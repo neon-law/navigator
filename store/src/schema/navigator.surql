@@ -1727,6 +1727,45 @@ DEFINE FIELD OVERWRITE updated_at ON asset TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE asset_sha256 ON asset FIELDS sha256_hex;
 DEFINE INDEX OVERWRITE asset_project_slug ON asset FIELDS project_id, slug;
 
+-- `document_upload_session`: one in-flight streaming upload of a document
+-- larger than the buffered upload door accepts (LAW-172). The row carries
+-- the document metadata and byte identity exactly as the eventual ingest
+-- will file them, plus how many bytes have arrived so far; the staged chunk
+-- bytes live in the object store under `uploads/<session id>/part-<offset>`,
+-- named by `store::documents::upload_part_key`, not in the database. The
+-- create-time validation (`store::documents::create_upload_session`) and the
+-- row's lifetime (one upload, `UPLOAD_SESSION_TTL_HOURS` from `created_at`,
+-- removed at completion) are the contract; the row exists only while bytes
+-- are in flight.
+DEFINE TABLE IF NOT EXISTS document_upload_session SCHEMAFULL PERMISSIONS FULL;
+
+DEFINE FIELD IF NOT EXISTS project_id ON document_upload_session TYPE record<project>;
+DEFINE FIELD IF NOT EXISTS filename ON document_upload_session TYPE string;
+DEFINE FIELD IF NOT EXISTS kind ON document_upload_session TYPE string;
+DEFINE FIELD IF NOT EXISTS content_type ON document_upload_session TYPE string;
+DEFINE FIELD IF NOT EXISTS visibility ON document_upload_session TYPE string;
+DEFINE FIELD IF NOT EXISTS description ON document_upload_session TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS slug ON document_upload_session TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS transcript_quality ON document_upload_session TYPE option<string>;
+-- `metadata`, `derived_from`, `signing`, and `notarization` mirror the same
+-- `any` fields the `asset` table carries; they are copied verbatim onto the
+-- filed document at completion.
+DEFINE FIELD IF NOT EXISTS metadata ON document_upload_session TYPE any;
+DEFINE FIELD IF NOT EXISTS derived_from ON document_upload_session TYPE any;
+DEFINE FIELD IF NOT EXISTS signing ON document_upload_session TYPE any;
+DEFINE FIELD IF NOT EXISTS notarization ON document_upload_session TYPE any;
+DEFINE FIELD IF NOT EXISTS declared_size ON document_upload_session TYPE int;
+DEFINE FIELD IF NOT EXISTS declared_sha256 ON document_upload_session TYPE string;
+DEFINE FIELD IF NOT EXISTS chunk_size ON document_upload_session TYPE int;
+DEFINE FIELD IF NOT EXISTS received_bytes ON document_upload_session TYPE int;
+DEFINE FIELD IF NOT EXISTS created_at ON document_upload_session TYPE datetime
+	DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS expires_at ON document_upload_session TYPE datetime;
+-- The resume probe (`find_resumable_session`): the live session for one
+-- exact upload identity.
+DEFINE INDEX OVERWRITE upload_session_project ON document_upload_session
+	FIELDS project_id, filename, declared_sha256, declared_size;
+
 -- `templates`: the questionnaire + markdown body that drives a notation,
 -- identified by a stable `code`.
 --

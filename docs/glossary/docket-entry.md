@@ -44,7 +44,15 @@ A client's lens shows an entry only when its document is client-visible.
 number the Project lists under `dockets:` in its `navigator.yaml` — and its caption carries that case number, printed in
 the Project's declared spelling after a case-insensitive match. A value the Project has not declared refuses to render,
 and a pleading that declares no `docket:` captions itself with the `matter:` block's own case number; the `N133` gate
-advisory reports a Project pleading that leaves the key out, so a multi-case filing never rides a quiet default.
+advisory reports a Project pleading that leaves the key out, so a multi-case filing never rides a quiet default. A
+state-court case number of any shape is a valid `dockets:` entry: a California number such as `00CV000000` and a Nevada
+district-court number such as `D-26-000000-D` (case-type letter, two-digit year, six digits, department or type suffix)
+are declared, matched and printed the same way.
+
+**A register without entry numbers.** A Nevada district court's register of actions lists entries by date, not by a
+CM/ECF entry number. The Project numbers those entries itself, in register order: the oldest entry is `1`, and entries
+filed the same day keep the register's order. The [DKT Number](dkt-number.md) then applies unchanged. A filed date or
+the case number is not an entry number, and the DKT name refuses it.
 
 - Commands: [`store::cases`](../../store/src/cases.rs) · Schema:
   [`case_docket_entry`](../../store/src/schema/navigator.surql)

@@ -9,6 +9,11 @@
 //! ([`store::project_archives`]): a crash between a step and its checkpoint
 //! repeats only verified-idempotent work. The slot-keyed workflow id makes
 //! replicas join one run per slot.
+//!
+//! Each slot ends with a `coverage` step: every Project in the inventory,
+//! open and closed, judged against its newest committed generation
+//! ([`store::project_archives::coverage`]). It reports gaps; it requests
+//! nothing.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +21,7 @@ use std::time::Duration;
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use dbos::{CancellationToken, WorkflowHandle, WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
+use store::project_archives::coverage::CoverageSummary;
 use uuid::Uuid;
 
 pub const WORKFLOW: &str = "ProjectRecovery";
@@ -39,6 +45,12 @@ pub struct RecoveryReport {
     pub stalled: Vec<(Uuid, String)>,
     /// What archiving soft-deleted chains did this slot, or why it stopped.
     pub soft_deleted: Option<String>,
+    /// Recovery coverage of every expected Project at this slot.
+    #[serde(default)]
+    pub coverage: Option<CoverageSummary>,
+    /// Why coverage could not be read this slot.
+    #[serde(default)]
+    pub coverage_error: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
@@ -58,6 +70,11 @@ pub trait RecoverySource: Send + Sync {
     /// a summary of counts.
     async fn archive_soft_deleted(&self) -> Result<String, String> {
         Ok("not configured".into())
+    }
+    /// Recovery coverage of every expected Project; `None` when this source
+    /// has no inventory to judge.
+    async fn coverage(&self) -> Result<Option<CoverageSummary>, String> {
+        Ok(None)
     }
 }
 
@@ -136,6 +153,13 @@ impl RecoverySource for StoreRecoverySource {
             report.without_firm,
             report.stalled.len()
         ))
+    }
+
+    async fn coverage(&self) -> Result<Option<CoverageSummary>, String> {
+        store::project_archives::coverage::report(&self.surreal, &self.pg, Utc::now())
+            .await
+            .map(|report| Some(report.summary()))
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -218,6 +242,36 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<ProjectRecoveryWo
                 })
                 .await?;
             report.soft_deleted = Some(soft_deleted.unwrap_or_else(|reason| reason));
+            let source = Arc::clone(&context.source);
+            let coverage: Result<Option<CoverageSummary>, String> =
+                dbos::step("coverage", move || {
+                    let source = Arc::clone(&source);
+                    async move { dbos::Result::<_, RecoveryError>::Ok(source.coverage().await) }
+                })
+                .await?;
+            match coverage {
+                Ok(summary) => {
+                    if let Some(counts) = summary.as_ref().map(|summary| summary.counts) {
+                        if counts.current < counts.expected {
+                            tracing::warn!(
+                                expected = counts.expected,
+                                current = counts.current,
+                                stale = counts.stale,
+                                missing = counts.missing,
+                                source_unbound = counts.source_unbound,
+                                no_firm = counts.no_firm,
+                                pending = counts.pending,
+                                "recovery coverage has gaps"
+                            );
+                        }
+                    }
+                    report.coverage = summary;
+                }
+                Err(reason) => {
+                    tracing::warn!(%reason, "recovery coverage could not be read");
+                    report.coverage_error = Some(reason);
+                }
+            }
             dbos::Result::<_, RecoveryError>::Ok(report)
         }
     })

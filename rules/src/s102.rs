@@ -206,6 +206,60 @@ impl S102LinePacking {
                 return None;
             }
         }
+        self.pack(file, lines, start, end)
+    }
+
+    /// Repack the paragraph (or folded frontmatter scalar) holding
+    /// `line_no` the way `fix` does, whether or not `S102` flags it.
+    ///
+    /// For a fix that lengthens a line past `S101`'s limit — `S106`
+    /// spelling a vulgar fraction in ASCII — so the same greedy re-wrap,
+    /// with the same guards, lands in the same edit. Returns `None` when
+    /// the line is not reflowable prose or repacking changes nothing.
+    pub(crate) fn rewrap_line(&self, file: &SourceFile, line_no: usize) -> Option<TextEdit> {
+        let all_lines: Vec<&str> = file.contents.lines().collect();
+        let mut contexts = vec![frontmatter::body_lines(&file.contents)];
+        for region in frontmatter::folded_scalar_lines(&file.contents) {
+            contexts.push(
+                region
+                    .map(|line_no| (line_no, all_lines[line_no - 1]))
+                    .collect(),
+            );
+        }
+        for lines in &contexts {
+            let Some(index) = lines.iter().position(|(no, _)| *no == line_no) else {
+                continue;
+            };
+            let non_prose = non_prose_lines(lines);
+            if non_prose[index] || lines[index].1.trim().is_empty() {
+                return None;
+            }
+            let linked =
+                |k: usize| joinable(lines[k], lines[k + 1], non_prose[k], non_prose[k + 1]);
+            let mut start = index;
+            while start > 0 && linked(start - 1) {
+                start -= 1;
+            }
+            let mut end = index;
+            while end + 1 < lines.len() && linked(end) {
+                end += 1;
+            }
+            return self.pack(file, lines, start, end);
+        }
+        None
+    }
+
+    /// Greedily pack the words of `lines[start..=end]` to `max`, keeping
+    /// the first line's indent, and return the edit — or `None` when
+    /// packing would change what the Markdown means or change nothing.
+    fn pack(
+        &self,
+        file: &SourceFile,
+        lines: &[(usize, &str)],
+        start: usize,
+        end: usize,
+    ) -> Option<TextEdit> {
+        let max = self.max;
         // Four spaces of indent is an indented code block unless it
         // continues something — a list item, or a paragraph. CommonMark
         // decides that on the line above, and so does `M046`: with a

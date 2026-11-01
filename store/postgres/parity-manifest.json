@@ -402,7 +402,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 110,
+    "table_count": 111,
     "tables": {
       "address": {
         "city": "string",
@@ -689,6 +689,27 @@
         "resolved": "bool",
         "review_document_id": "record<review_document>",
         "updated_at": "datetime"
+      },
+      "document_upload_session": {
+        "chunk_size": "int",
+        "content_type": "string",
+        "created_at": "datetime",
+        "declared_sha256": "string",
+        "declared_size": "int",
+        "derived_from": "any",
+        "description": "option<string>",
+        "expires_at": "datetime",
+        "filename": "string",
+        "id": "record",
+        "kind": "string",
+        "metadata": "any",
+        "notarization": "any",
+        "project_id": "record<project>",
+        "received_bytes": "int",
+        "signing": "any",
+        "slug": "option<string>",
+        "transcript_quality": "option<string>",
+        "visibility": "string"
       },
       "draft": {
         "id": "record"
@@ -1746,7 +1767,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 141,
+    "table_count": 142,
     "tables": {
       "address": {
         "columns": {
@@ -2357,6 +2378,39 @@
         "foreign_keys": [],
         "name": "document_comment",
         "references": []
+      },
+      "document_upload_session": {
+        "columns": {
+          "chunk_size": "bigint",
+          "content_type": "text",
+          "created_at": "timestamptz",
+          "declared_sha256": "text",
+          "declared_size": "bigint",
+          "derived_from": "jsonb",
+          "description": "text",
+          "expires_at": "timestamptz",
+          "filename": "text",
+          "id": "uuid",
+          "kind": "text",
+          "metadata": "jsonb",
+          "notarization": "jsonb",
+          "project_id": "uuid",
+          "received_bytes": "bigint",
+          "signing": "jsonb",
+          "slug": "text",
+          "transcript_quality": "text",
+          "visibility": "text"
+        },
+        "foreign_keys": [
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "document_upload_session",
+        "references": [
+          "project"
+        ]
       },
       "efiling_transactions": {
         "columns": {

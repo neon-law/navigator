@@ -153,6 +153,12 @@
     "scope": "project",
     "through": "review_document_id -> owning parent scope"
   },
+  "document_upload_session": {
+    "migration_slice": "document-storage",
+    "parity_scenario": "Project-scoped resumable upload; offset retries and digest-verified completion; staged bytes remain in object storage",
+    "scope": "project",
+    "through": "project_id -> Project.firm_id"
+  },
   "draft": {
     "migration_slice": "workflow-storage",
     "parity_scenario": "view equals source projection; no independent writes",

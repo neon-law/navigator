@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::{TimeZone, Utc};
+use store::project_archives::coverage::{Coverage, CoverageCounts, CoverageSummary, Uncovered};
 use tokio::sync::Notify;
 use uuid::Uuid;
 use workflows::dbos_engine;
@@ -21,6 +22,7 @@ struct Queue {
     unfinished: Vec<Uuid>,
     failing: Vec<Uuid>,
     hold: Option<Uuid>,
+    coverage: Option<Result<CoverageSummary, String>>,
     reached: Arc<Notify>,
     advanced: Arc<Mutex<BTreeMap<Uuid, usize>>>,
 }
@@ -49,6 +51,10 @@ impl RecoverySource for Queue {
             return Err("source object for documents/synthetic is missing".into());
         }
         Ok(())
+    }
+
+    async fn coverage(&self) -> Result<Option<CoverageSummary>, String> {
+        self.coverage.clone().transpose()
     }
 }
 
@@ -200,7 +206,66 @@ async fn the_schedule_starts_the_current_slot_and_stops_on_cancellation() {
     worker.shutdown().await;
     assert_eq!(report.committed, vec![generation]);
     assert_eq!(report.soft_deleted.as_deref(), Some("not configured"));
+    assert_eq!(report.coverage, None);
+    assert_eq!(report.coverage_error, None);
     assert_eq!(queue.count(generation), 1);
+}
+
+#[tokio::test]
+async fn every_slot_reports_coverage_and_a_coverage_failure_does_not_fail_it() {
+    let Some(db) = database().await else {
+        return;
+    };
+    let missing = Uuid::now_v7();
+    let summary = CoverageSummary {
+        counts: CoverageCounts {
+            expected: 2,
+            current: 1,
+            missing: 1,
+            pending: 1,
+            ..CoverageCounts::default()
+        },
+        uncovered: vec![Uncovered {
+            project_id: missing,
+            coverage: Coverage::Missing,
+            pending: true,
+        }],
+    };
+    let reported = Queue {
+        coverage: Some(Ok(summary.clone())),
+        ..Queue::default()
+    };
+    let worker = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+    let workflow =
+        project_recovery::register(&worker, Context::new(Arc::new(reported))).expect("register");
+    worker.launch().await.expect("launch");
+    project_recovery::fire(&workflow, slot())
+        .await
+        .expect("start");
+    let report = report_of(&worker, &project_recovery::workflow_id(slot())).await;
+    worker.shutdown().await;
+    assert_eq!(report.coverage, Some(summary));
+    assert_eq!(report.coverage_error, None);
+
+    let later = slot() + chrono::TimeDelta::minutes(15);
+    let failing = Queue {
+        coverage: Some(Err("the Project inventory could not be read".into())),
+        ..Queue::default()
+    };
+    let worker = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+    let workflow =
+        project_recovery::register(&worker, Context::new(Arc::new(failing))).expect("register");
+    worker.launch().await.expect("launch");
+    project_recovery::fire(&workflow, later)
+        .await
+        .expect("start");
+    let report = report_of(&worker, &project_recovery::workflow_id(later)).await;
+    worker.shutdown().await;
+    assert_eq!(report.coverage, None);
+    assert_eq!(
+        report.coverage_error.as_deref(),
+        Some("the Project inventory could not be read")
+    );
 }
 
 #[tokio::test]
@@ -286,6 +351,16 @@ async fn the_store_source_drives_a_recorded_generation_to_commit() {
     .await
     .expect("record a generation");
     assert_eq!(source.unfinished().await.unwrap(), vec![generation.id]);
+    let before = source
+        .coverage()
+        .await
+        .expect("read coverage")
+        .expect("the store source judges the inventory");
+    assert!(before.uncovered.contains(&Uncovered {
+        project_id: matter.project,
+        coverage: Coverage::Missing,
+        pending: true,
+    }));
     source
         .advance(generation.id)
         .await
@@ -296,6 +371,14 @@ async fn the_store_source_drives_a_recorded_generation_to_commit() {
         .unwrap()
         .expect("a committed generation");
     assert_eq!(committed.id, generation.id);
+    let after = source.coverage().await.unwrap().unwrap();
+    assert!(
+        after
+            .uncovered
+            .iter()
+            .all(|entry| entry.project_id != matter.project),
+        "a freshly committed generation covers its Project"
+    );
 
     // An unknown generation stops with a reason, never a panic.
     assert!(source.advance(Uuid::now_v7()).await.is_err());
@@ -314,4 +397,5 @@ async fn the_store_source_drives_a_recorded_generation_to_commit() {
         source.unfinished().await,
         Err(RecoveryError::Queue)
     ));
+    assert!(source.coverage().await.is_err());
 }

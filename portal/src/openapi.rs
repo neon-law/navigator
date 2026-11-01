@@ -100,6 +100,7 @@ pub fn document_with_base(base: &str) -> Value {
     add_journal_operations(&mut document);
     add_blog_operations(&mut document);
     add_graph_operations(&mut document);
+    add_upload_session_operations(&mut document);
     document["paths"]["/app/api/projects/{id}/section-counts"] = serde_json::json!({
       "get": {
         "operationId": "getProjectSectionCounts", "tags": ["Projects"],
@@ -116,6 +117,112 @@ pub fn document_with_base(base: &str) -> Value {
       }
     });
     document
+}
+
+fn upload_session_schema() -> Value {
+    json!({
+        "type": "object", "required": ["id", "chunk_size", "received_bytes", "declared_size", "complete", "expires_at"],
+        "properties": {
+            "id": {"type": "string", "format": "uuid"},
+            "chunk_size": {"type": "integer", "minimum": 1},
+            "received_bytes": {"type": "integer", "minimum": 0},
+            "declared_size": {"type": "integer", "minimum": 1, "maximum": store::documents::MAX_STREAMING_UPLOAD_BYTES},
+            "complete": {"type": "boolean"},
+            "expires_at": {"type": "string", "format": "date-time"}
+        }
+    })
+}
+
+fn upload_session_request(document: &Value) -> Value {
+    let kind = document["paths"]["/app/api/projects/{id}/documents"]["post"]["requestBody"]
+        ["content"]["application/json"]["schema"]["properties"]["kind"]
+        .clone();
+    json!({
+        "type": "object", "required": ["filename", "kind", "declared_size", "declared_sha256"],
+        "properties": {
+            "filename": {"type": "string", "minLength": 1}, "slug": {"type": "string"}, "kind": kind,
+            "content_type": {"type": "string", "default": "application/octet-stream"},
+            "visibility": {"type": "string", "enum": ["internal", "client"], "default": "internal"},
+            "description": {"type": "string"}, "metadata": {},
+            "transcript_quality": {"type": "string", "enum": ["machine", "proofread"]},
+            "derived_from": {"type": "object", "required": ["document_id", "version", "sha256"], "properties": {
+                "document_id": {"type": "string", "format": "uuid"}, "version": {"type": "integer", "minimum": 1},
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }},
+            "signing": {"$ref": "#/components/schemas/DocumentSigning"},
+            "notarization": {"type": "array", "items": {"$ref": "#/components/schemas/DocumentNotarization"}},
+            "declared_size": {"type": "integer", "minimum": 1, "maximum": store::documents::MAX_STREAMING_UPLOAD_BYTES},
+            "declared_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+    })
+}
+
+fn upload_session_errors() -> Value {
+    json!({
+        "400": {"description": "Invalid document metadata, digest format, or base64"},
+        "401": {"description": "No authenticated session"},
+        "403": {"description": "Lawyer-tier access required"},
+        "404": {"description": "Project or session unavailable, including out-of-scope access"},
+        "500": {"description": "Database or storage failure"}
+    })
+}
+
+fn add_upload_session_operations(document: &mut Value) {
+    let base = "/app/api/projects/{id}/documents/upload-session";
+    let session_path = format!("{base}/{{session_id}}");
+    let project_parameter = json!({"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}});
+    let parameters = json!([project_parameter, {"name": "session_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]);
+    let status = json!({"description": "Acknowledged upload progress", "content": {"application/json": {"schema": upload_session_schema()}}});
+    let mut responses = upload_session_errors();
+    responses["200"] = status.clone();
+    responses["201"] = status.clone();
+    responses["413"] = json!({"description": "The declared upload exceeds the streaming limit"});
+    document["paths"][base] = json!({"post": {
+        "operationId": "openDocumentUploadSession", "summary": "Open or resume a document upload",
+        "description": "Lawyer-tier access and Project participation are required. Sessions expire after 24 hours. The filename and slug retain the same extension; transcript provenance must identify a current revision on this Project.",
+        "parameters": [project_parameter], "requestBody": {"required": true, "content": {"application/json": {"schema": upload_session_request(document)}}},
+        "responses": responses
+    }});
+    let mut responses = upload_session_errors();
+    responses["200"] = status.clone();
+    document["paths"][&session_path] = json!({"get": {
+        "operationId": "getDocumentUploadSession", "summary": "Read the acknowledged upload offset",
+        "parameters": parameters, "responses": responses
+    }});
+    let pointer =
+        document["paths"]["/app/api/projects/{id}/documents"]["post"]["responses"]["201"].clone();
+    for (suffix, operation_id, summary) in [
+        (
+            "chunk",
+            "appendDocumentUploadChunk",
+            "Append one chunk at its declared offset",
+        ),
+        (
+            "complete",
+            "completeDocumentUpload",
+            "Verify the digest and file the document",
+        ),
+    ] {
+        let mut responses = upload_session_errors();
+        responses["410"] =
+            json!({"description": "The upload session expired; start a new session"});
+        responses["409"] = json!({"description": "Wrong chunk offset or size, or incomplete upload; read session progress before resuming"});
+        let mut operation = json!({"operationId": operation_id, "summary": summary, "parameters": parameters, "responses": responses});
+        if suffix == "chunk" {
+            operation["requestBody"] = json!({"required": true, "content": {"application/json": {"schema": {
+                "type": "object", "required": ["offset", "content_base64"], "properties": {
+                    "offset": {"type": "integer", "minimum": 0, "description": "The session's acknowledged received_bytes"},
+                    "content_base64": {"type": "string", "description": "Exactly one server-sized chunk, or the final remainder, encoded as base64"}
+                }
+            }}}});
+            operation["responses"]["200"] = status.clone();
+        } else {
+            operation["responses"]["200"] = pointer.clone();
+            operation["responses"]["201"] = pointer.clone();
+            operation["responses"]["422"] = json!({"description": "Digest mismatch; the session and staged parts were removed"});
+        }
+        document["paths"][format!("{session_path}/{suffix}")] = json!({"post": operation});
+    }
 }
 
 /// The three read-only relationship-graph doors (`portal/src/api.rs`

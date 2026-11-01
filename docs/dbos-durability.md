@@ -257,8 +257,10 @@ The schedule starts `ProjectRecovery-<UTC date>T<HH:MM>` every quarter hour. Its
 uncommitted [Project Recovery Archive](glossary/project-recovery-archive.md) generations from PostgreSQL; each then
 advances in its own `archive-<generation>` step. Every write is an idempotent copy-and-verify keyed by content and path,
 and the commit is one conditional update, so a crash between a step and its checkpoint repeats only safe work. A
-generation that stops records its reason and waits for the next slot. See [Project recovery
-archives](project-recovery-archives.md).
+generation that stops records its reason and waits for the next slot. A final `coverage` step judges every Project, open
+and closed, against its newest committed generation and records the counts and uncovered Project ids. It requests
+nothing, and a failed read does not fail the slot. See [Project recovery
+archives](project-recovery-archives.md#coverage).
 
 ## RetentionPurge
 
