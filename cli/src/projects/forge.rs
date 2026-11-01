@@ -12,6 +12,22 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use serde::Serialize;
+
+/// A forge run pinned to the commit whose effects it verifies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DeploymentRun {
+    pub(crate) url: String,
+    pub(crate) commit: String,
+    pub(crate) conclusion: Option<String>,
+    pub(crate) jobs: Vec<DeploymentJob>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DeploymentJob {
+    pub(crate) name: String,
+    pub(crate) conclusion: Option<String>,
+}
 
 /// A review request's coordinates once it exists on the forge.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,14 +48,17 @@ pub(crate) struct ReviewRequest {
     pub(crate) body: String,
 }
 
-/// What arming merge-when-green did. The arm is always read back, because a
-/// forge's merge queue can answer an arm without queueing anything.
+/// What arming merge-when-green did. GitHub's arm is read back; Forgejo
+/// acknowledges scheduling and the watcher requires an observed merge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ArmOutcome {
     /// Merge-when-green is armed and was read back as enabled.
     Armed,
     /// An earlier run of the verb armed it already.
     AlreadyArmed,
+    /// Forgejo acknowledged scheduling; its API exposes no queue read-back.
+    /// The actual merged state is still required before reporting success.
+    Scheduled,
     /// The forge would not queue because the request merges now, so the
     /// backend merged it directly, pinned to the commit it checked.
     MergedNow { merge_commit: String },
@@ -89,4 +108,10 @@ pub(crate) trait Forge: Send + Sync {
     /// The merge commit's sha once the request has merged, `None` while it
     /// is still open.
     async fn merge_commit(&self, review: &ReviewRef) -> Result<Option<String>>;
+
+    /// The latest post-merge push run for this exact commit, including its jobs.
+    async fn deployment(&self, merge_commit: &str) -> Result<Option<DeploymentRun>>;
+
+    /// The pull-request CI run for the reviewed head, when the forge exposes it.
+    async fn verification(&self, review: &ReviewRef) -> Result<Option<DeploymentRun>>;
 }

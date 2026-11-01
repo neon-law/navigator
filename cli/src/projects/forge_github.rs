@@ -8,13 +8,15 @@
 //! sha-pinned merge that covers that case is the same escape
 //! `devx::github_auto_merge` uses for the operator verb.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::forge::{ArmOutcome, CheckVerdict, Forge, ReviewRef, ReviewRequest};
+use super::forge::{
+    ArmOutcome, CheckVerdict, DeploymentJob, DeploymentRun, Forge, ReviewRef, ReviewRequest,
+};
 use super::lifecycle::{git_text, github_owner_name, github_token};
 
 const API_VERSION: &str = "2022-11-28";
@@ -128,6 +130,77 @@ impl GitHubForge {
             .await
             .with_context(|| format!("read the response body of {method} {path}"))?;
         Ok((status, text))
+    }
+    async fn workflow_run(
+        &self,
+        merge_commit: &str,
+        workflow: &str,
+        event: &str,
+    ) -> Result<Option<DeploymentRun>> {
+        #[derive(Deserialize)]
+        struct Runs {
+            workflow_runs: Vec<Run>,
+        }
+        #[derive(Deserialize)]
+        struct Run {
+            id: u64,
+            html_url: String,
+            head_sha: String,
+            event: String,
+            status: String,
+            conclusion: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct Jobs {
+            jobs: Vec<Job>,
+        }
+        #[derive(Deserialize)]
+        struct Job {
+            name: String,
+            conclusion: Option<String>,
+        }
+        let runs: Runs = self
+            .get_json(&self.repo_path(&format!(
+                "actions/workflows/{workflow}/runs?head_sha={merge_commit}&event={event}&per_page=100"
+            )))
+            .await?;
+        let Some(run) = runs
+            .workflow_runs
+            .into_iter()
+            .filter(|run| run.head_sha == merge_commit && run.event == event)
+            .max_by_key(|run| run.id)
+        else {
+            return Ok(None);
+        };
+        let mut jobs = Vec::new();
+        let mut page = 1;
+        loop {
+            let batch: Jobs = self
+                .get_json(&self.repo_path(&format!(
+                    "actions/runs/{}/jobs?filter=latest&per_page=100&page={page}",
+                    run.id
+                )))
+                .await?;
+            let count = batch.jobs.len();
+            jobs.extend(batch.jobs.into_iter().map(|job| DeploymentJob {
+                name: job.name,
+                conclusion: job.conclusion,
+            }));
+            if count < 100 {
+                break;
+            }
+            page += 1;
+        }
+        Ok(Some(DeploymentRun {
+            url: run.html_url,
+            commit: run.head_sha,
+            conclusion: if run.status == "completed" {
+                run.conclusion
+            } else {
+                None
+            },
+            jobs,
+        }))
     }
 }
 
@@ -371,11 +444,19 @@ impl Forge for GitHubForge {
             Ok(None)
         }
     }
+    async fn deployment(&self, merge_commit: &str) -> Result<Option<DeploymentRun>> {
+        self.workflow_run(merge_commit, "cd.yml", "push").await
+    }
+
+    async fn verification(&self, review: &ReviewRef) -> Result<Option<DeploymentRun>> {
+        self.workflow_run(&review.head_sha, "ci.yml", "pull_request")
+            .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{verdict, GitHubForge};
+    use super::{GitHubForge, verdict};
     use crate::projects::forge::{ArmOutcome, CheckVerdict, Forge, ReviewRef, ReviewRequest};
     use serde_json::json;
     use wiremock::matchers::{method, path, query_param};
@@ -439,23 +520,23 @@ mod tests {
 
     #[test]
     fn a_running_check_run_is_pending() {
-        let runs = vec![serde_json::from_value::<super::CheckRun>(check_run(
-            "ci / test",
-            "in_progress",
-            None,
-        ))
-        .unwrap()];
+        let runs = vec![
+            serde_json::from_value::<super::CheckRun>(check_run("ci / test", "in_progress", None))
+                .unwrap(),
+        ];
         assert_eq!(verdict("blocked", &runs), CheckVerdict::Pending);
     }
 
     #[test]
     fn green_checks_answer_by_mergeable_state() {
-        let runs = vec![serde_json::from_value::<super::CheckRun>(check_run(
-            "ci / test",
-            "completed",
-            Some("success"),
-        ))
-        .unwrap()];
+        let runs = vec![
+            serde_json::from_value::<super::CheckRun>(check_run(
+                "ci / test",
+                "completed",
+                Some("success"),
+            ))
+            .unwrap(),
+        ];
         assert_eq!(verdict("clean", &runs), CheckVerdict::Green);
         assert_eq!(verdict("behind", &runs), CheckVerdict::BranchBehind);
         assert_eq!(verdict("blocked", &runs), CheckVerdict::HeldReview);
@@ -479,6 +560,43 @@ mod tests {
             .unwrap(),
         ];
         assert_eq!(verdict("clean", &runs), CheckVerdict::Green);
+    }
+
+    #[tokio::test]
+    async fn deployment_reads_only_the_merge_commit_cd_run_and_all_jobs() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/actions/workflows/cd.yml/runs"))
+            .and(query_param("head_sha", "merge555"))
+            .and(query_param("event", "push"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "workflow_runs": [
+                    {"id": 9, "html_url": "wrong", "head_sha": "another", "event": "push",
+                     "status": "completed", "conclusion": "success"},
+                    {"id": 8, "html_url": "https://github.com/acme/nav/actions/runs/8",
+                     "head_sha": "merge555", "event": "push", "status": "completed",
+                     "conclusion": "failure"}
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/actions/runs/8/jobs"))
+            .and(query_param("filter", "latest"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jobs": [{"name": "gate / seeds", "conclusion": "failure"},
+                         {"name": "gate / notify", "conclusion": "skipped"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let forge = GitHubForge::new(&server.uri(), "acme", "nav", "t").unwrap();
+        let run = forge.deployment("merge555").await.unwrap().unwrap();
+        assert_eq!(run.commit, "merge555");
+        assert_eq!(run.conclusion.as_deref(), Some("failure"));
+        assert_eq!(run.jobs.len(), 2);
+        assert_eq!(run.jobs[1].conclusion.as_deref(), Some("skipped"));
     }
 
     #[tokio::test]

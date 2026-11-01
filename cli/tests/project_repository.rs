@@ -120,6 +120,7 @@ const SYNCED_SKILL_NAMES: &[&str] = &[
     "working-notes",
     "pull-changes",
     "push-changes",
+    "push-to-navigator",
     "word-editing",
 ];
 

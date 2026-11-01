@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 
-use super::forge::{ArmOutcome, CheckVerdict, Forge, ReviewRef, ReviewRequest};
+use super::forge::{ArmOutcome, CheckVerdict, DeploymentRun, Forge, ReviewRef, ReviewRequest};
+use super::forge_forgejo::ForgejoForge;
 use super::forge_github::GitHubForge;
 use super::lifecycle::{git, git_text};
 use super::manifest;
@@ -28,10 +29,13 @@ pub(crate) const CHECK_POLL: Duration = Duration::from_secs(15);
 pub(crate) const CHECK_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// What the lane did, as the structured report renders it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct LaneReport {
     pub(crate) review_url: String,
     pub(crate) merge_commit: String,
+    pub(crate) deployment: Option<DeploymentRun>,
+    pub(crate) ci: Option<DeploymentRun>,
+    pub(crate) unverified: Vec<String>,
 }
 
 /// Build the real backend and run the lane. The dispatch half is the only
@@ -44,7 +48,14 @@ pub(crate) async fn dispatch(
     body: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
-    let forge = GitHubForge::from_checkout(dir)?;
+    let remote = git_text(dir, &["remote", "get-url", "origin"])?;
+    let github = remote.starts_with("git@github.com:")
+        || url::Url::parse(&remote).is_ok_and(|url| url.host_str() == Some("github.com"));
+    let forge: Box<dyn Forge> = if github {
+        Box::new(GitHubForge::from_checkout(dir)?)
+    } else {
+        Box::new(ForgejoForge::from_checkout(dir)?)
+    };
     run(
         dir,
         base,
@@ -52,7 +63,7 @@ pub(crate) async fn dispatch(
         title,
         body,
         dry_run,
-        &forge,
+        forge.as_ref(),
         tokio::time::sleep,
     )
     .await?;
@@ -166,15 +177,119 @@ where
             println!("merge: landed now, pinned to the checked commit");
             merge_commit
         }
-        ArmOutcome::Armed | ArmOutcome::AlreadyArmed => watch_check(forge, &review, sleep).await?,
+        ArmOutcome::Armed | ArmOutcome::AlreadyArmed | ArmOutcome::Scheduled => {
+            watch_check(forge, &review, &sleep).await?
+        }
     };
 
+    finish_delivery(forge, &review, merge_commit, sleep).await
+}
+
+async fn finish_delivery<S, Fut>(
+    forge: &dyn Forge,
+    review: &ReviewRef,
+    merge_commit: String,
+    sleep: S,
+) -> Result<LaneReport>
+where
+    S: Fn(Duration) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let mut unverified = Vec::new();
+    let ci = match forge.verification(review).await {
+        Ok(Some(run)) if run.commit == review.head_sha => Some(run),
+        Ok(_) => {
+            unverified.push("CI run details unavailable for the reviewed head".into());
+            None
+        }
+        Err(error) => {
+            unverified.push(format!("CI run lookup failed: {error:#}"));
+            None
+        }
+    };
+    let deployment = match watch_deployment(forge, &merge_commit, sleep).await {
+        Ok(run) => Some(run),
+        Err(error) => {
+            unverified.push(format!("deployment unverified: {error:#}"));
+            None
+        }
+    };
+    for (stage, run) in [("CI", ci.as_ref()), ("deployment", deployment.as_ref())] {
+        if run.is_some_and(|run| run.jobs.is_empty()) {
+            unverified.push(format!("{stage} job details unavailable"));
+        }
+    }
     let report = LaneReport {
         review_url: review.url.clone(),
         merge_commit,
+        deployment,
+        ci,
+        unverified,
     };
     println!("{}", render_report(&report));
+    if report
+        .deployment
+        .as_ref()
+        .is_none_or(|run| run.conclusion.as_deref() != Some("success"))
+    {
+        bail!("merged, but deployment did not succeed; inspect the delivery report");
+    }
+    anyhow::ensure!(
+        report.unverified.is_empty(),
+        "delivery includes unverified stages; inspect the delivery report"
+    );
+    anyhow::ensure!(
+        report
+            .ci
+            .as_ref()
+            .is_some_and(|run| run.conclusion.as_deref() == Some("success")),
+        "delivery CI did not succeed; inspect the delivery report"
+    );
     Ok(report)
+}
+
+/// Keep merge success distinct from the live gate's verdict.
+pub(crate) async fn watch_deployment<S, Fut>(
+    forge: &dyn Forge,
+    merge_commit: &str,
+    sleep: S,
+) -> Result<DeploymentRun>
+where
+    S: Fn(Duration) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let deadline = Instant::now() + CHECK_TIMEOUT;
+    watch_deployment_within(forge, merge_commit, deadline, sleep).await
+}
+
+async fn watch_deployment_within<S, Fut>(
+    forge: &dyn Forge,
+    merge_commit: &str,
+    deadline: Instant,
+    sleep: S,
+) -> Result<DeploymentRun>
+where
+    S: Fn(Duration) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    loop {
+        if let Some(run) = forge.deployment(merge_commit).await? {
+            anyhow::ensure!(
+                run.commit == merge_commit,
+                "deployment run belongs to another commit"
+            );
+            if run.conclusion.is_some() {
+                return Ok(run);
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "merged {merge_commit}; cd deployment remains unverified after {} seconds",
+                CHECK_TIMEOUT.as_secs()
+            );
+        }
+        sleep(CHECK_POLL).await;
+    }
 }
 
 /// Read the manifest's CLI version pin. The verb runs from a Project
@@ -354,8 +469,9 @@ where
 /// where the required check landed.
 pub(crate) fn render_report(report: &LaneReport) -> String {
     format!(
-        "Landed.\n  review request: {}\n  merge commit: {}\n  required check: green",
-        report.review_url, report.merge_commit
+        "Merged. Portal publishing is retired; publish is a no-op.\n{}",
+        serde_json::to_string_pretty(report)
+            .unwrap_or_else(|error| format!("report encoding failed: {error}"))
     )
 }
 
@@ -382,6 +498,7 @@ mod tests {
         /// How many polls must pass before the merge is reported.
         merge_after_polls: usize,
         opened: Mutex<Vec<ReviewRequest>>,
+        deployment_conclusion: String,
     }
 
     impl MockForge {
@@ -397,6 +514,7 @@ mod tests {
                 polls: Mutex::new(0),
                 merge_after_polls: polls,
                 opened: Mutex::new(Vec::new()),
+                deployment_conclusion: "success".into(),
             }
         }
 
@@ -440,9 +558,69 @@ mod tests {
                 Ok(None)
             }
         }
+
+        async fn deployment(&self, merge_commit: &str) -> Result<Option<super::DeploymentRun>> {
+            Ok(Some(super::DeploymentRun {
+                url: "https://forge.example/run/8".into(),
+                commit: merge_commit.into(),
+                conclusion: (!self.deployment_conclusion.is_empty())
+                    .then(|| self.deployment_conclusion.clone()),
+                jobs: vec![crate::projects::forge::DeploymentJob {
+                    name: "seeds".into(),
+                    conclusion: Some(self.deployment_conclusion.clone()),
+                }],
+            }))
+        }
+
+        async fn verification(&self, review: &ReviewRef) -> Result<Option<super::DeploymentRun>> {
+            Ok(Some(super::DeploymentRun {
+                url: "https://forge.example/run/7".into(),
+                commit: review.head_sha.clone(),
+                conclusion: Some("success".into()),
+                jobs: vec![crate::projects::forge::DeploymentJob {
+                    name: "ci".into(),
+                    conclusion: Some("success".into()),
+                }],
+            }))
+        }
     }
 
     async fn instant_sleep(_: std::time::Duration) {}
+
+    #[tokio::test]
+    async fn deployment_failure_is_reported_after_merge() {
+        let mut forge = MockForge::green_after(1);
+        forge.deployment_conclusion = "failure".into();
+        let report = super::watch_deployment(&forge, "merge111", instant_sleep)
+            .await
+            .unwrap();
+        assert_eq!(report.conclusion.as_deref(), Some("failure"));
+        assert_eq!(report.jobs[0].name, "seeds");
+    }
+
+    #[tokio::test]
+    async fn pending_deployment_times_out_as_unverified() {
+        let mut forge = MockForge::green_after(1);
+        forge.deployment_conclusion.clear();
+        let error =
+            super::watch_deployment_within(&forge, "merge111", Instant::now(), instant_sleep)
+                .await
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("deployment remains unverified"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_deployment_reports_its_exact_commit() {
+        let forge = MockForge::green_after(1);
+        let run = super::watch_deployment(&forge, "merge111", instant_sleep)
+            .await
+            .unwrap();
+        assert_eq!(run.commit, "merge111");
+        assert_eq!(run.conclusion.as_deref(), Some("success"));
+    }
 
     #[tokio::test]
     async fn the_watch_names_a_failed_check_by_its_forged_name() {
@@ -507,10 +685,18 @@ mod tests {
         let rendered = render_report(&super::LaneReport {
             review_url: "https://forge.example/review/7".to_string(),
             merge_commit: "merge111".to_string(),
+            deployment: Some(super::DeploymentRun {
+                url: "https://forge.example/run/8".into(),
+                commit: "merge111".into(),
+                conclusion: Some("success".into()),
+                jobs: vec![],
+            }),
+            ci: None,
+            unverified: vec!["CI run details unavailable".into()],
         });
         assert!(rendered.contains("https://forge.example/review/7"));
         assert!(rendered.contains("merge111"));
-        assert!(rendered.contains("required check: green"));
+        assert!(rendered.contains("success"));
     }
 
     #[test]
@@ -551,6 +737,7 @@ mod tests {
             git_sh(Some(&repo), &["init", "--initial-branch=main"]);
             git_sh(Some(&repo), &["config", "user.email", "agent@example.com"]);
             git_sh(Some(&repo), &["config", "user.name", "Agent"]);
+            git_sh(Some(&repo), &["config", "commit.gpgsign", "false"]);
             std::fs::write(
                 repo.join("navigator.yaml"),
                 format!("version: \"{}\"\n", env!("CARGO_PKG_VERSION")),
@@ -635,7 +822,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_verb_lands_a_change_to_a_report() {
+    async fn the_verb_refuses_to_call_a_failed_deployment_complete() {
+        let checkout = TempCheckout::new().with_signing();
+        std::fs::write(checkout.path().join("letter.md"), "# A change\n").unwrap();
+        let forge = MockForge::green_after(1);
+        let mut forge = forge;
+        forge.deployment_conclusion = "failure".into();
+        let error = super::run(
+            checkout.path(),
+            "main",
+            Some("push/the-change"),
+            "the change",
+            Some("body"),
+            false,
+            &forge,
+            instant_sleep,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("deployment did not succeed"));
+        // The branch is on the bare origin under the name the verb chose.
+        let head = Command::new("git")
+            .arg("-C")
+            .arg(checkout.path())
+            .args(["rev-parse", "--verify", "origin/push/the-change"])
+            .output()
+            .unwrap();
+        assert!(head.status.success(), "the branch was not pushed");
+        // Two verdict polls: the watch loop's gate, then the merge wait's
+        // re-poll (a merged-but-unreported window is a cache, not a verdict).
+        assert_eq!(*forge.polls.lock().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_verb_reports_verified_ci_and_deployment_after_merge() {
         let checkout = TempCheckout::new().with_signing();
         std::fs::write(checkout.path().join("letter.md"), "# A change\n").unwrap();
         let forge = MockForge::green_after(1);
@@ -652,18 +872,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(report.merge_commit, "merge111");
-        assert_eq!(report.review_url, forge.review.url);
-        // The branch is on the bare origin under the name the verb chose.
-        let head = Command::new("git")
-            .arg("-C")
-            .arg(checkout.path())
-            .args(["rev-parse", "--verify", "origin/push/the-change"])
-            .output()
-            .unwrap();
-        assert!(head.status.success(), "the branch was not pushed");
-        // Two verdict polls: the watch loop's gate, then the merge wait's
-        // re-poll (a merged-but-unreported window is a cache, not a verdict).
-        assert_eq!(*forge.polls.lock().unwrap(), 2);
+        assert_eq!(report.ci.unwrap().commit, forge.review.head_sha);
+        assert_eq!(
+            report.deployment.unwrap().conclusion.as_deref(),
+            Some("success")
+        );
+        assert!(report.unverified.is_empty());
     }
 
     #[tokio::test]
