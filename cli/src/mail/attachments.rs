@@ -275,7 +275,7 @@ async fn attachments_command(reference: &str, dir: &Path, selection: &Selection<
     )?;
     let attachments = extract(&raw, selection)?;
     if attachments.is_empty() {
-        println!("No attachments matched in message {message_id}; nothing was written");
+        println!("No attachments matched; nothing was written");
         return Ok(());
     }
     for ((_, state), attachment) in write_all(dir, &attachments)?.iter().zip(&attachments) {

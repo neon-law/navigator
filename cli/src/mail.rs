@@ -85,9 +85,11 @@ pub enum MailAction {
     /// Authorize Gmail in the browser and store the refresh token in the
     /// macOS Keychain. Requests gmail.readonly and gmail.compose only.
     Login {
-        /// Google's downloaded Desktop-app client JSON (`client_secret_*.json`).
-        /// Its `installed.client_secret` is stored in the Keychain and never
-        /// printed. Without it, the stored secret is used, or prompted for.
+        /// Read the client secret from Google's Desktop-app client JSON.
+        ///
+        /// Takes `installed.client_secret` from a `client_secret_*.json`,
+        /// stores it in the Keychain, and never prints it. Without this flag,
+        /// the stored secret is used, or prompted for when none is stored.
         #[arg(long, value_name = "PATH")]
         client_secret_file: Option<PathBuf>,
     },
@@ -137,7 +139,8 @@ pub enum MailAction {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Write a Gmail message's attachments into a directory, one file each.
+    /// Write each attachment of a Gmail message into a directory.
+    ///
     /// Never clobbers; prints name, byte count, and sha256 per file. Nothing
     /// is uploaded.
     Attachments {
@@ -146,8 +149,7 @@ pub enum MailAction {
         /// Directory to write the attachments into.
         #[arg(long)]
         dir: PathBuf,
-        /// Only attachments whose filename matches this glob (`*`, `?`;
-        /// case-insensitive), for example '*.pdf'.
+        /// Only write filenames matching this case-insensitive glob, such as '*.pdf'.
         #[arg(long, value_name = "GLOB")]
         only: Option<String>,
         /// Also write inline images, which are skipped by default.
