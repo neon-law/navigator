@@ -190,6 +190,7 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             let mut paths: std::collections::BTreeSet<String> = [
                 "/",
                 "/services",
+                "/business",
                 "/navigator",
                 "/legal-aid",
                 "/delete-your-debt",
@@ -355,11 +356,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
             let mark = views::brand::FIRM_BRAND.site_name;
             portal::LlmsTxt {
                 title: mark.to_string(),
-                summary: format!(
-                    "{mark} is a consumer law firm working on flat fees: wills, trusts, name changes, \
-                     formations, and the other routine matters a person actually walks in with, \
-                     alongside a litigation and company-counsel practice quoted per engagement."
-                ),
+                summary: locales::nautilus(&views::brand::DEFAULT_BRANDING, None).meta_description,
                 pages: indexed_pages(mark),
                 sections: [("Workshop Corpus", "workshops")]
                     .into_iter()
@@ -398,7 +395,12 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
         indexed_page(
             mark,
             "/",
-            "Counsel for technology companies. $5,000 once for contracts within the agreed scope. Company formation, financings, acquisitions, exits, and excluded agreements carry extra fees. Ongoing counsel starts at $100/day, with contract reviews returned within three business days; additional flat fees may apply and are quoted in the engagement letter. Contracts include 50 pages; each additional page is $5. Separate $10,000 retainer.",
+            &locales::nautilus(&views::brand::DEFAULT_BRANDING, None).meta_description,
+        ),
+        indexed_page(
+            "Business counsel",
+            "/business",
+            &locales::fractional_gc(&views::brand::DEFAULT_BRANDING).meta_description,
         ),
         services_page_link(),
         indexed_page(
