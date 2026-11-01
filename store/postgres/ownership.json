@@ -534,6 +534,12 @@
     "scope": "identity",
     "through": "identity ownership and explicit Person/Entity links; no inferred participation"
   },
+  "person_phone": {
+    "scope": "identity",
+    "through": "person_id record link to the Person the number belongs to; no inferred participation",
+    "migration_slice": "identity-storage",
+    "parity_scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes"
+  },
   "person_project_role": {
     "migration_slice": "tenancy-storage",
     "parity_scenario": "unique Person/Project participation; participation derives from role; no source-forge access grant",
@@ -591,6 +597,13 @@
     "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "scope": "project",
     "through": "project_id -> Project.firm_id"
+  },
+  "project_folder": {
+    "migration_slice": "project-folder-storage",
+    "parity_scenario": "typed slots; idempotent immutable bindings; same-project parents; global provider identity isolation",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id; PostgreSQL-authoritative with no Surreal source"
   },
   "project_handoff": {
     "migration_slice": "project-handoff",
@@ -770,11 +783,5 @@
     "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "scope": "project",
     "through": "project_id -> Project.firm_id"
-  },
-  "person_phone": {
-    "scope": "identity",
-    "through": "person_id record link to the Person the number belongs to; no inferred participation",
-    "migration_slice": "identity-storage",
-    "parity_scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes"
   }
 }

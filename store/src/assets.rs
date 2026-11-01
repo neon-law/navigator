@@ -144,6 +144,12 @@ pub struct Asset {
 }
 
 impl Asset {
+    /// Explicit checkout placement of a provider import, independent of its slug.
+    #[must_use]
+    pub fn drive_checkout_path(&self) -> Option<&str> {
+        self.metadata.as_ref()?.get("drive_checkout_path")?.as_str()
+    }
+
     /// Where this document sits below a Project checkout's `documents/`, by
     /// the same rule `navigator project sync` lays it out with: the slug, or
     /// the filename of a one-off, in the matter folder its kind maps to. A
@@ -156,6 +162,9 @@ impl Asset {
             .as_deref()
             .or(self.filename.as_deref())
             .unwrap_or_default();
+        if let Some(path) = self.drive_checkout_path() {
+            return path.to_owned();
+        }
         crate::document_pointers::documents_path(
             name,
             crate::document_pointers::MatterFolder::for_kind(
@@ -2150,6 +2159,8 @@ pub async fn repair_missing_object(
 /// Why a [`file_revision`] call wrote nothing.
 #[derive(Debug, thiserror::Error)]
 pub enum RevisionError {
+    #[error("recursive Drive document metadata must be a JSON object")]
+    InvalidTreeMetadata,
     /// The kind names a Markdown lane value (`workshop`, `post`) or is
     /// not vocabulary at all. The asset lane is closed: see
     /// [`rules::kind::Kind::valid_for`].
@@ -2260,7 +2271,29 @@ async fn file_revision_inner(
     };
 
     let latest = current(db, args.project_id, slug, Lens::Lawyer).await?;
-
+    let mut preserved_identity = identity.clone();
+    if let Some(head) = latest
+        .as_ref()
+        .filter(|head| head.drive_checkout_path().is_some())
+    {
+        let metadata = preserved_identity
+            .metadata
+            .get_or_insert_with(|| serde_json::json!({}));
+        if !metadata.is_object() {
+            return Err(RevisionError::InvalidTreeMetadata);
+        }
+        if let (Some(target), Some(source)) = (
+            metadata.as_object_mut(),
+            head.metadata
+                .as_ref()
+                .and_then(serde_json::Value::as_object),
+        ) {
+            for (key, value) in source.iter().filter(|(key, _)| key.starts_with("drive_")) {
+                target.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+    }
+    let identity = &preserved_identity;
     if let Some(head) = latest {
         // Rule 2 — kind is immutable across the chain.
         if let Some(existing) = head.kind.as_deref() {
@@ -2283,6 +2316,58 @@ async fn file_revision_inner(
     // Rule 4 — a superseded revision is internal by default.
     demote_superseded(db, args.project_id, slug, doc.asset_id).await?;
     Ok(Filed::Revision(doc))
+}
+
+/// Refresh a verified import's source receipt and placement without forking its identity.
+pub(crate) async fn refresh_drive_import(
+    db: &SurrealDb,
+    project_id: Uuid,
+    asset_id: Uuid,
+    file_id: &str,
+    receipt: &serde_json::Value,
+    filename: &str,
+) -> Result<(), AssetError> {
+    let head = find_by_id(db, asset_id)
+        .await?
+        .ok_or(AssetError::WriteReturnedNothing)?;
+    if head.project_id != Some(project_id)
+        || head
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("drive_file_id"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|id| id != file_id)
+    {
+        return Err(AssetError::WriteReturnedNothing);
+    }
+    let mut metadata = head
+        .metadata
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let target = metadata
+        .as_object_mut()
+        .ok_or(AssetError::WriteReturnedNothing)?;
+    for (key, value) in receipt
+        .as_object()
+        .ok_or(AssetError::WriteReturnedNothing)?
+    {
+        target.insert(key.clone(), value.clone());
+    }
+    if head.metadata.as_ref() == Some(&metadata) && head.filename.as_deref() == Some(filename) {
+        return Ok(());
+    }
+    let response = writing(|| {
+        db.query("UPDATE $id SET metadata=$metadata, filename=$filename, updated_at=time::now()")
+            .bind(("id", record_id(TABLE, asset_id)))
+            .bind(("metadata", metadata.clone()))
+            .bind(("filename", filename.to_owned()))
+    })
+    .await?;
+    if one(response)?.is_none() {
+        return Err(AssetError::WriteReturnedNothing);
+    }
+    mirror_writes(db, &[asset_id]).await;
+    Ok(())
 }
 
 /// Set every revision of `(project_id, slug)` except `current` to

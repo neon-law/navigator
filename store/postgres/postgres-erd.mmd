@@ -987,6 +987,7 @@ erDiagram
         datetime expires_at
         uuid id
         datetime inserted_at
+        uuid notation_id
         uuid project_id
         string slug
         string source
@@ -1275,6 +1276,16 @@ erDiagram
         string status
         string title
         datetime updated_at
+    }
+    project_folder {
+        string drive_folder_id
+        uuid id
+        datetime inserted_at
+        string parent_drive_folder_id
+        uuid parent_id
+        uuid project_id
+        string slot
+        datetime verified_at
     }
     project_handoff {
         datetime created_at
@@ -1780,6 +1791,7 @@ erDiagram
     template }o--|| notation : references
     notation }o--|| notation_clause : references
     person }o--|| notation_clause : references
+    notation }o--|| notation_draft : references
     project }o--|| notation_draft : references
     notation }o--|| notation_event : references
     person }o--|| notation_event : references
@@ -1808,6 +1820,8 @@ erDiagram
     asset }o--|| project_deadlines : references
     person }o--|| project_deadlines : references
     project }o--|| project_deadlines : references
+    project }o--|| project_folder : references
+    project_folder }o--|| project_folder : references
     project_handoff }o--|| project_handoff_acknowledgment : references
     person }o--|| project_module : references
     project }o--|| project_module : references

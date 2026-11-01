@@ -22,7 +22,7 @@
 
 use std::collections::VecDeque;
 use std::io::{BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
@@ -98,7 +98,9 @@ pub fn as_ci_project_code() -> Result<String> {
     crate::projects::manifest::read(Path::new("."))
         .and_then(|manifest| manifest.project)
         .ok_or_else(|| {
-            anyhow!("--as-ci needs a Project checkout: navigator.yaml names the project CI is scoped to")
+            anyhow!(
+                "--as-ci needs a Project checkout: navigator.yaml names the project CI is scoped to"
+            )
         })
 }
 
@@ -866,6 +868,8 @@ pub(crate) struct RevisionsResponse {
 /// server applies the caller's matter lens before this shape reaches the CLI.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LiveDocumentSummary {
+    #[serde(default)]
+    pub(crate) metadata: Option<serde_json::Value>,
     pub(crate) id: Uuid,
     pub(crate) byte_size: i64,
     pub(crate) sha256_hex: String,
@@ -1096,7 +1100,7 @@ impl DocumentClient {
                     return Err(anyhow!(
                         "document integrity paging did not advance: the server answered \
                          next_offset {next} for offset {offset}"
-                    ))
+                    ));
                 }
             }
         }
@@ -2909,8 +2913,11 @@ fn bytes_relative(key: &str) -> String {
 fn laid_out_bytes_relative(dir: &Path, key: &str, pointer: &str) -> String {
     match crate::document_sync::read_pointer(&dir.join(pointer)) {
         Ok(Some(pointer)) => {
-            let relative =
-                crate::document_layout::bytes_relative(Path::new(key), pointer.matter_folder());
+            let relative = if let Some(path) = pointer.checkout_path.as_deref() {
+                PathBuf::from(path)
+            } else {
+                crate::document_layout::bytes_relative(Path::new(key), pointer.matter_folder())
+            };
             format!(
                 "{}/{}",
                 crate::document_sync::DOCUMENT_DIRECTORY,
@@ -2930,7 +2937,14 @@ fn validate_local_pointer_move(dir: &Path, previous: &str, new_slug: &str) -> Re
         return Ok(());
     };
     let target_bytes = laid_out_bytes_relative(dir, new_slug, &blob_relative(&source));
-    for relative in [blob_relative(new_slug), target_bytes] {
+    let source_bytes = laid_out_bytes_relative(dir, &source, &blob_relative(&source));
+    for relative in [
+        Some(blob_relative(new_slug)),
+        (target_bytes != source_bytes).then_some(target_bytes),
+    ]
+    .into_iter()
+    .flatten()
+    {
         if dir.join(&relative).exists() {
             return Err(anyhow!(
                 "{relative} already exists in the checkout; no live or local move was made"
@@ -2971,7 +2985,8 @@ fn move_local_pointer(dir: &Path, previous: &str, new_slug: &str) -> Result<Opti
     });
     let target_bytes_relative = laid_out_bytes_relative(dir, new_slug, &source);
     let target_bytes = dir.join(&target_bytes_relative);
-    if target_bytes.exists() {
+    let same_placement = source_bytes_relative.as_deref() == Some(target_bytes_relative.as_str());
+    if target_bytes.exists() && !same_placement {
         return Err(anyhow!(
             "the document moved, but {target_bytes_relative} already exists in the checkout; \
              leave {source} in place and run `navigator project gate --check`"
@@ -2983,7 +2998,7 @@ fn move_local_pointer(dir: &Path, previous: &str, new_slug: &str) -> Result<Opti
     let moved_bytes = match source_bytes_relative {
         Some(ref source_bytes_relative) => {
             let source_bytes = dir.join(source_bytes_relative);
-            if source_bytes.is_file() {
+            if source_bytes.is_file() && !same_placement {
                 if let Some(parent) = target_bytes.parent() {
                     std::fs::create_dir_all(parent)
                         .with_context(|| format!("create {}", parent.display()))?;
@@ -4160,25 +4175,31 @@ pub async fn notation_create(
 }
 
 /// Server response to a notation-draft POST: the draft's path on the
-/// deployment. Joined with `base` to print and open the full URL.
+/// deployment, plus the notation run the push opened (LAW-203). Joined
+/// with `base` to print and open the full URLs.
 #[derive(Debug, Deserialize)]
 struct NotationDraftCreated {
     id: Uuid,
     path: String,
+    /// The run the push opened, when it opened one.
+    notation_id: Option<Uuid>,
+    /// The lawyer-side path of the run's questionnaire.
+    run_path: Option<String>,
 }
 
 /// `navigator notation preview <file>` (LAW-29) — push a template as a
 /// **draft** to the Project it belongs to: `POST
-/// /app/projects/{project_code}/notations/draft`. Unlike [`notation_create`],
-/// this creates no Notation and starts no questionnaire — the server-side
-/// handler stores the draft alone (see `store::notation_drafts`). Returns
-/// the draft's id and its full URL on the deployment.
+/// /app/projects/{project_code}/notations/draft`. The push persists and
+/// validates the pushed source, enforces the engagement-first rule, and
+/// opens a real notation run — the server returns the draft's path and
+/// the run's (see `portal::notation_draft`). Returns the draft's id, the
+/// run's id when one opened, and the draft's full URL on the deployment.
 pub(crate) async fn create_notation_draft(
     host: Option<&str>,
     project_code: &str,
     slug: &str,
     source: &str,
-) -> Result<(Uuid, String)> {
+) -> Result<(Uuid, Option<Uuid>, String)> {
     let (base, token) = resolve(host)?;
     let client = reqwest::Client::new();
     let url = format!("{base}/app/projects/{project_code}/notations/draft");
@@ -4199,7 +4220,11 @@ pub(crate) async fn create_notation_draft(
     }
     let created: NotationDraftCreated =
         resp.json().await.context("parse notation-draft response")?;
-    Ok((created.id, format!("{base}{}", created.path)))
+    Ok((
+        created.id,
+        created.notation_id,
+        format!("{base}{}", created.path),
+    ))
 }
 
 /// `navigator site notation list --project <code>` — inspect the private
@@ -4471,11 +4496,11 @@ pub async fn intake_answer(
                     } else {
                         if persons_consumed {
                             return Err(anyhow!(
-                            "question `{}` is a people_list but every --person row was already \
+                                "question `{}` is a people_list but every --person row was already \
                              consumed by an earlier one; this matter has more than one — answer \
                              it interactively",
-                            question.code,
-                        ));
+                                question.code,
+                            ));
                         }
                         persons_consumed = true;
                         crate::intake::people_list_fields(&parsed_persons)
@@ -5695,6 +5720,7 @@ mod tests {
         let server_uri = server.uri();
         let _env = CredentialsEnv::new(&server_uri);
         let draft_id = Uuid::now_v7();
+        let run_id = Uuid::now_v7();
 
         Mock::given(method("POST"))
             .and(path("/app/projects/acme/notations/draft"))
@@ -5705,12 +5731,17 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": draft_id,
                 "path": format!("/notations/drafts/{draft_id}"),
+                "notation_id": run_id,
+                "run_path": format!("/app/lawyer/notations/{run_id}/step"),
             })))
             .expect(1)
             .mount(&server)
             .await;
 
-        let (id, url) = create_notation_draft(
+        // The push hands back the run it opened (LAW-203) beside the
+        // draft — the CLI prints it so the lawyer knows the preview is
+        // backed by a real questionnaire.
+        let (id, run, url) = create_notation_draft(
             Some(&server_uri),
             "acme",
             "sample-letter",
@@ -5720,6 +5751,7 @@ mod tests {
         .expect("the draft is pushed");
 
         assert_eq!(id, draft_id);
+        assert_eq!(run, Some(run_id));
         assert_eq!(url, format!("{server_uri}/notations/drafts/{draft_id}"));
     }
 
@@ -7485,6 +7517,7 @@ mod tests {
         let pointer_path = root.path().join("blobs/cases/order.docx.yml");
         std::fs::create_dir_all(pointer_path.parent().unwrap()).unwrap();
         let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "filing".into(),
             visibility: "internal".into(),
             folder: None,
@@ -8835,7 +8868,9 @@ mod tests {
     #[test]
     fn trimmed_body_drops_markup_and_collapses_whitespace() {
         assert_eq!(
-            trimmed_body("<html><head><title>502 Bad Gateway</title></head>\n<body>\n  upstream  down\n</body></html>"),
+            trimmed_body(
+                "<html><head><title>502 Bad Gateway</title></head>\n<body>\n  upstream  down\n</body></html>"
+            ),
             "502 Bad Gateway upstream down"
         );
         assert_eq!(trimmed_body("  \n"), "(empty response)");

@@ -2324,10 +2324,12 @@ enum NotationCmd {
     /// against the host that repository targets. Refuses outside a
     /// Project repository rather than falling back to a local render.
     ///
-    /// The draft is stored and addressable but explicitly **not run**: no
-    /// Notation row, no workflow instance, no `intake_submitted`, no
-    /// PDF — nothing that could be mistaken for an executed instrument or
-    /// a filed document. It carries a short TTL rather than accumulating.
+    /// The push opens a **real notation run** on the matter (LAW-203):
+    /// the pushed source is persisted and validated like any other
+    /// template version, the engagement-first rule applies, and the
+    /// questionnaire's state machine starts — the draft page hands off to
+    /// it. What a preview never does is anything a signature or a filing
+    /// does: no document is sent, signed, or filed by previewing.
     Preview {
         /// The template to push: a path, or a notation `code` looked up
         /// under `templates/` and then `templates/notations/`. Underscores

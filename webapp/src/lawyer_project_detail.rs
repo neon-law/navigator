@@ -593,6 +593,9 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         crate::sections::PageLens::Lawyer,
     )
     .await;
+    let (verified_drive_root, verified_submissions) =
+        crate::project_resources::verified_drive_links(&surreal, person_id, role, id).await;
+
     Ok(LawyerDetailView {
         page_tabs,
         id: project.id.to_string(),
@@ -608,9 +611,10 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         resources: crate::project_resources::ProjectResourcesView {
             resources: crate::project_resources::visible_resources(
                 &crate::project_resources::ProjectResourceLinks {
+                    client_submissions_folder_id: verified_submissions,
                     private_slack_channel_url: project.internal_slack_channel_url,
                     private_notion_page_url: project.private_notion_page_url,
-                    drive_folder_id: project.drive_folder_id,
+                    drive_folder_id: verified_drive_root,
                     shared_slack_channel_url: project.external_slack_channel_url,
                     shared_notion_page_url: project.shared_notion_page_url,
                     calendar_id: project.calendar_id,
@@ -692,17 +696,17 @@ pub fn LawyerProjectDetail() -> Element {
         Some(Ok(_)) => {
             return rsx! {
                 main { id: "lawyer-project", p { "That project was not found." } }
-            }
+            };
         }
         Some(Err(_)) => {
             return rsx! {
                 main { id: "lawyer-project", p { "Failed to load this project." } }
-            }
+            };
         }
         None => {
             return rsx! {
                 main { id: "lawyer-project", p { "Loading…" } }
-            }
+            };
         }
     };
 

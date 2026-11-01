@@ -602,6 +602,7 @@ fn desired_pointer(
             _ => (None, None, None, None, None, None),
         };
     let pointer = DocumentPointer {
+        checkout_path: None,
         kind: kind.to_string(),
         visibility: operative.visibility.clone(),
         // The live chain has no folder; a committed one is kept (LAW-189).
@@ -781,7 +782,7 @@ pub(crate) fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>
             return Err(match cloud_storage_permission_note(&error, documents) {
                 Some(note) => anyhow!("{}: {note}", documents.display()),
                 None => io_error_with(error, documents, "inspect"),
-            })
+            });
         }
     }
     let mut errors = Vec::new();
@@ -939,7 +940,7 @@ fn resolve_drive_local_in(project: &str, cloud_storage: &Path) -> Result<PathBuf
             return Err(match cloud_storage_permission_note(&error, cloud_storage) {
                 Some(note) => anyhow!("{}: {note}", cloud_storage.display()),
                 None => io_error_with(error, cloud_storage, "read"),
-            })
+            });
         }
     };
     let mut found = Vec::new();
@@ -950,7 +951,7 @@ fn resolve_drive_local_in(project: &str, cloud_storage: &Path) -> Result<PathBuf
                 return Err(match cloud_storage_permission_note(&error, cloud_storage) {
                     Some(note) => anyhow!("{}: {note}", cloud_storage.display()),
                     None => io_error_with(error, cloud_storage, "read"),
-                })
+                });
             }
         };
         if !mount

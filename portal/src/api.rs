@@ -4983,7 +4983,7 @@ async fn upload_document_door(
                 return Ok(bad_request(
                     "invalid_base64",
                     "content_base64 is not valid base64.",
-                ))
+                ));
             }
         }
     };
@@ -5588,6 +5588,7 @@ async fn document_pointer(
         ApiError::Db("a filed document revision could not be read back".to_string())
     })?;
     Ok(store::document_pointers::DocumentPointer {
+        checkout_path: current.drive_checkout_path().map(str::to_owned),
         kind: kind.to_string(),
         visibility: current.visibility.clone(),
         folder: None,

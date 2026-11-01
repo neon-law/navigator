@@ -15,6 +15,9 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DocumentPointer {
+    /// Explicit checkout-relative placement, independent of the document slug.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout_path: Option<String>,
     /// A Project-document classification from the closed asset-lane
     /// vocabulary. Empty when [`Self::authority_id`] is set: an Authority
     /// capture (`blobs/cases/**`, `blobs/rules/**`) is archived under
@@ -316,6 +319,8 @@ pub struct PointerVersion {
 /// Why a pointer cannot name a valid document revision.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PointerError {
+    #[error("checkout_path must be a safe relative file path")]
+    CheckoutPath,
     #[error("kind `{0}` is not an accepted document kind")]
     Kind(String),
     /// An Authority-backed pointer (`authority_id` set) is never a Project
@@ -364,6 +369,20 @@ impl DocumentPointer {
     /// # Errors
     /// The first semantic pointer violation.
     pub fn validate(&self) -> Result<(), PointerError> {
+        if self.checkout_path.as_deref().is_some_and(|path| {
+            path.is_empty()
+                || path.len() > 4096
+                || path.split('/').any(|part| {
+                    part.is_empty()
+                        || matches!(part, "." | "..")
+                        || part.len() > 255
+                        || part.contains('\\')
+                        || part.chars().any(char::is_control)
+                })
+        }) {
+            return Err(PointerError::CheckoutPath);
+        }
+
         if self.authority_id.is_some() {
             if !self.kind.is_empty() {
                 return Err(PointerError::KindOnAuthority(self.kind.clone()));
@@ -414,6 +433,7 @@ mod tests {
 
     fn pointer() -> DocumentPointer {
         DocumentPointer {
+            checkout_path: None,
             kind: "agreement".into(),
             visibility: "internal".into(),
             folder: None,
