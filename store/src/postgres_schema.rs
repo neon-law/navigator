@@ -1267,6 +1267,10 @@ mod tests {
                 ),
             ),
             (
+                "20261101040000_add_notation_draft_run.sql",
+                include_str!("../postgres/migrations/20261101040000_add_notation_draft_run.sql"),
+            ),
+            (
                 "20261101100000_create_document_upload_session.sql",
                 include_str!("../postgres/migrations/20261101100000_create_document_upload_session.sql"),
             ),

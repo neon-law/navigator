@@ -987,6 +987,7 @@ erDiagram
         datetime expires_at
         uuid id
         datetime inserted_at
+        uuid notation_id
         uuid project_id
         string slug
         string source
@@ -1780,6 +1781,7 @@ erDiagram
     template }o--|| notation : references
     notation }o--|| notation_clause : references
     person }o--|| notation_clause : references
+    notation }o--|| notation_draft : references
     project }o--|| notation_draft : references
     notation }o--|| notation_event : references
     person }o--|| notation_event : references

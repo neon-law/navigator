@@ -1248,6 +1248,7 @@
         "expires_at": "datetime",
         "id": "record",
         "inserted_at": "datetime",
+        "notation_id": "option<record<notation>>",
         "project_id": "record<project>",
         "slug": "string",
         "source": "string",
@@ -3722,6 +3723,7 @@
           "expires_at": "TIMESTAMPTZ",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
           "project_id": "UUID",
           "slug": "TEXT",
           "source": "TEXT",
@@ -3729,12 +3731,17 @@
         },
         "foreign_keys": [
           [
+            "notation_id",
+            "notation"
+          ],
+          [
             "project_id",
             "project"
           ]
         ],
         "name": "notation_draft",
         "references": [
+          "notation",
           "project"
         ]
       },

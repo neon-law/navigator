@@ -40,7 +40,7 @@ Feature: Public routing on the firm's own host
 
     Examples:
       | host                           | brand                    | title                                      | copy                                  |
-      | staging.neonlaw.com            | Neon Law                 | Neon Law \| Home                           | Keep building.                         |
+      | staging.neonlaw.com            | Neon Law                 | Neon Law \| Home                           | Your shell in a connected world.       |
       | staging.deleteyourdata.com     | DeleteYourData.com       | DeleteYourData.com \| Home                  | Your Life. Less Exposed.               |
       | staging.vestaestateplanning.com | Vesta Estate Planning    | Vesta Estate Planning \| Home    | Your life is part of a larger story.   |
       | staging.misericordialaw.com     | Misericordia Injury Law  | Misericordia Injury Law \| Home  | You were hurt. We are here to listen.  |
@@ -83,14 +83,11 @@ Feature: Public routing on the firm's own host
       | /notations |
       | /contact   |
       | /services  |
+      | /business  |
 
   Scenario Outline: A retired practice path answers 404 rather than redirecting
-    # `/business` and `/disputes` no longer name a page. They answer the same
-    # `404` as a path that never existed, and carry no `Location`: a reader
-    # who follows an old link is told the page is gone rather than silently
-    # rerouted to the root, where they would have to find the section
-    # themselves. `/services` is not in this list: it answers the firm's fee
-    # schedule again.
+    # `/disputes` has no public page and returns 404 without a Location.
+    # `/business` and `/services` are published anonymous pages.
     When a visitor opens <path>
     Then the response status is 404
     And the response carries no redirect
@@ -98,7 +95,13 @@ Feature: Public routing on the firm's own host
     Examples:
       | path      |
       | /disputes |
-      | /business |
+
+  Scenario: Business counsel is separate from the subscription home
+    When a visitor opens /business
+    Then the response status is 200
+    And the page is branded "Neon Law"
+    And the response body contains "contract-library access"
+    And the response body does not contain "data-nautilus-intake"
 
   Scenario Outline: A path with no firm page answers 404
     When a visitor opens <path>

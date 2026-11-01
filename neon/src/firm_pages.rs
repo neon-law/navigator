@@ -1519,13 +1519,23 @@ fn resolve_firm_contact_content(
 /// Brand-safe like [`resolve_firm_contact_content`]: the `<title>` names the
 /// mounted brand, resolved at router-build time.
 ///
-/// Neon presents membership, the one-time setup fee, and booking on one page.
+/// Neon presents the Nautilus subscription through the shared marketing bands.
 /// Other house brands resolve their own home catalogs.
 pub(crate) fn resolve_firm_home_content(
     branding: &views::brand::Branding,
     deployment_host: Option<&str>,
 ) -> webapp::home::HomeContent {
     match branding.brand_key {
+        BrandKey::Neon => {
+            let page = firm_copy::nautilus(branding, deployment_host);
+            webapp::home::HomeContent {
+                head_title: page.head_title.clone(),
+                meta_description: page.meta_description.clone(),
+                heading: page.tagline.clone(),
+                marketing_page: Some(page),
+                ..Default::default()
+            }
+        }
         BrandKey::LawyerShook => lawyer_shook_holding_content(branding),
         // Guieb & Shook reads its own `home.yaml` like every other practice
         // brand; only the account invitation stays closed on the firm's own
@@ -1535,8 +1545,7 @@ pub(crate) fn resolve_firm_home_content(
             content.signup = None;
             content
         }
-        BrandKey::Neon
-        | BrandKey::DeleteYourData
+        BrandKey::DeleteYourData
         | BrandKey::Vesta
         | BrandKey::Misericordia
         | BrandKey::Abhaya
@@ -1645,6 +1654,28 @@ mod home_page_tests {
     use super::resolve_firm_home_content;
     use views::brand::BrandKey;
 
+    #[test]
+    fn neon_home_publishes_nautilus_without_changing_other_brand_homes() {
+        let home = resolve_firm_home_content(&views::brand::DEFAULT_BRANDING, None);
+        assert!(
+            home.marketing_page
+                == Some(super::firm_copy::nautilus(
+                    &views::brand::DEFAULT_BRANDING,
+                    None
+                )),
+            "Neon's home uses the same Nautilus content as /nautilus"
+        );
+        assert!(home.company.is_none());
+        assert!(home.signup.is_none());
+        for key in BrandKey::ALL.iter().filter(|key| **key != BrandKey::Neon) {
+            let content = resolve_firm_home_content(
+                key.resolve_branding(&views::brand::DEFAULT_BRANDING),
+                None,
+            );
+            assert!(content.marketing_page.is_none(), "{}", key.as_str());
+        }
+    }
+
     /// Every registered brand has a deliberate home surface: authored design
     /// copy, a holding statement, or an explicit Coming Soon notice.
     #[test]
@@ -1652,16 +1683,17 @@ mod home_page_tests {
         for key in BrandKey::ALL {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             let content = resolve_firm_home_content(branding, None);
-            let authored_design = !content.heading.is_empty()
-                && (content.service.is_some()
-                    || content.estate.is_some()
-                    || content.privacy.is_some()
-                    || content.company.is_some()
-                    || content.daybridge.is_some()
-                    || content.death_and_divorce.is_some()
-                    || content.cyber_injury.is_some()
-                    || content.summons.is_some()
-                    || !content.practices.is_empty());
+            let authored_design = content.marketing_page.is_some()
+                || !content.heading.is_empty()
+                    && (content.service.is_some()
+                        || content.estate.is_some()
+                        || content.privacy.is_some()
+                        || content.company.is_some()
+                        || content.daybridge.is_some()
+                        || content.death_and_divorce.is_some()
+                        || content.cyber_injury.is_some()
+                        || content.summons.is_some()
+                        || !content.practices.is_empty());
             let holding_design = content
                 .bare
                 .as_ref()

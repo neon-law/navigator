@@ -228,7 +228,18 @@ pub fn NotationPreviewPage(
                         }
                     }
                 }
-                p { class: "nav-muted", "This is a synthetic preview; nothing you type below is saved." }
+                // A local author preview (LAW-203) is dry by design — it
+                // creates no notation run — and says so, with the door to
+                // the real thing. A published-catalog preview keeps the
+                // standing synthetic-preview line.
+                if mode == NotationPreviewMode::Local {
+                    p { class: "nav-muted",
+                        "Dry preview: this local rendering opens no notation run. "
+                        "Push it with `navigator notation preview --push` to run it for real."
+                    }
+                } else {
+                    p { class: "nav-muted", "This is a synthetic preview; nothing you type below is saved." }
+                }
                 if let Some(error) = &content.questionnaire_error {
                     {questionnaire_error_panel(error)}
                 }
@@ -466,6 +477,39 @@ mod tests {
         assert!(out.contains("Scope of the engagement"), "body: {out}");
         assert!(out.contains("Try answering this"), "questionnaire: {out}");
         assert!(out.contains("notation-workflow"), "workflow: {out}");
+    }
+
+    /// LAW-203's honest label: a local author preview is dry — it opens no
+    /// notation run — and the page says so, with the push command that does
+    /// run it for real. A published-catalog preview keeps its own standing
+    /// line and never mentions the CLI door.
+    #[test]
+    fn a_local_preview_is_labeled_dry_and_a_published_one_is_not() {
+        fn app(mode: NotationPreviewMode) -> Element {
+            let chrome = PublicChrome {
+                brand_name: "Neon Law".to_string(),
+                ..PublicChrome::default()
+            };
+            rsx! { NotationPreviewPage { chrome, content: letter_content(), mode } }
+        }
+        let local = ssr(|| app(NotationPreviewMode::Local));
+        assert!(
+            local.contains("Dry preview: this local rendering opens no notation run"),
+            "the dry label: {local}"
+        );
+        assert!(
+            local.contains("navigator notation preview --push"),
+            "the door to the real run: {local}"
+        );
+        let published = ssr(|| app(NotationPreviewMode::Published));
+        assert!(
+            published.contains("This is a synthetic preview; nothing you type below is saved."),
+            "the standing line: {published}"
+        );
+        assert!(
+            !published.contains("Dry preview"),
+            "a published-catalog preview is not the dry local one: {published}"
+        );
     }
 
     #[test]

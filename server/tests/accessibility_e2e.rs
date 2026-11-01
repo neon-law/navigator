@@ -866,17 +866,17 @@ async fn public_navigation_images_and_collage_dialog_are_accessible() {
 
     assert_public_shell(&c).await;
     let cta = c
-        .find(Locator::Css(".company-hero a.nav-btn--primary"))
+        .find(Locator::Css(".fm-hero__cta"))
         .await
-        .expect("the home page has its contact call to action");
+        .expect("the subscription home has its enrollment call to action");
     let href = cta
         .attr("href")
         .await
         .expect("the home call to action has an href")
         .expect("the home call to action has an href");
     assert_eq!(
-        href, "https://calendar.notion.so/meet/nick-shook/or15n4yy7",
-        "the home call to action opens the consultation calendar"
+        href, "#enrollment",
+        "the home call to action reaches Nautilus enrollment"
     );
 
     c.goto(&format!("{site_base_url}/blog/thanks-apple"))

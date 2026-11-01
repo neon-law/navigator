@@ -134,6 +134,9 @@ pub struct ProvenancePillar {
 /// injected into the render context.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct HomeContent {
+    /// A home surface composed from the shared marketing bands.
+    #[serde(default)]
+    pub marketing_page: Option<crate::marketing_page::PageContent>,
     pub head_title: String,
     pub meta_description: String,
     /// The `og:description` override; `None` previews `meta_description`.
@@ -462,6 +465,17 @@ fn HomePageBody(
     #[props(default)] testimonials: Vec<TestimonialCard>,
     #[props(default)] video_posts: Vec<HomeVideoPost>,
 ) -> Element {
+    if let Some(page) = content.marketing_page.clone() {
+        return rsx! {
+            crate::marketing_page::MarketingPage {
+                chrome,
+                content: page,
+                lead_capture: lead_context,
+                query: String::new(),
+                path: "/".to_string(),
+            }
+        };
+    }
     if let Some(copy) = content.summons.clone() {
         return rsx! { summons::SummonsHome { chrome, content, copy, lead_capture, lead_context } };
     }
@@ -1006,6 +1020,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn marketing_home_uses_the_root_enrollment_context() {
+        fn page() -> Element {
+            rsx! { HomePage {
+                chrome: PublicChrome { canonical_origin: "https://www.example.com".into(), ..Default::default() },
+                content: HomeContent {
+                    marketing_page: Some(crate::marketing_page::PageContent {
+                        title: "Nautilus".into(),
+                        tagline: "Your shell in a connected world.".into(),
+                        bands: vec![crate::marketing_page::Band::Enrollment {
+                            heading: "Start".into(), body: String::new(), steps: vec![],
+                            next_label: "Next".into(), back_label: "Back".into(),
+                            submit_label: "Submit".into(), booking_label: String::new(),
+                            booking_body: String::new(), booking_href: String::new(),
+                        }],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                lead_context: LeadCaptureContext { csrf_token: "synthetic-csrf".into(), source_path: "/".into(), ..Default::default() },
+            } }
+        }
+        let mut dom = VirtualDom::new(page);
+        dom.rebuild_in_place();
+        let html = dioxus_ssr::render(&dom);
+        assert!(html.contains("Your shell in a connected world."), "{html}");
+        assert!(html.contains("data-nautilus-intake"), "{html}");
+        assert!(html.contains("synthetic-csrf"), "{html}");
+        assert!(html.contains(r#"name="source_path" value="/""#), "{html}");
+        assert!(!html.contains("company-pricing"), "{html}");
+    }
+
+    #[test]
     fn signed_in_visitors_are_not_prompted_to_create_an_account() {
         fn page() -> Element {
             rsx! { HomePage {
@@ -1131,6 +1177,7 @@ mod tests {
                     chrome: PublicChrome::default(),
                     content: HomeContent {
                         signup: None,
+                        marketing_page: None,
                         head_title: "Home".to_string(),
                         meta_description: "AI enablement for law firms.".to_string(),
                         og_description: None,

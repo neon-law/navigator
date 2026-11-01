@@ -3399,6 +3399,11 @@ CREATE TABLE sandbox_usage (
 );
 CREATE INDEX sandbox_usage_period ON sandbox_usage (period, overage);
 
+-- Migration: 20261101040000_add_notation_draft_run.sql
+-- A pushed preview may reference the real run it opened. Historical
+-- drafts retain NULL and remain readable without inventing a Notation.
+ALTER TABLE notation_draft ADD COLUMN notation_id UUID REFERENCES notation (id);
+
 -- Migration: 20261101100000_create_document_upload_session.sql
 -- Upload Sessions retain metadata and the acknowledged offset; chunk bytes stay in object storage.
 CREATE TABLE document_upload_session (

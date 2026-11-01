@@ -3011,6 +3011,7 @@ fn typst_body_from_template(
     ctx: &BTreeMap<String, String>,
     kind: Option<&str>,
 ) -> String {
+    let body = rules::frontmatter::split(body).map_or(body, |(_, body)| body);
     let format = kind
         .and_then(rules::Kind::parse)
         .and_then(|k| pdf::OutputFormat::parse(k.default_output()))
@@ -4199,6 +4200,17 @@ Sign: {{client.signature}}";
         assert!(!typst_source.contains("{{client.signature}}"));
         assert!(typst_source.contains("nlsig-client-signature-1"));
         assert_eq!(fields.len(), 1);
+    }
+
+    #[test]
+    fn stored_template_pdf_excludes_source_metadata() {
+        let source = "---\nkind: onboarding\nquestionnaire:\n  BEGIN: {}\n---\n\nThe law of {{law}} governs.";
+        let ctx = BTreeMap::from([("law".to_string(), "Nevada".to_string())]);
+        let typst = typst_body_from_template(source, &ctx, None);
+        assert!(typst.contains("The law of Nevada governs."));
+        assert!(!typst.contains("questionnaire"));
+        assert!(!typst.contains("onboarding"));
+        assert!(!typst.contains("BEGIN"));
     }
 
     #[test]

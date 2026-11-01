@@ -57,8 +57,8 @@ actual checks and review workflow. The user supplied the production-engineering 
 trust-deposit and page-limit disclosures remain pending any separate change to engagement terms.
 
 The user also confirmed 12 years of experience, nine figures in exits, and coverage of the agreements in the public
-library. The home page uses those aggregate facts without identifying clients, assigning a precise exit value, or
-promising a result. The service directory describes the firm's work beyond the nine public template drafts.
+library. The company-counsel catalog carries those aggregate facts without identifying clients, assigning a precise exit
+value, or promising a result. The service directory describes the firm's work beyond the nine public template drafts.
 
 Ferris is Karen Rustad Tölva’s public-domain artwork from [Rustacean.net](https://rustacean.net/), served locally as
 SVG.

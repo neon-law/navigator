@@ -179,6 +179,7 @@ pub fn App() -> Element {
                 notation_draft::NotationDraftPage {
                     chrome: view.chrome.clone(),
                     content: view.content.clone(),
+                    run_path: view.run_path.clone(),
                 }
             };
         }

@@ -13,21 +13,17 @@
 //! previewed as the Project whose repository it sits in — pushes the
 //! template to that deployment as a **draft**, and opens the browser at it.
 //!
-//! A draft is stored and addressable, but explicitly **not run**: creating
-//! one starts no workflow instance, journals no `intake_submitted`, and
-//! renders no PDF — nothing a draft creates could be mistaken for an
-//! executed instrument or a filed document (see `store::notation_drafts`).
-//!
-//! # `--offline`
-//!
-//! Outside a Project repository, or without a login, there is no
-//! deployment to push a draft to. `--offline` covers that case, but it is
-//! a **lint**, not a preview: a from-scratch local render of the same
+//! A pushed draft is backed by a **real notation run** (LAW-203): the push
+//! persists and validates the template source, enforces the same
+//! engagement-first rule `notation create` enforces, and opens the
+//! questionnaire's state machine on the matter — the draft page leads with
+//! the hand-off to it. `--offline` stays what it always was: a **lint**,
+//! not a preview — a from-scratch local render of the same
 //! [`portal::dioxus_app::notation_preview_router`] the firm's public site
-//! mounts, with no store connection, browser-only persistence, and no claim to be
-//! the surface a client will see. Good for catching a malformed
-//! questionnaire or workflow spec before it ever reaches a Project; not a
-//! substitute for opening the real draft.
+//! mounts, with no store connection, no run, and browser-only
+//! persistence. Good for catching a malformed questionnaire or workflow
+//! spec before it ever reaches a Project; not a substitute for the real
+//! run.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -90,13 +86,19 @@ pub async fn run(file: &Path, offline: bool, port: u16, host_override: Option<&s
         }
     );
 
-    let (draft_id, url) =
+    let (draft_id, run_id, url) =
         crate::remote::create_notation_draft(Some(host), &project_code, &slug, &found.src)
             .await
             .context("pushing the draft")?;
 
-    eprintln!("    draft {draft_id} — not run: no notation, no workflow, no PDF");
-    eprintln!("==> {url}");
+    if let Some(run_id) = run_id {
+        eprintln!("    draft {draft_id} — run {run_id} is open on the matter");
+        eprintln!("==> {url} (the draft page; the real questionnaire is one click from it)");
+    } else {
+        // Older deployments store an addressable draft without a run.
+        eprintln!("    draft {draft_id} — this deployment stores drafts without a run");
+        eprintln!("==> {url}");
+    }
     if open_browser(&url) {
         eprintln!("    opened in your browser.");
     } else {
