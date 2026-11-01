@@ -26,7 +26,7 @@ use crate::scraper::config::{self, ConfigError, ScraperConfig};
 use crate::scraper::credentials::{CredentialsError, LoginPresence, PortalLogins};
 use crate::scraper::fetcher::HttpFetcherOverReqwest;
 use crate::scraper::file::{DktFilingIntake, ProjectFilingStore};
-use crate::scraper::intake::{InboxIntake, UnwiredIntake};
+use crate::scraper::intake::{InboxIntake, StoreInboxIntake};
 use crate::scraper::retry::{RetryPolicy, TokioClock};
 use crate::scraper::session::SessionConfig;
 use crate::scraper::{registered_adapters, run_scraper, ScraperDeps};
@@ -62,8 +62,8 @@ pub(crate) enum ScraperCmd {
         headed: bool,
         /// File every fetched document straight into the Project checkout
         /// at the working directory, under its DKT name. Without this flag
-        /// the documents stage and the run reports them undelivered: the
-        /// omnichannel inbox intake is its own integration.
+        /// the documents enqueue into the omnichannel inbox for triage,
+        /// which needs the deployment's asset storage configured.
         #[arg(long)]
         file_dkt: bool,
     },
@@ -320,16 +320,39 @@ async fn run_site(
         headless: !headed,
         state_dir: state_root.clone(),
     });
-    // The intake seam's two pluggable implementations: straight DKT filing
-    // into this Project checkout, or (default, until its integration
-    // lands) the placeholder that reports documents staged but undelivered.
+    // The intake seam's two pluggable implementations, chosen once here:
+    // straight DKT filing into this Project checkout (needs nothing but
+    // the checkout), or (default) the omnichannel inbox — documents
+    // enqueue as `scraper`-channel messages with the bytes stored as
+    // content-addressed Assets, ready for triage. The inbox lane therefore
+    // also needs the asset storage the deployment configures (GCS, or the
+    // emulator endpoint in dev); missing config fails the run with the
+    // remedy named rather than silently dropping documents.
     let filing_store = ProjectFilingStore::new(project_root);
     let dkt_intake = DktFilingIntake::new(&filing_store);
-    let unwired = UnwiredIntake;
-    let intake: &dyn InboxIntake = if file_dkt { &dkt_intake } else { &unwired };
+    let surreal = std::sync::Arc::new(surreal);
+    let inbox_intake;
+    let intake: &dyn InboxIntake = if file_dkt {
+        &dkt_intake
+    } else {
+        let storage = match cloud::GcsStorageConfig::from_env() {
+            Ok(config) => match cloud::GcsStorage::new_from_config(config).await {
+                Ok(storage) => {
+                    std::sync::Arc::new(storage) as std::sync::Arc<dyn cloud::StorageService>
+                }
+                Err(error) => return exit_failure("connecting to asset storage", error),
+            },
+            Err(error) => return exit_failure(
+                "configuring asset storage — omnichannel intake stores documents as assets; set the storage environment or file into this checkout with --file-dkt",
+                error,
+            ),
+        };
+        inbox_intake = StoreInboxIntake::new(std::sync::Arc::clone(&surreal), storage, firm_id);
+        &inbox_intake
+    };
     let deps = ScraperDeps {
         sessions: &sessions,
-        surreal: &surreal,
+        surreal: surreal.as_ref(),
         firm_id,
         kms: kms.as_ref(),
         fetcher: &fetcher,

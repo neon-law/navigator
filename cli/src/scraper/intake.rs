@@ -1,8 +1,9 @@
 //! The outbound document hook: a fetched, hashed document handed into
 //! Navigator's omnichannel inbox — the same entry point support-app intake
-//! uses, and the only path toward a matter folder. This PR defines the
-//! interface and ships the test recording double; wiring the real inbox
-//! source is its own task.
+//! uses, and the only path toward a matter folder. Production hands
+//! documents to [`StoreInboxIntake`] (an inbox message with the bytes
+//! stored as a content-addressed Asset); tests record with
+//! [`RecordingIntake`].
 //!
 //! Naming is Navigator's own, not the scraper's: every document carries the
 //! `DKT NNNN[-att] - <title>.<ext>` name `store::cases::filing_name`
@@ -20,7 +21,6 @@ pub(crate) enum IntakeError {
     #[error("the omnichannel inbox rejected the document: {detail}")]
     Rejected { detail: String },
     #[error("the omnichannel inbox is temporarily unavailable: {detail}")]
-    #[cfg_attr(not(test), allow(dead_code))] // raised by the real inbox integration later
     Transient { detail: String },
 }
 
@@ -178,29 +178,138 @@ impl InboxIntake for FailingIntake {
     }
 }
 
-/// The production placeholder behind the intake seam: the omnichannel
-/// inbox source for scraped documents is its own integration task, and no
-/// site adapter is registered yet either. Until both land, this is what a
-/// run hands documents to, and it says so honestly instead of dropping
-/// bytes on the floor.
-#[derive(Debug, Default)]
-pub(crate) struct UnwiredIntake;
+/// The production intake: a scraped document becomes an omnichannel inbox
+/// message on the `scraper` channel — the same entry point the support app
+/// feeds — with the document bytes stored as a content-addressed Asset and
+/// attached, so triage sees an ordinary inbox row. The filing path is
+/// triage's, never the scraper's.
+///
+/// Threading: the inbox threads on `provider_thread_ref`, so one
+/// conversation collects every notice a site scraped for one docket.
+/// Idempotence: the inbox's dedupe key (Firm + channel + account +
+/// provider message id) is deterministic per notice, so a rerun of the
+/// same docket rediscovers the original delivery (`deduped: true`) rather
+/// than duplicating the row.
+pub(crate) struct StoreInboxIntake {
+    db: std::sync::Arc<store::surreal::SurrealDb>,
+    storage: std::sync::Arc<dyn cloud::StorageService>,
+    firm_id: uuid::Uuid,
+}
+
+impl StoreInboxIntake {
+    /// Wire the intake to a Firm's inbox over the given store and asset
+    /// storage (GCS in deployment, the filesystem emulator in dev).
+    pub(crate) fn new(
+        db: std::sync::Arc<store::surreal::SurrealDb>,
+        storage: std::sync::Arc<dyn cloud::StorageService>,
+        firm_id: uuid::Uuid,
+    ) -> Self {
+        Self {
+            db,
+            storage,
+            firm_id,
+        }
+    }
+}
+
+/// A storage or database hiccup is transient; a semantic refusal is not.
+fn intake_error(error: store::inbox::InboxError) -> IntakeError {
+    match error {
+        store::inbox::InboxError::Db(detail) => IntakeError::Transient {
+            detail: format!("the omnichannel store failed: {detail}"),
+        },
+        other => IntakeError::Rejected {
+            detail: other.to_string(),
+        },
+    }
+}
+
+/// The MIME type an attachment carries, from the document's extension.
+fn content_type_for(extension: &str) -> &'static str {
+    match extension.to_ascii_lowercase().as_str() {
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
+}
 
 #[async_trait::async_trait]
-impl InboxIntake for UnwiredIntake {
+impl InboxIntake for StoreInboxIntake {
     async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError> {
-        Err(IntakeError::Rejected {
-            detail: format!(
-                "the omnichannel intake for scraped documents is not wired yet; `{}` is staged but was not delivered",
-                document.filename
-            ),
+        // The bytes become a content-addressed Asset first — the same
+        // store and dedupe-by-sha the support app's attachments use — so
+        // the attachment link row's key always matches the stored content.
+        let asset_id = store::assets::ingest_content(
+            self.db.as_ref(),
+            &self.storage,
+            &document.bytes,
+            content_type_for(&document.extension),
+        )
+        .await
+        .map_err(|error| IntakeError::Transient {
+            detail: format!("storing the document asset failed: {error}"),
+        })?;
+
+        let provider_message_id = format!(
+            "{}:{}:{}",
+            document.site.as_str(),
+            document.docket,
+            document.entry_number
+        );
+        let body = format!(
+            "Scraped from {}: docket {}, entry {} — {} ({} bytes).",
+            document.site.as_str(),
+            document.docket,
+            document.entry_number,
+            document.title,
+            document.bytes.len()
+        );
+        let occurred_at = chrono::Utc::now().to_rfc3339();
+        let ingested = store::inbox::ingest_inbound(
+            self.db.as_ref(),
+            &store::inbox::IngestInbound {
+                // No project attribution at ingest time: like support-app
+                // intake, the conversation stays on the Firm until triage
+                // assigns it to the docket task's Project.
+                project_id: None,
+                firm_id: self.firm_id,
+                brand_key: None,
+                interaction_type: Some("message"),
+                provider_post_id: None,
+                parent_provider_message_id: None,
+                visibility: None,
+                channel: store::inbox::channel::SCRAPER,
+                provider_account: document.site.as_str(),
+                provider_message_id: &provider_message_id,
+                provider_thread_ref: Some(&document.docket),
+                external_address: document.site.as_str(),
+                external_name: Some(document.site.as_str()),
+                subject: Some(&document.filename),
+                body: &body,
+                source_page: None,
+                source_channel: Some(store::inbox::channel::SCRAPER),
+                matter_consent: false,
+                promotional_opt_in: false,
+                email_conversation_id: None,
+                attachments: vec![store::inbox::IngestAttachment {
+                    asset_id,
+                    filename: document.filename.clone(),
+                    sha256: document.sha256.clone(),
+                }],
+                occurred_at: &occurred_at,
+            },
+        )
+        .await
+        .map_err(intake_error)?;
+        Ok(IntakeReceipt {
+            message_id: ingested.message_id,
+            deduped: ingested.deduped,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{InboxIntake, IntakeError, RecordingIntake, ScrapedDocument, UnwiredIntake};
+    use super::{InboxIntake, IntakeError, RecordingIntake, ScrapedDocument, StoreInboxIntake};
     use crate::scraper::adapter::{NoticeRef, SiteKey};
 
     fn site() -> SiteKey {
@@ -280,27 +389,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_unwired_intake_rejects_and_names_the_staged_document() {
-        // The production placeholder must say honestly that bytes were
-        // staged but not delivered — never drop them silently.
-        let outcome = UnwiredIntake
+    async fn the_store_intake_enqueues_a_document_into_the_inbox() {
+        // The production intake against a real embedded store and the
+        // filesystem storage: the document becomes an omnichannel message
+        // on the scraper channel, and the same notice redelivered — a
+        // retried run, a lost ack — is the original row, not a duplicate.
+        let db = std::sync::Arc::new(store::surreal::test_support::mem().await);
+        let storage_root = tempfile::tempdir().expect("a storage root");
+        let storage: std::sync::Arc<dyn cloud::StorageService> = std::sync::Arc::new(
+            cloud::FsStorage::new(storage_root.path().to_path_buf())
+                .await
+                .expect("the filesystem storage opens"),
+        );
+        let firm_id = store::test_support::seed_firm_with_brand(db.as_ref(), "neon").await;
+        let intake = StoreInboxIntake::new(db, storage, firm_id);
+
+        let first = intake
             .enqueue(&document("4", "Notice of Hearing"))
-            .await;
-        let error = outcome.expect_err("the placeholder is not wired");
-        match error {
-            IntakeError::Rejected { detail } => {
-                assert!(
-                    detail.contains("DKT 0004 - Notice of Hearing.pdf"),
-                    "the error names the staged document: {detail}"
-                );
-                assert!(
-                    detail.contains("not wired"),
-                    "the error says the intake is not wired: {detail}"
-                );
-            }
-            IntakeError::Transient { .. } => {
-                panic!("expected a Rejected intake error, got a Transient one")
-            }
-        }
+            .await
+            .expect("the inbox accepts the document");
+        assert!(!first.deduped);
+
+        let second = intake
+            .enqueue(&document("4", "Notice of Hearing"))
+            .await
+            .expect("the redelivery is accepted");
+        assert!(second.deduped, "a redelivered notice dedupes");
+        assert_eq!(second.message_id, first.message_id);
     }
 }
