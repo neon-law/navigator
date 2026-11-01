@@ -40,6 +40,10 @@ pub mod channel {
     pub const THREADS: &str = "threads";
     pub const YOUTUBE: &str = "youtube";
     pub const TIKTOK: &str = "tiktok";
+    /// Court and program scrapers file their notices here. The Firm inbox
+    /// handles them exactly like any other intake: the message carries the
+    /// document as an attachment, and triage assigns it.
+    pub const SCRAPER: &str = "scraper";
 }
 
 pub mod direction {
@@ -532,8 +536,10 @@ pub async fn ingest_inbound(
     db: &SurrealDb,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
-    let channel_supported = matches!(inbound.channel, channel::EMAIL | channel::SMS)
-        || is_social_channel(inbound.channel);
+    let channel_supported = matches!(
+        inbound.channel,
+        channel::EMAIL | channel::SMS | channel::SCRAPER
+    ) || is_social_channel(inbound.channel);
     if !channel_supported
         || !matches!(
             inbound.interaction_type.unwrap_or("message"),
@@ -3033,6 +3039,34 @@ mod tests {
             .await
             .unwrap();
         assert!(foreign.is_empty());
+    }
+
+    /// Scraped notices enter the same ingest door as email and SMS: the
+    /// `scraper` channel is supported, the message dedupes on the run-spanning
+    /// notice identity, and triage sees it like any other intake.
+    #[tokio::test]
+    async fn scraper_channel_ingests_and_dedupes_like_other_intake() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let mut message = inbound(
+            world.firm,
+            channel::SCRAPER,
+            "la-superior",
+            "la-superior/0004/4",
+            "0004",
+        );
+        message.attachments = vec![attachment(
+            Uuid::now_v7(),
+            "DKT 0004 - Notice of Hearing.pdf",
+            "sha-dkt",
+        )];
+        let first = ingest_inbound(&db, &message).await.unwrap();
+        assert!(!first.deduped);
+
+        // A retry after a lost acknowledgment returns the original row.
+        let second = ingest_inbound(&db, &message).await.unwrap();
+        assert!(second.deduped);
+        assert_eq!(second.message_id, first.message_id);
     }
 
     #[tokio::test]
