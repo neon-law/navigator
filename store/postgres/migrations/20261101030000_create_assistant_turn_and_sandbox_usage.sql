@@ -28,6 +28,7 @@ CREATE TABLE sandbox_usage (
     spent_cents BIGINT NOT NULL CHECK (spent_cents >= 0),
     overage BOOLEAN NOT NULL DEFAULT false,
     inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (person_id, period)
 );
 CREATE INDEX sandbox_usage_period ON sandbox_usage (period, overage);
