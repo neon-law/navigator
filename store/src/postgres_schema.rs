@@ -1236,6 +1236,12 @@ mod tests {
                 "20261101020000_create_attorney_rates.sql",
                 include_str!("../postgres/migrations/20261101020000_create_attorney_rates.sql"),
             ),
+            (
+                "20261101030000_create_assistant_turn_and_sandbox_usage.sql",
+                include_str!(
+                    "../postgres/migrations/20261101030000_create_assistant_turn_and_sandbox_usage.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

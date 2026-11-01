@@ -1,0 +1,22 @@
+# Sandbox skill loading (`SandboxSkill` catalog + `SkillId` + system-context
+# rendering). Vendored Legal Aid Plugin instruction files are embedded at
+# compile time; no filesystem access, no LawDroid runtime dependency.
+[package]
+name = "sandbox-skills"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sandbox_skills"
+path = "src/lib.rs"
+
+[dependencies]
+# `SkillId` serializes: the gateway's `CompletionRequest` — which carries
+# the session's active skills — journals through serde.
+serde.workspace = true
+
+[lints]
+workspace = true

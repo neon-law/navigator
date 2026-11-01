@@ -1516,6 +1516,7 @@ dependencies = [
  "restate-sdk",
  "serde",
  "serde_json",
+ "sqlx",
  "store",
  "telemetry",
  "thiserror 2.0.21",
@@ -4776,6 +4777,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway"
+version = "26.11.2-rc.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "gcloud-auth",
+ "reqwest 0.13.5",
+ "sandbox-skills",
+ "serde",
+ "serde_json",
+ "store",
+ "thiserror 2.0.21",
+ "token-source",
+ "tokio",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "gcloud-auth"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7137,6 +7158,7 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
+ "wiremock",
  "workflows",
 ]
 
@@ -8471,6 +8493,7 @@ dependencies = [
  "flate2",
  "forms",
  "futures",
+ "gateway",
  "hmac 0.13.0",
  "http-body-util",
  "image",
@@ -9926,6 +9949,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "sandbox-skills"
+version = "26.11.2-rc.1"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
