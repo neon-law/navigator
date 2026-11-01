@@ -176,13 +176,15 @@ impl SiteAdapter for MockAdapter {
     async fn login(
         &self,
         _session: &BrowserSession,
-        login: &SiteLogin,
+        login: Option<&SiteLogin>,
     ) -> Result<(), AdapterError> {
         let step = {
             let mut core = self.core.lock().expect("mock adapter lock");
             core.login_calls += 1;
-            core.seen_logins
-                .push((login.username().to_owned(), login.password().to_owned()));
+            if let Some(login) = login {
+                core.seen_logins
+                    .push((login.username().to_owned(), login.password().to_owned()));
+            }
             core.login_script.pop_front()
         };
         match step {

@@ -2566,7 +2566,8 @@ DEFINE FIELD OVERWRITE updated_at ON email_conversation_message TYPE datetime DE
 DEFINE INDEX OVERWRITE email_conversation_message_conversation ON email_conversation_message
     FIELDS conversation_id;
 
--- `inbox_conversation`: one Firm-scoped email or SMS exchange. It stays on
+-- `inbox_conversation`: one Firm-scoped exchange — email, SMS, social, or
+-- a scraper's documents. It stays on
 -- the Firm until an Owner assigns `project_id`. Communication rows are a
 -- separate table and still require a Project; this row is the intake
 -- record that can exist before that boundary.
@@ -2577,7 +2578,7 @@ DEFINE FIELD OVERWRITE interaction_type ON inbox_conversation TYPE string DEFAUL
 DEFINE FIELD OVERWRITE provider_post_id ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE project_id ON inbox_conversation TYPE option<record<project>>;
 DEFINE FIELD OVERWRITE channel ON inbox_conversation TYPE string
-    ASSERT $value IN ['email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok'];
+    ASSERT $value IN ['email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'scraper'];
 DEFINE FIELD OVERWRITE external_address ON inbox_conversation TYPE string;
 DEFINE FIELD OVERWRITE external_name ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE subject ON inbox_conversation TYPE option<string>;

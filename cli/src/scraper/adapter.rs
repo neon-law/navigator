@@ -113,13 +113,15 @@ pub(crate) struct NoticeQuery {
 
 /// Why one adapter step failed. `Transient` is retried with backoff;
 /// `StructureDrift` hard-stops the run — nothing partial is ever filed off
-/// a portal whose selectors no longer match.
+/// a portal whose selectors no longer match — and `AccessDenied` hard-stops
+/// too: a portal refusing a fetch may need a credential the Firm has not
+/// provisioned, and retrying cannot fix that.
 #[derive(Debug, Clone, thiserror::Error)]
 pub(crate) enum AdapterError {
     #[error("site structure changed: {step} no longer matches ({detail})")]
-    #[cfg_attr(not(test), allow(dead_code))]
-    // site adapters raise this; the base registers none yet
     StructureDrift { step: String, detail: String },
+    #[error("the portal refused access at {step} ({detail})")]
+    AccessDenied { step: String, detail: String },
     #[error("transient failure at {step}: {detail}")]
     Transient { step: String, detail: String },
 }
@@ -136,11 +138,26 @@ pub(crate) trait SiteAdapter: Send + Sync {
     /// e.g. `la-superior`.
     fn credential_key(&self) -> &str;
 
+    /// Whether the site's flow needs a provisioned login. Public portals
+    /// scrape without one: when this is `false`, a missing credential row is
+    /// not an error — the run proceeds unauthenticated. A mis-shapen or
+    /// incomplete provisioned row still hard-stops, so a provisioning
+    /// mistake is never silently ignored.
+    fn requires_login(&self) -> bool {
+        true
+    }
+
     /// Log the session into the portal. Failures are retried a bounded
     /// number of times before the run hard-stops, so an implementation must
     /// not hammer a portal that is clearly refusing (bad password or a
-    /// rewritten login form should surface promptly).
-    async fn login(&self, session: &BrowserSession, login: &SiteLogin) -> Result<(), AdapterError>;
+    /// rewritten login form should surface promptly). `login` is `None` on
+    /// the public path of a site whose [`requires_login`](Self::requires_login)
+    /// is `false` and has no provisioned credential.
+    async fn login(
+        &self,
+        session: &BrowserSession,
+        login: Option<&SiteLogin>,
+    ) -> Result<(), AdapterError>;
 
     /// Discover the notices for one docket.
     async fn notices(
