@@ -41,6 +41,12 @@ match = '''SM123@sms\.twilio\.com'''
 paths = ["portal/src/twilio_sms.rs"]
 reason = "A synthetic Twilio message id in the SMS intake parser's test."
 
+[[allow]]
+class = "email"
+match = '''[a-z0-9-]+@openssh\.com'''
+paths = ["store/src/ssh_public_keys.rs"]
+reason = "OpenSSH key-type names (security keys, certificate types) in the parser's refusal test, not mailboxes."
+
 # --- Domain-shape fixtures --------------------------------------------------
 
 [[allow]]

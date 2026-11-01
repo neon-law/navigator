@@ -1889,6 +1889,35 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/ssh-keys": {
+          "get": {
+            "summary": "List SSH public keys",
+            "description": "The caller's own live SSH public keys (ENG-1219), by fingerprint and label. With `person`, another Person's keys, only when the caller may revoke them (an Owner, or an Admin who may manage one of that Person's Firm memberships); otherwise 404. Scoped sessions are refused.",
+            "parameters": [{ "name": "person", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The keys", "content": { "application/json": { "schema": { "type": "object", "properties": { "keys": { "type": "array", "items": { "type": "object" } } } } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Scoped session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "Not the caller's to read" }, "503": { "description": "PostgreSQL is unavailable", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          },
+          "post": {
+            "summary": "Register an SSH public key",
+            "description": "Registers one OpenSSH public key for the caller and reconciles it onto their Forgejo account. Only ed25519 and ECDSA (nistp256, nistp384, nistp521) are accepted; the body must decode to a key of the declared type; private key material is refused and never stored. A fingerprint is live on at most one Person. The caller must hold a Firm membership. The `sync` member reports the reconciliation (`synced`, `no_forgejo_account`, `not_configured`, or `failed`); a failed sync does not undo the registration. Scoped sessions are refused.",
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["public_key"], "properties": { "public_key": { "type": "string" }, "label": { "type": "string", "maxLength": 100 } } } } } },
+            "responses": { "201": { "description": "The registered key and the sync outcome", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Not a Firm member, or a scoped session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "409": { "description": "The key is already registered", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "422": { "description": "A private key, an algorithm off the allowlist, a malformed key, or an invalid label", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "503": { "description": "PostgreSQL is unavailable", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/ssh-keys/sync": {
+          "post": {
+            "summary": "Reconcile the caller's Forgejo SSH keys",
+            "description": "Reconciles the caller's Forgejo account with their registered keys now, for example after their first Forgejo sign-in. Adds missing keys, removes keys Navigator manages but no longer holds, and reports unmanaged keys as drift without removing them. Scoped sessions are refused.",
+            "responses": { "200": { "description": "The sync outcome", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Scoped session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "503": { "description": "PostgreSQL is unavailable", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/ssh-keys/{id}": {
+          "delete": {
+            "summary": "Revoke an SSH public key",
+            "description": "Revokes a key and reconciles its owner's Forgejo account, removing it there. The key's owner may revoke it; so may an Owner, or an Admin who may manage one of the owner's Firm memberships. Anyone else gets 404. Scoped sessions are refused.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The revoked key and the sync outcome", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required" }, "403": { "description": "Scoped session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such live key, or not the caller's to revoke", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "503": { "description": "PostgreSQL is unavailable", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
         "/app/api/projects/{id}/handoffs": {
           "post": {
             "summary": "Prepare a legal-files-only handoff",

@@ -26,3 +26,10 @@ condition = "AND"
 regexTarget = "line"
 paths = ['''docs/oss-install\.md$''']
 regexes = ['''NAVIGATOR_SURREAL_PASSWORD=<secret-backed password>''']
+
+[[allowlists]]
+description = "The SSH key parser's refusal test carries a truncated, fake OpenSSH private key."
+condition = "AND"
+regexTarget = "line"
+paths = ['''store/src/ssh_public_keys\.rs$''']
+regexes = ['''BEGIN OPENSSH PRIVATE KEY-----\\nb3BlbnNzaC1rZXktdjEAAAAA\\n-----END''']

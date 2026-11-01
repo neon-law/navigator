@@ -926,8 +926,26 @@ fn forgejo_policy_help_requires_explicit_targets_and_names_the_guarded_actions()
             "runner-once",
             "schedule-open",
             "setup",
+            "ssh-keys",
             "help"
         ]
+    );
+    let ssh_keys = help(&["ops", "forgejo", "ssh-keys", "sync", "--help"]);
+    for required in [
+        "--dry-run",
+        "--person",
+        "NAVIGATOR_FORGEJO_KEY_SYNC_LOGIN",
+        "NAVIGATOR_FORGEJO_KEY_SYNC_TOKEN",
+    ] {
+        assert!(
+            unwrapped(&ssh_keys).contains(required),
+            "missing {required}: {ssh_keys}"
+        );
+    }
+    let site_keys = help(&["site", "person", "ssh-key", "--help"]);
+    assert_eq!(
+        command_names(&site_keys),
+        ["add", "list", "remove", "sync", "help"]
     );
     let bundle = help(&["ops", "forgejo", "bundle", "--help"]);
     for required in ["<MIRROR>", "<OUTPUT>"] {

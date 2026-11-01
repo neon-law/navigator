@@ -2773,6 +2773,39 @@ test_anonymous_denied_app_profile if {
 	not authz.allow with input as {"path": ["app", "profile"], "method": "GET", "session": null}
 }
 
+# ---------- /app/api/ssh-keys ----------
+# A Firm user's own SSH public keys (ENG-1219). Every Firm tier reaches the
+# doors; a client and an anonymous caller are denied, and nothing deeper than
+# `/app/api/ssh-keys/{id}` is admitted.
+
+test_lawyer_reaches_ssh_keys if {
+	authz.allow with input as {"path": ["app", "api", "ssh-keys"], "method": "POST", "session": lawyer_session}
+}
+
+test_clerk_reaches_ssh_keys if {
+	authz.allow with input as {"path": ["app", "api", "ssh-keys"], "method": "GET", "session": clerk_session}
+}
+
+test_admin_revokes_ssh_key if {
+	authz.allow with input as {"path": ["app", "api", "ssh-keys", "k1"], "method": "DELETE", "session": admin_session}
+}
+
+test_lawyer_revokes_ssh_key if {
+	authz.allow with input as {"path": ["app", "api", "ssh-keys", "k1"], "method": "DELETE", "session": lawyer_session}
+}
+
+test_client_denied_ssh_keys if {
+	not authz.allow with input as {"path": ["app", "api", "ssh-keys"], "method": "POST", "session": client_session}
+}
+
+test_anonymous_denied_ssh_keys if {
+	not authz.allow with input as {"path": ["app", "api", "ssh-keys"], "method": "GET", "session": null}
+}
+
+test_lawyer_denied_deeper_ssh_key_path if {
+	not authz.allow with input as {"path": ["app", "api", "ssh-keys", "k1", "extra"], "method": "GET", "session": lawyer_session}
+}
+
 # ---------- /app/avatar ----------
 # The self-service avatar upload. Sibling of `/app/profile` so the native
 # form action and the browser's relative resolution agree. Every

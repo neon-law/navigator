@@ -903,6 +903,9 @@ fn dispatch_with_dns_provider(
         crate::Command::Ops(crate::OpsCmd::SurrealArchive(
             crate::SurrealArchiveCmd::RestoreDrill { key },
         )) => crate::surreal_archive::restore_drill(&key),
+        crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::SshKeys {
+            action: crate::ForgejoSshKeysCmd::Sync { person, dry_run },
+        })) => crate::ssh_keys::sweep(person.as_deref(), dry_run),
         crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::RunnerOnce(
             options,
         ))) => forgejo::runner::run(&options),
