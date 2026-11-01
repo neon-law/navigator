@@ -130,18 +130,6 @@ impl LaSuperiorAdapter {
             percent_encode(case_id)
         )
     }
-
-    /// The document-image URL for one document: the court's preview endpoint
-    /// on the public surface. Both variable segments are encoded.
-    #[must_use]
-    pub(crate) fn document_preview_url(&self, document_id: &str, provider: &str) -> String {
-        let base = self.base_url.trim_end_matches('/');
-        format!(
-            "{base}{DOCUMENT_PREVIEW_PATH}/{}/preview?provider={}",
-            percent_encode(document_id),
-            percent_encode(provider)
-        )
-    }
 }
 
 #[async_trait::async_trait]
@@ -855,7 +843,7 @@ mod tests {
             format!("{DEFAULT_BASE_URL}{CASE_DETAILS_PATH}/5436252?includeProperties=documents")
         );
         assert_eq!(
-            adapter().document_preview_url("98046165", "ECourt"),
+            build_preview_url(DEFAULT_BASE_URL, "ECourt", "98046165"),
             format!("{DEFAULT_BASE_URL}{DOCUMENT_PREVIEW_PATH}/98046165/preview?provider=ECourt")
         );
     }
@@ -879,7 +867,7 @@ mod tests {
         let notice = crate::scraper::adapter::NoticeRef {
             entry_number: "4".to_owned(),
             title: "Notice of Hearing".to_owned(),
-            url: adapter().document_preview_url("98046165", "ECourt"),
+            url: build_preview_url(DEFAULT_BASE_URL, "ECourt", "98046165"),
             extension: "pdf".to_owned(),
         };
         let outcome = adapter().download(&fetcher, &notice, &mut sink).await;
@@ -905,7 +893,7 @@ mod tests {
         let notice = crate::scraper::adapter::NoticeRef {
             entry_number: "4".to_owned(),
             title: "Notice of Hearing".to_owned(),
-            url: adapter().document_preview_url("98046165", "ECourt"),
+            url: build_preview_url(DEFAULT_BASE_URL, "ECourt", "98046165"),
             extension: "pdf".to_owned(),
         };
         let outcome = adapter().download(&fetcher, &notice, &mut sink).await;
@@ -918,7 +906,7 @@ mod tests {
         let notice = crate::scraper::adapter::NoticeRef {
             entry_number: "4".to_owned(),
             title: "Notice of Hearing".to_owned(),
-            url: adapter().document_preview_url("98046165", "ECourt"),
+            url: build_preview_url(DEFAULT_BASE_URL, "ECourt", "98046165"),
             extension: "pdf".to_owned(),
         };
 
