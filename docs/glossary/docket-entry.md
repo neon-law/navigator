@@ -40,6 +40,12 @@ side (ours, the other side's, or the court's) is derived from the filer, the cli
 case's recorded posture, never typed; a stipulation counts for both sides and an entry with no filer stays unattributed.
 A client's lens shows an entry only when its document is client-visible.
 
+**Which case a pleading serves.** A pleading in a Project that litigates more than one case declares `docket:` — a case
+number the Project lists under `dockets:` in its `navigator.yaml` — and its caption carries that case number, printed in
+the Project's declared spelling after a case-insensitive match. A value the Project has not declared refuses to render,
+and a pleading that declares no `docket:` captions itself with the `matter:` block's own case number; the `N133` gate
+advisory reports a Project pleading that leaves the key out, so a multi-case filing never rides a quiet default.
+
 - Commands: [`store::cases`](../../store/src/cases.rs) · Schema:
   [`case_docket_entry`](../../store/src/schema/navigator.surql)
 

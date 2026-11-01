@@ -34,3 +34,6 @@ matter:
     telephone: (000) 555-0100
     email: pat@example.invalid
     appears_for: Plaintiff SAMPLE HOLDINGS
+dockets:
+  - 00CV000000
+  - B327654

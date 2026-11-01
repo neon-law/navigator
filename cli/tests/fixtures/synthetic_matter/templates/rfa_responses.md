@@ -3,6 +3,7 @@ kind: pleading
 title: Synthetic Responses to Requests for Admission (California)
 caption_title: PLAINTIFF'S RESPONSES TO DEFENDANT'S REQUESTS FOR ADMISSION, SET ONE
 footer_title: PLAINTIFF'S RESPONSES TO DEFENDANT'S REQUESTS FOR ADMISSION, SET ONE
+docket: 00CV000000
 hearing_date: 2026-08-14
 hearing_time: 8:30 a.m.
 reservation_id: R-0000-SAMPLE
