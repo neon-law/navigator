@@ -1330,3 +1330,124 @@ async fn unattended_runs_verification_failures_and_restore_refusals() {
         Err(ArchiveError::ArchiveMissing(_))
     ));
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn coverage_enumerates_every_project_and_flags_missing_and_stale_generations() {
+    use archives::coverage::{self, Coverage, BASELINE};
+    let Some(world) = world().await else {
+        return;
+    };
+    let new_project = |code: &'static str| {
+        let surreal = world.surreal.clone();
+        let firm_id = world.firm_id;
+        async move {
+            projects::create(
+                &surreal,
+                &NewProject {
+                    code: format!("{code}-{}", &Uuid::now_v7().simple().to_string()[..8]),
+                    name: "Synthetic Coverage Matter".into(),
+                    status: "open".into(),
+                    entity_id: seed_entity(&surreal).await,
+                    firm_id: Some(firm_id),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let unarchived = new_project("coverage-unarchived").await;
+    let repository = new_project("coverage-repository").await;
+    projects::set_repository_url(
+        &world.surreal,
+        repository.id,
+        Some("https://forge.example.com/synthetic/coverage.git"),
+    )
+    .await
+    .unwrap();
+
+    let entry = |report: &coverage::CoverageReport, id: Uuid| {
+        report
+            .entries
+            .iter()
+            .find(|entry| entry.project_id == id)
+            .cloned()
+            .expect("every Project in the inventory is expected")
+    };
+    let empty = coverage::report(&world.surreal, &world.pg, at(0))
+        .await
+        .unwrap();
+    assert_eq!(empty.entries.len(), 3);
+    for id in [world.project.id, unarchived.id, repository.id] {
+        assert_eq!(entry(&empty, id).coverage, Coverage::Missing);
+    }
+    assert!(entry(&empty, repository.id).has_repository);
+
+    let generation = archives::request(
+        &world.stores(),
+        &world.owner,
+        world.project.id,
+        "coverage-1",
+        None,
+        at(1),
+    )
+    .await
+    .unwrap();
+    let requested = coverage::report(&world.surreal, &world.pg, at(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        entry(&requested, world.project.id).coverage,
+        Coverage::Missing
+    );
+    assert!(entry(&requested, world.project.id).pending);
+
+    let committed = archives::run(&world.stores(), &world.owner, generation.id, at(2))
+        .await
+        .unwrap();
+    let cutoff = committed
+        .cutoff_at
+        .expect("a committed generation has a cutoff");
+    // A retried request under the same key joins the committed generation.
+    let retried = archives::request(
+        &world.stores(),
+        &world.owner,
+        world.project.id,
+        "coverage-1",
+        None,
+        at(3),
+    )
+    .await
+    .unwrap();
+    assert_eq!(retried.id, committed.id);
+
+    let fresh = coverage::report(&world.surreal, &world.pg, cutoff + BASELINE)
+        .await
+        .unwrap();
+    let covered = entry(&fresh, world.project.id);
+    assert_eq!(covered.coverage, Coverage::Current);
+    assert_eq!(covered.generation_id, Some(committed.id));
+    assert_eq!(covered.cutoff_at, Some(cutoff));
+    assert!(!covered.pending);
+    assert_eq!(entry(&fresh, unarchived.id).coverage, Coverage::Missing);
+    let counts = fresh.counts();
+    assert_eq!((counts.expected, counts.current, counts.missing), (3, 1, 2));
+
+    let stale = coverage::report(
+        &world.surreal,
+        &world.pg,
+        cutoff + BASELINE + chrono::TimeDelta::seconds(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(entry(&stale, world.project.id).coverage, Coverage::Stale);
+    let summary = stale.summary();
+    assert_eq!(summary.uncovered.len(), 3);
+    assert!(
+        !serde_json::to_string(&summary)
+            .unwrap()
+            .contains("forge.example.com"),
+        "the summary names ids, never repository coordinates"
+    );
+}

@@ -52,6 +52,8 @@ const OPERATION_KEY_MAX: usize = 200;
 const OBJECT_CONTENT_TYPE: &str = "application/octet-stream";
 const JSON_CONTENT_TYPE: &str = "application/json";
 
+pub mod coverage;
+
 /// The closed vocabulary of [`ArchiveItem::kind`].
 pub mod kind {
     /// One Project document revision's bytes.
