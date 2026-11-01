@@ -114,7 +114,6 @@
   border-radius: 50%;
   color: var(--nav-color-primary);
   background: color-mix(in oklab, var(--nav-color-primary) 9%, var(--nav-color-surface));
-  box-shadow: 0 1rem 3rem color-mix(in oklab, var(--nav-color-primary) 15%, transparent);
 }
 
 .fm-badge {
@@ -909,7 +908,6 @@
   color: var(--firm-brand);
   border-color: var(--firm-brand-edge);
   background: var(--firm-brand-tint);
-  box-shadow: 0 1rem 3rem var(--firm-brand-glow);
 }
 
 /* The statement, in the firm's serif at the practice pages' size. */
