@@ -186,6 +186,8 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "verification",
     "visitor_route_count",
     "xero_invoice",
+    "assistant_turn",
+    "sandbox_usage",
 ];
 
 /// Rows read per cursor fetch and written per Parquet row group.

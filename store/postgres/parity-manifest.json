@@ -382,21 +382,7 @@
       "extra_column": null,
       "extra_table": null,
       "missing_column": null,
-      "missing_table": "assistant_turn",
-      "table": null
-    },
-    {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": null,
       "missing_table": "draft",
-      "table": null
-    },
-    {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": null,
-      "missing_table": "sandbox_usage",
       "table": null
     },
     {
@@ -1753,7 +1739,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 138,
+    "table_count": 140,
     "tables": {
       "address": {
         "columns": {
@@ -1884,6 +1870,29 @@
         "references": [
           "person",
           "project"
+        ]
+      },
+      "assistant_turn": {
+        "columns": {
+          "content": "TEXT",
+          "id": "UUID",
+          "input_tokens": "BIGINT",
+          "inserted_at": "TIMESTAMPTZ",
+          "kind": "TEXT",
+          "output_tokens": "BIGINT",
+          "person_id": "UUID",
+          "tool_name": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "assistant_turn",
+        "references": [
+          "person"
         ]
       },
       "attestation": {
@@ -4547,6 +4556,28 @@
         "foreign_keys": [],
         "name": "review_document",
         "references": []
+      },
+      "sandbox_usage": {
+        "columns": {
+          "granted_cents": "BIGINT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "overage": "BOOLEAN",
+          "period": "TEXT",
+          "person_id": "UUID",
+          "spent_cents": "BIGINT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "sandbox_usage",
+        "references": [
+          "person"
+        ]
       },
       "sent_email": {
         "columns": {

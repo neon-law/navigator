@@ -901,7 +901,7 @@
       "tool_name": "option<string>",
       "updated_at": "datetime"
     },
-    "target_table_present": false,
+    "target_table_present": true,
     "ownership": {
       "scope": "identity",
       "through": "person_id — owner-scoped sandbox transcript with no firm or project anchor",
@@ -924,6 +924,7 @@
     ],
     "source_table_declaration": "DEFINE TABLE IF NOT EXISTS assistant_turn SCHEMAFULL PERMISSIONS NONE",
     "candidate_rust_callers": [
+      "archives/src/postgres.rs",
       "store/src/assistant_turns.rs",
       "webapp/src/sandbox.rs"
     ],
@@ -11967,7 +11968,7 @@
       "spent_cents": "int",
       "updated_at": "datetime"
     },
-    "target_table_present": false,
+    "target_table_present": true,
     "ownership": {
       "scope": "identity",
       "through": "person_id -> Person; no Project or Firm attribution",
@@ -11989,6 +11990,7 @@
     ],
     "source_table_declaration": "DEFINE TABLE IF NOT EXISTS sandbox_usage SCHEMAFULL PERMISSIONS NONE",
     "candidate_rust_callers": [
+      "archives/src/postgres.rs",
       "billing-workflows/src/bin/sandbox_reset_trigger.rs",
       "billing-workflows/src/sandbox_reset.rs",
       "gateway/src/metered.rs",
