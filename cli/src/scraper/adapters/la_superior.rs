@@ -517,8 +517,9 @@ fn drift(step: &str, detail: String) -> AdapterError {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_case_documents, parse_case_search, percent_encode, resolve_case, LaSuperiorAdapter,
-        CASE_DETAILS_PATH, CASE_SEARCH_PATH, DEFAULT_BASE_URL, DOCUMENT_PREVIEW_PATH, SITE_KEY,
+        build_preview_url, parse_case_documents, parse_case_search, percent_encode, resolve_case,
+        LaSuperiorAdapter, CASE_DETAILS_PATH, CASE_SEARCH_PATH, DEFAULT_BASE_URL,
+        DOCUMENT_PREVIEW_PATH, SITE_KEY,
     };
     use crate::scraper::adapter::{AdapterError, NoticeKey, SiteAdapter, SiteKey};
     use crate::scraper::download::DownloadSink;
