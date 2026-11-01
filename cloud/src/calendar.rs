@@ -1214,11 +1214,11 @@ mod tests {
 
     #[test]
     fn a_colored_event_writes_colorid_and_an_uncolored_one_omits_it() {
-        let colored = serde_json::to_value(&event_body(&event())).unwrap();
+        let colored = serde_json::to_value(event_body(&event())).unwrap();
         assert_eq!(colored["colorId"], "11");
         let mut plain = event();
         plain.color_id = None;
-        let plain = serde_json::to_value(&event_body(&plain)).unwrap();
+        let plain = serde_json::to_value(event_body(&plain)).unwrap();
         assert!(plain.get("colorId").is_none());
     }
 
