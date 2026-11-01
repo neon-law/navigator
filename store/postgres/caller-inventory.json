@@ -2506,7 +2506,6 @@
     "candidate_rust_callers": [
       "archives/src/postgres.rs",
       "billing-workflows/src/bin/reconcile_trigger.rs",
-      "billing-workflows/src/bin/sandbox_reset_trigger.rs",
       "billing-workflows/src/reconcile.rs",
       "cli/src/authorities.rs",
       "cli/src/credentials.rs",
