@@ -22,3 +22,9 @@ or hard-code a second brand registry. Keep visitor-facing copy in `neon/locales/
 Present the billing period and total price together. Put family-member prices and service-scope disclosures near the
 offer. Check desktop and mobile layouts, contrast, keyboard access, and reduced-motion behavior using the task-owned
 preview described in [web-preview](../web-preview/SKILL.md).
+
+## Decoration
+
+Apply Less is More to visual layers: let the primary illustration or logo carry the identity. Omit repeated logos,
+background textures, heading ornaments, and drop shadows that add no information. Keep purposeful brand artwork, useful
+section boundaries, interactive state indicators, and visible keyboard focus.
