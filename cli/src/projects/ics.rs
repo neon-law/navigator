@@ -333,6 +333,19 @@ mod tests {
     }
 
     #[test]
+    fn a_category_never_changes_the_ics_output() {
+        // The feed renders no color and no category: mirrored Google events
+        // carry it instead. Same bytes for a categoryless row, each mapped
+        // category, and an unknown one.
+        let without = render(&calendar(), &[row()]).unwrap();
+        for category in ["court", "hearing", "discovery", "internal", "filing"] {
+            let mut categorized = row();
+            categorized["category"] = json!(category);
+            assert_eq!(render(&calendar(), &[categorized]).unwrap(), without);
+        }
+    }
+
+    #[test]
     fn every_line_ends_in_crlf_and_none_exceeds_75_octets() {
         let mut long = row();
         long["authority"] = json!("Synthetic authority ".repeat(20) + "é§é§é§é§é§é§é§é§");

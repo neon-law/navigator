@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 #[derive(Args)]
 pub struct ProposalArgs {
-    /// Private JSON rule: `trigger`, `offset_days`, `basis`, `authority_kind`, `authority_id`.
+    /// Private JSON rule: `trigger`, `offset_days`, `basis`, `authority_kind`, `authority_id`, `category`.
     #[arg(long)]
     pub rule: PathBuf,
     /// Date of the event named by the rule (YYYY-MM-DD).
@@ -50,6 +50,11 @@ struct Rule {
     basis: Basis,
     authority_kind: String,
     authority_id: Uuid,
+    /// What kind of date this proposal produces. A rule names it because
+    /// `court` and `discovery` deadlines share authority kinds and are never
+    /// guessed; creation is refused without one unless the calendar role or
+    /// an internal authority settles it.
+    category: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -136,6 +141,9 @@ async fn execute(
         "due_on":due_on, "manual_due_on_required":due_on.is_none(),
         "authority_kind":rule.authority_kind, "authority_id":authority.id,
         "citation":authority.citation, "replay_key":args.replay_key});
+    if let Some(category) = &rule.category {
+        proposal["category"] = json!(category);
+    }
     if !args.confirm {
         return Ok(proposal);
     }
@@ -205,12 +213,16 @@ async fn save(
         }
     }
     let authority_kind = proposal["authority_kind"].clone();
+    let category = proposal.get("category").cloned();
     let description = audit_description(
         existing.as_ref().and_then(|row| row.description.as_deref()),
         proposal,
     );
     let mut body = json!({"title":args.title, "description":description, "due_at":due_at,
         "authority_kind":authority_kind, "authority":authority.citation});
+    if let Some(category) = category {
+        body["category"] = category;
+    }
     let request = if let Some(row) = existing {
         client.patch(format!("{endpoint}/{}", row.id))
     } else {

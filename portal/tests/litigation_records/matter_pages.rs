@@ -50,6 +50,7 @@ fn deadline(
         source_document_id: None,
         owner_person_id: None,
         calendar_role: calendar_role.into(),
+        category: None,
         internal_lead_days: Some(7),
         client_lead_days,
         replay_key: None,

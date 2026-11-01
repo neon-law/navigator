@@ -386,6 +386,7 @@ mod tests {
             source_document_id: None,
             owner_person_id: None,
             calendar_role: "firm".into(),
+            category: Some("court".into()),
             internal_lead_days: Some(7),
             client_lead_days: None,
             replay_key: None,

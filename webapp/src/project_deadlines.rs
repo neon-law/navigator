@@ -25,6 +25,9 @@ pub struct DeadlineRow {
     pub due: String,
     /// Whose date it is, in plain words.
     pub role: String,
+    /// What kind of date it is, in plain words; empty on a row recorded
+    /// before categories existed.
+    pub category: String,
     /// The full citation, left empty when the row has no citation.
     pub authority: String,
     /// Short text shown before the citation is expanded.
@@ -138,6 +141,8 @@ pub fn deadline_groups(
                     .to_string(),
                     due,
                     role: role_label(&row.calendar_role).to_string(),
+                    category: category_label(row.category.as_deref().unwrap_or_default())
+                        .to_string(),
                     authority,
                     authority_preview,
                     authority_kind,
@@ -173,6 +178,20 @@ pub fn role_label(calendar_role: &str) -> &'static str {
         "opponent" => "Other side's deadline",
         "hearing" => "Hearing",
         _ => "Deadline",
+    }
+}
+
+/// `category` in plain words. A row recorded without a category — the
+/// historical shape — carries none, and an unknown value names itself.
+#[must_use]
+pub fn category_label(category: &str) -> &'static str {
+    match category {
+        "court" => "Court",
+        "hearing" => "Hearing",
+        "discovery" => "Discovery",
+        "internal" => "Internal",
+        "" => "",
+        _ => "Uncategorized",
     }
 }
 
@@ -217,13 +236,14 @@ pub fn ProjectDeadlinesPanel(
                             th { scope: "col", "Due" }
                             th { scope: "col", "Deadline" }
                             th { scope: "col", "Authority" }
+                            th { scope: "col", "Category" }
                             th { scope: "col", "Status" }
                         }
                     }
                     tbody {
                         if rows.is_empty() {
                             tr {
-                                td { colspan: "4", class: "nav-muted", "{EMPTY_MESSAGE}" }
+                                td { colspan: "5", class: "nav-muted", "{EMPTY_MESSAGE}" }
                             }
                         } else {
                             for row in rows.iter() {
@@ -250,6 +270,11 @@ pub fn ProjectDeadlinesPanel(
                                         }
                                     }
                                     td {
+                                        if !row.category.is_empty() {
+                                            span { class: "project-deadlines__chip project-deadlines__chip--category status-chip", "{row.category}" }
+                                        }
+                                    }
+                                    td {
                                         span {
                                             class: if row.overdue { "status-chip status-chip--due project-deadlines__state--overdue" } else if row.state == "Due soon" { "status-chip status-chip--due" } else { "status-chip" },
                                             "{row.state}"
@@ -270,6 +295,7 @@ pub fn ProjectDeadlinesPanel(
                                 th { scope: "col", "Due" }
                                 th { scope: "col", "Deadline" }
                                 th { scope: "col", "Authority" }
+                                th { scope: "col", "Category" }
                                 th { scope: "col", "Status" }
                             } }
                             tbody {
@@ -293,6 +319,11 @@ pub fn ProjectDeadlinesPanel(
                                                     summary { "{row.authority_preview}" }
                                                     p { "{row.authority}" }
                                                 }
+                                            }
+                                        }
+                                        td {
+                                            if !row.category.is_empty() {
+                                                span { class: "project-deadlines__chip project-deadlines__chip--category status-chip", "{row.category}" }
                                             }
                                         }
                                         td { "{row.state}" }
@@ -329,6 +360,7 @@ mod tests {
             visibility: "Internal".to_string(),
             due: "2026-11-02 17:00 -08:00".to_string(),
             role: "Our deadline".to_string(),
+            category: "Court".to_string(),
             authority: "Order setting briefing schedule".to_string(),
             authority_preview: "Order setting briefing schedule".to_string(),
             authority_kind: "Court order".to_string(),
@@ -359,6 +391,36 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("Answer to the complaint"), "{html}");
+    }
+
+    #[test]
+    fn panel_renders_a_category_chip_only_when_the_row_has_one() {
+        let mut categorized = row("a", "Upcoming", false);
+        categorized.category = "Discovery".to_string();
+        let html = panel(vec![categorized]);
+        assert!(html.contains("project-deadlines__chip--category"), "{html}");
+        assert!(html.contains(">Discovery<"), "{html}");
+        let mut uncategorized = row("b", "Upcoming", false);
+        uncategorized.category = String::new();
+        let html = panel(vec![uncategorized]);
+        assert!(
+            !html.contains("project-deadlines__chip--category"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn category_labels_cover_every_closed_vocabulary_value() {
+        for (category, label) in [
+            ("court", "Court"),
+            ("hearing", "Hearing"),
+            ("discovery", "Discovery"),
+            ("internal", "Internal"),
+        ] {
+            assert_eq!(category_label(category), label);
+        }
+        assert_eq!(category_label(""), "");
+        assert_eq!(category_label("filing"), "Uncategorized");
     }
 
     #[test]
@@ -459,6 +521,7 @@ mod tests {
                 owner_person_id: None,
                 status: status.to_string(),
                 calendar_role: "firm".to_string(),
+                category: Some("court".to_string()),
                 internal_lead_days: Some(7),
                 client_lead_days: client_lead,
                 replay_key: None,
