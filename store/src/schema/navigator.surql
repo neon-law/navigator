@@ -1973,15 +1973,18 @@ DEFINE INDEX OVERWRITE notation_project ON notation FIELDS project_id;
 DEFINE INDEX OVERWRITE notation_person ON notation FIELDS person_id;
 DEFINE INDEX OVERWRITE notation_template ON notation FIELDS template_id;
 
--- `notation_drafts` (LAW-29): a stored, addressable, **unrun** preview of a
--- template — no `notation` row, no workflow instance, no `notation_event`.
--- `expires_at` backs the read-time TTL filter in `store::notation_drafts`;
--- a draft is a short-lived preview artifact, not a place to accumulate.
+-- `notation_drafts` (LAW-29): a stored, addressable preview of a template.
+-- A preview push opens a real notation run beside it (LAW-203), so a draft
+-- may carry the `notation` it opened; drafts pushed before that link — or
+-- drafts whose run could not open — carry none. `expires_at` backs the
+-- read-time TTL filter in `store::notation_drafts`; a draft is a
+-- short-lived preview artifact, not a place to accumulate.
 DEFINE TABLE IF NOT EXISTS notation_draft SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE project_id ON notation_draft TYPE record<project>;
 DEFINE FIELD OVERWRITE slug ON notation_draft TYPE string;
 DEFINE FIELD OVERWRITE title ON notation_draft TYPE string;
 DEFINE FIELD OVERWRITE source ON notation_draft TYPE string;
+DEFINE FIELD OVERWRITE notation_id ON notation_draft TYPE option<record<notation>>;
 DEFINE FIELD OVERWRITE inserted_at ON notation_draft TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE expires_at ON notation_draft TYPE datetime;
 DEFINE INDEX OVERWRITE notation_draft_project ON notation_draft FIELDS project_id;

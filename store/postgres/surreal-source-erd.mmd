@@ -843,6 +843,7 @@ erDiagram
         string id
         datetime expires_at
         datetime inserted_at
+        uuid notation_id
         uuid project_id
         string slug
         string source
@@ -1483,6 +1484,7 @@ erDiagram
     notation_document }o--|| notation_document_version : document_id
     asset }o--|| notation_document_version : markdown_asset_id
     notation_document_version }o--|| notation_document_version : parent_version_id
+    notation }o--|| notation_draft : notation_id
     project }o--|| notation_draft : project_id
     person }o--|| notation_event : acting_person_id
     notation }o--|| notation_event : notation_id
