@@ -482,10 +482,11 @@ fn parse_case_documents(
         }
         // A missing filed date cannot be bounded, so the document survives
         // `since` — the same never-silently-drop rule the date parser has.
+        let url = build_preview_url(base_url, provider, &document.document_id);
         notices.push(NoticeRef {
             entry_number: document.document_id,
             title: format!("{} (preview)", document.name),
-            url: build_preview_url(base_url, provider, &document.document_id),
+            url,
             extension: "pdf".to_owned(),
         });
     }
