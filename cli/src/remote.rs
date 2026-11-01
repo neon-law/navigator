@@ -4160,25 +4160,31 @@ pub async fn notation_create(
 }
 
 /// Server response to a notation-draft POST: the draft's path on the
-/// deployment. Joined with `base` to print and open the full URL.
+/// deployment, plus the notation run the push opened (LAW-203). Joined
+/// with `base` to print and open the full URLs.
 #[derive(Debug, Deserialize)]
 struct NotationDraftCreated {
     id: Uuid,
     path: String,
+    /// The run the push opened, when it opened one.
+    notation_id: Option<Uuid>,
+    /// The lawyer-side path of the run's questionnaire.
+    run_path: Option<String>,
 }
 
 /// `navigator notation preview <file>` (LAW-29) — push a template as a
 /// **draft** to the Project it belongs to: `POST
-/// /app/projects/{project_code}/notations/draft`. Unlike [`notation_create`],
-/// this creates no Notation and starts no questionnaire — the server-side
-/// handler stores the draft alone (see `store::notation_drafts`). Returns
-/// the draft's id and its full URL on the deployment.
+/// /app/projects/{project_code}/notations/draft`. The push persists and
+/// validates the pushed source, enforces the engagement-first rule, and
+/// opens a real notation run — the server returns the draft's path and
+/// the run's (see `portal::notation_draft`). Returns the draft's id, the
+/// run's id when one opened, and the draft's full URL on the deployment.
 pub(crate) async fn create_notation_draft(
     host: Option<&str>,
     project_code: &str,
     slug: &str,
     source: &str,
-) -> Result<(Uuid, String)> {
+) -> Result<(Uuid, Option<Uuid>, String)> {
     let (base, token) = resolve(host)?;
     let client = reqwest::Client::new();
     let url = format!("{base}/app/projects/{project_code}/notations/draft");
@@ -4199,7 +4205,11 @@ pub(crate) async fn create_notation_draft(
     }
     let created: NotationDraftCreated =
         resp.json().await.context("parse notation-draft response")?;
-    Ok((created.id, format!("{base}{}", created.path)))
+    Ok((
+        created.id,
+        created.notation_id,
+        format!("{base}{}", created.path),
+    ))
 }
 
 /// `navigator site notation list --project <code>` — inspect the private
@@ -5695,6 +5705,7 @@ mod tests {
         let server_uri = server.uri();
         let _env = CredentialsEnv::new(&server_uri);
         let draft_id = Uuid::now_v7();
+        let run_id = Uuid::now_v7();
 
         Mock::given(method("POST"))
             .and(path("/app/projects/acme/notations/draft"))
@@ -5705,12 +5716,17 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": draft_id,
                 "path": format!("/notations/drafts/{draft_id}"),
+                "notation_id": run_id,
+                "run_path": format!("/app/lawyer/notations/{run_id}/step"),
             })))
             .expect(1)
             .mount(&server)
             .await;
 
-        let (id, url) = create_notation_draft(
+        // The push hands back the run it opened (LAW-203) beside the
+        // draft — the CLI prints it so the lawyer knows the preview is
+        // backed by a real questionnaire.
+        let (id, run, url) = create_notation_draft(
             Some(&server_uri),
             "acme",
             "sample-letter",
@@ -5720,6 +5736,7 @@ mod tests {
         .expect("the draft is pushed");
 
         assert_eq!(id, draft_id);
+        assert_eq!(run, Some(run_id));
         assert_eq!(url, format!("{server_uri}/notations/drafts/{draft_id}"));
     }
 

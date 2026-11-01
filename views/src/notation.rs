@@ -76,6 +76,7 @@ pub fn render_filled_in_with_display(
     context: &BTreeMap<String, String>,
     display: &BTreeMap<String, String>,
 ) -> String {
+    let body = rules::frontmatter::split(body).map_or(body, |(_, body)| body);
     let filled = fill_with_display(body, context, display);
     let paragraphs: Vec<&str> = filled
         .split("\n\n")
@@ -115,6 +116,16 @@ mod tests {
     use super::render_filled_in;
     use rules::Rule;
     use std::path::PathBuf;
+
+    #[test]
+    fn stored_template_preview_excludes_source_metadata() {
+        let source = "---\nkind: onboarding\nquestionnaire:\n  BEGIN: {}\n---\n\nThe law of {{law}} governs.";
+        let html = render_filled_in(source, &ctx(&[("law", "Nevada")]));
+        assert!(html.contains("The law of Nevada governs."));
+        assert!(!html.contains("questionnaire"));
+        assert!(!html.contains("onboarding"));
+        assert!(!html.contains("---"));
+    }
 
     fn ctx(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs

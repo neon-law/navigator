@@ -3184,13 +3184,15 @@ async fn llms_txt_indexes_the_markdown_corpus_with_absolute_urls() {
     assert!(body.contains("estate plans tailored to each person"));
     assert!(body.contains("Nevada asset protection planning"));
     assert!(body.contains("fee for a mutual split"));
-    assert!(body.contains("excluded agreements carry extra fees"));
+    assert!(body.contains("Nautilus is one subscription of privacy and paperwork checks"));
+    assert!(body.contains("from $50/day"));
     assert!(!body.contains("$500 setup fee") && !body.contains("$5,000 per trial day"));
     // The firm's own marketing surface. The workshops catalog is public
     // root-level material and is advertised in its own section below; the
     // presentations catalog is not curated into the index at all.
     for page in [
         "https://www.example.com/)",
+        "https://www.example.com/business)",
         "https://www.example.com/navigator)",
         "https://www.example.com/notations)",
     ] {
@@ -10472,7 +10474,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::Neon,
         LiveHomeContract::Authored {
             title: "<title>Neon Law | Home</title>",
-            copy: "Keep building.",
+            copy: "Your shell in a connected world.",
         },
     ),
     (
@@ -10712,7 +10714,10 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
         .unwrap();
     assert_eq!(neon_resp.status(), StatusCode::OK);
     let neon_body = body_string(neon_resp).await;
-    assert!(neon_body.contains("Keep building."), "{neon_body}");
+    assert!(
+        neon_body.contains("Your shell in a connected world."),
+        "{neon_body}"
+    );
     assert!(
         neon_body.contains("<title>Neon Law | Home</title>"),
         "{neon_body}"
@@ -10744,11 +10749,11 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
         "{delete_your_data_body}"
     );
     assert!(
-        !delete_your_data_body.contains("Keep building."),
+        !delete_your_data_body.contains("Your shell in a connected world."),
         "{delete_your_data_body}"
     );
-    assert!(neon_body.contains("company-pricing"));
-    assert!(!delete_your_data_body.contains("company-pricing"));
+    assert!(neon_body.contains("data-nautilus-intake"));
+    assert!(!delete_your_data_body.contains("data-nautilus-intake"));
     assert!(delete_your_data_body.contains(r#"aria-labelledby="privacy-benefits-title""#));
 
     let litigation = app
@@ -11243,18 +11248,22 @@ fn assert_brand_home_lead_markup(body: &str, host: &str, brand: views::brand::Br
         body.contains(r#"href="/privacy""#),
         "{host}: privacy policy"
     );
-    assert_eq!(
-        body.contains(r#"data-lead-modal="true""#),
-        brand == views::brand::BrandKey::Neon,
-        "{host}: dialog is reserved for Neon"
+    assert!(
+        !body.contains(r#"data-lead-modal="true""#),
+        "{host}: home form is inline"
     );
-    if brand == views::brand::BrandKey::CyberInjuryLaw {
+    if brand == views::brand::BrandKey::Neon {
+        assert!(
+            body.contains("data-nautilus-intake"),
+            "{host}: Nautilus enrollment"
+        );
+    } else if brand == views::brand::BrandKey::CyberInjuryLaw {
         assert!(
             html.select(&lead_form)
                 .any(|form| form.select(&inline_contact).next().is_some()),
             "{host}: contact fields are inline in the incident form"
         );
-    } else if brand != views::brand::BrandKey::Neon && brand != views::brand::BrandKey::Summons {
+    } else if brand != views::brand::BrandKey::Summons {
         assert!(
             body.contains(r#"id="home-lead""#),
             "{host}: visible contact section"

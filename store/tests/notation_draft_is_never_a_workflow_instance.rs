@@ -33,6 +33,7 @@ async fn creating_a_draft_creates_no_notation_row_and_starts_no_workflow_instanc
             slug: "sample-letter",
             title: "Sample Letter",
             source: TEMPLATE_SOURCE,
+            notation_id: None,
         },
     )
     .await
@@ -72,6 +73,7 @@ async fn a_stored_draft_is_addressable_by_id() {
             slug: "sample-letter",
             title: "Sample Letter",
             source: TEMPLATE_SOURCE,
+            notation_id: None,
         },
     )
     .await
@@ -90,5 +92,59 @@ async fn a_stored_draft_is_addressable_by_id() {
             .expect("lookup")
             .is_none(),
         "an unknown id finds nothing"
+    );
+}
+
+/// A draft that opened a run carries the run's id back out — the link the
+/// draft page's hand-off reads.
+#[tokio::test]
+async fn a_draft_can_carry_the_notation_run_it_opened() {
+    let db = &mem().await;
+    let project_id = store::test_support::seed_project_surreal(db, "draft-run").await;
+    let notation_id = store::test_support::seed_notation(db).await;
+
+    let draft = create(
+        db,
+        &NewNotationDraft {
+            project_id,
+            slug: "sample-letter",
+            title: "Sample Letter",
+            source: TEMPLATE_SOURCE,
+            notation_id: Some(notation_id),
+        },
+    )
+    .await
+    .expect("draft is stored");
+
+    let found = find_live(db, draft.id)
+        .await
+        .expect("lookup")
+        .expect("the draft is reachable");
+    assert_eq!(found.notation_id, Some(notation_id));
+}
+
+/// A row written before the run link existed — or by any path that left
+/// the field unset — reads as run-less rather than failing the read.
+#[tokio::test]
+async fn a_row_written_without_the_run_link_reads_as_run_less() {
+    let db = &mem().await;
+    let project_id = store::test_support::seed_project_surreal(db, "draft-historical").await;
+    let raw_id = uuid::Uuid::now_v7();
+    db.query(format!(
+        "CREATE notation_draft:u'{raw_id}' SET \
+         project_id = project:u'{project_id}', slug = 'sample-letter', \
+         title = 'Sample Letter', source = 'Body', \
+         inserted_at = time::now(), expires_at = time::now() + 1h;"
+    ))
+    .await
+    .expect("raw historical row");
+
+    let found = find_live(db, raw_id)
+        .await
+        .expect("lookup")
+        .expect("the historical row is readable");
+    assert!(
+        found.notation_id.is_none(),
+        "a row with no run link reads as run-less: {found:?}"
     );
 }

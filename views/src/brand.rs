@@ -145,11 +145,11 @@ const FIRM_NAV: &[NavLink] = &[
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
-/// Neon's own header adds Nautilus, the subscription only Neon publishes at
-/// `/nautilus`; every other brand host answers that path with a 404.
+/// Neon's header links its subscription home and separate business counsel page.
 const NEON_NAV: &[NavLink] = &[
     NavLink::leaf("Services", "/services"),
-    NavLink::leaf("Nautilus", "/nautilus"),
+    NavLink::leaf("Nautilus", "/"),
+    NavLink::leaf("Business", "/business"),
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
@@ -1182,8 +1182,8 @@ impl BrandKey {
     /// answers: [`Self::publishes_firm_path`] is the route gate. Neon still
     /// ships every stem in [`crate::locales::KNOWN_PAGES`] — `fractional-gc`
     /// and `litigation` remain authored, and remain the only readers of their
-    /// `{shared:…}` keys, even though the firm answers neither `/business` nor
-    /// `/disputes`. `services` is also authored here, and today answers
+    /// `{shared:…}` keys. `/business` publishes the first; `/disputes` returns
+    /// 404. `services` is also authored here, and answers
     /// `/services` too. Dropping a stem here while the file still ships would
     /// strand its shared copy, which
     /// `shared_copy_is_consumed_by_pages_or_the_exported_home_contract` fails
@@ -1235,8 +1235,8 @@ impl BrandKey {
 
     /// Firm marketing paths this key answers on its own hosts.
     ///
-    /// Neon answers its fee schedule at `/services`, alongside `/`;
-    /// `/business` and `/disputes` remain retired and 404. DeleteYourData
+    /// Neon answers Nautilus at `/`, business counsel at `/business`, and its
+    /// fee schedule at `/services`; `/disputes` returns 404. DeleteYourData
     /// answers only the pages it has a catalog for (plus `/contact`, which is
     /// addresses rather than a YAML stem). Lawyer Shook keeps its holding
     /// notice and practice cards on `/`. Every brand answers `/contact/sent`
@@ -1284,7 +1284,7 @@ impl BrandKey {
             return true;
         }
         match self {
-            Self::Neon => !matches!(path.trim_end_matches('/'), "/business" | "/disputes"),
+            Self::Neon => path.trim_end_matches('/') != "/disputes",
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),
             Self::LawyerShook => matches!(path, "/" | "/testimonials"),
             // Guieb & Shook publishes its services page: the homepage's
@@ -2801,15 +2801,17 @@ mod tests {
     }
 
     #[test]
-    fn the_firm_nav_leads_with_services_then_nautilus_then_consultation_booking() {
-        assert_eq!(FIRM_BRAND.nav.len(), 3);
+    fn the_firm_nav_links_services_nautilus_business_and_consultation() {
+        assert_eq!(FIRM_BRAND.nav.len(), 4);
         assert_eq!(FIRM_BRAND.nav[0].label, "Services");
         assert_eq!(FIRM_BRAND.nav[0].href, "/services");
         assert_eq!(FIRM_BRAND.nav[1].label, "Nautilus");
-        assert_eq!(FIRM_BRAND.nav[1].href, "/nautilus");
-        assert_eq!(FIRM_BRAND.nav[2].label, "Book Consultation");
+        assert_eq!(FIRM_BRAND.nav[1].href, "/");
+        assert_eq!(FIRM_BRAND.nav[2].label, "Business");
+        assert_eq!(FIRM_BRAND.nav[2].href, "/business");
+        assert_eq!(FIRM_BRAND.nav[3].label, "Book Consultation");
         assert_eq!(
-            FIRM_BRAND.nav[2].href,
+            FIRM_BRAND.nav[3].href,
             "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
         );
     }
@@ -3467,7 +3469,7 @@ mod tests {
         assert!(!BrandKey::LawyerShook.publishes_firm_path("/contact"));
         assert!(!BrandKey::LawyerShook.publishes_firm_path("/disputes"));
         assert!(BrandKey::Neon.publishes_firm_path("/services"));
-        assert!(!BrandKey::Neon.publishes_firm_path("/business"));
+        assert!(BrandKey::Neon.publishes_firm_path("/business"));
         assert!(!BrandKey::Neon.publishes_firm_path("/disputes"));
         assert!(BrandKey::CyberInjuryLaw.publishes_firm_path("/services"));
     }

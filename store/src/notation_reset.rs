@@ -408,6 +408,7 @@ mod tests {
                 slug: "engagement",
                 title: "Engagement",
                 source: "---\ntitle: Engagement\n---\nBody",
+                notation_id: None,
             },
         )
         .await

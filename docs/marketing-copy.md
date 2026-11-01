@@ -294,29 +294,22 @@ links use the same Notion booking calendar as Neon and Vesta. Plus Jakarta Sans 
 Pricing uses the shared `PricingSection` with the brand palette and typeface. The cloak crossing an internet grid is
 decorative; reduced-motion preferences disable animation. The Solana section carries the approved request-record and
 litigation copy. The page uses the same footer treatment as Neon and Vesta. The subscription is also called [Neon Law
-Nautilus](glossary/neon-law-nautilus.md). Neon publishes `/nautilus` (`neon/locales/en/neon/nautilus.yaml`) under the
-one name Nautilus, with no themed card names. An `app_preview` band draws the coming iPhone and Android apps in each
-platform's idiom, listing every check as an equal peer: data removal, privacy protection, credit monitoring, dark web
-monitoring, identity theft insurance, unclaimed property, estate planning, and basic form filings. Its listing price,
-like the $29/mo and $290/year pricing cards, resolves from DeleteYourData's home catalog. The store badges read "Coming
-soon" and link nowhere until the apps are published. A lawyer review starts at $20 and is prepaid; the private legal
-sandbox includes $5 of model usage a month, then is priced à la carte by Lex Tecnica. Monitoring and insurance coverage
-are confirmed before activation. Its CTA opens a three-step public contact intake before sign-in; the signed-in page
-exposes the configured enrollment booking link. DocuSign paperwork follows the enrollment review. The page expressly
-distinguishes privacy from attorney-client privilege. Every other brand host answers `/nautilus` with a 404.
+Nautilus](glossary/neon-law-nautilus.md). Neon publishes Nautilus at `/` and `/nautilus` from
+`neon/locales/en/neon/nautilus.yaml`. An `app_preview` band draws one iPhone in its body proportions, listing every
+check as an equal peer: data removal, privacy protection, credit monitoring, dark web monitoring, identity theft
+insurance, unclaimed property, estate planning, and basic form filings. Its listing price, like the $29/mo and $290/year
+pricing cards, resolves from DeleteYourData's home catalog. The store badges read "Coming soon" and link nowhere until
+the apps are published. A lawyer review starts at $20 and is prepaid; the private legal sandbox includes $5 of model
+usage a month, then is priced à la carte by Lex Tecnica. Monitoring and insurance coverage are confirmed before
+activation. Its CTA opens a three-step public contact intake before sign-in; the signed-in page exposes the configured
+enrollment booking link. DocuSign paperwork follows the enrollment review. The page expressly distinguishes privacy from
+attorney-client privilege. Every other brand host answers `/nautilus` with a 404.
 
-The Neon home page presents common employment, NDA, sales, and privacy agreements under a $5,000 one-time contract fee;
-financings are scoped separately. It also presents ongoing counsel from $100 a day, with questions over Slack and
-contract reviews returned within three business days. There is no separate expedited review fee. Each contract covers up
-to 50 US letter size pages in Times New Roman 10pt or larger, with each additional page priced at $5. Its `company`
-block also holds the service directory, Apache-licensed Rust explanation, independent-funding and community copy, and
-notation callout. GORP and cyan remain the identity; the layout uses static illustrations and generous spacing. An
-interactive trust-balance chart shows the earned contract fee and daily counsel against the deposit. Its brief
-allocation animation respects reduced-motion preferences. The presentation video remains user-controlled. The business
-template inventory and drafting choices are documented in [business notations](business-notations.md).
-
-Neon publishes one offer on `/`, plus its fee schedule on `/services`; `/business` and `/disputes` return 404. Other
-brands retain their own home layouts. Litigation and sibling-practice scope remain separately disclosed.
+Neon publishes Nautilus on `/`, business counsel on `/business`, and its fee schedule on `/services`. The Business plan
+uses `neon/locales/en/neon/fractional-gc.yaml`: contract-library access and a scoped counsel relationship from $50/day,
+with a $10,000 minimum retainer and separately agreed Notation fees. The `/disputes` route returns a 404. Other brands
+retain their own home layouts. The business template inventory is documented in [business
+notations](business-notations.md).
 
 ## A copy-only pull request
 
@@ -332,10 +325,10 @@ belongs in `views::locales` and is a Rust change.
 The catalog is compiled into the brand crate with `include_str!`. A merged YAML edit lands on the next image build that
 compiles `neon`.
 
-Every registered house brand publishes a Lead form on its home page. Neon keeps its contact dialog and Summons keeps its
-intake form; the other layouts show the shared form inline, including Cyber Injury and Lawyer Shook. Each form posts to
-`/leads` with the request's CSRF token and source path. Email is required, phone is optional, and SMS consent is a
-separate choice. The route test submits a synthetic inquiry from every live brand and verifies its attribution.
+Every registered house brand publishes a Lead form on its home page. Neon uses the Nautilus enrollment form and Summons
+keeps its intake form; the other layouts show the shared form inline, including Cyber Injury and Lawyer Shook. Each form
+posts to `/leads` with the request's CSRF token and source path. Email is required, phone is optional, and SMS consent
+is a separate choice. The route test submits a synthetic inquiry from every live brand and verifies its attribution.
 
 Misericordia focuses on compassionate personal injury representation: vehicle collisions, premises injuries,
 catastrophic injuries, wrongful death, elder care abuse and neglect, and medical negligence. Cyber Injury Law reviews
