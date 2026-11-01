@@ -509,18 +509,25 @@ fn linkedin_row_to_message<'a>(
 }
 
 /// LinkedIn export timestamps ("2026-10-30 14:23:05 UTC", RFC 3339, and
-/// date-only shapes) as RFC 3339 UTC. Returns `None` for a value none of
-/// the known shapes parse — the caller fails loudly (AC9).
+/// date-only shapes) as RFC 3339 UTC. Unsupported named timezones and
+/// unknown shapes return `None` so the caller fails loudly (AC9).
 #[must_use]
 pub fn linkedin_date_to_rfc3339(value: &str) -> Option<String> {
     let value = value.trim();
     if let Ok(stamp) = chrono::DateTime::parse_from_rfc3339(value) {
-        return Some(stamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        return Some(
+            stamp
+                .with_timezone(&chrono::Utc)
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        );
     }
+    // A naive parser discards a named timezone. Accept only explicit zero
+    // offset names; other zones need an RFC 3339 offset to preserve the instant.
+    let value = value
+        .rsplit_once(' ')
+        .filter(|(_, zone)| zone.eq_ignore_ascii_case("UTC") || zone.eq_ignore_ascii_case("GMT"))
+        .map_or(value, |(stamp, _)| stamp.trim_end());
     for format in [
-        "%Y-%m-%d %H:%M:%S%.f %Z",
-        "%Y-%m-%d %H:%M:%S %Z",
-        "%Y-%m-%d %H:%M %Z",
         "%Y-%m-%d %H:%M:%S%.f",
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
@@ -826,6 +833,24 @@ mod tests {
             Some("2026-10-29T10:00:00Z")
         );
         assert_eq!(linkedin_date_to_rfc3339("yesterday"), None);
+    }
+
+    #[test]
+    fn linkedin_dates_normalize_offsets_to_utc() {
+        assert_eq!(
+            linkedin_date_to_rfc3339("2026-10-29T10:00:00-07:00").as_deref(),
+            Some("2026-10-29T17:00:00Z"),
+            "timestamps must sort in actual chronological order",
+        );
+    }
+
+    #[test]
+    fn linkedin_dates_refuse_unsupported_timezones() {
+        assert_eq!(
+            linkedin_date_to_rfc3339("2026-10-29 10:00:00 PST"),
+            None,
+            "an unsupported timezone must not silently become UTC"
+        );
     }
 
     #[test]
