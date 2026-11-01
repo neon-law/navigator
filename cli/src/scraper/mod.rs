@@ -467,23 +467,31 @@ fn map_step_failure(step: &str, failure: RetryFailure<AdapterError>) -> ScraperE
 }
 
 /// The adapter registry: every portal the framework can scrape today. Site
-/// adapters register here as they land — the La Superior adapter is the
-/// first.
+/// adapters register here as they land — La Superior first, PACER as the
+/// second.
 #[must_use]
 pub(crate) fn registered_adapters() -> Vec<Box<dyn SiteAdapter>> {
-    let la_superior = crate::scraper::adapters::LaSuperiorAdapter::new(
+    let mut adapters: Vec<Box<dyn SiteAdapter>> = Vec::new();
+    // The checked-in key literals are valid, so a failure here is a bug,
+    // not a runtime state; surface it loudly rather than panic. `scraper
+    // run` reports an unregistered site and `sites` lists the rest.
+    match crate::scraper::adapters::LaSuperiorAdapter::new(
         crate::scraper::adapters::la_superior::DEFAULT_BASE_URL,
-    );
-    match la_superior {
-        Ok(adapter) => vec![Box::new(adapter)],
-        // The checked-in key literal is valid, so this is a bug, not a
-        // runtime state; surface it loudly rather than panic. `scraper run`
-        // reports an unregistered site and `sites` lists nothing.
+    ) {
+        Ok(adapter) => adapters.push(Box::new(adapter)),
         Err(error) => {
             eprintln!("scraper: the built-in la-superior site key is invalid: {error}");
-            vec![]
         }
     }
+    match crate::scraper::adapters::PacerAdapter::new(
+        crate::scraper::adapters::pacer::DEFAULT_BASE_URL,
+    ) {
+        Ok(adapter) => adapters.push(Box::new(adapter)),
+        Err(error) => {
+            eprintln!("scraper: the built-in pacer site key is invalid: {error}");
+        }
+    }
+    adapters
 }
 
 #[cfg(test)]
@@ -618,6 +626,11 @@ mod tests {
         let binding = registered_adapters();
         let real = find_adapter(&binding, &site()).expect("the la-superior adapter is registered");
         assert_eq!(real.site(), &site());
+        let pacer = SiteKey::new(crate::scraper::adapters::pacer::SITE_KEY).expect("valid key");
+        let pacer_real = find_adapter(&binding, &pacer).expect("the pacer adapter is registered");
+        assert_eq!(pacer_real.site(), &pacer);
+        assert_eq!(pacer_real.credential_key(), "pacer");
+        assert!(pacer_real.requires_login(), "PACER runs behind the account");
         let adapters: Vec<Box<dyn crate::scraper::adapter::SiteAdapter>> =
             vec![Box::new(MockAdapter::simple(site()))];
         let found = find_adapter(&adapters, &site()).expect("the mock is found");
