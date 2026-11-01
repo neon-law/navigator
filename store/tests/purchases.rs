@@ -163,6 +163,9 @@ async fn for_offerings_lists_nautilus_purchases_in_every_state_and_no_others() {
         ..plan(annual_subscriber)
     };
     let annual = purchases::open(&pg, &annual, now).await.unwrap();
+    purchases::record_invoice(&pg, annual.id, "contact", "annual-invoice", None, now)
+        .await
+        .unwrap();
     purchases::activate(&pg, annual.id, None, now + TimeDelta::minutes(5))
         .await
         .unwrap();

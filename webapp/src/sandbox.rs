@@ -557,7 +557,7 @@ mod tests {
         let html = render(&page);
         assert!(html.contains("legal-sandbox-preview"), "{html}");
         assert!(html.contains("legal-sandbox-turn--reply"), "{html}");
-        assert!(html.contains("Last month's answer."), "{html}");
+        assert!(html.contains("Last month&#39;s answer."), "{html}");
         assert!(!html.contains("legal-sandbox-composer"), "{html}");
     }
 
