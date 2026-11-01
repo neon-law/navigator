@@ -397,8 +397,7 @@ pub async fn update(
                 object.insert(
                     "category".into(),
                     category_field(Some(raw))?
-                        .map(|category| json!(category))
-                        .unwrap_or(Value::Null),
+                        .map_or(Value::Null, |category| json!(category)),
                 );
             }
             if let Some(days) = internal_lead_days {
