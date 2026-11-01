@@ -102,11 +102,22 @@ mod tests {
     /// `marketing_page` component tests use, parameterized by the shell's
     /// page state.
     fn render(page: MobilePage) -> String {
-        let element = match page {
-            MobilePage::Home => rsx! { NautilusHome { on_open_dyd: move |_| {} } },
-            MobilePage::Dyd => rsx! { DydPage { on_back_home: move |_| {} } },
-        };
-        dioxus_ssr::render_element(element)
+        // Event handlers must be built inside a Dioxus runtime — constructing
+        // them in the test body panics — so the pages are rendered through a
+        // component, the same way the marketing_page component tests do.
+        dioxus_ssr::render_element(rsx! { TestShell { page } })
+    }
+
+    /// Test-only shell: renders one page directly with the shell's own
+    /// navigation handlers wired to no-ops.
+    #[component]
+    fn TestShell(page: MobilePage) -> Element {
+        rsx! {
+            match page {
+                MobilePage::Home => rsx! { NautilusHome { on_open_dyd: move |_| {} } },
+                MobilePage::Dyd => rsx! { DydPage { on_back_home: move |_| {} } },
+            }
+        }
     }
 
     #[test]
