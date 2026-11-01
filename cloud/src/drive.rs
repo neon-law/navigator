@@ -14,6 +14,12 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod tree;
+pub use tree::{
+    DriveFolderAccess, DriveIsolationBlock, DriveIsolationOutcome, DrivePermissionAccess,
+    DriveTreeFile, DriveTreeFolder,
+};
+
 const DRIVE_SCOPE: &str = "https://www.googleapis.com/auth/drive";
 const DRIVE_BASE_URL: &str = "https://www.googleapis.com/drive/v3";
 const FOLDER_MIME_TYPE: &str = "application/vnd.google-apps.folder";
@@ -201,8 +207,14 @@ impl DriveRole {
 
 #[derive(Debug, Error)]
 pub enum DriveError {
+    #[error("Drive fixture state is unavailable")]
+    StateUnavailable,
     #[error("missing required Drive configuration: {0}")]
     MissingConfig(String),
+    #[error("Drive tree boundary or traversal bound was violated")]
+    TreeBoundary,
+    #[error("Drive provider does not support restricted trees")]
+    UnsupportedTree,
     #[error("Drive authentication failed")]
     Authentication,
     #[error("Drive request failed while {action}")]
@@ -233,6 +245,67 @@ pub enum DriveError {
 /// object storage remains the canonical client asset boundary.
 #[async_trait]
 pub trait DriveService: Send + Sync {
+    /// All contained file objects, including shortcuts, for permission audit only. Targets are never followed.
+    async fn list_tree_items(&self, _root: &str) -> Result<Vec<DriveTreeFile>, DriveError> {
+        Err(DriveError::UnsupportedTree)
+    }
+
+    async fn list_tree_folders(&self, _root: &str) -> Result<Vec<DriveTreeFolder>, DriveError> {
+        Err(DriveError::UnsupportedTree)
+    }
+    async fn item_permissions(&self, _id: &str) -> Result<Vec<DrivePermissionAccess>, DriveError> {
+        Err(DriveError::UnsupportedTree)
+    }
+
+    /// Restore descendant inheritance; None means capability or post-write verification blocked it.
+    async fn inherit_folder(&self, _id: &str) -> Result<Option<DriveFolderAccess>, DriveError> {
+        Ok(None)
+    }
+
+    /// Allocate an identity that the caller persists before a create request.
+    async fn allocate_folder_id(&self) -> Result<String, DriveError> {
+        Err(DriveError::UnsupportedTree)
+    }
+    async fn find_child_folder(
+        &self,
+        _parent: &str,
+        _name: &str,
+    ) -> Result<Option<DriveFolder>, DriveError> {
+        Err(DriveError::UnsupportedTree)
+    }
+    /// Retry only the persisted identity; a conflicting object is never overwritten.
+    async fn ensure_child_folder_with_id(
+        &self,
+        _parent: &str,
+        _name: &str,
+        _id: &str,
+    ) -> Result<DriveFolder, DriveError> {
+        Err(DriveError::UnsupportedTree)
+    }
+
+    /// Create or adopt exactly one same-named folder directly below the parent.
+    async fn ensure_child_folder(
+        &self,
+        _parent_id: &str,
+        _name: &str,
+    ) -> Result<DriveFolder, DriveError> {
+        Err(DriveError::UnsupportedTree)
+    }
+    /// Bounded recursive walk; shortcut targets are never followed.
+    async fn list_tree(&self, _root_id: &str) -> Result<Vec<DriveTreeFile>, DriveError> {
+        Err(DriveError::UnsupportedTree)
+    }
+    /// Inspect provider grants; callers must authorize every effective grantee.
+    async fn folder_access(&self, _folder_id: &str) -> Result<DriveFolderAccess, DriveError> {
+        Err(DriveError::UnsupportedTree)
+    }
+    /// Disable inherited access when the provider permits it; never revoke drive membership.
+    async fn restrict_folder(&self, _folder_id: &str) -> Result<DriveIsolationOutcome, DriveError> {
+        Ok(DriveIsolationOutcome::Blocked(
+            DriveIsolationBlock::Unsupported,
+        ))
+    }
+
     async fn create_folder(&self, project_code: &str) -> Result<DriveFolder, DriveError>;
     async fn find_folder_by_name(
         &self,
@@ -248,6 +321,15 @@ pub trait DriveService: Send + Sync {
     /// Fetch one file's bytes for the asynchronous/operator-triggered ingest
     /// lane. Portal request paths do not call this method.
     async fn download_file(&self, file_id: &str) -> Result<DriveFileDownload, DriveError>;
+    /// Establish an explicit folder grant without changing inherited or organizer permissions.
+    async fn ensure_direct_member_permission(
+        &self,
+        _folder_id: &str,
+        _member: &DriveMember,
+        _role: DriveRole,
+    ) -> Result<(), DriveError> {
+        Err(DriveError::UnsupportedTree)
+    }
     async fn set_member_permission(
         &self,
         folder_id: &str,
@@ -460,6 +542,56 @@ impl GoogleDrive {
 
 #[async_trait]
 impl DriveService for GoogleDrive {
+    async fn inherit_folder(&self, id: &str) -> Result<Option<DriveFolderAccess>, DriveError> {
+        self.tree_inherit(id).await
+    }
+    async fn list_tree_items(&self, root: &str) -> Result<Vec<DriveTreeFile>, DriveError> {
+        self.tree_items(root).await
+    }
+
+    async fn list_tree_folders(&self, root: &str) -> Result<Vec<DriveTreeFolder>, DriveError> {
+        self.tree_folders(root).await
+    }
+    async fn item_permissions(&self, id: &str) -> Result<Vec<DrivePermissionAccess>, DriveError> {
+        self.tree_item_permissions(id).await
+    }
+
+    async fn allocate_folder_id(&self) -> Result<String, DriveError> {
+        self.tree_allocate_id().await
+    }
+    async fn find_child_folder(
+        &self,
+        parent: &str,
+        name: &str,
+    ) -> Result<Option<DriveFolder>, DriveError> {
+        self.tree_find_child(parent, name).await
+    }
+    async fn ensure_child_folder_with_id(
+        &self,
+        parent: &str,
+        name: &str,
+        id: &str,
+    ) -> Result<DriveFolder, DriveError> {
+        self.tree_ensure_reserved(parent, name, id).await
+    }
+
+    async fn ensure_child_folder(
+        &self,
+        parent_id: &str,
+        name: &str,
+    ) -> Result<DriveFolder, DriveError> {
+        self.tree_ensure_child(parent_id, name).await
+    }
+    async fn list_tree(&self, root_id: &str) -> Result<Vec<DriveTreeFile>, DriveError> {
+        self.tree_list(root_id).await
+    }
+    async fn folder_access(&self, folder_id: &str) -> Result<DriveFolderAccess, DriveError> {
+        self.tree_access(folder_id).await
+    }
+    async fn restrict_folder(&self, folder_id: &str) -> Result<DriveIsolationOutcome, DriveError> {
+        self.tree_restrict(folder_id).await
+    }
+
     async fn create_folder(&self, project_code: &str) -> Result<DriveFolder, DriveError> {
         if let Some(existing) = self.find_folder_by_name(project_code).await? {
             tracing::info!(
@@ -754,6 +886,66 @@ impl DriveService for GoogleDrive {
         })
     }
 
+    async fn ensure_direct_member_permission(
+        &self,
+        folder_id: &str,
+        member: &DriveMember,
+        role: DriveRole,
+    ) -> Result<(), DriveError> {
+        let access = self.tree_access(folder_id).await?;
+        let address = member.email.trim().to_ascii_lowercase();
+        let grants: Vec<_> = access
+            .permissions
+            .iter()
+            .filter(|grant| {
+                grant.permission_type == member.kind.api_value()
+                    && grant
+                        .email
+                        .as_deref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(&address))
+            })
+            .collect();
+        if grants.iter().any(|grant| grant.role == "organizer") {
+            return Ok(());
+        }
+        if let Some(grant) = grants.iter().find(|grant| grant.direct) {
+            if grant.role == role.api_value() {
+                return Ok(());
+            }
+            Self::checked(
+                self.http
+                    .patch(format!("{}/{}", self.permissions_url(folder_id), grant.id))
+                    .bearer_auth(self.token().await?)
+                    .query(&[("supportsAllDrives", "true")])
+                    .json(&PermissionRole {
+                        role: role.api_value(),
+                    })
+                    .send()
+                    .await,
+                "updating direct folder permission",
+            )?;
+        } else {
+            Self::checked(
+                self.http
+                    .post(self.permissions_url(folder_id))
+                    .bearer_auth(self.token().await?)
+                    .query(&[
+                        ("supportsAllDrives", "true"),
+                        ("sendNotificationEmail", "false"),
+                    ])
+                    .json(&CreatePermission {
+                        kind: member.kind.api_value(),
+                        role: role.api_value(),
+                        email_address: &member.email,
+                    })
+                    .send()
+                    .await,
+                "creating direct folder permission",
+            )?;
+        }
+        Ok(())
+    }
+
     async fn set_member_permission(
         &self,
         folder_id: &str,
@@ -979,18 +1171,98 @@ struct FakeDriveState {
 
 #[derive(Default)]
 struct FakeFolder {
+    parent_id: Option<String>,
+    child_name: Option<String>,
+    inherited_permissions_disabled: bool,
+    cannot_disable_inheritance: bool,
     id: String,
     archived: bool,
     permissions: BTreeSet<(DriveMember, DriveRole)>,
 }
 
 struct FakeFile {
+    permissions: BTreeSet<(DriveMember, DriveRole)>,
     folder_id: String,
     file: DriveFile,
     bytes: Vec<u8>,
 }
 
+fn fake_effective_permissions(
+    state: &FakeDriveState,
+    id: &str,
+    depth: usize,
+) -> Result<Vec<DrivePermissionAccess>, DriveError> {
+    if depth > 32 {
+        return Err(DriveError::TreeBoundary);
+    }
+    let folder = state
+        .folders
+        .values()
+        .find(|f| f.id == id && !f.archived)
+        .ok_or(DriveError::TreeBoundary)?;
+    let mut permissions: Vec<_> = folder
+        .permissions
+        .iter()
+        .enumerate()
+        .map(|(index, (member, role))| DrivePermissionAccess {
+            id: format!("{id}-{index}"),
+            permission_type: member.kind.api_value().to_owned(),
+            email: Some(member.email.clone()),
+            role: role.api_value().to_owned(),
+            inherited: false,
+            direct: true,
+            view: None,
+        })
+        .collect();
+    if !folder.inherited_permissions_disabled {
+        if let Some(parent) = folder.parent_id.as_deref() {
+            permissions.extend(
+                fake_effective_permissions(state, parent, depth + 1)?
+                    .into_iter()
+                    .map(|mut permission| {
+                        permission.direct = false;
+                        permission.inherited = true;
+                        permission
+                    }),
+            );
+        }
+    }
+    Ok(permissions)
+}
+
 impl FakeDrive {
+    /// Simulate provider permission drift and capability changes during reconciliation tests.
+    #[must_use]
+    pub fn set_folder_access_state(
+        &self,
+        folder_id: &str,
+        limited: bool,
+        can_disable: bool,
+    ) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        let Some(folder) = state.folders.values_mut().find(|f| f.id == folder_id) else {
+            return false;
+        };
+        folder.inherited_permissions_disabled = limited;
+        folder.cannot_disable_inheritance = !can_disable;
+        true
+    }
+
+    /// Simulate a provider identity without permission to limit inheritance.
+    #[must_use]
+    pub fn block_folder_restriction(&self, folder_id: &str) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        let Some(folder) = state.folders.values_mut().find(|f| f.id == folder_id) else {
+            return false;
+        };
+        folder.cannot_disable_inheritance = true;
+        true
+    }
+
     /// Add synthetic bytes to a folder for an ingest test.
     #[must_use]
     pub fn add_file(
@@ -1019,12 +1291,34 @@ impl FakeDrive {
         state.files.insert(
             id,
             FakeFile {
+                permissions: BTreeSet::new(),
                 folder_id: folder_id.to_string(),
                 file: file.clone(),
                 bytes,
             },
         );
         Some(file)
+    }
+
+    /// Move/rename a fixture file while preserving its provider identity and receipt.
+    #[must_use]
+    pub fn move_file(&self, file_id: &str, folder_id: &str, name: &str) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if !state.folders.values().any(|folder| folder.id == folder_id)
+            || name.is_empty()
+            || matches!(name, "." | "..")
+            || name.contains(['/', '\\', '\0'])
+        {
+            return false;
+        }
+        let Some(file) = state.files.get_mut(file_id) else {
+            return false;
+        };
+        folder_id.clone_into(&mut file.folder_id);
+        name.clone_into(&mut file.file.name);
+        true
     }
 
     /// Replace a file's bytes as a new Drive version, refreshing its receipt.
@@ -1104,6 +1398,336 @@ impl FakeDrive {
 
 #[async_trait]
 impl DriveService for FakeDrive {
+    async fn list_tree_folders(&self, root: &str) -> Result<Vec<DriveTreeFolder>, DriveError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| DriveError::StateUnavailable)?;
+        if !state.folders.values().any(|f| f.id == root && !f.archived) {
+            return Err(DriveError::TreeBoundary);
+        }
+        let mut pending = vec![(root.to_string(), String::new(), vec![root.to_string()])];
+        let mut output = Vec::new();
+        let mut seen = BTreeSet::new();
+        while let Some((id, relative_path, ancestor_ids)) = pending.pop() {
+            if ancestor_ids.len() > 33 || !seen.insert(id.clone()) || seen.len() > 512 {
+                return Err(DriveError::TreeBoundary);
+            }
+            for child in state
+                .folders
+                .values()
+                .filter(|f| f.parent_id.as_deref() == Some(id.as_str()) && !f.archived)
+            {
+                let name = child
+                    .child_name
+                    .as_deref()
+                    .ok_or(DriveError::TreeBoundary)?;
+                let path = if relative_path.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{relative_path}/{name}")
+                };
+                let mut ancestors = ancestor_ids.clone();
+                ancestors.push(child.id.clone());
+                pending.push((child.id.clone(), path, ancestors));
+            }
+            output.push(DriveTreeFolder {
+                id,
+                relative_path,
+                ancestor_ids,
+            });
+        }
+        output.sort_by(|a, b| a.relative_path.cmp(&b.relative_path).then(a.id.cmp(&b.id)));
+        Ok(output)
+    }
+    async fn item_permissions(&self, id: &str) -> Result<Vec<DrivePermissionAccess>, DriveError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| DriveError::StateUnavailable)?;
+        let permissions =
+            if let Some(folder) = state.folders.values().find(|f| f.id == id && !f.archived) {
+                &folder.permissions
+            } else if let Some(file) = state.files.get(id) {
+                &file.permissions
+            } else {
+                return Err(DriveError::TreeBoundary);
+            };
+        Ok(permissions
+            .iter()
+            .enumerate()
+            .map(|(index, (member, role))| DrivePermissionAccess {
+                view: None,
+                id: format!("permission-{index}"),
+                permission_type: member.kind.api_value().to_string(),
+                email: Some(member.email.clone()),
+                role: role.api_value().to_string(),
+                direct: true,
+                inherited: false,
+            })
+            .collect())
+    }
+
+    async fn allocate_folder_id(&self) -> Result<String, DriveError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| DriveError::StateUnavailable)?;
+        state.next_id += 1;
+        Ok(format!("folder-{}", state.next_id))
+    }
+    async fn find_child_folder(
+        &self,
+        parent: &str,
+        name: &str,
+    ) -> Result<Option<DriveFolder>, DriveError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| DriveError::StateUnavailable)?;
+        Ok(state
+            .folders
+            .values()
+            .find(|f| {
+                f.parent_id.as_deref() == Some(parent)
+                    && f.child_name.as_deref() == Some(name)
+                    && !f.archived
+            })
+            .map(|f| DriveFolder {
+                id: f.id.clone(),
+                name: name.to_string(),
+            }))
+    }
+    async fn ensure_child_folder_with_id(
+        &self,
+        parent: &str,
+        name: &str,
+        id: &str,
+    ) -> Result<DriveFolder, DriveError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| DriveError::StateUnavailable)?;
+        if name.is_empty() || name.contains(['/', '\\', '\0']) || matches!(name, "." | "..") {
+            return Err(DriveError::TreeBoundary);
+        }
+        if let Some(f) = state.folders.values().find(|f| f.id == id) {
+            if f.parent_id.as_deref() == Some(parent)
+                && f.child_name.as_deref() == Some(name)
+                && !f.archived
+            {
+                return Ok(DriveFolder {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                });
+            }
+            return Err(DriveError::TreeBoundary);
+        }
+        if !state
+            .folders
+            .values()
+            .any(|f| f.id == parent && !f.archived)
+        {
+            return Err(DriveError::TreeBoundary);
+        }
+        state.folders.insert(
+            id.to_string(),
+            FakeFolder {
+                id: id.to_string(),
+                parent_id: Some(parent.to_string()),
+                child_name: Some(name.to_string()),
+                ..Default::default()
+            },
+        );
+        Ok(DriveFolder {
+            id: id.to_string(),
+            name: name.to_string(),
+        })
+    }
+
+    async fn ensure_child_folder(
+        &self,
+        parent_id: &str,
+        name: &str,
+    ) -> Result<DriveFolder, DriveError> {
+        if name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\\', '\0']) {
+            return Err(DriveError::TreeBoundary);
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| DriveError::StateUnavailable)?;
+        if !state
+            .folders
+            .values()
+            .any(|folder| folder.id == parent_id && !folder.archived)
+        {
+            return Err(DriveError::TreeBoundary);
+        }
+        if let Some(folder) = state.folders.values().find(|f| {
+            f.parent_id.as_deref() == Some(parent_id)
+                && f.child_name.as_deref() == Some(name)
+                && !f.archived
+        }) {
+            return Ok(DriveFolder {
+                id: folder.id.clone(),
+                name: name.to_string(),
+            });
+        }
+        state.next_id += 1;
+        let id = format!("folder-{}", state.next_id);
+        state.folders.insert(
+            id.clone(),
+            FakeFolder {
+                id: id.clone(),
+                parent_id: Some(parent_id.to_string()),
+                child_name: Some(name.to_string()),
+                ..Default::default()
+            },
+        );
+        Ok(DriveFolder {
+            id,
+            name: name.to_string(),
+        })
+    }
+    async fn list_tree(&self, root: &str) -> Result<Vec<DriveTreeFile>, DriveError> {
+        Ok(self
+            .list_tree_items(root)
+            .await?
+            .into_iter()
+            .filter(|f| f.file.mime_type != "application/vnd.google-apps.shortcut")
+            .collect())
+    }
+    async fn list_tree_items(&self, root_id: &str) -> Result<Vec<DriveTreeFile>, DriveError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| DriveError::StateUnavailable)?;
+        if !state
+            .folders
+            .values()
+            .any(|f| f.id == root_id && !f.archived)
+        {
+            return Err(DriveError::TreeBoundary);
+        }
+        let mut pending = vec![(
+            root_id.to_string(),
+            String::new(),
+            0_usize,
+            vec![root_id.to_string()],
+        )];
+        let mut seen = BTreeSet::new();
+        let mut output = Vec::new();
+        while let Some((id, prefix, depth, ancestor_ids)) = pending.pop() {
+            if depth > 32 || !seen.insert(id.clone()) || seen.len() > 512 {
+                return Err(DriveError::TreeBoundary);
+            }
+            for folder in state
+                .folders
+                .values()
+                .filter(|f| f.parent_id.as_deref() == Some(id.as_str()) && !f.archived)
+            {
+                let name = folder
+                    .child_name
+                    .as_deref()
+                    .ok_or(DriveError::TreeBoundary)?;
+                let path = if prefix.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{prefix}/{name}")
+                };
+                let mut child_ancestors = ancestor_ids.clone();
+                child_ancestors.push(folder.id.clone());
+                pending.push((folder.id.clone(), path, depth + 1, child_ancestors));
+            }
+            for entry in state.files.values().filter(|f| f.folder_id == id) {
+                if entry.file.name.contains(['/', '\\', '\0'])
+                    || matches!(entry.file.name.as_str(), "" | "." | "..")
+                {
+                    return Err(DriveError::TreeBoundary);
+                }
+                let relative_path = if prefix.is_empty() {
+                    entry.file.name.clone()
+                } else {
+                    format!("{prefix}/{}", entry.file.name)
+                };
+                output.push(DriveTreeFile {
+                    relative_path,
+                    ancestor_ids: ancestor_ids.clone(),
+                    file: entry.file.clone(),
+                });
+                if output.len() > 5000 {
+                    return Err(DriveError::TreeBoundary);
+                }
+            }
+        }
+        output.sort_by(|a, b| {
+            a.relative_path
+                .cmp(&b.relative_path)
+                .then(a.file.id.cmp(&b.file.id))
+        });
+        Ok(output)
+    }
+    async fn inherit_folder(&self, id: &str) -> Result<Option<DriveFolderAccess>, DriveError> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| DriveError::StateUnavailable)?;
+            let folder = state
+                .folders
+                .values_mut()
+                .find(|f| f.id == id && !f.archived)
+                .ok_or(DriveError::TreeBoundary)?;
+            if folder.inherited_permissions_disabled && folder.cannot_disable_inheritance {
+                return Ok(None);
+            }
+            folder.inherited_permissions_disabled = false;
+        }
+        Ok(Some(self.folder_access(id).await?))
+    }
+    async fn folder_access(&self, id: &str) -> Result<DriveFolderAccess, DriveError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| DriveError::StateUnavailable)?;
+        let folder = state
+            .folders
+            .values()
+            .find(|f| f.id == id && !f.archived)
+            .ok_or(DriveError::TreeBoundary)?;
+        Ok(DriveFolderAccess {
+            inherited_permissions_disabled: folder.inherited_permissions_disabled,
+            can_disable_inheritance: !folder.cannot_disable_inheritance,
+            can_enable_inheritance: !folder.cannot_disable_inheritance,
+            can_list_children: true,
+            parent_ids: folder.parent_id.iter().cloned().collect(),
+            permissions: fake_effective_permissions(&state, id, 0)?,
+        })
+    }
+    async fn restrict_folder(&self, folder_id: &str) -> Result<DriveIsolationOutcome, DriveError> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| DriveError::StateUnavailable)?;
+            let folder = state
+                .folders
+                .values_mut()
+                .find(|f| f.id == folder_id && !f.archived)
+                .ok_or(DriveError::TreeBoundary)?;
+            if !folder.inherited_permissions_disabled && folder.cannot_disable_inheritance {
+                return Ok(DriveIsolationOutcome::Blocked(
+                    DriveIsolationBlock::CapabilityUnavailable,
+                ));
+            }
+            folder.inherited_permissions_disabled = true;
+        }
+        Ok(DriveIsolationOutcome::Restricted(
+            self.folder_access(folder_id).await?,
+        ))
+    }
+
     async fn create_folder(&self, project_code: &str) -> Result<DriveFolder, DriveError> {
         let mut state = self.state.lock().expect("fake drive mutex poisoned");
         if let Some(folder) = state.folders.get(project_code) {
@@ -1143,7 +1767,7 @@ impl DriveService for FakeDrive {
         Ok(state
             .folders
             .iter()
-            .filter(|(_, folder)| !folder.archived)
+            .filter(|(_, folder)| !folder.archived && folder.parent_id.is_none())
             .map(|(name, folder)| DriveFolder {
                 id: folder.id.clone(),
                 name: name.clone(),
@@ -1190,6 +1814,15 @@ impl DriveService for FakeDrive {
         })
     }
 
+    async fn ensure_direct_member_permission(
+        &self,
+        folder_id: &str,
+        member: &DriveMember,
+        role: DriveRole,
+    ) -> Result<(), DriveError> {
+        self.set_member_permission(folder_id, member, role).await
+    }
+
     async fn set_member_permission(
         &self,
         folder_id: &str,
@@ -1204,6 +1837,11 @@ impl DriveService for FakeDrive {
         {
             folder.permissions.retain(|(current, _)| current != member);
             folder.permissions.insert((member.clone(), role));
+        } else if let Some(file) = state.files.get_mut(folder_id) {
+            file.permissions.retain(|(current, _)| current != member);
+            file.permissions.insert((member.clone(), role));
+        } else {
+            return Err(DriveError::TreeBoundary);
         }
         Ok(())
     }
@@ -1220,6 +1858,10 @@ impl DriveService for FakeDrive {
             .find(|folder| folder.id == folder_id)
         {
             folder.permissions.retain(|(current, _)| current != member);
+        } else if let Some(file) = state.files.get_mut(folder_id) {
+            file.permissions.retain(|(current, _)| current != member);
+        } else {
+            return Err(DriveError::TreeBoundary);
         }
         Ok(())
     }
