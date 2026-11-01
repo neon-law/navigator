@@ -207,7 +207,7 @@ to resolve it.
 | `S103` | Error | The declared `kind:` must be a recognized document kind, and never a matter page kind. | No |
 | `S104` | Error | A file's declared `kind:` must agree with its notation/event structure. | No |
 | `S105` | Error | Teaching prose must use Pointer, Blob, and Matter Folder consistently with the glossary. | No |
-| `S106` | Error | Markdown is not valid UTF-8, has a stray control char, U+FFFD, or a disallowed non-ASCII char. | No |
+| `S106` | Error | Markdown is not valid UTF-8, has a control char, U+FFFD, or a disallowed non-ASCII char. | Yes |
 
 `S102` runs on notation templates as well as prose, because a template renders into an instrument a client signs; the
 rule's own guards hold back the structured YAML. The single exception is a GitHub intake notation under
@@ -224,6 +224,14 @@ prose, so `[text]: this is prose` and a paragraph opening `<span>inline</span>` 
 of those guards are what make the rule safe on a legal template: frontmatter is reflowed only inside a folded (`>`)
 scalar, never a literal (`|`) one or a plain mapping, and a line ending in a hard break — two trailing spaces or a
 trailing backslash — is left alone, which is what a signature block is built from.
+
+`S106` allows the profession's citation marks, the section sign `§` and the pilcrow `¶`, so `¶¶ 12–14` is a valid
+pinpoint. A disallowed character with an obvious ASCII spelling is named in the finding and autofixed: the vulgar
+fractions (U+00BC to U+00BE and U+2150 to U+215E) become `1/2`, `2/3`, `3/4`, and so on, with a space after a digit, so
+thirteen and a half reads `13 1/2`, never `131/2`. When the longer spelling would push a line past `S101`'s limit, the
+fix re-wraps the paragraph with `S102`'s repack. Where that repack declines, as in a table row or a heading, the
+spelling still lands and `S101` reports the line. Every other disallowed character, such as CJK mojibake, stays
+diagnostic-only.
 
 ### N-family — notation template shape
 
