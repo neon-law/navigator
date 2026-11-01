@@ -248,23 +248,6 @@ const REMOVED_FOOTER_DETAIL: &[&str] = &[
     "contact@neonlaw.com",
 ];
 
-#[then("the footer carries no firm detail beyond the legal strip")]
-async fn footer_is_the_legal_strip_only(world: &mut BrandWorld) {
-    for needle in REMOVED_FOOTER_DETAIL {
-        assert!(
-            !world.last_body.contains(needle),
-            "the footer still renders {needle:?}",
-        );
-    }
-}
-
-/// The live-resolution story, end to end: an Owner moves a brand to a firm
-/// whose entity no compiled fallback names, and the brand's public pages
-/// resolve the new firm's entity on the next request. Seeds the same shared
-/// store the router reads — a first firm wearing the brand, a second firm
-/// with a fresh entity — then performs the Owner's `move_brand`. Brand
-/// creation is the Admin-DRI-only act (`brands::authorize`); the move is
-/// the Owner-only one (`firms::move_brand`), so the two roles both appear.
 #[given(regex = r#"^the brand "([^"]+)" is moved to a firm whose entity is "([^"]+)"$"#)]
 async fn move_brand_to_firm(_world: &mut BrandWorld, brand_key: String, entity_name: String) {
     let surreal = features::shared_surreal().await;

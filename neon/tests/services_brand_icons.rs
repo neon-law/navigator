@@ -39,7 +39,7 @@ async fn services_directory_renders_every_brand_icon() {
         .await
         .unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
-    let brands: Vec<BrandKey> = BrandKey::ALL
+    let brands: Vec<BrandKey> = BrandKey::LIVE
         .iter()
         .copied()
         .filter(|key| {

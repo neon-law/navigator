@@ -1036,12 +1036,19 @@ async fn inject_public_utility(mut req: Request, next: Next) -> Response {
         .extensions()
         .get::<webapp::firm_footer::FirmFooterModel>()
     {
-        // The live Firm→Entity resolution wins over the compiled fallback:
-        // the copyright names the entity the store answers for, and links the
-        // Firm's own home (empty when it wears no firm brand — the name then
-        // renders unlinked).
         chrome.legal_entity.clone_from(&model.legal_entity);
         chrome.firm_home_href.clone_from(&model.firm_home_href);
+        chrome.brands = model
+            .brands
+            .iter()
+            .map(|brand| webapp::public_chrome::ChromeBrand {
+                label: brand.label.clone(),
+                href: brand.href.clone(),
+                current: brand.current,
+                logo_href: brand.logo_href.clone(),
+                byline: brand.byline.clone(),
+            })
+            .collect();
     }
     req.extensions_mut().insert(chrome);
     req.extensions_mut()

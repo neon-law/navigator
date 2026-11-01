@@ -50,6 +50,7 @@ pub mod fact_grid;
 pub mod feed;
 pub mod focus;
 pub mod form;
+pub mod github_stars;
 pub mod honeypot;
 pub mod icon;
 pub mod links;
@@ -114,6 +115,7 @@ pub(crate) use form::assert_forms_accessible;
 pub use form::{
     question_fields, Choice, Field, FieldKind, FormCard, Heading, QuestionFieldContext,
 };
+pub use github_stars::GitHubStars;
 pub use honeypot::Honeypot;
 pub use icon::{Icon, IconName, LIBRA_SCALES};
 pub use links::{is_external_href, ExternalLink};
@@ -141,7 +143,11 @@ pub use row_actions::RowActions;
 pub use sample_matters_banner::render_sample_matters_banner;
 pub use sample_matters_banner::{SampleMattersBanner, SAMPLE_MATTERS_BANNER_ID};
 pub use separator::{Separator, SeparatorOrientation};
-pub use site_footer::SiteFooterLegal;
+pub use signature_seal::{provider_label, signed_on, SignatureSeal, SignatureSealData};
+pub use site_footer::{
+    FooterAttorney, FooterBarLicense, FooterBrandLink, FooterMembership, FooterNavLink,
+    FooterOffice, FooterSocialLink, SiteFooterLegal, FOOTER_TAGLINE,
+};
 pub(crate) use social_mark::SocialMarkGlyph;
 pub use status_strip::{StatusCell, StatusStrip};
 pub use toggle_group::{ToggleGroup, ToggleOption};

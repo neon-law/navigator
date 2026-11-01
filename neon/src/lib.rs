@@ -304,6 +304,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
         | BrandKey::Groundwork
         | BrandKey::DeathAndDivorce
         | BrandKey::CyberInjuryLaw
+        | BrandKey::GuiebShook
         | BrandKey::IepDefenders) => practice_brand_llms_txt(key),
         BrandKey::DeleteYourData => {
             let branding = &views::brand::DELETE_YOUR_DATA_BRANDING;

@@ -1979,9 +1979,9 @@ async fn owner_lists_the_seeded_practice_and_its_brands() {
 /// ENG-589: the `/app` footer and the public footer both name the seeded
 /// practice's Entity — resolved live from `store::firms`/`store::brands`,
 /// not the compiled `FIRM_BRAND` constant every deployment used to render
-/// regardless of which Firm actually owns the request's brand. Both footers
-/// render the same one copyright line; the public footer adds only the
-/// trademark notice and the disclaimer.
+/// regardless of which Firm actually owns the request's brand. The `/app`
+/// footer itself renders only that one copyright line; the family/membership
+/// rows are the public footer's alone.
 #[tokio::test]
 async fn the_app_and_public_footers_name_the_seeded_firm() {
     let (state, surreal) = state_with_engines().await;
@@ -10568,13 +10568,6 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
             copy: "written engagement before work begins",
         },
     ),
-    (
-        views::brand::BrandKey::IepDefenders,
-        LiveHomeContract::Authored {
-            title: "<title>IEP Defenders | Home</title>",
-            copy: "the one who loses time",
-        },
-    ),
 ];
 
 fn live_home_contract(key: views::brand::BrandKey) -> &'static LiveHomeContract {
@@ -11038,35 +11031,11 @@ async fn assert_unregistered_host_redirects(
 /// above (an authenticated request, since the anonymous redirect renders no
 /// chrome to check) — this matrix asserts the status/redirect shape that
 /// holds on every host regardless of session.
-/// The holding host's chrome: no header and no public shell — but the one
-/// shared footer, now the three-line legal strip: copyright, trademark
-/// notice, disclaimer. No office address and no association affiliation
-/// render anywhere on the page.
-fn assert_holding_host_chrome(body: &str) {
-    let standing_line = views::brand::JTA_STANDING.to_string();
-    for (marker, present) in [
-        (r#"class="site-header""#, false),
-        ("nav-theme public-shell", false),
-        (r#"class="site-footer""#, true),
-        ("Ste 405-9002", false),
-        (r#"aria-label="Our family""#, false),
-        (standing_line.as_str(), false),
-    ] {
-        assert_eq!(
-            body.contains(marker),
-            present,
-            "the holding host's chrome marker {marker:?}: {body}"
-        );
-    }
-}
-
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // One linear host-path-brand matrix reads best as one function.
 async fn host_brand_path_matrix_resolves_every_combination() {
     let default_host = "www.neonlaw.com";
     let delete_your_data_host = "staging.deleteyourdata.com";
     let holding_host = "staging.guiebandshook.com";
-    let iep_host = "www.iepdefenders.com";
     let unknown_host = "unregistered.example";
     let state =
         empty_state_with_canonical_host(CanonicalHost::new(Some(default_host.into()))).await;
@@ -11074,27 +11043,19 @@ async fn host_brand_path_matrix_resolves_every_combination() {
 
     // Marketing path: 200 on every registered host with its own
     // `og:site_name`; the unknown host's redirect target renders the
-    // default brand's chrome, not merely a 301. Guieb & Shook keeps its
-    // holding notice on `/` — `/contact` is unpublished
-    // and 404s. IEP Defenders serves its authored home and services
-    // pages under its own name.
+    // default brand's chrome, not merely a 301. Guieb & Shook renders
+    // its authored homepage on `/`; `/contact` is unpublished
+    // and 404s.
     for (host, path, brand) in [
         (default_host, "/contact", "Neon Law"),
         (delete_your_data_host, "/contact", "DeleteYourData.com"),
         (holding_host, "/", "Guieb & Shook"),
-        (iep_host, "/", "IEP Defenders"),
-        (iep_host, "/services", "IEP Defenders"),
     ] {
         let resp = get_on_host(&app, path, host).await;
         assert_eq!(resp.status(), StatusCode::OK, "{host} {path}");
         let body = body_string(resp).await;
         assert!(page_declares_og_site_name(&body, brand), "{host}: {body}");
-        for other_brand in [
-            "Neon Law",
-            "DeleteYourData.com",
-            "Guieb & Shook",
-            "IEP Defenders",
-        ] {
+        for other_brand in ["Neon Law", "DeleteYourData.com", "Guieb & Shook"] {
             if other_brand != brand {
                 assert!(
                     !page_declares_og_site_name(&body, other_brand),
@@ -11120,7 +11081,7 @@ async fn host_brand_path_matrix_resolves_every_combination() {
     // `/app`: session-gated on every host. The host layer runs outside the
     // session boundary, so the unauthenticated status is identical on both
     // registered hosts — no brand leaks through an anonymous redirect.
-    for host in [default_host, delete_your_data_host, holding_host, iep_host] {
+    for host in [default_host, delete_your_data_host, holding_host] {
         let resp = get_on_host(&app, "/app/projects", host).await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER, "{host} /app/projects");
         assert_eq!(
@@ -11141,7 +11102,7 @@ async fn host_brand_path_matrix_resolves_every_combination() {
 
     // `/public/*` asset: served on every registered host; the unknown host's
     // redirect target actually serves the file.
-    for host in [default_host, delete_your_data_host, holding_host, iep_host] {
+    for host in [default_host, delete_your_data_host, holding_host] {
         let resp = get_on_host(&app, "/public/favicon.svg", host).await;
         assert_eq!(resp.status(), StatusCode::OK, "{host} /public/favicon.svg");
     }
@@ -11154,15 +11115,6 @@ async fn host_brand_path_matrix_resolves_every_combination() {
         "followed /public/favicon.svg"
     );
 
-    // An unpublished path 404s on the IEP Defenders host even though the
-    // stem is catalogued: `publishes_firm_path` decides, not `catalog_pages`.
-    let resp = get_on_host(&app, "/testimonials", iep_host).await;
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_FOUND,
-        "{iep_host} /testimonials"
-    );
-
     // The probes: a probe target, not a public hostname — every host answers,
     // registered or not, and never redirects. Kubernetes dials a pod IP, so
     // the request carries no public `Host:` header to satisfy enforcement;
@@ -11172,7 +11124,6 @@ async fn host_brand_path_matrix_resolves_every_combination() {
         default_host,
         delete_your_data_host,
         holding_host,
-        iep_host,
         unknown_host,
     ] {
         for path in ["/app/health", "/app/readyz"] {

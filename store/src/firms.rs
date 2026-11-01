@@ -1414,30 +1414,38 @@ pub async fn move_brand(
     )
     .await?;
     let worn_by = firm_id_for_brand_key(surreal, brand_key).await?;
-    if worn_by == Some(target_firm_id) && brand.firm_id == Some(target_firm_id) {
-        return Ok(()); // a move to the current firm is a no-op, not an error
+    if worn_by != Some(target_firm_id) || brand.firm_id != Some(target_firm_id) {
+        let now = chrono::Utc::now().to_rfc3339();
+        retry::writing(|| {
+            surreal
+                .query(format!(
+                    "BEGIN; \
+                     DELETE {BRAND_TABLE} WHERE brand_key = $brand_key; \
+                     UPDATE $brand SET firm_id = $firm_id, updated_at = $now; \
+                     CREATE $seat SET firm_id = $firm_id, brand_key = $brand_key, \
+                     inserted_at = $now, updated_at = $now; \
+                     COMMIT;"
+                ))
+                .bind(("brand_key", brand_key.to_string()))
+                .bind(("brand", record_id(crate::brands::TABLE, brand.id)))
+                .bind(("firm_id", record_id(TABLE, target_firm_id)))
+                .bind(("now", now.clone()))
+                .bind(("seat", record_id(BRAND_TABLE, Uuid::now_v7())))
+        })
+        .await?;
     }
-    let now = chrono::Utc::now().to_rfc3339();
-    retry::writing(|| {
-        surreal
-            .query(format!("DELETE {BRAND_TABLE} WHERE brand_key = $brand_key"))
-            .bind(("brand_key", brand_key.to_string()))
-            .query("UPDATE $brand SET firm_id = $firm_id, updated_at = $now")
-            .bind(("brand", record_id(crate::brands::TABLE, brand.id)))
-            .bind(("firm_id", record_id(TABLE, target_firm_id)))
-            .bind(("now", now.clone()))
-            .query(
-                "CREATE $seat SET firm_id = $firm_id, brand_key = $brand_key, \
-                 inserted_at = $now, updated_at = $now",
-            )
-            .bind(("seat", record_id(BRAND_TABLE, Uuid::now_v7())))
-    })
-    .await?;
-    crate::postgres_mirror::after_write(
+    // The target may predate optional mirroring. An identical move also retries
+    // projections after a prior mirror failure without rewriting source timestamps.
+    // Keep parent-before-child order and the best-effort mirror contract.
+    crate::postgres_mirror::after_writes(
         surreal,
-        MirrorKey::FirmBrand {
-            brand_key: brand_key.to_string(),
-        },
+        [
+            MirrorKey::Firm(target_firm_id),
+            MirrorKey::Brand(brand.id),
+            MirrorKey::FirmBrand {
+                brand_key: brand_key.to_string(),
+            },
+        ],
     )
     .await;
     Ok(())
@@ -2701,6 +2709,52 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(brand.firm_id, Some(to.id));
+    }
+
+    /// A refused replacement seat must roll back the preceding deletion and
+    /// owner update, so a failed move leaves the complete old attribution.
+    #[tokio::test]
+    async fn a_failed_replacement_seat_rolls_back_the_whole_brand_move() {
+        let db = mem_surreal().await;
+        let from = practice(&db, "Rollback Source").await;
+        let to = practice(&db, "Rollback Target").await;
+        attach_brand(&db, Role::Owner, None, from.id, "neon")
+            .await
+            .unwrap();
+        let before = crate::brands::find_by_key(&db, "neon")
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Refuse only the final CREATE, after DELETE and UPDATE ran. The
+        // existing seat remains readable under this write-time assertion.
+        db.query(
+            "DEFINE FIELD OVERWRITE brand_key ON firm_brand TYPE string \
+             ASSERT $value != 'neon'",
+        )
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+        assert!(move_brand(&db, Role::Owner, None, "neon", to.id)
+            .await
+            .is_err());
+
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(from.id)
+        );
+        assert_eq!(
+            brand_keys_for_firm(&db, from.id).await.unwrap(),
+            vec!["neon".to_string()]
+        );
+        assert!(brand_keys_for_firm(&db, to.id).await.unwrap().is_empty());
+        let after = crate::brands::find_by_key(&db, "neon")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.firm_id, before.firm_id);
+        assert_eq!(after.updated_at, before.updated_at);
     }
 
     #[tokio::test]

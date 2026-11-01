@@ -127,12 +127,12 @@ pub const ENTITY_SEED_YAML: &str = canonical::ENTITY;
 /// that column and not the name.
 pub const FIRM_ENTITY_NAME: &str = "Guieb & Shook PC";
 
-/// The second firm Entity the canonical seed ships. `Lex Tecnica LLP`
+/// The second firm Entity the canonical seed ships. `Lex Tecnica, Ltd.`
 /// anchors the `Lex` firm, which wears only the `iep-defenders` brand —
 /// brand mobility's proof that a brand can belong to a different firm.
 /// Its row joins [`FIRM_ENTITY_NAME`]'s anchor-key discipline, so the
 /// delete guard protects it identically.
-pub const LEX_FIRM_ENTITY_NAME: &str = "Lex Tecnica LLP";
+pub const LEX_FIRM_ENTITY_NAME: &str = "Lex Tecnica, Ltd.";
 /// The firm row's wordmark, distinct from the legal entity it wears.
 pub const LEX_FIRM_NAME: &str = "Lex";
 
@@ -3297,7 +3297,7 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
 /// whose row is firm-scoped to Lex from the moment it is first seeded.
 /// The key joins [`crate::firms::CLOSED_BRAND_KEYS`] for registry-ordered
 /// footer display and the website-URL backfill, but no practice-firm
-/// attachment — the brand belongs to Lex Tecnica LLP alone. Its row copies
+/// attachment — the brand belongs to Lex Tecnica, Ltd. alone. Its row copies
 /// the compiled presentation: `BrandKey::IepDefenders`
 /// `default_typeface` and `default_palette().light.primary`.
 const LEX_COMPILED_BRANDS: &[CompiledBrand] = &[CompiledBrand {
@@ -3419,7 +3419,7 @@ async fn ensure_practice_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firm
     }
 }
 
-/// Find or create the deployment's second firm: the `Lex Tecnica LLP`
+/// Find or create the deployment's second firm: the `Lex Tecnica, Ltd.`
 /// entity's Firm, wearing only the `iep-defenders` brand. Idempotent on
 /// the same terms as [`ensure_practice_firm`] — an existing Firm on this
 /// Entity is left exactly as it is. Its Admin DRI is the same primary
@@ -4445,7 +4445,11 @@ mod tests {
     /// read as one registry.
     #[test]
     fn compiled_brands_cover_every_closed_brand_key() {
-        let seeded: Vec<&str> = COMPILED_BRANDS.iter().map(|brand| brand.key).collect();
+        let seeded: Vec<&str> = COMPILED_BRANDS
+            .iter()
+            .chain(super::LEX_COMPILED_BRANDS)
+            .map(|brand| brand.key)
+            .collect();
         assert_eq!(
             seeded,
             crate::firms::CLOSED_BRAND_KEYS.to_vec(),
@@ -6956,8 +6960,8 @@ records:
             .await
             .unwrap();
         neon_keys.sort();
-        let mut closed = crate::firms::CLOSED_BRAND_KEYS
-            .iter()
+        let mut closed = super::practice_worn_brand_keys()
+            .into_iter()
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>();
         closed.sort();

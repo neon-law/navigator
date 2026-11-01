@@ -248,7 +248,7 @@ mod tests {
             }],
             firms: vec![IdChoice {
                 id: FIRM_ID.to_string(),
-                label: "Lex Tecnica LLP".to_string(),
+                label: "Lex Tecnica, Ltd.".to_string(),
             }],
             csrf_token: "CSRF-TOKEN".to_string(),
             query,
@@ -305,12 +305,14 @@ mod tests {
     fn a_successful_move_reports_the_new_attribution() {
         let html = render(&view(FirmMoveQuery {
             moved: Some(BRAND_KEY.to_string()),
-            firm: Some("Lex Tecnica LLP".to_string()),
+            firm: Some("Lex Tecnica, Ltd.".to_string()),
             ..FirmMoveQuery::default()
         }));
         assert!(
             // Server-side rendering escapes the apostrophe (`&#39;`).
-            html.contains("Moved iep. Its public pages now name Lex Tecnica LLP&#39;s legal entity."),
+            html.contains(
+                "Moved iep. Its public pages now name Lex Tecnica, Ltd.&#39;s legal entity."
+            ),
             "{html}"
         );
     }

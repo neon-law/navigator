@@ -1155,8 +1155,11 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
-    let services_copy = branded_map(branding, "/services", |resolved| {
-        webapp::marketing_page::InjectedMarketingPage(firm_copy::legal_services(resolved))
+    let services_copy = branded_map(branding, dioxus_app::FIRM_SERVICES_PATH, |resolved| {
+        webapp::marketing_page::InjectedMarketingPage {
+            path: dioxus_app::FIRM_SERVICES_PATH.to_string(),
+            content: firm_copy::legal_services(resolved),
+        }
     });
     for source_key in [BrandKey::Aegis, BrandKey::Vesta] {
         for (path, stem) in source_key.explainer_pages() {
@@ -1493,9 +1496,9 @@ fn resolve_firm_contact_content(
              an active project."
         ),
         // IEP Defenders belongs to the second firm, so its contact page
-        // names Lex Tecnica LLP — never Guieb & Shook PC.
+        // names Lex Tecnica, Ltd. — never Guieb & Shook PC.
         BrandKey::IepDefenders => format!(
-            "Reach {firm_name}, a practice of Lex Tecnica LLP, about legal services. \
+            "Reach {firm_name}, a practice of Lex Tecnica, Ltd., about legal services. \
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),

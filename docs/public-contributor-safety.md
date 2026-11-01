@@ -65,7 +65,7 @@ Re-verify a fact against its source before changing a row; a fact with no public
 privately.
 
 - Guieb & Shook PC, a California Professional Corporation (`Entity.yaml`): the firm website footer and `LICENSE`.
-- Lex Tecnica LLP (`Entity.yaml`): [lextecnica.com](https://www.lextecnica.com) — the second firm
+- Lex Tecnica, Ltd. (`Entity.yaml`): [official terms](https://lextecnica.com/terms-conditions/) — the second firm
   anchor, parent of the held-out IEP brand.
 - Nick Shook, name (`Person.yaml`): the California, Nevada, and Washington bar directories.
 - Nevada Bar No. 13400 (`Credential.yaml`): [nvbar.org](https://nvbar.org/find-a-lawyer/?usearch=13400), verified

@@ -1,4 +1,4 @@
-# The firm's own entity of record, the only Entity the canonical layer seeds.
+# The firms' public entities of record, the only Entities the canonical layer seeds.
 # Provenance: docs/public-contributor-safety.md → Public firm facts.
 lookup_fields:
   - name
@@ -9,12 +9,12 @@ records:
       name: Professional Corporation
       jurisdiction:
         name: California
-  # Lex Tecnica LLP anchors the deployment's second firm (`Lex`), which
+  # Lex Tecnica, Ltd. anchors the deployment's second firm (`Lex`), which
   # wears only the held-out `iep` brand. It joins the professional
   # corporation's anchor-key discipline: the delete guard protects it
   # identically, by `entities.firm_anchor_key`.
-  - name: Lex Tecnica LLP
+  - name: Lex Tecnica, Ltd.
     entity_type:
-      name: Limited Liability Partnership
+      name: Limited Liability Company
       jurisdiction:
         name: Nevada

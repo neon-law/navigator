@@ -87,11 +87,11 @@ const COMPILED_SITES: &[CompiledSite] = &[
         www: "www.guiebandshook.com",
         live: true,
     },
-    // Live: the special-education practice serves its own production host.
+    // Registered for isolated staging; public launch remains held back.
     CompiledSite {
         key: "iep-defenders",
         www: "www.iepdefenders.com",
-        live: true,
+        live: false,
     },
 ];
 

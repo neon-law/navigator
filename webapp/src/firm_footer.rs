@@ -3,11 +3,11 @@
 //! constant (ENG-589).
 //!
 //! [`FirmFooterModel`] is also the shape `crate::public_chrome::inject_public_utility`
-//! (in `portal`) reads to overlay the public chrome's live firm identity — the
-//! legal entity the copyright names and the firm home it links — onto the
-//! compiled fallback once a Firm exists. `brands` stays on this model because
-//! the resolved family is part of that overlay seam; the public footer no
-//! longer renders it (nor the /app footer, which never did).
+//! (in `portal`) reads to override the public chrome's "Our Family" row with
+//! the live Firm data once one exists — see [`compiled_family_brands`], which
+//! that chrome calls directly for its own compiled-time fallback. `brands`
+//! stays on this model for that reason even though [`FirmFooter`] itself no
+//! longer renders it.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};

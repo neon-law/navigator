@@ -74,7 +74,7 @@ async fn build_fixture() -> Fixture {
     let target = store::firms::create(
         &surreal,
         &store::firms::NewFirm {
-            name: "Lex Tecnica LLP".into(),
+            name: "Lex Tecnica, Ltd.".into(),
             status: "active".into(),
             entity_id: seed_entity(&surreal).await,
             admin_dri_person_id: admin_id,
@@ -200,7 +200,10 @@ async fn a_refusal_redirects_back_with_the_rule_and_both_pickers_echoed() {
     let (status, location, response_body) = post_move(&fx.app, Some(&fx.owner), &body).await;
 
     assert_eq!(status, StatusCode::SEE_OTHER, "{response_body}");
-    assert!(location.contains("error=Confirm%20the%20move"), "{location}");
+    assert!(
+        location.contains("error=Confirm%20the%20move"),
+        "{location}"
+    );
     assert!(location.contains("brand_key=neon"), "{location}");
     assert!(
         location.contains(&format!("target_firm_id={}", fx.target_firm_id)),
@@ -210,4 +213,3 @@ async fn a_refusal_redirects_back_with_the_rule_and_both_pickers_echoed() {
     // The refused move changed nothing.
     assert_eq!(brand_firm_id(&fx.surreal).await, before);
 }
-

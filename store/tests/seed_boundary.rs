@@ -189,7 +189,7 @@ fn identity_seeds_hold_only_the_inventoried_public_firm_facts() {
 
     for fact in [
         "Guieb & Shook PC",
-        "Lex Tecnica LLP",
+        "Lex Tecnica, Ltd.",
         "Nick Shook",
         "13400",
         "337252",
