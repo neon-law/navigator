@@ -82,8 +82,12 @@ pub(crate) fn bytes_relative(slug: &Path, folder: MatterFolder) -> PathBuf {
 
 /// The bytes path for the document `pointer` describes, below the checkout.
 pub(crate) fn document_path(root: &Path, slug: &Path, pointer: &DocumentPointer) -> PathBuf {
-    root.join(DOCUMENT_DIRECTORY)
-        .join(bytes_relative(slug, pointer.matter_folder()))
+    if let Some(path) = pointer.checkout_path.as_deref() {
+        root.join(DOCUMENT_DIRECTORY).join(path)
+    } else {
+        root.join(DOCUMENT_DIRECTORY)
+            .join(bytes_relative(slug, pointer.matter_folder()))
+    }
 }
 
 /// The slug a bytes path (below `documents/`) names, and the matter folder it
@@ -125,7 +129,7 @@ pub(crate) fn ensure_tree(root: &Path) -> Result<()> {
                 return Err(anyhow!(
                     "{} must be a directory to hold matter documents",
                     path.display()
-                ))
+                ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 std::fs::create_dir_all(&path)

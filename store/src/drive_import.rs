@@ -13,18 +13,18 @@
 //! becomes a new revision of the same document, and an interrupted pass
 //! converges when it runs again.
 //!
-//! A file's document identity is its own Drive filename (LAW-216):
-//! `report.pdf` files as the document named `report.pdf`, not an opaque
-//! `drive-{file.id}` slug, so the matter checkout and the documents board
-//! carry the names the lawyer gave them. The Drive file id, version, and
-//! checksum stay on the asset row as metadata. Two controls keep a
-//! filename-derived identity safe: a name that could not live in a Project
-//! checkout (path separators, control characters, over 255 bytes) is refused
-//! as `unusable_name`, and files in one pass whose names collide
-//! case-insensitively are refused together as `name_collision` rather than
-//! silently merged into one revision chain. A `dry_run` pass runs everything
-//! but the writes, so its report is exactly what a real pass would do.
+//! A new Drive file receives a stable document identity derived from its
+//! case-sensitive provider ID. Existing identities, including historical flat
+//! slugs and lawyer reslugs, are preserved. Renames and moves update the
+//! checkout path without splitting the document's revision chain. A change
+//! of file format requires an explicit decision instead of a silent new identity.
+//!
+//! The Drive file ID, version, source path, and checksum remain asset metadata.
+//! Unsafe names and conflicting checkout paths are refused. Client Submissions
+//! enter Client Production, while nested firm files retain their Matter Folder.
+//! A dry run checks the same access, receipts, bounds, and screening without writes.
 
+use crate::project_folders::{self, ProjectFolderSlot};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -63,6 +63,12 @@ pub enum DriveImportError {
     Head(#[from] assets::AssetError),
     #[error("Project has no Drive ingest folder")]
     MissingFolder,
+    #[error("verified Project Folder storage is unavailable")]
+    FolderStoreUnavailable,
+    #[error("current Project Folder access could not be verified")]
+    FolderAccess(#[source] crate::project_folder_reconcile::FolderReconcileError),
+    #[error("Project Folder lookup failed")]
+    FolderStore(#[from] crate::project_folders::ProjectFolderError),
     #[error("Drive import is not authorized for this Project")]
     Unauthorized,
     #[error("stored Drive folder is not a live folder in this deployment's Projects drive")]
@@ -103,6 +109,8 @@ pub struct ImportedDriveFile {
     pub drive_file_id: String,
     pub asset_id: Uuid,
     pub filename: String,
+    /// Original root-relative provider path, retained independently of display name.
+    pub relative_path: String,
     /// The matter folder a Project checkout downloads this document into,
     /// resolved from the pass's document kind (LAW-189).
     pub matter_folder: MatterFolder,
@@ -162,33 +170,126 @@ pub async fn import_project_files(
     actor_id: Uuid,
     args: &DriveImportArgs<'_>,
 ) -> Result<DriveImportReport, DriveImportError> {
+    // Authorization precedes configuration or provider observations.
+    let actor = persons::find_by_id(db, actor_id)
+        .await?
+        .ok_or(DriveImportError::Unauthorized)?;
+    if !matches!(
+        crate::access::matter_lens(db, Some(actor.id), actor.role, project_id).await,
+        Ok(Some(crate::access::ProjectLens::Lawyer))
+    ) {
+        return Err(DriveImportError::Unauthorized);
+    }
+    let pg = crate::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|_| DriveImportError::FolderStoreUnavailable)?;
+    import_project_files_with_folders(db, &pg, storage, drive, screen, project_id, actor_id, args)
+        .await
+}
+
+/// Import only verified Project Folder roots using an explicit database handle.
+///
+/// # Errors
+/// Authorization, folder verification, provider, receipt or storage failures.
+// Keep admission, bounded enumeration, and per-file refusal ordering explicit.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub async fn import_project_files_with_folders(
+    db: &SurrealDb,
+    pg: &crate::postgres::PostgresDb,
+    storage: &Arc<dyn StorageService>,
+    drive: &dyn DriveService,
+    screen: &dyn IngestScreen,
+    project_id: Uuid,
+    actor_id: Uuid,
+    args: &DriveImportArgs<'_>,
+) -> Result<DriveImportReport, DriveImportError> {
     let project = projects::find_by_id(db, project_id)
         .await?
         .ok_or(projects::ProjectStoreError::NoSuchProject(project_id))?;
     let Some(actor) = persons::find_by_id(db, actor_id).await? else {
         return Err(DriveImportError::Unauthorized);
     };
-    if !projects::can_access_as_lawyer_in_surreal(db, Some(actor.id), actor.role, project_id)
-        .await?
-    {
+    if !matches!(
+        crate::access::matter_lens(db, Some(actor.id), actor.role, project_id).await,
+        Ok(Some(crate::access::ProjectLens::Lawyer))
+    ) {
         return Err(DriveImportError::Unauthorized);
     }
-    let folder_id = project
-        .drive_folder_id
-        .as_deref()
+    crate::project_folder_reconcile::verify_for_import(db, pg, drive, project_id)
+        .await
+        .map_err(DriveImportError::FolderAccess)?;
+    let root = project_folders::get_verified(pg, project_id, ProjectFolderSlot::Root)
+        .await?
         .ok_or(DriveImportError::MissingFolder)?;
-    if projects::drive_folder_recorded_elsewhere(db, project_id, folder_id).await?
-        || !drive.is_ingest_folder(folder_id).await?
-    {
+    let submissions =
+        project_folders::get_verified(pg, project_id, ProjectFolderSlot::ClientSubmissions)
+            .await?
+            .ok_or(DriveImportError::MissingFolder)?;
+    if project.drive_folder_id.as_deref() != Some(root.drive_folder_id.as_str()) {
         return Err(DriveImportError::FolderMismatch);
     }
-    let listed_files = drive.list_files(folder_id).await?;
+    let existing_assets = assets::for_project_including_deleted(db, project_id).await?;
+    let mut listed_files = Vec::new();
+    let mut paths = HashMap::new();
+    let mut source_roots = HashMap::new();
+    for (folder, client_intake) in [(&root, false), (&submissions, true)] {
+        if projects::drive_folder_recorded_elsewhere(db, project_id, &folder.drive_folder_id)
+            .await?
+            || project_folders::recorded_elsewhere(pg, project_id, &folder.drive_folder_id).await?
+            || !drive.is_ingest_folder(&folder.drive_folder_id).await?
+        {
+            return Err(DriveImportError::FolderMismatch);
+        }
+        let access = drive.folder_access(&folder.drive_folder_id).await?;
+        if !access.can_list_children
+            || folder
+                .parent_drive_folder_id
+                .as_ref()
+                .is_some_and(|parent| access.parent_ids.as_slice() != [parent.clone()])
+        {
+            return Err(DriveImportError::FolderMismatch);
+        }
+        for entry in drive.list_tree(&folder.drive_folder_id).await? {
+            if !usable_relative_path(&entry.relative_path)
+                && (usable_name(&entry.file.name) || entry.relative_path != entry.file.name)
+            {
+                return Err(DriveImportError::FolderMismatch);
+            }
+            // Provider ancestry includes the selected root and every containing
+            // folder, allowing stored cross-Project bindings to fail closed.
+            for ancestor in &entry.ancestor_ids {
+                if project_folders::recorded_elsewhere(pg, project_id, ancestor).await? {
+                    return Err(DriveImportError::FolderMismatch);
+                }
+            }
+            let path = if client_intake {
+                format!("Client Production/{}", entry.relative_path)
+            } else if classify_path(&entry.relative_path).is_some() {
+                entry.relative_path.clone()
+            } else {
+                format!(
+                    "{}/{}",
+                    MatterFolder::for_kind(args.kind).as_str(),
+                    entry.relative_path
+                )
+            };
+            source_roots.insert(entry.file.id.clone(), folder.drive_folder_id.clone());
+            if paths
+                .insert(entry.file.id.clone(), (path, entry.relative_path))
+                .is_some()
+            {
+                return Err(DriveImportError::FolderMismatch);
+            }
+            listed_files.push(entry.file);
+        }
+    }
     if listed_files.len() > MAX_FILES {
         return Err(DriveImportError::TooManyFiles {
             actual: listed_files.len(),
         });
     }
-    let collisions = colliding_names(&listed_files);
+    // Collisions use complete checkout paths, never only leaf filenames.
+    let collisions = colliding_paths(&listed_files, &paths);
 
     let mut total_bytes = 0usize;
     let mut report = DriveImportReport::default();
@@ -207,6 +308,105 @@ pub async fn import_project_files(
             });
             continue;
         }
+        let (checkout_path, source_path) = paths
+            .get(&file.id)
+            .ok_or(DriveImportError::FolderMismatch)?
+            .clone();
+        if existing_assets.iter().any(|asset| {
+            asset.deleted_at.is_some()
+                && asset
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("drive_file_id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(file.id.as_str())
+        }) {
+            report.refused.push(RefusedDriveFile {
+                drive_file_id: file.id,
+                reason: "deleted_source",
+            });
+            continue;
+        }
+        let matching: Vec<_> = existing_assets
+            .iter()
+            .filter(|asset| {
+                asset
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("drive_file_id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some(file.id.as_str())
+            })
+            .collect();
+        let identities: HashSet<_> = matching
+            .iter()
+            .filter_map(|asset| asset.slug.as_deref())
+            .collect();
+        if identities.len() > 1 || (!matching.is_empty() && identities.is_empty()) {
+            report.refused.push(RefusedDriveFile {
+                drive_file_id: file.id,
+                reason: "ambiguous_source_identity",
+            });
+            continue;
+        }
+        let slug = if let Some(slug) = identities.iter().next() {
+            (*slug).to_owned()
+        } else if let Some(slug) = reserved_drive_slug(&file) {
+            slug
+        } else {
+            report.refused.push(RefusedDriveFile {
+                drive_file_id: file.id,
+                reason: "unsupported_source_identity",
+            });
+            continue;
+        };
+        // Existing identities, including lawyer reslugs and historical flat slugs,
+        // always win. Format-changing names cannot silently rename that identity.
+        if documents::validate_document_slug(&file.name, &slug).is_err() {
+            report.refused.push(RefusedDriveFile {
+                drive_file_id: file.id,
+                reason: "source_format_changed",
+            });
+            continue;
+        }
+        if let Some(head) = assets::current(db, project_id, &slug, assets::Lens::Lawyer).await? {
+            if head
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("drive_file_id"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| id != file.id.as_str())
+                || (matching.is_empty()
+                    && head
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("drive_file_id"))
+                        .and_then(serde_json::Value::as_str)
+                        .is_none())
+            {
+                report.refused.push(RefusedDriveFile {
+                    drive_file_id: file.id,
+                    reason: "name_collision",
+                });
+                continue;
+            }
+        }
+        if existing_assets.iter().any(|asset| {
+            asset.deleted_at.is_none()
+                && asset.documents_path().eq_ignore_ascii_case(&checkout_path)
+                && asset
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("drive_file_id"))
+                    .and_then(serde_json::Value::as_str)
+                    != Some(file.id.as_str())
+        }) {
+            report.refused.push(RefusedDriveFile {
+                drive_file_id: file.id,
+                reason: "name_collision",
+            });
+            continue;
+        }
         validate_declared_size(&file.id, file.size_bytes, total_bytes)?;
 
         let downloaded = drive.download_file(&file.id).await?;
@@ -222,7 +422,25 @@ pub async fn import_project_files(
         if total_bytes > MAX_TOTAL_BYTES {
             return Err(DriveImportError::BatchTooLarge);
         }
-        match ingest_one(db, storage, screen, project_id, args, file, &downloaded).await? {
+        let source_root = source_roots
+            .get(&file.id)
+            .ok_or(DriveImportError::FolderMismatch)?
+            .clone();
+        match ingest_one(
+            db,
+            storage,
+            screen,
+            project_id,
+            args,
+            file,
+            &downloaded,
+            &slug,
+            &checkout_path,
+            &source_path,
+            &source_root,
+        )
+        .await?
+        {
             Outcome::Imported(imported) => report.imported.push(imported),
             Outcome::Refused(refused) => report.refused.push(refused),
         }
@@ -236,6 +454,7 @@ enum Outcome {
 }
 
 /// Check, screen, and file one downloaded Drive file.
+#[allow(clippy::too_many_arguments)]
 async fn ingest_one(
     db: &SurrealDb,
     storage: &Arc<dyn StorageService>,
@@ -244,6 +463,10 @@ async fn ingest_one(
     args: &DriveImportArgs<'_>,
     file: cloud::DriveFile,
     downloaded: &cloud::DriveFileDownload,
+    slug: &str,
+    checkout_path: &str,
+    source_path: &str,
+    source_root: &str,
 ) -> Result<Outcome, DriveImportError> {
     if !receipt_matches(&file, &downloaded.bytes) {
         return Ok(Outcome::Refused(RefusedDriveFile {
@@ -261,10 +484,21 @@ async fn ingest_one(
         }
         Err(()) => return Err(DriveImportError::ScreenUnavailable),
     }
-    let matter_folder = MatterFolder::for_kind(args.kind);
+    let matter_folder =
+        classify_path(checkout_path).unwrap_or_else(|| MatterFolder::for_kind(args.kind));
     if args.dry_run {
         return Ok(Outcome::Imported(
-            plan_one(db, project_id, args, file, &downloaded.bytes, matter_folder).await?,
+            plan_one(
+                db,
+                project_id,
+                args,
+                file,
+                &downloaded.bytes,
+                matter_folder,
+                slug,
+                source_path,
+            )
+            .await?,
         ));
     }
     let content_type = if downloaded.content_type == "application/octet-stream"
@@ -275,10 +509,14 @@ async fn ingest_one(
         downloaded.content_type.as_str()
     };
     let identity = DocumentIdentity {
-        slug: Some(file.name.as_str()),
+        slug: Some(slug),
         published_at: None,
         metadata: Some(json!({
             "drive_file_id": file.id,
+            "drive_relative_path": source_path,
+            "drive_source_root_id": source_root,
+            "drive_checkout_path": checkout_path,
+            "drive_matter_folder": matter_folder.as_str(),
             "drive_modified_time": file.modified_time,
             "drive_version": file.version,
             "drive_md5_checksum": file.md5_checksum,
@@ -304,11 +542,24 @@ async fn ingest_one(
             Filed::Revision(document) => (document.asset_id, true),
             Filed::Unchanged { asset_id } => (asset_id, false),
         };
+    assets::refresh_drive_import(
+        db,
+        project_id,
+        asset_id,
+        &file.id,
+        identity
+            .metadata
+            .as_ref()
+            .ok_or(DriveImportError::FolderMismatch)?,
+        &file.name,
+    )
+    .await?;
     Ok(Outcome::Imported(ImportedDriveFile {
         drive_file_id: file.id,
         asset_id,
         matter_folder,
         filename: file.name,
+        relative_path: source_path.to_owned(),
         changed,
     }))
 }
@@ -318,6 +569,7 @@ async fn ingest_one(
 /// and 3, read and not written — or that a real pass would file the first
 /// revision. A planned file carries the nil asset id, because nothing was
 /// filed.
+#[allow(clippy::too_many_arguments)]
 async fn plan_one(
     db: &SurrealDb,
     project_id: Uuid,
@@ -325,8 +577,10 @@ async fn plan_one(
     file: cloud::DriveFile,
     bytes: &[u8],
     matter_folder: MatterFolder,
+    slug: &str,
+    source_path: &str,
 ) -> Result<ImportedDriveFile, DriveImportError> {
-    let head = assets::current(db, project_id, &file.name, assets::Lens::Lawyer).await?;
+    let head = assets::current(db, project_id, slug, assets::Lens::Lawyer).await?;
     if let Some(head) = head {
         if let Some(existing) = head.kind.as_deref() {
             if existing != args.kind {
@@ -344,6 +598,7 @@ async fn plan_one(
                 asset_id: head.id,
                 matter_folder,
                 filename: file.name,
+                relative_path: source_path.to_owned(),
                 changed: false,
             });
         }
@@ -353,6 +608,7 @@ async fn plan_one(
         asset_id: Uuid::nil(),
         matter_folder,
         filename: file.name,
+        relative_path: source_path.to_owned(),
         changed: true,
     })
 }
@@ -408,11 +664,67 @@ fn usable_name(name: &str) -> bool {
         && name.len() <= 255
 }
 
+fn reserved_drive_slug(file: &cloud::DriveFile) -> Option<String> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    if file.id.is_empty() || file.id.len() > 120 {
+        return None;
+    }
+    // Case-sensitive provider IDs must not alias on a case-insensitive macOS checkout.
+    let mut encoded = String::with_capacity(file.id.len() * 2);
+    for byte in file.id.bytes() {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 15)]));
+    }
+    let extension = std::path::Path::new(&file.name).extension()?.to_str()?;
+    let slug = format!("drive/{encoded}.{}", extension.to_ascii_lowercase());
+    if slug.rsplit('/').next()?.len() > 255 {
+        return None;
+    }
+    documents::validate_document_slug(&file.name, &slug).ok()?;
+    Some(slug)
+}
+
+fn usable_relative_path(path: &str) -> bool {
+    !path.is_empty() && path.len() <= 4096 && path.split('/').all(usable_name)
+}
+
+fn classify_path(path: &str) -> Option<MatterFolder> {
+    MatterFolder::TREE
+        .iter()
+        .copied()
+        .filter(|folder| {
+            path.strip_prefix(folder.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
+        .max_by_key(|folder| folder.as_str().len())
+}
+
+fn colliding_paths(
+    files: &[cloud::DriveFile],
+    paths: &HashMap<String, (String, String)>,
+) -> HashSet<String> {
+    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+    for file in files {
+        if let Some((path, _)) = paths.get(&file.id) {
+            groups
+                .entry(path.to_ascii_lowercase())
+                .or_default()
+                .push(file.id.clone());
+        }
+    }
+    groups
+        .into_values()
+        .filter(|ids| ids.len() > 1)
+        .flatten()
+        .collect()
+}
+
 /// The drive file ids whose names collide case-insensitively: every member of
 /// a same-name group, because a pass has no honest way to pick which one the
 /// lawyer meant. ASCII-only folding matches what the checkout filesystems
 /// (APFS, NTFS) fold; anything finer is one rename away in Drive.
 #[must_use]
+#[cfg(test)]
 fn colliding_names(files: &[cloud::DriveFile]) -> HashSet<String> {
     let mut groups: HashMap<String, Vec<&str>> = HashMap::new();
     for file in files {
@@ -482,5 +794,69 @@ mod tests {
     fn distinct_names_never_collide() {
         let files = [file("a", "a.pdf"), file("b", "b.pdf")];
         assert!(colliding_names(&files).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod recursive_path_tests {
+    use super::*;
+    #[test]
+    fn nested_paths_are_safe_and_longest_canonical_folder_wins() {
+        assert!(usable_relative_path(
+            "Work Product/Research (Work Product)/folder/opinion.pdf"
+        ));
+        for path in ["/a.pdf", "a/../b.pdf", "a//b.pdf", "a/./b.pdf", "a\\b.pdf"] {
+            assert!(!usable_relative_path(path), "{path}");
+        }
+        assert_eq!(
+            classify_path("Work Product/Research (Work Product)/folder/opinion.pdf"),
+            Some(
+                MatterFolder::parse("Work Product/Research (Work Product)")
+                    .expect("canonical folder")
+            )
+        );
+        assert_eq!(classify_path("Work Productive/a.pdf"), None);
+    }
+    #[test]
+    fn same_basename_in_different_directories_is_not_a_collision() {
+        let files = vec![file("a"), file("b"), file("c")];
+        let paths = HashMap::from([
+            (
+                "a".to_owned(),
+                ("Client Production/one/notice.pdf".to_owned(), String::new()),
+            ),
+            (
+                "b".to_owned(),
+                ("Client Production/two/notice.pdf".to_owned(), String::new()),
+            ),
+            (
+                "c".to_owned(),
+                ("client production/ONE/NOTICE.pdf".to_owned(), String::new()),
+            ),
+        ]);
+        assert_eq!(
+            colliding_paths(&files, &paths),
+            HashSet::from(["a".to_owned(), "c".to_owned()])
+        );
+    }
+    #[test]
+    fn source_reservation_is_case_safe_and_ignores_mutable_name() {
+        let mut upper = file("A");
+        let lower = file("a");
+        assert_eq!(reserved_drive_slug(&upper).as_deref(), Some("drive/41.pdf"));
+        assert_eq!(reserved_drive_slug(&lower).as_deref(), Some("drive/61.pdf"));
+        upper.name = "renamed.pdf".to_owned();
+        assert_eq!(reserved_drive_slug(&upper).as_deref(), Some("drive/41.pdf"));
+    }
+    fn file(id: &str) -> cloud::DriveFile {
+        cloud::DriveFile {
+            id: id.to_owned(),
+            name: "notice.pdf".to_owned(),
+            mime_type: "application/pdf".to_owned(),
+            size_bytes: None,
+            modified_time: None,
+            md5_checksum: None,
+            version: None,
+        }
     }
 }

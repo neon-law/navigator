@@ -37,6 +37,36 @@ pub(crate) fn pointer_path_for_slug(root: &Path, slug: &Path) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// Resolve a provider placement to its committed identity; placement is never a slug.
+pub(crate) fn slug_of_document_bytes(
+    root: &Path,
+    relative: &Path,
+) -> Result<(PathBuf, Option<store::document_pointers::MatterFolder>)> {
+    let mut found = None;
+    for pointer_path in crate::document_read::discover_pointers(root)? {
+        let Some(pointer) = read_pointer(&root.join(&pointer_path))? else {
+            continue;
+        };
+        if pointer
+            .checkout_path
+            .as_deref()
+            .is_some_and(|path| Path::new(path) == relative)
+        {
+            let slug = slug_for_pointer(&pointer_path)
+                .ok_or_else(|| anyhow!("invalid provider pointer"))?;
+            if found.replace(slug).is_some() {
+                return Err(anyhow!(
+                    "multiple identities use provider checkout placement"
+                ));
+            }
+        }
+    }
+    Ok(found.map_or_else(
+        || crate::document_layout::slug_of_bytes(relative),
+        |slug| (slug, None),
+    ))
+}
+
 /// The bytes `documents/<slug>` a pointer `blobs/<slug>.yaml` names.
 pub(crate) fn document_path_for_slug(root: &Path, slug: &Path) -> PathBuf {
     root.join(DOCUMENT_DIRECTORY).join(slug)
@@ -467,6 +497,7 @@ async fn sync_authority_capture(
     let version = existing_pointer.map_or(1, |pointer| pointer.current_version.version + 1);
     let previous_version = existing_pointer.map(|pointer| pointer.current_version.asset_id);
     let pointer = store::document_pointers::DocumentPointer {
+        checkout_path: None,
         kind: String::new(),
         visibility: "internal".to_string(),
         folder: None,
@@ -562,7 +593,7 @@ impl DocumentScope {
                 Ok(_) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
                 Err(error) => {
-                    return Err(error).with_context(|| format!("inspect {}", current.display()))
+                    return Err(error).with_context(|| format!("inspect {}", current.display()));
                 }
             }
         }
@@ -570,7 +601,7 @@ impl DocumentScope {
         let source = match relative.to_str().and_then(strip_pointer_extension) {
             Some(slug) => PathBuf::from(slug),
             None if path.starts_with(DOCUMENT_DIRECTORY) => {
-                crate::document_layout::slug_of_bytes(relative).0
+                slug_of_document_bytes(root, relative)?.0
             }
             None => relative.to_path_buf(),
         };
@@ -609,6 +640,7 @@ struct ProjectSyncPlan {
     committed: Option<store::document_pointers::DocumentPointer>,
     pointer_target: PathBuf,
     document_target: PathBuf,
+    previous_document_target: Option<PathBuf>,
     pointer_changed: bool,
     local: Option<LocalCopy>,
     /// The newest live revision's number (the chain length) and size.
@@ -868,6 +900,12 @@ fn project_sync_plans_scoped(
             _ => Vec::new(),
         };
         let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: current
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("drive_checkout_path"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
             kind,
             visibility: current.visibility.clone(),
             // The live inventory has no folder; the committed pointer names it.
@@ -929,7 +967,35 @@ fn project_sync_plans_scoped(
             .map_err(|error| anyhow!("invalid live pointer for {}: {error}", relative.display()))?;
         let pointer_changed = !current_pointer_matches(&pointer_target, &pointer)?;
         let document_target = crate::document_layout::document_path(root, &relative, &pointer);
-        let local_copy = read_local_copy(&document_target)?;
+        let previous_document_target = committed
+            .as_ref()
+            .map(|prior| crate::document_layout::document_path(root, &relative, prior))
+            .filter(|prior| prior != &document_target && prior.exists());
+        if let Some(previous) = &previous_document_target {
+            ensure_document_path_is_safe(root, previous, false, true)?;
+            let expected = &committed
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing placement source pointer"))?
+                .current_version
+                .sha256;
+            if !matches_digest(previous, expected)? {
+                return Err(anyhow!(
+                    "provider placement changed but local bytes were edited: {}",
+                    previous.display()
+                ));
+            }
+            if document_target.exists() {
+                return Err(anyhow!(
+                    "provider placement destination is occupied: {}",
+                    document_target.display()
+                ));
+            }
+        }
+        let local_copy = read_local_copy(
+            previous_document_target
+                .as_deref()
+                .unwrap_or(&document_target),
+        )?;
         let chain: Vec<Uuid> = revisions.iter().map(|revision| revision.id).collect();
         // A repository that removed this document's pointer is asking to
         // delete it. A closed_repository archive is never deleted by sync, and
@@ -985,6 +1051,7 @@ fn project_sync_plans_scoped(
             committed,
             pointer_target,
             document_target,
+            previous_document_target,
             pointer_changed,
             local: local_copy,
             live_revision: revisions.len(),
@@ -1246,7 +1313,7 @@ fn local_only_documents(
             .strip_prefix(&documents)
             .map_err(|_| anyhow!("{} is outside documents/", path.display()))?;
         // Bytes in a matter folder name the slug below it (LAW-189).
-        let (slug_path, _) = crate::document_layout::slug_of_bytes(relative);
+        let (slug_path, _) = slug_of_document_bytes(root, relative)?;
         if !scope.includes(&slug_path) {
             continue;
         }
@@ -1308,6 +1375,13 @@ async fn stage_project_sync(
     let mut unreadable = Vec::new();
     for (plan, fetch) in items {
         let mut bytes_path = None;
+        if !*fetch {
+            if let Some(previous) = &plan.previous_document_target {
+                let staged_path = downloads.join(format!("placement-{}", staged.len()));
+                std::fs::copy(previous, &staged_path)?;
+                bytes_path = Some(staged_path);
+            }
+        }
         if *fetch {
             // A 401, a 403, or any other refusal is "could not read", never
             // "absent": the item is skipped and nothing is written over it.
@@ -1342,15 +1416,20 @@ async fn stage_project_sync(
             let staged_path = downloads.join(format!("pointer-{}", staged.len()));
             std::fs::write(&staged_path, plan.pointer.to_yaml()?)?;
             staged.push(StagedPull {
+                delete_sha256: None,
                 target: plan.pointer_target.clone(),
                 staged: staged_path,
             });
         }
         if let Some(staged_path) = bytes_path {
             staged.push(StagedPull {
+                delete_sha256: None,
                 target: plan.document_target.clone(),
                 staged: staged_path,
             });
+        }
+        if let Some(deletion) = previous_placement_deletion(plan)? {
+            staged.push(deletion);
         }
     }
     for copy in authorities.iter().filter(|copy| copy.missing) {
@@ -1373,6 +1452,7 @@ async fn stage_project_sync(
                     let staged_path = downloads.join(staged.len().to_string());
                     std::fs::write(&staged_path, bytes)?;
                     staged.push(StagedPull {
+                        delete_sha256: None,
                         target: copy.target.clone(),
                         staged: staged_path,
                     });
@@ -1382,6 +1462,21 @@ async fn stage_project_sync(
         }
     }
     Ok((staged, unreadable))
+}
+
+fn previous_placement_deletion(plan: &ProjectSyncPlan) -> Result<Option<StagedPull>> {
+    let Some(previous) = &plan.previous_document_target else {
+        return Ok(None);
+    };
+    let committed = plan
+        .committed
+        .as_ref()
+        .ok_or_else(|| anyhow!("missing placement source"))?;
+    Ok(Some(StagedPull {
+        target: previous.clone(),
+        staged: previous.clone(),
+        delete_sha256: Some(committed.current_version.sha256.clone()),
+    }))
 }
 
 /// Upload one local file as a new revision of its slug (or as a new
@@ -1401,7 +1496,7 @@ async fn upload_local_revision(
         .map_err(|_| anyhow!("{} is outside documents/", path.display()))?;
     // Bytes in a matter folder name the slug below it, and that folder is
     // where they stay (LAW-189).
-    let (slug_path, dropped_into) = crate::document_layout::slug_of_bytes(relative);
+    let (slug_path, dropped_into) = slug_of_document_bytes(root, relative)?;
     let slug = slash_path(&slug_path)?;
     let (pointer_path, has_existing_pointer) = pointer_path_for_source(root, path)?;
     prepare_pointer_parent(root, &pointer_path)?;
@@ -1549,7 +1644,9 @@ async fn sync_case_timeline(
         }
     } else {
         for relative in &timeline.removals {
-            println!("cannot remove {relative}: no Docket Entry names it any more; rerun with --yes-delete");
+            println!(
+                "cannot remove {relative}: no Docket Entry names it any more; rerun with --yes-delete"
+            );
         }
     }
     Ok(())
@@ -1866,7 +1963,9 @@ fn report_dry_run_plans(
         }
     }
     for orphan in &local.orphan_pointers {
-        println!("cannot reconcile {orphan}: the pointer names a document the live Project does not list");
+        println!(
+            "cannot reconcile {orphan}: the pointer names a document the live Project does not list"
+        );
     }
     for notice in &local.notices {
         println!("skip {notice}");
@@ -1971,6 +2070,9 @@ pub(crate) async fn reconcile_project(
     crate::document_layout::ensure_tree(root)?;
     for plan in &plans {
         raw_document_is_git_ignored(root, &plan.document_target)?;
+        if let Some(previous) = &plan.previous_document_target {
+            raw_document_is_git_ignored(root, previous)?;
+        }
     }
     for copy in &authorities {
         raw_document_is_git_ignored(root, &copy.target)?;
@@ -2019,7 +2121,9 @@ pub(crate) async fn reconcile_project(
         tally.declined += local.new_files.len();
     }
     for orphan in &local.orphan_pointers {
-        println!("cannot reconcile {orphan}: the pointer names a document the live Project does not list");
+        println!(
+            "cannot reconcile {orphan}: the pointer names a document the live Project does not list"
+        );
     }
     for notice in &local.notices {
         println!("skip {notice}");
@@ -2222,6 +2326,7 @@ struct PullTransactionTarget {
 }
 
 struct StagedPull {
+    delete_sha256: Option<String>,
     target: PathBuf,
     staged: PathBuf,
 }
@@ -2415,7 +2520,9 @@ fn recover_interrupted_pull_scoped(root: &Path, scope: &DocumentScope) -> Result
                         )
                     })?;
                 if !scope.includes(&slug) {
-                    return Err(anyhow!("interrupted publication includes an out-of-scope target; run unscoped project sync to recover it"));
+                    return Err(anyhow!(
+                        "interrupted publication includes an out-of-scope target; run unscoped project sync to recover it"
+                    ));
                 }
             }
         }
@@ -2451,9 +2558,74 @@ fn cleanup_filed_sidecars(root: &Path, scope: &DocumentScope) -> Result<()> {
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(error).with_context(|| format!("inspect {}", sidecar.display()))
+                return Err(error).with_context(|| format!("inspect {}", sidecar.display()));
             }
         }
+    }
+    Ok(())
+}
+
+/// Ask the checkout's own filesystem whether planned paths are distinct.
+/// A fresh private probe tree preserves its native case/Unicode rules without
+/// guessing a portable normalization. Final `create_new` refuses aliasing files;
+/// native directory identities refuse two spellings of the same directory.
+fn ensure_pull_batch_targets_are_distinct(root: &Path, staged: &[StagedPull]) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let probe = tempfile::Builder::new()
+        .prefix(".navigator-pull-reserve-")
+        .tempdir_in(root)
+        .context("reserve native checkout destinations")?;
+    let mut directories = std::collections::BTreeMap::<(u64, u64), PathBuf>::new();
+    for item in staged {
+        ensure_pull_target_is_safe(root, &item.target)?;
+        let relative = item
+            .target
+            .strip_prefix(root)
+            .context("pull destination outside checkout")?;
+        let components = relative.components().collect::<Vec<_>>();
+        if components.is_empty()
+            || components
+                .iter()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err(anyhow!("pull destination is not a safe relative path"));
+        }
+        let mut parent = probe.path().to_path_buf();
+        let mut spelling = PathBuf::new();
+        for component in &components[..components.len() - 1] {
+            parent.push(component.as_os_str());
+            spelling.push(component.as_os_str());
+            match std::fs::create_dir(&parent) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error).context("reserve checkout directory"),
+            }
+            let metadata = std::fs::symlink_metadata(&parent)?;
+            if !metadata.is_dir() {
+                return Err(anyhow!("pull destination collides with a planned file"));
+            }
+            let native = (metadata.dev(), metadata.ino());
+            if let Some(previous) = directories.get(&native) {
+                if previous != &spelling {
+                    return Err(anyhow!("pull destinations use aliasing directory spellings; reconcile provider placement"));
+                }
+            } else {
+                directories.insert(native, spelling.clone());
+            }
+        }
+        let file = parent.join(
+            components
+                .last()
+                .ok_or_else(|| anyhow!("missing pull filename"))?
+                .as_os_str(),
+        );
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(file)
+            .context(
+                "pull destinations collide on this filesystem; reconcile provider placement",
+            )?;
     }
     Ok(())
 }
@@ -2463,6 +2635,8 @@ fn begin_pull_transaction(
     staging: tempfile::TempDir,
     staged: Vec<StagedPull>,
 ) -> Result<PullTransaction> {
+    // Refuse every same-batch alias before keeping staging or creating recovery state.
+    ensure_pull_batch_targets_are_distinct(root, &staged)?;
     let transaction = pull_transaction_path(root);
     let parent = transaction
         .parent()
@@ -2531,6 +2705,7 @@ fn begin_pull_transaction(
                 .file_name()
                 .ok_or_else(|| anyhow!("staged pull has no file name"))?;
             Ok(StagedPull {
+                delete_sha256: item.delete_sha256,
                 staged: transaction.join("downloads").join(file_name),
                 target: item.target,
             })
@@ -2553,6 +2728,17 @@ fn publish_pull_transaction(
 
     for item in &transaction.staged {
         ensure_pull_target_is_safe(root, &item.target).map_err(PublicationFailure::BeforeCommit)?;
+        if let Some(expected) = &item.delete_sha256 {
+            if !matches_digest(&item.target, expected).map_err(PublicationFailure::BeforeCommit)? {
+                return Err(PublicationFailure::BeforeCommit(anyhow!(
+                    "placement source changed during pull"
+                )));
+            }
+            std::fs::remove_file(&item.target)
+                .map_err(anyhow::Error::from)
+                .map_err(PublicationFailure::BeforeCommit)?;
+            continue;
+        }
         let Some(parent) = item.target.parent() else {
             return Err(PublicationFailure::BeforeCommit(anyhow!(
                 "{} has no parent directory",
@@ -2598,7 +2784,7 @@ pub(crate) fn ensure_documents_tree_is_safe(documents: &Path) -> Result<()> {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
-            return Err(error).with_context(|| format!("inspect {}", documents.display()))
+            return Err(error).with_context(|| format!("inspect {}", documents.display()));
         }
     }
     for entry in walkdir::WalkDir::new(documents).follow_links(false) {
@@ -2682,7 +2868,7 @@ fn pointer_path_for_source(root: &Path, path: &Path) -> Result<(PathBuf, bool)> 
         .strip_prefix(root.join(DOCUMENT_DIRECTORY))
         .map_err(|_| anyhow!("{} is outside documents/", path.display()))?;
     // Bytes in a matter folder name the slug below it (LAW-189).
-    let (slug, _) = crate::document_layout::slug_of_bytes(below);
+    let (slug, _) = slug_of_document_bytes(root, below)?;
     let slug = slug.as_path();
     let stem = root.join(POINTER_DIRECTORY).join(slug);
     for extension in POINTER_READ_EXTENSIONS {
@@ -2700,7 +2886,7 @@ fn pointer_path_for_source(root: &Path, path: &Path) -> Result<(PathBuf, bool)> 
             Ok(_) => return Ok((candidate, true)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(error).with_context(|| format!("inspect {}", candidate.display()))
+                return Err(error).with_context(|| format!("inspect {}", candidate.display()));
             }
         }
     }
@@ -2931,6 +3117,7 @@ mod tests {
         docusign_envelope_id: Option<Uuid>,
     ) -> store::document_pointers::DocumentPointer {
         store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "onboarding".into(),
             visibility: "internal".into(),
             folder: None,
@@ -2956,6 +3143,7 @@ mod tests {
 
     fn invoice_pointer(xero_invoice_id: Option<Uuid>) -> store::document_pointers::DocumentPointer {
         store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "invoice".into(),
             visibility: "internal".into(),
             folder: None,
@@ -3036,6 +3224,7 @@ mod tests {
     #[test]
     fn project_sync_plans_normalizes_a_fractional_second_timestamp() {
         let document = crate::remote::LiveDocumentSummary {
+            metadata: None,
             id: Uuid::now_v7(),
             byte_size: 18,
             sha256_hex: "0".repeat(64),
@@ -3064,6 +3253,7 @@ mod tests {
 
     fn live_signed_letter_with_sha(id: Uuid, sha256: &str) -> crate::remote::LiveDocumentSummary {
         crate::remote::LiveDocumentSummary {
+            metadata: None,
             id,
             byte_size: 18,
             sha256_hex: sha256.to_string(),
@@ -3678,5 +3868,245 @@ mod tests {
         assert_eq!(std::fs::read(&first_target).unwrap(), b"before first");
         assert_eq!(std::fs::read(&second_target).unwrap(), b"before second");
         assert!(!transaction.exists());
+    }
+}
+
+#[cfg(test)]
+mod drive_placement_tests {
+    use super::*;
+    fn pointer(path: &str) -> store::document_pointers::DocumentPointer {
+        let raw=format!("kind: unclassified\nvisibility: client\ncheckout_path: '{path}'\ncurrent_version:\n  version: 1\n  asset_id: 00000000-0000-0000-0000-000000000001\n  created_at: '2026-01-01T00:00:00Z'\n  sha256: {}\n  size_bytes: 1\n", "a".repeat(64));
+        store::document_pointers::DocumentPointer::from_yaml(&raw).unwrap()
+    }
+    #[test]
+    fn mutable_placement_round_trips_to_stable_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let slug = Path::new("drive/provider-123.pdf");
+        let relative = Path::new("Client Production/nested/notice.pdf");
+        let ptr = pointer(relative.to_str().unwrap());
+        let target = pointer_path_for_slug(root, slug);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, ptr.to_yaml().unwrap()).unwrap();
+        assert_eq!(
+            crate::document_layout::document_path(root, slug, &ptr),
+            root.join(DOCUMENT_DIRECTORY).join(relative)
+        );
+        assert_eq!(
+            slug_of_document_bytes(root, relative).unwrap(),
+            (slug.to_path_buf(), None)
+        );
+        assert_eq!(
+            crate::document_read::slug_from_pointer(
+                root,
+                &root.join(DOCUMENT_DIRECTORY).join(relative)
+            )
+            .unwrap(),
+            "drive/provider-123.pdf"
+        );
+        assert!(store::document_pointers::DocumentPointer::from_yaml(
+            &ptr.to_yaml()
+                .unwrap()
+                .replace("Client Production/nested/notice.pdf", "../escape.pdf")
+        )
+        .is_err());
+    }
+    #[test]
+    fn placement_publication_removes_old_bytes_and_keeps_one_new_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let old = root.join("documents/old.pdf");
+        let new = root.join("documents/Client Production/nested/new.pdf");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"original").unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        let downloads = staging.path().join("downloads");
+        std::fs::create_dir(&downloads).unwrap();
+        let fresh = downloads.join("new-bytes");
+        std::fs::write(&fresh, b"original").unwrap();
+        let mut transaction = begin_pull_transaction(
+            root,
+            staging,
+            vec![
+                StagedPull {
+                    target: new.clone(),
+                    staged: fresh,
+                    delete_sha256: None,
+                },
+                StagedPull {
+                    target: old.clone(),
+                    staged: old.clone(),
+                    delete_sha256: Some(store::documents::sha256_hex(b"original")),
+                },
+            ],
+        )
+        .unwrap();
+        assert!(publish_pull_transaction(root, &mut transaction).is_ok());
+        assert!(!old.exists());
+        assert_eq!(std::fs::read(new).unwrap(), b"original");
+    }
+    #[test]
+    fn placement_deletion_rolls_back_with_existing_pull_transaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let old = root.join("documents/old.pdf");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"original").unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        std::fs::create_dir(staging.path().join("downloads")).unwrap();
+        let mut transaction = begin_pull_transaction(
+            root,
+            staging,
+            vec![StagedPull {
+                target: old.clone(),
+                staged: old.clone(),
+                delete_sha256: Some(store::documents::sha256_hex(b"original")),
+            }],
+        )
+        .unwrap();
+        transaction.state.phase = PullTransactionPhase::Publishing;
+        write_pull_transaction_state(&transaction.path, &transaction.state).unwrap();
+        std::fs::remove_file(&old).unwrap();
+        recover_interrupted_pull(root).unwrap();
+        assert_eq!(std::fs::read(&old).unwrap(), b"original");
+    }
+    fn staged_target(root: &Path, relative: &str) -> StagedPull {
+        StagedPull {
+            delete_sha256: None,
+            target: root.join(relative),
+            staged: PathBuf::from("unused"),
+        }
+    }
+    fn filesystem_aliases(root: &Path, a: &str, b: &str) -> bool {
+        let probe = tempfile::tempdir_in(root).unwrap();
+        std::fs::write(probe.path().join(a), b"probe").unwrap();
+        probe.path().join(b).exists()
+    }
+    #[test]
+    fn batch_reservation_refuses_duplicate_files_and_keeps_distinct_siblings() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(ensure_pull_batch_targets_are_distinct(
+            root.path(),
+            &[
+                staged_target(root.path(), "documents/Client Production/a.pdf"),
+                staged_target(root.path(), "documents/Client Production/a.pdf"),
+            ]
+        )
+        .is_err());
+        assert!(ensure_pull_batch_targets_are_distinct(
+            root.path(),
+            &[
+                staged_target(root.path(), "documents/Client Production/a.pdf"),
+                staged_target(root.path(), "documents/Client Production/b.pdf"),
+            ]
+        )
+        .is_ok());
+        assert_eq!(
+            std::fs::read_dir(root.path()).unwrap().count(),
+            0,
+            "probe cleans itself on every exit"
+        );
+    }
+    #[test]
+    fn batch_reservation_obeys_native_case_and_unicode_file_aliases_before_publication() {
+        let root = tempfile::tempdir().unwrap();
+        for (a, b) in [("Doc.pdf", "doc.pdf"), ("\u{e9}.pdf", "e\u{301}.pdf")] {
+            let aliases = filesystem_aliases(root.path(), a, b);
+            let result = ensure_pull_batch_targets_are_distinct(
+                root.path(),
+                &[
+                    staged_target(root.path(), &format!("documents/Client Production/{a}")),
+                    staged_target(root.path(), &format!("documents/Client Production/{b}")),
+                ],
+            );
+            assert_eq!(
+                result.is_err(),
+                aliases,
+                "native alias detection for {a:?}/{b:?}"
+            );
+        }
+        assert!(!root.path().join("documents").exists());
+    }
+    #[test]
+    fn batch_reservation_refuses_native_directory_aliases_even_for_different_leaf_names() {
+        let root = tempfile::tempdir().unwrap();
+        for (a, b) in [("CaseFolder", "casefolder"), ("\u{e9}", "e\u{301}")] {
+            let aliases = filesystem_aliases(root.path(), a, b);
+            let result = ensure_pull_batch_targets_are_distinct(
+                root.path(),
+                &[
+                    staged_target(
+                        root.path(),
+                        &format!("documents/Client Production/{a}/first.pdf"),
+                    ),
+                    staged_target(
+                        root.path(),
+                        &format!("documents/Client Production/{b}/second.pdf"),
+                    ),
+                ],
+            );
+            assert_eq!(
+                result.is_err(),
+                aliases,
+                "directory identity must preserve native names"
+            );
+        }
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+    #[test]
+    fn batch_preflight_rejects_existing_nested_symlink_before_staging_is_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("documents/Client Production")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path(),
+            root.path().join("documents/Client Production/nested"),
+        )
+        .unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        let staging_path = staging.path().to_path_buf();
+        assert!(begin_pull_transaction(
+            root.path(),
+            staging,
+            vec![staged_target(
+                root.path(),
+                "documents/Client Production/nested/new.pdf"
+            )]
+        )
+        .is_err());
+        assert!(
+            !staging_path.exists(),
+            "refused staging was not leaked by keep"
+        );
+        assert!(!pull_transaction_path(root.path()).exists());
+        assert_eq!(
+            std::fs::read_dir(outside.path()).unwrap().count(),
+            0,
+            "no external write"
+        );
+    }
+    #[test]
+    fn duplicate_new_destinations_refuse_before_any_transaction_or_checkout_publication() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("original"), b"untouched").unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        let staging_path = staging.path().to_path_buf();
+        let target = "documents/Client Production/new.pdf";
+        assert!(begin_pull_transaction(
+            root.path(),
+            staging,
+            vec![
+                staged_target(root.path(), target),
+                staged_target(root.path(), target),
+            ]
+        )
+        .is_err());
+        assert!(!root.path().join(target).exists());
+        assert_eq!(
+            std::fs::read(root.path().join("original")).unwrap(),
+            b"untouched"
+        );
+        assert!(!staging_path.exists());
+        assert!(!pull_transaction_path(root.path()).exists());
     }
 }

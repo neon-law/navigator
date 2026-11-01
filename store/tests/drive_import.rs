@@ -9,7 +9,8 @@ use serde_json::json;
 use store::document_pointers::MatterFolder;
 use store::documents::{source, visibility};
 use store::drive_import::{
-    import_project_files, DriveImportArgs, DriveImportError, DriveImportReport, IngestScreen,
+    import_project_files, import_project_files_with_folders, DriveImportArgs, DriveImportError,
+    DriveImportReport, IngestScreen,
 };
 use store::persons::{self, NewPerson, Role};
 use store::projects::{create, set_drive_folder_id, NewProject, Project};
@@ -36,6 +37,7 @@ impl IngestScreen for Screen {
 
 struct World {
     surreal: SurrealDb,
+    pg: store::postgres::PostgresDb,
     storage: Arc<dyn StorageService>,
     drive: FakeDrive,
     project: Project,
@@ -78,12 +80,17 @@ async fn project(surreal: &SurrealDb, code: &str) -> Project {
 
 /// A Project whose recorded folder carries a display name unrelated to its
 /// code: the import is scoped by the folder link, never by name.
-async fn setup(code: &str) -> World {
+async fn setup(code: &str) -> Option<World> {
+    let pg = database().await?;
     let surreal = mem_surreal().await;
     let project = project(&surreal, code).await;
     let drive = FakeDrive::default();
+    let parent = drive
+        .create_folder("Synthetic shared parent")
+        .await
+        .expect("shared parent");
     let folder = drive
-        .create_folder("Legacy display name")
+        .ensure_child_folder(&parent.id, "Legacy display name")
         .await
         .expect("folder creation");
     set_drive_folder_id(&surreal, project.id, Some(&folder.id))
@@ -97,26 +104,68 @@ async fn setup(code: &str) -> World {
     .await
     .expect("create operator")
     .id;
+    store::projects::add_participation(&surreal, project.id, actor, "owner")
+        .await
+        .expect("firm participation");
+    seed_pg_project(&pg, project.id).await;
+    let submissions = drive
+        .ensure_child_folder(&parent.id, "Synthetic submissions")
+        .await
+        .expect("submissions");
+    for (slot, id) in [
+        (
+            store::project_folders::ProjectFolderSlot::Root,
+            folder.id.as_str(),
+        ),
+        (
+            store::project_folders::ProjectFolderSlot::ClientSubmissions,
+            submissions.id.as_str(),
+        ),
+    ] {
+        store::project_folders::bind(&pg, project.id, slot, id, None, Some(&parent.id))
+            .await
+            .expect("bind folder");
+        drive
+            .restrict_folder(id)
+            .await
+            .expect("isolated synthetic folder");
+        drive
+            .ensure_direct_member_permission(
+                id,
+                &cloud::drive::DriveMember {
+                    kind: cloud::drive::DriveMemberKind::User,
+                    email: "drive-operator@example.com".into(),
+                },
+                cloud::drive::DriveRole::Writer,
+            )
+            .await
+            .expect("root grant");
+        store::project_folders::mark_verified(&pg, project.id, slot, id)
+            .await
+            .expect("verify folder");
+    }
     let dir = tempfile::tempdir().expect("storage directory");
     let storage: Arc<dyn StorageService> =
         Arc::new(FsStorage::new(dir.path()).await.expect("storage"));
-    World {
+    Some(World {
         surreal,
+        pg,
         storage,
         drive,
         project,
         folder_id: folder.id,
         actor,
         _dir: dir,
-    }
+    })
 }
 
 impl World {
     // Mirrors the importer's own signature.
     #[allow(clippy::result_large_err)]
     async fn import(&self, screen: &Screen) -> Result<DriveImportReport, DriveImportError> {
-        import_project_files(
+        import_project_files_with_folders(
             &self.surreal,
+            &self.pg,
             &self.storage,
             &self.drive,
             screen,
@@ -128,7 +177,18 @@ impl World {
     }
 
     async fn revisions(&self, slug: &str) -> Vec<store::assets::Asset> {
-        store::assets::revisions(&self.surreal, self.project.id, slug)
+        let slug = store::assets::for_project(&self.surreal, self.project.id)
+            .await
+            .expect("assets")
+            .into_iter()
+            .find(|asset| {
+                asset.slug.as_deref() == Some(slug)
+                    || asset.filename.as_deref() == Some(slug)
+                    || asset.documents_path() == slug
+            })
+            .and_then(|asset| asset.slug)
+            .unwrap_or_else(|| slug.to_owned());
+        store::assets::revisions(&self.surreal, self.project.id, &slug)
             .await
             .expect("revision chain")
     }
@@ -137,8 +197,9 @@ impl World {
     /// written.
     #[allow(clippy::result_large_err)]
     async fn plan(&self, screen: &Screen) -> Result<DriveImportReport, DriveImportError> {
-        import_project_files(
+        import_project_files_with_folders(
             &self.surreal,
+            &self.pg,
             &self.storage,
             &self.drive,
             screen,
@@ -152,7 +213,9 @@ impl World {
 
 #[tokio::test]
 async fn drive_files_become_project_assets_and_a_rerun_writes_nothing() {
-    let world = setup("drive-import").await;
+    let Some(world) = setup("drive-import").await else {
+        return;
+    };
     let screen = Screen::default();
     let file = world
         .drive
@@ -184,6 +247,10 @@ async fn drive_files_become_project_assets_and_a_rerun_writes_nothing() {
         asset.metadata,
         Some(json!({
             "drive_file_id": file.id,
+            "drive_relative_path": "notice.pdf",
+            "drive_source_root_id": world.folder_id,
+            "drive_checkout_path": "Work Product/notice.pdf",
+            "drive_matter_folder": "Work Product",
             "drive_modified_time": "2026-09-21T12:00:00Z",
             "drive_version": "1",
             "drive_md5_checksum": cloud::md5_hex(b"synthetic drive bytes"),
@@ -221,7 +288,9 @@ async fn drive_files_become_project_assets_and_a_rerun_writes_nothing() {
 
 #[tokio::test]
 async fn a_new_drive_version_is_recorded_as_a_new_revision() {
-    let world = setup("drive-versions").await;
+    let Some(world) = setup("drive-versions").await else {
+        return;
+    };
     let screen = Screen::default();
     let file = world
         .drive
@@ -252,7 +321,9 @@ async fn a_new_drive_version_is_recorded_as_a_new_revision() {
 
 #[tokio::test]
 async fn an_interrupted_download_converges_without_duplicates() {
-    let world = setup("drive-interrupted").await;
+    let Some(world) = setup("drive-interrupted").await else {
+        return;
+    };
     let screen = Screen::default();
     world
         .drive
@@ -289,7 +360,9 @@ async fn an_interrupted_download_converges_without_duplicates() {
 
 #[tokio::test]
 async fn a_malformed_receipt_or_malware_files_nothing_and_an_unavailable_screen_stops() {
-    let world = setup("drive-receipts").await;
+    let Some(world) = setup("drive-receipts").await else {
+        return;
+    };
     let file = world
         .drive
         .add_file(
@@ -306,7 +379,9 @@ async fn a_malformed_receipt_or_malware_files_nothing_and_an_unavailable_screen_
     assert_eq!(report.refused[0].reason, "receipt_mismatch");
     assert!(world.revisions("deed.pdf").await.is_empty());
 
-    let malware = setup("drive-malware").await;
+    let Some(malware) = setup("drive-malware").await else {
+        return;
+    };
     malware
         .drive
         .add_file(
@@ -336,7 +411,9 @@ async fn a_malformed_receipt_or_malware_files_nothing_and_an_unavailable_screen_
 
 #[tokio::test]
 async fn unauthorized_drive_import_stops_before_listing_or_persisting() {
-    let world = setup("drive-unauthorized").await;
+    let Some(world) = setup("drive-unauthorized").await else {
+        return;
+    };
     let client = persons::create(
         &world.surreal,
         &NewPerson::new("Drive Client", "drive-client@example.com"),
@@ -361,7 +438,9 @@ async fn unauthorized_drive_import_stops_before_listing_or_persisting() {
 
 #[tokio::test]
 async fn another_projects_folder_or_a_folder_outside_the_drive_is_refused() {
-    let world = setup("drive-target").await;
+    let Some(world) = setup("drive-target").await else {
+        return;
+    };
     let other = project(&world.surreal, "drive-other").await;
     let other_folder = world
         .drive
@@ -409,7 +488,9 @@ async fn another_projects_folder_or_a_folder_outside_the_drive_is_refused() {
 
 #[tokio::test]
 async fn a_dry_run_predicts_a_real_pass_and_writes_nothing() {
-    let world = setup("drive-dry-run").await;
+    let Some(world) = setup("drive-dry-run").await else {
+        return;
+    };
     let screen = Screen::default();
     world
         .drive
@@ -447,7 +528,9 @@ async fn a_dry_run_predicts_a_real_pass_and_writes_nothing() {
 
 #[tokio::test]
 async fn a_dry_run_refuses_exactly_what_a_real_pass_would() {
-    let world = setup("drive-dry-refusals").await;
+    let Some(world) = setup("drive-dry-refusals").await else {
+        return;
+    };
     world
         .drive
         .add_file(
@@ -514,7 +597,9 @@ async fn a_dry_run_refuses_exactly_what_a_real_pass_would() {
 
 #[tokio::test]
 async fn same_name_files_are_refused_together_case_insensitively() {
-    let world = setup("drive-collisions").await;
+    let Some(world) = setup("drive-collisions").await else {
+        return;
+    };
     let screen = Screen::default();
     world
         .drive
@@ -555,7 +640,9 @@ async fn same_name_files_are_refused_together_case_insensitively() {
 
 #[tokio::test]
 async fn a_name_that_cannot_be_a_checkout_document_is_refused_before_download() {
-    let world = setup("drive-unusable-names").await;
+    let Some(world) = setup("drive-unusable-names").await else {
+        return;
+    };
     world
         .drive
         .add_file(
@@ -567,12 +654,346 @@ async fn a_name_that_cannot_be_a_checkout_document_is_refused_before_download() 
         )
         .expect("file creation");
 
-    let report = world.import(&Screen::default()).await.expect("import runs");
-    assert!(report.imported.is_empty());
-    assert_eq!(report.refused[0].reason, "unusable_name");
+    assert!(
+        world.import(&Screen::default()).await.is_err(),
+        "unsafe provider tree is refused"
+    );
     assert_eq!(
         world.drive.download_calls(),
         0,
         "an unusable name is refused before its bytes move"
     );
+}
+
+async fn database() -> Option<store::postgres::PostgresDb> {
+    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
+        assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
+        return None;
+    };
+    let options = sqlx::postgres::PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(port.parse().unwrap())
+        .username("postgres")
+        .password("synthetic")
+        .database(
+            &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into()),
+        )
+        .ssl_mode(sqlx::postgres::PgSslMode::Disable);
+    let admin = sqlx::PgPool::connect_with(options.clone()).await.unwrap();
+    let name = format!("project_folder_{}", Uuid::now_v7().simple());
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+    let pg = store::postgres::PostgresDb::connect(options.database(&name))
+        .await
+        .unwrap();
+    pg.migrate_embedded(None).await.unwrap();
+    pg.migrate_embedded(None).await.unwrap();
+    Some(pg)
+}
+
+async fn seed_pg_project(pg: &store::postgres::PostgresDb, id: Uuid) {
+    let entity = Uuid::now_v7();
+    let kind = Uuid::now_v7();
+    let jurisdiction = Uuid::now_v7();
+    sqlx::query("INSERT INTO jurisdiction(id,name) VALUES ($1,$2)")
+        .bind(jurisdiction)
+        .bind(format!("Synthetic {id}"))
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO entity_type(id,name) VALUES ($1,$2)")
+        .bind(kind)
+        .bind(format!("Synthetic {id}"))
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,'Synthetic Entity',$2,$3)")
+        .bind(entity).bind(kind).bind(jurisdiction).execute(pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO project(id,code,name,status,entity_id) VALUES ($1,$2,'Synthetic Project','open',$3)")
+        .bind(id).bind(format!("synthetic-{id}")).bind(entity).execute(pg.pool()).await.unwrap();
+}
+
+#[tokio::test]
+async fn nested_same_basename_and_submissions_preserve_paths_and_retry_without_duplicates() {
+    let Some(world) = setup("drive-tree-paths").await else {
+        return;
+    };
+    let one = world
+        .drive
+        .ensure_child_folder(&world.folder_id, "one")
+        .await
+        .unwrap();
+    let two = world
+        .drive
+        .ensure_child_folder(&world.folder_id, "two")
+        .await
+        .unwrap();
+    for folder in [&one, &two] {
+        world.drive.inherit_folder(&folder.id).await.unwrap();
+    }
+    let a = world
+        .drive
+        .add_file(
+            &one.id,
+            "notice.pdf",
+            "application/pdf",
+            b"one".to_vec(),
+            None,
+        )
+        .unwrap();
+    world
+        .drive
+        .add_file(
+            &two.id,
+            "notice.pdf",
+            "application/pdf",
+            b"two".to_vec(),
+            None,
+        )
+        .unwrap();
+    let intake = store::project_folders::get_verified(
+        &world.pg,
+        world.project.id,
+        store::project_folders::ProjectFolderSlot::ClientSubmissions,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    world
+        .drive
+        .add_file(
+            &intake.drive_folder_id,
+            "notice.pdf",
+            "application/pdf",
+            b"intake".to_vec(),
+            None,
+        )
+        .unwrap();
+    let first = world.import(&Screen::default()).await.unwrap();
+    assert_eq!(first.imported.len(), 3);
+    let mut paths = store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|asset| asset.documents_path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert_eq!(
+        paths,
+        [
+            "Client Production/notice.pdf",
+            "Work Product/one/notice.pdf",
+            "Work Product/two/notice.pdf"
+        ]
+    );
+    let retry = world.import(&Screen::default()).await.unwrap();
+    assert!(retry.imported.iter().all(|row| !row.changed));
+    assert_eq!(
+        store::assets::for_project(&world.surreal, world.project.id)
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+    world.drive.replace_file(&a.id, b"updated".to_vec(), None);
+    world.import(&Screen::default()).await.unwrap();
+    assert_eq!(
+        world.revisions("Work Product/one/notice.pdf").await.len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn legacy_flat_source_identity_keeps_its_slug_and_checkout_placement() {
+    let Some(world) = setup("drive-legacy-flat").await else {
+        return;
+    };
+    let file = world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "legacy.pdf",
+            "application/pdf",
+            b"legacy".to_vec(),
+            None,
+        )
+        .unwrap();
+    let identity = store::documents::DocumentIdentity {
+        slug: Some("legacy.pdf"),
+        metadata: Some(json!({"drive_file_id":file.id})),
+        ..Default::default()
+    };
+    let ingest = store::documents::IngestArgs {
+        project_id: world.project.id,
+        source: source::DRIVE,
+        filename: "legacy.pdf",
+        kind: "unclassified",
+        content_type: "application/pdf",
+        description: None,
+        secondary_storage_key: None,
+        visibility: visibility::CLIENT,
+    };
+    store::assets::file_revision(
+        &world.surreal,
+        &world.storage,
+        &ingest,
+        &identity,
+        b"legacy",
+    )
+    .await
+    .unwrap();
+    let retry = world.import(&Screen::default()).await.unwrap();
+    assert_eq!(retry.imported.len(), 1);
+    assert!(!retry.imported[0].changed);
+    let assets = store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .unwrap();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0].slug.as_deref(), Some("legacy.pdf"));
+    assert_eq!(assets[0].documents_path(), "Work Product/legacy.pdf");
+}
+
+#[tokio::test]
+async fn source_moves_renames_and_lawyer_reslug_preserve_one_identity() {
+    let Some(world) = setup("drive-stable-identity").await else {
+        return;
+    };
+    let file = world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "original.pdf",
+            "application/pdf",
+            b"original".to_vec(),
+            None,
+        )
+        .unwrap();
+    world.import(&Screen::default()).await.unwrap();
+    let initial = store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let reserved = initial.slug.clone().unwrap();
+    assert!(reserved.starts_with("drive/"));
+    assert_eq!(
+        std::path::Path::new(&reserved)
+            .extension()
+            .and_then(|ext| ext.to_str()),
+        Some("pdf")
+    );
+    assert!(!reserved.contains("original"));
+    let nested = world
+        .drive
+        .ensure_child_folder(&world.folder_id, "nested")
+        .await
+        .unwrap();
+    world.drive.inherit_folder(&nested.id).await.unwrap();
+    assert!(world.drive.move_file(&file.id, &nested.id, "renamed.pdf"));
+    let moved = world.import(&Screen::default()).await.unwrap();
+    assert!(!moved.imported[0].changed);
+    let assets = store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .unwrap();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0].id, initial.id);
+    assert_eq!(assets[0].slug.as_deref(), Some(reserved.as_str()));
+    assert_eq!(
+        assets[0].documents_path(),
+        "Work Product/nested/renamed.pdf"
+    );
+    store::assets::reslug(
+        &world.surreal,
+        world.project.id,
+        initial.id,
+        "lawyer-chosen.pdf",
+        false,
+    )
+    .await
+    .unwrap();
+    world
+        .drive
+        .replace_file(&file.id, b"new bytes".to_vec(), None);
+    world.import(&Screen::default()).await.unwrap();
+    let chain = store::assets::revisions(&world.surreal, world.project.id, "lawyer-chosen.pdf")
+        .await
+        .unwrap();
+    assert_eq!(chain.len(), 2);
+    assert!(chain
+        .iter()
+        .all(|asset| asset.slug.as_deref() == Some("lawyer-chosen.pdf")));
+    assert!(world.drive.move_file(&file.id, &nested.id, "renamed.docx"));
+    let refused = world.import(&Screen::default()).await.unwrap();
+    assert!(refused.imported.is_empty());
+    assert_eq!(refused.refused[0].reason, "source_format_changed");
+    assert_eq!(
+        store::assets::revisions(&world.surreal, world.project.id, "lawyer-chosen.pdf")
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn client_intake_is_production_even_when_kind_is_letter() {
+    let Some(world) = setup("drive-intake-folder").await else {
+        return;
+    };
+    let intake = store::project_folders::get_verified(
+        &world.pg,
+        world.project.id,
+        store::project_folders::ProjectFolderSlot::ClientSubmissions,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let nested = world
+        .drive
+        .ensure_child_folder(&intake.drive_folder_id, "client-notes")
+        .await
+        .unwrap();
+    world.drive.inherit_folder(&nested.id).await.unwrap();
+    world
+        .drive
+        .add_file(
+            &nested.id,
+            "letter.pdf",
+            "application/pdf",
+            b"intake letter".to_vec(),
+            None,
+        )
+        .unwrap();
+    let args = DriveImportArgs {
+        kind: "letter",
+        ..ARGS
+    };
+    let report = import_project_files_with_folders(
+        &world.surreal,
+        &world.pg,
+        &world.storage,
+        &world.drive,
+        &Screen::default(),
+        world.project.id,
+        world.actor,
+        &args,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        report.imported[0].matter_folder,
+        MatterFolder::ClientProduction
+    );
+    let assets = store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .unwrap();
+    assert_eq!(assets[0].kind.as_deref(), Some("letter"));
+    assert_eq!(
+        assets[0].documents_path(),
+        "Client Production/client-notes/letter.pdf"
+    );
+    assert_eq!(MatterFolder::TREE.len(), 14);
+    assert!(!assets[0].documents_path().contains("Client Submissions"));
 }

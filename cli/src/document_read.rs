@@ -79,7 +79,7 @@ pub(crate) fn slug_from_pointer(root: &Path, pointer: &Path) -> Result<String> {
         ));
     }
     // A matter folder is where the bytes live, not part of the slug (LAW-189).
-    slash_path(&crate::document_layout::slug_of_bytes(relative).0)
+    slash_path(&crate::document_sync::slug_of_document_bytes(root, relative)?.0)
 }
 
 /// The committed Blob for the document `pointer` names — whichever spelling
@@ -533,11 +533,17 @@ pub(crate) async fn validate_live_pointers(root: &Path) -> Result<()> {
     };
     let (base, token) = match crate::remote::matching_stored_session(&host)? {
         crate::remote::MatchingSession::Absent => {
-            println!("Live document verification skipped for {} pointer(s): no stored session for the manifest host", pointers.len());
+            println!(
+                "Live document verification skipped for {} pointer(s): no stored session for the manifest host",
+                pointers.len()
+            );
             return Ok(());
         }
         crate::remote::MatchingSession::Expired => {
-            println!("Live document verification skipped for {} pointer(s): stored session for the manifest host has expired", pointers.len());
+            println!(
+                "Live document verification skipped for {} pointer(s): stored session for the manifest host has expired",
+                pointers.len()
+            );
             return Ok(());
         }
         crate::remote::MatchingSession::Valid(base, token) => (base, token),
@@ -648,6 +654,7 @@ mod tests {
         let documents = root.path().join("documents");
         std::fs::create_dir_all(&documents).unwrap();
         let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "memo".into(),
             visibility: "internal".into(),
             folder: None,
@@ -773,6 +780,7 @@ mod tests {
     #[test]
     fn drift_names_the_missing_asset_when_the_pointer_is_stale() {
         let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "agreement".to_string(),
             visibility: "internal".to_string(),
             folder: None,
@@ -807,6 +815,7 @@ mod tests {
     fn drift_passes_when_the_pointers_asset_is_still_live() {
         let live_revision = revision(1, Uuid::max(), true);
         let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "agreement".to_string(),
             visibility: "internal".to_string(),
             folder: None,
@@ -836,6 +845,7 @@ mod tests {
     fn drift_names_both_hashes_on_a_sha256_mismatch() {
         let live_revision = revision(1, Uuid::max(), true);
         let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "agreement".to_string(),
             visibility: "internal".to_string(),
             folder: None,
@@ -868,6 +878,7 @@ mod tests {
     fn drift_flags_a_size_mismatch() {
         let live_revision = revision(1, Uuid::max(), true);
         let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "agreement".to_string(),
             visibility: "internal".to_string(),
             folder: None,
@@ -898,6 +909,7 @@ mod tests {
     fn drift_flags_a_pointer_that_is_no_longer_the_operative_revision() {
         let stale = revision(1, Uuid::max(), false);
         let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "agreement".to_string(),
             visibility: "internal".to_string(),
             folder: None,

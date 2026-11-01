@@ -14,9 +14,10 @@ ignores them.
 The `(Work Product)` suffix separates the firm's drafts from what was actually served (`Correspondence (Work Product)`
 against `Correspondence (Served)`), and a downloaded or attached file reads unambiguously out of context. The bare
 `Discovery` folder a five-folder checkout holds predates LAW-215: a fresh checkout never creates it, and `navigator
-project repository migrate-folders` refiles it onto `Discovery (Served)`. Lawyer-made subfolders inside a Matter Folder
-(one per motion, `Evidence Summaries/`, `Answer/`) stay part of the [Document Identity](document-identity.md) slug; the
-fixed `(Work Product)` names do not.
+project repository migrate-folders` refiles it onto `Discovery (Served)`. For a document created in the checkout,
+lawyer-made subfolders inside a Matter Folder (one per motion, `Evidence Summaries/`, `Answer/`) stay part of the
+[Document Identity](document-identity.md) slug; the fixed `(Work Product)` names do not. Recursive Drive imports use the
+separate placement described below.
 
 A document's [Pointer](pointer.md) lives at `blobs/<slug>.yaml`, never in a Matter Folder. Its optional `folder:` key
 names the Matter Folder — a `Work Product` subfolder's name is its whole path below `documents/`. Without one, the
@@ -31,3 +32,9 @@ repository.
 
 - Vocabulary: [`store::document_pointers::MatterFolder`](../../store/src/document_pointers.rs) · Layout:
   [`cli/src/document_layout.rs`](../../cli/src/document_layout.rs)
+
+Recursive Drive imports keep placement separate from Document Identity. A Pointer's optional `checkout_path:` names the
+complete safe path below `documents/`; it already contains its Matter Folder prefix, so the CLI adds none. Internal tree
+paths retain canonical prefixes once. Client Submissions is an external intake channel, not another Matter Folder: its
+files are placed under Client Production with their nested subpaths preserved. The original provider root ID and
+relative path remain Asset provenance. Moving a provider file changes placement, not its slug.
