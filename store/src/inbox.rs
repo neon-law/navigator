@@ -46,6 +46,7 @@ pub mod channel {
     /// handles them exactly like any other intake: the message carries the
     /// document as an attachment, and triage assigns it.
     pub const SCRAPER: &str = "scraper";
+    pub const X: &str = "x";
 }
 
 pub mod direction {
@@ -2366,6 +2367,7 @@ pub(crate) fn is_social_channel(channel_name: &str) -> bool {
             | channel::THREADS
             | channel::YOUTUBE
             | channel::TIKTOK
+            | channel::X
     )
 }
 

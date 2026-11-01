@@ -814,7 +814,7 @@ mod tests {
     /// including a confident "this is privileged", is refused.
     #[test]
     fn social_channels_ignore_the_classifier() {
-        for channel in ["facebook", "instagram", "threads", "youtube", "tiktok"] {
+        for channel in ["facebook", "instagram", "threads", "youtube", "tiktok", "x"] {
             for verdict in [
                 Some(classifier(true, 1.0)),
                 Some(classifier(false, 1.0)),
