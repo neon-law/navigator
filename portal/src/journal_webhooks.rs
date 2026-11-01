@@ -174,14 +174,17 @@ mod tests {
     #[test]
     fn signature_covers_original_bytes_and_fails_closed() {
         let body = br#"{ "events": [] }"#;
-        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(b"synthetic-key").unwrap();
+        // Generated keys are confined to this verification test.
+        let key: [u8; 32] = rand::random();
+        let wrong_key: [u8; 32] = rand::random();
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(&key).unwrap();
         mac.update(body);
         let signature = STANDARD.encode(mac.finalize().into_bytes());
-        assert!(verify(b"synthetic-key", &signature, body));
-        assert!(!verify(b"synthetic-key", &signature, br#"{"events":[]}"#));
-        assert!(!verify(b"wrong-key", &signature, body));
+        assert!(verify(&key, &signature, body));
+        assert!(!verify(&key, &signature, br#"{"events":[]}"#));
+        assert!(!verify(&wrong_key, &signature, body));
         assert!(!verify(b"", &signature, body));
-        assert!(!verify(b"synthetic-key", "bad base64", body));
+        assert!(!verify(&key, "bad base64", body));
     }
     #[test]
     fn event_identity_is_stable_and_urls_are_not_fetch_targets() {
