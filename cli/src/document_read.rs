@@ -737,7 +737,17 @@ mod tests {
         let blobs = root.path().join("blobs");
         std::fs::create_dir_all(&blobs).unwrap();
         let retired = blobs.join("motion.pdf.yml");
-        std::fs::write(&retired, "").unwrap();
+        std::fs::write(
+            &retired,
+            concat!(
+                "kind: unclassified\nvisibility: internal\ncurrent_version:\n",
+                "  version: 1\n  asset_id: 01990000-0000-7000-8000-000000000001\n",
+                "  created_at: '2026-01-01T00:00:00Z'\n",
+                "  sha256: '0000000000000000000000000000000000000000000000000000000000000000'\n",
+                "  size_bytes: 1\n",
+            ),
+        )
+        .unwrap();
 
         assert_eq!(
             pointer_yaml_path(root.path(), Path::new("documents/motion.pdf")).unwrap(),
