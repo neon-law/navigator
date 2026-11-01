@@ -282,6 +282,7 @@ pub(crate) async fn fetch_into(
     let request = crate::scraper::fetcher::FetchRequest {
         url: url.to_owned(),
         range_start: (resume_offset > 0).then_some(resume_offset),
+        headers: std::collections::BTreeMap::new(),
     };
     let FetchResponse { status, body } = fetcher.fetch(&request).await?;
     // 206 Partial Content continues the staged bytes; anything else answers

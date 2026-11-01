@@ -10,14 +10,20 @@
 #[cfg_attr(not(test), allow(dead_code))]
 const MAX_RESPONSE_BYTES: usize = 256 * 1024 * 1024;
 
-/// One HTTP GET an adapter needs: the URL and, when resuming a partial
-/// download, the byte offset the server should answer from.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One HTTP GET an adapter needs: the URL, optional request headers (the
+/// portal's JSON endpoints key off a `Provider` header, for one), and, when
+/// resuming a partial download, the byte offset the server should answer
+/// from.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))] // adapters build these; the base registers none yet
 pub(crate) struct FetchRequest {
     pub url: String,
     /// `Range: bytes=<start>-`. `None` on a first fetch.
     pub range_start: Option<u64>,
+    /// Request headers, applied verbatim. A `BTreeMap` so a request's
+    /// serialization — and any test record of it — is deterministic.
+    #[cfg_attr(not(test), allow(dead_code))] // the adapter sets the Provider header
+    pub headers: std::collections::BTreeMap<String, String>,
 }
 
 /// A completed fetch: the status the server answered with and its body.
@@ -76,6 +82,9 @@ impl HttpFetcher for HttpFetcherOverReqwest {
         let mut builder = self.client.get(&request.url);
         if let Some(start) = request.range_start {
             builder = builder.header(reqwest::header::RANGE, format!("bytes={start}-"));
+        }
+        for (name, value) in &request.headers {
+            builder = builder.header(name.as_str(), value.as_str());
         }
         let response = builder.send().await.map_err(FetchError::Request)?;
         let status = response.status().as_u16();

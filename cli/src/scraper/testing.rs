@@ -221,6 +221,7 @@ impl SiteAdapter for MockAdapter {
             let request = FetchRequest {
                 url,
                 range_start: None,
+                headers: std::collections::BTreeMap::new(),
             };
             let response = fetcher
                 .fetch(&request)
@@ -299,6 +300,15 @@ impl MockFetcher {
                 .filter(|request| request.url.contains(needle))
                 .count()
         })
+    }
+
+    /// Snapshots of every recorded request, in order — for assertions on
+    /// headers and shape that a URL needle cannot see.
+    #[must_use]
+    pub(crate) fn requests(&self) -> Vec<FetchRequest> {
+        self.requests
+            .lock()
+            .map_or_else(Vec::new, |requests| requests.clone())
     }
 }
 
