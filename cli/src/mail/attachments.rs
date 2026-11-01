@@ -249,23 +249,42 @@ pub(super) async fn run(
     only: Option<&str>,
     include_inline: bool,
 ) -> Result<()> {
-    attachments_command(
+    let lines = attachments_command(
         reference,
         dir,
         &Selection {
             only,
             include_inline,
         },
+        super::client,
     )
-    .await
+    .await?;
+    if lines.is_empty() {
+        println!("No attachments matched; nothing was written");
+    }
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
 }
 
-/// `navigator mail attachments`.
-async fn attachments_command(reference: &str, dir: &Path, selection: &Selection<'_>) -> Result<()> {
+/// Fetches the raw message through `connect`, writes its attachments, and
+/// returns one report line per file. A reference that names no message is
+/// refused before `connect` runs.
+async fn attachments_command<F, Fut>(
+    reference: &str,
+    dir: &Path,
+    selection: &Selection<'_>,
+    connect: F,
+) -> Result<Vec<String>>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<super::GmailClient>>,
+{
     let message_id = super::gmail_message_id(reference).ok_or_else(|| {
         anyhow!("the reference is neither a Gmail web URL nor a Gmail message id: {reference}")
     })?;
-    let gmail = super::client().await?;
+    let gmail = connect().await?;
     let raw_field = gmail.raw_message(&message_id).await?;
     let raw = super::decode_gmail_raw(
         raw_field
@@ -275,13 +294,13 @@ async fn attachments_command(reference: &str, dir: &Path, selection: &Selection<
     )?;
     let attachments = extract(&raw, selection)?;
     if attachments.is_empty() {
-        println!("No attachments matched; nothing was written");
-        return Ok(());
+        return Ok(Vec::new());
     }
-    for ((_, state), attachment) in write_all(dir, &attachments)?.iter().zip(&attachments) {
-        println!("{}", report_line(attachment, state));
-    }
-    Ok(())
+    Ok(write_all(dir, &attachments)?
+        .iter()
+        .zip(&attachments)
+        .map(|((_, state), attachment)| report_line(attachment, state))
+        .collect())
 }
 
 #[cfg(test)]
@@ -428,6 +447,184 @@ Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain
             !target.join("b.pdf").exists(),
             "a refused run writes nothing"
         );
+    }
+
+    const MESSAGE_ID: &str = "18fa3bc2d4e5f6a7";
+
+    async fn gmail_serving(raw: Option<&[u8]>) -> (wiremock::MockServer, url::Url) {
+        use wiremock::matchers::{method, path, query_param};
+        let server = wiremock::MockServer::start().await;
+        let body = match raw {
+            Some(raw) => serde_json::json!({
+                "id": MESSAGE_ID,
+                "raw": base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, raw),
+            }),
+            None => serde_json::json!({ "id": MESSAGE_ID }),
+        };
+        wiremock::Mock::given(method("GET"))
+            .and(path(format!("/users/me/messages/{MESSAGE_ID}")))
+            .and(query_param("format", "raw"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let base = url::Url::parse(&server.uri()).unwrap();
+        (server, base)
+    }
+
+    #[tokio::test]
+    async fn the_command_writes_each_attachment_from_a_gmail_web_url() {
+        let (_server, base) = gmail_serving(Some(FIXTURE)).await;
+        let dir = tempfile::tempdir().unwrap();
+        let reference = format!("https://mail.google.com/mail/u/0/#inbox/{MESSAGE_ID}");
+        let connect = || async {
+            Ok(super::super::GmailClient::with_base_url(
+                "t".into(),
+                base.clone(),
+            ))
+        };
+        let lines = attachments_command(&reference, dir.path(), &all(), connect)
+            .await
+            .unwrap();
+        assert_eq!(lines.len(), 5);
+        assert!(lines[0].starts_with("Engagement Letter.pdf\t19 bytes\tsha256:"));
+        assert!(lines.iter().all(|line| line.ends_with("\twritten")));
+        assert_eq!(
+            std::fs::read(dir.path().join("Engagement Letter.pdf")).unwrap(),
+            b"%PDF-1.4 synthetic\n"
+        );
+
+        let connect = || async {
+            Ok(super::super::GmailClient::with_base_url(
+                "t".into(),
+                base.clone(),
+            ))
+        };
+        let again = attachments_command(MESSAGE_ID, dir.path(), &all(), connect)
+            .await
+            .unwrap();
+        assert!(again.iter().all(|line| line.ends_with("\talready present")));
+    }
+
+    #[tokio::test]
+    async fn the_command_reports_nothing_when_no_attachment_matches() {
+        let (_server, base) = gmail_serving(Some(FIXTURE)).await;
+        let dir = tempfile::tempdir().unwrap();
+        let connect = || async { Ok(super::super::GmailClient::with_base_url("t".into(), base)) };
+        let lines = attachments_command(
+            MESSAGE_ID,
+            &dir.path().join("never-created"),
+            &Selection {
+                only: Some("*.docx"),
+                include_inline: false,
+            },
+            connect,
+        )
+        .await
+        .unwrap();
+        assert!(lines.is_empty());
+        assert!(!dir.path().join("never-created").exists());
+    }
+
+    #[tokio::test]
+    async fn the_command_refuses_a_message_without_a_raw_copy() {
+        let (_server, base) = gmail_serving(None).await;
+        let dir = tempfile::tempdir().unwrap();
+        let connect = || async { Ok(super::super::GmailClient::with_base_url("t".into(), base)) };
+        let error = attachments_command(MESSAGE_ID, dir.path(), &all(), connect)
+            .await
+            .unwrap_err();
+        assert!(format!("{error}").contains("no raw copy"));
+    }
+
+    #[tokio::test]
+    async fn the_command_refuses_a_reference_that_names_no_message_before_connecting() {
+        let dir = tempfile::tempdir().unwrap();
+        let connect = || async {
+            panic!("connect must not run for a bad reference");
+            #[allow(unreachable_code)]
+            Ok(super::super::GmailClient::with_base_url(
+                "t".into(),
+                url::Url::parse("http://127.0.0.1:1").unwrap(),
+            ))
+        };
+        let error = attachments_command("not a message", dir.path(), &all(), connect)
+            .await
+            .unwrap_err();
+        assert!(format!("{error}").contains("neither a Gmail web URL"));
+    }
+
+    #[test]
+    fn only_and_include_inline_combine() {
+        let attachments = extract(
+            FIXTURE,
+            &Selection {
+                only: Some("*.png"),
+                include_inline: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(names(&attachments), ["logo.png"]);
+        let none = extract(
+            FIXTURE,
+            &Selection {
+                only: Some("*.png"),
+                include_inline: false,
+            },
+        )
+        .unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn identical_duplicates_collapse_and_numbering_skips_taken_names() {
+        let attachment = |name: &str, bytes: &[u8]| ExtractedAttachment {
+            name: name.into(),
+            bytes: bytes.to_vec(),
+        };
+        let kept = disambiguate(vec![
+            attachment("a.pdf", b"1"),
+            attachment("a.pdf", b"1"),
+            attachment("a.pdf", b"2"),
+            attachment("a.pdf", b"3"),
+            attachment("README", b"x"),
+            attachment("README", b"y"),
+            attachment(".hidden", b"p"),
+            attachment(".hidden", b"q"),
+        ]);
+        assert_eq!(
+            names(&kept),
+            [
+                "a.pdf",
+                "a-2.pdf",
+                "a-3.pdf",
+                "README",
+                "README-2",
+                ".hidden",
+                ".hidden-2"
+            ]
+        );
+    }
+
+    #[test]
+    fn unnamed_parts_take_their_extension_from_the_mime_type() {
+        for (ctype, subtype, extension) in [
+            ("application", "pdf", "pdf"),
+            ("message", "rfc822", "eml"),
+            ("image", "png", "png"),
+            ("image", "jpeg", "jpg"),
+            ("image", "gif", "gif"),
+            ("text", "plain", "txt"),
+            ("text", "html", "html"),
+            ("text", "calendar", "ics"),
+            ("application", "zip", "bin"),
+        ] {
+            assert_eq!(extension_for(ctype, subtype), extension);
+        }
+    }
+
+    #[test]
+    fn a_message_that_is_not_mime_is_refused() {
+        assert!(extract(b"", &all()).is_err());
     }
 
     #[test]

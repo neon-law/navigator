@@ -237,14 +237,12 @@ struct GmailClient {
 
 impl GmailClient {
     fn new(access_token: String) -> Result<Self> {
-        Ok(Self {
-            http: reqwest::Client::new(),
+        Ok(Self::with_base_url(
             access_token,
-            base_url: Url::parse(GMAIL_API).context("parse Gmail API base URL")?,
-        })
+            Url::parse(GMAIL_API).context("parse Gmail API base URL")?,
+        ))
     }
 
-    #[cfg(test)]
     fn with_base_url(access_token: String, base_url: Url) -> Self {
         Self {
             http: reqwest::Client::new(),

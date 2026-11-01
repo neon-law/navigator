@@ -192,7 +192,16 @@ async fn handle_callback(socket: &mut TcpStream, expected_state: &str) -> Result
             .collect();
         return Err(anyhow!("Google refused the authorization: {error}"));
     }
-    let code = code.ok_or_else(|| anyhow!("the callback carried no authorization code"))?;
+    let Some(code) = code else {
+        respond(
+            socket,
+            400,
+            "Bad Request",
+            "No authorization code; nothing was stored.",
+        )
+        .await;
+        return Err(anyhow!("the callback carried no authorization code"));
+    };
     respond(
         socket,
         200,
@@ -310,9 +319,9 @@ impl AuthorizationCodeForm<'_> {
 
 /// Best-effort revocation of a token the CLI refuses to keep. Revoking a
 /// refresh token also revokes its access tokens.
-pub(super) async fn revoke(http: &reqwest::Client, token: &str) {
+async fn revoke(http: &reqwest::Client, revoke_url: &str, token: &str) {
     let _ = http
-        .post(GOOGLE_REVOKE_API)
+        .post(revoke_url)
         .form(&[("token", token)])
         .timeout(Duration::from_secs(30))
         .send()
@@ -423,10 +432,65 @@ fn prompt_hidden(_prompt: &str) -> Result<String> {
 pub(super) async fn login_command(secret_file: Option<&Path>) -> Result<()> {
     let (account, client_id) = super::configured_setup()?;
     let client_secret = client_secret(&client_id, secret_file)?;
-
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("bind the loopback listener on 127.0.0.1")?;
+    let refresh_token = authorize(
+        &listener,
+        &Authorization {
+            client_id: &client_id,
+            client_secret: &client_secret,
+            account: &account,
+        },
+        &GoogleEndpoints::production()?,
+        |url| {
+            eprintln!(
+                "Opening Google sign-in in your browser. If it does not open, visit:\n\n  {url}\n"
+            );
+            crate::login::open_in_browser(url.as_str());
+        },
+    )
+    .await?;
+    keychain_write(REFRESH_TOKEN_SERVICE, &account, &refresh_token)?;
+    println!(
+        "Stored the Gmail refresh token in the macOS Keychain, service {REFRESH_TOKEN_SERVICE}. Run navigator mail setup to check."
+    );
+    Ok(())
+}
+
+/// The OAuth client and the account it signs in.
+struct Authorization<'a> {
+    client_id: &'a str,
+    client_secret: &'a str,
+    account: &'a str,
+}
+
+/// Where the flow redeems, revokes, and checks the signed-in profile.
+struct GoogleEndpoints {
+    token: String,
+    revoke: String,
+    gmail: Url,
+}
+
+impl GoogleEndpoints {
+    fn production() -> Result<Self> {
+        Ok(Self {
+            token: GOOGLE_TOKEN_API.to_owned(),
+            revoke: GOOGLE_REVOKE_API.to_owned(),
+            gmail: Url::parse(super::GMAIL_API).context("parse Gmail API base URL")?,
+        })
+    }
+}
+
+/// The browser round trip and the exchange, up to a refresh token that has
+/// passed the scope and account checks. `open` receives the authorization
+/// URL. A token that fails a check is revoked and never returned.
+async fn authorize(
+    listener: &TcpListener,
+    client: &Authorization<'_>,
+    endpoints: &GoogleEndpoints,
+    open: impl FnOnce(&Url),
+) -> Result<String> {
     let port = listener
         .local_addr()
         .context("read the loopback port")?
@@ -434,25 +498,23 @@ pub(super) async fn login_command(secret_file: Option<&Path>) -> Result<()> {
     let redirect_uri = format!("http://127.0.0.1:{port}/");
     let state = random_state();
     let verifier = pkce_verifier();
-    let url = authorization_url(
-        &client_id,
+    open(&authorization_url(
+        client.client_id,
         &redirect_uri,
         &state,
         &pkce_challenge(&verifier),
-        &account,
-    )?;
-    eprintln!("Opening Google sign-in in your browser. If it does not open, visit:\n\n  {url}\n");
-    crate::login::open_in_browser(url.as_str());
+        client.account,
+    )?);
 
-    let code = wait_for_code(&listener, &state).await?;
+    let code = wait_for_code(listener, &state).await?;
     let http = reqwest::Client::new();
     let grant = exchange_code(
         &http,
-        GOOGLE_TOKEN_API,
+        &endpoints.token,
         &AuthorizationCodeForm {
             code: &code,
-            client_id: &client_id,
-            client_secret: &client_secret,
+            client_id: client.client_id,
+            client_secret: client.client_secret,
             redirect_uri: &redirect_uri,
             code_verifier: &verifier,
         },
@@ -464,24 +526,23 @@ pub(super) async fn login_command(secret_file: Option<&Path>) -> Result<()> {
         )
     })?;
     if let Err(error) = check_granted_scopes(grant.scope.as_deref()) {
-        revoke(&http, &refresh_token).await;
+        revoke(&http, &endpoints.revoke, &refresh_token).await;
         return Err(error.context("the new token was revoked and not stored"));
     }
-    let profile = super::GmailClient::new(grant.access_token.clone())?
+    let profile = super::GmailClient::with_base_url(grant.access_token, endpoints.gmail.clone())
         .profile()
         .await
         .context("read the signed-in Gmail profile")?;
-    if !profile.email_address.eq_ignore_ascii_case(account.trim()) {
-        revoke(&http, &refresh_token).await;
+    if !profile
+        .email_address
+        .eq_ignore_ascii_case(client.account.trim())
+    {
+        revoke(&http, &endpoints.revoke, &refresh_token).await;
         return Err(anyhow!(
             "Google signed in a different account than the configured Gmail address; the token was revoked and not stored. Rerun navigator mail login and choose the configured account"
         ));
     }
-    keychain_write(REFRESH_TOKEN_SERVICE, &account, &refresh_token)?;
-    println!(
-        "Stored the Gmail refresh token in the macOS Keychain, service {REFRESH_TOKEN_SERVICE}. Run navigator mail setup to check."
-    );
-    Ok(())
+    Ok(refresh_token)
 }
 
 /// Deletes the stored refresh token when the refresh exchange reports a
@@ -626,6 +687,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn callback_refuses_a_matching_state_without_a_code() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let waiter = tokio::spawn(async move { wait_for_code(&listener, "nonce").await });
+        let page = send_to(addr, "/?state=nonce").await;
+        assert!(page.starts_with("HTTP/1.1 400"));
+        let error = waiter.await.unwrap().unwrap_err();
+        assert!(format!("{error}").contains("no authorization code"));
+    }
+
+    #[tokio::test]
+    async fn callback_ignores_an_empty_connection_and_a_malformed_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let waiter = tokio::spawn(async move { wait_for_code(&listener, "nonce").await });
+        drop(TcpStream::connect(addr).await.unwrap());
+        let mut malformed = TcpStream::connect(addr).await.unwrap();
+        malformed.write_all(b"GARBAGE\r\n\r\n").await.unwrap();
+        let mut response = String::new();
+        let _ = malformed.read_to_string(&mut response).await;
+        assert!(response.starts_with("HTTP/1.1 400"));
+        send_to(addr, "/?state=nonce&code=late").await;
+        assert_eq!(waiter.await.unwrap().unwrap(), "late");
+    }
+
+    #[tokio::test]
+    async fn token_errors_without_a_json_code_name_only_the_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("<html>shh</html>"))
+            .mount(&server)
+            .await;
+        let response = reqwest::Client::new()
+            .post(server.uri())
+            .send()
+            .await
+            .unwrap();
+        let text = format!("{:#}", token_response(response).await.err().unwrap());
+        assert!(text.contains("500"));
+        assert!(!text.contains("shh"));
+    }
+
+    #[tokio::test]
+    async fn token_error_codes_outside_the_plain_alphabet_are_dropped() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({ "error": "bad code with spaces" })),
+            )
+            .mount(&server)
+            .await;
+        let response = reqwest::Client::new()
+            .post(server.uri())
+            .send()
+            .await
+            .unwrap();
+        let text = format!("{:#}", token_response(response).await.err().unwrap());
+        assert!(!text.contains("spaces"));
+    }
+
+    #[test]
+    fn refusing_a_stored_token_keeps_the_scope_error_and_names_the_next_step() {
+        let error = refuse_stored_token(
+            "no-such-account@example.test",
+            anyhow!("the token carries scopes beyond gmail.readonly"),
+        );
+        let text = format!("{error:#}");
+        assert!(text.contains("scopes beyond"));
+        assert!(text.contains("refresh token"));
+    }
+
+    #[tokio::test]
     async fn code_exchange_sends_the_secret_verifier_and_redirect() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -690,6 +824,163 @@ mod tests {
         let text = format!("{error:#}");
         assert!(text.contains("invalid_client"));
         assert!(!text.contains("shh"));
+    }
+
+    /// Drives the browser half: reads the authorization URL `authorize`
+    /// hands to `open`, then hits the loopback redirect with its state.
+    async fn run_authorize(server: &MockServer) -> Result<String> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let endpoints = GoogleEndpoints {
+            token: format!("{}/token", server.uri()),
+            revoke: format!("{}/revoke", server.uri()),
+            gmail: Url::parse(&format!("{}/gmail/v1", server.uri())).unwrap(),
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel::<Url>();
+        let browser = tokio::spawn(async move {
+            let url = receiver.await.unwrap();
+            let state = url
+                .query_pairs()
+                .find(|(name, _)| name == "state")
+                .unwrap()
+                .1
+                .into_owned();
+            send_to(addr, &format!("/?state={state}&code=the-code")).await
+        });
+        let result = authorize(
+            &listener,
+            &Authorization {
+                client_id: "client",
+                client_secret: "shh",
+                account: "Lawyer@Example.test",
+            },
+            &endpoints,
+            |url| sender.send(url.clone()).unwrap(),
+        )
+        .await;
+        assert!(browser.await.unwrap().starts_with("HTTP/1.1 200"));
+        result
+    }
+
+    async fn mount_grant(server: &MockServer, grant: serde_json::Value) {
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .and(body_string_contains("code=the-code"))
+            .and(body_string_contains("client_secret=shh"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(grant))
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_profile(server: &MockServer, email: &str) {
+        Mock::given(method("GET"))
+            .and(path("/gmail/v1/users/me/profile"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "emailAddress": email })),
+            )
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_revoke(server: &MockServer, expected: u64) {
+        Mock::given(method("POST"))
+            .and(path("/revoke"))
+            .and(body_string_contains("token=refresh"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(expected)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn authorize_returns_a_checked_refresh_token_for_the_configured_account() {
+        let server = MockServer::start().await;
+        mount_grant(
+            &server,
+            serde_json::json!({
+                "access_token": "access",
+                "refresh_token": "refresh",
+                "scope": GMAIL_SCOPES.join(" "),
+            }),
+        )
+        .await;
+        mount_profile(&server, "lawyer@example.test").await;
+        mount_revoke(&server, 0).await;
+        assert_eq!(run_authorize(&server).await.unwrap(), "refresh");
+    }
+
+    #[tokio::test]
+    async fn authorize_revokes_a_token_with_an_extra_scope() {
+        let server = MockServer::start().await;
+        mount_grant(
+            &server,
+            serde_json::json!({
+                "access_token": "access",
+                "refresh_token": "refresh",
+                "scope": format!("{} https://www.googleapis.com/auth/gmail.send", GMAIL_SCOPES.join(" ")),
+            }),
+        )
+        .await;
+        mount_revoke(&server, 1).await;
+        let error = format!("{:#}", run_authorize(&server).await.unwrap_err());
+        assert!(error.contains("revoked and not stored"));
+        assert!(error.contains("gmail.send"));
+    }
+
+    #[tokio::test]
+    async fn authorize_revokes_a_token_for_a_different_account() {
+        let server = MockServer::start().await;
+        mount_grant(
+            &server,
+            serde_json::json!({
+                "access_token": "access",
+                "refresh_token": "refresh",
+                "scope": GMAIL_SCOPES.join(" "),
+            }),
+        )
+        .await;
+        mount_profile(&server, "someone-else@example.test").await;
+        mount_revoke(&server, 1).await;
+        let error = format!("{:#}", run_authorize(&server).await.unwrap_err());
+        assert!(error.contains("different account"));
+        assert!(!error.contains("someone-else"));
+    }
+
+    #[tokio::test]
+    async fn authorize_refuses_a_grant_without_a_refresh_token() {
+        let server = MockServer::start().await;
+        mount_grant(
+            &server,
+            serde_json::json!({ "access_token": "access", "scope": GMAIL_SCOPES.join(" ") }),
+        )
+        .await;
+        let error = format!("{:#}", run_authorize(&server).await.unwrap_err());
+        assert!(error.contains("no refresh token"));
+    }
+
+    /// On Linux, Keychain access is unsupported, so a secret file is read
+    /// and checked and then refused at the store; macOS would write the real
+    /// Keychain, so this runs only off macOS (as CI does).
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_secret_file_is_checked_before_it_is_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("client_secret_test.json");
+        std::fs::write(
+            &file,
+            br#"{"installed":{"client_id":"client","client_secret":"shh"}}"#,
+        )
+        .unwrap();
+        let other = format!("{:#}", client_secret("other", Some(&file)).unwrap_err());
+        assert!(other.contains("different OAuth client"));
+        let store = format!("{:#}", client_secret("client", Some(&file)).unwrap_err());
+        assert!(store.contains("only on macOS"));
+        assert!(!store.contains("shh"));
+        let missing = client_secret("client", Some(&dir.path().join("absent.json"))).unwrap_err();
+        assert!(format!("{missing:#}").contains("read the client secret file"));
+        assert!(keychain_read(CLIENT_SECRET_SERVICE, "client").is_err());
+        assert!(keychain_delete(REFRESH_TOKEN_SERVICE, "client").is_err());
     }
 
     #[test]
