@@ -93,6 +93,10 @@ fn the_documented_document_kinds_are_the_kinds_ingest_accepts() {
         "OpenAPI drift: the reclassify door's `kind` values must be the asset-lane kinds"
     );
 
+    let streaming_kind = &doc["paths"]["/app/api/projects/{id}/documents/upload-session"]["post"]
+        ["requestBody"]["content"]["application/json"]["schema"]["properties"]["kind"]["enum"];
+    assert_eq!(streaming_kind, &serde_json::json!(accepted));
+
     let schema = &doc["paths"]["/app/api/projects/{id}/documents"]["post"]["requestBody"]
         ["content"]["application/json"]["schema"];
     let required: Vec<&str> = schema["required"]

@@ -341,6 +341,27 @@ erDiagram
         uuid review_document_id
         datetime updated_at
     }
+    document_upload_session {
+        string chunk_size
+        string content_type
+        string created_at
+        string declared_sha256
+        string declared_size
+        string derived_from
+        string description
+        string expires_at
+        string filename
+        string id
+        string kind
+        string metadata
+        string notarization
+        string project_id
+        string received_bytes
+        string signing
+        string slug
+        string transcript_quality
+        string visibility
+    }
     efiling_transactions {
         string accepted_on
         string case_number
@@ -1684,6 +1705,7 @@ erDiagram
     jurisdiction }o--|| credential : references
     person }o--|| credential : references
     document_chain_archive }o--|| document_chain_archive_item : references
+    project }o--|| document_upload_session : references
     firm }o--|| email_conversation : references
     notation }o--|| email_conversation : references
     person }o--|| email_conversation : references

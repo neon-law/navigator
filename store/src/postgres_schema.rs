@@ -1242,6 +1242,10 @@ mod tests {
                     "../postgres/migrations/20261101030000_create_assistant_turn_and_sandbox_usage.sql"
                 ),
             ),
+            (
+                "20261101100000_create_document_upload_session.sql",
+                include_str!("../postgres/migrations/20261101100000_create_document_upload_session.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
