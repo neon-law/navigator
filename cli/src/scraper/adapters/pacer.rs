@@ -506,7 +506,7 @@ mod tests {
         .expect("a valid payload");
         let login = logins.login_for("pacer").expect("the pacer entry resolves");
         assert!(
-            adapter().login(&session, Some(&login)).await.is_ok(),
+            adapter().login(&session, Some(login)).await.is_ok(),
             "the hook runs with a resolved credential"
         );
     }
@@ -859,7 +859,7 @@ mod tests {
         }))
         .expect("a valid payload");
         let login = logins.login_for("pacer").expect("the pacer entry resolves");
-        assert!(adapter().login(&session, Some(&login)).await.is_ok());
+        assert!(adapter().login(&session, Some(login)).await.is_ok());
         session.shutdown().await.expect("the stub shuts down");
     }
 }
