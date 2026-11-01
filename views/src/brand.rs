@@ -653,7 +653,7 @@ pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
     primary_domain: "guiebandshook.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
     // The `llms.txt` summary for this brand: the firm speaks as itself.
-    mission_description: "Guieb & Shook PC, Attorneys at Law.",
+    mission_description: "Guieb & Shook PC is an American law firm helping people and businesses face a dispute, plan a decision, or complete a defined legal task.",
     service_description: "Legal services from Guieb & Shook PC, attorneys at law: dispute assessment, business counsel, and defined legal tasks. We discuss the work, check for conflicts, and explain the scope before an engagement begins.",
     portal_only: false,
     brand_key: BrandKey::GuiebShook,

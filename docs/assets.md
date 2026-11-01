@@ -77,15 +77,14 @@ illustrate public architecture and do not imply that a pictured institution prov
 
 ## Guieb & Shook homepage photograph
 
-One public-domain photograph illustrates the firm's home page under `img/guieb-shook/`.
-Source: "Columns, Byron R. White U.S. Courthouse, Denver, Colorado", Library of Congress
-LCCN 2010719071, via [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Columns,_Byron_R._White_U.S._Courthouse,_Denver,_Colorado_LCCN2010719071.tif)
-(Public domain — no attribution required; see the Commons file page for rights details).
-Key: `img/guieb-shook/courthouse-columns.jpg`. Alt text: A New York
-courthouse of stone and columns, photographed in soft light.
-`views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY` includes it in publication checks and
-orphan protection. The photograph illustrates public architecture and does not imply
-that a pictured institution provides or endorses the services.
+One public-domain photograph illustrates the firm's home page under `img/guieb-shook/`. Source: "Columns, Byron R. White
+U.S. Courthouse, Denver, Colorado", Library of Congress LCCN 2010719071, via [Wikimedia
+Commons](https://commons.wikimedia.org/wiki/File:Columns,_Byron_R._White_U.S._Courthouse,_Denver,_Colorado_LCCN2010719071.tif)
+(Public domain — no attribution required; see the Commons file page for rights details). Key:
+`img/guieb-shook/courthouse-columns.jpg`. Alt text: Fluted stone columns with carved capitals in bright sun along the
+facade of a federal courthouse in Denver, Colorado. `views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY` includes it in
+publication checks and orphan protection. The photograph illustrates public architecture and does not imply that a
+pictured institution provides or endorses the services.
 
 ## Brand uploads
 
