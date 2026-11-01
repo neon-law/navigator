@@ -1,7 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1050 600" width="100%" height="100%" role="img" aria-labelledby="logo-title logo-description">
   <title id="logo-title">Guieb &amp; Shook</title>
   <desc id="logo-description">Equal-height handwritten G and Lawyer Shook S with a smaller centered cursive ampersand, in blue on ivory.</desc>
-  <style>@media (max-width: 128px) { .strokes { stroke-width: 1 } }</style>
+  <style>
+    @media (max-width: 128px) {
+      .strokes { stroke-width: 0.8; transform: scale(0.92); transform-origin: 50% 50%; }
+    }
+    @media (max-width: 48px) {
+      .strokes { stroke-width: 0.6; transform: scale(0.88); }
+    }
+  </style>
   <rect width="1050" height="600" fill="#f7f3e8"/>
   <g class="strokes" fill="none" stroke="#1f3a5f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
     <path id="initial-g" transform="matrix(0.693069306930693 0 0 1.0019171990172375 67.02970297029704 12.179838191350797)" d="M163 477 C182 494 217 464 252 429 C332 347 420 208 424 121 C426 97 417 91 394 93 C363 95 315 180 305 241 C298 282 303 309 331 314 C375 325 444 266 494 207 C476 299 436 390 384 431 C350 458 317 461 281 457 C244 452 208 405 204 359 C201 341 201 330 207 329 C218 325 226 332 245 347 C310 400 353 428 392 435 C428 441 472 441 499 438 C524 435 549 422 567 414" vector-effect="non-scaling-stroke"/>
