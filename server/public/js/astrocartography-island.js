@@ -53,7 +53,10 @@
     var el = document.getElementById(DATA_ID);
     if (!el) return null;
     try {
-      return JSON.parse(el.textContent);
+      // Dioxus's SSR hydration markers (<!--node-id…-->) can sit inside the
+      // element's text; comments are not JSON, so drop them before parsing.
+      var text = el.textContent.replace(/<!--[\s\S]*?-->/g, "");
+      return JSON.parse(text);
     } catch (error) {
       console.error("astrocartography island: unreadable payload", error);
       return null;
