@@ -999,6 +999,17 @@ impl DocumentClient {
         token: String,
         project_code: &str,
     ) -> Result<Self> {
+        let origin = url::Url::parse(&base).context("parse document deployment URL")?;
+        let loopback = match origin.host() {
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            Some(url::Host::Domain("localhost")) => true,
+            _ => false,
+        };
+        anyhow::ensure!(
+            origin.scheme() == "https" || (origin.scheme() == "http" && loopback),
+            "document transfers require HTTPS except for a loopback deployment"
+        );
         let body = fetch_project_list(&client, &base, &token).await?;
         let projects: Vec<VisibleProject> =
             serde_json::from_str(&body).context("parse GET /app/api/projects")?;
@@ -9925,6 +9936,26 @@ mod tests {
                 "{kind} at the asset ceiling still has a lane"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn document_client_refuses_remote_plaintext_before_request() {
+        let client = reqwest::Client::builder().https_only(true).build().unwrap();
+        let error = DocumentClient::with_client(
+            client,
+            "http://upload.example.test".into(),
+            "synthetic-token".into(),
+            "acme",
+        )
+        .await
+        .err()
+        .expect("a remote plaintext origin must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("document transfers require HTTPS"),
+            "{error:#}"
+        );
     }
 
     async fn streaming_client_fixture(bytes: &[u8]) -> (MockServer, DocumentClient, Uuid, Uuid) {
