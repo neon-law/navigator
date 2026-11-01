@@ -17,9 +17,10 @@ fn expected_gallery_placeholders() -> usize {
 /// holds the table itself to this same number.
 const EXPECTED_FONT_PLACEHOLDERS: usize = 23;
 
-/// Seven fixed house-brand media files, including the canonical Aster board, plus Vesta videos and
-/// photos, the Navigator page's Matter Page screenshots, and architecture photos.
-const EXPECTED_BRAND_MEDIA_PLACEHOLDERS: usize = 7
+/// Eight fixed house-brand media files, including the canonical Aster board and the Guieb & Shook
+/// home-page photograph, plus Vesta videos and photos, the Navigator page's Matter Page
+/// screenshots, and architecture photos.
+const EXPECTED_BRAND_MEDIA_PLACEHOLDERS: usize = 8
     + views::assets::VESTA_UPDATE_VIDEO_KEYS.len()
     + views::assets::VESTA_PHOTOS.len()
     + views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS.len()
@@ -125,6 +126,10 @@ fn stub_referenced_writes_the_gallery_and_licensed_fonts_without_content_images(
     assert!(out
         .path()
         .join(views::assets::ABHAYA_COMMUNITY_PHOTO_KEY)
+        .is_file());
+    assert!(out
+        .path()
+        .join(views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY)
         .is_file());
 }
 

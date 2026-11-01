@@ -1247,6 +1247,7 @@ pub(crate) fn embedded_asset_refs() -> BTreeSet<String> {
     refs.insert(views::assets::CYBER_INJURY_AD_KEY.to_owned());
     refs.insert(views::assets::DEATH_AND_DIVORCE_HERO_KEY.to_owned());
     refs.insert(views::assets::ABHAYA_COMMUNITY_PHOTO_KEY.to_owned());
+    refs.insert(views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY.to_owned());
     refs.extend(
         views::assets::ARCHITECTURE_PHOTOS
             .iter()
@@ -2361,6 +2362,7 @@ Inline raw-HTML tile: <div>![Team](img/thanks-apple/team-lunch.jpg)</div>\n";
             views::assets::CYBER_INJURY_AD_KEY,
             views::assets::DEATH_AND_DIVORCE_HERO_KEY,
             views::assets::ABHAYA_COMMUNITY_PHOTO_KEY,
+            views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY,
         ];
         keys.extend(views::assets::VESTA_UPDATE_VIDEO_KEYS);
         keys.extend(views::assets::VESTA_PHOTOS.iter().map(|(key, _)| *key));
