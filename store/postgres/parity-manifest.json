@@ -395,7 +395,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 108,
+    "table_count": 110,
     "tables": {
       "address": {
         "city": "string",
@@ -456,6 +456,17 @@
         "transcript_quality": "option<string>",
         "updated_at": "datetime",
         "visibility": "string"
+      },
+      "assistant_turn": {
+        "content": "string",
+        "id": "record",
+        "input_tokens": "option<int>",
+        "inserted_at": "datetime",
+        "kind": "string",
+        "output_tokens": "option<int>",
+        "person_id": "record<person>",
+        "tool_name": "option<string>",
+        "updated_at": "datetime"
       },
       "attestation": {
         "chain": "string",
@@ -1520,6 +1531,16 @@
         "title": "string",
         "updated_at": "datetime"
       },
+      "sandbox_usage": {
+        "granted_cents": "int",
+        "id": "record",
+        "inserted_at": "datetime",
+        "overage": "bool",
+        "period": "string",
+        "person_id": "record<person>",
+        "spent_cents": "int",
+        "updated_at": "datetime"
+      },
       "schema_version": {
         "applied_at": "datetime",
         "id": "record",
@@ -1718,7 +1739,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 138,
+    "table_count": 140,
     "tables": {
       "address": {
         "columns": {
@@ -1849,6 +1870,29 @@
         "references": [
           "person",
           "project"
+        ]
+      },
+      "assistant_turn": {
+        "columns": {
+          "content": "TEXT",
+          "id": "UUID",
+          "input_tokens": "BIGINT",
+          "inserted_at": "TIMESTAMPTZ",
+          "kind": "TEXT",
+          "output_tokens": "BIGINT",
+          "person_id": "UUID",
+          "tool_name": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "assistant_turn",
+        "references": [
+          "person"
         ]
       },
       "attestation": {
@@ -4512,6 +4556,28 @@
         "foreign_keys": [],
         "name": "review_document",
         "references": []
+      },
+      "sandbox_usage": {
+        "columns": {
+          "granted_cents": "BIGINT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "overage": "BOOLEAN",
+          "period": "TEXT",
+          "person_id": "UUID",
+          "spent_cents": "BIGINT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "sandbox_usage",
+        "references": [
+          "person"
+        ]
       },
       "sent_email": {
         "columns": {
