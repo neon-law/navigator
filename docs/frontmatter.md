@@ -246,8 +246,8 @@ own name (`output: client_letter`).
   `hearing_date`, `hearing_time`, and `reservation_id` give the paper its first-page caption and footer; the body's
   `<!-- keep -->` groups give it unsplittable request/response and signature groups; see [Pleading
   paper](notation-authoring.md#pleading-paper). A pleading in a Project that litigates more than one case also declares
-  `docket:` — a case number the Project lists under `dockets:` — so the caption carries the case the filing serves;
-  see the `docket` row in the key table below.
+  `docket:` — a case number the Project lists under `dockets:` — so the caption carries the case the filing serves; see
+  the `docket` row in the key table below.
 - **`output: form`** is a different mode entirely: instead of typesetting prose, it prints the questionnaire answers
   onto an official government form (an AcroForm fill). A `form` template carries no legal prose — its body is the field
   map — so it always rides with the two form keys below (`form:` and `origin_url:`), and the checker (N109) requires
