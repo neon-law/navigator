@@ -1,0 +1,15 @@
+# Dioxus CLI configuration for the Nautilus mobile app. `dx` reads this from
+# the crate directory — run dx commands from webapp/. The web build never
+# reads it: the existing webapp wasm bundle is driven by
+# `navigator dev build-webapp` from the workspace root.
+[application]
+name = "nautilus"
+default_platform = "ios"
+
+[bundle]
+identifier = "com.neonlaw.nautilus"
+icon = [
+    "icons/nautilus-32.png",
+    "icons/nautilus-64.png",
+    "icons/nautilus-256.png",
+]
