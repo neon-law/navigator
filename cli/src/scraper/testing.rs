@@ -262,7 +262,8 @@ impl SiteAdapter for MockAdapter {
     }
 }
 
-type MockHandler = Arc<dyn Fn(&FetchRequest) -> Result<FetchResponse, FetchError> + Send + Sync>;
+pub(crate) type MockHandler =
+    Arc<dyn Fn(&FetchRequest) -> Result<FetchResponse, FetchError> + Send + Sync>;
 
 /// A fetcher double: records every request and answers through a canned
 /// handler. Tests assert on the request record — the mock never opens a
