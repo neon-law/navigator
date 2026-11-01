@@ -247,7 +247,9 @@ own name (`output: client_letter`).
   `<!-- keep -->` groups give it unsplittable request/response and signature groups; see [Pleading
   paper](notation-authoring.md#pleading-paper). A pleading in a Project that litigates more than one case also declares
   `docket:` — a case number the Project lists under `dockets:` — so the caption carries the case the filing serves; see
-  the `docket` row in the key table below.
+  the `docket` row in the key table below. A state-court case number of any shape is a valid `dockets:` entry and
+  `docket:` value, printed exactly as declared: a California number such as `00CV000000` and a Nevada district-court
+  number such as `D-26-000000-D` (case-type letter, two-digit year, six digits, department or type suffix) both work.
 - **`output: form`** is a different mode entirely: instead of typesetting prose, it prints the questionnaire answers
   onto an official government form (an AcroForm fill). A `form` template carries no legal prose — its body is the field
   map — so it always rides with the two form keys below (`form:` and `origin_url:`), and the checker (N109) requires
@@ -315,7 +317,7 @@ what each code actually checks, its severity, and whether it autofixes, see the 
 | `output` | no | `letter`, `client_letter`, `contract`, `pleading`, `form`, or `resume` (omit for the default) | N109 |
 | `caption_title`, `footer_title` | `kind: pleading` | the full caption title and the short footer title | N130, Y019 |
 | `hearing_date`, `hearing_time`, `reservation_id` | no | a `YYYY-MM-DD` date, a time, a reservation ID | Y019 |
-| `docket` | `kind: pleading` in a Project tree | a case number the Project declares under `dockets:` | N133, Y019 |
+| `docket` | `kind: pleading` in a Project tree | any-shape case number declared under `dockets:` | N133, Y019 |
 | `form` | with `output: form` | the bundled form's code | N109 |
 | `origin_url` | forms only | the `.gov` page the blank form came from; refused anywhere else | N109, N110, N128 |
 | `audiences` | no | `lawyer`/`client`/`both` per `custom_*` role; others use `Question.yaml` | N129 |

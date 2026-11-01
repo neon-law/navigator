@@ -150,6 +150,37 @@ mod tests {
             .contains("supersedes: 0190c2a0-0000-7000-8000-000000000001\n"));
     }
 
+    /// LAW-246: a Nevada district court's register of actions lists entries
+    /// by date without CM/ECF entry numbers. The Project numbers them in
+    /// register order (oldest first, from 1), so the DKT name applies
+    /// unchanged; a date or the case number standing in for the entry
+    /// number is not a DKT Number and is refused, never silently renamed.
+    #[test]
+    fn a_nevada_register_entry_takes_its_register_order_as_its_dkt_number() {
+        let record = render(&json!({
+            "entry_number": "3",
+            "kind": "motion",
+            "title": "Motion for Temporary Orders",
+            "filed_or_served_on": "2026-03-14"
+        }))
+        .unwrap();
+        assert_eq!(
+            record.file_name,
+            "DKT 0003 - Motion for Temporary Orders.yaml"
+        );
+        for not_a_number in ["2026-03-14", "D-26-000000-D"] {
+            assert!(
+                render(&json!({
+                    "entry_number": not_a_number,
+                    "kind": "motion",
+                    "title": "Motion for Temporary Orders"
+                }))
+                .is_err(),
+                "{not_a_number} is not a DKT Number"
+            );
+        }
+    }
+
     #[test]
     fn an_unsafe_title_is_sanitized_in_the_name_only() {
         let record = render(&json!({

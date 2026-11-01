@@ -1,0 +1,35 @@
+version: v26.10.6
+project:
+  host: staging.neonlaw.com
+  name: sample-litigation
+  lawyer_dri: pat@example.invalid
+  client_dri: sam@example.invalid
+  private_slack_channel: not provisioned
+  private_notion_page: not provisioned
+matter:
+  court:
+    - DISTRICT COURT
+    - FAMILY DIVISION
+    - SAMPLE COUNTY, NEVADA
+  case_number: D-26-000000-D
+  judicial_officer: Hon. Sample Q. Jurist
+  department: "Z"
+  filed_on: 2026-02-02
+  parties:
+    - name: SAMPLE SYNTHETIC PETITIONER
+      role: Plaintiff
+    - name: EXAMPLE FICTITIOUS RESPONDENT
+      role: Defendant
+  counsel:
+    name: Pat Sample
+    bar_jurisdiction: Nevada
+    bar_number: "000000"
+    firm: SAMPLE SYNTHETIC LAW GROUP, PLLC
+    address:
+      - 100 Example Boulevard, Suite 200
+      - Sampleton, Nevada 89000
+    telephone: (000) 555-0100
+    email: pat@example.invalid
+    appears_for: Plaintiff SAMPLE SYNTHETIC PETITIONER
+dockets:
+  - D-26-000000-D

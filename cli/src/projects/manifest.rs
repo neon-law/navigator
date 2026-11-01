@@ -1553,10 +1553,17 @@ mod tests {
         let parsed = parse("host: h.example.com\nproject: acme\ndockets:\n  - 9:26-cv-00042\n")
             .expect("a list of case numbers parses");
         assert_eq!(parsed.dockets, vec!["9:26-cv-00042".to_string()]);
-        assert!(
-            !codes("host: h.example.com\nproject: acme\ndockets:\n  - 26-10042\n")
-                .contains(&DOCKETS_CODE)
-        );
+        // A state-court case number of any shape is a docket: California's
+        // and Nevada's `<L>-<YY>-<NNNNNN>-<L>` alike (LAW-246).
+        for case_number in ["26-10042", "00CV000000", "D-26-000000-D"] {
+            assert!(
+                !codes(&format!(
+                    "host: h.example.com\nproject: acme\ndockets:\n  - {case_number}\n"
+                ))
+                .contains(&DOCKETS_CODE),
+                "{case_number}"
+            );
+        }
         for malformed in [
             "dockets: 26-10042\n",
             "dockets:\n  - \"\"\n",
