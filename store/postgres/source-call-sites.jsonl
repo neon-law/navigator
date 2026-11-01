@@ -316,8 +316,8 @@
 {"file":"cli/src/projects/manifest.rs","line":1233,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/manifest.rs","line":1237,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/manifest.rs","line":1248,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/matter.rs","line":108,"function":"caption_for_export","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
-{"file":"cli/src/projects/matter.rs","line":185,"function":"caption_for_preview","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
+{"file":"cli/src/projects/matter.rs","line":186,"function":"caption_for_export","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
+{"file":"cli/src/projects/matter.rs","line":270,"function":"caption_for_preview","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
 {"file":"cli/src/projects/preview.rs","line":851,"function":"respond","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/repository.rs","line":2674,"function":"lint_project_template","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/search.rs","line":214,"function":"search_file","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
@@ -753,8 +753,8 @@
 {"file":"rules/src/clauses.rs","line":316,"function":"compile","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/engine.rs","line":395,"function":"code_uniqueness_violations","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/engine.rs","line":461,"function":"service_template_violations","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"rules/src/engine.rs","line":712,"function":"navigator_markdown_only_rules","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"rules/src/engine.rs","line":1200,"function":"navigator_markdown_only_rules_drop_n_family_and_add_m036","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"rules/src/engine.rs","line":718,"function":"navigator_markdown_only_rules","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"rules/src/engine.rs","line":1206,"function":"navigator_markdown_only_rules_drop_n_family_and_add_m036","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f107.rs","line":218,"function":"loop_variables","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f107.rs","line":355,"function":"scan_placeholders","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f114.rs","line":139,"function":"reaches","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
