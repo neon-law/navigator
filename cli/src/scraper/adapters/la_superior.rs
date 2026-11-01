@@ -55,7 +55,9 @@ impl LaSuperiorAdapter {
     /// When the checked-in site key literal violates [`SiteKey`]'s
     /// vocabulary — unreachable for this literal, but no panic path exists
     /// by construction.
-    pub(crate) fn new(base_url: impl Into<String>) -> Result<Self, crate::scraper::adapter::SiteKeyError> {
+    pub(crate) fn new(
+        base_url: impl Into<String>,
+    ) -> Result<Self, crate::scraper::adapter::SiteKeyError> {
         Ok(Self {
             site: SiteKey::new(SITE_KEY)?,
             base_url: base_url.into(),
@@ -77,7 +79,10 @@ impl LaSuperiorAdapter {
     #[must_use]
     pub(crate) fn register_url(&self, docket: &str) -> String {
         let base = self.base_url.trim_end_matches('/');
-        format!("{base}{REGISTER_PATH}?CaseNumber={}", percent_encode(docket))
+        format!(
+            "{base}{REGISTER_PATH}?CaseNumber={}",
+            percent_encode(docket)
+        )
     }
 }
 
@@ -142,8 +147,7 @@ impl SiteAdapter for LaSuperiorAdapter {
         judge_status(STEP, response.status)?;
         // A non-partial answer replaces the stale part file; a 206 continues it.
         if offset > 0 && response.status != 206 {
-            sink.restart()
-                .map_err(|error| sink_error(STEP, error))?;
+            sink.restart().map_err(|error| sink_error(STEP, error))?;
         }
         sink.extend(&response.body)
             .map_err(|error| sink_error(STEP, error))
@@ -254,9 +258,7 @@ fn parse_register(
         step: STEP.to_owned(),
         detail,
     };
-    let text = std::str::from_utf8(body).map_err(|_| {
-        drift("the body is not UTF-8".to_owned())
-    })?;
+    let text = std::str::from_utf8(body).map_err(|_| drift("the body is not UTF-8".to_owned()))?;
     let document = scraper::Html::parse_document(text);
     let rows = Selector::parse("table.roa tr")
         .map_err(|error| drift(format!("the row selector does not compile: {error}")))?;
@@ -270,8 +272,10 @@ fn parse_register(
             "no register of actions table was found in the page".to_owned(),
         ));
     }
-    let cells = Selector::parse("td, th").map_err(|error| drift(format!("the cell selector does not compile: {error}")))?;
-    let link = Selector::parse("a[href]").map_err(|error| drift(format!("the link selector does not compile: {error}")))?;
+    let cells = Selector::parse("td, th")
+        .map_err(|error| drift(format!("the cell selector does not compile: {error}")))?;
+    let link = Selector::parse("a[href]")
+        .map_err(|error| drift(format!("the link selector does not compile: {error}")))?;
     let base = url::Url::parse(base_url)
         .map_err(|error| drift(format!("the configured base url is not a URL: {error}")))?;
 
@@ -297,15 +301,15 @@ fn parse_register(
         };
         let href = anchor.attr("href").unwrap_or_default();
         if entry_number.is_empty() || title.is_empty() {
-            return Err(drift("an entry row is missing its number or title".to_owned()));
+            return Err(drift(
+                "an entry row is missing its number or title".to_owned(),
+            ));
         }
         let url = base
             .join(href)
             .map_err(|error| drift(format!("a document link does not resolve: {error}")))?;
         if let Some(since) = since {
-            if filed_since(filed)
-                .is_some_and(|filed| filed < since)
-            {
+            if filed_since(filed).is_some_and(|filed| filed < since) {
                 continue;
             }
         }
@@ -324,15 +328,12 @@ fn parse_register(
 fn filed_since(printed: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     use chrono::TimeZone as _;
     let date = chrono::NaiveDate::parse_from_str(printed.trim(), "%m/%d/%Y").ok()?;
-    Some(
-        chrono::Utc
-            .from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("midnight exists")),
-    )
+    Some(chrono::Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("midnight exists")))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_BASE_URL, LaSuperiorAdapter, SITE_KEY, parse_register, percent_encode};
+    use super::{parse_register, percent_encode, LaSuperiorAdapter, DEFAULT_BASE_URL, SITE_KEY};
     use crate::scraper::adapter::{AdapterError, SiteAdapter, SiteKey};
     use crate::scraper::download::DownloadSink;
     use crate::scraper::fetcher::{FetchRequest, FetchResponse};
@@ -363,7 +364,10 @@ mod tests {
     }
 
     fn staging_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("navigator-la-superior-{tag}-{}", uuid::Uuid::now_v7()));
+        let dir = std::env::temp_dir().join(format!(
+            "navigator-la-superior-{tag}-{}",
+            uuid::Uuid::now_v7()
+        ));
         std::fs::create_dir_all(&dir).expect("the staging dir is created");
         dir
     }
@@ -379,10 +383,8 @@ mod tests {
 
     #[tokio::test]
     async fn login_is_a_no_op_on_the_public_path() {
-        let session = crate::scraper::session::BrowserSession::offline(
-            &site(),
-            staging_dir("login"),
-        );
+        let session =
+            crate::scraper::session::BrowserSession::offline(&site(), staging_dir("login"));
         assert!(adapter().login(&session, None).await.is_ok());
     }
 
@@ -399,7 +401,10 @@ mod tests {
         );
         assert_eq!(notices[0].extension, "pdf");
         assert_eq!(notices[1].entry_number, "5");
-        assert_eq!(notices[1].url, "https://www.lacourt.ca.gov/paos/ShowDocument.do?docId=88422");
+        assert_eq!(
+            notices[1].url,
+            "https://www.lacourt.ca.gov/paos/ShowDocument.do?docId=88422"
+        );
     }
 
     #[test]
@@ -414,21 +419,32 @@ mod tests {
         let notices =
             parse_register(REGISTER.as_bytes(), DEFAULT_BASE_URL, Some(since)).expect("parses");
         assert_eq!(notices.len(), 1);
-        assert_eq!(notices[0].entry_number, "5", "only the later entry survives");
+        assert_eq!(
+            notices[0].entry_number, "5",
+            "only the later entry survives"
+        );
     }
 
     #[test]
     fn an_entry_with_an_unparseable_date_survives_since() {
         use chrono::TimeZone as _;
-        let since = chrono::Utc
-            .from_utc_datetime(&chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap().and_hms_opt(0, 0, 0).unwrap());
+        let since = chrono::Utc.from_utc_datetime(
+            &chrono::NaiveDate::from_ymd_opt(2026, 10, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap(),
+        );
         let body = r#"<table class="roa">
             <tr><td>7</td><td>29 October 2026</td><td>Order</td>
                 <td><a href="/doc.pdf">Document</a></td></tr>
             </table>"#;
-        let notices = parse_register(body.as_bytes(), DEFAULT_BASE_URL, Some(since))
-            .expect("parses");
-        assert_eq!(notices.len(), 1, "a date the court changed format for must not drop the document");
+        let notices =
+            parse_register(body.as_bytes(), DEFAULT_BASE_URL, Some(since)).expect("parses");
+        assert_eq!(
+            notices.len(),
+            1,
+            "a date the court changed format for must not drop the document"
+        );
     }
 
     #[test]
@@ -492,8 +508,12 @@ mod tests {
         };
         let fetcher = MockFetcher::with_handler(Arc::new(handler));
         let dir = staging_dir("paywall");
-        let mut sink = DownloadSink::open(&dir, dir.join("out.pdf"), crate::scraper::adapter::NoticeKey::new(&site(), "0004", "4"))
-            .expect("the sink opens");
+        let mut sink = DownloadSink::open(
+            &dir,
+            dir.join("out.pdf"),
+            crate::scraper::adapter::NoticeKey::new(&site(), "0004", "4"),
+        )
+        .expect("the sink opens");
         let notice = crate::scraper::adapter::NoticeRef {
             entry_number: "4".to_owned(),
             title: "Notice of Hearing".to_owned(),
@@ -514,8 +534,12 @@ mod tests {
         };
         let fetcher = MockFetcher::with_handler(Arc::new(handler));
         let dir = staging_dir("server-error");
-        let mut sink = DownloadSink::open(&dir, dir.join("out.pdf"), crate::scraper::adapter::NoticeKey::new(&site(), "0004", "4"))
-            .expect("the sink opens");
+        let mut sink = DownloadSink::open(
+            &dir,
+            dir.join("out.pdf"),
+            crate::scraper::adapter::NoticeKey::new(&site(), "0004", "4"),
+        )
+        .expect("the sink opens");
         let notice = crate::scraper::adapter::NoticeRef {
             entry_number: "4".to_owned(),
             title: "Notice of Hearing".to_owned(),
@@ -542,7 +566,10 @@ mod tests {
         let handler_ranges = Arc::clone(&fresh_ranges);
         let fresh_document = document.clone();
         let fresh_handler = move |request: &FetchRequest| {
-            handler_ranges.lock().expect("ranges").push(request.range_start);
+            handler_ranges
+                .lock()
+                .expect("ranges")
+                .push(request.range_start);
             Ok(FetchResponse {
                 status: 200,
                 body: fresh_document.clone(),
@@ -578,7 +605,10 @@ mod tests {
         let handler_ranges = Arc::clone(&requested_ranges);
         let handler_document = document.clone();
         let handler = move |request: &FetchRequest| {
-            handler_ranges.lock().expect("ranges").push(request.range_start);
+            handler_ranges
+                .lock()
+                .expect("ranges")
+                .push(request.range_start);
             match request.range_start {
                 Some(5) => Ok(FetchResponse {
                     status: 206,
@@ -597,15 +627,16 @@ mod tests {
         // First attempt: five bytes staged, then the attempt dies (a crash
         // mid-download, say).
         {
-            let mut sink = DownloadSink::open(&dir, staged.clone(), key.clone())
-                .expect("the sink opens");
-            sink.extend(&document[..5]).expect("the partial write lands");
+            let mut sink =
+                DownloadSink::open(&dir, staged.clone(), key.clone()).expect("the sink opens");
+            sink.extend(&document[..5])
+                .expect("the partial write lands");
         }
 
         // The reopened sink continues from the offset; the adapter asks for
         // the remainder and the part file completes.
-        let mut sink = DownloadSink::open(&dir, staged.clone(), key.clone())
-            .expect("the sink reopens");
+        let mut sink =
+            DownloadSink::open(&dir, staged.clone(), key.clone()).expect("the sink reopens");
         assert_eq!(sink.resume_offset(), 5, "the partial bytes are staged");
         adapter()
             .download(&fetcher, &notice, &mut sink)
@@ -613,7 +644,10 @@ mod tests {
             .expect("the download completes");
         let completed = sink.finish().expect("the sink finishes");
         assert_eq!(completed.bytes, 64);
-        assert_eq!(std::fs::read(&completed.path).expect("the file reads"), document);
+        assert_eq!(
+            std::fs::read(&completed.path).expect("the file reads"),
+            document
+        );
         assert_eq!(
             *requested_ranges.lock().expect("ranges"),
             vec![Some(5)],

@@ -616,8 +616,7 @@ mod tests {
     #[test]
     fn the_registry_looks_adapters_up_by_site_key() {
         let binding = registered_adapters();
-        let real = find_adapter(&binding, &site())
-            .expect("the la-superior adapter is registered");
+        let real = find_adapter(&binding, &site()).expect("the la-superior adapter is registered");
         assert_eq!(real.site(), &site());
         let adapters: Vec<Box<dyn crate::scraper::adapter::SiteAdapter>> =
             vec![Box::new(MockAdapter::simple(site()))];
