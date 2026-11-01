@@ -64,6 +64,7 @@ impl LaSuperiorAdapter {
 
     /// The portal base this run was bound to.
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))] // tests assert the binding
     pub(crate) fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -259,6 +260,16 @@ fn parse_register(
     let document = scraper::Html::parse_document(text);
     let rows = Selector::parse("table.roa tr")
         .map_err(|error| drift(format!("the row selector does not compile: {error}")))?;
+    // A page with no register table at all — a login redirect, a redesign —
+    // is drift, not an empty docket. Only a present-but-empty register is
+    // a well-formed empty result.
+    let register = Selector::parse("table.roa")
+        .map_err(|error| drift(format!("the register selector does not compile: {error}")))?;
+    if document.select(&register).next().is_none() {
+        return Err(drift(
+            "no register of actions table was found in the page".to_owned(),
+        ));
+    }
     let cells = Selector::parse("td, th").map_err(|error| drift(format!("the cell selector does not compile: {error}")))?;
     let link = Selector::parse("a[href]").map_err(|error| drift(format!("the link selector does not compile: {error}")))?;
     let base = url::Url::parse(base_url)
@@ -518,29 +529,69 @@ mod tests {
     #[tokio::test]
     async fn download_streams_the_document_and_resumes_from_the_offset() {
         let document: Vec<u8> = (0..64u8).collect();
+        let notice = crate::scraper::adapter::NoticeRef {
+            entry_number: "4".to_owned(),
+            title: "Notice of Hearing".to_owned(),
+            url: "https://www.lacourt.ca.gov/paos/ShowDocument.do?docId=88421".to_owned(),
+            extension: "pdf".to_owned(),
+        };
+
+        // A fresh download: the first fetch carries no Range header and the
+        // whole document lands in the sink.
+        let fresh_ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let fresh_document = document.clone();
+        let fresh_handler = move |request: &FetchRequest| {
+            fresh_ranges.lock().expect("ranges").push(request.range_start);
+            Ok(FetchResponse {
+                status: 200,
+                body: fresh_document.clone(),
+            })
+        };
+        let fresh_fetcher = MockFetcher::with_handler(Arc::new(fresh_handler));
+        let fresh_dir = staging_dir("resume-fresh");
+        let key = crate::scraper::adapter::NoticeKey::new(&site(), "0004", "4");
+        {
+            let mut sink = DownloadSink::open(&fresh_dir, fresh_dir.join("out.pdf"), key.clone())
+                .expect("the sink opens");
+            adapter()
+                .download(&fresh_fetcher, &notice, &mut sink)
+                .await
+                .expect("the fresh download completes");
+            let completed = sink.finish().expect("the sink finishes");
+            assert_eq!(completed.bytes, 64);
+            assert_eq!(
+                std::fs::read(&completed.path).expect("the file reads"),
+                document
+            );
+        }
+        assert_eq!(
+            *fresh_ranges.lock().expect("ranges"),
+            vec![None],
+            "the first fetch carried no range"
+        );
+
+        // A resumed download: with five bytes already staged by a dead
+        // attempt, the reopened sink fetches only the remainder and the part
+        // file completes into the same document.
         let requested_ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
         let handler_ranges = Arc::clone(&requested_ranges);
         let handler_document = document.clone();
         let handler = move |request: &FetchRequest| {
             handler_ranges.lock().expect("ranges").push(request.range_start);
-            let status;
-            let body: Vec<u8>;
             match request.range_start {
-                Some(5) => {
-                    status = 206;
-                    body = handler_document[5..].to_vec();
-                }
-                _ => {
-                    status = 200;
-                    body = handler_document.clone();
-                }
+                Some(5) => Ok(FetchResponse {
+                    status: 206,
+                    body: handler_document[5..].to_vec(),
+                }),
+                start => Ok(FetchResponse {
+                    status: 206,
+                    body: handler_document[start.unwrap_or_default() as usize..].to_vec(),
+                }),
             }
-            Ok(FetchResponse { status, body })
         };
         let fetcher = MockFetcher::with_handler(Arc::new(handler));
         let dir = staging_dir("resume");
         let staged = dir.join("out.pdf");
-        let key = crate::scraper::adapter::NoticeKey::new(&site(), "0004", "4");
 
         // First attempt: five bytes staged, then the attempt dies (a crash
         // mid-download, say).
@@ -549,12 +600,6 @@ mod tests {
                 .expect("the sink opens");
             sink.extend(&document[..5]).expect("the partial write lands");
         }
-        let notice = crate::scraper::adapter::NoticeRef {
-            entry_number: "4".to_owned(),
-            title: "Notice of Hearing".to_owned(),
-            url: "https://www.lacourt.ca.gov/paos/ShowDocument.do?docId=88421".to_owned(),
-            extension: "pdf".to_owned(),
-        };
 
         // The reopened sink continues from the offset; the adapter asks for
         // the remainder and the part file completes.
@@ -570,8 +615,8 @@ mod tests {
         assert_eq!(std::fs::read(&completed.path).expect("the file reads"), document);
         assert_eq!(
             *requested_ranges.lock().expect("ranges"),
-            vec![None, Some(5)],
-            "the first fetch had no range; the resume asked for the remainder"
+            vec![Some(5)],
+            "the resume asked for the remainder, not the whole document"
         );
     }
 

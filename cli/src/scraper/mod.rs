@@ -239,16 +239,21 @@ pub(crate) async fn run_scraper(
     // there — the run proceeds unauthenticated — while a store failure or
     // a malformed provisioned row still hard-stops, never silently ignored.
     let resolved = credentials::resolve_portal_logins(deps.surreal, deps.firm_id, deps.kms).await;
-    let login = match &resolved {
-        Ok(resolved) => match resolved.login_for(adapter.credential_key()) {
-            Ok(login) => {
-                login.ensure_complete(adapter.credential_key())?;
-                Some(login)
-            }
-            Err(CredentialsError::NotProvisioned { .. }) if !adapter.requires_login() => None,
-            Err(error) => return Err(error.into()),
-        },
-        Err(CredentialsError::NotConfigured { .. }) if !adapter.requires_login() => None,
+    let resolved = match resolved {
+        Ok(resolved) => resolved,
+        Err(CredentialsError::NotConfigured { .. }) if !adapter.requires_login() => {
+            // A public site needs no provisioned credential: the run
+            // proceeds unauthenticated with an empty set of logins.
+            credentials::PortalLogins::default()
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let login = match resolved.login_for(adapter.credential_key()) {
+        Ok(login) => {
+            login.ensure_complete(adapter.credential_key())?;
+            Some(login)
+        }
+        Err(CredentialsError::NotProvisioned { .. }) if !adapter.requires_login() => None,
         Err(error) => return Err(error.into()),
     };
 
@@ -610,12 +615,11 @@ mod tests {
 
     #[test]
     fn the_registry_looks_adapters_up_by_site_key() {
+        let real = find_adapter(&registered_adapters(), &site())
+            .expect("the la-superior adapter is registered");
+        assert_eq!(real.site(), &site());
         let adapters: Vec<Box<dyn crate::scraper::adapter::SiteAdapter>> =
             vec![Box::new(MockAdapter::simple(site()))];
-        assert!(
-            find_adapter(&registered_adapters(), &site()).is_none(),
-            "no real adapters yet"
-        );
         let found = find_adapter(&adapters, &site()).expect("the mock is found");
         assert_eq!(found.site(), &site());
         assert!(find_adapter(&adapters, &SiteKey::new("pacer").expect("valid key")).is_none());
