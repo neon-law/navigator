@@ -564,8 +564,8 @@ mod tests {
     fn clean_report_only_claims_measured_scope() {
         let report = report(Mode::Parity, &[]);
         let json: serde_json::Value = serde_json::from_str(&render_json(&report)).unwrap();
-        assert_eq!(json["coverage"]["source_tables"], 107);
-        assert_eq!(json["coverage"]["eligible_source_tables"], 105);
+        assert_eq!(json["coverage"]["source_tables"], 108);
+        assert_eq!(json["coverage"]["eligible_source_tables"], 106);
         assert_eq!(
             json["coverage"]["excluded_source_tables"],
             json!(["draft", "schema_version"])
@@ -575,7 +575,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            105
+            106
         );
         assert_eq!(
             json["coverage"]["unmapped_tables"]

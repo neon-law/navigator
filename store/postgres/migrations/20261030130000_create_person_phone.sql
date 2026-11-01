@@ -4,8 +4,8 @@
 -- source orphans remain importable and are reported separately.
 
 CREATE TABLE "person_phone" (
-    "e164" TEXT NOT NULL,
     "id" UUID NOT NULL PRIMARY KEY,
+    "e164" TEXT NOT NULL,
     "inserted_at" TIMESTAMPTZ NOT NULL,
     "is_primary" BOOLEAN NOT NULL,
     "label" TEXT NOT NULL,

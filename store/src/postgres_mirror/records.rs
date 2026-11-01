@@ -566,8 +566,8 @@ pub(super) const TABLES: &[Table] = &[
         name: "person_phone",
         group: "source_domain_records",
         columns: &[
-            "e164",
             "id",
+            "e164",
             "inserted_at",
             "is_primary",
             "label",
