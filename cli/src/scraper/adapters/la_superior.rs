@@ -461,17 +461,17 @@ fn parse_case_documents(
             format!("the body is not the case-documents JSON: {error}"),
         )
     })?;
-    let documents = envelopes
-        .first()
-        .and_then(|envelope| envelope.cases.first())
-        .map(|case| case.documents.clone())
-        .ok_or_else(|| drift(STEP, "the register envelope carries no case".to_owned()))?
-        .ok_or_else(|| {
-            drift(
-                STEP,
-                "the case carries no documents property (the include was ignored)".to_owned(),
-            )
-        })?;
+    let case = envelopes
+        .into_iter()
+        .next()
+        .and_then(|envelope| envelope.cases.into_iter().next())
+        .ok_or_else(|| drift(STEP, "the register envelope carries no case".to_owned()))?;
+    let documents = case.documents.ok_or_else(|| {
+        drift(
+            STEP,
+            "the case carries no documents property (the include was ignored)".to_owned(),
+        )
+    })?;
 
     let mut notices = Vec::new();
     for document in documents {
@@ -533,9 +533,8 @@ mod tests {
     };
     use crate::scraper::adapter::{AdapterError, NoticeKey, SiteAdapter, SiteKey};
     use crate::scraper::download::DownloadSink;
-    use crate::scraper::fetcher::{FetchRequest, FetchResponse};
+    use crate::scraper::fetcher::{FetchError, FetchRequest, FetchResponse};
     use crate::scraper::testing::MockFetcher;
-    use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::Arc;
 
