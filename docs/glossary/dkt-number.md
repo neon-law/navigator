@@ -22,5 +22,9 @@ lists each of those filings beside its DKT name. Pass `--apply` to reconcile lin
 operation. `docket add --slug` and `docket link-document` apply the linked entry's name. The Project gate checks Docket
 Filings against their linked entries.
 
+A court whose register does not number its entries, such as a Nevada district court's register of actions, takes the
+number the Project gives each entry in register order (oldest first, from `1`); see [Docket Entry](docket-entry.md). The
+DKT name never falls back to a date or the case number.
+
 A Project whose manifest lists several `dockets:` shares one flat folder, so two cases with the same entry number
 collide on the DKT Number; ingest then treats the later notice as already filed.

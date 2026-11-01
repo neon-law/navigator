@@ -12,11 +12,19 @@ use tempfile::TempDir;
 
 const FIXTURE: &str = "tests/fixtures/synthetic_matter";
 
+/// A Nevada district-court matter whose case number has the
+/// `<L>-<YY>-<NNNNNN>-<L>` shape rather than the California one (LAW-246).
+const NEVADA_FIXTURE: &str = "tests/fixtures/synthetic_nevada_matter";
+
 /// The synthetic matter tree copied into a tempdir, so a test can edit its
 /// manifest or notations without touching the checked-in fixture.
 fn matter_tree() -> TempDir {
+    tree_of(FIXTURE)
+}
+
+fn tree_of(fixture: &str) -> TempDir {
     let work = TempDir::new().unwrap();
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(fixture);
     copy_tree(&source, work.path());
     work
 }
@@ -198,6 +206,69 @@ fn a_declared_docket_serves_the_caption_its_case_number() {
         1
     );
     assert_eq!(pdf::occurrence_count(&bytes, "00CV000000").unwrap(), 0);
+}
+
+#[test]
+fn a_nevada_case_number_clears_n133_and_captions_preview_and_export() {
+    use rules::Rule as _;
+    const CASE: &str = "D-26-000000-D";
+    let work = tree_of(NEVADA_FIXTURE);
+    let template = work.path().join("templates/nevada_notice_of_compliance.md");
+    let lint = rules::f133::F133PleadingDocketUndeclared.lint(&rules::SourceFile {
+        contents: fs::read_to_string(&template).unwrap(),
+        path: template.clone(),
+    });
+    assert!(lint.is_empty(), "a Nevada `docket:` clears N133: {lint:?}");
+
+    let preview = work.path().join("preview.pdf");
+    let result = Command::new(cargo_bin("navigator"))
+        .args(["notation", "pdf"])
+        .arg(&template)
+        .args(["--preview", "--out"])
+        .arg(&preview)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", stderr(&result));
+    let exported = pdf_of(&work, "nevada_notice_of_compliance.md");
+    for (label, bytes) in [
+        ("preview", fs::read(preview).unwrap()),
+        ("export", exported),
+    ] {
+        assert_eq!(
+            pdf::occurrence_count(&bytes, &format!("Case No. {CASE}")).unwrap(),
+            1,
+            "{label} captions the Nevada case number"
+        );
+        assert_eq!(
+            pdf::occurrence_count(&bytes, "Nevada Bar No. 000000").unwrap(),
+            1,
+            "{label}"
+        );
+    }
+
+    let docx = work.path().join("out.docx");
+    let result = render("word", &template, &docx);
+    assert!(result.status.success(), "stderr: {}", stderr(&result));
+    let document = docx_part(&fs::read(&docx).unwrap(), "word/document.xml");
+    assert!(
+        document.contains(&format!("Case No. {CASE}")),
+        "word caption"
+    );
+}
+
+#[test]
+fn a_nevada_docket_matches_case_insensitively_into_the_declared_spelling() {
+    let work = tree_of(NEVADA_FIXTURE);
+    edit(
+        work.path().join("templates/nevada_notice_of_compliance.md"),
+        "docket: D-26-000000-D",
+        "docket: d-26-000000-d",
+    );
+    let bytes = pdf_of(&work, "nevada_notice_of_compliance.md");
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Case No. D-26-000000-D").unwrap(),
+        1
+    );
 }
 
 #[test]

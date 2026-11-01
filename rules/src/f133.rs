@@ -121,6 +121,16 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_nevada_docket_is_silent() {
+        let (_tree, file) = project_tree(
+            "templates/complaint.md",
+            "---\nkind: pleading\ntitle: T\ncaption_title: C\ndocket: D-26-000000-D\n---\n\n# Body\n",
+        );
+        let found = F133PleadingDocketUndeclared.lint(&file);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn a_non_pleading_kind_is_silent() {
         let (_tree, file) = project_tree(
             "templates/letter.md",
