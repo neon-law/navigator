@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use assert_cmd::cargo::cargo_bin;
+use rules::frontmatter;
 use tempfile::TempDir;
 
 const FIXTURE: &str = "tests/fixtures/synthetic_matter";
@@ -70,7 +71,13 @@ fn edit(path: PathBuf, from: &str, to: &str) {
 fn two_pleadings_share_one_matter_with_no_caption_text_in_either_body() {
     let work = matter_tree();
     for template in ["rfa_responses.md", "notice_of_compliance.md"] {
-        let body = fs::read_to_string(work.path().join("templates").join(template)).unwrap();
+        let text = fs::read_to_string(work.path().join("templates").join(template)).unwrap();
+        // The frontmatter legitimately carries the docket: key now, so the
+        // assertion is body-only — the body never says the case number.
+        let body = match frontmatter::split(&text) {
+            Some((_, body)) => body,
+            None => text.as_str(),
+        };
         assert!(!body.contains("caption\n") && !body.contains("00CV000000"));
         let bytes = pdf_of(&work, template);
         for shared in [
@@ -144,6 +151,20 @@ fn changing_the_manifest_changes_every_rendered_pleading_with_no_template_edit()
         "case_number: 00CV000000",
         "case_number: 11CV111111",
     );
+    // Keep the declarations aligned with the matter block: the list and
+    // both pleadings' docket keys move to the new case number together.
+    edit(
+        manifest.clone(),
+        "dockets:\n  - 00CV000000",
+        "dockets:\n  - 11CV111111",
+    );
+    for template in ["rfa_responses.md", "notice_of_compliance.md"] {
+        edit(
+            work.path().join("templates").join(template),
+            "docket: 00CV000000",
+            "docket: 11CV111111",
+        );
+    }
     edit(
         manifest,
         "100 Example Boulevard, Suite 200",
@@ -161,6 +182,41 @@ fn changing_the_manifest_changes_every_rendered_pleading_with_no_template_edit()
         );
         assert_eq!(pdf::occurrence_count(&bytes, "00CV000000").unwrap(), 0);
     }
+}
+
+#[test]
+fn a_declared_docket_serves_the_caption_its_case_number() {
+    let work = matter_tree();
+    edit(
+        work.path().join("templates/rfa_responses.md"),
+        "docket: 00CV000000",
+        "docket: B327654",
+    );
+    let bytes = pdf_of(&work, "rfa_responses.md");
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Case No. B327654").unwrap(),
+        1
+    );
+    assert_eq!(pdf::occurrence_count(&bytes, "00CV000000").unwrap(), 0);
+}
+
+#[test]
+fn an_undeclared_docket_is_refused_and_nothing_is_written() {
+    let work = matter_tree();
+    edit(
+        work.path().join("templates/rfa_responses.md"),
+        "docket: 00CV000000",
+        "docket: 99CV999999",
+    );
+    let out = work.path().join("out.pdf");
+    let result = render("pdf", &work.path().join("templates/rfa_responses.md"), &out);
+    assert!(!result.status.success());
+    let message = stderr(&result);
+    assert!(
+        message.contains("99CV999999") && message.contains("dockets:"),
+        "{message}"
+    );
+    assert!(!out.exists());
 }
 
 #[test]

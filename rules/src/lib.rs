@@ -43,6 +43,7 @@ pub mod f128;
 pub mod f129;
 pub mod f130;
 pub mod f131;
+pub mod f133;
 pub mod final_document;
 pub mod frontmatter;
 pub mod kind;
@@ -156,6 +157,7 @@ pub use f128::F128OriginUrlOnlyOnForms;
 pub use f129::F129AudiencesOnlyCustom;
 pub use f130::F130PleadingBodyHasNoCaption;
 pub use f131::F131TemplateHasNoDraftingMarkers;
+pub use f133::F133PleadingDocketUndeclared;
 pub use kind::Kind;
 pub use m001::M001HeadingIncrement;
 pub use m003::M003HeadingStyle;
@@ -386,6 +388,7 @@ pub fn description_for_code(code: &str) -> &'static str {
         "N130" => "A pleading body carries no caption markup; its caption comes from `matter:` and its frontmatter",
         "N132" => "Clause references name a pinned version and bind its required inputs; an onboarding includes `engagement_arbitration`",
         "N131" => "A notation template carries no drafting markers: brackets, fill-in blanks outside a signature block, notes, or the render's Signer Box marker",
+        "N133" => "A pleading in a Project repository declares no `docket:`; the caption cannot say which case the filing serves",
         "E001" => "Event must declare both a `starts_at` timestamp and a `timezone`",
         "E002" => "A file is either an event or a notation template, never both",
         "E004" => "Event must declare a `luma_url` to check it out on Luma",
@@ -487,7 +490,7 @@ pub fn severity_for_code(code: &str) -> Severity {
         // than blocking. (M057, the disk-resolution check, stays an
         // error — a broken path is a bug.) N108 blocks once this package
         // is newer than `F108TemplateCodeRequired::FINAL_COMPATIBILITY_RELEASE`.
-        "N112" | "M061" => Severity::Warning,
+        "N112" | "N133" | "M061" => Severity::Warning,
         "N108" if !n108_compatibility_expired() => Severity::Warning,
         _ => Severity::Error,
     }

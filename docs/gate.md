@@ -261,6 +261,7 @@ trailing backslash — is left alone, which is what a signature block is built f
 | `N130` | Error | A pleading body carries no caption markup; the caption comes from `matter:` and frontmatter. | No |
 | `N131` | Error | A template carries no drafting marker: bracket, stray blank, note, or typed Signer Box marker. | No |
 | `N132` | Error | Pins a version and binds inputs; an unexecuted onboarding has `engagement_arbitration`. | No |
+| `N133` | Warning | A Project pleading must declare `docket:` so the caption can name the case it serves. | No |
 
 ### E-family — events
 

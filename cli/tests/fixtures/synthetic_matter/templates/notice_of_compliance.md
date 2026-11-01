@@ -3,6 +3,7 @@ kind: pleading
 title: Synthetic Notice of Compliance (California)
 caption_title: PLAINTIFF'S NOTICE OF SYNTHETIC COMPLIANCE
 footer_title: PLAINTIFF'S NOTICE OF SYNTHETIC COMPLIANCE
+docket: 00CV000000
 jurisdiction: CA
 respondent_type: person
 confidential: false

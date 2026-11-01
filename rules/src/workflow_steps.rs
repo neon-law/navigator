@@ -74,7 +74,10 @@ pub const WORKFLOW_STEPS: &[WorkflowStep] = &[
         status: StepStatus::Human,
         summary: "Pauses for a lawyer (an attorney) to approve or reject. No automated side \
                   effect — the human decision drives the next transition. This is the mandatory \
-                  legal gate every notation must cross.",
+                  legal gate every notation must cross. `N106` requires the state name be the \
+                  bare prefix; a discriminated state such as `lawyer_review__docket_check` \
+                  resolves here — the discriminator labels the review, it does not name \
+                  another step.",
     },
     WorkflowStep {
         prefix: "client_review",
@@ -177,7 +180,9 @@ pub const WORKFLOW_STEPS: &[WorkflowStep] = &[
         status: StepStatus::Implemented,
         summary:
             "Records an electronic filing with a government office as a filings row. The \
-                  submission itself is performed out of band; this records it. After lawyer_review.",
+                  submission itself is performed out of band; this records it. After \
+                  lawyer_review. A pleading's filing is journaled against the docket its \
+                  frontmatter declares, so the filings row names the case it serves.",
     },
     WorkflowStep {
         prefix: "filing",
@@ -292,6 +297,31 @@ mod tests {
             s.summary.contains("records") && s.summary.contains("does not mail"),
             "mailroom_send summary must be honest, got {:?}",
             s.summary,
+        );
+    }
+
+    #[test]
+    fn a_discriminated_lawyer_review_resolves_to_the_bare_step() {
+        // N106 requires a BARE lawyer_review state; `lawyer_review__docket_check`
+        // is a discriminator on the same step, not a new one. Hover must say so.
+        let s = lookup("lawyer_review__docket_check").expect("discriminator resolves");
+        assert_eq!(s.prefix, "lawyer_review");
+        assert_eq!(s.status, StepStatus::Human);
+        assert!(
+            s.summary.contains("docket_check"),
+            "the summary must explain the discriminator, got {:?}",
+            s.summary
+        );
+    }
+
+    #[test]
+    fn e_filing_summary_names_the_pleading_docket() {
+        let s = lookup("e_filing").expect("e_filing is in the catalog");
+        assert_eq!(s.prefix, "e_filing");
+        assert!(
+            s.summary.contains("docket") && s.summary.contains("journaled"),
+            "the summary must tie the filing to the pleading-declared docket, got {:?}",
+            s.summary
         );
     }
 
