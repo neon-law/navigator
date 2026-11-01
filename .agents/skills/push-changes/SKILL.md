@@ -28,10 +28,13 @@ Before naming a table, field, state, or UI concept, follow the **Find the term f
 3. Run `navigator project gate` again, then `git push --force-with-lease -u origin <branch>`. Never use plain
    `--force`. Reuse the same branch and existing pull request when continuing an earlier attempt.
 4. Open a pull request against `main`, ready for review. Inspect the origin URL to choose the forge. On GitHub, use
-   `gh pr create --base main` and inspect `gh pr view <number> --json autoMergeRequest,state`. Respect App-owned
-   automatic squash auto-merge; confirm it is armed or the state is already `MERGED`. If automation does not arm it,
-   inspect the failure and report a policy or permission blocker instead of merging manually. On another forge, use its
-   equivalent ready-for-review and merge-when-checks-pass controls and verify the pull request's merge policy.
+   `gh pr create --base main`. Respect App-owned automatic squash auto-merge: the `automerge` workflow arms it about ten
+   to fifteen seconds after the pull request opens, so a read in the first seconds shows `null` on a pull request about
+   to be armed. Wait for that run (`gh run list --workflow automerge.yml --branch <branch>`, then `gh run watch
+   <run-id>`) before you read `gh pr view <number> --json autoMergeRequest,state`, and confirm it is armed or the state
+   is already `MERGED`. If the finished run left it unarmed, inspect the run's log and report a policy or permission
+   blocker instead of merging manually. On another forge, use its equivalent ready-for-review and merge-when-checks-pass
+   controls and verify the pull request's merge policy.
 5. Wait for the required checks and the actual merge. On GitHub, use `gh pr checks <number> --watch`, then poll
    `gh pr view <number> --json state,mergeCommit` until `state` is `MERGED`; green checks alone do not finish the job.
    On another forge, watch its required checks and verify its merged state. Fix failed checks on this branch. If main

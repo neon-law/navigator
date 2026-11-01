@@ -3722,6 +3722,13 @@ enum GithubCmd {
         /// The pull request number.
         #[arg(long)]
         pull_request: u64,
+        /// Seconds to wait for the merge-queue App's `automerge` workflow to
+        /// arm the pull request before arming it as the caller. The App needs
+        /// roughly ten to fifteen seconds after a pull request opens, so an
+        /// operator opening Project pull requests passes about 90 here and
+        /// arms by hand only as the fallback. 0 arms straight away.
+        #[arg(long, value_name = "SECONDS", default_value_t = 0)]
+        await_app: u64,
     },
     /// Refuse a revision range that contains an unsigned commit. Cloud Agent
     /// pull-request heads carry an HSM `gpgsig`; a session that turned

@@ -4318,6 +4318,9 @@ jobs:
             "git push --force-with-lease -u origin",
             "MERGED",
             "App-owned",
+            // LAW-144: the App arms ~10–15s after open; read back only after
+            // its `automerge` run finishes, or a pending arm reads as `null`.
+            "gh run watch",
             "another forge",
             "git switch main",
         ] {
