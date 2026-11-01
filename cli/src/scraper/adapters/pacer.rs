@@ -402,8 +402,36 @@ fn billing_confirmation(body: &[u8]) -> Option<String> {
     (!charges.is_empty()).then_some(charges)
 }
 
+/// Recorded fixtures, shared with the orchestration tests in
+/// `crate::scraper` so the base proves the same HTML the adapter tests
+/// pin. Provisional until the live dogfood — see the module docs.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    /// A recorded docket report, shaped the way the fixture tests pin it:
+    /// one header row, two document-bearing entries, one linkless entry
+    /// the enumeration skips.
+    pub(crate) const DOCKET: &str = r#"<html><body>
+        <table class="docket">
+        <tr><th>No.</th><th>Date Filed</th><th>Description</th><th>Document</th></tr>
+        <tr><td>4</td><td>10/28/2026</td><td>Notice of Hearing</td>
+            <td><a href="/doc/88421.pdf">Document</a></td></tr>
+        <tr><td>5</td><td>10/29/2026</td><td>Order Granting Extension</td>
+            <td><a href="/doc/88422.pdf">Document</a></td></tr>
+        <tr><td>6</td><td>10/30/2026</td><td>Minute Order</td><td></td></tr>
+        </table>
+        </body></html>"#;
+
+    /// A recorded charge-confirmation page: the portal's answer to a
+    /// billable request. The gate must name these charges and never
+    /// accept them.
+    pub(crate) const CONFIRMATION: &str = r#"<html><body>
+        <div id="billing-confirmation">2 page(s) at $0.10 per page: $0.20 total. Accept charges to retrieve this document.</div>
+        </body></html>"#;
+}
+
 #[cfg(test)]
 mod tests {
+    use super::fixtures::{CONFIRMATION, DOCKET};
     use super::{
         billing_confirmation, parse_docket, percent_encode, PacerAdapter, DEFAULT_BASE_URL,
         SITE_KEY,
@@ -424,28 +452,6 @@ mod tests {
     fn site() -> SiteKey {
         SiteKey::new(SITE_KEY).expect("valid key")
     }
-
-    /// A recorded docket report, shaped the way the fixture tests pin it:
-    /// one header row, two document-bearing entries, one linkless entry
-    /// the enumeration skips. Provisional until the live dogfood — see
-    /// the module docs.
-    const DOCKET: &str = r#"<html><body>
-        <table class="docket">
-        <tr><th>No.</th><th>Date Filed</th><th>Description</th><th>Document</th></tr>
-        <tr><td>4</td><td>10/28/2026</td><td>Notice of Hearing</td>
-            <td><a href="/doc/88421.pdf">Document</a></td></tr>
-        <tr><td>5</td><td>10/29/2026</td><td>Order Granting Extension</td>
-            <td><a href="/doc/88422.pdf">Document</a></td></tr>
-        <tr><td>6</td><td>10/30/2026</td><td>Minute Order</td><td></td></tr>
-        </table>
-        </body></html>"#;
-
-    /// A recorded charge-confirmation page: the portal's answer to a
-    /// billable request. The gate must name these charges and never
-    /// accept them.
-    const CONFIRMATION: &str = r#"<html><body>
-        <div id="billing-confirmation">2 page(s) at $0.10 per page: $0.20 total. Accept charges to retrieve this document.</div>
-        </body></html>"#;
 
     fn staging_dir(tag: &str) -> PathBuf {
         let dir =

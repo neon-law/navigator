@@ -501,12 +501,14 @@ mod tests {
         ScraperError,
     };
     use crate::scraper::adapter::{find_adapter, AdapterError, SiteKey};
+    use crate::scraper::fetcher::{FetchRequest, FetchResponse};
     use crate::scraper::intake::RecordingIntake;
     use crate::scraper::retry::RetryPolicy;
     use crate::scraper::testing::{
         DownloadStep, LoginStep, MockAdapter, MockFetcher, StubClock, StubSessions,
     };
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::Duration;
 
     fn site() -> SiteKey {
@@ -907,6 +909,67 @@ mod tests {
             "the error names the remedy: {error}"
         );
         assert_eq!(fixture.factory.opens(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_pacer_run_without_a_provisioned_credential_refuses_before_the_browser_opens() {
+        let fixture = fixture().await;
+        let adapter = crate::scraper::adapters::PacerAdapter::new(
+            crate::scraper::adapters::pacer::DEFAULT_BASE_URL,
+        )
+        .expect("the checked-in key is valid");
+        let error = run_scraper(&adapter, &query(), &deps(&fixture))
+            .await
+            .expect_err("no pacer credential is provisioned");
+        assert!(
+            matches!(error, ScraperError::Credentials(_)),
+            "the run stops at the credential seam: {error}"
+        );
+        assert_eq!(fixture.factory.opens(), 0, "no browser ever opens");
+        assert_eq!(fixture.intake.received().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_pacer_run_with_a_provisioned_credential_logs_in_and_enqueues_notices() {
+        let fixture = fixture().await;
+        fixture
+            .put_portal_secret(&serde_json::json!({
+                "pacer": {"username": "firm@example.com", "password": "staple"}
+            }))
+            .await;
+        let handler = |request: &FetchRequest| {
+            if request.url.contains("CaseNumber=") {
+                Ok(FetchResponse {
+                    status: 200,
+                    body: crate::scraper::adapters::pacer::fixtures::DOCKET
+                        .as_bytes()
+                        .to_vec(),
+                })
+            } else {
+                Ok(FetchResponse {
+                    status: 200,
+                    body: b"%PDF-fixture".to_vec(),
+                })
+            }
+        };
+        let fetcher = MockFetcher::with_handler(Arc::new(handler));
+        let adapter = crate::scraper::adapters::PacerAdapter::new(
+            crate::scraper::adapters::pacer::DEFAULT_BASE_URL,
+        )
+        .expect("the checked-in key is valid");
+        let mut deps = deps(&fixture);
+        deps.fetcher = &fetcher;
+        let report = run_scraper(&adapter, &query(), &deps)
+            .await
+            .expect("the run completes");
+        assert_eq!(report.discovered, 2, "the linkless entry is skipped");
+        assert_eq!(report.downloaded, 2);
+        assert_eq!(report.enqueued.len(), 2);
+        assert!(
+            fixture.factory.opens() >= 1,
+            "the login hook ran in a session"
+        );
+        assert_eq!(fixture.intake.received().len(), 2);
     }
 
     #[tokio::test]
