@@ -193,7 +193,7 @@
 {"file":"cli/src/devx/native/registry.rs","line":610,"function":"a_stale_process_record_orphans_a_claim_whose_checkout_survived","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/native/supervisor.rs","line":333,"function":"start","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/native/surreal.rs","line":71,"function":"remove_database","operation":"query","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/devx/observability.rs","line":1478,"function":"assert_pipelines_match_declared_processors","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/devx/observability.rs","line":1497,"function":"assert_pipelines_match_declared_processors","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/orchestrate.rs","line":628,"function":"strip_ingress_controller_host_ports_if_requested","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/orchestrate.rs","line":1440,"function":"open_log","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/restate_handover.rs","line":81,"function":"audit","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
