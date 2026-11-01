@@ -8,11 +8,12 @@
     rendering = true;
     try {
       var source = event.data.source;
-      if (typeof source !== "string" || source.length > 50000) throw new Error("Source limit");
+      if (typeof source !== "string" || source.length > 200000) throw new Error("Source limit");
       mermaid.initialize({ startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true,
-        maxTextSize: 50000, maxEdges: 500, htmlLabels: false,
+        maxTextSize: 200000, maxEdges: 2000, htmlLabels: false,
         secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "maxEdges",
-          "suppressErrorRendering", "htmlLabels", "dompurifyConfig"],
+          "suppressErrorRendering", "htmlLabels", "dompurifyConfig", "er", "flowchart"],
+        er: { useMaxWidth: false },
         flowchart: { htmlLabels: false }, theme: "neutral" });
       var result = await mermaid.render("navigatorDiagram", source);
       document.getElementById("diagram").innerHTML = result.svg;
@@ -23,8 +24,9 @@
         svg.setAttribute("aria-label", "Mermaid diagram");
       }
       function reportSize() {
+        var box = svg.getBoundingClientRect();
         window.parent.postMessage({ type: "navigator-mermaid", ok: true,
-          height: Math.ceil(svg.getBoundingClientRect().height) + 16 }, "*");
+          height: Math.ceil(box.height) + 16, width: Math.ceil(box.width) }, "*");
       }
       new ResizeObserver(reportSize).observe(svg);
       reportSize();

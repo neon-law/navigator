@@ -219,6 +219,10 @@ fn rewrite_links(text: &str) -> String {
     out
 }
 
+/// Notion has no site root, so a glossary path such as `/public/glossary/ERD.svg`
+/// needs the public host. The glossary is the firm's vocabulary on that host.
+const NOTION_SITE_ORIGIN: &str = "https://www.neonlaw.com";
+
 /// Resolve one link destination, or `None` for a link between terms.
 fn notion_link(dest: &str) -> Option<String> {
     match link_target(dest) {
@@ -226,7 +230,16 @@ fn notion_link(dest: &str) -> Option<String> {
         LinkTarget::Repository { path, anchor } => {
             Some(store::glossary::github_source_url(&path, anchor))
         }
-        LinkTarget::Verbatim => Some(dest.to_string()),
+        LinkTarget::Verbatim => Some(site_url(dest)),
+    }
+}
+
+/// A root-relative path becomes an absolute URL. Every other destination
+/// is already absolute or is not a site path.
+fn site_url(dest: &str) -> String {
+    match dest.strip_prefix('/') {
+        Some(path) if !path.starts_with('/') => format!("{NOTION_SITE_ORIGIN}/{path}"),
+        _ => dest.to_string(),
     }
 }
 
