@@ -15,7 +15,6 @@
 .nav-theme .vesta-home a.vesta-text-link { color: var(--nav-color-text); text-decoration: underline; text-underline-offset: .3em; }
 .vesta-home .nav-btn { border-radius: 3px; }
 .vesta-plan { position: relative; border-top: 1px solid var(--vesta-rule); padding: clamp(1.5rem, 3vw, 3rem) 0; }
-.vesta-plan__mark { width: 36px; height: 50px; object-fit: contain; float: right; }
 .vesta-plan__term { margin: 0 0 2rem; font-size: 1.1rem; }
 .vesta-plan ul { list-style: none; padding: 0; margin: 0; }
 .vesta-plan li { padding: .8rem 0; }
@@ -128,8 +127,6 @@
   background:
     radial-gradient(ellipse at 85% 7%, #72573533, transparent 24%),
     radial-gradient(ellipse at 4% 21%, #244d6333, transparent 23%),
-    radial-gradient(circle at 17px 39px, #e6d8bc88 .7px, transparent 1.3px) 0 0 / 157px 173px,
-    radial-gradient(circle at 61px 81px, #e6d8bc55 .6px, transparent 1.2px) 0 0 / 223px 257px,
     #0b111c;
 }
 .vesta-home section { position: relative; }
@@ -148,8 +145,8 @@
 .vesta-orbit--outer { inset: 13%; animation-duration: 100s; transform: rotate(35deg); }
 .vesta-orbit--middle { inset: 25%; animation-duration: 70s; animation-direction: reverse; }
 .vesta-orbit--inner { inset: 36%; animation-duration: 45s; }
-.vesta-planet { position: absolute; top: 50%; left: 0; transform: translate(-50%, -50%); border-radius: 50%; box-shadow: 0 0 22px #d7a46b44; }
-.vesta-planet--jupiter { width: 2.7rem; height: 2.7rem; background: repeating-linear-gradient(12deg, #b58761, #e2c3a0 5px, #8c6048 9px, #d2b18e 13px); box-shadow: inset -9px -5px 12px #0009, 0 0 24px #d7a46b33; }
+.vesta-planet { position: absolute; top: 50%; left: 0; transform: translate(-50%, -50%); border-radius: 50%; }
+.vesta-planet--jupiter { width: 2.7rem; height: 2.7rem; background: repeating-linear-gradient(12deg, #b58761, #e2c3a0 5px, #8c6048 9px, #d2b18e 13px); box-shadow: inset -9px -5px 12px #0009; }
 .vesta-planet--mars { width: 1.3rem; height: 1.3rem; background: radial-gradient(circle at 30% 25%, #e4b081, #b3664f 45%, #4f302e); }
 .vesta-planet--venus { width: 1rem; height: 1rem; background: radial-gradient(circle at 30% 25%, #f2e1c1, #bda27d 50%, #4d4242); }
 .vesta-zodiac { position: absolute; font-size: 1.1rem; color: #deb382; line-height: 1; }
@@ -175,7 +172,6 @@
 .vesta-theme__body p { color: #c1b9ad; font-size: 1rem; }
 .vesta-offer { padding: 2rem 0 5rem; }
 .vesta-offer .vesta-plan { display: grid; grid-template-columns: 1fr 1.6fr; gap: 1rem 4rem; border: 1px solid var(--vesta-rule); padding: clamp(1.5rem, 4vw, 3.5rem); background: linear-gradient(120deg, #deb3820d, #0b111c); }
-.vesta-offer .vesta-plan__mark { grid-column: 1; float: none; }
 .vesta-offer .vesta-plan > .vesta-eyebrow, .vesta-offer .vesta-plan__term { grid-column: 1; margin: 0; }
 .vesta-offer .vesta-plan ul { grid-column: 2; grid-row: 1 / 4; }
 .vesta-offer .vesta-note { grid-column: 1 / -1; margin-top: 1rem; }
@@ -202,12 +198,6 @@
 }
 
 .vesta-offer { scroll-margin-top: 6rem; }
-.vesta-process > .vesta-eyebrow::before { content: '☊'; }
-.vesta-nevada__intro > .vesta-eyebrow::before { content: '♂'; }
-.vesta-administration__intro > .vesta-eyebrow::before { content: '♄'; }
-.vesta-probate .vesta-eyebrow::before { content: '♀'; }
-.vesta-record .vesta-eyebrow::before { content: '♃'; }
-.vesta-home section .vesta-eyebrow::before { margin-right: .75rem; font-size: 1.1rem; }
 
 /* Keep the invitation in view beside the sky on an ordinary laptop. */
 .vesta-hero { min-height: auto; padding-block: 3rem 4rem; }
