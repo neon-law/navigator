@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
 
-/// One request = one payload. `project` is a matter *code* (`24-1043`);
+/// One request = one payload. `project` is a matter *code* (`sample-litigation`);
 /// attribution at import rides `store::inbox::assign` after ingest.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,8 +44,8 @@ pub(crate) struct InboxImportRequest {
 struct ImportedMessage {
     message_id: Uuid,
     conversation_id: Uuid,
-    /// True when this payload had already been imported — the existing ids
-    /// are echoed back and nothing was written.
+    /// True when the Message already exists. A retry can still finish
+    /// interrupted attachment filing or attribution.
     deduped: bool,
     direction: String,
     /// Email attachments filed from this message (LinkedIn carries none).
@@ -57,7 +57,7 @@ struct ImportedAttachment {
     filename: String,
     content_type: String,
     size_bytes: usize,
-    /// The asset the bytes filed as — `mail/{message_id}/{index}`.
+    /// The asset the bytes filed as — `mail/{message_id}/{index}.<extension>`.
     asset_id: Uuid,
 }
 
@@ -140,7 +140,7 @@ async fn resolve_firm(state: &ApiState, person_id: Uuid) -> Result<Uuid, Respons
 /// or a changed LinkedIn export shape fails loudly, naming the offending
 /// headers), or the Firm/matter resolution is ambiguous. `201` carries one
 /// summary per ingested message; replaying the same payload reports the
-/// existing ids with `deduped: true` and writes nothing (AC3).
+/// existing Message ids with `deduped: true`; interrupted filing can finish (AC3).
 /// The payload's bytes: `payload_base64` under the strict standard alphabet.
 /// A bad encoding is a 400 — the caller picked the wrong file or truncated it.
 fn decode_payload(encoded: &str) -> Result<Vec<u8>, Response> {
@@ -312,7 +312,7 @@ async fn import_all(
 /// or a changed LinkedIn export shape fails loudly, naming the offending
 /// headers), or the Firm/matter resolution is ambiguous. `201` carries one
 /// summary per ingested message; replaying the same payload reports the
-/// existing ids with `deduped: true` and writes nothing (AC3).
+/// existing Message ids with `deduped: true`; interrupted filing can finish (AC3).
 pub(crate) async fn inbox_import_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
@@ -418,7 +418,7 @@ pub(crate) async fn inbox_import_door(
     Ok((StatusCode::CREATED, Json(response)).into_response())
 }
 
-/// File one parsed attachment as `mail/{message_id}/{index}` with full
+/// File one parsed attachment as `mail/{message_id}/{index}.<extension>` with full
 /// `MailProvenance` — the `mail_file_door` pattern (AC8). Returns the asset
 /// the bytes live under; identical bytes re-file as `Unchanged`.
 async fn file_import_attachment(
@@ -430,12 +430,29 @@ async fn file_import_attachment(
     attachment: &store::inbox_import::ImportAttachment,
 ) -> Result<Uuid, ApiError> {
     let message_id_str = message_id.to_string();
-    let slug = format!("mail/{message_id_str}/{index}");
+    let mut filename = std::path::Path::new(&attachment.filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("attachment")
+        .to_owned();
+    if std::path::Path::new(&filename)
+        .extension()
+        .is_none_or(std::ffi::OsStr::is_empty)
+    {
+        filename.push_str(".bin");
+    }
+    let extension = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| !extension.is_empty())
+        .unwrap_or("bin");
+    let slug = format!("mail/{message_id_str}/{index}.{extension}");
     let kind = "unclassified";
     let args = store::documents::IngestArgs {
         project_id,
         source: store::documents::source::EMAIL,
-        filename: &attachment.filename,
+        filename: &filename,
         kind,
         content_type: &attachment.content_type,
         description: None,

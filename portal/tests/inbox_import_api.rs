@@ -461,7 +461,7 @@ async fn run_lifecycle() {
     // Surface the door's error logs (the house Db mapping logs the detail,
     // never the wire) — the only way to diagnose a 500 in this child.
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new("warn"))
+        .with_env_filter(tracing_subscriber::EnvFilter::new("warn,sqlx::query=error"))
         .with_writer(std::io::stderr)
         .try_init();
     let pg = store::postgres::PostgresDb::from_env()
@@ -485,6 +485,7 @@ async fn run_lifecycle() {
     assert_email_lifecycle(&fixture, &pg, project_id).await;
     assert_linkedin_lifecycle(&fixture).await;
     assert_interrupted_import_recovers_attachments(&fixture, project.firm_id.unwrap()).await;
+    assert_extensionless_attachment_filing(&fixture).await;
 }
 
 /// The email walk (AC3, AC4, AC6, AC7, AC8): first import attributed at
@@ -547,6 +548,15 @@ async fn assert_email_lifecycle(
         .await
         .expect("fetch the filed attachment");
     assert_eq!(fetched, b"synthetic pdf bytes".as_slice());
+    let asset = store::assets::find_by_id(&fixture.surreal, asset_id)
+        .await
+        .unwrap()
+        .unwrap();
+    store::documents::validate_document_slug(
+        asset.filename.as_deref().unwrap(),
+        asset.slug.as_deref().unwrap(),
+    )
+    .expect("an imported attachment must be representable by a repository pointer");
     let message_id: Uuid = first["imported"][0]["message_id"]
         .as_str()
         .unwrap()
@@ -684,6 +694,39 @@ async fn assert_interrupted_import_recovers_attachments(fixture: &Fixture, firm_
 
 /// The `LinkedIn` walk (AC3, AC9): one request imports both directions
 /// onto one Conversation, and replaying the export dedups every row.
+async fn assert_extensionless_attachment_filing(fixture: &Fixture) {
+    let raw = String::from_utf8(INBOUND_EML.to_vec())
+        .unwrap()
+        .replace(
+            "notice-1@opposing.example",
+            "extensionless@opposing.example",
+        )
+        .replace("exhibit-a.pdf", "README");
+    let (status, response) = post_json(
+        &fixture.app,
+        Some(&fixture.lawyer_session),
+        email_body(raw.as_bytes(), &json!({"project": "alpha-matter"})),
+    )
+    .await;
+    assert_eq!(status, 201, "{response}");
+    let attachment = &response["imported"][0]["attachments"][0];
+    assert_eq!(
+        attachment["filename"], "README",
+        "retain the original provider name"
+    );
+    let asset_id = attachment["asset_id"].as_str().unwrap().parse().unwrap();
+    let asset = store::assets::find_by_id(&fixture.surreal, asset_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(asset.filename.as_deref(), Some("README.bin"));
+    store::documents::validate_document_slug(
+        asset.filename.as_deref().unwrap(),
+        asset.slug.as_deref().unwrap(),
+    )
+    .expect("extensionless provider files still need a valid repository identity");
+}
+
 async fn assert_linkedin_lifecycle(fixture: &Fixture) {
     // A LinkedIn export imports both directions in one request and threads
     // its rows onto one Conversation (AC4, AC9).
