@@ -170,6 +170,20 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         "seed applied"
     );
 
+    // Startup convergence has a finite budget; nightly reconciliation retries unfinished slots.
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        store::project_folder_reconcile::backfill_from_env(&surreal),
+    )
+    .await
+    {
+        Ok(Ok(verified)) => {
+            tracing::info!(verified, "Drive folder startup reconciliation finished");
+        }
+        Ok(Err(_)) => tracing::warn!("Drive folder startup reconciliation failed"),
+        Err(_) => tracing::warn!("Drive folder startup reconciliation deferred to nightly retry"),
+    }
+
     let public_dir = std::env::var("NAVIGATOR_PUBLIC_DIR")
         .map_or_else(|_| PathBuf::from(crate::DEFAULT_PUBLIC_DIR), PathBuf::from);
     tracing::info!(?public_dir, "serving static assets");

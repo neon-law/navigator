@@ -570,9 +570,10 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     let resources = crate::project_resources::ProjectResourcesView {
         resources: crate::project_resources::visible_resources(
             &crate::project_resources::ProjectResourceLinks {
+                client_submissions_folder_id: None,
                 private_slack_channel_url: project.internal_slack_channel_url.clone(),
                 private_notion_page_url: project.private_notion_page_url.clone(),
-                drive_folder_id: project.drive_folder_id.clone(),
+                drive_folder_id: None,
                 shared_slack_channel_url: project.external_slack_channel_url.clone(),
                 shared_notion_page_url: project.shared_notion_page_url.clone(),
                 calendar_id: project.calendar_id.clone(),
@@ -947,17 +948,17 @@ pub fn ClientProjectDetail() -> Element {
         Some(Ok(_)) => {
             return rsx! {
                 main { id: "portal-project", p { "That matter was not found." } }
-            }
+            };
         }
         Some(Err(_)) => {
             return rsx! {
                 main { id: "portal-project", p { "Failed to load this matter." } }
-            }
+            };
         }
         None => {
             return rsx! {
                 main { id: "portal-project", p { "Loading…" } }
-            }
+            };
         }
     };
 

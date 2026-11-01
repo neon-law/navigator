@@ -58,7 +58,7 @@ pub enum Audience {
     Shared,
 }
 
-/// One of the five resources a matter carries.
+/// One of the resources a matter carries.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ResourceKind {
     /// The lawyer-only Slack channel.
@@ -67,6 +67,8 @@ pub enum ResourceKind {
     PrivateNotionPage,
     /// The matter's folder in the firm's shared drive.
     PrivateDriveFolder,
+    /// Verified client intake coordinate, displayed only on the firm workbench.
+    ClientSubmissionsFolder,
     /// The Slack channel shared with the client, if the matter has one.
     SharedSlackChannel,
     /// The Notion page shared with the client, if the matter has one.
@@ -80,7 +82,7 @@ pub enum ResourceKind {
 }
 
 impl ResourceKind {
-    /// Every resource, in render order: the firm's four, then the shared
+    /// Every resource, in render order: the firm's five, then the shared
     /// three. Declaration order *is* render order so the panel does not
     /// interleave audiences — a reader scanning it sees one block they may
     /// speak freely in and one block the client can read too.
@@ -88,6 +90,7 @@ impl ResourceKind {
         ResourceKind::PrivateSlackChannel,
         ResourceKind::PrivateNotionPage,
         ResourceKind::PrivateDriveFolder,
+        ResourceKind::ClientSubmissionsFolder,
         ResourceKind::ProjectCalendar,
         ResourceKind::SharedSlackChannel,
         ResourceKind::SharedNotionPage,
@@ -102,6 +105,7 @@ impl ResourceKind {
             Self::PrivateSlackChannel => "private-slack-channel",
             Self::PrivateNotionPage => "private-notion-page",
             Self::PrivateDriveFolder => "private-drive-folder",
+            Self::ClientSubmissionsFolder => "client-submissions-folder",
             Self::SharedSlackChannel => "shared-slack-channel",
             Self::SharedNotionPage => "shared-notion-page",
             Self::ProjectCalendar => "project-calendar",
@@ -122,6 +126,7 @@ impl ResourceKind {
             Self::PrivateSlackChannel => "Private Slack channel",
             Self::PrivateNotionPage => "Private Notion page",
             Self::PrivateDriveFolder => "Private Google Drive",
+            Self::ClientSubmissionsFolder => "Client Submissions",
             Self::SharedSlackChannel => "Shared Slack channel",
             Self::SharedNotionPage => "Shared Notion page",
             Self::ProjectCalendar => "Matter calendar",
@@ -135,6 +140,7 @@ impl ResourceKind {
         match self {
             Self::PrivateSlackChannel
             | Self::PrivateNotionPage
+            | Self::ClientSubmissionsFolder
             | Self::PrivateDriveFolder
             | Self::ProjectCalendar => Audience::Firm,
             Self::SharedSlackChannel | Self::SharedNotionPage | Self::BookingLink => {
@@ -149,7 +155,7 @@ impl ResourceKind {
         match self {
             Self::PrivateSlackChannel | Self::SharedSlackChannel => ResourceMark::Slack,
             Self::PrivateNotionPage | Self::SharedNotionPage => ResourceMark::Notion,
-            Self::PrivateDriveFolder => ResourceMark::GoogleDrive,
+            Self::PrivateDriveFolder | Self::ClientSubmissionsFolder => ResourceMark::GoogleDrive,
             Self::ProjectCalendar | Self::BookingLink => ResourceMark::Calendar,
         }
     }
@@ -157,6 +163,13 @@ impl ResourceKind {
     /// Whether a reader of `role` may be shown this resource at all.
     #[must_use]
     pub fn visible_to(self, role: ViewerRole) -> bool {
+        if matches!(
+            self,
+            Self::PrivateDriveFolder | Self::ClientSubmissionsFolder
+        ) && !role.is_lawyer_tier()
+        {
+            return false;
+        }
         match self.audience() {
             Audience::Firm => role.is_firm_tier(),
             Audience::Shared => true,
@@ -178,6 +191,7 @@ pub struct ProjectResourceLinks {
     /// it, because the id is the folder's actual coordinate and the address is
     /// a fixed prefix over it. Nothing is guessed here.
     pub drive_folder_id: Option<String>,
+    pub client_submissions_folder_id: Option<String>,
     pub shared_slack_channel_url: Option<String>,
     pub shared_notion_page_url: Option<String>,
     /// The calendar **id**, like the Drive folder id: the address is derived.
@@ -234,6 +248,10 @@ pub fn visible_resources(links: &ProjectResourceLinks, role: ViewerRole) -> Vec<
                 }
                 ResourceKind::PrivateDriveFolder => configured(links.drive_folder_id.as_ref())
                     .map(|id| format!("{DRIVE_FOLDER_PREFIX}{id}")),
+                ResourceKind::ClientSubmissionsFolder => {
+                    configured(links.client_submissions_folder_id.as_ref())
+                        .map(|id| format!("{DRIVE_FOLDER_PREFIX}{id}"))
+                }
                 ResourceKind::SharedSlackChannel => {
                     configured(links.shared_slack_channel_url.as_ref())
                 }
@@ -324,6 +342,7 @@ mod tests {
     /// row that should not be there.
     fn every_link() -> ProjectResourceLinks {
         ProjectResourceLinks {
+            client_submissions_folder_id: None,
             private_slack_channel_url: Some(
                 "https://neonlaw.slack.com/archives/C0PRIVATE".to_string(),
             ),
@@ -351,16 +370,11 @@ mod tests {
         dioxus_ssr::render_element(rsx! { ProjectResourcesPanel { view } })
     }
 
-    /// The firm tiers see all seven. Clerk is included deliberately: a supervised
-    /// non-lawyer works for the firm and reads the matter's working surfaces.
+    /// Lawyer tiers see the configured resources. Drive coordinates additionally
+    /// require firm-side matter participation in the server read model.
     #[test]
-    fn every_firm_tier_sees_all_seven() {
-        for role in [
-            ViewerRole::Owner,
-            ViewerRole::Admin,
-            ViewerRole::Lawyer,
-            ViewerRole::Clerk,
-        ] {
+    fn every_lawyer_tier_sees_configured_resources() {
+        for role in [ViewerRole::Owner, ViewerRole::Admin, ViewerRole::Lawyer] {
             assert_eq!(
                 names(role),
                 [
@@ -432,6 +446,7 @@ mod tests {
     #[test]
     fn a_blank_value_counts_as_unset() {
         let links = ProjectResourceLinks {
+            client_submissions_folder_id: None,
             private_notion_page_url: Some("   ".to_string()),
             ..ProjectResourceLinks::default()
         };
@@ -528,8 +543,8 @@ mod tests {
             .iter()
             .filter(|k| k.audience() == Audience::Firm)
             .count();
-        assert_eq!(firm, 4, "four firm-only resources");
-        assert_eq!(ResourceKind::ALL.len(), 7);
+        assert_eq!(firm, 5, "five firm-only resources");
+        assert_eq!(ResourceKind::ALL.len(), 8);
         // The name each kind carries is unique, or `data-resource` could not
         // identify a row.
         let mut names: Vec<_> = ResourceKind::ALL.iter().map(|k| k.name()).collect();
@@ -557,5 +572,63 @@ mod tests {
             );
         }
         assert!(!html.contains(r#"data-resource-mark="portal""#), "{html}");
+    }
+}
+
+/// Resolve only verified Drive coordinates after matter participation admission.
+#[cfg(feature = "server")]
+pub async fn verified_drive_links(
+    surreal: &store::surreal::SurrealDb,
+    person_id: Option<uuid::Uuid>,
+    role: ViewerRole,
+    project_id: uuid::Uuid,
+) -> (Option<String>, Option<String>) {
+    use store::project_folders::{get_verified, ProjectFolderSlot};
+    let store_role = match role {
+        ViewerRole::Owner => store::persons::Role::Owner,
+        ViewerRole::Admin => store::persons::Role::Admin,
+        ViewerRole::Lawyer => store::persons::Role::Lawyer,
+        ViewerRole::Clerk => store::persons::Role::Clerk,
+        ViewerRole::Client => store::persons::Role::Client,
+    };
+    if !matches!(
+        store::access::matter_lens(surreal, person_id, store_role, project_id).await,
+        Ok(Some(store::access::ProjectLens::Lawyer))
+    ) {
+        return (None, None);
+    }
+    let Ok(pg) = store::postgres::PostgresDb::from_env().await else {
+        return (None, None);
+    };
+    let root = get_verified(&pg, project_id, ProjectFolderSlot::Root)
+        .await
+        .ok()
+        .flatten();
+    let intake = get_verified(&pg, project_id, ProjectFolderSlot::ClientSubmissions)
+        .await
+        .ok()
+        .flatten();
+    (
+        root.map(|f| f.drive_folder_id),
+        intake.map(|f| f.drive_folder_id),
+    )
+}
+
+#[cfg(test)]
+mod verified_resource_tests {
+    use super::*;
+    #[test]
+    fn drive_links_are_never_built_for_client_or_clerk() {
+        let links = ProjectResourceLinks {
+            drive_folder_id: Some("root".into()),
+            client_submissions_folder_id: Some("intake".into()),
+            ..Default::default()
+        };
+        for role in [ViewerRole::Client, ViewerRole::Clerk] {
+            assert!(visible_resources(&links, role).is_empty());
+        }
+        let shown = visible_resources(&links, ViewerRole::Lawyer);
+        assert_eq!(shown.len(), 2);
+        assert_eq!(shown[1].kind, ResourceKind::ClientSubmissionsFolder);
     }
 }

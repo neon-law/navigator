@@ -232,6 +232,8 @@ pub struct ProjectHandles {
 pub enum SurfaceError {
     #[error("no matter with that id")]
     NotFound,
+    #[error("Drive folder reconciliation blocked: {0}")]
+    FolderBlocked(&'static str),
     #[error("drive: {0}")]
     Drive(#[from] DriveError),
     #[error("forge: {0}")]
@@ -415,6 +417,18 @@ pub async fn reconcile_from_env(
     } else {
         None
     };
+    if drive.is_some() {
+        let report = Box::pin(crate::project_folder_reconcile::reconcile_from_env(
+            surreal, project_id,
+        ))
+        .await
+        .map_err(|_| SurfaceError::Db("Drive folder reconciliation failed".to_string()))?;
+        if let Some(report) = report {
+            if let crate::project_folder_reconcile::FolderOutcome::Blocked(block) = report.outcome {
+                return Err(SurfaceError::FolderBlocked(block.reason()));
+            }
+        }
+    }
     let lookup = |key: &str| std::env::var(key).ok();
     match cloud::ForgeBackend::from_lookup(lookup)? {
         cloud::ForgeBackend::GitHub => {
@@ -730,7 +744,7 @@ pub fn forge_from_env() -> Result<Option<cloud::forge::GitHubForge>, ForgeError>
 /// Best-effort wrapper for matter-open doors: a Drive or forge fault is
 /// logged rather than rolling the open back. Retry is [`reconcile`].
 pub async fn reconcile_after_open(surreal: &SurrealDb, project_id: Uuid) {
-    if let Err(error) = reconcile_from_env(surreal, project_id).await {
+    if let Err(error) = Box::pin(reconcile_from_env(surreal, project_id)).await {
         tracing::error!(
             %error,
             project_id = %project_id,
@@ -761,6 +775,13 @@ where
         else {
             continue;
         };
+        let viewer =
+            crate::access::matter_viewer(surreal, Some(person.id), person.role, project_id)
+                .await
+                .map_err(SurfaceError::Db)?;
+        if !viewer.is_some_and(crate::access::MatterViewer::is_firm_side) {
+            continue;
+        }
         let email = person.email.trim();
         if email.is_empty() {
             continue;
@@ -1105,7 +1126,10 @@ mod tests {
             })
             .collect();
         assert!(emails.contains(&"lawyer@example.com"), "{emails:?}");
-        assert!(emails.contains(&"client@example.com"), "{emails:?}");
+        assert!(
+            !emails.contains(&"client@example.com"),
+            "clients never receive a working-root grant: {emails:?}"
+        );
     }
 
     #[tokio::test]
