@@ -116,6 +116,10 @@ pub const ARCHITECTURE_PHOTOS: [&str; 5] = [
 /// Rights-cleared community photograph on Abhaya's home page.
 pub const ABHAYA_COMMUNITY_PHOTO_KEY: &str = "img/abhaya/stadium-community.jpg";
 
+/// The one photograph on Guieb & Shook's home page, referenced by that page's
+/// `home.yaml` and resolved through the asset lane like every other brand's.
+pub const GUIEB_SHOOK_HOME_PHOTO_KEY: &str = "img/guieb-shook/courthouse-columns.jpg";
+
 /// Stable object key for the replaceable firm home presentation.
 pub const HOME_PRESENTATION_KEY: &str = "img/neon-home/neon-home-presentation.mp4";
 

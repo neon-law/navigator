@@ -156,6 +156,14 @@ values = [
 ]
 
 [[names]]
+reason = "A public building's name: the Byron R. White U.S. Courthouse, credited as the subject of the public-domain photo on Guieb & Shook's home page (docs/assets.md)."
+values = [
+  "Byron R. White",
+  "Byron White",
+  "Byron R. White U.S.",
+]
+
+[[names]]
 reason = "A public firm named on /nautilus as the provider of à la carte sandbox pricing."
 values = ["Lex Tecnica"]
 

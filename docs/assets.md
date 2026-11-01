@@ -75,6 +75,16 @@ and EXIF metadata removed. `views::assets::ARCHITECTURE_PHOTOS` includes them in
 protection. The brand home catalogs select contextual images and carry their descriptive alt text. The photographs
 illustrate public architecture and do not imply that a pictured institution provides or endorses the services.
 
+## Guieb & Shook homepage photograph
+
+One public-domain photograph illustrates the firm's home page under `img/guieb-shook/`. Source: "Columns, Byron R. White
+U.S. Courthouse, Denver, Colorado", Library of Congress LCCN 2010719071, via [Wikimedia
+Commons](https://commons.wikimedia.org/w/index.php?curid=50963555) (Public domain — no attribution required; see the
+Commons file page for rights details). Key: `img/guieb-shook/courthouse-columns.jpg`. Alt text: Fluted stone columns
+with carved capitals in bright sun along the facade of a federal courthouse in Denver, Colorado.
+`views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY` includes it in publication checks and orphan protection. The photograph
+illustrates public architecture and does not imply that a pictured institution provides or endorses the services.
+
 ## Brand uploads
 
 Brand logo and font uploads share one UUID-scoped prefix in the public bucket: `brand-<Brand UUID>/logo.png` or
