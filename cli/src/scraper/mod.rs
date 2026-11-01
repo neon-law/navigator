@@ -17,6 +17,7 @@
 //! document.
 
 pub(crate) mod adapter;
+pub(crate) mod adapters;
 pub(crate) mod browser;
 pub(crate) mod cmd;
 pub(crate) mod config;
@@ -61,6 +62,11 @@ pub(crate) enum ScraperError {
     },
     #[error("site structure changed: {step} no longer matches ({detail}); nothing was filed")]
     SiteStructure { step: String, detail: String },
+    #[error(
+        "the portal refused access: {step} ({detail}); this surface may need a credential the \
+         Firm has not provisioned"
+    )]
+    AccessDenied { step: String, detail: String },
     #[error("gave up on {step} after {attempts} attempt(s): {detail}")]
     TransientExhausted {
         step: String,
@@ -228,10 +234,23 @@ pub(crate) async fn run_scraper(
 ) -> Result<RunReport, ScraperError> {
     // The credential resolves before any browser opens: a missing or
     // malformed secret hard-stops with a provisioning error and never
-    // launches a session.
-    let resolved = credentials::resolve_portal_logins(deps.surreal, deps.firm_id, deps.kms).await?;
-    let login = resolved.login_for(adapter.credential_key())?;
-    login.ensure_complete(adapter.credential_key())?;
+    // launches a session. The exception is a public site (`requires_login`
+    // is `false`): a credential that simply is not provisioned is fine
+    // there — the run proceeds unauthenticated — while a store failure or
+    // a malformed provisioned row still hard-stops, never silently ignored.
+    let resolved = credentials::resolve_portal_logins(deps.surreal, deps.firm_id, deps.kms).await;
+    let login = match &resolved {
+        Ok(resolved) => match resolved.login_for(adapter.credential_key()) {
+            Ok(login) => {
+                login.ensure_complete(adapter.credential_key())?;
+                Some(login)
+            }
+            Err(CredentialsError::NotProvisioned { .. }) if !adapter.requires_login() => None,
+            Err(error) => return Err(error.into()),
+        },
+        Err(CredentialsError::NotConfigured { .. }) if !adapter.requires_login() => None,
+        Err(error) => return Err(error.into()),
+    };
 
     let session = deps.sessions.open(adapter.site()).await?;
     let outcome = scrape_notices(adapter, query, deps, &session, login).await;
@@ -253,7 +272,7 @@ async fn scrape_notices(
     query: &NoticeQuery,
     deps: &ScraperDeps<'_>,
     session: &BrowserSession,
-    login: &credentials::SiteLogin,
+    login: Option<&credentials::SiteLogin>,
 ) -> Result<RunReport, ScraperError> {
     let mut report = RunReport {
         site: adapter.site().to_string(),
@@ -273,6 +292,9 @@ async fn scrape_notices(
         match failure.last {
             AdapterError::StructureDrift { step, detail } => {
                 ScraperError::SiteStructure { step, detail }
+            }
+            AdapterError::AccessDenied { step, detail } => {
+                ScraperError::AccessDenied { step, detail }
             }
             last @ AdapterError::Transient { .. } => ScraperError::LoginFailed {
                 site: adapter.site().to_string(),
@@ -427,6 +449,7 @@ fn map_step_failure(step: &str, failure: RetryFailure<AdapterError>) -> ScraperE
         AdapterError::StructureDrift { step, detail } => {
             ScraperError::SiteStructure { step, detail }
         }
+        AdapterError::AccessDenied { step, detail } => ScraperError::AccessDenied { step, detail },
         AdapterError::Transient {
             step: transient_step,
             detail,
@@ -443,7 +466,19 @@ fn map_step_failure(step: &str, failure: RetryFailure<AdapterError>) -> ScraperE
 /// first.
 #[must_use]
 pub(crate) fn registered_adapters() -> Vec<Box<dyn SiteAdapter>> {
-    vec![]
+    let la_superior = crate::scraper::adapters::LaSuperiorAdapter::new(
+        crate::scraper::adapters::la_superior::DEFAULT_BASE_URL,
+    );
+    match la_superior {
+        Ok(adapter) => vec![Box::new(adapter)],
+        // The checked-in key literal is valid, so this is a bug, not a
+        // runtime state; surface it loudly rather than panic. `scraper run`
+        // reports an unregistered site and `sites` lists nothing.
+        Err(error) => {
+            eprintln!("scraper: the built-in la-superior site key is invalid: {error}");
+            vec![]
+        }
+    }
 }
 
 #[cfg(test)]

@@ -53,6 +53,9 @@ reqwest.workspace = true
 regex.workspace = true
 rgb.workspace = true
 rules.workspace = true
+# The La Superior adapter parses the portal's server-rendered Register of
+# Actions through the shared workspace HTML parser.
+scraper.workspace = true
 # `ops release check` and `ops release version` decide what a release version is
 # and whether it is newer than the last one, and `devx::registry` picks the
 # newest published image tag. All three are semver questions, so all three ask
