@@ -524,7 +524,7 @@ mod tests {
     use crate::scraper::adapter::{AdapterError, NoticeKey, SiteAdapter, SiteKey};
     use crate::scraper::download::DownloadSink;
     use crate::scraper::fetcher::{FetchError, FetchRequest, FetchResponse};
-    use crate::scraper::testing::MockFetcher;
+    use crate::scraper::testing::{MockFetcher, MockHandler};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -622,10 +622,7 @@ mod tests {
 
     /// A handler that answers the two discovery calls the way the live
     /// portal does, recording every request for assertions.
-    fn portal_handler(
-        search_body: &'static str,
-        details_body: &'static str,
-    ) -> Arc<dyn Fn(&FetchRequest) -> Result<FetchResponse, FetchError> + Send + Sync> {
+    fn portal_handler(search_body: &'static str, details_body: &'static str) -> MockHandler {
         Arc::new(move |request: &FetchRequest| {
             let body = if request.url.contains(CASE_SEARCH_PATH) {
                 search_body
