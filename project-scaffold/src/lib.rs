@@ -137,6 +137,10 @@ pub const SYNCED_SKILLS: &[(&str, &str)] = &[
         include_str!("../../.agents/skills/push-changes/SKILL.md"),
     ),
     (
+        "push-to-navigator",
+        include_str!("../../.agents/skills/push-to-navigator/SKILL.md"),
+    ),
+    (
         "word-editing",
         include_str!("../../.agents/skills/word-editing/SKILL.md"),
     ),

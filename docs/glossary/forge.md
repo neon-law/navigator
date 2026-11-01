@@ -12,4 +12,8 @@ commit starts.
 Which forge a repository sits on is a fact of its `origin` remote, not of the code. The verb that lands a change,
 `navigator project repository push`, speaks to the [Project](project.md)'s forge through one seam —
 `cli/src/projects/forge.rs` — so its report reads the same on either forge, and each forge's quirks stay in that forge's
-backend (`cli/src/projects/forge_github.rs` for GitHub).
+backend (`cli/src/projects/forge_github.rs` for GitHub and `forge_forgejo.rs` for Forgejo).
+
+The report distinguishes a merged review request from the exact commit’s successful deployment run. A missing run
+remains unverified. Forgejo’s generated gate currently covers pull requests; its post-merge source application remains a
+prerequisite to source handover.

@@ -24,6 +24,7 @@ pub mod drive_ingest;
 pub mod efiling;
 pub mod finance;
 pub mod forge;
+pub mod forge_forgejo;
 pub mod forge_github;
 pub mod gate;
 pub mod ics;
