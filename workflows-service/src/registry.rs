@@ -31,6 +31,7 @@ pub const WORKFLOW_SERVICES: &[&str] = &[
     "BillingCanary",
     "BillingDigest",
     "ReconcileInvoices",
+    "SandboxCreditReset",
     "DriDigest",
     "FinanceAggregate",
     "GeneralNag",

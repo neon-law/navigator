@@ -10,6 +10,50 @@ struct Database {
     pg: store::postgres::PostgresDb,
 }
 
+#[tokio::test]
+async fn sandbox_credit_has_one_row_per_person_and_period() {
+    let Some(db) = Database::new().await else {
+        return;
+    };
+    db.pg.migrate_embedded(None).await.unwrap();
+    let person = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO person (id, name, email) VALUES ($1, 'Pat Sample', 'pat@example.com')",
+    )
+    .bind(person)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let insert = "INSERT INTO sandbox_usage (id, person_id, period, granted_cents, spent_cents) \
+                  VALUES ($1, $2, $3, 500, 0)";
+    sqlx::query(insert)
+        .bind(Uuid::new_v4())
+        .bind(person)
+        .bind("2026-11")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let duplicate = sqlx::query(insert)
+        .bind(Uuid::new_v4())
+        .bind(person)
+        .bind("2026-11")
+        .execute(&db.pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        duplicate.as_database_error().unwrap().code().as_deref(),
+        Some("23505")
+    );
+    sqlx::query(insert)
+        .bind(Uuid::new_v4())
+        .bind(person)
+        .bind("2026-12")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    db.close().await;
+}
+
 impl Database {
     async fn new() -> Option<Self> {
         let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {

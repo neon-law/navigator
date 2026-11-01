@@ -564,19 +564,16 @@ mod tests {
     fn clean_report_only_claims_measured_scope() {
         let report = report(Mode::Parity, &[]);
         let json: serde_json::Value = serde_json::from_str(&render_json(&report)).unwrap();
-        assert_eq!(json["coverage"]["source_tables"], 108);
-        assert_eq!(json["coverage"]["eligible_source_tables"], 106);
+        let source: BTreeSet<_> = store::schema::table_names().into_iter().collect();
+        let excluded = BTreeSet::from(["draft".to_owned(), "schema_version".to_owned()]);
+        let eligible: BTreeSet<_> = source.difference(&excluded).cloned().collect();
+        assert_eq!(json["coverage"]["source_tables"], source.len());
+        assert_eq!(json["coverage"]["eligible_source_tables"], eligible.len());
         assert_eq!(
             json["coverage"]["excluded_source_tables"],
             json!(["draft", "schema_version"])
         );
-        assert_eq!(
-            json["coverage"]["sql_target_tables"]
-                .as_array()
-                .unwrap()
-                .len(),
-            106
-        );
+        assert_eq!(json["coverage"]["sql_target_tables"], json!(eligible));
         assert_eq!(
             json["coverage"]["unmapped_tables"]
                 .as_array()
