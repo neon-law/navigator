@@ -531,16 +531,18 @@ fn the_help_parser_still_reads_the_top_level_commands() {
 }
 
 /// The guard's own failure path, kept covered rather than checked once by
-/// hand: `cli person create` is the string this file was written for, and a
-/// guard that can only pass is worth nothing.
+/// hand: `cli coupon create` is the string this file was written for, and a
+/// guard that can only pass is worth nothing. `person` is a real command
+/// now, so billing stays the stand-in for a plausible-looking spelling —
+/// coupons are portal-side, never a CLI verb.
 #[test]
 fn the_guard_rejects_a_command_that_does_not_exist() {
     let mut cache = BTreeMap::new();
 
-    let stale = subcommand_path("cli person create").expect("an invocation");
-    let why = resolve(&mut cache, &stale).expect_err("`person` is not a subcommand");
+    let stale = subcommand_path("cli coupon create").expect("an invocation");
+    let why = resolve(&mut cache, &stale).expect_err("`coupon` is not a subcommand");
     assert!(
-        why.contains("`person` is not a subcommand of `navigator`"),
+        why.contains("`coupon` is not a subcommand of `navigator`"),
         "the failure must name the token and where it was looked up: {why}"
     );
 

@@ -944,6 +944,15 @@ erDiagram
         string id
         uuid person_id
     }
+    person_phone {
+        string id
+        string e164
+        datetime inserted_at
+        boolean is_primary
+        string label
+        uuid person_id
+        datetime updated_at
+    }
     person_project_role {
         string id
         string inserted_at
@@ -1448,6 +1457,7 @@ erDiagram
     firm }o--|| person_firm_role : firm_id
     person }o--|| person_firm_role : person_id
     person }o--|| person_mailbox : person_id
+    person }o--|| person_phone : person_id
     person }o--|| person_project_role : person_id
     project }o--|| person_project_role : project_id
     entity }o--|| playbook : entity_id
