@@ -7,6 +7,13 @@ description: >-
 
 # Website style
 
+## Less is More
+
+Feature the brand once in the page header. Start the content with its descriptive heading; omit repeated brand labels
+above it, including on blog indexes and articles across Neon Law and Vesta Estate Planning. Prefer fewer elements and
+less copy when they communicate the same meaning. Keep information needed for navigation, accessibility, legal
+disclosures, and informed decisions.
+
 Use descriptive headings and labels. Do not decorate website sections, cards, or features with `01`, `02`, or other
 zero-padded numbers. Use ordinary ordered lists when sequence helps someone complete a task. Keep meaningful numbers
 such as prices, dates, statutory references, and account identifiers intact.

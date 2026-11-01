@@ -94,7 +94,6 @@ pub fn BlogIndex(chrome: PublicChrome, posts: Vec<BlogPostSummary>) -> Element {
         document::Title { "{chrome.brand_name} | Blog" }
         PublicShell { header, footer,
             section { class: "blog-index",
-                p { class: "blog-index__brand", "{chrome.brand_name}" }
                 h1 { "Blog" }
                 ul { class: "blog-index__posts",
                     for post in posts.iter() {
@@ -143,8 +142,8 @@ mod tests {
     fn lists_each_post_linked_to_its_slug() {
         let out = html();
         assert!(
-            out.contains(r#"class="blog-index__brand">Neon Law"#),
-            "Brand attribution: {out}"
+            !out.contains(r#"class="blog-index__brand"#),
+            "the header already identifies the brand: {out}"
         );
         assert!(out.contains("Thanks, Apple"), "post title: {out}");
         assert!(
