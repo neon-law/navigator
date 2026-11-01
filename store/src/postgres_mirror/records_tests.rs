@@ -912,6 +912,46 @@ async fn notation_inputs_mirror_and_follow_their_notation() {
             .unwrap(),
         Mirrored::Unchanged
     );
+    // Historical drafts have no run link; the optional mirror column
+    // must retain SQL NULL rather than inventing a run.
+    let historical: Option<Uuid> =
+        sqlx::query_scalar("SELECT notation_id FROM notation_draft WHERE id = $1")
+            .bind(draft.id)
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+    assert_eq!(historical, None);
+
+    // A newly run-backed draft must mirror the real Notation reference.
+    surreal
+        .query("UPDATE $draft SET notation_id = $notation")
+        .bind((
+            "draft",
+            crate::surreal::record_id("notation_draft", draft.id),
+        ))
+        .bind((
+            "notation",
+            crate::surreal::record_id("notation", notation_id),
+        ))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    mirror(&surreal, &pg, "notation_draft", draft.id)
+        .await
+        .unwrap();
+    let linked: Option<Uuid> =
+        sqlx::query_scalar("SELECT notation_id FROM notation_draft WHERE id = $1")
+            .bind(draft.id)
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+    assert_eq!(linked, Some(notation_id));
+    assert!(parity(&surreal, &pg, "notation_inputs")
+        .await
+        .unwrap()
+        .is_clean());
+
     let order: Vec<String> =
         sqlx::query_scalar("SELECT source_ref FROM notation_source ORDER BY position")
             .fetch_all(&pg.0)

@@ -91,18 +91,13 @@ pub async fn run(file: &Path, offline: bool, port: u16, host_override: Option<&s
             .await
             .context("pushing the draft")?;
 
-    match run_id {
-        Some(run_id) => {
-            eprintln!("    draft {draft_id} — run {run_id} is open on the matter");
-            eprintln!("==> {url} (the draft page; the real questionnaire is one click from it)");
-        }
-        None => {
-            // The door opens a run on every successful push today; an
-            // absent id means the deployment predates LAW-203's run-backed
-            // preview. The draft is still stored and addressable.
-            eprintln!("    draft {draft_id} — this deployment stores drafts without a run");
-            eprintln!("==> {url}");
-        }
+    if let Some(run_id) = run_id {
+        eprintln!("    draft {draft_id} — run {run_id} is open on the matter");
+        eprintln!("==> {url} (the draft page; the real questionnaire is one click from it)");
+    } else {
+        // Older deployments store an addressable draft without a run.
+        eprintln!("    draft {draft_id} — this deployment stores drafts without a run");
+        eprintln!("==> {url}");
     }
     if open_browser(&url) {
         eprintln!("    opened in your browser.");
