@@ -143,14 +143,14 @@ impl SiteAdapter for LaSuperiorAdapter {
         let response = fetcher
             .fetch(&request)
             .await
-            .map_err(|error| map_fetch_error(STEP, error))?;
+            .map_err(|error| map_fetch_error(STEP, &error))?;
         judge_status(STEP, response.status)?;
         // A non-partial answer replaces the stale part file; a 206 continues it.
         if offset > 0 && response.status != 206 {
-            sink.restart().map_err(|error| sink_error(STEP, error))?;
+            sink.restart().map_err(|error| sink_error(STEP, &error))?;
         }
         sink.extend(&response.body)
-            .map_err(|error| sink_error(STEP, error))
+            .map_err(|error| sink_error(STEP, &error))
     }
 }
 
@@ -168,7 +168,7 @@ async fn fetch_document(
     let response = fetcher
         .fetch(&request)
         .await
-        .map_err(|error| map_fetch_error(step, error))?;
+        .map_err(|error| map_fetch_error(step, &error))?;
     judge_status(step, response.status)?;
     Ok(response)
 }
@@ -198,8 +198,8 @@ fn judge_status(step: &str, status: u16) -> Result<(), AdapterError> {
 
 /// Transport failures: a body past the size cap is a wrong link (the flow
 /// moved), a request error is a blip.
-fn map_fetch_error(step: &str, error: FetchError) -> AdapterError {
-    match &error {
+fn map_fetch_error(step: &str, error: &FetchError) -> AdapterError {
+    match error {
         FetchError::TooLarge { .. } => AdapterError::StructureDrift {
             step: step.to_owned(),
             detail: error.to_string(),
@@ -211,7 +211,7 @@ fn map_fetch_error(step: &str, error: FetchError) -> AdapterError {
     }
 }
 
-fn sink_error(step: &str, error: crate::scraper::download::DownloadError) -> AdapterError {
+fn sink_error(step: &str, error: &crate::scraper::download::DownloadError) -> AdapterError {
     AdapterError::Transient {
         step: step.to_owned(),
         detail: error.to_string(),
@@ -223,13 +223,17 @@ fn sink_error(step: &str, error: crate::scraper::download::DownloadError) -> Ada
 /// structure.
 #[must_use]
 fn percent_encode(value: &str) -> String {
+    use std::fmt::Write as _;
+
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(byte as char);
             }
-            _ => out.push_str(&format!("%{byte:02X}")),
+            _ => {
+                let _ = write!(out, "%{byte:02X}");
+            }
         }
     }
     out
@@ -614,10 +618,14 @@ mod tests {
                     status: 206,
                     body: handler_document[5..].to_vec(),
                 }),
-                start => Ok(FetchResponse {
-                    status: 206,
-                    body: handler_document[start.unwrap_or_default() as usize..].to_vec(),
-                }),
+                start => {
+                    let from = usize::try_from(start.unwrap_or_default())
+                        .expect("a recorded range start fits usize");
+                    Ok(FetchResponse {
+                        status: 206,
+                        body: handler_document[from..].to_vec(),
+                    })
+                }
             }
         };
         let fetcher = MockFetcher::with_handler(Arc::new(handler));
