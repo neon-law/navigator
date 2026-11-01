@@ -90,6 +90,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "matter_page",
     "matter_caption",
     "asset",
+    "document_upload_session",
     "notation",
     "notation_event",
     "notation_clause",
