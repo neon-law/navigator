@@ -180,6 +180,8 @@ pub mod project_calendar;
 pub mod project_closeout;
 pub mod project_costs;
 pub mod project_deadlines;
+pub mod project_folder_reconcile;
+pub mod project_folders;
 pub mod project_handoffs;
 pub mod project_modules;
 pub mod project_reconcile;

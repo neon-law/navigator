@@ -399,6 +399,8 @@ impl NightlyProjectUpdateService {
 #[restate_sdk::workflow(name = "NightlyProjectUpdate")]
 impl NightlyProjectUpdateService {
     #[restate_sdk::handler]
+    // Keep discovery, folder convergence, and Slack admission in journal order.
+    #[allow(clippy::too_many_lines)]
     async fn run(
         &self,
         ctx: WorkflowContext<'_>,
@@ -411,6 +413,41 @@ impl NightlyProjectUpdateService {
             &self.messages_channel_id,
             &self.staging_messages_channel_id,
         );
+        let surreal = self.surreal.clone();
+        let roster = ctx
+            .run(move || async move { discover_roster(&surreal).await.map(Json) })
+            .name("discover-projects")
+            .await?
+            .into_inner();
+
+        // Run independently of Slack admission and of per-tag eligibility.
+        store::project_folder_reconcile::visit_nightly_roster(
+            roster
+                .iter()
+                .filter(|project| project.open)
+                .map(|project| project.project_id)
+                .collect::<Vec<_>>(),
+            |project_id| {
+                let surreal = self.surreal.clone();
+                let context = &ctx;
+                async move {
+                    context
+                        .run(move || async move {
+                            Ok(Json(
+                                store::project_folder_reconcile::nightly_from_env(
+                                    &surreal, project_id,
+                                )
+                                .await,
+                            ))
+                        })
+                        .name(format!("converge-project-folders-{project_id}"))
+                        .await
+                        .map(Json::into_inner)
+                }
+            },
+        )
+        .await?;
+
         validate_configuration(outcome_channel, self.slack_enabled)?;
 
         let started_at = ctx
@@ -425,13 +462,6 @@ impl NightlyProjectUpdateService {
         ctx.run(move || async move { post_start(slack.as_ref(), &channel_id).await })
             .name("post-start")
             .await?;
-
-        let surreal = self.surreal.clone();
-        let roster = ctx
-            .run(move || async move { discover_roster(&surreal).await.map(Json) })
-            .name("discover-projects")
-            .await?
-            .into_inner();
 
         let context = &ctx;
         let ran_on = &ran_on;
@@ -989,8 +1019,12 @@ mod tests {
     #[test]
     fn the_daily_trigger_runs_at_0555_utc_in_every_manifest() {
         for source in [
-            include_str!("../../examples/deploy/k8s/exports/cron-nightly-project-update-trigger.yaml"),
-            include_str!("../../k8s/overlays/kind/nightly-project-update-trigger/nightly-project-update-trigger.yaml"),
+            include_str!(
+                "../../examples/deploy/k8s/exports/cron-nightly-project-update-trigger.yaml"
+            ),
+            include_str!(
+                "../../k8s/overlays/kind/nightly-project-update-trigger/nightly-project-update-trigger.yaml"
+            ),
         ] {
             let manifest: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
             assert_eq!(manifest["spec"]["schedule"].as_str(), Some("55 5 * * *"));
@@ -1055,6 +1089,32 @@ mod tests {
             slack.posted_messages().last().unwrap(),
             &("C-STAGING".to_string(), START_MESSAGE.to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn no_slack_admission_happens_only_after_every_folder_outcome() {
+        use store::project_folder_reconcile::{visit_nightly_roster, NightlyFolderOutcome};
+        let ids = [Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()];
+        let visited = std::sync::Mutex::new(Vec::new());
+        let outcomes = visit_nightly_roster(ids, |id| {
+            visited.lock().unwrap().push(id);
+            std::future::ready(Ok::<_, std::convert::Infallible>(if id == ids[0] {
+                NightlyFolderOutcome::Blocked
+            } else if id == ids[1] {
+                NightlyFolderOutcome::Failed
+            } else {
+                NightlyFolderOutcome::Verified
+            }))
+        })
+        .await
+        .unwrap();
+        assert_eq!(*visited.lock().unwrap(), ids);
+        assert_eq!(outcomes.len(), 3);
+        assert!(
+            validate_configuration("", false).is_err(),
+            "existing Slack rejection is preserved after folder pass"
+        );
+        assert!(validate_configuration("C-MESSAGES", true).is_ok());
     }
 
     #[test]
@@ -1196,15 +1256,27 @@ mod tests {
     #[test]
     fn failure_reasons_are_bounded_codes() {
         for (message, reason) in [
-            ("Slack channel name is taken by a channel this bot cannot see", "slack_name_taken"),
+            (
+                "Slack channel name is taken by a channel this bot cannot see",
+                "slack_name_taken",
+            ),
             (
                 "Slack API rejected conversations.list: missing_scope (needed: groups:read; provided: chat:write)",
                 "slack_missing_scope",
             ),
-            ("Slack API rejected the request: channel_not_found", "slack_channel_not_found"),
-            ("Slack API rejected the request: not_in_channel", "slack_channel_not_found"),
+            (
+                "Slack API rejected the request: channel_not_found",
+                "slack_channel_not_found",
+            ),
+            (
+                "Slack API rejected the request: not_in_channel",
+                "slack_channel_not_found",
+            ),
             ("Slack API rate limited the request", "slack_rate_limited"),
-            ("Slack rejected the Nightly Project Update with HTTP 500", "slack_other"),
+            (
+                "Slack rejected the Nightly Project Update with HTTP 500",
+                "slack_other",
+            ),
             ("forge down", "other"),
         ] {
             assert_eq!(failure_reason(message), reason, "{message}");
