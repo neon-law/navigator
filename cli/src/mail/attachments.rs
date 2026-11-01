@@ -219,23 +219,38 @@ pub(super) fn write_all(
     Ok(plan)
 }
 
-pub(super) fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut out, byte| {
-            let _ = write!(out, "{byte:02x}");
-            out
-        })
+/// What one written attachment reports: built only from the parsed MIME
+/// part and the write outcome, never from the Gmail client or its token.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct AttachmentReport {
+    pub(super) name: String,
+    pub(super) bytes: u64,
+    pub(super) sha256: [u8; 32],
+    pub(super) status: Written,
+}
+
+impl AttachmentReport {
+    fn new(attachment: &ExtractedAttachment, status: Written) -> Self {
+        Self {
+            name: attachment.name.clone(),
+            bytes: attachment.bytes.len() as u64,
+            sha256: Sha256::digest(&attachment.bytes).into(),
+            status,
+        }
+    }
 }
 
 /// One output line: name, byte count, digest, and whether it was written.
-pub(super) fn report_line(attachment: &ExtractedAttachment, state: &Written) -> String {
+pub(super) fn format_report(report: &AttachmentReport) -> String {
+    let mut digest = String::with_capacity(64);
+    for byte in report.sha256 {
+        let _ = write!(digest, "{byte:02x}");
+    }
     format!(
-        "{}\t{} bytes\tsha256:{}\t{}",
-        attachment.name,
-        attachment.bytes.len(),
-        sha256_hex(&attachment.bytes),
-        match state {
+        "{}\t{} bytes\tsha256:{digest}\t{}",
+        report.name,
+        report.bytes,
+        match report.status {
             Written::Written => "written",
             Written::Unchanged => "already present",
         }
@@ -249,7 +264,7 @@ pub(super) async fn run(
     only: Option<&str>,
     include_inline: bool,
 ) -> Result<()> {
-    let lines = attachments_command(
+    let reports = attachments_command(
         reference,
         dir,
         &Selection {
@@ -259,24 +274,24 @@ pub(super) async fn run(
         super::client,
     )
     .await?;
-    if lines.is_empty() {
+    if reports.is_empty() {
         println!("No attachments matched; nothing was written");
     }
-    for line in lines {
-        println!("{line}");
+    for report in &reports {
+        println!("{}", format_report(report));
     }
     Ok(())
 }
 
 /// Fetches the raw message through `connect`, writes its attachments, and
-/// returns one report line per file. A reference that names no message is
+/// returns one report per file. A reference that names no message is
 /// refused before `connect` runs.
 async fn attachments_command<F, Fut>(
     reference: &str,
     dir: &Path,
     selection: &Selection<'_>,
     connect: F,
-) -> Result<Vec<String>>
+) -> Result<Vec<AttachmentReport>>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<super::GmailClient>>,
@@ -297,9 +312,9 @@ where
         return Ok(Vec::new());
     }
     Ok(write_all(dir, &attachments)?
-        .iter()
+        .into_iter()
         .zip(&attachments)
-        .map(|((_, state), attachment)| report_line(attachment, state))
+        .map(|((_, status), attachment)| AttachmentReport::new(attachment, status))
         .collect())
 }
 
@@ -482,9 +497,12 @@ Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain
                 base.clone(),
             ))
         };
-        let lines = attachments_command(&reference, dir.path(), &all(), connect)
+        let lines: Vec<String> = attachments_command(&reference, dir.path(), &all(), connect)
             .await
-            .unwrap();
+            .unwrap()
+            .iter()
+            .map(format_report)
+            .collect();
         assert_eq!(lines.len(), 5);
         assert!(lines[0].starts_with("Engagement Letter.pdf\t19 bytes\tsha256:"));
         assert!(lines.iter().all(|line| line.ends_with("\twritten")));
@@ -502,7 +520,9 @@ Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain
         let again = attachments_command(MESSAGE_ID, dir.path(), &all(), connect)
             .await
             .unwrap();
-        assert!(again.iter().all(|line| line.ends_with("\talready present")));
+        assert!(again
+            .iter()
+            .all(|report| report.status == Written::Unchanged));
     }
 
     #[tokio::test]
@@ -633,8 +653,14 @@ Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain
             name: "a.txt".into(),
             bytes: b"abc".to_vec(),
         };
+        let report = AttachmentReport::new(&attachment, Written::Written);
+        assert_eq!(report.bytes, 3);
         assert_eq!(
-            report_line(&attachment, &Written::Written),
+            format_report(&AttachmentReport::new(&attachment, Written::Unchanged)),
+            "a.txt\t3 bytes\tsha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\talready present"
+        );
+        assert_eq!(
+            format_report(&report),
             "a.txt\t3 bytes\tsha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\twritten"
         );
     }
