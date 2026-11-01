@@ -494,9 +494,13 @@ async fn run_exchange(
     )
     .await?;
 
+    let period = current_period();
+    // The subscription gate has verified this caller's active Purchase.
+    // A direct composer POST needs the same idempotent grant as the page;
+    // an existing period retains all spending and its overage flag.
+    store::sandbox_usage::grant(&db, person_id, &period).await?;
     let provider = model_backend(state).await?;
     let ledger: Arc<dyn UsageLedger> = Arc::new(StoreLedger::new(db.clone()));
-    let period = current_period();
 
     for pass in 0..MAX_TOOL_PASSES {
         let turns = assistant_turns::history(&db, person_id).await?;

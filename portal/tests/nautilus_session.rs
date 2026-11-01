@@ -184,11 +184,15 @@ async fn row(surreal: &SurrealDb, person_id: Uuid) -> store::sandbox_usage::Sand
 }
 
 async fn get(app: &Router, bearer: &str) -> (StatusCode, String, String) {
+    get_at(app, bearer, nautilus::NAUTILUS_PATH).await
+}
+
+async fn get_at(app: &Router, bearer: &str, uri: &str) -> (StatusCode, String, String) {
     let response = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(nautilus::NAUTILUS_PATH)
+                .uri(uri)
                 .header(header::AUTHORIZATION, bearer)
                 .body(Body::empty())
                 .unwrap(),
@@ -253,7 +257,7 @@ async fn a_prompt_runs_one_metered_completion_and_renders_the_conversation() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("legal-sandbox-composer"), "{body}");
     assert!(body.contains("$5.00"), "{body}");
-    assert!(body.contains("$0.00"), "{body}");
+    assert!(body.contains("$5.00 of $5.00"), "{body}");
     let usage = row(&fx.surreal, person_id).await;
     assert_eq!(usage.granted_cents, 500);
     assert_eq!(usage.spent_cents, 0);
@@ -268,7 +272,7 @@ async fn a_prompt_runs_one_metered_completion_and_renders_the_conversation() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("Is my lease assignable?"), "{body}");
     assert!(body.contains("Stub reply 1."), "{body}");
-    assert!(body.contains("$0.01"), "{body}");
+    assert!(body.contains("$4.99 of $5.00"), "{body}");
     assert!(!body.contains("legal-sandbox-error"), "{body}");
     let usage = row(&fx.surreal, person_id).await;
     assert_eq!(usage.spent_cents, 1);
@@ -294,7 +298,7 @@ async fn an_exhausted_subscriber_gets_the_offer_and_no_completion() {
     };
     let (person_id, bearer) = seed_subscriber(&fx.surreal, "session-spent@example.com").await;
     seed_active_purchase(&fx.pg, person_id, "session-spent@example.com").await;
-    seed_spent(&fx.surreal, person_id, 500).await;
+    seed_spent(&fx.surreal, person_id, 501).await;
 
     // The page shows the à la carte offer, never a composer.
     let (status, _, body) = get(&fx.app, &bearer).await;
@@ -310,7 +314,8 @@ async fn an_exhausted_subscriber_gets_the_offer_and_no_completion() {
         "an exhausted session never reaches a model"
     );
     let usage = row(&fx.surreal, person_id).await;
-    assert_eq!(usage.spent_cents, 500);
+    assert_eq!(usage.spent_cents, 501);
+    assert!(usage.overage, "a POST must not reset exhausted credit");
 }
 
 #[tokio::test]
@@ -419,7 +424,7 @@ async fn a_failed_completion_charges_nothing_and_flags_the_page() {
     );
 
     // The nothing-charged notice stands, and the saved question shows.
-    let (status, _, body) = get(&fx.app, &bearer).await;
+    let (status, _, body) = get_at(&fx.app, &bearer, &location).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("legal-sandbox-error"), "{body}");
     assert!(body.contains("Is my lease assignable?"), "{body}");
@@ -436,8 +441,18 @@ async fn the_outbound_request_carries_the_terms_and_no_identity() {
     let email = "session-sanitized@example.com";
     let (person_id, bearer) = seed_subscriber(&fx.surreal, email).await;
     seed_active_purchase(&fx.pg, person_id, email).await;
+    assert!(
+        store::sandbox_usage::find(&fx.surreal, person_id, &period())
+            .await
+            .unwrap()
+            .is_none()
+    );
 
+    // A direct POST provisions credit without a preceding page GET.
     post_prompt(&fx.app, &bearer, "Is my lease assignable?").await;
+    let usage = row(&fx.surreal, person_id).await;
+    assert_eq!(usage.granted_cents, 500);
+    assert_eq!(usage.spent_cents, 1);
 
     // The provider saw the question — and none of the identity the
     // session carries: no email, no person id, no session secret.
@@ -448,4 +463,11 @@ async fn the_outbound_request_carries_the_terms_and_no_identity() {
     assert!(!wire.contains(email), "{wire}");
     assert!(!wire.contains(&person_id.to_string()), "{wire}");
     assert!(!wire.contains("csrf"), "{wire}");
+
+    // The next POST keeps the first debit rather than granting anew.
+    post_prompt(&fx.app, &bearer, "What notice is required?").await;
+    assert_eq!(fx.stub.calls().len(), 2);
+    let usage = row(&fx.surreal, person_id).await;
+    assert_eq!(usage.granted_cents, 500);
+    assert_eq!(usage.spent_cents, 2);
 }
