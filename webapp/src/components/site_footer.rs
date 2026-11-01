@@ -686,28 +686,13 @@ pub fn SiteFooterLegal(
                         p { class: "site-footer__attribution", "{attribution}" }
                     }
                     div { class: "site-footer__legal-practice",
-                        p { class: "site-footer__copyright",
-                        // The site and the words on it belong to the firm's
-                        // legal person, which is what a copyright notice names
-                        // — the wordmark cannot hold one. This heads the legal
-                        // strip rather than trailing it, because it is the only
-                        // line naming the entity behind the site. One name: the
-                        // wordmark it trades under is named on the line below,
-                        // as the mark this same person registered.
-                        "© {copyright_year} "
-                        if copyright_href.is_empty() {
-                            "{copyright_holder}"
-                        } else {
-                            a { href: "{copyright_href}", "{copyright_holder}" }
-                        }
-                    }
-                    // The other ownership fact, directly under the first: the
-                    // wordmark this footer opens on is a registered mark, and
-                    // this is who holds it and under what number. It sits above
-                    // the bar licences because it is a property notice about
-                    // the site rather than regulated attorney copy, and it
-                    // links out for the same reason those rows do — a reader
-                    // checks the register, not the page's word for it.
+                    // The ownership fact about the wordmark: it is a registered
+                    // mark, and this is who holds it and under what number. It
+                    // sits above the bar licences because it is a property
+                    // notice about the site rather than regulated attorney
+                    // copy, and it links out for the same reason those rows do
+                    // — a reader checks the register, not the page's word for
+                    // it.
                     if !trademark.is_empty() && disclosure.ownership.is_empty() {
                         p { class: "site-footer__trademark",
                             "{trademark}"
@@ -760,24 +745,6 @@ pub fn SiteFooterLegal(
                             }
                         }
                     }
-                    // One line names the software this page runs: "Powered
-                    // by", the public source repository, the release serving
-                    // here, and the repository's stars.
-                    //
-                    // The version is plain text and optional:
-                    // `NAVIGATOR_RELEASE_TAG` is unset under `cargo run`, so a
-                    // local build names the repository and stops there.
-                    div { class: "site-footer__legal-platform",
-                        p { class: "site-footer__powered",
-                            "Powered by "
-                            crate::components::GitHubStars {
-                                href: crate::source_repository::SOURCE_HREF.to_string(),
-                                repo: crate::source_repository::SOURCE_REPO.to_string(),
-                                version: navigator_version.clone(),
-                                stars: github_stars,
-                            }
-                        }
-                    }
                     if !disclosure.provider.is_empty() {
                         p { class: "site-footer__provider",
                             "{disclosure.prefix} "
@@ -793,6 +760,38 @@ pub fn SiteFooterLegal(
                         }
                     }
                     p { class: "site-footer__tagline", "{FOOTER_TAGLINE[0]}" br {} "{FOOTER_TAGLINE[1]}" }
+                    // One line names the software this page runs: "Powered
+                    // by", the public source repository, the release serving
+                    // here, and the repository's stars.
+                    //
+                    // The version is plain text and optional:
+                    // `NAVIGATOR_RELEASE_TAG` is unset under `cargo run`, so a
+                    // local build names the repository and stops there.
+                    div { class: "site-footer__legal-platform",
+                        p { class: "site-footer__copyright",
+                            // The site and the words on it belong to the firm's
+                            // legal person, which is what a copyright notice names
+                            // — the wordmark cannot hold one. It closes the strip,
+                            // directly over the platform line, so the two
+                            // attributions — who owns the site, what software runs
+                            // it — read together as the footer's last word.
+                            "© {copyright_year} "
+                            if copyright_href.is_empty() {
+                                "{copyright_holder}"
+                            } else {
+                                a { href: "{copyright_href}", "{copyright_holder}" }
+                            }
+                        }
+                        p { class: "site-footer__powered",
+                            "Powered by "
+                            crate::components::GitHubStars {
+                                href: crate::source_repository::SOURCE_HREF.to_string(),
+                                repo: crate::source_repository::SOURCE_REPO.to_string(),
+                                version: navigator_version.clone(),
+                                stars: github_stars,
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -887,10 +886,10 @@ mod tests {
     /// The mark notice names the mark, the registrant, and the number, and
     /// links the number to the register's own record.
     ///
-    /// Order is the substance: the two ownership facts read together, so the
-    /// notice follows the copyright and precedes the bar licences.
+    /// Order is the substance: the notice precedes the bar licences, and the
+    /// copyright closes the strip below both.
     #[test]
-    fn notices_the_registered_mark_under_the_copyright() {
+    fn notices_the_registered_mark_above_the_licences() {
         let out = legal_html();
         assert!(
             out.contains("NEON LAW") && out.contains("®"),
@@ -910,15 +909,15 @@ mod tests {
         );
         let copyright = out.find("site-footer__copyright").expect("the copyright");
         let mark = out.find("site-footer__trademark").expect("the mark notice");
-        let licences = out.find("site-footer__licenses").unwrap_or(usize::MAX);
+        let licences = out.find("site-footer__licenses").unwrap_or(mark);
         assert!(
-            copyright < mark && mark < licences,
-            "the ownership facts read together, above the bar rows: {out}"
+            mark <= licences && licences < copyright,
+            "the mark notice sits above the bar rows, the copyright below: {out}"
         );
     }
 
     #[test]
-    fn ends_the_legal_strip_with_the_tagline_after_the_disclaimer_and_brands() {
+    fn ends_the_legal_strip_with_the_copyright_and_platform_after_the_tagline() {
         let out = legal_html();
         let legal = out
             .split(r#"<div class="site-footer__legal">"#)
@@ -939,8 +938,11 @@ mod tests {
         let tagline = legal
             .rfind(FOOTER_TAGLINE[0])
             .expect("the final tagline renders");
-        assert!(disclaimer < copyright && copyright < trademark && trademark < platform);
-        assert!(platform < tagline);
+        let powered = legal
+            .find("site-footer__powered")
+            .expect("the platform line renders");
+        assert!(disclaimer < trademark && trademark < tagline);
+        assert!(tagline < platform && platform < copyright && copyright < powered);
         assert_eq!(legal.matches(FOOTER_TAGLINE[0]).count(), 1);
     }
 
@@ -1133,7 +1135,7 @@ mod tests {
         );
     }
 
-    /// The copyright heads the legal strip and there is exactly one of it.
+    /// The copyright closes the legal strip and there is exactly one of it.
     ///
     /// Asserted on the copyright element rather than on the entity's name. The
     /// name now appears twice on purpose: the supporter line at the foot of the
@@ -1141,7 +1143,7 @@ mod tests {
     /// firm's own wording. What must not recur is the *copyright*, which once
     /// trailed a firm-level attribution line saying the same thing.
     #[test]
-    fn renders_the_copyright_once_at_the_head_of_the_strip() {
+    fn renders_the_copyright_once_at_the_foot_of_the_strip() {
         let out = legal_html();
         assert_eq!(
             out.matches(r#"class="site-footer__copyright""#).count(),

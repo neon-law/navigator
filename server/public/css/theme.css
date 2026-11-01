@@ -1815,12 +1815,15 @@ a.nav-pagination__link:hover {
 }
 
 /* The legal strip. Muted and small so it reads as terminal fine print, and
-   ruled off from the contact band above it. */
+   ruled off from the contact band above it. Every line in it sets on the one
+   line height and nothing adds a gap between them, so a wrapped line, a `<br>`
+   and the next paragraph all sit the same distance apart — only the closing
+   platform line, whose stars badge is taller than text, stands off. */
 .site-footer__legal {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--footer-strip-gap);
+  gap: 0;
   border-top: 1px solid var(--nav-color-border);
   padding-top: var(--footer-strip-gap);
   color: var(--nav-color-text-muted);
@@ -1834,10 +1837,10 @@ a.nav-pagination__link:hover {
    apart: the whole strip reads as one block of fine print. */
 .site-footer__legal > div {
   display: grid;
-  gap: var(--footer-strip-gap);
+  gap: 0;
 }
 
-/* The grid's gap is the only thing that spaces this strip, so nothing in it
+/* The line height is the only thing that spaces this strip, so nothing in it
    carries a margin of its own to add to it. */
 .site-footer__legal p,
 .site-footer__legal ul,
@@ -1872,21 +1875,15 @@ a.nav-pagination__link:hover {
    its stars on one row. A flex row because the parts are separate elements — the
    gap spaces them, so none has to carry a literal space — and it wraps on a
    narrow viewport rather than overflowing the strip. */
-.site-footer__powered {
+.site-footer__legal .site-footer__powered {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
-  margin: 0;
+  margin: 0.35rem 0 0;
 }
 
 @media (max-width: 54rem) {
-  /* Keep the trademark and platform attribution visually adjacent in the
-     narrow legal strip; the groups still space their own internal lines. */
-  .site-footer__legal {
-    row-gap: 0;
-  }
-
   /* The band collapses to one tile per row here, so there are no tracks left
      to line up with: the masthead stacks and drops the band's inset. */
   .site-footer__masthead {
@@ -1953,13 +1950,6 @@ a.nav-pagination__link:hover {
 .site-footer__licenses {
   padding: 0;
   list-style: none;
-}
-
-/* One attorney per line; a licensee whose licences wrap must still read as one
-   entry, so the rows are spaced further apart than the wrapped lines within a
-   row. */
-.site-footer__licensee + .site-footer__licensee {
-  margin-top: 0.35rem;
 }
 
 .site-footer__licensee-name {
