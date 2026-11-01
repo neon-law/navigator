@@ -1048,7 +1048,7 @@ pub async fn installed_version(db: &SurrealDb) -> Result<Option<u32>, SchemaErro
 
 /// Whether `err` is the engine reporting that `table` has never been
 /// defined.
-fn is_undefined_table(err: &SurrealQueryError, table: &str) -> bool {
+pub(crate) fn is_undefined_table(err: &SurrealQueryError, table: &str) -> bool {
     matches!(
         err.details(),
         ErrorDetails::NotFound(Some(NotFoundError::Table { name })) if name == table

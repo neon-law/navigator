@@ -125,13 +125,19 @@ async fn source(
     surreal: &SurrealDb,
     table: &Table,
 ) -> Result<BTreeMap<MirrorKey, Value>, MirrorError> {
-    let rows: Vec<surrealdb::types::Value> = surreal
+    let rows: Vec<surrealdb::types::Value> = match surreal
         .query(format!("SELECT * FROM {}", table.name))
         .await
         .and_then(surrealdb::IndexedResults::check)
-        .map_err(|_| MirrorError::Source)?
-        .take(0)
-        .map_err(|_| MirrorError::Source)?;
+    {
+        Ok(mut response) => response.take(0).map_err(|_| MirrorError::Source)?,
+        // A table this build mirrors but the live engine has not defined yet:
+        // the web process applies the schema on boot, and `ops ship` runs the
+        // mirror reconcile before it rolls the web. An undefined table holds
+        // no rows; any other failure still surfaces.
+        Err(error) if crate::schema::is_undefined_table(&error, table.name) => Vec::new(),
+        Err(_) => return Err(MirrorError::Source),
+    };
     rows.into_iter()
         .map(|row| normalize(table, row.into_json_value()))
         .collect()
@@ -363,6 +369,19 @@ mod tests {
         assert!(sql.contains("ON CONFLICT (id) DO UPDATE"));
         assert!(sql.contains("ROW(message.conversation_id"));
         assert!(sql.contains("IS DISTINCT FROM"));
+    }
+
+    #[tokio::test]
+    async fn a_table_the_engine_has_not_defined_yet_reads_as_empty() {
+        let db = crate::test_support::mem_surreal().await;
+        db.query("REMOVE TABLE inbox_message_asset")
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .unwrap();
+        let rows = source(&db, table("inbox_message_asset").unwrap())
+            .await
+            .unwrap();
+        assert!(rows.is_empty());
     }
 
     #[tokio::test]
