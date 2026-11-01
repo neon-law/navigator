@@ -231,6 +231,19 @@
       "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
     ]
   },
+  "document_upload_session": {
+    "scenario": "Project-scoped resumable upload; offset retries and digest-verified completion; staged bytes remain in object storage",
+    "runtime_tests": [
+      {
+        "file": "store/src/documents.rs",
+        "function": "a_session_resumes_from_its_received_bytes_and_files_the_original_bytes",
+        "proves": "Source-store upload retries preserve the acknowledged offset and completion files the original digest."
+      }
+    ],
+    "remaining": [
+      "PostgreSQL application accessors and lifecycle parity require separate acceptance; the runtime still uses the source store."
+    ]
+  },
   "draft": {
     "scenario": "view equals source projection; no independent writes",
     "runtime_tests": [],

@@ -285,6 +285,27 @@ erDiagram
         uuid review_document_id
         datetime updated_at
     }
+    document_upload_session {
+        string id
+        number chunk_size
+        string content_type
+        datetime created_at
+        string declared_sha256
+        number declared_size
+        json derived_from
+        string description
+        datetime expires_at
+        string filename
+        string kind
+        json metadata
+        json notarization
+        uuid project_id
+        number received_bytes
+        json signing
+        string slug
+        string transcript_quality
+        string visibility
+    }
     draft {
         string id
     }
@@ -1375,6 +1396,7 @@ erDiagram
     case_docket_entry }o--|| discovery_request : docket_entry_id
     person }o--|| document_comment : person_id
     review_document }o--|| document_comment : review_document_id
+    project }o--|| document_upload_session : project_id
     asset }o--|| efiling_transactions : conformed_document_id
     project }o--|| efiling_transactions : project_id
     asset }o--|| efiling_transactions : submitted_document_id
