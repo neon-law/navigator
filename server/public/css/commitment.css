@@ -76,7 +76,6 @@
 .commitment-hero__rate-mark {
   width: clamp(9rem, 16vw, 13rem);
   height: auto;
-  filter: drop-shadow(0 1rem 2rem var(--firm-brand-glow));
 }
 
 .commitment-hero__rate-caption {

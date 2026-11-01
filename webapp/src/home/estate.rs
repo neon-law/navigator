@@ -84,7 +84,6 @@ pub(super) fn EstateHome(
         div { class: "vesta-home",
             section { class: "vesta-hero", "aria-labelledby": "vesta-title",
                 div {
-                    p { class: "vesta-eyebrow", "{estate.eyebrow}" }
                     h1 { id: "vesta-title", "{content.heading}" }
                     p { class: "vesta-lead", "{content.lead}" }
                     div { class: "vesta-actions",
@@ -138,7 +137,6 @@ pub(super) fn EstateHome(
             }
             section { id: "estate-plan", class: "vesta-offer", "aria-label": "{estate.plan_label}",
                 aside { class: "vesta-plan", "aria-label": "{estate.plan_label}",
-                    img { class: "vesta-plan__mark", src: "/public/brand/vesta.svg", alt: "", width: "36", height: "50" }
                     p { class: "vesta-eyebrow", "{estate.plan_label}" }
                     p { class: "vesta-plan__price", "{estate.price}" }
                     p { class: "vesta-plan__term", "{estate.plan_description}" }
