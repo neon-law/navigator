@@ -357,6 +357,8 @@ pub enum UploadSessionError {
         expected: i64,
         actual: i64,
     },
+    #[error("next append must start at offset {expected}, not {actual}")]
+    ChunkOffset { expected: i64, actual: i64 },
     #[error("upload is incomplete: {received} of {declared} bytes received")]
     Incomplete { received: i64, declared: i64 },
     #[error("staged bytes hash to {stored}, not the declared {declared}; restart the upload")]
@@ -442,18 +444,7 @@ pub fn upload_part_key(session_id: Uuid, offset: i64) -> String {
     format!("uploads/{session_id}/part-{offset:020}")
 }
 
-/// Open (or resume) a streaming upload session: validate the declared
-/// identity, then return the live session for it — the existing row when
-/// this exact upload is already in flight, so a crashed client run resumes
-/// instead of orphaning a session, else a fresh one.
-///
-/// # Errors
-/// [`UploadSessionError`] on an invalid kind, visibility, digest, or size,
-/// or a database failure.
-pub async fn create_upload_session(
-    db: &SurrealDb,
-    args: &UploadSessionArgs<'_>,
-) -> Result<UploadSession, UploadSessionError> {
+fn validate_upload_session(args: &UploadSessionArgs<'_>) -> Result<i64, UploadSessionError> {
     if !rules::kind::Kind::parse(args.kind).is_some_and(|k| k.valid_for(rules::kind::Lane::Asset)) {
         return Err(UploadSessionError::InvalidKind(args.kind.to_string()));
     }
@@ -483,6 +474,23 @@ pub async fn create_upload_session(
             max: MAX_STREAMING_UPLOAD_BYTES,
         });
     }
+
+    Ok(declared_size)
+}
+
+/// Open (or resume) a streaming upload session: validate the declared
+/// identity, then return the live session for it — the existing row when
+/// this exact upload is already in flight, so a crashed client run resumes
+/// instead of orphaning a session, else a fresh one.
+///
+/// # Errors
+/// [`UploadSessionError`] on an invalid kind, visibility, digest, or size,
+/// or a database failure.
+pub async fn create_upload_session(
+    db: &SurrealDb,
+    args: &UploadSessionArgs<'_>,
+) -> Result<UploadSession, UploadSessionError> {
+    let declared_size = validate_upload_session(args)?;
 
     let now = Utc::now();
     if let Some(existing) = find_resumable_session(db, args, now).await? {
@@ -601,8 +609,7 @@ async fn find_resumable_session(
     let rows: Vec<UploadSessionRow> = response.take(0)?;
     Ok(rows
         .into_iter()
-        .filter_map(UploadSessionRow::into_upload_session)
-        .next())
+        .find_map(UploadSessionRow::into_upload_session))
 }
 
 /// Read one upload session by id, scoped to the matter. `None` when the id
@@ -633,7 +640,9 @@ pub async fn find_upload_session(
 /// the count. The part object is written before the row moves (the
 /// ordering guarantee the module doc holds: never claim bytes that are not
 /// durable), and the chunk length must be exactly [`next_chunk_len`] — the
-/// strictly sequential rule that makes `received_bytes` the resume point.
+/// strictly sequential rule that makes `received_bytes` the resume point. The
+/// caller must send that offset; advancing it uses a conditional write so
+/// a delayed retry cannot move the counter backwards.
 ///
 /// # Errors
 /// [`UploadSessionError`] when the session is missing, expired, complete,
@@ -644,20 +653,38 @@ pub async fn append_upload_chunk(
     storage: &Arc<dyn StorageService>,
     project_id: Uuid,
     session_id: Uuid,
+    offset: i64,
     chunk: &[u8],
 ) -> Result<UploadSession, UploadSessionError> {
     let mut session = find_upload_session(db, project_id, session_id)
         .await?
         .ok_or(UploadSessionError::NoSuchSession(session_id))?;
     let new_received = check_append(&session, Utc::now(), chunk.len())?;
-    let key = upload_part_key(session_id, session.received_bytes);
+    if offset != session.received_bytes {
+        return Err(UploadSessionError::ChunkOffset {
+            expected: session.received_bytes,
+            actual: offset,
+        });
+    }
+    let key = upload_part_key(session_id, offset);
     storage.put(&key, chunk, "application/octet-stream").await?;
-    crate::assets::writing(|| {
-        db.query("UPDATE $id SET received_bytes = $received_bytes")
+    let mut response = crate::assets::writing(|| {
+        db.query("UPDATE $id SET received_bytes = $received_bytes WHERE received_bytes = $offset RETURN AFTER")
             .bind(("id", record_id(UPLOAD_SESSION_TABLE, session_id)))
             .bind(("received_bytes", new_received))
+            .bind(("offset", offset))
     })
     .await?;
+    let updated: Vec<UploadSessionRow> = response.take(0)?;
+    if updated.is_empty() {
+        let current = find_upload_session(db, project_id, session_id)
+            .await?
+            .ok_or(UploadSessionError::NoSuchSession(session_id))?;
+        return Err(UploadSessionError::ChunkOffset {
+            expected: current.received_bytes,
+            actual: offset,
+        });
+    }
     session.received_bytes = new_received;
     Ok(session)
 }
@@ -2155,11 +2182,7 @@ mod tests {
         }
     }
 
-    fn stream_session_args<'a>(
-        project_id: Uuid,
-        size: usize,
-        sha: &'a str,
-    ) -> UploadSessionArgs<'a> {
+    fn stream_session_args(project_id: Uuid, size: usize, sha: &str) -> UploadSessionArgs<'_> {
         UploadSessionArgs {
             project_id,
             filename: "hearing.transcript.mp3",
@@ -2252,7 +2275,7 @@ mod tests {
     #[test]
     fn the_lane_cap_message_names_the_cap() {
         let message = streaming_upload_size_message(MAX_STREAMING_UPLOAD_BYTES + 1);
-        assert!(message.contains(&format!("{}", MAX_STREAMING_UPLOAD_BYTES)));
+        assert!(message.contains(&format!("{MAX_STREAMING_UPLOAD_BYTES}")));
     }
 
     #[tokio::test]
@@ -2314,9 +2337,8 @@ mod tests {
     async fn a_session_resumes_from_its_received_bytes_and_files_the_original_bytes() {
         let (db, storage, _tmp, project_id) = fixtures().await;
         let chunk = STREAMING_UPLOAD_CHUNK_SIZE;
-        let short = 4 * 1024 * 1024;
-        let size = chunk * 2 + short; // three parts: full, full, short remainder
-        let bytes: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        let size = chunk * 3; // Equal-sized parts cannot detect a retry by length.
+        let bytes: Vec<u8> = (0..size).map(|i| u8::try_from(i % 251).unwrap()).collect();
         let sha = sha256_hex(&bytes);
         let session = create_upload_session(&db, &stream_session_args(project_id, size, &sha))
             .await
@@ -2325,7 +2347,7 @@ mod tests {
 
         // First chunk lands.
         let after_first =
-            append_upload_chunk(&db, &storage, project_id, session.id, &bytes[..chunk])
+            append_upload_chunk(&db, &storage, project_id, session.id, 0, &bytes[..chunk])
                 .await
                 .unwrap();
         assert_eq!(after_first.received_bytes, i64::try_from(chunk).unwrap());
@@ -2338,6 +2360,7 @@ mod tests {
             &storage,
             project_id,
             session.id,
+            i64::try_from(chunk).unwrap(),
             &bytes[chunk..chunk * 2],
         )
         .await
@@ -2351,6 +2374,7 @@ mod tests {
             &storage,
             project_id,
             session.id,
+            i64::try_from(chunk).unwrap(),
             &bytes[chunk..chunk * 2],
         )
         .await
@@ -2358,23 +2382,30 @@ mod tests {
         assert!(
             matches!(
                 resent,
-                UploadSessionError::ChunkLength { offset, expected, .. }
-                    if offset == i64::try_from(chunk * 2).unwrap()
-                        && expected == i64::try_from(short).unwrap()
+                UploadSessionError::ChunkOffset { expected, actual }
+                    if expected == i64::try_from(chunk * 2).unwrap()
+                        && actual == i64::try_from(chunk).unwrap()
             ),
             "the retried chunk was mis-applied: {resent:?}"
         );
 
         // The client re-syncs from the status and finishes with the short
-        // last chunk.
+        // final chunk.
         let resumed = find_upload_session(&db, project_id, session.id)
             .await
             .unwrap()
             .expect("session still in flight");
         assert_eq!(resumed.received_bytes, i64::try_from(chunk * 2).unwrap());
-        append_upload_chunk(&db, &storage, project_id, session.id, &bytes[chunk * 2..])
-            .await
-            .unwrap();
+        append_upload_chunk(
+            &db,
+            &storage,
+            project_id,
+            session.id,
+            i64::try_from(chunk * 2).unwrap(),
+            &bytes[chunk * 2..],
+        )
+        .await
+        .unwrap();
 
         // Completing files the document: the stored bytes hash to the
         // declared digest — the original bytes, not a re-encoding.
@@ -2421,7 +2452,7 @@ mod tests {
         let first = create_upload_session(&db, &stream_session_args(project_id, 64, &sha))
             .await
             .unwrap();
-        append_upload_chunk(&db, &storage, project_id, first.id, &[0; 64])
+        append_upload_chunk(&db, &storage, project_id, first.id, 0, &[0; 64])
             .await
             .unwrap();
 
@@ -2458,7 +2489,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            append_upload_chunk(&db, &storage, project_id, session.id, &[0; 64])
+            append_upload_chunk(&db, &storage, project_id, session.id, 0, &[0; 64])
                 .await
                 .is_err(),
             "an expired session accepted a chunk"
@@ -2479,7 +2510,7 @@ mod tests {
         let session = create_upload_session(&db, &stream_session_args(project_id, 11, &wrong))
             .await
             .unwrap();
-        append_upload_chunk(&db, &storage, project_id, session.id, b"right bytes")
+        append_upload_chunk(&db, &storage, project_id, session.id, 0, b"right bytes")
             .await
             .unwrap();
 

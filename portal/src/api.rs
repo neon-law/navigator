@@ -5110,6 +5110,7 @@ struct CreateUploadSessionRequest {
 /// Request body for the chunk-append door: one base64-encoded chunk.
 #[derive(Deserialize)]
 struct UploadChunkRequest {
+    offset: i64,
     content_base64: String,
 }
 
@@ -5168,6 +5169,113 @@ fn upload_sha_mismatch(stored: &str, declared: &str) -> Response {
         })),
     )
         .into_response()
+}
+
+async fn streaming_source_revision(
+    state: &ApiState,
+    id: Uuid,
+    source: &store::documents::DerivedFrom,
+) -> Result<serde_json::Value, Response> {
+    if source.version == 0
+        || source.sha256.len() != 64
+        || !source
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(bad_request(
+            "invalid_derived_from",
+            "The source revision needs a positive version and a lowercase SHA-256 digest.",
+        ));
+    }
+    let Some(source_asset) = store::assets::find_by_id(&state.surreal, source.document_id)
+        .await
+        .map_err(|error| ApiError::Asset(error).into_response())?
+    else {
+        return Err(bad_request(
+            "invalid_derived_from",
+            "The source revision is not a current document on this matter.",
+        ));
+    };
+    let Some(source_slug) = source_asset
+        .slug
+        .as_deref()
+        .filter(|_| source_asset.project_id == Some(id))
+    else {
+        return Err(bad_request(
+            "invalid_derived_from",
+            "The source revision is not a current document on this matter.",
+        ));
+    };
+    let revisions = store::assets::revisions(&state.surreal, id, source_slug)
+        .await
+        .map_err(|error| ApiError::Asset(error).into_response())?;
+    if revisions.first().map(|current| current.id) != Some(source.document_id)
+        || revisions.len() != source.version
+        || source_asset.sha256_hex != source.sha256
+    {
+        return Err(bad_request(
+            "invalid_derived_from",
+            "The source revision is no longer operative on this matter.",
+        ));
+    }
+    Ok(serde_json::json!({
+        "document_id": source.document_id,
+        "version": source.version,
+        "sha256": source.sha256,
+    }))
+}
+
+fn streaming_session_args<'a>(
+    id: Uuid,
+    input: &'a CreateUploadSessionRequest,
+    filename: &'a str,
+    kind: &'a str,
+    slug: &'a str,
+    derived_from: Option<serde_json::Value>,
+) -> store::documents::UploadSessionArgs<'a> {
+    let visibility = if input.visibility.as_deref() == Some(store::documents::visibility::CLIENT) {
+        store::documents::visibility::CLIENT
+    } else {
+        store::documents::visibility::INTERNAL
+    };
+    let signing = input
+        .signing
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .ok()
+        .flatten();
+    let notarization = serde_json::to_value(&input.notarization).ok();
+    store::documents::UploadSessionArgs {
+        project_id: id,
+        filename,
+        kind,
+        content_type: input
+            .content_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("application/octet-stream"),
+        visibility,
+        description: input
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        slug: Some(slug),
+        transcript_quality: if kind == "transcript" {
+            input.transcript_quality.as_deref()
+        } else {
+            None
+        },
+        metadata: input.metadata.clone(),
+        derived_from,
+        signing,
+        notarization,
+        declared_size: input.declared_size,
+        declared_sha256: &input.declared_sha256,
+    }
 }
 
 /// `POST /app/api/projects/{id}/documents/upload-session` — open (or resume)
@@ -5236,56 +5344,10 @@ async fn create_upload_session_door(
         ));
     }
     let derived_from = match input.derived_from.as_ref() {
-        Some(source) => {
-            if source.version == 0
-                || source.sha256.len() != 64
-                || !source
-                    .sha256
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            {
-                return Ok(bad_request(
-                    "invalid_derived_from",
-                    "The source revision needs a positive version and a lowercase SHA-256 digest.",
-                ));
-            }
-            let Some(source_asset) = store::assets::find_by_id(&state.surreal, source.document_id)
-                .await
-                .map_err(ApiError::Asset)?
-            else {
-                return Ok(bad_request(
-                    "invalid_derived_from",
-                    "The source revision is not a current document on this matter.",
-                ));
-            };
-            let Some(source_slug) = source_asset
-                .slug
-                .as_deref()
-                .filter(|_| source_asset.project_id == Some(id))
-            else {
-                return Ok(bad_request(
-                    "invalid_derived_from",
-                    "The source revision is not a current document on this matter.",
-                ));
-            };
-            let revisions = store::assets::revisions(&state.surreal, id, source_slug)
-                .await
-                .map_err(ApiError::Asset)?;
-            if revisions.first().map(|current| current.id) != Some(source.document_id)
-                || revisions.len() != source.version
-                || source_asset.sha256_hex != source.sha256
-            {
-                return Ok(bad_request(
-                    "invalid_derived_from",
-                    "The source revision is no longer operative on this matter.",
-                ));
-            }
-            Some(serde_json::json!({
-                "document_id": source.document_id,
-                "version": source.version,
-                "sha256": source.sha256,
-            }))
-        }
+        Some(source) => match streaming_source_revision(&state, id, source).await {
+            Ok(source) => Some(source),
+            Err(response) => return Ok(response),
+        },
         None => None,
     };
     if input.declared_size > store::documents::MAX_STREAMING_UPLOAD_BYTES {
@@ -5314,48 +5376,7 @@ async fn create_upload_session_door(
     if let Some(response) = invalid_document_slug_response(filename, &slug) {
         return Ok(response);
     }
-    let visibility = if input.visibility.as_deref() == Some(store::documents::visibility::CLIENT) {
-        store::documents::visibility::CLIENT
-    } else {
-        store::documents::visibility::INTERNAL
-    };
-    let signing = input
-        .signing
-        .as_ref()
-        .map(serde_json::to_value)
-        .transpose()
-        .ok()
-        .flatten();
-    let notarization = serde_json::to_value(&input.notarization).ok();
-    let args = store::documents::UploadSessionArgs {
-        project_id: id,
-        filename,
-        kind,
-        content_type: input
-            .content_type
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("application/octet-stream"),
-        visibility,
-        description: input
-            .description
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty()),
-        slug: Some(&slug),
-        transcript_quality: if kind == "transcript" {
-            input.transcript_quality.as_deref()
-        } else {
-            None
-        },
-        metadata: input.metadata.clone(),
-        derived_from,
-        signing,
-        notarization,
-        declared_size: input.declared_size,
-        declared_sha256: &input.declared_sha256,
-    };
+    let args = streaming_session_args(id, &input, filename, kind, &slug, derived_from);
     match store::documents::create_upload_session(&state.surreal, &args).await {
         Ok(session) => {
             let status = if session.received_bytes > 0 {
@@ -5442,6 +5463,7 @@ async fn append_upload_chunk_door(
         &state.storage,
         id,
         session_id,
+        input.offset,
         &chunk,
     )
     .await
@@ -5463,6 +5485,10 @@ async fn append_upload_chunk_door(
         }
         Err(store::documents::UploadSessionError::NoSuchSession(_)) => Err(ApiError::NotFound),
         Err(store::documents::UploadSessionError::Expired(at)) => Ok(upload_session_expired(&at)),
+        Err(store::documents::UploadSessionError::ChunkOffset { expected, actual }) => Ok(conflict(
+            "chunk_offset_mismatch",
+            &format!("The next append must start at offset {expected}, not {actual}. Re-read the session status."),
+        )),
         Err(store::documents::UploadSessionError::ChunkLength {
             offset,
             expected,
@@ -8726,6 +8752,10 @@ mod tests {
         list_firms, list_notations_door, mail_file_door, routes, ApiError, ApiState, AuthedSession,
         EmlUploadRequest, IntegrityQuery, LawyerSession, MailFileRequest, RevisionsQuery,
     };
+    use super::{
+        append_upload_chunk_door, complete_upload_session_door, create_upload_session_door,
+        upload_session_status_door, CreateUploadSessionRequest, JsonOrForm, UploadChunkRequest,
+    };
     use axum::extract::{Path, Query, State};
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
@@ -9613,14 +9643,7 @@ mod tests {
         );
     }
 
-    /// The streaming doors carry one small upload end to end: open a
-    /// session, stage a chunk, feel the 409 when the same chunk is replayed
-    /// after a lost acknowledgement, resume from the status door, finish,
-    /// and read the same source-safe pointer the buffered door returns.
-    /// A tiny file fits in one server chunk, so the replay of the *first*
-    /// chunk doubles as the replay of the *last* one.
-    #[tokio::test]
-    async fn streaming_doors_resume_a_dropped_chunk_and_file_the_pointer() {
+    async fn streaming_fixture() -> (ApiState, crate::SessionData, Uuid) {
         let db = store::surreal::test_support::mem().await;
         let project_id = store::test_support::seed_project_surreal(&db, "stream-up").await;
         let app = crate::test_support::app_state(db.clone()).await;
@@ -9644,6 +9667,7 @@ mod tests {
         .expect("seed the lawyer's participation row");
         let state = ApiState {
             surreal: app.surreal.clone(),
+            canonical_base_url: None,
             email: app.email.clone(),
             bootstrap_owner_email: app.bootstrap_owner_email.clone(),
             bootstrap_company: "Test Firm".to_string(),
@@ -9661,6 +9685,61 @@ mod tests {
             ..crate::SessionData::fresh("lawyer-sub", store::persons::Role::Lawyer)
         };
 
+        (state, session_data, project_id)
+    }
+
+    async fn streaming_json(response: axum::response::Response) -> serde_json::Value {
+        serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    async fn open_streaming_session(
+        state: &ApiState,
+        session: &crate::SessionData,
+        project_id: Uuid,
+        filename: &str,
+        bytes: &[u8],
+    ) -> serde_json::Value {
+        let response = create_upload_session_door(
+            State(state.clone()),
+            LawyerSession(session.clone()),
+            Path(project_id),
+            JsonOrForm(CreateUploadSessionRequest {
+                filename: filename.into(),
+                slug: None,
+                content_type: Some("audio/mpeg".into()),
+                kind: Some("transcript".into()),
+                visibility: None,
+                description: None,
+                metadata: None,
+                derived_from: None,
+                transcript_quality: Some("machine".into()),
+                signing: None,
+                notarization: vec![],
+                declared_size: bytes.len(),
+                declared_sha256: store::documents::sha256_hex(bytes),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        streaming_json(response).await
+    }
+
+    /// The streaming doors carry one small upload end to end: open a
+    /// session, stage a chunk, replay its lost acknowledgement, resume
+    /// from the status door, and complete with the original digest in the
+    /// source-safe pointer.
+    /// A tiny file fits in one server chunk, so the replay of the *first*
+    /// chunk doubles as the replay of the *last* one.
+    #[tokio::test]
+    async fn streaming_doors_resume_a_dropped_chunk_and_file_the_pointer() {
+        let (state, session_data, project_id) = streaming_fixture().await;
+
         let bytes = b"streamed court audio bytes".to_vec();
         let sha = store::documents::sha256_hex(&bytes);
         let encode = |chunk: &[u8]| -> String {
@@ -9669,39 +9748,12 @@ mod tests {
         };
 
         // Open the session: 201, with the chunk size and the resume point.
-        let created = create_upload_session_door(
-            State(state.clone()),
-            LawyerSession(session_data.clone()),
-            Path(project_id),
-            JsonOrForm(CreateUploadSessionRequest {
-                filename: "hearing.mp3".to_string(),
-                slug: None,
-                content_type: Some("audio/mpeg".to_string()),
-                kind: Some("transcript".to_string()),
-                visibility: None,
-                description: None,
-                metadata: None,
-                derived_from: None,
-                transcript_quality: Some("machine".to_string()),
-                signing: None,
-                notarization: vec![],
-                declared_size: bytes.len(),
-                declared_sha256: sha.clone(),
-            }),
-        )
-        .await
-        .expect("a lawyer on the matter can open a streaming upload");
-        assert_eq!(created.status(), axum::http::StatusCode::CREATED);
-        let body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(created.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let body =
+            open_streaming_session(&state, &session_data, project_id, "hearing.mp3", &bytes).await;
         let session_id: uuid::Uuid = body["id"].as_str().unwrap().parse().unwrap();
         let chunk_size = body["chunk_size"].as_i64().unwrap();
         assert!(
-            chunk_size > bytes.len() as i64,
+            chunk_size > i64::try_from(bytes.len()).unwrap(),
             "the fixture fits one chunk: {chunk_size}"
         );
         assert_eq!(body["received_bytes"], 0);
@@ -9715,18 +9767,14 @@ mod tests {
             LawyerSession(session_data.clone()),
             Path((project_id, session_id)),
             JsonOrForm(UploadChunkRequest {
+                offset: 0,
                 content_base64: encode(&bytes),
             }),
         )
         .await
         .unwrap();
         assert_eq!(appended.status(), axum::http::StatusCode::OK);
-        let status: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(appended.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let status: serde_json::Value = streaming_json(appended).await;
         assert_eq!(
             status["received_bytes"],
             bytes.len(),
@@ -9742,18 +9790,14 @@ mod tests {
             LawyerSession(session_data.clone()),
             Path((project_id, session_id)),
             JsonOrForm(UploadChunkRequest {
+                offset: 0,
                 content_base64: encode(&bytes),
             }),
         )
         .await
         .unwrap();
         assert_eq!(replayed.status(), axum::http::StatusCode::OK);
-        let replay: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(replayed.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let replay: serde_json::Value = streaming_json(replayed).await;
         assert_eq!(
             replay["received_bytes"],
             bytes.len(),
@@ -9770,45 +9814,37 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(resumed.status(), axum::http::StatusCode::OK);
-        let resumed: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(resumed.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let resumed: serde_json::Value = streaming_json(resumed).await;
         assert_eq!(resumed["received_bytes"], bytes.len(), "{resumed}");
 
-        // Completing with nothing staged is a 409: a second session that
-        // never received a chunk cannot file a pointer.
-        let empty_session = create_upload_session_door(
+        let completed = complete_upload_session_door(
             State(state.clone()),
             LawyerSession(session_data.clone()),
-            Path(project_id),
-            JsonOrForm(CreateUploadSessionRequest {
-                filename: "empty-hearing.mp3".to_string(),
-                slug: None,
-                content_type: Some("audio/mpeg".to_string()),
-                kind: Some("transcript".to_string()),
-                visibility: None,
-                description: None,
-                metadata: None,
-                derived_from: None,
-                transcript_quality: Some("machine".to_string()),
-                signing: None,
-                notarization: vec![],
-                declared_size: bytes.len(),
-                declared_sha256: sha.clone(),
-            }),
+            Path((project_id, session_id)),
         )
         .await
-        .expect("a second streaming session opens");
-        assert_eq!(empty_session.status(), axum::http::StatusCode::CREATED);
-        let empty_body: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(empty_session.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
         .unwrap();
+        assert_eq!(completed.status(), StatusCode::CREATED);
+        let pointer = streaming_json(completed).await;
+        assert_eq!(pointer["current_version"]["sha256"], sha);
+    }
+
+    #[tokio::test]
+    async fn streaming_doors_refuse_wrong_offsets_and_incomplete_uploads() {
+        use base64::Engine as _;
+        let (state, session_data, project_id) = streaming_fixture().await;
+        let bytes = b"streamed court audio bytes".to_vec();
+        let encode = |chunk: &[u8]| base64::engine::general_purpose::STANDARD.encode(chunk);
+        // Completing with nothing staged is a 409: a second session that
+        // never received a chunk cannot file a pointer.
+        let empty_body = open_streaming_session(
+            &state,
+            &session_data,
+            project_id,
+            "empty-hearing.mp3",
+            &bytes,
+        )
+        .await;
         let empty_id: uuid::Uuid = empty_body["id"].as_str().unwrap().parse().unwrap();
         // A chunk at the wrong offset is refused with the offset the
         // session stands at — the client resyncs through the status door.
@@ -9817,18 +9853,14 @@ mod tests {
             LawyerSession(session_data.clone()),
             Path((project_id, empty_id)),
             JsonOrForm(UploadChunkRequest {
-                content_base64: encode(&bytes[..5]),
+                offset: 5,
+                content_base64: encode(&bytes),
             }),
         )
         .await
         .unwrap();
         assert_eq!(misaligned.status(), axum::http::StatusCode::CONFLICT);
-        let misaligned: serde_json::Value = serde_json::from_slice(
-            &axum::body::to_bytes(misaligned.into_body(), usize::MAX)
-                .await
-                .unwrap(),
-        )
-        .unwrap();
+        let misaligned: serde_json::Value = streaming_json(misaligned).await;
         assert_eq!(misaligned["error"], "chunk_offset_mismatch", "{misaligned}");
         let early = complete_upload_session_door(
             State(state.clone()),

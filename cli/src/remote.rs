@@ -1573,82 +1573,10 @@ impl DocumentClient {
                 first_line(&text)
             ));
         }
-        let mut session: StreamingSessionStatus =
+        let session: StreamingSessionStatus =
             serde_json::from_str(&text).context("parse upload session response")?;
         let session_id = session.id;
-        let mut offset = session.received_bytes as usize;
-
-        // A 409 means the server stands at a different offset than this run
-        // assumed — a lost acknowledgement, or a chunk sized for a stale
-        // session view. Re-sync from the status door and continue; after a
-        // few consecutive refusals the mismatch is real, so fail with the
-        // offset named instead of looping.
-        let mut resyncs = 0_u32;
-        while offset < bytes.len() {
-            let chunk_len = session.chunk_size.max(1) as usize;
-            let end = (offset + chunk_len).min(bytes.len());
-            let chunk = &bytes[offset..end];
-            let chunk_url = format!(
-                "{}/app/api/projects/{}/documents/upload-session/{session_id}/chunk",
-                self.base, self.project_id
-            );
-            let response = self
-                .client
-                .post(&chunk_url)
-                .bearer_auth(&self.token)
-                .json(&serde_json::json!({
-                    "content_base64":
-                        base64::engine::general_purpose::STANDARD.encode(chunk),
-                }))
-                .send()
-                .await
-                .with_context(|| {
-                    format!(
-                        "POST {chunk_url}: chunk {offset} outcome unknown; \
-                         re-running the command resumes from the acknowledged offset"
-                    )
-                })?;
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                return Err(UploadSessionExpired(self.base.clone()).into());
-            }
-            if status == reqwest::StatusCode::CONFLICT {
-                resyncs += 1;
-                if resyncs > 4 {
-                    return Err(anyhow!(
-                        "the server refused the chunk at offset {offset} repeatedly; \
-                         re-run the command to resume from the acknowledged offset"
-                    ));
-                }
-                session = self.upload_session_status(session_id).await?;
-                offset = session.received_bytes as usize;
-                continue;
-            }
-            if status == reqwest::StatusCode::GONE {
-                return Err(anyhow!(
-                    "the upload session expired mid-upload; re-run the command \
-                     to open a new one (progress is not recoverable)"
-                ));
-            }
-            if !status.is_success() {
-                return Err(anyhow!(
-                    "chunk at offset {offset} failed: {status}: {} — re-run the \
-                     command to resume from the acknowledged offset",
-                    first_line(&text)
-                ));
-            }
-            let ack: StreamingSessionStatus =
-                serde_json::from_str(&text).context("parse upload session acknowledgement")?;
-            if ack.received_bytes as usize <= offset && end < bytes.len() {
-                return Err(anyhow!(
-                    "the server acknowledged {} bytes after the chunk at offset \
-                     {offset}; re-run the command to resume",
-                    ack.received_bytes
-                ));
-            }
-            offset = ack.received_bytes as usize;
-        }
+        self.stream_upload_chunks(bytes, session).await?;
 
         let complete_url = format!(
             "{}/app/api/projects/{}/documents/upload-session/{session_id}/complete",
@@ -1682,6 +1610,95 @@ impl DocumentClient {
             "parse document pointer response: upload may be filed; reconcile with \
              `navigator project gate --check` before retrying",
         )
+    }
+
+    async fn stream_upload_chunks(
+        &self,
+        bytes: &[u8],
+        mut session: StreamingSessionStatus,
+    ) -> Result<()> {
+        let session_id = session.id;
+        let mut offset = usize::try_from(session.received_bytes)
+            .context("upload offset exceeds addressable memory")?;
+
+        // A 409 means the server stands at a different offset than this run
+        // assumed — a lost acknowledgement, or a chunk sized for a stale
+        // session view. Re-sync from the status door and continue; after a
+        // few consecutive refusals the mismatch is real, so fail with the
+        // offset named instead of looping.
+        let mut resyncs = 0_u32;
+        while offset < bytes.len() {
+            let chunk_len = usize::try_from(session.chunk_size.max(1))
+                .context("upload chunk size exceeds addressable memory")?;
+            let end = offset.saturating_add(chunk_len).min(bytes.len());
+            let chunk = &bytes[offset..end];
+            let chunk_url = format!(
+                "{}/app/api/projects/{}/documents/upload-session/{session_id}/chunk",
+                self.base, self.project_id
+            );
+            let response = self
+                .client
+                .post(&chunk_url)
+                .bearer_auth(&self.token)
+                .json(&serde_json::json!({
+                    "offset": offset,
+                    "content_base64":
+                        base64::engine::general_purpose::STANDARD.encode(chunk),
+                }))
+                .send()
+                .await
+                .with_context(|| {
+                    format!(
+                        "POST {chunk_url}: chunk {offset} outcome unknown; \
+                         re-running the command resumes from the acknowledged offset"
+                    )
+                })?;
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(UploadSessionExpired(self.base.clone()).into());
+            }
+            if status == reqwest::StatusCode::CONFLICT {
+                resyncs += 1;
+                if resyncs > 4 {
+                    return Err(anyhow!(
+                        "the server refused the chunk at offset {offset} repeatedly; \
+                         re-run the command to resume from the acknowledged offset"
+                    ));
+                }
+                session = self.upload_session_status(session_id).await?;
+                offset = usize::try_from(session.received_bytes)
+                    .context("upload offset exceeds addressable memory")?;
+                continue;
+            }
+            if status == reqwest::StatusCode::GONE {
+                return Err(anyhow!(
+                    "the upload session expired mid-upload; re-run the command \
+                     to open a new one (progress is not recoverable)"
+                ));
+            }
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "chunk at offset {offset} failed: {status}: {} — re-run the \
+                     command to resume from the acknowledged offset",
+                    first_line(&text)
+                ));
+            }
+            let ack: StreamingSessionStatus =
+                serde_json::from_str(&text).context("parse upload session acknowledgement")?;
+            let acknowledged = usize::try_from(ack.received_bytes)
+                .context("upload acknowledgement exceeds addressable memory")?;
+            if acknowledged <= offset && end < bytes.len() {
+                return Err(anyhow!(
+                    "the server acknowledged {} bytes after the chunk at offset \
+                     {offset}; re-run the command to resume",
+                    ack.received_bytes
+                ));
+            }
+            offset = acknowledged;
+        }
+
+        Ok(())
     }
 
     /// Read one streaming upload session's status — the resume point and the
@@ -9910,12 +9927,7 @@ mod tests {
         }
     }
 
-    /// The streaming client end to end against a mock deployment: open, two
-    /// chunks, a 409 from a replayed chunk after a lost acknowledgement, the
-    /// status-door re-sync, completion, and the same pointer the buffered
-    /// door files. Four bytes per chunk makes the choreography explicit.
-    #[tokio::test(flavor = "current_thread")]
-    async fn document_upload_streams_in_chunks_and_resumes_after_a_conflict() {
+    async fn streaming_client_fixture(bytes: &[u8]) -> (MockServer, DocumentClient, Uuid, Uuid) {
         let server = MockServer::start().await;
         let project_id = Uuid::now_v7();
         let session_id = Uuid::now_v7();
@@ -9946,7 +9958,35 @@ mod tests {
             .mount(&server)
             .await;
 
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/upload-session/{session_id}/complete"
+            )))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "kind": "transcript",
+                "visibility": "internal",
+                "current_version": {
+                    "version": 1,
+                    "asset_id": Uuid::now_v7(),
+                    "created_at": "2026-10-30T12:00:00Z",
+                    "sha256": store::documents::sha256_hex(bytes),
+                    "size_bytes": bytes.len()
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        (server, client, project_id, session_id)
+    }
+
+    /// The streaming client end to end against a mock deployment: open, two
+    /// chunks, a 409 from a replayed chunk after a lost acknowledgement, the
+    /// status-door re-sync, completion, and the same pointer the buffered
+    /// door files. Four bytes per chunk makes the choreography explicit.
+    #[tokio::test(flavor = "current_thread")]
+    async fn document_upload_streams_in_chunks_and_resumes_after_a_conflict() {
         let bytes = b"eight bytes here".to_vec();
+        let (server, client, project_id, session_id) = streaming_client_fixture(&bytes).await;
         let encode = |chunk: &[u8]| -> String {
             use base64::Engine as _;
             base64::engine::general_purpose::STANDARD.encode(chunk)
@@ -9962,6 +10002,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path(&chunk_url))
             .and(body_json(serde_json::json!({
+                "offset": 0,
                 "content_base64": encode(&bytes[..4])
             })))
             .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
@@ -9975,6 +10016,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path(&chunk_url))
             .and(body_json(serde_json::json!({
+                "offset": 0,
                 "content_base64": encode(&bytes[..4])
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -10000,64 +10042,23 @@ mod tests {
             .mount(&server)
             .await;
 
-        // The remaining three chunks each land exactly once, in order.
-        Mock::given(method("POST"))
-            .and(path(&chunk_url))
-            .and(body_json(serde_json::json!({
-                "content_base64": encode(&bytes[4..8])
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": session_id,
-                "chunk_size": 4,
-                "received_bytes": 8
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path(&chunk_url))
-            .and(body_json(serde_json::json!({
-                "content_base64": encode(&bytes[8..12])
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": session_id,
-                "chunk_size": 4,
-                "received_bytes": 12
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path(&chunk_url))
-            .and(body_json(serde_json::json!({
-                "content_base64": encode(&bytes[12..])
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": session_id,
-                "chunk_size": 4,
-                "received_bytes": 16
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path(format!(
-                "/app/api/projects/{project_id}/documents/upload-session/{session_id}/complete"
-            )))
-            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-                "kind": "transcript",
-                "visibility": "internal",
-                "current_version": {
-                    "version": 1,
-                    "asset_id": Uuid::now_v7(),
-                    "created_at": "2026-10-30T12:00:00Z",
-                    "sha256": store::documents::sha256_hex(&bytes),
-                    "size_bytes": 16
-                }
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
+        // The remaining chunks each land exactly once at their declared offset.
+        for (index, chunk) in bytes.chunks(4).enumerate().skip(1) {
+            Mock::given(method("POST"))
+                .and(path(&chunk_url))
+                .and(body_json(serde_json::json!({
+                    "offset": index * 4,
+                    "content_base64": encode(chunk)
+                })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": session_id,
+                    "chunk_size": 4,
+                    "received_bytes": (index + 1) * 4
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
 
         let pointer = client
             .upload_bytes_streaming(
