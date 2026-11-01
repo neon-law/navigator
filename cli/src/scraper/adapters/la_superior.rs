@@ -539,9 +539,10 @@ mod tests {
         // A fresh download: the first fetch carries no Range header and the
         // whole document lands in the sink.
         let fresh_ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let handler_ranges = Arc::clone(&fresh_ranges);
         let fresh_document = document.clone();
         let fresh_handler = move |request: &FetchRequest| {
-            fresh_ranges.lock().expect("ranges").push(request.range_start);
+            handler_ranges.lock().expect("ranges").push(request.range_start);
             Ok(FetchResponse {
                 status: 200,
                 body: fresh_document.clone(),
