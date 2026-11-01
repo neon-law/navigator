@@ -106,6 +106,20 @@ fn surreal_and_postgres_rows_normalize_to_one_image() {
 }
 
 #[tokio::test]
+async fn a_table_the_engine_has_not_defined_yet_reads_as_empty() {
+    let surreal = mem_surreal().await;
+    surreal
+        .query("REMOVE TABLE person_phone")
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .unwrap();
+    let rows = source(&surreal, table("person_phone").unwrap())
+        .await
+        .unwrap();
+    assert!(rows.is_empty());
+}
+
+#[tokio::test]
 async fn unmapped_source_fields_cannot_disappear_from_parity() {
     let surreal = mem_surreal().await;
     let id = Uuid::new_v4();
