@@ -1,0 +1,61 @@
+custom_datetime__amount_due_date
+custom_datetime__auto_accident_date
+custom_text__claim_facts
+custom_text__claim_other_description
+custom_usd__claim_amount
+custom_yes_no__claim_auto_damages
+custom_yes_no__claim_faulty_workmanship
+custom_yes_no__claim_loan
+custom_yes_no__claim_merchandise
+custom_yes_no__claim_other
+custom_yes_no__claim_property_damage
+custom_yes_no__claim_rent
+custom_yes_no__claim_return_of_deposit
+custom_yes_no__claim_wages
+people__defendants.0.city
+people__defendants.0.name
+people__defendants.0.state
+people__defendants.0.street
+people__defendants.0.zip
+people__defendants.1.city
+people__defendants.1.name
+people__defendants.1.state
+people__defendants.1.street
+people__defendants.1.zip
+people__plaintiffs.0.city
+people__plaintiffs.0.name
+people__plaintiffs.0.state
+people__plaintiffs.0.street
+people__plaintiffs.0.zip
+people__plaintiffs.1.city
+people__plaintiffs.1.name
+people__plaintiffs.1.state
+people__plaintiffs.1.street
+people__plaintiffs.1.zip
+person__client.email
+person__client.name
+person__client.phone
+unmapped__City_5
+unmapped__Clerk
+unmapped__Date_2
+unmapped__Email or Alt Phone_2
+unmapped__Email or Alt Phone_3
+unmapped__Email or Alt Phone_4
+unmapped__Faulty Workmanship.1.1.0.1
+unmapped__Faulty Workmanship.1.1.1.0.0.0
+unmapped__Faulty Workmanship.1.1.1.0.0.1
+unmapped__Faulty Workmanship.1.1.1.0.1.1
+unmapped__Faulty Workmanship.1.1.1.1
+unmapped__I do not know if any defendants are covered by the Servicemember Civil Relief Act
+unmapped__Language 1
+unmapped__Language 2
+unmapped__Name 1
+unmapped__Name 2
+unmapped__No
+unmapped__No defendant is covered by the Servicemember Civil Relief Act The facts supporting this claim are
+unmapped__Phone No_2
+unmapped__Phone No_3
+unmapped__Print or Type Name
+unmapped__State on
+unmapped__cmbdivision
+unmapped__o

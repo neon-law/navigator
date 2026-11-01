@@ -1,0 +1,106 @@
+form_code = "wa__minor_name_change_petition"
+
+# King County District Court local form — Petition for Name Change of
+# Minor Child (KCDC October 2024, 2 pages).
+#
+# Mapped: the caption's three full-name lines (two parent/guardian
+# petitioners, the minor's current name), the parent printed-name boxes,
+# the minor's printed name, the date-of-birth box, the prior name-change
+# pair and its explanation, the sex-offender single box, and the
+# best-interest reasons box.
+#
+# This official blank is partly broken: ELEVEN widgets ship with zero
+# rects (invisible and unclickable), including the WHEREFORE name-part
+# rows, the DOC Yes/No pair (statement 5), and the statement-1a-i
+# Yes/No/N/A trio. They stay unmapped; a filled packet cannot paint them
+# and the lawyer hand-checks the printed brackets at review.
+#
+# Deliberately left unmapped (decision recorded, firm or clerk completes):
+# - `petdiv` — the clerk's division dropdown (ships with the form's own
+#   `SELECT A COURTHOUSE` placeholder value; left as the form ships it).
+# - `No` — the clerk's case-number box.
+# - `NoKC.0.0` / `NoKC.0.1` / `NoKC.1.0` / `NoKC.1.1` — the statement-1a-i
+#   other-parent Yes/No/N/A trio's hidden widgets; the other parent's
+#   consent-or-service status is adjudicated by the lawyer at review.
+# - `Text2` (both pages) / `Text3` (both pages) — hidden zero-rect
+#   explanation boxes (broken official form).
+# - `Check Box2.0` / `Check Box2.1` — statement 5's hidden DOC Yes/No.
+# - `Text5` — the minor's age; derived from the date of birth, confirmed
+#   by the lawyer at review.
+# - `Check Box1` — the interpreter-request box, and the interpreter's
+#   language line has no widget at all; hearing accommodations are
+#   confirmed with the family at review.
+# - `Check Box3` / `Check Box5` / `Text8` / `Text9` — the pronoun
+#   checkboxes and free-text boxes (hearing accommodations).
+# - `City` / `Date` — the signed-at city and date, completed at the
+#   review appointment.
+# - `Petitioners Street AddressPO Box` / `City State Zip` / `Phone
+#   number` / `Email address` — the petitioners' contact block; the firm
+#   confirms the mailing address at review (the court mails hearing
+#   notices to it).
+# - The WHEREFORE CURRENT NAME and REQUESTED NEW NAME first/middle/last
+#   rows (`Text1.0.0.0.0` through `Text1.1.0.1`) are all hidden zero-rect
+#   widgets; the lawyer writes the names on the printed lines at review.
+# - `Check Box4` — the minor's pronoun-request checkbox.
+
+[[field]]
+name = "Last1"
+question = "people__parents"
+row = 0
+part = "name"
+
+[[field]]
+name = "ParentGuardian Printed Name"
+question = "people__parents"
+row = 0
+part = "name"
+
+[[field]]
+name = "Last2"
+question = "people__parents"
+row = 1
+part = "name"
+
+[[field]]
+name = "ParentGuardian Printed Name_2"
+question = "people__parents"
+row = 1
+part = "name"
+
+[[field]]
+name = "Last3"
+question = "person__client.name"
+
+[[field]]
+name = "Minors Printed Name"
+question = "person__client.name"
+
+[[field]]
+name = "Text4"
+question = "custom_datetime__date_of_birth"
+
+[[field]]
+name = "NoSO"
+question = "custom_yes_no__sex_offender_registration"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "YesNameChanged"
+question = "custom_yes_no__prior_name_change"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "NoNameChanged"
+question = "custom_yes_no__prior_name_change"
+checked_when = "no"
+on_state = "On"
+
+[[field]]
+name = "Text7"
+question = "custom_text__prior_petition_details"
+
+[[field]]
+name = "Text6"
+question = "custom_text__best_interest_reasons"

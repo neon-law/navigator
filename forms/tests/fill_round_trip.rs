@@ -167,6 +167,21 @@ fn court_form_answers(form_code: &str) -> Vec<(&'static str, String)> {
         "nv__adult_name_change_petition" | "nv__dv_protection_order_application" => {
             nv_answers(form_code)
         }
+        "nv__las_vegas_small_claims_complaint"
+        | "nv__las_vegas_small_claims_counterclaim"
+        | "nv__washoe_adult_name_change_petition"
+        | "nv__washoe_fee_waiver_application"
+        | "ny__nc1_adult_name_change_petition"
+        | "ny__nc2_minor_name_change_petition"
+        | "ny__nc3_lip_name_change_petition"
+        | "ny__nc4_family_name_change_petition"
+        | "ny__nc5_family_name_change_supplement"
+        | "ny__civ_sc50_statement_of_claim"
+        | "ny__probate_petition"
+        | "wa__adult_name_change_petition"
+        | "wa__minor_name_change_petition"
+        | "wa__small_claims_notice"
+        | "wa__small_claims_plaintiff_packet" => wave_two_answers(form_code),
         other => panic!("no sample answers for `{other}`"),
     }
 }
@@ -390,6 +405,1062 @@ async fn every_packet_round_trips_from_the_storage_seam() {
     }
 }
 
+/// Wave-two court-form packets: King County (WA), Washoe and Las Vegas
+/// (NV), and the New York UCS routes. Each form fills from its own
+/// questionnaire, so the arms are per form rather than per family.
+#[allow(clippy::too_many_lines)] // one arm per form; the forms are large
+fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
+    match form_code {
+        "nv__las_vegas_small_claims_complaint" => vec![
+            (
+                "custom_phone__defendant_contact",
+                "702-555-0100".to_string(),
+            ),
+            (
+                "custom_text__defendant_caption",
+                "Sample entry for defendant_caption".to_string(),
+            ),
+            (
+                "custom_text__plaintiff_caption",
+                "Sample entry for plaintiff_caption".to_string(),
+            ),
+            (
+                "custom_text__reason_owed",
+                "Sample entry for reason_owed".to_string(),
+            ),
+            ("custom_usd__amount_owed", "2500".to_string()),
+            ("person__client.email", "jordan@example.com".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__client.phone", "702-555-0100".to_string()),
+        ],
+        "nv__las_vegas_small_claims_counterclaim" => vec![
+            (
+                "custom_text__counterdefendant_caption",
+                "Sample entry for counterdefendant_caption".to_string(),
+            ),
+            (
+                "custom_text__counterplaintiff_caption",
+                "Sample entry for counterplaintiff_caption".to_string(),
+            ),
+            (
+                "custom_text__reason_owed",
+                "Sample entry for reason_owed".to_string(),
+            ),
+            (
+                "custom_text__reason_owed_2",
+                "Sample entry for reason_owed_2".to_string(),
+            ),
+            (
+                "custom_text__reason_owed_3",
+                "Sample entry for reason_owed_3".to_string(),
+            ),
+            (
+                "custom_text__reason_owed_4",
+                "Sample entry for reason_owed_4".to_string(),
+            ),
+            (
+                "custom_text__reason_owed_5",
+                "Sample entry for reason_owed_5".to_string(),
+            ),
+            (
+                "custom_text__reason_owed_6",
+                "Sample entry for reason_owed_6".to_string(),
+            ),
+            ("custom_usd__amount_owed", "2500".to_string()),
+            ("person__client.email", "jordan@example.com".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__client.phone", "702-555-0100".to_string()),
+        ],
+        "nv__washoe_adult_name_change_petition" => vec![
+            (
+                "custom_datetime__county_residency_since",
+                "1990-04-12".to_string(),
+            ),
+            ("custom_datetime__date_of_birth", "1990-04-12".to_string()),
+            ("custom_text__birthplace_city", "Reno".to_string()),
+            (
+                "custom_text__felony_details",
+                "Sample entry for felony_details".to_string(),
+            ),
+            (
+                "custom_text__reason_for_change",
+                "The new name reflects the petitioner's family ties.".to_string(),
+            ),
+            ("custom_yes_no__criminal_record", "yes".to_string()),
+            ("custom_yes_no__felony_conviction", "yes".to_string()),
+            ("jurisdiction__birthplace.name", "Nevada".to_string()),
+            ("person__client.family", "Blake".to_string()),
+            ("person__client.given", "Jordan".to_string()),
+            ("person__client.middle", "Kim".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__new_name.family", "Blake".to_string()),
+            ("person__new_name.given", "Jordan".to_string()),
+            ("person__new_name.middle", "Kim".to_string()),
+        ],
+        "nv__washoe_fee_waiver_application" => vec![
+            (
+                "custom_text__account_one",
+                "Sample entry for account_one".to_string(),
+            ),
+            (
+                "custom_text__account_two",
+                "Sample entry for account_two".to_string(),
+            ),
+            (
+                "custom_text__additional_information",
+                "Sample entry for additional_information".to_string(),
+            ),
+            (
+                "custom_text__expense_other_label",
+                "Sample entry for expense_other_label".to_string(),
+            ),
+            (
+                "custom_text__hours_per_week",
+                "Sample entry for hours_per_week".to_string(),
+            ),
+            (
+                "custom_text__household_age_1",
+                "Sample entry for household_age_1".to_string(),
+            ),
+            (
+                "custom_text__household_age_2",
+                "Sample entry for household_age_2".to_string(),
+            ),
+            (
+                "custom_text__household_age_3",
+                "Sample entry for household_age_3".to_string(),
+            ),
+            (
+                "custom_text__household_age_4",
+                "Sample entry for household_age_4".to_string(),
+            ),
+            (
+                "custom_text__household_age_5",
+                "Sample entry for household_age_5".to_string(),
+            ),
+            (
+                "custom_text__household_age_6",
+                "Sample entry for household_age_6".to_string(),
+            ),
+            (
+                "custom_text__household_age_7",
+                "Sample entry for household_age_7".to_string(),
+            ),
+            (
+                "custom_text__household_person_1",
+                "Sample entry for household_person_1".to_string(),
+            ),
+            (
+                "custom_text__household_person_2",
+                "Sample entry for household_person_2".to_string(),
+            ),
+            (
+                "custom_text__household_person_3",
+                "Sample entry for household_person_3".to_string(),
+            ),
+            (
+                "custom_text__household_person_4",
+                "Sample entry for household_person_4".to_string(),
+            ),
+            (
+                "custom_text__household_person_5",
+                "Sample entry for household_person_5".to_string(),
+            ),
+            (
+                "custom_text__household_person_6",
+                "Sample entry for household_person_6".to_string(),
+            ),
+            (
+                "custom_text__household_person_7",
+                "Sample entry for household_person_7".to_string(),
+            ),
+            (
+                "custom_text__household_relationship_1",
+                "Sample entry for household_relationship_1".to_string(),
+            ),
+            (
+                "custom_text__household_relationship_2",
+                "Sample entry for household_relationship_2".to_string(),
+            ),
+            (
+                "custom_text__household_relationship_3",
+                "Sample entry for household_relationship_3".to_string(),
+            ),
+            (
+                "custom_text__household_relationship_4",
+                "Sample entry for household_relationship_4".to_string(),
+            ),
+            (
+                "custom_text__household_relationship_5",
+                "Sample entry for household_relationship_5".to_string(),
+            ),
+            (
+                "custom_text__household_relationship_6",
+                "Sample entry for household_relationship_6".to_string(),
+            ),
+            (
+                "custom_text__household_relationship_7",
+                "Sample entry for household_relationship_7".to_string(),
+            ),
+            (
+                "custom_text__no_income_explanation",
+                "Sample entry for no_income_explanation".to_string(),
+            ),
+            (
+                "custom_text__other_benefits_program",
+                "Sample entry for other_benefits_program".to_string(),
+            ),
+            (
+                "custom_text__real_estate_address",
+                "Sample entry for real_estate_address".to_string(),
+            ),
+            (
+                "custom_text__vehicle_one",
+                "Sample entry for vehicle_one".to_string(),
+            ),
+            (
+                "custom_text__vehicle_two",
+                "Sample entry for vehicle_two".to_string(),
+            ),
+            ("custom_usd__account_one_owed", "2500".to_string()),
+            ("custom_usd__account_one_worth", "2500".to_string()),
+            ("custom_usd__account_two_owed", "2500".to_string()),
+            ("custom_usd__account_two_worth", "2500".to_string()),
+            ("custom_usd__cash", "2500".to_string()),
+            ("custom_usd__commissions_monthly", "2500".to_string()),
+            ("custom_usd__expense_childcare", "2500".to_string()),
+            ("custom_usd__expense_food", "2500".to_string()),
+            ("custom_usd__expense_insurance", "2500".to_string()),
+            ("custom_usd__expense_medical", "2500".to_string()),
+            ("custom_usd__expense_other", "2500".to_string()),
+            ("custom_usd__expense_rent", "2500".to_string()),
+            ("custom_usd__expense_transportation", "2500".to_string()),
+            ("custom_usd__expense_utilities", "2500".to_string()),
+            ("custom_usd__expenses_total", "2500".to_string()),
+            ("custom_usd__hourly_wage", "2500".to_string()),
+            ("custom_usd__household_contribution_1", "2500".to_string()),
+            ("custom_usd__household_contribution_2", "2500".to_string()),
+            ("custom_usd__household_contribution_3", "2500".to_string()),
+            ("custom_usd__household_contribution_4", "2500".to_string()),
+            ("custom_usd__household_contribution_5", "2500".to_string()),
+            ("custom_usd__household_contribution_6", "2500".to_string()),
+            ("custom_usd__household_contribution_7", "2500".to_string()),
+            ("custom_usd__other_income_monthly", "2500".to_string()),
+            ("custom_usd__pension_monthly", "2500".to_string()),
+            ("custom_usd__real_estate_owed", "2500".to_string()),
+            ("custom_usd__real_estate_worth", "2500".to_string()),
+            ("custom_usd__salary_per_month", "2500".to_string()),
+            ("custom_usd__salary_per_year", "2500".to_string()),
+            ("custom_usd__support_monthly", "2500".to_string()),
+            ("custom_usd__unemployment_weekly", "2500".to_string()),
+            ("custom_usd__vehicle_one_owed", "2500".to_string()),
+            ("custom_usd__vehicle_one_worth", "2500".to_string()),
+            ("custom_usd__vehicle_two_owed", "2500".to_string()),
+            ("custom_usd__vehicle_two_worth", "2500".to_string()),
+            ("custom_usd__veterans_or_ss_monthly", "2500".to_string()),
+            ("custom_yes_no__benefit_food_stamps", "yes".to_string()),
+            ("custom_yes_no__benefit_legal_services", "yes".to_string()),
+            ("custom_yes_no__benefit_medicaid", "yes".to_string()),
+            ("custom_yes_no__benefit_other", "yes".to_string()),
+            ("custom_yes_no__benefit_ssi", "yes".to_string()),
+            (
+                "custom_yes_no__benefit_subsidized_housing",
+                "yes".to_string(),
+            ),
+            ("custom_yes_no__benefit_tanf", "yes".to_string()),
+            ("custom_yes_no__income_benefits", "yes".to_string()),
+            ("custom_yes_no__income_commissions", "yes".to_string()),
+            ("custom_yes_no__income_employment", "yes".to_string()),
+            ("custom_yes_no__income_other", "yes".to_string()),
+            ("custom_yes_no__income_pension", "yes".to_string()),
+            ("custom_yes_no__income_salary", "yes".to_string()),
+            ("custom_yes_no__income_support", "yes".to_string()),
+            ("custom_yes_no__income_unemployment", "yes".to_string()),
+            ("custom_yes_no__no_income", "yes".to_string()),
+            ("custom_yes_no__no_real_estate", "yes".to_string()),
+            ("custom_yes_no__no_vehicle", "yes".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            (
+                "person__opposing_party.name",
+                "Jordan Kim Blake".to_string(),
+            ),
+        ],
+        "ny__nc1_adult_name_change_petition" => vec![
+            ("custom_datetime__date_of_birth", "1990-04-12".to_string()),
+            ("custom_single_choice__bankruptcy", "No".to_string()),
+            ("custom_single_choice__child_support", "No".to_string()),
+            (
+                "custom_single_choice__child_support_current",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__children_under_21", String::new()),
+            ("custom_single_choice__convicted", "No".to_string()),
+            ("custom_single_choice__currently_married", String::new()),
+            ("custom_single_choice__documents_attached", "No".to_string()),
+            (
+                "custom_single_choice__filing_county",
+                "New York".to_string(),
+            ),
+            (
+                "custom_single_choice__filing_court",
+                "Supreme Court".to_string(),
+            ),
+            ("custom_single_choice__judgments_liens", "No".to_string()),
+            ("custom_single_choice__name_change", "Yes".to_string()),
+            ("custom_single_choice__new_sex_designation", "X".to_string()),
+            ("custom_single_choice__party_to_action", "No".to_string()),
+            ("custom_single_choice__previously_married", "No".to_string()),
+            ("custom_single_choice__prior_name_change", String::new()),
+            (
+                "custom_single_choice__prior_sex_designation_change",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__sealing_requested", "No".to_string()),
+            (
+                "custom_single_choice__sex_designation_change",
+                "Yes".to_string(),
+            ),
+            (
+                "custom_single_choice__sex_designation_reasons_given",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__spousal_support", "No".to_string()),
+            (
+                "custom_single_choice__spousal_support_current",
+                "No".to_string(),
+            ),
+            (
+                "custom_text__child_support_court",
+                "Sample entry for child_support_court".to_string(),
+            ),
+            (
+                "custom_text__current_address",
+                "Sample entry for current_address".to_string(),
+            ),
+            (
+                "custom_text__financial_matters_details",
+                "Sample entry for financial_matters_details".to_string(),
+            ),
+            (
+                "custom_text__place_of_birth",
+                "Sample entry for place_of_birth".to_string(),
+            ),
+            (
+                "custom_text__prior_petition_details",
+                "Sample entry for prior_petition_details".to_string(),
+            ),
+            (
+                "custom_text__prior_sex_designation_details",
+                "Sample entry for prior_sex_designation_details".to_string(),
+            ),
+            (
+                "custom_text__reason_for_change",
+                "The new name reflects the petitioner's family ties.".to_string(),
+            ),
+            (
+                "custom_text__sealing_details",
+                "Sample entry for sealing_details".to_string(),
+            ),
+            (
+                "custom_text__sex_designation_reasons",
+                "Sample entry for sex_designation_reasons".to_string(),
+            ),
+            (
+                "custom_text__spousal_support_court",
+                "Sample entry for spousal_support_court".to_string(),
+            ),
+            (
+                "custom_text__support_collections_unit",
+                "Sample entry for support_collections_unit".to_string(),
+            ),
+            (
+                "custom_text__supporting_documents_list",
+                "Sample entry for supporting_documents_list".to_string(),
+            ),
+            ("custom_usd__child_support_arrears", "2500".to_string()),
+            ("custom_usd__spousal_support_arrears", "2500".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__new_name.name", "Jordan Kim Blake".to_string()),
+        ],
+        "ny__nc2_minor_name_change_petition" => vec![
+            ("custom_datetime__date_of_birth", "1990-04-12".to_string()),
+            ("custom_single_choice__documents_attached", "No".to_string()),
+            (
+                "custom_single_choice__filing_county",
+                "New York".to_string(),
+            ),
+            (
+                "custom_single_choice__filing_court",
+                "Supreme Court".to_string(),
+            ),
+            ("custom_single_choice__minor_bankruptcy", "No".to_string()),
+            (
+                "custom_single_choice__minor_child_support",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__minor_child_support_current",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__minor_children_under_21",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__minor_convicted", "No".to_string()),
+            (
+                "custom_single_choice__minor_currently_married",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__minor_judgments_liens",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__minor_new_sex_designation",
+                "X".to_string(),
+            ),
+            (
+                "custom_single_choice__minor_party_to_action",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__minor_previously_married",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__minor_prior_sex_designation",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__minor_sex_designation_reasons_given",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__minor_spousal_support",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__minor_spousal_support_current",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__name_change", "Yes".to_string()),
+            (
+                "custom_single_choice__petitioner_bankruptcy",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__petitioner_child_support",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__petitioner_child_support_current",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__petitioner_children_under_21",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__petitioner_convicted",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__petitioner_currently_married",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__petitioner_judgments_liens",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__petitioner_party_to_action",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__petitioner_previously_married",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__petitioner_spousal_support",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__petitioner_spousal_support_current",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__prior_name_change", "No".to_string()),
+            (
+                "custom_single_choice__relationship",
+                "Parent(s)".to_string(),
+            ),
+            ("custom_single_choice__sealing_requested", "No".to_string()),
+            (
+                "custom_single_choice__sex_designation_change",
+                "Yes".to_string(),
+            ),
+            (
+                "custom_text__minor_child_support_court",
+                "Sample entry for minor_child_support_court".to_string(),
+            ),
+            (
+                "custom_text__minor_current_address",
+                "Sample entry for minor_current_address".to_string(),
+            ),
+            (
+                "custom_text__minor_financial_details",
+                "Sample entry for minor_financial_details".to_string(),
+            ),
+            (
+                "custom_text__minor_prior_sex_designation_details",
+                "Sample entry for minor_prior_sex_designation_details".to_string(),
+            ),
+            (
+                "custom_text__minor_sex_designation_reasons",
+                "Sample entry for minor_sex_designation_reasons".to_string(),
+            ),
+            (
+                "custom_text__minor_spousal_support_court",
+                "Sample entry for minor_spousal_support_court".to_string(),
+            ),
+            (
+                "custom_text__minor_support_collections_unit",
+                "Sample entry for minor_support_collections_unit".to_string(),
+            ),
+            (
+                "custom_text__other_relation",
+                "Sample entry for other_relation".to_string(),
+            ),
+            (
+                "custom_text__petitioner_address",
+                "Sample entry for petitioner_address".to_string(),
+            ),
+            (
+                "custom_text__petitioner_financial_details",
+                "Sample entry for petitioner_financial_details".to_string(),
+            ),
+            (
+                "custom_text__petitioner_spousal_support_court",
+                "Sample entry for petitioner_spousal_support_court".to_string(),
+            ),
+            (
+                "custom_text__petitioner_support_collections_unit",
+                "Sample entry for petitioner_support_collections_unit".to_string(),
+            ),
+            (
+                "custom_text__place_of_birth",
+                "Sample entry for place_of_birth".to_string(),
+            ),
+            (
+                "custom_text__prior_petition_details",
+                "Sample entry for prior_petition_details".to_string(),
+            ),
+            (
+                "custom_text__reason_for_change",
+                "The new name reflects the petitioner's family ties.".to_string(),
+            ),
+            (
+                "custom_text__sealing_details",
+                "Sample entry for sealing_details".to_string(),
+            ),
+            (
+                "custom_text__supporting_documents_list",
+                "Sample entry for supporting_documents_list".to_string(),
+            ),
+            (
+                "custom_usd__minor_child_support_arrears",
+                "2500".to_string(),
+            ),
+            (
+                "custom_usd__minor_spousal_support_arrears",
+                "2500".to_string(),
+            ),
+            (
+                "custom_usd__petitioner_child_support_arrears",
+                "2500".to_string(),
+            ),
+            (
+                "custom_usd__petitioner_spousal_support_arrears",
+                "2500".to_string(),
+            ),
+            ("people__consenting_parents", two_people().clone()),
+            ("person__minor.name", "Jordan Kim Blake".to_string()),
+            (
+                "person__minor_new_name.name",
+                "Jordan Kim Blake".to_string(),
+            ),
+            ("person__petitioner.name", "Jordan Kim Blake".to_string()),
+        ],
+        "ny__nc3_lip_name_change_petition" => vec![
+            ("custom_datetime__date_of_birth", "1990-04-12".to_string()),
+            ("custom_single_choice__bankruptcy", "No".to_string()),
+            ("custom_single_choice__child_support", "No".to_string()),
+            (
+                "custom_single_choice__child_support_current",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__convicted", "No".to_string()),
+            ("custom_single_choice__currently_married", "No".to_string()),
+            ("custom_single_choice__documents_attached", "No".to_string()),
+            (
+                "custom_single_choice__filing_county",
+                "New York".to_string(),
+            ),
+            (
+                "custom_single_choice__filing_court",
+                "Supreme Court".to_string(),
+            ),
+            ("custom_single_choice__judgments_liens", "No".to_string()),
+            ("custom_single_choice__name_change", "Yes".to_string()),
+            ("custom_single_choice__new_sex_designation", "X".to_string()),
+            ("custom_single_choice__party_to_action", "No".to_string()),
+            ("custom_single_choice__previously_married", "No".to_string()),
+            ("custom_single_choice__prior_name_change", "No".to_string()),
+            (
+                "custom_single_choice__sex_designation_change",
+                "Yes".to_string(),
+            ),
+            (
+                "custom_single_choice__sex_designation_reasons_given",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__spousal_support", "No".to_string()),
+            (
+                "custom_single_choice__spousal_support_current",
+                "No".to_string(),
+            ),
+            (
+                "custom_text__child_support_court",
+                "Sample entry for child_support_court".to_string(),
+            ),
+            (
+                "custom_text__current_address",
+                "Sample entry for current_address".to_string(),
+            ),
+            (
+                "custom_text__financial_matters_details",
+                "Sample entry for financial_matters_details".to_string(),
+            ),
+            (
+                "custom_text__place_of_birth",
+                "Sample entry for place_of_birth".to_string(),
+            ),
+            (
+                "custom_text__prior_petition_details",
+                "Sample entry for prior_petition_details".to_string(),
+            ),
+            (
+                "custom_text__prior_sex_designation_details",
+                "Sample entry for prior_sex_designation_details".to_string(),
+            ),
+            (
+                "custom_text__reason_for_change",
+                "The new name reflects the petitioner's family ties.".to_string(),
+            ),
+            (
+                "custom_text__sex_designation_reasons",
+                "Sample entry for sex_designation_reasons".to_string(),
+            ),
+            (
+                "custom_text__spousal_support_court",
+                "Sample entry for spousal_support_court".to_string(),
+            ),
+            (
+                "custom_text__support_collections_unit",
+                "Sample entry for support_collections_unit".to_string(),
+            ),
+            (
+                "custom_text__supporting_documents_list",
+                "Sample entry for supporting_documents_list".to_string(),
+            ),
+            ("custom_usd__child_support_arrears", "2500".to_string()),
+            ("custom_usd__spousal_support_arrears", "2500".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__new_name.name", "Jordan Kim Blake".to_string()),
+            ("person__petitioner.name", "Jordan Kim Blake".to_string()),
+        ],
+        "ny__nc4_family_name_change_petition" => vec![
+            ("custom_datetime__address_since", "1990-04-12".to_string()),
+            ("custom_single_choice__bankruptcy", "No".to_string()),
+            ("custom_single_choice__child_support", "No".to_string()),
+            ("custom_single_choice__convicted", "No".to_string()),
+            (
+                "custom_single_choice__filing_county",
+                "New York".to_string(),
+            ),
+            (
+                "custom_single_choice__filing_court",
+                "Supreme Court".to_string(),
+            ),
+            ("custom_single_choice__judgments_liens", "No".to_string()),
+            ("custom_single_choice__party_to_action", "No".to_string()),
+            ("custom_single_choice__prior_name_change", String::new()),
+            ("custom_single_choice__sealing_requested", "No".to_string()),
+            ("custom_single_choice__spousal_support", "No".to_string()),
+            (
+                "custom_text__current_address",
+                "Sample entry for current_address".to_string(),
+            ),
+            (
+                "custom_text__parent_1_address",
+                "Sample entry for parent_1_address".to_string(),
+            ),
+            (
+                "custom_text__parent_1_consent_children",
+                "Sample entry for parent_1_consent_children".to_string(),
+            ),
+            (
+                "custom_text__parent_1_consent_new_names",
+                "Sample entry for parent_1_consent_new_names".to_string(),
+            ),
+            (
+                "custom_text__parent_1_name",
+                "Sample entry for parent_1_name".to_string(),
+            ),
+            (
+                "custom_text__parent_2_address",
+                "Sample entry for parent_2_address".to_string(),
+            ),
+            (
+                "custom_text__parent_2_consent_children",
+                "Sample entry for parent_2_consent_children".to_string(),
+            ),
+            (
+                "custom_text__parent_2_consent_new_names",
+                "Sample entry for parent_2_consent_new_names".to_string(),
+            ),
+            (
+                "custom_text__parent_2_name",
+                "Sample entry for parent_2_name".to_string(),
+            ),
+            (
+                "custom_text__prior_petition_details",
+                "Sample entry for prior_petition_details".to_string(),
+            ),
+            (
+                "custom_text__reason_for_change",
+                "The new name reflects the petitioner's family ties.".to_string(),
+            ),
+            (
+                "custom_text__sealing_details",
+                "Sample entry for sealing_details".to_string(),
+            ),
+            ("people__co_petitioners", two_people().clone()),
+            ("people__family_members", two_people().clone()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            (
+                "person__new_family_name.name",
+                "Jordan Kim Blake".to_string(),
+            ),
+        ],
+        "ny__nc5_family_name_change_supplement" => vec![
+            (
+                "custom_single_choice__child_support_current",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__children_under_21", "No".to_string()),
+            ("custom_single_choice__currently_married", "No".to_string()),
+            (
+                "custom_single_choice__filing_county",
+                "New York".to_string(),
+            ),
+            (
+                "custom_single_choice__filing_court",
+                "Supreme Court".to_string(),
+            ),
+            ("custom_single_choice__member_bankruptcy", "No".to_string()),
+            (
+                "custom_single_choice__member_child_support",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__member_convicted", "No".to_string()),
+            (
+                "custom_single_choice__member_judgments_liens",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__member_party_to_action",
+                "No".to_string(),
+            ),
+            (
+                "custom_single_choice__member_role",
+                "The petitioner".to_string(),
+            ),
+            (
+                "custom_single_choice__member_spousal_support",
+                "No".to_string(),
+            ),
+            ("custom_single_choice__previously_married", "No".to_string()),
+            (
+                "custom_single_choice__spousal_support_current",
+                "No".to_string(),
+            ),
+            (
+                "custom_text__child_support_collection_unit",
+                "Sample entry for child_support_collection_unit".to_string(),
+            ),
+            (
+                "custom_text__child_support_order_court",
+                "Sample entry for child_support_order_court".to_string(),
+            ),
+            (
+                "custom_text__court_of_conviction",
+                "Sample entry for court_of_conviction".to_string(),
+            ),
+            (
+                "custom_text__crime_of_conviction",
+                "Sample entry for crime_of_conviction".to_string(),
+            ),
+            (
+                "custom_text__member_disclosure_details",
+                "Sample entry for member_disclosure_details".to_string(),
+            ),
+            (
+                "custom_text__spousal_support_order_court",
+                "Sample entry for spousal_support_order_court".to_string(),
+            ),
+            ("custom_usd__child_support_arrears", "2500".to_string()),
+            ("custom_usd__spousal_support_arrears", "2500".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__member.name", "Jordan Kim Blake".to_string()),
+        ],
+        "ny__civ_sc50_statement_of_claim" => vec![
+            (
+                "custom_datetime__claim_occurrence_date",
+                "1990-04-12".to_string(),
+            ),
+            (
+                "custom_phone__defendant_contact",
+                "702-555-0100".to_string(),
+            ),
+            (
+                "custom_single_choice__primary_claim_reason",
+                "automobile".to_string(),
+            ),
+            (
+                "custom_text__auto_accident_place",
+                "Sample entry for auto_accident_place".to_string(),
+            ),
+            (
+                "custom_text__claim_other_description",
+                "The sample narrative for this answer.".to_string(),
+            ),
+            (
+                "custom_text__identifying_numbers",
+                "Sample entry for identifying_numbers".to_string(),
+            ),
+            ("custom_usd__claim_amount", "2500".to_string()),
+            ("people__claimants", two_people().clone()),
+            ("people__defendants", two_people().clone()),
+            ("person__client.email", "jordan@example.com".to_string()),
+            ("person__client.family", "Blake".to_string()),
+            ("person__client.given", "Jordan".to_string()),
+            ("person__client.middle", "Kim".to_string()),
+            ("person__client.phone", "702-555-0100".to_string()),
+            ("person__defendant.family", "Blake".to_string()),
+            ("person__defendant.given", "Jordan".to_string()),
+            ("person__defendant.middle", "Kim".to_string()),
+        ],
+        "wa__adult_name_change_petition" => vec![
+            (
+                "custom_text__reason_for_change",
+                "The new name reflects the petitioner's family ties.".to_string(),
+            ),
+            ("custom_yes_no__doc_jurisdiction", "yes".to_string()),
+            ("custom_yes_no__not_detrimental", "yes".to_string()),
+            ("custom_yes_no__open_protection_order", "yes".to_string()),
+            ("custom_yes_no__prior_name_change", "yes".to_string()),
+            (
+                "custom_yes_no__sex_offender_registration",
+                "yes".to_string(),
+            ),
+            ("person__client.family", "Blake".to_string()),
+            ("person__client.given", "Jordan".to_string()),
+            ("person__client.middle", "Kim".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__new_name.family", "Blake".to_string()),
+            ("person__new_name.given", "Jordan".to_string()),
+            ("person__new_name.middle", "Kim".to_string()),
+        ],
+        "wa__minor_name_change_petition" => vec![
+            ("custom_datetime__date_of_birth", "1990-04-12".to_string()),
+            (
+                "custom_text__best_interest_reasons",
+                "Sample entry for best_interest_reasons".to_string(),
+            ),
+            (
+                "custom_text__prior_name_change_details",
+                "Sample entry for prior_name_change_details".to_string(),
+            ),
+            ("custom_yes_no__prior_name_change", "yes".to_string()),
+            (
+                "custom_yes_no__sex_offender_registration",
+                "yes".to_string(),
+            ),
+            ("people__parents", two_people().clone()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+        ],
+        "wa__small_claims_notice" => vec![
+            ("custom_datetime__amount_due_date", "1990-04-12".to_string()),
+            (
+                "custom_datetime__auto_accident_date",
+                "1990-04-12".to_string(),
+            ),
+            (
+                "custom_text__claim_facts",
+                "Sample entry for claim_facts".to_string(),
+            ),
+            (
+                "custom_text__claim_other_description",
+                "The sample narrative for this answer.".to_string(),
+            ),
+            ("custom_usd__claim_amount", "2500".to_string()),
+            ("custom_yes_no__claim_auto_damages", "yes".to_string()),
+            ("custom_yes_no__claim_faulty_workmanship", "yes".to_string()),
+            ("custom_yes_no__claim_loan", "yes".to_string()),
+            ("custom_yes_no__claim_merchandise", "yes".to_string()),
+            ("custom_yes_no__claim_other", "yes".to_string()),
+            ("custom_yes_no__claim_property_damage", "yes".to_string()),
+            ("custom_yes_no__claim_rent", "yes".to_string()),
+            ("custom_yes_no__claim_return_of_deposit", "yes".to_string()),
+            ("custom_yes_no__claim_wages", "yes".to_string()),
+            ("people__defendants", two_people().clone()),
+            ("people__plaintiffs", two_people().clone()),
+            ("person__client.email", "jordan@example.com".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__client.phone", "702-555-0100".to_string()),
+        ],
+        "wa__small_claims_plaintiff_packet" => vec![
+            ("custom_usd__claim_amount", "2500".to_string()),
+            ("custom_yes_no__claim_auto_damages", "yes".to_string()),
+            ("custom_yes_no__claim_faulty_workmanship", "yes".to_string()),
+            ("custom_yes_no__claim_loan", "yes".to_string()),
+            ("custom_yes_no__claim_merchandise", "yes".to_string()),
+            ("custom_yes_no__claim_other", "yes".to_string()),
+            ("custom_yes_no__claim_return_of_deposit", "yes".to_string()),
+            ("custom_yes_no__claim_wages", "yes".to_string()),
+            ("people__defendants", two_people().clone()),
+            ("people__plaintiffs", two_people().clone()),
+            ("person__client.email", "jordan@example.com".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__client.phone", "702-555-0100".to_string()),
+        ],
+        "ny__probate_petition" => vec![
+            ("custom_datetime__codicil_date", "2010-03-02".to_string()),
+            ("custom_datetime__codicil_date_2", "2015-09-14".to_string()),
+            (
+                "custom_datetime__decedent_date_of_death",
+                "2024-11-05".to_string(),
+            ),
+            ("custom_datetime__petition_date", "2026-10-31".to_string()),
+            ("custom_datetime__will_date", "2001-06-15".to_string()),
+            (
+                "custom_single_choice__distributee_class_aunts_uncles",
+                "No survivors in this class".to_string(),
+            ),
+            (
+                "custom_single_choice__distributee_class_children",
+                "Two".to_string(),
+            ),
+            (
+                "custom_single_choice__distributee_class_cousins_once_removed",
+                "No survivors in this class".to_string(),
+            ),
+            (
+                "custom_single_choice__distributee_class_grandparents",
+                "No survivors in this class".to_string(),
+            ),
+            (
+                "custom_single_choice__distributee_class_parents",
+                "No survivors in this class".to_string(),
+            ),
+            (
+                "custom_single_choice__distributee_class_siblings",
+                "No survivors in this class".to_string(),
+            ),
+            (
+                "custom_single_choice__distributee_class_spouse",
+                "One".to_string(),
+            ),
+            (
+                "custom_single_choice__letters_requested",
+                "Letters Testamentary".to_string(),
+            ),
+            (
+                "custom_text__codicil_witnesses",
+                "Cora Blair Stubbs".to_string(),
+            ),
+            (
+                "custom_text__codicil_witnesses_2",
+                "Cora Blair Stubbs".to_string(),
+            ),
+            ("custom_text__decedent_aka", "Jordan A. Blake".to_string()),
+            (
+                "custom_text__decedent_citizenship",
+                "United States".to_string(),
+            ),
+            ("custom_text__decedent_county", "Queens".to_string()),
+            (
+                "custom_text__decedent_place_of_death",
+                "Queens, New York".to_string(),
+            ),
+            ("custom_text__filing_county", "Queens".to_string()),
+            (
+                "custom_text__letters_to_name",
+                "Jordan Kim Blake".to_string(),
+            ),
+            ("custom_text__no_later_instruments", "NONE".to_string()),
+            ("custom_text__other_petition_details", String::new()),
+            ("custom_text__other_testamentary_assets", "NONE".to_string()),
+            (
+                "custom_text__petitioner_citizenship",
+                "United States".to_string(),
+            ),
+            ("custom_text__petitioner_mailing_address", String::new()),
+            (
+                "custom_text__will_witnesses",
+                "Casey Devon Harper, Cora Blair Stubbs".to_string(),
+            ),
+            ("custom_usd__gross_rents_18_months", "2500".to_string()),
+            (
+                "custom_usd__improved_real_property_less_than",
+                "2500".to_string(),
+            ),
+            (
+                "custom_usd__improved_real_property_value",
+                "2500".to_string(),
+            ),
+            (
+                "custom_usd__unimproved_real_property_less_than",
+                "2500".to_string(),
+            ),
+            (
+                "custom_usd__unimproved_real_property_value",
+                "2500".to_string(),
+            ),
+            ("custom_yes_no__executor_is_attorney", "no".to_string()),
+            (
+                "custom_yes_no__executor_is_convicted_felon",
+                "no".to_string(),
+            ),
+            ("custom_yes_no__executor_is_draftsperson", "no".to_string()),
+            (
+                "custom_yes_no__petitioner_is_named_executor",
+                "yes".to_string(),
+            ),
+            ("person__client.city", "Queens".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__client.state", "NY".to_string()),
+            ("person__client.street", "1 Main St".to_string()),
+            ("person__client.zip", "11101".to_string()),
+            ("person__decedent.city", "Queens".to_string()),
+            ("person__decedent.name", "Jordan Kim Blake".to_string()),
+            ("person__decedent.state", "NY".to_string()),
+            ("person__decedent.street", "2 Side St".to_string()),
+        ],
+        other => panic!("no sample answers for `{other}`"),
+    }
+}
+
 fn flattened_text_smoke_values(form_code: &str) -> &'static [&'static str] {
     match form_code {
         "nv__llc_formation" | "nv__profit_corp_formation" | "nv__business_trust_formation" => {
@@ -423,6 +1494,31 @@ fn flattened_text_smoke_values(form_code: &str) -> &'static [&'static str] {
         "nv__dv_protection_order_application" => {
             &["Cora Blair Stubbs", "Odile Quill Prine", "October 12, 2026"]
         }
+        "nv__las_vegas_small_claims_complaint" => &["Sample entry for defendant_caption"],
+        "nv__las_vegas_small_claims_counterclaim" => &["Sample entry for counterdefendant_caption"],
+        "nv__washoe_adult_name_change_petition" => &["Reno"],
+        "nv__washoe_fee_waiver_application" => &["Sample entry for account_one"],
+        "ny__nc1_adult_name_change_petition" | "ny__nc3_lip_name_change_petition" => {
+            &["Sample entry for child_support_court"]
+        }
+        "ny__nc2_minor_name_change_petition" => &["Sample entry for minor_child_support_court"],
+        "ny__nc4_family_name_change_petition" => &["Sample entry for current_address"],
+        "ny__nc5_family_name_change_supplement" => {
+            &["Sample entry for child_support_collection_unit"]
+        }
+        "ny__civ_sc50_statement_of_claim" => &["Sample entry for auto_accident_place"],
+        "ny__probate_petition" => &[
+            "Jordan Kim Blake",
+            "Jordan A. Blake",
+            "Casey Devon Harper, Cora Blair Stubbs",
+            "NONE",
+        ],
+        "wa__adult_name_change_petition" => {
+            &["The new name reflects the petitioner's family ties."]
+        }
+        "wa__minor_name_change_petition" => &["Sample entry for best_interest_reasons"],
+        "wa__small_claims_notice" => &["Sample entry for claim_facts"],
+        "wa__small_claims_plaintiff_packet" => &["Aries Client"],
         other => panic!("no flattened text smoke values for `{other}`"),
     }
 }

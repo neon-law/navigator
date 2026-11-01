@@ -314,6 +314,52 @@ fn preview_doc(slug: &str, source_path: &str, src: &str) -> webapp::notation_pre
     )
 }
 
+const FORM_NV_LAS_VEGAS_SMALL_CLAIMS_COMPLAINT: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_complaint.md"
+);
+const FORM_NV_LAS_VEGAS_SMALL_CLAIMS_COUNTERCLAIM: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_counterclaim.md"
+);
+const FORM_NV_WASHOE_ADULT_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_adult_name_change_petition.md"
+);
+const FORM_NV_WASHOE_FEE_WAIVER_APPLICATION: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.md"
+);
+const FORM_NY_NC1_ADULT_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc1_adult_name_change_petition.md"
+);
+const FORM_NY_NC2_MINOR_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc2_minor_name_change_petition.md"
+);
+const FORM_NY_NC3_LIP_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc3_lip_name_change_petition.md"
+);
+const FORM_NY_NC4_FAMILY_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc4_family_name_change_petition.md"
+);
+const FORM_NY_NC5_FAMILY_NAME_CHANGE_SUPPLEMENT: &str = include_str!(
+    "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc5_family_name_change_supplement.md"
+);
+const FORM_NY_PROBATE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/new_york/new_york_surrogates_court/ny__probate_petition.md"
+);
+const FORM_NY_CIV_SC50_STATEMENT_OF_CLAIM: &str = include_str!(
+    "../../templates/notations/forms/united_states/new_york/nyc_civil_court/ny__civ_sc50_statement_of_claim.md"
+);
+const FORM_WA_ADULT_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__adult_name_change_petition.md"
+);
+const FORM_WA_MINOR_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__minor_name_change_petition.md"
+);
+const FORM_WA_SMALL_CLAIMS_NOTICE: &str = include_str!(
+    "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__small_claims_notice.md"
+);
+const FORM_WA_SMALL_CLAIMS_PLAINTIFF_PACKET: &str = include_str!(
+    "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__small_claims_plaintiff_packet.md"
+);
+
 /// Every bundled notation's show-page content — the sample letters, fixture
 /// filings, and every government form — the content
 /// [`portal::dioxus_app::notation_preview_router`] serves at
@@ -474,6 +520,81 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
             "nevada-dv-protection-order-application",
             "notations/forms/united_states/nevada/nevada_supreme_court/nv__dv_protection_order_application.md",
             NV_DV_PROTECTION_ORDER_APPLICATION,
+        ),
+        preview_doc(
+            "nv-las-vegas-small-claims-complaint",
+            "notations/forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_complaint.md",
+            FORM_NV_LAS_VEGAS_SMALL_CLAIMS_COMPLAINT,
+        ),
+        preview_doc(
+            "nv-las-vegas-small-claims-counterclaim",
+            "notations/forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_counterclaim.md",
+            FORM_NV_LAS_VEGAS_SMALL_CLAIMS_COUNTERCLAIM,
+        ),
+        preview_doc(
+            "nv-washoe-adult-name-change-petition",
+            "notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_adult_name_change_petition.md",
+            FORM_NV_WASHOE_ADULT_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "nv-washoe-fee-waiver-application",
+            "notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.md",
+            FORM_NV_WASHOE_FEE_WAIVER_APPLICATION,
+        ),
+        preview_doc(
+            "ny-nc1-adult-name-change-petition",
+            "notations/forms/united_states/new_york/new_york_supreme_court/ny__nc1_adult_name_change_petition.md",
+            FORM_NY_NC1_ADULT_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "ny-nc2-minor-name-change-petition",
+            "notations/forms/united_states/new_york/new_york_supreme_court/ny__nc2_minor_name_change_petition.md",
+            FORM_NY_NC2_MINOR_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "ny-nc3-lip-name-change-petition",
+            "notations/forms/united_states/new_york/new_york_supreme_court/ny__nc3_lip_name_change_petition.md",
+            FORM_NY_NC3_LIP_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "ny-nc4-family-name-change-petition",
+            "notations/forms/united_states/new_york/new_york_supreme_court/ny__nc4_family_name_change_petition.md",
+            FORM_NY_NC4_FAMILY_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "ny-nc5-family-name-change-supplement",
+            "notations/forms/united_states/new_york/new_york_supreme_court/ny__nc5_family_name_change_supplement.md",
+            FORM_NY_NC5_FAMILY_NAME_CHANGE_SUPPLEMENT,
+        ),
+        preview_doc(
+            "ny-probate-petition",
+            "notations/forms/united_states/new_york/new_york_surrogates_court/ny__probate_petition.md",
+            FORM_NY_PROBATE_PETITION,
+        ),
+        preview_doc(
+            "ny-civ-sc50-statement-of-claim",
+            "notations/forms/united_states/new_york/nyc_civil_court/ny__civ_sc50_statement_of_claim.md",
+            FORM_NY_CIV_SC50_STATEMENT_OF_CLAIM,
+        ),
+        preview_doc(
+            "wa-adult-name-change-petition",
+            "notations/forms/united_states/washington/king_county_district_court/wa__adult_name_change_petition.md",
+            FORM_WA_ADULT_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "wa-minor-name-change-petition",
+            "notations/forms/united_states/washington/king_county_district_court/wa__minor_name_change_petition.md",
+            FORM_WA_MINOR_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "wa-small-claims-notice",
+            "notations/forms/united_states/washington/king_county_district_court/wa__small_claims_notice.md",
+            FORM_WA_SMALL_CLAIMS_NOTICE,
+        ),
+        preview_doc(
+            "wa-small-claims-plaintiff-packet",
+            "notations/forms/united_states/washington/king_county_district_court/wa__small_claims_plaintiff_packet.md",
+            FORM_WA_SMALL_CLAIMS_PLAINTIFF_PACKET,
         ),
     ]);
     docs
@@ -706,6 +827,111 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
         brand_key: String::new(),
         kinds: kind_catalog_entries(),
     };
+    content.materials.push(notation_card(
+        "Nevada",
+        "Small Claims Complaint (Las Vegas)",
+        "nv-las-vegas-small-claims-complaint",
+        "Bundled court-form notation.",
+        FORM_NV_LAS_VEGAS_SMALL_CLAIMS_COMPLAINT,
+    ));
+    content.materials.push(notation_card(
+        "Nevada",
+        "Small Claims Counterclaim (Las Vegas)",
+        "nv-las-vegas-small-claims-counterclaim",
+        "Bundled court-form notation.",
+        FORM_NV_LAS_VEGAS_SMALL_CLAIMS_COUNTERCLAIM,
+    ));
+    content.materials.push(notation_card(
+        "Nevada",
+        "Petition for Adult Name Change (Washoe)",
+        "nv-washoe-adult-name-change-petition",
+        "Bundled court-form notation.",
+        FORM_NV_WASHOE_ADULT_NAME_CHANGE_PETITION,
+    ));
+    content.materials.push(notation_card(
+        "Nevada",
+        "Application for Waiver of Fees and Costs (Washoe)",
+        "nv-washoe-fee-waiver-application",
+        "Bundled court-form notation.",
+        FORM_NV_WASHOE_FEE_WAIVER_APPLICATION,
+    ));
+    content.materials.push(notation_card(
+        "New York",
+        "Name Change and/or Sex Designation Change Petition — Individual Adult (New York)",
+        "ny-nc1-adult-name-change-petition",
+        "Bundled court-form notation.",
+        FORM_NY_NC1_ADULT_NAME_CHANGE_PETITION,
+    ));
+    content.materials.push(notation_card(
+        "New York",
+        "Name Change and/or Sex Designation Change Petition for an Individual Minor (New York)",
+        "ny-nc2-minor-name-change-petition",
+        "Bundled court-form notation.",
+        FORM_NY_NC2_MINOR_NAME_CHANGE_PETITION,
+    ));
+    content.materials.push(notation_card(
+        "New York",
+        "Name Change and/or Sex Designation Change Petition for a Legally Incapacitated Person (New York)",
+        "ny-nc3-lip-name-change-petition",
+        "Bundled court-form notation.",
+        FORM_NY_NC3_LIP_NAME_CHANGE_PETITION,
+    ));
+    content.materials.push(notation_card(
+        "New York",
+        "Family Name Change Petition (New York)",
+        "ny-nc4-family-name-change-petition",
+        "Bundled court-form notation.",
+        FORM_NY_NC4_FAMILY_NAME_CHANGE_PETITION,
+    ));
+    content.materials.push(notation_card(
+        "New York",
+        "Family Name Change Supplement (New York)",
+        "ny-nc5-family-name-change-supplement",
+        "Bundled court-form notation.",
+        FORM_NY_NC5_FAMILY_NAME_CHANGE_SUPPLEMENT,
+    ));
+    content.materials.push(notation_card(
+        "New York",
+        "Petition for Probate and Letters Testamentary (New York)",
+        "ny-probate-petition",
+        "Bundled court-form notation.",
+        FORM_NY_PROBATE_PETITION,
+    ));
+    content.materials.push(notation_card(
+        "New York",
+        "Statement of Claim (Small Claims)",
+        "ny-civ-sc50-statement-of-claim",
+        "Bundled court-form notation.",
+        FORM_NY_CIV_SC50_STATEMENT_OF_CLAIM,
+    ));
+    content.materials.push(notation_card(
+        "Washington",
+        "Petition for Name Change (Individual)",
+        "wa-adult-name-change-petition",
+        "Bundled court-form notation.",
+        FORM_WA_ADULT_NAME_CHANGE_PETITION,
+    ));
+    content.materials.push(notation_card(
+        "Washington",
+        "Petition for Minor Child Name Change",
+        "wa-minor-name-change-petition",
+        "Bundled court-form notation.",
+        FORM_WA_MINOR_NAME_CHANGE_PETITION,
+    ));
+    content.materials.push(notation_card(
+        "Washington",
+        "Notice of Small Claim",
+        "wa-small-claims-notice",
+        "Bundled court-form notation.",
+        FORM_WA_SMALL_CLAIMS_NOTICE,
+    ));
+    content.materials.push(notation_card(
+        "Washington",
+        "Small Claims Packet — Plaintiff",
+        "wa-small-claims-plaintiff-packet",
+        "Bundled court-form notation.",
+        FORM_WA_SMALL_CLAIMS_PLAINTIFF_PACKET,
+    ));
     let business = BUSINESS_NOTATIONS
         .iter()
         .map(|(slug, title, _, summary, source)| {

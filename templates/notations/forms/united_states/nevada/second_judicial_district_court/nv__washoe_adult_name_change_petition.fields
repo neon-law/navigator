@@ -1,0 +1,30 @@
+custom_datetime__county_residency_since
+custom_datetime__date_of_birth
+custom_text__birthplace_city
+custom_text__felony_details
+custom_text__reason_for_change
+custom_yes_no__criminal_record
+custom_yes_no__felony_conviction
+jurisdiction__birthplace.name
+person__client.family
+person__client.given
+person__client.middle
+person__client.name
+person__new_name.family
+person__new_name.given
+person__new_name.middle
+unmapped__Case number
+unmapped__Check Box43
+unmapped__Check Box44
+unmapped__Date of your signature
+unmapped__Day
+unmapped__Department number
+unmapped__Month
+unmapped__Year
+unmapped__Your city, state, zip code
+unmapped__Your email address
+unmapped__Your first and last name
+unmapped__Your signature or type /s/ then your name
+unmapped__Your signature or type /s/ then your name_
+unmapped__Your street address
+unmapped__Your telephone number

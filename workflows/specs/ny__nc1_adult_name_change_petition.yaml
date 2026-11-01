@@ -1,0 +1,322 @@
+questionnaire:
+  BEGIN:
+    _: person__client
+  person__client:
+    _: person__new_name
+  person__new_name:
+    _: custom_datetime__date_of_birth
+  custom_datetime__date_of_birth:
+    _: custom_single_choice__filing_court
+  custom_single_choice__filing_court:
+    _: custom_single_choice__filing_county
+  custom_single_choice__filing_county:
+    _: custom_single_choice__name_change
+  custom_single_choice__name_change:
+    _: custom_text__reason_for_change
+  custom_text__reason_for_change:
+    _: custom_single_choice__prior_name_change
+  custom_single_choice__prior_name_change:
+    _: custom_text__prior_petition_details
+  custom_text__prior_petition_details:
+    _: custom_text__place_of_birth
+  custom_text__place_of_birth:
+    _: custom_text__current_address
+  custom_text__current_address:
+    _: custom_single_choice__convicted
+  custom_single_choice__convicted:
+    _: custom_text__felony_details
+  custom_text__felony_details:
+    _: custom_single_choice__bankruptcy
+  custom_single_choice__bankruptcy:
+    _: custom_single_choice__judgments_liens
+  custom_single_choice__judgments_liens:
+    _: custom_single_choice__party_to_action
+  custom_single_choice__party_to_action:
+    _: custom_text__financial_matters_details
+  custom_text__financial_matters_details:
+    _: custom_single_choice__currently_married
+  custom_single_choice__currently_married:
+    _: custom_single_choice__previously_married
+  custom_single_choice__previously_married:
+    _: custom_single_choice__children_under_21
+  custom_single_choice__children_under_21:
+    _: custom_single_choice__child_support
+  custom_single_choice__child_support:
+    _: custom_single_choice__child_support_current
+  custom_single_choice__child_support_current:
+    _: custom_usd__child_support_arrears
+  custom_usd__child_support_arrears:
+    _: custom_text__child_support_court
+  custom_text__child_support_court:
+    _: custom_text__support_collections_unit
+  custom_text__support_collections_unit:
+    _: custom_single_choice__spousal_support
+  custom_single_choice__spousal_support:
+    _: custom_single_choice__spousal_support_current
+  custom_single_choice__spousal_support_current:
+    _: custom_usd__spousal_support_arrears
+  custom_usd__spousal_support_arrears:
+    _: custom_text__spousal_support_court
+  custom_text__spousal_support_court:
+    _: custom_single_choice__sex_designation_change
+  custom_single_choice__sex_designation_change:
+    _: custom_single_choice__new_sex_designation
+  custom_single_choice__new_sex_designation:
+    _: custom_single_choice__prior_sex_designation_change
+  custom_single_choice__prior_sex_designation_change:
+    _: custom_text__prior_sex_designation_details
+  custom_text__prior_sex_designation_details:
+    _: custom_single_choice__sex_designation_reasons_given
+  custom_single_choice__sex_designation_reasons_given:
+    _: custom_text__sex_designation_reasons
+  custom_text__sex_designation_reasons:
+    _: custom_single_choice__sealing_requested
+  custom_single_choice__sealing_requested:
+    _: custom_text__sealing_details
+  custom_text__sealing_details:
+    _: custom_single_choice__documents_attached
+  custom_single_choice__documents_attached:
+    _: custom_text__supporting_documents_list
+  custom_text__supporting_documents_list:
+    _: END
+  END: {}
+choices:
+  filing_court:
+    Supreme Court: Supreme
+    County Court: County
+    New York City Civil Court: New York City Civil
+  filing_county:
+    Albany: Albany
+    Allegany: Allegany
+    Bronx: Bronx
+    Broome: Broome
+    Cattaraugus: Cattaraugus
+    Cayuga: Cayuga
+    Chautauqua: Chautauqua
+    Chemung: Chemung
+    Chenango: Chenango
+    Clinton: Clinton
+    Columbia: Columbia
+    Cortland: Cortland
+    Delaware: Delaware
+    Dutchess: Dutchess
+    Erie: Erie
+    Essex: Essex
+    Franklin: Franklin
+    Fulton: Fulton
+    Genesee: Genesee
+    Greene: Greene
+    Hamilton: Hamilton
+    Herkimer: Herkimer
+    Jefferson: Jefferson
+    Kings: Kings
+    Lewis: Lewis
+    Livingston: Livingston
+    Madison: Madison
+    Monroe: Monroe
+    Montgomery: Montgomery
+    Nassau: Nassau
+    New York: New York
+    Niagara: Niagara
+    Oneida: Oneida
+    Onondaga: Onondaga
+    Ontario: Ontario
+    Orange: Orange
+    Orleans: Orleans
+    Oswego: Oswego
+    Otsego: Otsego
+    Putnam: Putnam
+    Queens: Queens
+    Rensselaer: Rensselaer
+    Richmond: Richmond
+    Rockland: Rockland
+    Saratoga: Saratoga
+    Schenectady: Schenectady
+    Schoharie: Schoharie
+    Schuyler: Schuyler
+    Seneca: Seneca
+    St. Lawrence: St. Lawrence
+    Steuben: Steuben
+    Suffolk: Suffolk
+    Sullivan: Sullivan
+    Tioga: Tioga
+    Tompkins: Tompkins
+    Ulster: Ulster
+    Warren: Warren
+    Washington: Washington
+    Wayne: Wayne
+    Westchester: Westchester
+    Wyoming: Wyoming
+    Yates: Yates
+  name_change:
+    Yes: Name Change
+  sex_designation_change:
+    Yes: Sex Designation Change
+  convicted:
+    Yes: "1"
+    "No": "0"
+  bankruptcy:
+    Yes: "1"
+    "No": "2"
+  judgments_liens:
+    Yes: "0"
+    "No": "1"
+  party_to_action:
+    Yes: "0"
+    "No": "1"
+  currently_married:
+    Yes: "0"
+  previously_married:
+    Yes: "0"
+    "No": "1"
+  children_under_21:
+    Yes: "0"
+  child_support:
+    Yes: "0"
+    "No": "1"
+  child_support_current:
+    Yes: "0"
+    "No": "1"
+  spousal_support:
+    Yes: "0"
+    "No": "1"
+  spousal_support_current:
+    Yes: "0"
+    "No": "1"
+  prior_name_change:
+    Yes: "8"
+  new_sex_designation:
+    Male: Male
+    Female: Female
+    X: X
+  prior_sex_designation_change:
+    Yes: "0"
+    "No": "1"
+  sex_designation_reasons_given:
+    Yes: "Yes"
+    "No": "1"
+  sealing_requested:
+    Yes: "Yes"
+    "No": "No"
+  documents_attached:
+    Yes: "0"
+    "No": "1"
+prompts:
+  client_name: >-
+    What is your full legal name as it appears now? (It opens the petition
+    caption and identifies you to the court.)
+  new_name_given: >-
+    What first name do you want the court to order? (Leave the parts that do
+    not change blank.)
+  new_name_middle: Your new middle name, if you are changing it.
+  new_name_family: Your new last (family) name.
+  date_of_birth: Your date of birth, as month, day, and year.
+  filing_court: >-
+    Which court will the petition be filed in? (In New York City the Civil
+    Court route costs $65.00 and the Supreme Court route costs $210.00;
+    outside the city the Supreme or County Court of your county hears it.
+    The attorney confirms your venue before filing.)
+  filing_county: The county where you will file. (For NYC residents, your
+    borough's county.)
+  name_change: >-
+    Are you asking the court to change your name? (You may ask for a name
+    change, a sex designation change, or both.)
+  reason_for_change: >-
+    In your own words, why do you want your name changed? (The petition
+    tells the judge this under oath.)
+  prior_name_change: Have you ever filed a name change petition before?
+  prior_petition_details: >-
+    If you answered yes: where you filed it, when, the case number if you
+    know it, and how it came out. (Leave blank if you answered no.)
+  place_of_birth: >-
+    Your place of birth as the form prints it — street address if known,
+    city or town, state, and country. (Proof of birth is attached to the
+    petition.)
+  current_address: >-
+    Your current address as the form prints it — street address, city or
+    town, state, zip, and country. (The court may ask for proof of address
+    when you file.)
+  convicted: Have you ever been convicted of a crime?
+  felony_details: >-
+    If you answered yes: the court where you were convicted and the crime.
+    (Leave blank if you answered no.)
+  bankruptcy: Have you ever filed for bankruptcy?
+  judgments_liens: Are there any judgments or liens against you?
+  party_to_action: Are you a party in a lawsuit or other court case?
+  financial_matters_details: >-
+    If you answered yes to any of the three questions above: the court
+    where it was filed, the date, and the case number if you know it.
+    (Leave blank if you answered no to all three.)
+  currently_married: Are you currently married?
+  previously_married: Were you previously married?
+  children_under_21: Do you have any children under 21?
+  child_support: Do you have to pay child support?
+  child_support_current: >-
+    Are your child support payments up to date? (Answer only if you pay
+    child support.)
+  child_support_arrears: >-
+    If your child support payments are not up to date, how much do you owe?
+    (A dollar amount — leave blank if you owe nothing.)
+  child_support_court: >-
+    The court that issued your child support order. (Only if you pay child
+    support.)
+  support_collections_unit: >-
+    The Child Support Collections Unit handling your order, if there is
+    one. (Leave blank if not.)
+  spousal_support: Do you have to pay spousal support?
+  spousal_support_current: >-
+    Are your spousal support payments up to date? (Answer only if you pay
+    spousal support.)
+  spousal_support_arrears: >-
+    If your spousal support payments are not up to date, how much do you
+    owe? (A dollar amount — leave blank if you owe nothing.)
+  spousal_support_court: >-
+    The court that issued your spousal support order. (Only if you pay
+    spousal support.)
+  sex_designation_change: >-
+    Are you also asking the court to change your sex designation? (This
+    section is optional — New York law does not require a court order to
+    change the sex designation on New York-issued identity documents.)
+  new_sex_designation: >-
+    Your new sex designation, if you are asking for one. (The court
+    recognizes Male, Female, or X.)
+  prior_sex_designation_change: Have you ever filed a sex designation change
+    petition before?
+  prior_sex_designation_details: >-
+    If you answered yes: where you filed it, when, the case number if you
+    know it, and how it came out. (Leave blank if you answered no.)
+  sex_designation_reasons_given: >-
+    Do you want to give your reasons for changing your sex designation?
+    (The form asks this explicitly; the reasons themselves are optional
+    and are not required for the court order.)
+  sex_designation_reasons: >-
+    Optional: your reasons for changing your sex designation. (The form
+    says this information is not required for the court order — leave
+    blank if you prefer.)
+  sealing_requested: >-
+    Should this court record be sealed for your personal safety? (The clerk
+    already keeps the case private until the judge decides; sealing makes
+    it inaccessible after that.)
+  sealing_details: >-
+    If you asked for sealing: why, in your own words. (Leave blank if you
+    did not.)
+  documents_attached: >-
+    Have you attached any supporting documents or additional pages?
+    (Proof of birth is required; the attorney reviews the attachments with
+    you.)
+  supporting_documents_list: >-
+    If you attached documents: the name or a description of each. (Leave
+    blank if none.)
+workflow:
+  BEGIN:
+    intake_submitted: intake_persisted__client
+  intake_persisted__client:
+    petition_rendered: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__nc1_adult_name_change_petition_pdf
+    rejected: END
+  generate_pdf__nc1_adult_name_change_petition_pdf:
+    pdf_persisted: filing__new_york_supreme_court
+  filing__new_york_supreme_court:
+    filed: END
+  END: {}

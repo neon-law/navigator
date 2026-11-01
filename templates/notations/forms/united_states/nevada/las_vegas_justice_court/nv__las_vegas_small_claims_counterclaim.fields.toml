@@ -1,0 +1,72 @@
+form_code = "nv__las_vegas_small_claims_counterclaim"
+# Las Vegas Justice Court (Clark County) — Counterclaim, Small Claims.
+# The parser reports 18 AcroForm fields on the official blank; this map
+# renames the 13 the questionnaire fills and records the rest for the
+# roles that complete them.
+#
+# Mapped: the counterplaintiff (the client's) and counterdefendant
+# caption blocks, the client's own phone and email, the sworn-statement
+# name, the printed name beside the signature, the sum owed, and the six
+# reason lines (the form's fifth named line plus the full-width
+# continuation widget the form author left literally named `undefined` —
+# mapped to the sixth reason state, an honest rename of a real /Tx
+# field).
+#
+# Deliberately left unmapped (decision recorded, lawyer or clerk completes):
+# - `Case No` / `Department No` — the clerk's caption boxes.
+# - `Dated` — the signature date, set when the applicant signs at the
+#   review appointment (a literal would freeze the date at vendor time).
+# - `Attorney for` — the representation line, completed at review.
+# - `Signature` — the wet signature.
+
+[[field]]
+name = "Name and Address of Defendant  Counterplaintiff"
+question = "custom_text__counterplaintiff_caption"
+
+[[field]]
+name = "Counterplaintiffs Telephone Number"
+question = "person__client.phone"
+
+[[field]]
+name = "Counterplaintiffs Email Address"
+question = "person__client.email"
+
+[[field]]
+name = "Name and Address of Plaintiffs  Counterdefendants"
+question = "custom_text__counterdefendant_caption"
+
+[[field]]
+name = "Counterdefendant is indebted to the Counterplaintiff in the sum of"
+question = "custom_usd__amount_owed"
+
+[[field]]
+name = "that the reason for this indebtedness is 1"
+question = "custom_text__reason_owed"
+
+[[field]]
+name = "that the reason for this indebtedness is 2"
+question = "custom_text__reason_owed_2"
+
+[[field]]
+name = "that the reason for this indebtedness is 3"
+question = "custom_text__reason_owed_3"
+
+[[field]]
+name = "that the reason for this indebtedness is 4"
+question = "custom_text__reason_owed_4"
+
+[[field]]
+name = "that the reason for this indebtedness is 5"
+question = "custom_text__reason_owed_5"
+
+[[field]]
+name = "undefined"
+question = "custom_text__reason_owed_6"
+
+[[field]]
+name = "I insert your name"
+question = "person__client.name"
+
+[[field]]
+name = "Print Name"
+question = "person__client.name"

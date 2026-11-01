@@ -925,7 +925,22 @@ records:
     # minor packets live on the same forms tree with cache-busting URLs.
     # The statewide Nevada Supreme Court forms (registered above) are accepted
     # here; these rows carry only what is unique to Washoe County.
-    forms: []
+    forms:
+      - code: nv__washoe_adult_name_change_petition
+        title: Petition for Adult Name Change (Washoe)
+        source_url: https://www.washoecourts.com/Forms/Family/10.%20Name%20Changes/NA%20Adult%20Name%20Change/1.%20Petition%20for%20Adult%20Name%20Change.pdf
+        sha256: 9a8ceaa3bd70b31300f259fb4fb4bf848adb5cbc75bc6e41f4b2a79d522af029
+        filing_office: Family Division Clerk's Office, Second Judicial District Court, 1 S. Sierra St, Reno
+        fee_note: The filing fee for a Washoe name change was NOT published on any page the survey fetched (2026-10-30) — treat the amount as unknown.
+        fee_waiver_code: null
+      - code: nv__washoe_fee_waiver_application
+        title: Application for Waiver of Fees and Costs (Washoe)
+        source_url: https://www.washoecourts.com/Forms/Family/1.%20All%20Other%20Family%20Related%20Packets/F-6%20Application%20to%20Waive%20Fees%20and%20Costs/1.%20Application%20for%20Waiver%20of%20Fees%20and%20Costs.pdf
+        sha256: 9b5223881ad34dc41dff0820b264010df986e911c3268118561078cbadf950fb
+        filing_office: Family Division Clerk's Office, Second Judicial District Court
+        fee_note: No filing fee for the application.
+        fee_waiver_code: null
+
     surveyed_forms:
       - key: WASHOENA
         title: Petition for Adult Name Change (Washoe NA packet)
@@ -973,7 +988,22 @@ records:
     level: justice
     # Small claims forms are per-justice-court in Nevada; there is no
     # statewide small-claims set.
-    forms: []
+    forms:
+      - code: nv__las_vegas_small_claims_complaint
+        title: Complaint, Small Claims (Las Vegas)
+        source_url: https://www.civillawselfhelpcenter.org/images/small-claims/complaints/complaint---small-claims.pdf
+        sha256: b9cecb40625f1156f0d540ebe618cc89587e42891f261d37cc0f3399c189fb09
+        filing_office: Las Vegas Justice Court clerk, small claims division
+        fee_note: "Filing fee tiered by claim (NRS 4.060 schedule, eff. 2/8/2024): $66 up to $1,000; $86 for $1,000.01-$2,500; $106 for $2,500.01-$5,000; $146 for $5,000.01-$7,500; $196 for $7,500.01-$10,000. No fee may be charged to a defendant appearing. Waiver: the justice-court fee-waiver form or the statewide application."
+        fee_waiver_code: null
+      - code: nv__las_vegas_small_claims_counterclaim
+        title: Counterclaim, Small Claims (Las Vegas)
+        source_url: https://www.civillawselfhelpcenter.org/images/small-claims/counterclaims/counterclaim---small-claims---las-vegas.pdf
+        sha256: 1e52f29cdcc642d58c2d61fa47f16d1339dad88488c68b61732e565faba1d053
+        filing_office: Las Vegas Justice Court clerk, small claims division
+        fee_note: No separate filing fee for the counterclaim; it is filed in the same case.
+        fee_waiver_code: null
+
     surveyed_forms:
       - key: LVCSCOMPLAINT
         title: Complaint — Small Claims (Las Vegas Township)
@@ -1233,7 +1263,44 @@ records:
     level: district
     # King County's own local forms ARE fillable AcroForms, unlike the
     # statewide pattern PDFs. eFiling portal: dcfiling.kingcounty.gov.
-    forms: []
+    forms:
+      - code: wa__adult_name_change_petition
+        title: Petition for Name Change (Individual)
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-individual-july_2026.pdf
+        sha256: a4f86f65b2b30f5fa06284591617f27cee0a43ce334e188b7afb0f55ff72f04a
+        filing_office: King County District Court clerk
+        filing_fee:
+          amount: "98.00"
+          currency: USD
+        fee_note: "Filing fee $98 per application (includes 1 certified copy; additional copies $5) plus a separate King County Recorder fee: $203.50 individual; $204.50 first family member + $203.50 each additional. Waiver: the statewide GR 34 set (pattern PDFs, unfillable) or the local motion filed in person. Sealed name changes (gender expression/identity, refugee/asylum, DV victim, emancipated minor) go to Superior Court instead."
+        fee_waiver_code: null
+      - code: wa__minor_name_change_petition
+        title: Petition for Minor Child Name Change
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-minor-october-2024.pdf
+        sha256: 7d228ed4b18d377ee87a0cd07d81caaac1ec9338deddb51ef98318f325bab5ab
+        filing_office: King County District Court clerk
+        filing_fee:
+          amount: "98.00"
+          currency: USD
+        fee_note: Both parents' consent or service required; children 14-17 must attend the hearing. Fee as for the adult petition.
+        fee_waiver_code: null
+      - code: wa__small_claims_notice
+        title: Notice of Small Claim
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/forms_sc/notice-of-small-claim-september-2025.pdf
+        sha256: 761f9e321b19237c890d31652f32beeed42a5f5323cb03d6b6246558912d7b96
+        filing_office: King County District Court clerk, small claims division
+        filing_fee:
+          amount: "50.00"
+          currency: USD
+        fee_note: "Filing fee $50; limits $10,000 natural person / $5,000 other. Appeal to Superior: $280 cashier's check to the Superior Court Clerk + $40 district appeal-processing fee. A guided e-file interview generates this notice."
+        fee_waiver_code: null
+      - code: wa__small_claims_plaintiff_packet
+        title: Small Claims Packet — Plaintiff
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/info_instruct_small_claims/small_claims_plaintiff_packet-july-2026.pdf
+        sha256: 74a11bf8a81c30a97f43c3abc7c71208fdb8812a0e4ab3e945e98bc479ba41c1
+        filing_office: King County District Court clerk, small claims division
+        fee_note: Instructions packet wrapping the claim process; the notice's filing fee applies.
+        fee_waiver_code: null
     surveyed_forms:
       - key: KCPETADULT
         title: Petition for Name Change (Individual)
@@ -1412,7 +1479,57 @@ records:
     # statewide whether filed in Supreme/County Court or NYC Civil Court;
     # this record carries the Supreme/County Court route (fees and RJI
     # note included). County Court accepts the same forms at the same fee.
-    forms: []
+    forms:
+      - code: ny__nc1_adult_name_change_petition
+        title: Name Change and/or Sex Designation Change Petition for Individual Adult (18+)
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/AdultName-SexDesignationChangePetition-fillable.pdf
+        sha256: 8c771a7ce619ebb9f717f613fb47ff7a8acfd2019980d4e757182afa0ee2174e
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "One template serves both routes the form itself supports: NYC Civil Court at $65.00, or Supreme/County Court of the county of residence at $210.00 (the intake asks which court, confirmed by the lawyer at review). Fee waiver: poor person relief by motion with a sworn financial affidavit — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC1 surveyed_forms entry."
+        fee_waiver_code: null
+      - code: ny__nc3_lip_name_change_petition
+        title: Name Change and/or Sex Designation Change Petition for a Legally Incapacitated Person
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/LIPName-SexDesignationChangePetition-fillable.pdf
+        sha256: 10a0ab457acbbb88b0439cf81699418fda7eaef776d23d96ebd47f1b4b8f11b9
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "Brought by the person's guardian, committee, or parent as petitioner (the intake captures both names). Same dual-route fees as NC1: NYC Civil Court $65.00 or Supreme/County Court $210.00. Fee waiver: poor person relief by motion — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC3 surveyed_forms entry."
+        fee_waiver_code: null
+      - code: ny__nc2_minor_name_change_petition
+        title: Name Change and/or Sex Designation Change Petition for an Individual Minor (under 18)
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/MinorName-SexDesignationChangePetition-fillable.pdf
+        sha256: fc1aa34c334da4b45932de1ee0a582771fdcf29524eb690adde21de48a44d905
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "Brought by a parent or legal guardian for a child under 18; a child 14 or older signs a notarized consent, and a non-petitioning parent or guardian consents or is given notice. Same dual-route fees as NC1: NYC Civil Court $65.00 or Supreme/County Court $210.00. Fee waiver: poor person relief by motion — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC2 surveyed_forms entry."
+        fee_waiver_code: null
+      - code: ny__nc4_family_name_change_petition
+        title: Family Name Change Petition
+        source_url: https://www.nycourts.gov/FORMS/Name-SexDesignationChange/FamilyNameChangePetition-fillable.pdf
+        sha256: 9beb5f0dc13a8798255ad20e5560afe88f3e02ed337f86aa853f00c4858f5ad9
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "Family petition brought for more than one person at the same time (petitioners file together; NC5 supplies the additional petitioners' pages). Same dual-route fees as NC1: NYC Civil Court $65.00 or Supreme/County Court $210.00. Fee waiver: poor person relief by motion — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC4 surveyed_forms entry."
+        fee_waiver_code: null
+      - code: ny__nc5_family_name_change_supplement
+        title: Family Name Change Petition — Supplemental Form
+        source_url: https://www.nycourts.gov/FORMS/Name-SexDesignationChange/SupplementalFamilyNameChangePetition-fillable.pdf
+        sha256: d625a28b846790890b86303a770867547635ec733c4a93c5fcdfeac856b24e68
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "Supplemental pages filed with the NC4 family petition — additional petitioners and cross-references; no separate filing fee beyond the NC4 filing. Same dual-route fees as NC1: NYC Civil Court $65.00 or Supreme/County Court $210.00. Fee waiver: poor person relief by motion — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC5 surveyed_forms entry."
+        fee_waiver_code: null
     surveyed_forms:
       - key: NC1
         title: Name Change and/or Sex Designation Change Petition for Individual Adult (18+)
@@ -1501,7 +1618,14 @@ records:
     # Commercial claims sit in the same part; their filing fee is not stated
     # on the surveyed pages. Small-estate DIY (SE-3A) belongs to Surrogate's
     # Court, below.
-    forms: []
+    forms:
+      - code: ny__civ_sc50_statement_of_claim
+        title: Statement of Claim (Small Claims)
+        source_url: https://www.nycourts.gov/LegacyPDFS/courts/nyc/civil/forms/CIV-SC-50.pdf
+        sha256: 2f1808d206ec948fb2f9b4ce8f5471eee1ca2762ea58089fa4bfec52e84ba070
+        filing_office: NYC Civil Court, Small Claims Part clerk
+        fee_note: "Filing fee tiered by claim amount: $15.00 on claims up to $1,000.00, $20.00 above $1,000.00 (individuals only; the Small Claims Part limit is $10,000.00 and there is no e-filing). Waiver: poor person relief by motion with a sworn financial affidavit — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the CIVSC50 surveyed_forms entry."
+        fee_waiver_code: null
     surveyed_forms:
       - key: CIVNCADULT
         title: Petition for Individual Adult for Leave to Change His/Her Name (NYC Civil Court format)
@@ -1583,7 +1707,14 @@ records:
     # was extracted in the survey, but its fillability could NOT be verified
     # (Cloudflare + no Wayback binary), so it carries no entry here rather
     # than a guessed one. Probate fees vary by estate under SCPA 2402.
-    forms: []
+    forms:
+      - code: ny__probate_petition
+        title: Petition for Probate and Letters Testamentary / Trusteeship
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Probate.pdf
+        sha256: 41e297f070ae213b0e4ae5f2306936df65d9e8b9aa0693a21ca677d61210d286
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the PROBATE surveyed_forms entry."
+        fee_waiver_code: null
     surveyed_forms:
       - key: PROBATE
         title: Petition for Probate and Letters Testamentary / Trusteeship

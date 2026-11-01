@@ -1,0 +1,118 @@
+form_code = "nv__washoe_adult_name_change_petition"
+
+# Second Judicial District Court (Washoe) local form — Petition for Adult
+# Name Change (NA packet, revised 02/10/2026 ER, 3 pages, 35 fields).
+#
+# Mapped: the caption's "In the Matter of the Petition of" name, the birth
+# date, birthplace city and state, the Washoe-residency-since date, the
+# CURRENT and NEW name first/middle/last parts, the free-text reason, the
+# felony and criminal-record yes/no pairs (both widgets in each pair export
+# /Yes; the answers fill the pair), the conviction-details narrative, and
+# the printed-name lines beside each signature.
+#
+# Deliberately left unmapped (decision recorded, lawyer or clerk completes):
+# - `Your first and last name` / `Your street address` /
+#   `Your city, state, zip code` / `Your telephone number` /
+#   `Your email address` — the attorney/self-represented-litigant header
+#   block; the firm confirms the mailing address with the petitioner at
+#   review (the court mails hearing notices to it).
+# - `Case number` / `Department number` — the clerk's caption boxes.
+# - `Check Box43` / `Check Box44` — the reason-category checkboxes (gender
+#   identity / other); the free-text reason is mapped and the lawyer selects
+#   the category, because the gender-identity box asserts the statutory
+#   publication exemption (same split as the statewide petition).
+# - `Date of your signature` — the signature date, set when the petitioner
+#   signs at the review appointment (a literal would freeze the date at
+#   vendor time).
+# - `Your signature or type /s/ then your name` and its `_' twin — the wet
+#   signatures on the petition and its verification.
+# - `Day` / `Month` / `Year` — the verification's signing-date parts, set at
+#   the review appointment.
+
+[[field]]
+name = "Your current legal name you wish to change"
+question = "person__client.name"
+
+[[field]]
+name = "Your date of birth"
+question = "custom_datetime__date_of_birth"
+
+[[field]]
+name = "City where you were born"
+question = "custom_text__birthplace_city"
+
+[[field]]
+name = "State where you were born"
+question = "jurisdiction__birthplace.name"
+
+[[field]]
+name = "Date when you moved to Washoe County"
+question = "custom_datetime__county_residency_since"
+
+[[field]]
+name = "Your current first name"
+question = "person__client.given"
+
+[[field]]
+name = "Your current middle name"
+question = "person__client.middle"
+
+[[field]]
+name = "Current last name"
+question = "person__client.family"
+
+[[field]]
+name = "Your new first name"
+question = "person__new_name.given"
+
+[[field]]
+name = "Your new middle name"
+question = "person__new_name.middle"
+
+[[field]]
+name = "Your new last name"
+question = "person__new_name.family"
+
+[[field]]
+name = "Explain why you want to change your name"
+question = "custom_text__reason_for_change"
+
+[[field]]
+name = "Details of your convictions"
+question = "custom_text__felony_details"
+
+[[field]]
+name = "Check Box46"
+question = "custom_yes_no__felony_conviction"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box47"
+question = "custom_yes_no__felony_conviction"
+checked_when = "no"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box48"
+question = "custom_yes_no__criminal_record"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box49"
+question = "custom_yes_no__criminal_record"
+checked_when = "no"
+on_state = "Yes"
+
+[[field]]
+name = "Print or type your name"
+question = "person__client.name"
+
+[[field]]
+name = "Your name"
+question = "person__client.name"
+
+[[field]]
+name = "Print or type your name_"
+question = "person__client.name"

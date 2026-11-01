@@ -114,8 +114,115 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "county_of_residence", // county name for the filing court; the jurisdiction lookup seeds states, not counties
     "place_of_birth", // birthplace as the form prints it (city/county and state); the country lookup covers country-level birthplaces
     "reason_for_change", // NC-110 item: the petitioner's own words for the requested name change
+    "prior_petition_details", // the prior decree's date, place, court, and case number in the petitioner's words
+    "best_interest_reasons", // the minor petition's best-interest statement, in the parents' own words
+    "parent_1_consent_children", // NC-4 box: parent 1's narrative of the children affected by the name change
+    "parent_1_consent_new_names", // NC-4 box: parent 1's account of each child's requested new name
+    "parent_2_consent_children", // NC-4 box: parent 2's narrative of the children affected by the name change
+    "parent_2_consent_new_names", // NC-4 box: parent 2's account of each child's requested new name
+    "claim_facts", // the small-claims notice's statement of claim, in the plaintiff's own words
+    "claim_other_description", // the small-claims notice's Other-claim-type explanation, in the plaintiff's own words
     "birthplace_city", // the NV name petition's separate city-of-birth field; no city lookup exists
-    "felony_details", // NC-110/NV petition: narrative about a past felony conviction, if any
+    "felony_details",  // NC-110/NV petition: narrative about a past felony conviction, if any
+    // Wave-two court blanks: composed caption and address lines, court and
+    // collections-agency labels, and narrative detail boxes that the blanks
+    // print as single lines but the intake keeps typed in the matter record.
+    // Where a form prints a whole address in one box, the box is the form's
+    // composition; the durable address stays a typed state.
+    "plaintiff_caption", // the complaint caption's name-and-address line, as it should read
+    "defendant_caption", // the defendant caption's name-and-address line
+    "counterplaintiff_caption", // the counterclaim's plaintiff-caption line
+    "counterdefendant_caption", // the counterclaim's defendant-caption line
+    "current_address",   // a form's single composed address line (street/city/state/zip in one box)
+    "minor_current_address", // the NC2 minor's composed address line
+    "petitioner_address", // the NC2 petitioner's composed address line
+    "parent_1_address",  // NC4: the first non-petitioning parent's composed address line
+    "parent_2_address",  // NC4: the second non-petitioning parent's composed address line
+    "child_support_court", // the court that issued the support order, as the filer states it
+    "petitioner_child_support_court", // the NC2 petitioner's support-order court
+    "minor_child_support_court", // the NC2 minor's support-order court
+    "child_support_order_court", // NC5's support-order court label
+    "child_support_collection_unit", // NC5's support collections unit handling the order
+    "support_collections_unit", // the support collections unit's name, as the filer states it
+    "petitioner_support_collections_unit", // the NC2 petitioner's collections unit
+    "minor_support_collections_unit", // the NC2 minor's collections unit
+    "spousal_support_court", // the spousal-support order's issuing court
+    "petitioner_spousal_support_court", // the NC2 petitioner's spousal-support court
+    "minor_spousal_support_court", // the NC2 minor's spousal-support court
+    "spousal_support_order_court", // NC5's spousal-support order court
+    "court_of_conviction", // NC5: the court that heard the conviction
+    "crime_of_conviction", // NC5: the offense of conviction, as the filer states it
+    "sealing_details", // the safety reasons supporting a sealing request, in the petitioner's words
+    "supporting_documents_list", // the attachments the petitioner lists on the form itself
+    "sex_designation_reasons", // the petition's sex-designation reasons, in the petitioner's own words
+    "minor_sex_designation_reasons", // the NC2 minor's sex-designation reasons
+    "prior_sex_designation_details", // narrative about a prior sex-designation change, if any
+    "minor_prior_sex_designation_details", // the NC2 minor's prior sex-designation narrative
+    "financial_matters_details", // NC1's financial-matters narrative the petitioner supplies
+    "minor_financial_details", // the NC2 minor's financial narrative
+    "petitioner_financial_details", // the NC2 petitioner's financial narrative
+    "minor_felony_details",    // the NC2 minor's felony narrative
+    "petitioner_felony_details", // the NC2 petitioner's felony narrative
+    "member_disclosure_details", // NC5: the member's disclosure narrative for the checked disclosures
+    "other_relation",            // NC2: the Other-relationship label for a household member
+    "reason_owed", // the counterclaim's reason the debt is owed, in the defendant's words
+    "reason_owed_2", // second counterclaim item's reason
+    "reason_owed_3", // third counterclaim item's reason
+    "reason_owed_4", // fourth counterclaim item's reason
+    "reason_owed_5", // fifth counterclaim item's reason
+    "reason_owed_6", // sixth counterclaim item's reason
+    "account_one", // F-6: the first bank account's institution and identifier, as disclosed
+    "account_two", // F-6: the second bank account's line
+    "vehicle_one", // F-6: the first vehicle's description and value line
+    "vehicle_two", // F-6: the second vehicle's line
+    "real_estate_address", // F-6: the real property's location, as disclosed
+    "expense_other_label", // F-6: the Other-expense line's label
+    "hours_per_week", // F-6: the not-employed box's weekly hours, which intake may answer "varies"
+    "no_income_explanation", // F-6: why the household shows no income
+    "other_benefits_program", // F-6: the Other-benefits program's name
+    "additional_information", // F-6's Anything-else box, in the applicant's words
+    // New York Surrogate's Court probate intake and NYC Civil Court small
+    // claims: geographic and identity facts the lookups do not seed (the
+    // jurisdiction lookup carries states, not counties), and narrative
+    // detail boxes the lawyer verifies against the underlying instruments
+    // (the will, the codicils, the accident the claim arises from).
+    "decedent_county", // the decedent's domicile county; no county lookup exists
+    "filing_county",   // the filing county, as the petitioner states it
+    "decedent_aka",    // the decedent's also-known-as names, verbatim
+    "decedent_place_of_death", // where the decedent died, as the petitioner states it
+    "decedent_citizenship", // the decedent's citizenship, as the petitioner states it
+    "petitioner_citizenship", // the petitioner's citizenship, as the petitioner states it
+    "petitioner_mailing_address", // the probate petition's composed mailing-address box; the durable address stays a typed state
+    "will_witnesses", // the will's witness name lines, as the petitioner reads them; the lawyer verifies against the instrument
+    "codicil_witnesses", // the first codicil's witness lines
+    "codicil_witnesses_2", // the second codicil's witness lines
+    "no_later_instruments", // narrative about instruments later than the last codicil, if any
+    "other_testamentary_assets", // the Other testamentary-assets line, in the petitioner's words
+    "other_petition_details", // the petition's Other-details box, in the petitioner's words
+    "letters_wording", // the exact letters designation requested (e.g. "Letters Testamentary")
+    "auto_accident_place", // CIV-SC-50: where the auto accident happened, as the claimant states it
+    "identifying_numbers", // CIV-SC-50: contract or account numbers identifying the claim
+    "household_age_1", // F-6 flat row: the household member's age (no numeric state exists)
+    "household_age_2",
+    "household_age_3",
+    "household_age_4",
+    "household_age_5",
+    "household_age_6",
+    "household_age_7",
+    "household_relationship_1", // F-6 flat row: the filer's relationship to that member
+    "household_relationship_2",
+    "household_relationship_3",
+    "household_relationship_4",
+    "household_relationship_5",
+    "household_relationship_6",
+    "household_relationship_7",
+    "household_person_1", // F-6 flat row: the member's name line — the row shape (age, relationship,
+    "household_person_2", // contribution) cannot ride a people__ aggregate, whose parts carry
+    "household_person_3", // contact fields only, so the table stays flat and the lawyer reviews it
+    "household_person_4",
+    "household_person_5",
+    "household_person_6",
+    "household_person_7",
     "incident_date", // the DV application's most-recent-incident date, which intake may answer "ongoing" — the lawyer confirms the field
     "incident_location", // where the most recent DV incident happened
     "what_happened", // the DV application's own-words incident narrative

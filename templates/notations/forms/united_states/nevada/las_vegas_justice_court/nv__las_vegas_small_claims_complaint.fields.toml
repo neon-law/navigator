@@ -1,0 +1,56 @@
+form_code = "nv__las_vegas_small_claims_complaint"
+# Las Vegas Justice Court (Clark County) — Complaint, Small Claims.
+# The parser reports 14 AcroForm fields on the official blank; this map
+# renames the 9 the questionnaire fills and records the rest for the
+# roles that complete them.
+#
+# Mapped: the plaintiff and defendant caption blocks, the client's own
+# phone and email, the sworn-statement name, the printed name beside the
+# signature, the sum owed, and the reason narrative (the full-width
+# reason-area parent field).
+#
+# Deliberately left unmapped (decision recorded, lawyer or clerk completes):
+# - `Case No` / `Department No` — the clerk's caption boxes.
+# - `Dated` — the signature date, set when the applicant signs at the
+#   review appointment (a literal would freeze the date at vendor time).
+# - `Attorney for` — the representation line, completed at review.
+# - `courtselect` — the township dropdown's /Opt exports carry a
+#   ten-space leading prefix the canonical choice set cannot honestly
+#   reproduce; the attorney selects the township at review (the intake's
+#   venue answer informs that choice).
+
+[[field]]
+name = "plaintiff"
+question = "custom_text__plaintiff_caption"
+
+[[field]]
+name = "defendant"
+question = "custom_text__defendant_caption"
+
+[[field]]
+name = "Defendants Telephone Number"
+question = "custom_phone__defendant_contact"
+
+[[field]]
+name = "Plaintiffs Telephone Number"
+question = "person__client.phone"
+
+[[field]]
+name = "Plaintiffs Email Address"
+question = "person__client.email"
+
+[[field]]
+name = "SUM OWED"
+question = "custom_usd__amount_owed"
+
+[[field]]
+name = "that the reason for this indebtedness is 1"
+question = "custom_text__reason_owed"
+
+[[field]]
+name = "I insert your name"
+question = "person__client.name"
+
+[[field]]
+name = "Print Name"
+question = "person__client.name"

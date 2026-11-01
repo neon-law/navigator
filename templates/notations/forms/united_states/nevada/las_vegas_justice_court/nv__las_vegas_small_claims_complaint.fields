@@ -1,0 +1,13 @@
+custom_phone__defendant_contact
+custom_text__defendant_caption
+custom_text__plaintiff_caption
+custom_text__reason_owed
+custom_usd__amount_owed
+person__client.email
+person__client.name
+person__client.phone
+unmapped__Attorney for
+unmapped__Case No
+unmapped__Dated
+unmapped__Department No
+unmapped__courtselect

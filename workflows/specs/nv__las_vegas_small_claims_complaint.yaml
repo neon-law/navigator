@@ -1,0 +1,67 @@
+questionnaire:
+  BEGIN:
+    _: person__client
+  person__client:
+    _: custom_text__plaintiff_caption
+  custom_text__plaintiff_caption:
+    _: custom_text__defendant_caption
+  custom_text__defendant_caption:
+    _: custom_phone__defendant_contact
+  custom_phone__defendant_contact:
+    _: custom_usd__amount_owed
+  custom_usd__amount_owed:
+    _: custom_text__reason_owed
+  custom_text__reason_owed:
+    _: custom_single_choice__venue_township
+  custom_single_choice__venue_township:
+    _: END
+  END: {}
+choices:
+  venue_township:
+    Las Vegas: Las Vegas
+    Henderson: Henderson
+    North Las Vegas: North Las Vegas
+    Boulder: Boulder
+    Bunkerville: Bunkerville
+    Goodsprings: Goodsprings
+    Laughlin: Laughlin
+    Mesquite: Mesquite
+    Moapa: Moapa
+    Moapa Valley: Moapa Valley
+    Searchlight: Searchlight
+
+prompts:
+  client_name: >-
+    What is your full legal name? (It appears on the sworn statement and
+    beside your signature.)
+  plaintiff_caption: >-
+    Your full name and mailing address, as the caption should read. (The court
+    mails hearing notices to this address.)
+  defendant_caption: >-
+    The defendant's full name and mailing address. (The court serves the
+    complaint at this address.)
+  custom_phone__defendant_contact: >-
+    The defendant's telephone number, if you know it. (Leave blank if you
+    do not — the complaint carries one telephone box for the defendant.)
+  amount_owed: >-
+    How much does the defendant owe you? (A dollar amount — the claim limit in
+    justice-court small claims is $10,000.)
+  reason_owed: >-
+    Briefly, why does the defendant owe you this money? (The complaint's sworn
+    statement tells the court what happened.)
+  venue_township: >-
+    In which township will the case be filed? (Where the defendant lives or
+    the debt arose — the attorney confirms the venue with you.)
+workflow:
+  BEGIN:
+    intake_submitted: intake_persisted__client
+  intake_persisted__client:
+    petition_rendered: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__small_claims_complaint_pdf
+    rejected: END
+  generate_pdf__small_claims_complaint_pdf:
+    pdf_persisted: filing__las_vegas_justice_court
+  filing__las_vegas_justice_court:
+    filed: END
+  END: {}

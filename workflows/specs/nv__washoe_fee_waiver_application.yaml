@@ -1,0 +1,346 @@
+questionnaire:
+  BEGIN:
+    _: person__client
+  person__client:
+    _: person__opposing_party
+  person__opposing_party:
+    _: custom_yes_no__benefit_ssi
+  custom_yes_no__benefit_ssi:
+    _: custom_yes_no__benefit_food_stamps
+  custom_yes_no__benefit_food_stamps:
+    _: custom_yes_no__benefit_tanf
+  custom_yes_no__benefit_tanf:
+    _: custom_yes_no__benefit_medicaid
+  custom_yes_no__benefit_medicaid:
+    _: custom_yes_no__benefit_subsidized_housing
+  custom_yes_no__benefit_subsidized_housing:
+    _: custom_yes_no__benefit_legal_services
+  custom_yes_no__benefit_legal_services:
+    _: custom_yes_no__benefit_other
+  custom_yes_no__benefit_other:
+    _: custom_text__other_benefits_program
+  custom_text__other_benefits_program:
+    _: custom_yes_no__income_employment
+  custom_yes_no__income_employment:
+    _: custom_usd__hourly_wage
+  custom_usd__hourly_wage:
+    _: custom_text__hours_per_week
+  custom_text__hours_per_week:
+    _: custom_yes_no__income_salary
+  custom_yes_no__income_salary:
+    _: custom_usd__salary_per_year
+  custom_usd__salary_per_year:
+    _: custom_usd__salary_per_month
+  custom_usd__salary_per_month:
+    _: custom_yes_no__income_commissions
+  custom_yes_no__income_commissions:
+    _: custom_usd__commissions_monthly
+  custom_usd__commissions_monthly:
+    _: custom_yes_no__income_unemployment
+  custom_yes_no__income_unemployment:
+    _: custom_usd__unemployment_weekly
+  custom_usd__unemployment_weekly:
+    _: custom_yes_no__income_benefits
+  custom_yes_no__income_benefits:
+    _: custom_usd__veterans_or_ss_monthly
+  custom_usd__veterans_or_ss_monthly:
+    _: custom_yes_no__income_support
+  custom_yes_no__income_support:
+    _: custom_usd__support_monthly
+  custom_usd__support_monthly:
+    _: custom_yes_no__income_pension
+  custom_yes_no__income_pension:
+    _: custom_usd__pension_monthly
+  custom_usd__pension_monthly:
+    _: custom_yes_no__income_other
+  custom_yes_no__income_other:
+    _: custom_usd__other_income_monthly
+  custom_usd__other_income_monthly:
+    _: custom_yes_no__no_income
+  custom_yes_no__no_income:
+    _: custom_text__no_income_explanation
+  custom_text__no_income_explanation:
+    _: custom_usd__expense_rent
+  custom_usd__expense_rent:
+    _: custom_usd__expense_utilities
+  custom_usd__expense_utilities:
+    _: custom_usd__expense_food
+  custom_usd__expense_food:
+    _: custom_usd__expense_childcare
+  custom_usd__expense_childcare:
+    _: custom_usd__expense_insurance
+  custom_usd__expense_insurance:
+    _: custom_usd__expense_medical
+  custom_usd__expense_medical:
+    _: custom_usd__expense_transportation
+  custom_usd__expense_transportation:
+    _: custom_text__expense_other_label
+  custom_text__expense_other_label:
+    _: custom_usd__expense_other
+  custom_usd__expense_other:
+    _: custom_usd__expenses_total
+  custom_usd__expenses_total:
+    _: custom_text__vehicle_one
+  custom_text__vehicle_one:
+    _: custom_usd__vehicle_one_worth
+  custom_usd__vehicle_one_worth:
+    _: custom_usd__vehicle_one_owed
+  custom_usd__vehicle_one_owed:
+    _: custom_text__vehicle_two
+  custom_text__vehicle_two:
+    _: custom_usd__vehicle_two_worth
+  custom_usd__vehicle_two_worth:
+    _: custom_usd__vehicle_two_owed
+  custom_usd__vehicle_two_owed:
+    _: custom_yes_no__no_vehicle
+  custom_yes_no__no_vehicle:
+    _: custom_text__real_estate_address
+  custom_text__real_estate_address:
+    _: custom_usd__real_estate_worth
+  custom_usd__real_estate_worth:
+    _: custom_usd__real_estate_owed
+  custom_usd__real_estate_owed:
+    _: custom_yes_no__no_real_estate
+  custom_yes_no__no_real_estate:
+    _: custom_text__account_one
+  custom_text__account_one:
+    _: custom_usd__account_one_worth
+  custom_usd__account_one_worth:
+    _: custom_usd__account_one_owed
+  custom_usd__account_one_owed:
+    _: custom_text__account_two
+  custom_text__account_two:
+    _: custom_usd__account_two_worth
+  custom_usd__account_two_worth:
+    _: custom_usd__account_two_owed
+  custom_usd__account_two_owed:
+    _: custom_usd__cash
+  custom_usd__cash:
+    _: custom_text__household_person_1
+  custom_text__household_person_1:
+    _: custom_text__household_age_1
+  custom_text__household_age_1:
+    _: custom_text__household_relationship_1
+  custom_text__household_relationship_1:
+    _: custom_usd__household_contribution_1
+  custom_usd__household_contribution_1:
+    _: custom_text__household_person_2
+  custom_text__household_person_2:
+    _: custom_text__household_age_2
+  custom_text__household_age_2:
+    _: custom_text__household_relationship_2
+  custom_text__household_relationship_2:
+    _: custom_usd__household_contribution_2
+  custom_usd__household_contribution_2:
+    _: custom_text__household_person_3
+  custom_text__household_person_3:
+    _: custom_text__household_age_3
+  custom_text__household_age_3:
+    _: custom_text__household_relationship_3
+  custom_text__household_relationship_3:
+    _: custom_usd__household_contribution_3
+  custom_usd__household_contribution_3:
+    _: custom_text__household_person_4
+  custom_text__household_person_4:
+    _: custom_text__household_age_4
+  custom_text__household_age_4:
+    _: custom_text__household_relationship_4
+  custom_text__household_relationship_4:
+    _: custom_usd__household_contribution_4
+  custom_usd__household_contribution_4:
+    _: custom_text__household_person_5
+  custom_text__household_person_5:
+    _: custom_text__household_age_5
+  custom_text__household_age_5:
+    _: custom_text__household_relationship_5
+  custom_text__household_relationship_5:
+    _: custom_usd__household_contribution_5
+  custom_usd__household_contribution_5:
+    _: custom_text__household_person_6
+  custom_text__household_person_6:
+    _: custom_text__household_age_6
+  custom_text__household_age_6:
+    _: custom_text__household_relationship_6
+  custom_text__household_relationship_6:
+    _: custom_usd__household_contribution_6
+  custom_usd__household_contribution_6:
+    _: custom_text__household_person_7
+  custom_text__household_person_7:
+    _: custom_text__household_age_7
+  custom_text__household_age_7:
+    _: custom_text__household_relationship_7
+  custom_text__household_relationship_7:
+    _: custom_usd__household_contribution_7
+  custom_usd__household_contribution_7:
+    _: custom_text__additional_information
+  custom_text__additional_information:
+    _: END
+  END: {}
+prompts:
+  client_name: >-
+    What is your current full legal name, as it appears on your
+    identification?
+  person__opposing_party: >-
+    Who is the other party in your case — the defendant or respondent named
+    against you? (Leave blank if you are filing jointly or no party is named.)
+  income_employment: Are you working?
+  hourly_wage: >-
+    What is your hourly wage? (A dollar amount — leave blank if you are not
+    paid by the hour.)
+  hours_per_week: >-
+    About how many hours do you work per week? (Leave blank if you are not
+    paid by the hour.)
+  income_salary: Are you paid a salary rather than by the hour?
+  salary_per_year: What is your yearly salary? (Leave blank if you are paid monthly.)
+  salary_per_month: What is your monthly salary? (Leave blank if you are paid yearly.)
+  income_commissions: Do you receive commissions or tips?
+  commissions_monthly: >-
+    About how much do you receive in commissions or tips each month? (Leave
+    blank if none.)
+  income_unemployment: Do you receive unemployment benefits?
+  unemployment_weekly: >-
+    How much do you receive in unemployment benefits each week? (Leave blank
+    if none.)
+  income_benefits: Do you receive veterans or Social Security benefits?
+  veterans_or_ss_monthly: >-
+    How much do you receive in veterans or Social Security benefits each
+    month? (Leave blank if none.)
+  income_support: Do you receive child support, spousal support, or alimony?
+  support_monthly: >-
+    How much do you receive in child support, spousal support, or alimony each
+    month? (Leave blank if none.)
+  income_pension: Do you receive pension or annuity payments?
+  pension_monthly: >-
+    How much do you receive in pension or annuity payments each month? (Leave
+    blank if none.)
+  income_other: Do you receive income from any other source?
+  other_income_monthly: >-
+    How much do you receive from that other source each month? (Leave blank if
+    none.)
+  no_income: Are you unemployed and receiving no income or benefits at all?
+  no_income_explanation: >-
+    How are you meeting your basic living needs? (For example, are you living
+    with others who help support you, in a shelter, or meeting your needs in
+    other ways? Leave blank if this does not apply.)
+  expense_rent: How much is your rent or mortgage each month? (Enter 0 if none.)
+  expense_utilities: How much are your phone and utilities each month?
+  expense_food: How much is your food each month?
+  expense_childcare: How much is childcare each month?
+  expense_insurance: How much is insurance each month?
+  expense_medical: How much are medical costs each month?
+  expense_transportation: How much is transportation each month?
+  expense_other_label: >-
+    What is the other monthly expense? (Its name — leave blank if there is
+    none.)
+  expense_other: How much is that other expense each month? (Leave blank if there is none.)
+  expenses_total: >-
+    What are your total monthly expenses? (The form asks for the total; check
+    it against the items above.)
+  vehicle_one: >-
+    Describe your first vehicle — make, model, and year. (Leave blank if you
+    have none.)
+  vehicle_one_worth: About how much is that vehicle worth? (Leave blank if none.)
+  vehicle_one_owed: How much do you still owe on that vehicle? (Leave blank if none.)
+  vehicle_two: >-
+    Describe your second vehicle — make, model, and year. (Leave blank if you
+    have none.)
+  vehicle_two_worth: About how much is that vehicle worth? (Leave blank if none.)
+  vehicle_two_owed: How much do you still owe on that vehicle? (Leave blank if none.)
+  no_vehicle: Is it true that you do not own any motor vehicle?
+  real_estate_address: >-
+    What is the address of the real estate you own other than the home you
+    live in? (Leave blank if none.)
+  real_estate_worth: About how much is that real estate worth? (Leave blank if none.)
+  real_estate_owed: How much do you still owe on it? (Leave blank if none.)
+  no_real_estate: Is it true that you do not own any home or real estate?
+  account_one: >-
+    Describe the first bank account or personal property you hold (for
+    example, "Checking account at Wells Fargo"). (Leave blank if none.)
+  account_one_worth: About how much is it worth? (Leave blank if none.)
+  account_one_owed: How much is owed against it? (Leave blank if none.)
+  account_two: >-
+    Describe the second bank account or personal property you hold. (Leave
+    blank if none.)
+  account_two_worth: About how much is it worth? (Leave blank if none.)
+  account_two_owed: How much is owed against it? (Leave blank if none.)
+  cash: About how much cash do you have on hand?
+  custom_text__household_person_1: >-
+    Who is the first person in your household you support? (Their full name —
+    leave this and the rest of the household blank if you support no one
+    else.)
+  household_age_1: How old is the first person? (Leave blank if none.)
+  household_relationship_1: What is your relationship to the first person? (Leave blank if none.)
+  household_contribution_1: >-
+    About how much does the first person contribute to your support each
+    month? (Leave blank if none.)
+  custom_text__household_person_2: >-
+    Who is the second person in your household you support? (Their full name —
+    leave this and the rest of the household blank if you support no one
+    else.)
+  household_age_2: How old is the second person? (Leave blank if none.)
+  household_relationship_2: What is your relationship to the second person? (Leave blank if none.)
+  household_contribution_2: >-
+    About how much does the second person contribute to your support each
+    month? (Leave blank if none.)
+  custom_text__household_person_3: >-
+    Who is the third person in your household you support? (Their full name —
+    leave this and the rest of the household blank if you support no one
+    else.)
+  household_age_3: How old is the third person? (Leave blank if none.)
+  household_relationship_3: What is your relationship to the third person? (Leave blank if none.)
+  household_contribution_3: >-
+    About how much does the third person contribute to your support each
+    month? (Leave blank if none.)
+  custom_text__household_person_4: >-
+    Who is the fourth person in your household you support? (Their full name —
+    leave this and the rest of the household blank if you support no one
+    else.)
+  household_age_4: How old is the fourth person? (Leave blank if none.)
+  household_relationship_4: What is your relationship to the fourth person? (Leave blank if none.)
+  household_contribution_4: >-
+    About how much does the fourth person contribute to your support each
+    month? (Leave blank if none.)
+  custom_text__household_person_5: >-
+    Who is the fifth person in your household you support? (Their full name —
+    leave this and the rest of the household blank if you support no one
+    else.)
+  household_age_5: How old is the fifth person? (Leave blank if none.)
+  household_relationship_5: What is your relationship to the fifth person? (Leave blank if none.)
+  household_contribution_5: >-
+    About how much does the fifth person contribute to your support each
+    month? (Leave blank if none.)
+  custom_text__household_person_6: >-
+    Who is the sixth person in your household you support? (Their full name —
+    leave this and the rest of the household blank if you support no one
+    else.)
+  household_age_6: How old is the sixth person? (Leave blank if none.)
+  household_relationship_6: What is your relationship to the sixth person? (Leave blank if none.)
+  household_contribution_6: >-
+    About how much does the sixth person contribute to your support each
+    month? (Leave blank if none.)
+  custom_text__household_person_7: >-
+    Who is the seventh person in your household you support? (Their full name
+    — leave this and the rest of the household blank if you support no one
+    else.)
+  household_age_7: How old is the seventh person? (Leave blank if none.)
+  household_relationship_7: What is your relationship to the seventh person? (Leave blank if none.)
+  household_contribution_7: >-
+    About how much does the seventh person contribute to your support each
+    month? (Leave blank if none.)
+  other_benefits_program: Which other program? (Its name — leave blank if none.)
+  additional_information: >-
+    Is there anything else the court should know about your financial
+    situation? (Leave blank if nothing.)
+workflow:
+  BEGIN:
+    intake_submitted: intake_persisted__client
+  intake_persisted__client:
+    petition_rendered: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__fee_waiver_application_pdf
+    rejected: END
+  generate_pdf__fee_waiver_application_pdf:
+    pdf_persisted: filing__second_judicial_district_court
+  filing__second_judicial_district_court:
+    filed: END
+  END: {}

@@ -1,0 +1,106 @@
+---
+kind: filing
+title: Notice of Small Claim
+respondent_type: person
+jurisdiction: WA
+origin_url: https://kingcounty.gov/en/court/district-court/courts-jails-legal-system/small-claims
+confidential: true
+output: form
+form: wa__small_claims_notice
+questionnaire:
+  BEGIN:
+    _: person__client
+  person__client:
+    _: people__plaintiffs
+  people__plaintiffs:
+    _: people__defendants
+  people__defendants:
+    _: custom_usd__claim_amount
+  custom_usd__claim_amount:
+    _: custom_datetime__amount_due_date
+  custom_datetime__amount_due_date:
+    _: custom_yes_no__claim_faulty_workmanship
+  custom_yes_no__claim_faulty_workmanship:
+    _: custom_yes_no__claim_merchandise
+  custom_yes_no__claim_merchandise:
+    _: custom_yes_no__claim_auto_damages
+  custom_yes_no__claim_auto_damages:
+    _: custom_datetime__auto_accident_date
+  custom_datetime__auto_accident_date:
+    _: custom_yes_no__claim_wages
+  custom_yes_no__claim_wages:
+    _: custom_yes_no__claim_loan
+  custom_yes_no__claim_loan:
+    _: custom_yes_no__claim_return_of_deposit
+  custom_yes_no__claim_return_of_deposit:
+    _: custom_yes_no__claim_rent
+  custom_yes_no__claim_rent:
+    _: custom_yes_no__claim_property_damage
+  custom_yes_no__claim_property_damage:
+    _: custom_yes_no__claim_other
+  custom_yes_no__claim_other:
+    _: custom_text__claim_other_description
+  custom_text__claim_other_description:
+    _: custom_text__claim_facts
+  custom_text__claim_facts:
+    _: END
+  END: {}
+prompts:
+  client_name: What is your full legal name?
+  plaintiffs: >-
+    Who is filing this claim with you? Add yourself first, then anyone filing with you — the court mails the hearing
+    date to the address you give, so use an address where you actually receive mail. Skip anyone filing alone.
+  defendants: >-
+    Who are you claiming against? Give each defendant's name and the address where they can be served — up to two. The
+    court needs a street address, not a post-office box, for service.
+  claim_amount: How much money does the defendant owe you?
+  amount_due_date: When did the amount first become due and owing?
+  claim_faulty_workmanship: >-
+    Is your claim about faulty workmanship — work you paid for that was done badly or not finished?
+  claim_merchandise: Is your claim about merchandise you bought or sold?
+  claim_auto_damages: Is your claim about damage to a car?
+  auto_accident_date: What date did the accident happen?
+  claim_wages: Is your claim about wages you are owed?
+  claim_loan: Is your claim about a loan you made that has not been repaid?
+  claim_return_of_deposit: >-
+    Is your claim about a deposit the defendant has not returned — a security deposit, for example?
+  claim_rent: Is your claim about rent the defendant owes you?
+  claim_property_damage: Is your claim about damage to your property?
+  claim_other: Is your claim about something other than the types listed?
+  claim_other_description: Briefly describe the other type of claim.
+  claim_facts: >-
+    In your own words, what happened? Tell the story briefly — what the agreement was, what went wrong, and what you are
+    asking the court to order.
+workflow:
+  BEGIN:
+    intake_submitted: intake_persisted__client
+  intake_persisted__client:
+    notice_rendered: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__small_claims_notice_pdf
+    rejected: END
+  generate_pdf__small_claims_notice_pdf:
+    pdf_persisted: filing__king_county_district_court
+  filing__king_county_district_court:
+    filed: END
+  END: {}
+---
+
+This King County engagement starts a small-claims case in the King County District Court on the court's own Notice of
+Small Claim, for `{{person__client.name}}` (the "Plaintiff") against the defendants the Plaintiff names. Small claims in
+Washington is a lawyer-free, expedited process — the parties speak for themselves — so this notice is the pleading: it
+names the parties and their contact information and states the amount owed, when it became due, the type of claim, and
+the facts supporting it.
+
+The claim must sit inside the small-claims limits — $10,000 against a natural person, $5,000 against any other defendant
+— and notice is capped the same way. The filing fee is $50. A party who cannot afford the fee moves to waive it on the
+statewide GR 34 set before filing. A defendant who is served may instead choose binding arbitration, and either party
+may appeal to the Superior Court (a $280 cashier's check to the Superior Court clerk plus a $40 district-court
+appeal-processing fee).
+
+Your answers above are placed onto the court's own official blank and a licensed Neon Law attorney reviews the **filled
+notice** before anything is filed. Nothing reaches the courthouse unreviewed: the attorney confirms the Servicemember
+Civil Relief Act statement (a legal conclusion this questionnaire deliberately does not ask), the hearing-interpreter
+arrangements, and the signature block, which are completed at the review appointment. The Plaintiff signs the notice at
+the review appointment and the firm files it with the district court clerk, which schedules the hearing and mails the
+date to the address you provided.

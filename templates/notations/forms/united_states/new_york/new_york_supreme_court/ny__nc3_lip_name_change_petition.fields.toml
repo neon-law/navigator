@@ -1,0 +1,182 @@
+form_code = "ny__nc3_lip_name_change_petition"
+# UCS-NC3 (06/2025) — Name Change and/or Sex Designation Change Petition
+# for a Legally Incapacitated Person. The parser reports 50 AcroForm
+# fields; the survey counted the same 50.
+#
+# The structure mirrors UCS-NC1 (same form family and generator): every
+# Yes/No question is one radio parent carrying two kid widgets, and the
+# map renames each parent onto a `custom_single_choice` state whose
+# choice set carries the widgets' own appearance exports. This
+# generator's parent /Opt entries are junk ('Rect', 'Yes', '6' repeated
+# on both columns), but the fill keys off each kid's non-Off appearance
+# state, and every pair follows one honest pattern: the Yes column
+# (x≈490) checks on `0` and the No column (x≈540) on `1` — except
+# `SealingRequest` (literally `Yes`/`No`) and `ChildrenUnder21`
+# (`Yes`/`1`). Both answers therefore map everywhere those states exist.
+#
+# Mapped: the person's present and requested names, the petitioner's
+# (guardian's) name, birth data, residence, the filing court and county
+# dropdowns, the relief checkboxes, every Yes/No group the widgets can
+# honestly express, the arrears and detail boxes, and the sex-designation
+# section.
+#
+# Deliberately left unmapped (decision recorded, lawyer or clerk completes):
+# - `IndexNumber` — the clerk's caption number (four header boxes).
+# - `Age` — derivable from the intake's date of birth at review; the
+#   transform has no computed-value path, so the box stays for the
+#   lawyer.
+# - `CourtOfConviction` / `Crime` — the conviction details split across
+#   two boxes; the intake's felony narrative informs the lawyer, who
+#   completes the boxes (two different texts cannot share one answer).
+# - `PreviousSexDesignationChangeRequest` / `PreviousSexDesignationChangeRequest0`
+#   — the Yes/No box pair is two kid-less /Btn fields with inconsistent
+#   appearance data (states /0,/8 and /0,/1,/27,/9); no export can
+#   honestly discriminate the columns, so the intake's answer reaches
+#   the lawyer, who paints the pair at review.
+# - `SealingRequest` / `ChildrenUnder21` — radio parents with no /Opt at
+#   all; the fill would have no export to select, so the boxes stay for
+#   the lawyer (the intake answers reach them at review).
+# - `SignatureDate` / `AffirmDay` / `AffirmMonth` / `AffirmYear` — the
+#   verification date, set when the petitioner signs at the review
+#   appointment (the day/month/year widgets are dropdowns, not literals).
+# - `Reset_Form` / `Print_Form` — the blank's own push buttons.
+
+[[field]]
+name = "LIPName"
+question = "person__client.name"
+
+[[field]]
+name = "PetitionerName"
+question = "person__petitioner.name"
+
+[[field]]
+name = "CourtType"
+question = "custom_single_choice__filing_court"
+
+[[field]]
+name = "County"
+question = "custom_single_choice__filing_county"
+
+[[field]]
+name = "NewName"
+question = "person__new_name.name"
+
+[[field]]
+name = "PlaceOfBirth"
+question = "custom_text__place_of_birth"
+
+[[field]]
+name = "CurrentAddress"
+question = "custom_text__current_address"
+
+[[field]]
+name = "DOB"
+question = "custom_datetime__date_of_birth"
+
+[[field]]
+name = "NameChange"
+question = "custom_single_choice__name_change"
+
+[[field]]
+name = "SexDesignationChange"
+question = "custom_single_choice__sex_designation_change"
+
+[[field]]
+name = "ConvictedOfCrime"
+question = "custom_single_choice__convicted"
+
+[[field]]
+name = "Bankruptcy"
+question = "custom_single_choice__bankruptcy"
+
+[[field]]
+name = "JudgmentsOrLiens"
+question = "custom_single_choice__judgments_liens"
+
+[[field]]
+name = "PartyToAction"
+question = "custom_single_choice__party_to_action"
+
+[[field]]
+name = "BankruptcyJudgmentsLiensParty-specify"
+question = "custom_text__financial_matters_details"
+
+[[field]]
+name = "CurrentlyMarried"
+question = "custom_single_choice__currently_married"
+
+[[field]]
+name = "PreviouslyMarried"
+question = "custom_single_choice__previously_married"
+
+[[field]]
+name = "ChildSupport"
+question = "custom_single_choice__child_support"
+
+[[field]]
+name = "ChildSupportPayments"
+question = "custom_single_choice__child_support_current"
+
+[[field]]
+name = "ChildSupportArrears"
+question = "custom_usd__child_support_arrears"
+
+[[field]]
+name = "CourtIssuingChildSupportOrder"
+question = "custom_text__child_support_court"
+
+[[field]]
+name = "SupportCollectionsUnit"
+question = "custom_text__support_collections_unit"
+
+[[field]]
+name = "SpousalSupport"
+question = "custom_single_choice__spousal_support"
+
+[[field]]
+name = "SpousalSupportPayments"
+question = "custom_single_choice__spousal_support_current"
+
+[[field]]
+name = "SpousalSupportArrears"
+question = "custom_usd__spousal_support_arrears"
+
+[[field]]
+name = "CourtIssuingSpousalSupportOrder"
+question = "custom_text__spousal_support_court"
+
+[[field]]
+name = "PreviousNameChangePetition"
+question = "custom_single_choice__prior_name_change"
+
+[[field]]
+name = "PreviousNameChagePetition-specify"
+question = "custom_text__prior_petition_details"
+
+[[field]]
+name = "ReasonsForNameChangeRequest-specify"
+question = "custom_text__reason_for_change"
+
+[[field]]
+name = "NewSexDesignation"
+question = "custom_single_choice__new_sex_designation"
+
+[[field]]
+name = "PreviousSexDesignationChangeRequest-specify"
+question = "custom_text__prior_sex_designation_details"
+
+[[field]]
+name = "ReasonsForSexDesignationChangeRequest"
+question = "custom_single_choice__sex_designation_reasons_given"
+
+[[field]]
+name = "ReasonsForSexDesignationChangeRequest-specify"
+question = "custom_text__sex_designation_reasons"
+
+[[field]]
+name = "SupportingDocument"
+question = "custom_single_choice__documents_attached"
+
+[[field]]
+name = "SupportingDocument-specify"
+question = "custom_text__supporting_documents_list"

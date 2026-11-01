@@ -365,8 +365,224 @@ const BUNDLED: &[FormMeta] = &[
         }),
         fee_waiver_code: None,
     },
-];
+    FormMeta {
+        code: "wa__adult_name_change_petition",
+        jurisdiction: "WA",
+        title: "Petition for Name Change (Individual)",
+        origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-individual-july_2026.pdf",
+        object_path: "forms/united_states/washington/king_county_district_court/wa__adult_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__adult_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "98.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "wa__minor_name_change_petition",
+        jurisdiction: "WA",
+        title: "Petition for Minor Child Name Change",
+        origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-minor-october-2024.pdf",
+        object_path: "forms/united_states/washington/king_county_district_court/wa__minor_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__minor_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "98.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "wa__small_claims_notice",
+        jurisdiction: "WA",
+        title: "Notice of Small Claim",
+        origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/forms_sc/notice-of-small-claim-september-2025.pdf",
+        object_path: "forms/united_states/washington/king_county_district_court/wa__small_claims_notice.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__small_claims_notice.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "50.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "wa__small_claims_plaintiff_packet",
+        jurisdiction: "WA",
+        title: "Small Claims Packet — Plaintiff",
+        origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/info_instruct_small_claims/small_claims_plaintiff_packet-july-2026.pdf",
+        object_path: "forms/united_states/washington/king_county_district_court/wa__small_claims_plaintiff_packet.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__small_claims_plaintiff_packet.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
 
+    FormMeta {
+        code: "nv__washoe_adult_name_change_petition",
+        jurisdiction: "NV",
+        title: "Petition for Adult Name Change (Washoe)",
+        origin_url: "https://www.washoecourts.com/Forms/Family/10.%20Name%20Changes/NA%20Adult%20Name%20Change/1.%20Petition%20for%20Adult%20Name%20Change.pdf",
+        object_path: "forms/united_states/nevada/second_judicial_district_court/nv__washoe_adult_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_adult_name_change_petition.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "nv__washoe_fee_waiver_application",
+        jurisdiction: "NV",
+        title: "Application for Waiver of Fees and Costs (Washoe)",
+        origin_url: "https://www.washoecourts.com/Forms/Family/1.%20All%20Other%20Family%20Related%20Packets/F-6%20Application%20to%20Waive%20Fees%20and%20Costs/1.%20Application%20for%20Waiver%20of%20Fees%20and%20Costs.pdf",
+        object_path: "forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+
+    FormMeta {
+        code: "nv__las_vegas_small_claims_complaint",
+        jurisdiction: "NV",
+        title: "Complaint, Small Claims (Las Vegas)",
+        origin_url: "https://www.civillawselfhelpcenter.org/images/small-claims/complaints/complaint---small-claims.pdf",
+        object_path: "forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_complaint.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_complaint.sha256"
+        ),
+        // The complaint's fee is tiered by claim amount ($66-$196); no
+        // single honest figure fits FormMeta, so the registry fee_note
+        // carries the schedule.
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "nv__las_vegas_small_claims_counterclaim",
+        jurisdiction: "NV",
+        title: "Counterclaim, Small Claims (Las Vegas)",
+        origin_url: "https://www.civillawselfhelpcenter.org/images/small-claims/counterclaims/counterclaim---small-claims---las-vegas.pdf",
+        object_path: "forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_counterclaim.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_counterclaim.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ny__nc1_adult_name_change_petition",
+        jurisdiction: "NY",
+        title: "Name Change and/or Sex Designation Change Petition for Individual Adult (18+)",
+        origin_url: "https://www.nycourts.gov/forms/Name-SexDesignationChange/AdultName-SexDesignationChangePetition-fillable.pdf",
+        object_path: "forms/united_states/new_york/new_york_supreme_court/ny__nc1_adult_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc1_adult_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "210.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ny__nc3_lip_name_change_petition",
+        jurisdiction: "NY",
+        title: "Name Change and/or Sex Designation Change Petition for a Legally Incapacitated Person",
+        origin_url: "https://www.nycourts.gov/forms/Name-SexDesignationChange/LIPName-SexDesignationChangePetition-fillable.pdf",
+        object_path: "forms/united_states/new_york/new_york_supreme_court/ny__nc3_lip_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc3_lip_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "210.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ny__nc2_minor_name_change_petition",
+        jurisdiction: "NY",
+        title: "Name Change and/or Sex Designation Change Petition for an Individual Minor (under 18)",
+        origin_url: "https://www.nycourts.gov/forms/Name-SexDesignationChange/MinorName-SexDesignationChangePetition-fillable.pdf",
+        object_path: "forms/united_states/new_york/new_york_supreme_court/ny__nc2_minor_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc2_minor_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "210.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ny__nc4_family_name_change_petition",
+        jurisdiction: "NY",
+        title: "Family Name Change Petition",
+        origin_url: "https://www.nycourts.gov/FORMS/Name-SexDesignationChange/FamilyNameChangePetition-fillable.pdf",
+        object_path: "forms/united_states/new_york/new_york_supreme_court/ny__nc4_family_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc4_family_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "210.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ny__nc5_family_name_change_supplement",
+        jurisdiction: "NY",
+        title: "Family Name Change Petition — Supplemental Form",
+        origin_url: "https://www.nycourts.gov/FORMS/Name-SexDesignationChange/SupplementalFamilyNameChangePetition-fillable.pdf",
+        object_path: "forms/united_states/new_york/new_york_supreme_court/ny__nc5_family_name_change_supplement.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc5_family_name_change_supplement.sha256"
+        ),
+        // The supplement rides with the NC4 family petition; the fee the
+        // family pays is the petition's $210.00 (the registry row's figure).
+        filing_fee: Some(FilingFee {
+            amount: "210.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ny__civ_sc50_statement_of_claim",
+        jurisdiction: "NY",
+        title: "Statement of Claim (Small Claims)",
+        origin_url: "https://www.nycourts.gov/LegacyPDFS/courts/nyc/civil/forms/CIV-SC-50.pdf",
+        object_path: "forms/united_states/new_york/nyc_civil_court/ny__civ_sc50_statement_of_claim.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/nyc_civil_court/ny__civ_sc50_statement_of_claim.sha256"
+        ),
+        // The fee is tiered by claim amount ($15.00 up to $1,000; $20.00
+        // above); no single honest figure fits FormMeta, so the registry
+        // fee_note carries the schedule.
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ny__probate_petition",
+        jurisdiction: "NY",
+        title: "Petition for Probate and Letters Testamentary / Trusteeship",
+        origin_url: "https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Probate.pdf",
+        object_path: "forms/united_states/new_york/new_york_surrogates_court/ny__probate_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_surrogates_court/ny__probate_petition.sha256"
+        ),
+        // Filing fees vary by proceeding and estate size under SCPA 2402 and
+        // the UCS publishes no flat table; the registry fee_note carries the
+        // variance, so no single figure fits FormMeta.
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+];
 /// Return the bundled form registry.
 ///
 /// # Errors

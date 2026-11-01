@@ -1,0 +1,320 @@
+form_code = "ny__nc2_minor_name_change_petition"
+# UCS-NC2 (06/2025) — Petition for Individual Minor (under 18). The parser
+# reports 98 AcroForm fields across 7 pages; the survey counted the same 98.
+#
+# Two actors share one form: questions 1-20 concern the minor, questions
+# 21-39 the petitioner (the parent or guardian filing). Each actor's block
+# gets its own states (minor_*/petitioner_* prefixes). Text fields with
+# several kid widgets (the caption name, the present-name box, the
+# requested-name recitals in the consent sections) are one /Tx field per
+# group — the fill sets /V once and every kid displays it, which is exactly
+# what the form wants (the same name recited in the caption, Section C, and
+# each consent).
+#
+# This generator's parent /Opt entries on Yes/No radios are junk, but the
+# kid appearance states follow an honest pattern with two inversions caught
+# by geometry: the minor's spousal-support pair (Q16) and the petitioner's
+# child-support pair (Q33) check Yes on `1` and No on `0` (kid0 sits on the
+# No column); every other pair checks Yes on `0`, No on `1`. SealingRequest
+# uses literal Yes/No exports. The relationship radio exports 0/1/2 down
+# its Parent(s)/Guardian(s)/Other rows.
+#
+# Mapped: names (which auto-paint the consent recitals), the court and
+# county dropdowns, the relationship radio, both actors' full background
+# blocks, the sex-designation section, the sealing and documents section,
+# and the two non-petitioning-parent consent slots.
+#
+# Deliberately left unmapped (decision recorded, lawyer or clerk completes):
+# - `IndexNumber` — the clerk's caption number across seven header boxes.
+# - `Age` / `PetitionerAge` — derivable at review; the transform has no
+#   computed-value path.
+# - `CourtOfConviction` / `Crime` / `CourtOfConviction1` / `Crime1` — each
+#   conviction splits across two boxes (court, crime); the intake's felony
+#   narratives inform the lawyer, who completes them.
+# - `CoPetitionerName` / `SignatureDatePetitioner` /
+#   `SignatureDateCoPetitioner` — the optional co-petitioner line and the
+#   signature dates, set when the petitioners sign.
+# - `AffirmDay1/2` `AffirmMonth1/2` `AffirmYear1/2` — the verification
+#   dates (day/month/year dropdowns), set at the review appointment.
+# - `ParentConsentCounty1/2` and every `*Notary*` dropdown — the notary
+#   completes the consent verifications in person.
+# - `MinorConsentCounty` + `MinorConsentNotary*` — the Section E consent a
+#   child aged 14 or older signs before a notary, in person.
+# - `Reset_Form` / `Print_Form` — the blank's own push buttons.
+# - `PetitionerName` — the verification-section printed petitioner name
+#   (two kid widgets); the transform only merges kid-less text fields, so
+#   the lawyer completes it from the intake at review.
+# - `NameChange0` / `SexDesignationChange0` — the Section B verification
+#   checkboxes ("is the name/sex designation being changed"); derived from
+#   the intake itself, checked by the lawyer at review.
+# - `NewSexDesignation` — the three "to [sex]" recital dropdowns in the
+#   consent sections D/E; the lawyer completes them alongside the notary
+#   blocks. The Q7 dropdown itself (`NewSexDesignation2`) is mapped.
+
+[[field]]
+name = "MinorName"
+question = "person__minor.name"
+
+[[field]]
+name = "Petitioner(s)Name"
+question = "person__petitioner.name"
+
+[[field]]
+name = "NewName"
+question = "person__minor_new_name.name"
+
+[[field]]
+name = "CourtType"
+question = "custom_single_choice__filing_court"
+
+[[field]]
+name = "County"
+question = "custom_single_choice__filing_county"
+
+[[field]]
+name = "RelationshipToMinor"
+question = "custom_single_choice__relationship"
+
+[[field]]
+name = "OtherRelation"
+question = "custom_text__other_relation"
+
+[[field]]
+name = "NameChange"
+question = "custom_single_choice__name_change"
+
+[[field]]
+name = "SexDesignationChange"
+question = "custom_single_choice__sex_designation_change"
+
+[[field]]
+name = "PlaceOfBirth"
+question = "custom_text__place_of_birth"
+
+[[field]]
+name = "ConvictedOfCrime"
+question = "custom_single_choice__minor_convicted"
+
+[[field]]
+name = "Bankruptcy"
+question = "custom_single_choice__minor_bankruptcy"
+
+[[field]]
+name = "JudgmentsOrLiens"
+question = "custom_single_choice__minor_judgments_liens"
+
+[[field]]
+name = "PartyToAction"
+question = "custom_single_choice__minor_party_to_action"
+
+[[field]]
+name = "BankruptcyJudgmentsLiensParty-specify"
+question = "custom_text__minor_financial_details"
+
+[[field]]
+name = "CurrentlyMarried"
+question = "custom_single_choice__minor_currently_married"
+
+[[field]]
+name = "PreviouslyMarried"
+question = "custom_single_choice__minor_previously_married"
+
+[[field]]
+name = "ChildrenUnder21"
+question = "custom_single_choice__minor_children_under_21"
+
+[[field]]
+name = "ChildSupport"
+question = "custom_single_choice__minor_child_support"
+
+[[field]]
+name = "ChildSupportPayments"
+question = "custom_single_choice__minor_child_support_current"
+
+[[field]]
+name = "ChildSupportArrears"
+question = "custom_usd__minor_child_support_arrears"
+
+[[field]]
+name = "CourtIssuingChildSupportOrder"
+question = "custom_text__minor_child_support_court"
+
+[[field]]
+name = "SupportCollectionsUnit"
+question = "custom_text__minor_support_collections_unit"
+
+[[field]]
+name = "SpousalSupport"
+question = "custom_single_choice__minor_spousal_support"
+
+[[field]]
+name = "SpousalSupportPayments"
+question = "custom_single_choice__minor_spousal_support_current"
+
+[[field]]
+name = "SpousalSupportArrears"
+question = "custom_usd__minor_spousal_support_arrears"
+
+[[field]]
+name = "CourtIssuingSpousalSupportOrder"
+question = "custom_text__minor_spousal_support_court"
+
+[[field]]
+name = "PreviousNameChangePetition"
+question = "custom_single_choice__prior_name_change"
+
+[[field]]
+name = "PreviousNameChagePetition"
+question = "custom_text__prior_petition_details"
+
+[[field]]
+name = "ReasonsForNameChangeRequest"
+question = "custom_text__reason_for_change"
+
+[[field]]
+name = "PetitionerAddress"
+question = "custom_text__petitioner_address"
+
+[[field]]
+name = "ConvictedOfCrime1"
+question = "custom_single_choice__petitioner_convicted"
+
+[[field]]
+name = "Bankruptcy1"
+question = "custom_single_choice__petitioner_bankruptcy"
+
+[[field]]
+name = "JudgmentsOrLiens1"
+question = "custom_single_choice__petitioner_judgments_liens"
+
+[[field]]
+name = "PartyToAction1"
+question = "custom_single_choice__petitioner_party_to_action"
+
+[[field]]
+name = "BankruptcyJudgmentsLiensParty-specify1"
+question = "custom_text__petitioner_financial_details"
+
+[[field]]
+name = "CurrentlyMarried1"
+question = "custom_single_choice__petitioner_currently_married"
+
+[[field]]
+name = "PreviouslyMarried1"
+question = "custom_single_choice__petitioner_previously_married"
+
+[[field]]
+name = "ChildrenUnder1"
+question = "custom_single_choice__petitioner_children_under_21"
+
+[[field]]
+name = "ChildSupport1"
+question = "custom_single_choice__petitioner_child_support"
+
+[[field]]
+name = "ChildSupportPayments1"
+question = "custom_single_choice__petitioner_child_support_current"
+
+[[field]]
+name = "ChildSupportArrears1"
+question = "custom_usd__petitioner_child_support_arrears"
+
+[[field]]
+name = "SupportCollectionsUnit1"
+question = "custom_text__petitioner_support_collections_unit"
+
+[[field]]
+name = "SpousalSupport1"
+question = "custom_single_choice__petitioner_spousal_support"
+
+[[field]]
+name = "SpousalSupportPayments1"
+question = "custom_single_choice__petitioner_spousal_support_current"
+
+[[field]]
+name = "SpousalSupportArrears1"
+question = "custom_usd__petitioner_spousal_support_arrears"
+
+[[field]]
+name = "CourtIssuingSpousalSupportOrder0"
+question = "custom_text__petitioner_spousal_support_court"
+
+[[field]]
+name = "NewSexDesignation2"
+question = "custom_single_choice__minor_new_sex_designation"
+
+[[field]]
+name = "PreviousSexDesignationChangeRequest"
+question = "custom_single_choice__minor_prior_sex_designation"
+
+[[field]]
+name = "PreviousSexDesignationChangeRequest-specify"
+question = "custom_text__minor_prior_sex_designation_details"
+
+[[field]]
+name = "ReasonsForSexDesignationChangeRequest"
+question = "custom_single_choice__minor_sex_designation_reasons_given"
+
+[[field]]
+name = "ReasonsForSexDesignationChangeRequest-specify"
+question = "custom_text__minor_sex_designation_reasons"
+
+[[field]]
+name = "DOB"
+question = "custom_datetime__date_of_birth"
+
+[[field]]
+name = "CurrentAddress"
+question = "custom_text__minor_current_address"
+
+[[field]]
+name = "SealingRequest"
+question = "custom_single_choice__sealing_requested"
+
+[[field]]
+name = "SealingRequest-specify"
+question = "custom_text__sealing_details"
+
+[[field]]
+name = "SupportingDocument"
+question = "custom_single_choice__documents_attached"
+
+[[field]]
+name = "SupportingDocument-specify"
+question = "custom_text__supporting_documents_list"
+
+[[field]]
+name = "ParentName1"
+question = "people__consenting_parents"
+row = 0
+part = "name"
+
+[[field]]
+name = "Parent/Gaurdian1"
+question = "people__consenting_parents"
+row = 0
+part = "title"
+
+[[field]]
+name = "ParentCurrentAddress1"
+question = "people__consenting_parents"
+row = 0
+part = "street"
+
+[[field]]
+name = "ParentName2"
+question = "people__consenting_parents"
+row = 1
+part = "name"
+
+[[field]]
+name = "Parent/Gaurdian2"
+question = "people__consenting_parents"
+row = 1
+part = "title"
+
+[[field]]
+name = "ParentCurrentAddress2"
+question = "people__consenting_parents"
+row = 1
+part = "street"
