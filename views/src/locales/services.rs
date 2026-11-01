@@ -632,11 +632,10 @@ impl ServicesCatalog {
     /// service in a priced one resolves.
     #[must_use]
     pub fn fee<'a>(&'a self, service: &'a ServiceCopy) -> Option<&'a str> {
-        service.amount.as_deref().or_else(|| {
-            service
-                .flat_fee
-                .and(self.flat_fee.as_deref())
-        })
+        service
+            .amount
+            .as_deref()
+            .or_else(|| service.flat_fee.and(self.flat_fee.as_deref()))
     }
 
     /// The included Notations for a Notation package, if `service` is one.
@@ -1041,16 +1040,23 @@ services:
             err.contains("`nv-address` sets `amount` in an unpriced catalog"),
             "{err}"
         );
-        let with_flat_fee = unpriced_fixture().replace("priced: false\n", "priced: false\nflat_fee: $50\n");
+        let with_flat_fee =
+            unpriced_fixture().replace("priced: false\n", "priced: false\nflat_fee: $50\n");
         let err = ServicesCatalog::parse(&with_flat_fee).expect_err("flat fee in unpriced");
-        assert!(err.contains("an unpriced catalog publishes no `flat_fee`"), "{err}");
+        assert!(
+            err.contains("an unpriced catalog publishes no `flat_fee`"),
+            "{err}"
+        );
     }
 
     #[test]
     fn a_priced_catalog_requires_its_flat_fee() {
         let err = ServicesCatalog::parse(&fixture().replace("flat_fee: $50\n", ""))
             .expect_err("no flat fee");
-        assert!(err.contains("a priced catalog publishes `flat_fee`"), "{err}");
+        assert!(
+            err.contains("a priced catalog publishes `flat_fee`"),
+            "{err}"
+        );
     }
 
     #[test]
