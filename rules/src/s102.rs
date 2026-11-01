@@ -234,7 +234,8 @@ impl S102LinePacking {
             if non_prose[index] || lines[index].1.trim().is_empty() {
                 return None;
             }
-            let linked = |k: usize| joinable(lines[k], lines[k + 1], non_prose[k], non_prose[k + 1]);
+            let linked =
+                |k: usize| joinable(lines[k], lines[k + 1], non_prose[k], non_prose[k + 1]);
             let mut start = index;
             while start > 0 && linked(start - 1) {
                 start -= 1;

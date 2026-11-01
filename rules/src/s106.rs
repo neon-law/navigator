@@ -55,12 +55,12 @@ impl S106MarkdownHygiene {
         '\u{2013}', '\u{2014}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2026}',
         // Latin-1 letters in legitimate use (foreign words in docs).
         '\u{00E0}', '\u{00F6}',
-        // Legal and scholarly symbols: section sign, pilcrow (the
-        // pleading-paragraph pinpoint, `¶ 12` / `¶¶ 12–14`), middle dot,
-        // times, divide, plus-minus, registered, trademark.
-        '\u{00A7}', '\u{00B6}', '\u{00B7}', '\u{00D7}', '\u{00F7}', '\u{00B1}', '\u{00AE}', '\u{2122}',
-        // Arrows and the command key symbol.
-        '\u{2190}', '\u{2191}', '\u{2192}', '\u{2318}',
+        // Legal and scholarly symbols: section sign, middle dot, times,
+        // divide, plus-minus, registered, trademark.
+        '\u{00A7}', '\u{00B7}', '\u{00D7}', '\u{00F7}', '\u{00B1}', '\u{00AE}', '\u{2122}',
+        // The pilcrow, the pleading-paragraph pinpoint (`¶ 12` / `¶¶ 12–14`);
+        // arrows; and the command key symbol.
+        '\u{00B6}', '\u{2190}', '\u{2191}', '\u{2192}', '\u{2318}',
         // Mathematical and comparison symbols, true minus sign, one-third.
         '\u{2212}', '\u{2248}', '\u{2264}', '\u{2208}', '\u{2153}',
         // Typographic bullet.
@@ -408,10 +408,7 @@ mod tests {
 
     #[test]
     fn the_fix_spells_a_fraction_in_ascii() {
-        assert_eq!(
-            fixed("Unit \u{BD} of the lot.\n"),
-            "Unit 1/2 of the lot.\n"
-        );
+        assert_eq!(fixed("Unit \u{BD} of the lot.\n"), "Unit 1/2 of the lot.\n");
         // After a digit the fraction gets a space, so thirteen and a half
         // never reads as 131/2.
         assert_eq!(
@@ -436,11 +433,7 @@ mod tests {
         );
         // Re-wrapping moves words, never adds or drops them, and stays
         // inside the paragraph.
-        let words = |s: &str| {
-            s.split_whitespace()
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        };
+        let words = |s: &str| s.split_whitespace().map(str::to_string).collect::<Vec<_>>();
         assert_eq!(words(&out), words(&contents.replace('\u{BD}', "1/2")));
         assert!(out.starts_with("# Heading\n\n"), "{out}");
         assert!(out.ends_with("\n\nNext paragraph.\n"), "{out}");
