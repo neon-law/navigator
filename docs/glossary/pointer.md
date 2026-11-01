@@ -18,3 +18,9 @@ decision. Rule `Y003` validates every Pointer, and `Y014` refuses one left under
 
 - Shape: [`store::document_pointers::DocumentPointer`](../../store/src/document_pointers.rs) · Contract:
   [Document staging and pointers](../project-repositories.md#document-staging-and-pointers)
+
+An imported document may carry `checkout_path:`, a validated path below the Git-ignored `documents/` directory. It
+records placement independently of the stable slug naming the Pointer below `blobs/`. Without this field, `folder:` and
+the existing kind mapping continue to determine placement. A provider move updates this field without creating another
+identity; sync moves checksum-matching local bytes through its existing recoverable pull transaction. Edited old bytes
+and occupied destinations are refused for explicit reconciliation.

@@ -17,3 +17,11 @@ change and every Notation pins a template row.
 
 - Write boundary: [`store::assets::file_revision`](../../store/src/assets.rs) · Schema:
   [`asset` in `navigator.surql`](../../store/src/schema/navigator.surql)
+
+When a new recursive Drive import has no existing source-linked identity, Navigator reserves
+`drive/<hex-encoded-provider-file-id>.<initial-extension>` as its slug. The reversible lowercase hexadecimal provider
+ID, never the mutable filename or folder, identifies that source. A later import reuses any existing source-linked slug,
+including a lawyer's explicit reslug and historical flat-import identities. Renames and moves update placement and
+provenance without forking the chain. An extension-changing source rename is refused explicitly because the existing
+Pointer format requires the identity's extension to match the source format; it does not create a second identity or
+weaken that validation.
