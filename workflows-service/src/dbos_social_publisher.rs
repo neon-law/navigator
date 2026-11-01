@@ -291,9 +291,9 @@ async fn publish_post(
     let delay = (request.publish_at - Utc::now())
         .to_std()
         .unwrap_or(Duration::ZERO);
-    if !delay.is_zero() {
-        dbos::sleep::<SocialPublishDbosError>(delay).await?;
-    }
+    // Replay must consume the timer checkpoint even after its deadline.
+    // Skipping a zero delay would shift every following journal operation.
+    dbos::sleep::<SocialPublishDbosError>(delay).await?;
 
     let post_id = request.post_id;
     let surreal = publisher.surreal().clone();

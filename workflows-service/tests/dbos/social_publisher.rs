@@ -236,10 +236,12 @@ async fn a_cut_off_scheduled_wait_resumes_and_publishes_once() {
     .await
     .expect("start the scheduled publish");
 
-    // The snapshot step completes inside this wait and the run parks on its
-    // checkpointed timer; the cut-off must leave it pending, not failed.
+    // Cut off during the durable timer, then recover after its deadline.
+    // Recovery must replay that timer before loading the scheduled Post.
     tokio::time::sleep(Duration::from_millis(500)).await;
     worker.shutdown().await;
+    let downtime = (publish_at - Utc::now()).to_std().unwrap_or(Duration::ZERO);
+    tokio::time::sleep(downtime + Duration::from_millis(100)).await;
 
     let resumed = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
     let _ = dbos_social_publisher::register_publisher(
