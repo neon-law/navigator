@@ -976,7 +976,7 @@ impl DocumentClient {
         token: String,
         project_code: &str,
     ) -> Result<Self> {
-        Self::with_client(reqwest::Client::new(), base, token, project_code).await
+        Self::with_timeout(base, token, project_code, None).await
     }
 
     /// Bounded, read-only validation requests. The normal client keeps its
@@ -986,18 +986,20 @@ impl DocumentClient {
         token: String,
         project_code: &str,
     ) -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .context("build document validation client")?;
-        Self::with_client(client, base, token, project_code).await
+        Self::with_timeout(
+            base,
+            token,
+            project_code,
+            Some(std::time::Duration::from_secs(10)),
+        )
+        .await
     }
 
-    async fn with_client(
-        client: reqwest::Client,
+    async fn with_timeout(
         base: String,
         token: String,
         project_code: &str,
+        timeout: Option<std::time::Duration>,
     ) -> Result<Self> {
         let origin = url::Url::parse(&base).context("parse document deployment URL")?;
         let loopback = match origin.host() {
@@ -1010,6 +1012,15 @@ impl DocumentClient {
             origin.scheme() == "https" || (origin.scheme() == "http" && loopback),
             "document transfers require HTTPS except for a loopback deployment"
         );
+        // Keep credentials and document bytes on the selected deployment.
+        // A checked origin alone does not prevent a redirect from downgrading TLS.
+        let mut builder = reqwest::Client::builder()
+            .https_only(!loopback)
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(timeout) = timeout {
+            builder = builder.timeout(timeout);
+        }
+        let client = builder.build().context("build document transfer client")?;
         let body = fetch_project_list(&client, &base, &token).await?;
         let projects: Vec<VisibleProject> =
             serde_json::from_str(&body).context("parse GET /app/api/projects")?;
@@ -9940,9 +9951,7 @@ mod tests {
 
     #[tokio::test]
     async fn document_client_refuses_remote_plaintext_before_request() {
-        let client = reqwest::Client::builder().https_only(true).build().unwrap();
-        let error = DocumentClient::with_client(
-            client,
+        let error = DocumentClient::with_credential(
             "http://upload.example.test".into(),
             "synthetic-token".into(),
             "acme",
@@ -9955,6 +9964,32 @@ mod tests {
                 .to_string()
                 .contains("document transfers require HTTPS"),
             "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn document_client_does_not_follow_deployment_redirects() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", format!("{}/redirected", server.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/redirected"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": Uuid::now_v7(), "code": "acme"}
+            ])))
+            .expect(0)
+            .mount(&server)
+            .await;
+        assert!(
+            DocumentClient::with_credential(server.uri(), "synthetic-token".into(), "acme")
+                .await
+                .is_err()
         );
     }
 
