@@ -240,6 +240,36 @@ beneath it, named by its immutable `code`: `<firm-slug>/<project-code>` (`store:
 returns exactly that path. Concurrent creation, moves, and tenant isolation still need tests. Forgejo is one parallel
 service per installation, not a single central organization shared between installations.
 
+### Firm organizations
+
+The installation sets `DISABLE_REGULAR_ORG_CREATION`, so a Firm user's `POST /api/v1/orgs` is refused with `403`. An
+existing Firm's organization is provisioned through Navigator instead:
+
+```bash
+navigator site firm provision-forgejo <firm-slug> --host <deployment host>
+```
+
+The verb resolves the Firm from the Firm directory, which lists each visible Firm's `slug`, and posts to
+`/app/api/firms/{id}/forgejo-organization`. Owner, or an Admin whose Firm membership admits `manage_membership`, may
+call it. The web process then works through `store::firms::forgejo_organization::provision`:
+
+1. Reads the Firm's own `forgejo_access_token` integration secret and asks Forgejo which account it authenticates.
+2. With the provisioning identity, creates the private organization named by `firm.slug`, or adopts it when it exists,
+   and makes it private if it is not.
+3. Adds the Firm's account to the organization's owners team, unless it is already there.
+4. Records the result in the PostgreSQL `firm_forgejo_organization` row: one row per Firm, `provisioned_at` from the
+   first run, `reconciled_at` from the latest.
+
+A re-run creates nothing and adds nobody twice. A name held by a user account is refused with `409`, and nothing is
+renamed or suffixed. The Firm's account can then create or copy the Firm's Project repositories into the organization
+with the Firm's own token.
+
+The provisioning identity is a Forgejo account that exists only for Navigator. It is a site administrator, because
+Forgejo grants organization creation to no one else. Its token, `NAVIGATOR_FORGEJO_PROVISIONER_TOKEN`, lives only on the
+web process ([deployment secrets](deployment-secrets.md)). Scope it to `write:organization` and `read:user`. A token
+without `write:repository` cannot reach the forced-merge path described above. Give the account no password login and no
+other token.
+
 Deployment Actions defaults off. The KIND tier runs one runner (Forgejo Runner 13.2.0, pinned by digest in
 `k8s/forgejo/runner/`) on the `host` executor to prove registration and a workflow run; it is not an isolation boundary.
 Before enabling Actions in a deployment, establish isolated, ephemeral execution for Project workflows, restrict

@@ -20,6 +20,7 @@ mod document_ocr;
 mod document_read;
 mod document_reconcile;
 mod document_sync;
+mod firm_forgejo;
 mod firms_doctor;
 mod forms_sync;
 mod glossary;
@@ -2512,6 +2513,25 @@ enum SitePersonCmd {
 }
 
 #[derive(Subcommand)]
+enum SiteFirmCmd {
+    /// Create or reconcile the Firm's Forgejo organization.
+    ///
+    /// The deployment's provisioning identity creates the private
+    /// organization the Firm's slug names, and adds the account the Firm's
+    /// own Forgejo access token authenticates to its owners team, so the
+    /// Firm's Project repositories can be created or copied there without
+    /// anyone holding site administration. Safe to re-run: an existing
+    /// organization and owner are left as they are. Owner, or an Admin of
+    /// the Firm.
+    ProvisionForgejo {
+        /// The Firm's slug, as `GET /app/api/firms` lists it.
+        slug: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+}
+
+#[derive(Subcommand)]
 enum SiteCmd {
     /// Publish Brand Posts and record social links through a site login.
     Blog {
@@ -2563,6 +2583,11 @@ enum SiteCmd {
     Person {
         #[command(subcommand)]
         action: SitePersonCmd,
+    },
+    /// Manage a Firm through the logged-in deployment.
+    Firm {
+        #[command(subcommand)]
+        action: SiteFirmCmd,
     },
     /// File, read, and verify a Project's documents — every document is
     /// scoped to one Project, and every Project to one brand deployment
@@ -4858,6 +4883,9 @@ fn run() -> ExitCode {
             SiteCmd::Person {
                 action: SitePersonCmd::Merge { keep, drop, host },
             } => runtime().block_on(remote::merge_people(host.host, &keep, &drop)),
+            SiteCmd::Firm {
+                action: SiteFirmCmd::ProvisionForgejo { slug, host },
+            } => runtime().block_on(firm_forgejo::provision(host.host.as_deref(), &slug)),
             SiteCmd::Import {
                 model_name,
                 seed_file,

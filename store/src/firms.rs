@@ -16,6 +16,7 @@
 //! changes; it names the Firm's Forgejo organization ([`forgejo`]).
 
 pub mod forgejo;
+pub mod forgejo_organization;
 pub mod slug;
 
 use serde::Serialize;

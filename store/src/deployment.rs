@@ -291,6 +291,11 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
     // `webapp::lead_sources` reads an absent key as "not connected", so the
     // key is its own trigger and a row without it declines the section.
     required!(integration "PLAUSIBLE_STATS_API_KEY" if "PLAUSIBLE_STATS_API_KEY"),
+    // Firm organization provisioning on the installation's Forgejo
+    // (`store::firms::forgejo_organization`). The door reads an absent token
+    // as "not configured", so the key is its own trigger and a row without it
+    // declines provisioning.
+    required!(integration "NAVIGATOR_FORGEJO_PROVISIONER_TOKEN" if "NAVIGATOR_FORGEJO_PROVISIONER_TOKEN"),
     // DriDigest on DBOS posts through this incoming webhook. A row that does
     // not host it declines the key, so it is its own trigger; `ops ship`
     // demands it when `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED` is on.
