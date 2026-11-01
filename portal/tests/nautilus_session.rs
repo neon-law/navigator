@@ -256,6 +256,9 @@ async fn a_prompt_runs_one_metered_completion_and_renders_the_conversation() {
     let (status, _, body) = get(&fx.app, &bearer).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("legal-sandbox-composer"), "{body}");
+    assert!(body.contains("disabled=true"), "{body}");
+    assert!(body.contains(webapp::sandbox::VERTEX_BACKEND), "{body}");
+    assert!(!body.contains(webapp::sandbox::LOCAL_BACKEND), "{body}");
     assert!(body.contains("$5.00"), "{body}");
     assert!(body.contains("$5.00 of $5.00"), "{body}");
     let usage = row(&fx.surreal, person_id).await;

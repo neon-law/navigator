@@ -400,10 +400,7 @@ async fn credit_view(
         granted_cents: u64::try_from(usage.granted_cents.max(0)).unwrap_or(0),
         remaining_cents: u64::try_from(usage.remaining_cents().max(0)).unwrap_or(0),
         model_backend: webapp::sandbox::VERTEX_BACKEND.to_string(),
-        backends: vec![
-            webapp::sandbox::VERTEX_BACKEND.to_string(),
-            webapp::sandbox::LOCAL_BACKEND.to_string(),
-        ],
+        backends: vec![webapp::sandbox::VERTEX_BACKEND.to_string()],
     })
 }
 

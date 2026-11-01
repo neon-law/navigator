@@ -25,8 +25,7 @@ const PAGE_TITLE: &str = "Legal Sandbox";
 /// selector's first option, and the session default.
 pub const VERTEX_BACKEND: &str = "Claude Sonnet (Vertex AI)";
 
-/// The privacy-maximal local backend, offered in the selector. It serves
-/// through the same provider seam once it lands.
+/// The planned local backend's label. It is not an available session backend.
 pub const LOCAL_BACKEND: &str = "Local open-weights";
 
 /// The billing-month credit row for the current subscriber, in integer cents —
@@ -150,7 +149,7 @@ fn disclosure() -> Element {
 }
 
 /// The credit meter — remaining cents and percent of the grant — plus the
-/// model-backend selector. Rendered in every metered state.
+/// configured model backend. Rendered in every metered state.
 fn meter(credit: &SandboxCredit) -> Element {
     rsx! {
         section { class: "legal-sandbox-meter portal-detail__section",
@@ -168,6 +167,7 @@ fn meter(credit: &SandboxCredit) -> Element {
                 class: "nav-input",
                 id: "legal-sandbox-backend",
                 name: "backend",
+                disabled: true,
                 for option in credit.backends.iter() {
                     option {
                         value: "{option}",
@@ -176,6 +176,7 @@ fn meter(credit: &SandboxCredit) -> Element {
                     }
                 }
             }
+            p { class: "nav-muted", "Local model execution is unavailable." }
         }
     }
 }
@@ -340,7 +341,7 @@ mod tests {
             granted_cents: 500,
             remaining_cents,
             model_backend: VERTEX_BACKEND.to_string(),
-            backends: vec![VERTEX_BACKEND.to_string(), LOCAL_BACKEND.to_string()],
+            backends: vec![VERTEX_BACKEND.to_string()],
         }
     }
 
@@ -466,8 +467,8 @@ mod tests {
         assert!(!html.contains("<script"), "{html}");
     }
 
-    /// The backend selector marks the session's backend and offers the other
-    /// one.
+    /// The configured backend is read-only; an unavailable local model
+    /// cannot appear as a selectable execution destination.
     #[test]
     fn the_backend_selector_marks_the_session_backend() {
         let html = render(&view(Some(credit(500))));
@@ -475,7 +476,12 @@ mod tests {
             html.contains(r#"value="Claude Sonnet (Vertex AI)" selected=true"#),
             "session backend not selected: {html}"
         );
-        assert!(html.contains("Local open-weights"), "{html}");
+        assert!(html.contains("disabled=true"), "{html}");
+        assert!(!html.contains(LOCAL_BACKEND), "{html}");
+        assert!(
+            html.contains("Local model execution is unavailable."),
+            "{html}"
+        );
     }
 
     /// Money is subscriber-English dollars, never bare cent counts.
