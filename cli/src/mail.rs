@@ -14,9 +14,18 @@ use serde_json::json;
 use url::Url;
 use uuid::Uuid;
 
+mod attachments;
+mod login;
+
 const GMAIL_API: &str = "https://gmail.googleapis.com/gmail/v1";
 const GOOGLE_TOKEN_API: &str = "https://oauth2.googleapis.com/token";
 const MAX_SEARCH_RESULTS: u8 = 25;
+/// Keychain service holding the Gmail refresh token; the account is the
+/// configured Gmail address.
+const REFRESH_TOKEN_SERVICE: &str = "com.neonlaw.navigator.gmail.refresh-token";
+/// Keychain service holding the OAuth client secret; the account is the
+/// configured client id.
+const CLIENT_SECRET_SERVICE: &str = "com.neonlaw.navigator.gmail.client-secret";
 /// Gmail's 25 MB message limit, measured on the encoded MIME message.
 const MAX_MESSAGE_BYTES: u64 = 25_000_000;
 /// Where `mail save` writes by default: the Project checkout's git-ignored
@@ -73,6 +82,15 @@ pub enum MailAction {
         #[arg(long = "attach", value_name = "PATH")]
         attach: Vec<PathBuf>,
     },
+    /// Authorize Gmail in the browser and store the refresh token in the
+    /// macOS Keychain. Requests gmail.readonly and gmail.compose only.
+    Login {
+        /// Google's downloaded Desktop-app client JSON (`client_secret_*.json`).
+        /// Its `installed.client_secret` is stored in the Keychain and never
+        /// printed. Without it, the stored secret is used, or prompted for.
+        #[arg(long, value_name = "PATH")]
+        client_secret_file: Option<PathBuf>,
+    },
     /// Save Gmail account/client settings or check draft-only setup.
     Setup {
         /// Gmail address whose refresh token is stored in the macOS Keychain.
@@ -118,6 +136,23 @@ pub enum MailAction {
         /// Output filename. Defaults to the convention: YYYY.MM.DD_<subject>.eml.
         #[arg(long)]
         name: Option<String>,
+    },
+    /// Write a Gmail message's attachments into a directory, one file each.
+    /// Never clobbers; prints name, byte count, and sha256 per file. Nothing
+    /// is uploaded.
+    Attachments {
+        /// Gmail web URL or Gmail message id.
+        reference: String,
+        /// Directory to write the attachments into.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Only attachments whose filename matches this glob (`*`, `?`;
+        /// case-insensitive), for example '*.pdf'.
+        #[arg(long, value_name = "GLOB")]
+        only: Option<String>,
+        /// Also write inline images, which are skipped by default.
+        #[arg(long)]
+        include_inline: bool,
     },
     /// File a saved RFC 5322 message (.eml) into the matter inbox through
     /// the Navigator ingest door. Ingest-only: nothing is sent, and no
@@ -1172,9 +1207,16 @@ struct SetupReport {
 }
 
 /// Checklist for the draft-only Gmail path. Built from booleans only, so it never carries a secret
-/// or a value read from the environment.
-fn setup_report(account_set: bool, client_id_set: bool, keychain: KeychainState) -> SetupReport {
-    let mark = |ok: bool| if ok { "ok     " } else { "MISSING" };
+/// or a value read from the environment. The client secret is optional: a token minted by
+/// `navigator mail login` with a Desktop client needs it to refresh, and the refresh exchange
+/// sends it whenever one is stored.
+fn setup_report(
+    account_set: bool,
+    client_id_set: bool,
+    client_secret_stored: bool,
+    keychain: KeychainState,
+) -> SetupReport {
+    let mark = |ok: bool| if ok { "ok      " } else { "MISSING " };
     let keychain_ok = keychain == KeychainState::Present;
     let mut text = String::from("Gmail draft-only setup for navigator mail\n");
     let _ = writeln!(
@@ -1189,7 +1231,12 @@ fn setup_report(account_set: bool, client_id_set: bool, keychain: KeychainState)
     );
     let _ = writeln!(
         text,
-        "  [{}] refresh token in the macOS Keychain, service com.neonlaw.navigator.gmail.refresh-token",
+        "  [{}] OAuth client secret in the macOS Keychain, service {CLIENT_SECRET_SERVICE} (navigator mail login stores it)",
+        if client_secret_stored { "ok      " } else { "optional" }
+    );
+    let _ = writeln!(
+        text,
+        "  [{}] refresh token in the macOS Keychain, service {REFRESH_TOKEN_SERVICE}",
         mark(keychain_ok)
     );
     if !account_set || !client_id_set {
@@ -1199,13 +1246,14 @@ fn setup_report(account_set: bool, client_id_set: bool, keychain: KeychainState)
     }
     if keychain == KeychainState::Missing {
         text.push_str(
-            "\nStore the refresh token without echoing it (the command prompts for the value):\n  security add-generic-password -s com.neonlaw.navigator.gmail.refresh-token -a \"<gmail-address>\" -w\n",
+            "\nAuthorize Gmail in the browser and store the refresh token (prompts once for the client secret):\n  navigator mail login\n",
         );
     }
     text.push_str(
-        "\nScopes: authorize the refresh token for gmail.readonly and gmail.compose only. Gmail has no narrower \
-scope that creates drafts. navigator mail never sends, replies, or forwards: it has no send verb and calls no send \
-endpoint. Never print, paste, or log the token. See docs/mail-cli.md.\n",
+        "\nScopes: navigator mail login requests gmail.readonly and gmail.compose only, and refuses a token \
+carrying any other scope. Gmail has no narrower scope that creates drafts. navigator mail never sends, replies, or \
+forwards: it has no send verb and calls no send endpoint. Never print, paste, or log the token or client secret. See \
+docs/mail-cli.md.\n",
     );
     let ready = account_set && client_id_set && keychain_ok;
     if ready {
@@ -1224,15 +1272,21 @@ fn setup_command(account: Option<String>, client_id: Option<String>) -> Result<(
         load_setup(&setup_path())?,
     );
     let account = settings.account.filter(|value| !value.trim().is_empty());
-    let client_id_set = settings
-        .client_id
-        .is_some_and(|value| !value.trim().is_empty());
+    let client_id = settings.client_id.filter(|value| !value.trim().is_empty());
+    let client_secret_stored = client_id.as_deref().is_some_and(|client_id| {
+        keychain_read(CLIENT_SECRET_SERVICE, client_id).is_ok_and(|secret| secret.is_some())
+    });
     let keychain = match &account {
         None => KeychainState::AccountUnknown,
         Some(account) if keychain_refresh_token(account).is_ok() => KeychainState::Present,
         Some(_) => KeychainState::Missing,
     };
-    let report = setup_report(account.is_some(), client_id_set, keychain);
+    let report = setup_report(
+        account.is_some(),
+        client_id.is_some(),
+        client_secret_stored,
+        keychain,
+    );
     print!("{}", report.text);
     if report.ready {
         Ok(())
@@ -1241,57 +1295,111 @@ fn setup_command(account: Option<String>, client_id: Option<String>) -> Result<(
     }
 }
 
-async fn client() -> Result<GmailClient> {
-    let (account, client_id) = resolve_setup(
+/// The configured Gmail account and OAuth client id: environment overrides
+/// first, then the saved settings.
+fn configured_setup() -> Result<(String, String)> {
+    resolve_setup(
         std::env::var("NAVIGATOR_GMAIL_ACCOUNT").ok(),
         std::env::var("NAVIGATOR_GMAIL_CLIENT_ID").ok(),
         load_setup(&setup_path())?,
-    )?;
-    let refresh_token = keychain_refresh_token(&account).context(
-        "Gmail refresh token unavailable; run navigator mail setup for the Keychain command",
-    )?;
+    )
+}
+
+/// The refresh-token form. `client_secret` rides along only when one is
+/// stored: a Desktop-app client requires it, and a client that issues
+/// tokens without one keeps working.
+fn refresh_form<'a>(
+    client_id: &'a str,
+    client_secret: Option<&'a str>,
+    refresh_token: &'a str,
+) -> Vec<(&'static str, &'a str)> {
+    let mut form = vec![("client_id", client_id)];
+    if let Some(secret) = client_secret {
+        form.push(("client_secret", secret));
+    }
+    form.push(("refresh_token", refresh_token));
+    form.push(("grant_type", "refresh_token"));
+    form
+}
+
+async fn client() -> Result<GmailClient> {
+    let (account, client_id) = configured_setup()?;
+    let refresh_token = keychain_refresh_token(&account)
+        .context("Gmail refresh token unavailable; run navigator mail login")?;
+    let client_secret = keychain_read(CLIENT_SECRET_SERVICE, &client_id)?;
     let response = reqwest::Client::new()
         .post(GOOGLE_TOKEN_API)
-        .form(&[
-            ("client_id", client_id.as_str()),
-            ("refresh_token", refresh_token.as_str()),
-            ("grant_type", "refresh_token"),
-        ])
+        .form(&refresh_form(
+            &client_id,
+            client_secret.as_deref(),
+            &refresh_token,
+        ))
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .context("refresh Gmail access token")?;
-    let token: TokenResponse = parse_response(response, "Google token endpoint").await?;
+    let token = login::token_response(response).await?;
+    if let Err(error) = login::check_granted_scopes(token.scope.as_deref()) {
+        return Err(login::refuse_stored_token(&account, error));
+    }
     GmailClient::new(token.access_token)
 }
 
-#[derive(Debug, Deserialize)]
-struct TokenResponse {
-    access_token: String,
+fn keychain_refresh_token(account: &str) -> Result<String> {
+    let token = keychain_read(REFRESH_TOKEN_SERVICE, account)
+        .context("read Gmail refresh token from macOS Keychain")?
+        .ok_or_else(|| anyhow!("no Gmail refresh token in the Keychain"))?;
+    if token.trim().is_empty() {
+        return Err(anyhow!("Gmail refresh token is empty in Keychain"));
+    }
+    Ok(token)
 }
 
-fn keychain_refresh_token(account: &str) -> Result<String> {
-    #[cfg(target_os = "macos")]
-    {
-        const REFRESH_TOKEN_SERVICE: &str = "com.neonlaw.navigator.gmail.refresh-token";
-        let bytes = security_framework::passwords::generic_password(
-            security_framework::passwords::PasswordOptions::new_generic_password(
-                REFRESH_TOKEN_SERVICE,
-                account,
-            ),
-        )
-        .context("read Gmail refresh token from macOS Keychain")?;
-        let token = String::from_utf8(bytes).context("Gmail refresh token is not UTF-8")?;
-        if token.trim().is_empty() {
-            return Err(anyhow!("Gmail refresh token is empty in Keychain"));
+/// Reads one generic-password item. `None` when the item does not exist;
+/// any other Keychain failure is an error, never a silent absence.
+#[cfg(target_os = "macos")]
+fn keychain_read(service: &str, account: &str) -> Result<Option<String>> {
+    /// `errSecItemNotFound`.
+    const ITEM_NOT_FOUND: i32 = -25300;
+    match security_framework::passwords::generic_password(
+        security_framework::passwords::PasswordOptions::new_generic_password(service, account),
+    ) {
+        Ok(bytes) => {
+            let value = String::from_utf8(bytes).context("Keychain item is not UTF-8")?;
+            Ok(Some(value).filter(|value| !value.trim().is_empty()))
         }
-        Ok(token)
+        Err(error) if error.code() == ITEM_NOT_FOUND => Ok(None),
+        Err(error) => Err(anyhow!("read the macOS Keychain item {service}: {error}")),
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = account;
-        Err(anyhow!("Gmail Keychain access is supported only on macOS"))
-    }
+}
+
+/// Creates or updates one generic-password item.
+#[cfg(target_os = "macos")]
+fn keychain_write(service: &str, account: &str, value: &str) -> Result<()> {
+    security_framework::passwords::set_generic_password(service, account, value.as_bytes())
+        .map_err(|error| anyhow!("write the macOS Keychain item {service}: {error}"))
+}
+
+/// Deletes one generic-password item.
+#[cfg(target_os = "macos")]
+fn keychain_delete(service: &str, account: &str) -> Result<()> {
+    security_framework::passwords::delete_generic_password(service, account)
+        .map_err(|error| anyhow!("delete the macOS Keychain item {service}: {error}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_read(_service: &str, _account: &str) -> Result<Option<String>> {
+    Err(anyhow!("Gmail Keychain access is supported only on macOS"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_write(_service: &str, _account: &str, _value: &str) -> Result<()> {
+    Err(anyhow!("Gmail Keychain access is supported only on macOS"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_delete(_service: &str, _account: &str) -> Result<()> {
+    Err(anyhow!("Gmail Keychain access is supported only on macOS"))
 }
 
 fn finish(result: Result<()>) -> ExitCode {
@@ -1326,6 +1434,7 @@ pub async fn archive(reference: &str) -> Result<()> {
     client.archive_message(&id).await
 }
 
+#[allow(clippy::too_many_lines)] // one dispatch arm per verb; each arm delegates
 async fn run_inner(action: MailAction) -> Result<()> {
     match action {
         MailAction::Search { query } => {
@@ -1378,6 +1487,15 @@ async fn run_inner(action: MailAction) -> Result<()> {
             Ok(())
         }
         MailAction::Setup { account, client_id } => setup_command(account, client_id),
+        MailAction::Login { client_secret_file } => {
+            login::login_command(client_secret_file.as_deref()).await
+        }
+        MailAction::Attachments {
+            reference,
+            dir,
+            only,
+            include_inline,
+        } => attachments::run(&reference, &dir, only.as_deref(), include_inline).await,
         MailAction::File {
             thread,
             project,
@@ -3083,26 +3201,52 @@ mod tests {
 
     #[test]
     fn setup_report_names_each_gap_and_never_claims_send_access() {
-        let report = setup_report(false, false, KeychainState::AccountUnknown);
+        let report = setup_report(false, false, false, KeychainState::AccountUnknown);
         assert!(!report.ready);
         for expected in [
             "NAVIGATOR_GMAIL_ACCOUNT",
             "NAVIGATOR_GMAIL_CLIENT_ID",
             "com.neonlaw.navigator.gmail.refresh-token",
+            "com.neonlaw.navigator.gmail.client-secret",
             "gmail.readonly",
             "gmail.compose",
             "never sends",
         ] {
             assert!(report.text.contains(expected), "missing `{expected}`");
         }
+        assert!(!report.text.contains("security add-generic-password"));
 
-        let missing = setup_report(true, true, KeychainState::Missing);
+        let missing = setup_report(true, true, false, KeychainState::Missing);
         assert!(!missing.ready);
-        assert!(missing.text.contains("security add-generic-password"));
+        assert!(missing.text.contains("navigator mail login"));
+        assert!(missing.text.contains("[optional] OAuth client secret"));
+        assert!(!missing.text.contains("security add-generic-password"));
 
-        let ready = setup_report(true, true, KeychainState::Present);
+        // The client secret is optional: its absence never blocks readiness.
+        let ready = setup_report(true, true, false, KeychainState::Present);
         assert!(ready.ready);
-        assert!(!ready.text.contains("security add-generic-password"));
+        assert!(!ready.text.contains("  navigator mail login\n"));
+
+        let with_secret = setup_report(true, true, true, KeychainState::Present);
+        assert!(with_secret.ready);
+        assert!(with_secret.text.contains("[ok      ] OAuth client secret"));
+    }
+
+    #[test]
+    fn refresh_sends_the_client_secret_only_when_one_is_stored() {
+        let with = refresh_form("client", Some("secret"), "refresh");
+        assert_eq!(
+            with,
+            [
+                ("client_id", "client"),
+                ("client_secret", "secret"),
+                ("refresh_token", "refresh"),
+                ("grant_type", "refresh_token"),
+            ]
+        );
+        let without = refresh_form("client", None, "refresh");
+        assert!(without.iter().all(|(name, _)| *name != "client_secret"));
+        assert_eq!(without.len(), 3);
     }
 
     #[test]
