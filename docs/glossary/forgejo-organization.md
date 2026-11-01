@@ -13,7 +13,7 @@ reconciles it (`navigator site firm provision-forgejo <firm-slug>`). That identi
 Forgejo access token authenticates in the organization's owners team. Re-running converges: nothing is created or added
 twice. See [Firm organizations](../forgejo-deployment.md#firm-organizations).
 
-The table is `firm_forgejo_organization`. Its one row per Firm records the organization name, Forgejo's numeric
+Navigator keeps one PostgreSQL row per Firm in `firm_forgejo_organization`, recording the organization name, Forgejo's numeric
 `forgejo_id`, the `owner_login` kept in the owners team, the first `provisioned_at`, and the latest `reconciled_at`.
 
 - Vocabulary: [`store::firms::forgejo_organization`](../../store/src/firms/forgejo_organization.rs)
