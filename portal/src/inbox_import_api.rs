@@ -202,6 +202,7 @@ async fn resolve_firm_and_project(
 async fn archive_payload(
     state: &ApiState,
     channel: &str,
+    firm_id: Uuid,
     mailbox: &str,
     bytes: &[u8],
 ) -> Result<String, ApiError> {
@@ -210,31 +211,25 @@ async fn archive_payload(
     } else {
         ("text/csv", "csv")
     };
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis());
-    let slug: String = mailbox
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .to_lowercase();
-    let archived_key = format!("mail/{now_ms}-{slug}.{extension}");
-    state
-        .storage
-        .put(&archived_key, bytes, content_type)
-        .await
-        .map_err(|error| ApiError::Db(error.to_string()))?;
+    let digest = store::inbox_import::scoped_digest(&format!("{firm_id}:{mailbox}"), bytes);
+    let archived_key = format!("mail/{digest}.{extension}");
+    match state.storage.get(&archived_key).await {
+        Ok(existing) if existing.bytes == bytes => {}
+        Ok(_) => return Err(ApiError::Db("import archive identity conflict".into())),
+        Err(cloud::StorageError::NotFound(_)) => {
+            state
+                .storage
+                .put(&archived_key, bytes, content_type)
+                .await
+                .map_err(|error| ApiError::Db(error.to_string()))?;
+        }
+        Err(error) => return Err(ApiError::Db(error.to_string())),
+    }
     Ok(archived_key)
 }
 
 /// Walk every parsed message through the direction-aware postgres ingest,
-/// then file email attachments on the messages that landed fresh (AC4,
+/// then idempotently file email attachments (AC4,
 /// AC8). The importing actor is the mailbox owner: their own rows (From
 /// = the mailbox) arrive as `outbound` with them as author. Returns one
 /// summary per message, in payload order.
@@ -261,32 +256,41 @@ async fn import_all(
             .await
             .map_err(|error| inbox_error(&error))?;
 
-        // Email attachments file as slugged revisions with provenance
-        // (AC8). A deduped message was already filed by the import that
-        // created it, and an unattributed import has no matter to file
-        // into — its attachment bytes stay in the archived payload.
+        // Filing identical bytes reuses the revision. Retry even after message
+        // deduplication so an interrupted import can finish its attachments.
         let mut filed_attachments = Vec::new();
-        if !ingested.deduped {
-            if let Some(project_id) = project_id {
-                for (index, attachment) in message.attachments.iter().enumerate() {
-                    let asset_id = file_import_attachment(
-                        state,
-                        project_id,
-                        ingested.message_id,
-                        index,
-                        message,
-                        attachment,
-                    )
-                    .await?;
-                    filed_attachments.push(ImportedAttachment {
-                        filename: attachment.filename.clone(),
-                        content_type: attachment.content_type.clone(),
-                        size_bytes: attachment.bytes.len(),
-                        asset_id,
-                    });
-                }
+        if let Some(project_id) = project_id {
+            for (index, attachment) in message.attachments.iter().enumerate() {
+                let asset_id = file_import_attachment(
+                    state,
+                    project_id,
+                    ingested.message_id,
+                    index,
+                    message,
+                    attachment,
+                )
+                .await?;
+                filed_attachments.push(ImportedAttachment {
+                    filename: attachment.filename.clone(),
+                    content_type: attachment.content_type.clone(),
+                    size_bytes: attachment.bytes.len(),
+                    asset_id,
+                });
             }
         }
+
+        let links = filed_attachments
+            .iter()
+            .zip(&message.attachments)
+            .map(|(filed, parsed)| store::inbox::IngestAttachment {
+                asset_id: filed.asset_id,
+                filename: filed.filename.clone(),
+                sha256: store::documents::sha256_hex(&parsed.bytes),
+            })
+            .collect::<Vec<_>>();
+        store::inbox::link_message_assets(&state.surreal, firm_id, ingested.message_id, &links)
+            .await
+            .map_err(|error| inbox_error(&error))?;
 
         imported.push(ImportedMessage {
             message_id: ingested.message_id,
@@ -373,9 +377,10 @@ pub(crate) async fn inbox_import_door(
     }
 
     // Archive the verbatim payload first (AC6).
-    let archived_key = archive_payload(&state, adapter.channel(), &mailbox, &bytes).await?;
+    let archived_key =
+        archive_payload(&state, adapter.channel(), firm_id, &mailbox, &bytes).await?;
 
-    // Ingest every message, then file the attachments of the fresh ones.
+    // Ingest every message, then finish any attachment filings.
     let imported = import_all(
         &state,
         person_id,

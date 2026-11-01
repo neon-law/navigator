@@ -301,25 +301,7 @@ pub(crate) async fn ingest_message_on(
         },
     )
     .await?;
-    for (position, attachment) in inbound.attachments.iter().enumerate() {
-        let position = i32::try_from(position)
-            .map_err(|_| InboxError::Db("too many message attachments".into()))?;
-        sqlx::query(
-            "INSERT INTO inbox_message_asset (id, firm_id, message_id, asset_id, filename, \
-             position, sha256, inserted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, now()) \
-             ON CONFLICT ON CONSTRAINT inbox_message_asset_key DO NOTHING",
-        )
-        .bind(Uuid::now_v7())
-        .bind(inbound.firm_id)
-        .bind(message_id)
-        .bind(attachment.asset_id)
-        .bind(&attachment.filename)
-        .bind(position)
-        .bind(&attachment.sha256)
-        .execute(&mut *tx)
-        .await
-        .map_err(db_error)?;
-    }
+    link_message_assets_in(&mut tx, inbound.firm_id, message_id, &inbound.attachments).await?;
     if let Some(parent_provider) = inbound.parent_provider_message_id {
         let parent: Option<Uuid> = sqlx::query_scalar(
             "SELECT id FROM message WHERE conversation_id = $1 AND provider_message_id = $2 \
@@ -621,6 +603,24 @@ pub(crate) async fn assign_on(
         return Err(InboxError::Denied);
     }
     let from_project_id = conversation.project_id;
+    if from_project_id == Some(project_id) {
+        // A retry must finish any interrupted projection without recording a
+        // second attribution. Authorization still runs before this branch.
+        project_all_messages_on(pg, db, &conversation).await?;
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {ASSIGNMENT_COLUMNS} FROM inbox_assignment \
+             WHERE conversation_id = $1 AND to_project_id = $2 \
+             ORDER BY inserted_at DESC, id DESC LIMIT 1"
+        )))
+        .bind(conversation_id)
+        .bind(project_id)
+        .fetch_optional(&pg.0)
+        .await
+        .map_err(db_error)?;
+        if let Some(row) = row {
+            return assignment(&row).map_err(db_error);
+        }
+    }
     sqlx::query(
         "UPDATE inbox_conversation SET project_id = $2, unread = true, updated_at = now() \
          WHERE id = $1",
@@ -1860,4 +1860,142 @@ pub(crate) async fn awaiting_alert_reconciliation_on(
     .await
     .map_err(db_error)?;
     Ok(ids)
+}
+
+async fn link_message_assets_in(
+    connection: &mut sqlx::PgConnection,
+    firm_id: Uuid,
+    message_id: Uuid,
+    attachments: &[inbox::IngestAttachment],
+) -> Result<(), InboxError> {
+    for (position, attachment) in attachments.iter().enumerate() {
+        let position = i32::try_from(position)
+            .map_err(|_| InboxError::Db("too many message attachments".into()))?;
+        sqlx::query(
+            "INSERT INTO inbox_message_asset (id, firm_id, message_id, asset_id, filename, \
+             position, sha256, inserted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, now()) \
+             ON CONFLICT ON CONSTRAINT inbox_message_asset_key DO NOTHING",
+        )
+        .bind(Uuid::now_v7())
+        .bind(firm_id)
+        .bind(message_id)
+        .bind(attachment.asset_id)
+        .bind(&attachment.filename)
+        .bind(position)
+        .bind(&attachment.sha256)
+        .execute(&mut *connection)
+        .await
+        .map_err(db_error)?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn link_message_assets_on(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+    message_id: Uuid,
+    attachments: &[inbox::IngestAttachment],
+) -> Result<(), InboxError> {
+    let mut tx = pg.0.begin().await.map_err(db_error)?;
+    let visible: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM message m JOIN inbox_conversation c ON c.id = m.conversation_id WHERE m.id = $1 AND c.firm_id = $2)",
+    ).bind(message_id).bind(firm_id).fetch_one(&mut *tx).await.map_err(db_error)?;
+    if !visible {
+        return Err(InboxError::NotFound);
+    }
+    link_message_assets_in(&mut tx, firm_id, message_id, attachments).await?;
+    tx.commit().await.map_err(db_error)
+}
+
+pub(crate) async fn message_assets_on(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+    message_id: Uuid,
+) -> Result<Vec<inbox::MessageAttachment>, InboxError> {
+    use sqlx::Row;
+    let rows = sqlx::query("SELECT asset_id, filename, position::bigint AS position, sha256 FROM inbox_message_asset WHERE firm_id = $1 AND message_id = $2 ORDER BY position, id")
+        .bind(firm_id).bind(message_id).fetch_all(&pg.0).await.map_err(db_error)?;
+    rows.iter()
+        .map(|row| {
+            Ok(inbox::MessageAttachment {
+                asset_id: row.try_get("asset_id")?,
+                filename: row.try_get("filename")?,
+                position: row.try_get("position")?,
+                sha256: row.try_get("sha256")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(db_error)
+}
+
+pub(crate) async fn process_state_on(
+    pg: &PostgresDb,
+    message_id: Uuid,
+) -> Result<Option<inbox::ProcessState>, InboxError> {
+    let row: Option<(Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT route, processed_at FROM message WHERE id = $1")
+            .bind(message_id)
+            .fetch_optional(&pg.0)
+            .await
+            .map_err(db_error)?;
+    row.map(|(route, processed_at)| {
+        let processed_at = processed_at
+            .map(|value| {
+                chrono::DateTime::parse_from_rfc3339(&value)
+                    .map(|at| at.with_timezone(&Utc))
+                    .map_err(|error| InboxError::Db(error.to_string()))
+            })
+            .transpose()?;
+        Ok(inbox::ProcessState {
+            route,
+            processed_at,
+        })
+    })
+    .transpose()
+}
+
+pub(crate) async fn mark_processed_on(
+    pg: &PostgresDb,
+    message_id: Uuid,
+    route: &str,
+    processed_at: chrono::DateTime<Utc>,
+) -> Result<(), InboxError> {
+    sqlx::query(
+        "UPDATE message SET route = $2, processed_at = $3, updated_at = now() WHERE id = $1",
+    )
+    .bind(message_id)
+    .bind(route)
+    .bind(processed_at.to_rfc3339())
+    .execute(&pg.0)
+    .await
+    .map_err(db_error)?;
+    Ok(())
+}
+
+pub(crate) async fn unprocessed_inbox_on(
+    pg: &PostgresDb,
+    visible_firms: Option<&[Uuid]>,
+) -> Result<Vec<inbox::UnprocessedRow>, InboxError> {
+    use sqlx::Row;
+    let rows = sqlx::query("SELECT m.id, m.conversation_id, c.firm_id, c.project_id, c.channel, m.provider_message_id, c.external_address, c.external_name, c.subject, m.body, m.occurred_at, m.inserted_at FROM message m JOIN inbox_conversation c ON c.id = m.conversation_id WHERE m.direction = 'inbound' AND m.processed_at IS NULL AND ($1::uuid[] IS NULL OR c.firm_id = ANY($1)) ORDER BY m.inserted_at, m.id")
+        .bind(visible_firms).fetch_all(&pg.0).await.map_err(db_error)?;
+    rows.iter()
+        .map(|row| {
+            Ok(inbox::UnprocessedRow {
+                id: row.try_get("id")?,
+                conversation_id: row.try_get("conversation_id")?,
+                firm_id: row.try_get("firm_id")?,
+                project_id: row.try_get("project_id")?,
+                channel: row.try_get("channel")?,
+                provider_message_id: row.try_get("provider_message_id")?,
+                external_address: row.try_get("external_address")?,
+                external_name: row.try_get("external_name")?,
+                subject: row.try_get("subject")?,
+                body: row.try_get("body")?,
+                occurred_at: row.try_get("occurred_at")?,
+                inserted_at: row.try_get("inserted_at")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(db_error)
 }

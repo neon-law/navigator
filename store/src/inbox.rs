@@ -745,12 +745,25 @@ impl MessageAssetRow {
 /// Link a Message to its attachment Assets in provider order. Re-linking
 /// the same message and sha reuses the row, so a retried ingest cannot
 /// duplicate a link.
-async fn link_message_assets(
+///
+/// # Errors
+///
+/// Propagates database and Inbox authority errors.
+pub async fn link_message_assets(
     db: &SurrealDb,
     firm_id: Uuid,
     message_id: Uuid,
     attachments: &[IngestAttachment],
 ) -> Result<(), InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return crate::postgres::inbox::link_message_assets_on(
+            &pg,
+            firm_id,
+            message_id,
+            attachments,
+        )
+        .await;
+    }
     for (position, attachment) in attachments.iter().enumerate() {
         let position = i64::try_from(position).unwrap_or(i64::MAX);
         let mut response = db
@@ -798,6 +811,9 @@ pub async fn message_assets(
     firm_id: Uuid,
     message_id: Uuid,
 ) -> Result<Vec<MessageAttachment>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return crate::postgres::inbox::message_assets_on(&pg, firm_id, message_id).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT asset_id, filename, position, sha256 FROM {MESSAGE_ASSET} \
@@ -2033,6 +2049,9 @@ pub async fn unprocessed_inbox(
         return Err(InboxError::Denied);
     };
 
+    if let Some(pg) = inbox_authority().await? {
+        return crate::postgres::inbox::unprocessed_inbox_on(&pg, visible_firms.as_deref()).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT id, conversation_id, provider_message_id, body, occurred_at, inserted_at \
@@ -2088,6 +2107,9 @@ pub async fn process_state(
     db: &SurrealDb,
     message_id: Uuid,
 ) -> Result<Option<ProcessState>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return crate::postgres::inbox::process_state_on(&pg, message_id).await;
+    }
     let mut response = db
         .query("SELECT route, processed_at FROM ONLY $id")
         .bind(("id", record_id(MESSAGE, message_id)))
@@ -2121,6 +2143,10 @@ pub async fn mark_processed(
 ) -> Result<(), InboxError> {
     if !route::is_valid(route) {
         return Err(InboxError::InvalidRoute(route.to_owned()));
+    }
+    if let Some(pg) = inbox_authority().await? {
+        return crate::postgres::inbox::mark_processed_on(&pg, message_id, route, processed_at)
+            .await;
     }
     db.query(
         "UPDATE $id SET route = $route, processed_at = $processed_at, updated_at = time::now()",

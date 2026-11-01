@@ -367,7 +367,7 @@ async fn an_import_walks_the_postgres_ingest_idempotently() {
     let Some((port, database)) = isolated_database().await else {
         return;
     };
-    let status = std::process::Command::new(std::env::current_exe().expect("current executable"))
+    let output = std::process::Command::new(std::env::current_exe().expect("current executable"))
         .args([
             "--exact",
             "an_import_walks_the_postgres_ingest_idempotently",
@@ -384,10 +384,15 @@ async fn an_import_walks_the_postgres_ingest_idempotently() {
         // PostgreSQL; `set_attachment_asset`'s foreign key needs it there.
         .env("NAVIGATOR_POSTGRES_MIRROR", "1")
         .env("NAVIGATOR_POSTGRES_INBOX_AUTHORITY", "1")
-        .status()
+        .output()
         .expect("spawn the postgres-backed child test");
     remove_isolated_database(&port, &database).await;
-    assert!(status.success());
+    assert!(
+        output.status.success(),
+        "child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Reference rows the mirror cannot carry: the Surreal fixture links
@@ -456,7 +461,7 @@ async fn run_lifecycle() {
     // Surface the door's error logs (the house Db mapping logs the detail,
     // never the wire) — the only way to diagnose a 500 in this child.
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new("debug"))
+        .with_env_filter(tracing_subscriber::EnvFilter::new("warn"))
         .with_writer(std::io::stderr)
         .try_init();
     let pg = store::postgres::PostgresDb::from_env()
@@ -570,6 +575,17 @@ async fn assert_email_lifecycle(
     assert_eq!(
         second["imported"][0]["message_id"],
         first["imported"][0]["message_id"]
+    );
+
+    let assignments: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inbox_assignment WHERE conversation_id = $1")
+            .bind(conversation_id)
+            .fetch_one(pg.pool())
+            .await
+            .expect("count attribution events");
+    assert_eq!(
+        assignments, 1,
+        "replay must not create another attribution event"
     );
 
     // The lawyer's own mail arrives as outbound (AC4).
