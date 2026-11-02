@@ -527,8 +527,8 @@ fn HomePageBody(
                             class: "holding-page__logo",
                             src: "{chrome.logo_href}",
                             alt: "",
-                            width: "1050",
-                            height: "600",
+                            width: "718",
+                            height: "418",
                         }
                     }
                     h1 { class: "holding-page__heading", "{bare.heading}" }
