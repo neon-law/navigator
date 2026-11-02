@@ -47,6 +47,210 @@ struct Fixture {
 }
 
 #[tokio::test]
+async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
+    const CHILD: &str = "NAVIGATOR_TEST_PUBLIC_INBOX_AUTHORITY_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        if crate::postgres_mirror::tests::test_postgres().is_none() {
+            return;
+        }
+        let name = format!(
+            "{}::native_authority_routes_the_public_inbox_lifecycle_to_postgres",
+            module_path!().split_once("::").unwrap().1
+        );
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--nocapture"])
+            .env(CHILD, "1")
+            .env(pg_inbox::AUTHORITY_ENV, "0")
+            .env_remove("NAVIGATOR_POSTGRES_MIRROR")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "isolated native lifecycle: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let Some(f) = fixture().await else { return };
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    for (name, value) in [
+        ("NAVIGATOR_POSTGRES_HOST", "127.0.0.1".to_string()),
+        (
+            "NAVIGATOR_POSTGRES_PORT",
+            std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").unwrap(),
+        ),
+        ("NAVIGATOR_POSTGRES_USER", "postgres".to_string()),
+        ("NAVIGATOR_POSTGRES_PASSWORD", "synthetic".to_string()),
+        ("NAVIGATOR_POSTGRES_SSLMODE", "disable".to_string()),
+        ("NAVIGATOR_POSTGRES_DATABASE", database),
+        (pg_inbox::AUTHORITY_ENV, "1".to_string()),
+    ] {
+        std::env::set_var(name, value);
+    }
+    assert_public_native_lifecycle(&f).await;
+}
+
+async fn assert_public_native_lifecycle(f: &Fixture) {
+    use crate::inbox;
+    let account = format!("+{}", 15_550_100_000_u64);
+    let sender = format!("+{}", 15_555_550_127_u64);
+    let saved = inbox::ingest_inbound(
+        &f.db,
+        &inbound(
+            f.firm,
+            channel::SMS,
+            &account,
+            "public-native-flow",
+            &sender,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(message_count(&f.pg).await, 1);
+    assert_eq!(
+        inbox::message_by_id(&f.db, saved.message_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .body,
+        "Hello from outside."
+    );
+    assert_eq!(
+        inbox::conversation_by_id(&f.db, saved.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .channel,
+        channel::SMS
+    );
+    let mut source =
+        f.db.query("SELECT VALUE id FROM inbox_conversation")
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+    let source_ids: Vec<surrealdb::types::RecordId> = source.take(0).unwrap();
+    assert!(
+        source_ids.is_empty(),
+        "native reads must not depend on a Source conversation copy"
+    );
+    let intake = inbox::list_intake(&f.db, f.owner).await.unwrap();
+    assert_eq!(intake.len(), 1);
+    let detail = inbox::intake_detail(&f.db, f.owner, saved.conversation_id)
+        .await
+        .unwrap();
+    assert!(detail.can_sms_reply && detail.bodies_visible);
+    inbox::assign(&f.db, f.owner, saved.conversation_id, f.project)
+        .await
+        .unwrap();
+    assert_eq!(
+        inbox::assignments(&f.db, saved.conversation_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_public_native_project_actions(f, &saved).await;
+}
+
+async fn assert_public_native_project_actions(f: &Fixture, saved: &crate::inbox::IngestedInbound) {
+    use crate::inbox;
+    let note = inbox::post_note(
+        &f.db,
+        f.lawyer,
+        saved.conversation_id,
+        "synthetic internal note",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        inbox::message_by_id(&f.db, note)
+            .await
+            .unwrap()
+            .unwrap()
+            .direction,
+        direction::INTERNAL
+    );
+    let reply = inbox::queue_sms_reply(&f.db, f.lawyer, saved.conversation_id, "synthetic reply")
+        .await
+        .unwrap();
+    let thread = inbox::project_thread(&f.db, f.lawyer, f.project, saved.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(thread.messages.len(), 3);
+    assert_eq!(
+        inbox::list_project(&f.db, f.lawyer, f.project)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let report = inbox::dispatch_queued(&f.db, &CapturingTransport::default())
+        .await
+        .unwrap();
+    assert_eq!(report.submitted, 1);
+    assert_eq!(
+        inbox::message_by_id(&f.db, reply)
+            .await
+            .unwrap()
+            .unwrap()
+            .delivery_state,
+        delivery::SUBMITTED
+    );
+}
+
+#[tokio::test]
+async fn native_contact_link_preserves_a_persons_existing_number() {
+    let Some(f) = fixture().await else { return };
+    let original = format!("+{}", 15_555_550_125_u64);
+    let incoming = format!("+{}", 15_555_550_126_u64);
+    let account = format!("+{}", 15_550_100_000_u64);
+    let contact = persons::create(
+        &f.db,
+        &NewPerson::with_role(
+            "synthetic contact",
+            "existing.contact@example.com",
+            Role::Client,
+        ),
+    )
+    .await
+    .unwrap();
+    persons::set_phone(&f.db, contact.id, Some(&original))
+        .await
+        .unwrap();
+    let sms = pg_inbox::ingest_inbound_on(
+        &f.pg,
+        &inbound(
+            f.firm,
+            channel::SMS,
+            &account,
+            "existing-contact-number",
+            &incoming,
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, sms.conversation_id, &contact.email)
+            .await,
+        Err(InboxError::Contact(_))
+    ));
+    let saved = persons::find_by_id(&f.db, contact.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.phone.as_deref(), Some(original.as_str()));
+    assert!(persons::find_by_phone(&f.db, &incoming)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
 async fn native_sms_requires_consent_and_reuses_the_private_thread() {
     let Some(f) = fixture().await else { return };
     let account = format!("+{}", 15_550_100_000_u64);
