@@ -327,7 +327,9 @@ fn error(error: &InvoiceGenerationError, project_id: Uuid) -> Response {
         InvoiceGenerationError::CurrencyMismatch(_) => {
             (StatusCode::UNPROCESSABLE_ENTITY, "currency_mismatch")
         }
-        InvoiceGenerationError::NoBilledParty => (StatusCode::UNPROCESSABLE_ENTITY, "no_billed_party"),
+        InvoiceGenerationError::NoBilledParty => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "no_billed_party")
+        }
         InvoiceGenerationError::NoMatter => (StatusCode::NOT_FOUND, "no_matter"),
         InvoiceGenerationError::Time(time_entries::TimeEntryError::Conflict)
         | InvoiceGenerationError::Cost(costs::ProjectCostError::Conflict) => {
@@ -381,7 +383,10 @@ fn error(error: &InvoiceGenerationError, project_id: Uuid) -> Response {
     refused(status, reason)
 }
 
-async fn postgres(operation: &'static str, project_id: Uuid) -> Result<store::postgres::PostgresDb, Response> {
+async fn postgres(
+    operation: &'static str,
+    project_id: Uuid,
+) -> Result<store::postgres::PostgresDb, Response> {
     store::postgres::PostgresDb::from_env().await.map_err(|_| {
         tracing::warn!(
             event = "invoice_generation_store_unavailable",
@@ -433,7 +438,10 @@ async fn prepared_store(
             project_id = %project_id,
             store_error = %store_error
         );
-        return Err(refused(StatusCode::SERVICE_UNAVAILABLE, "postgres_unavailable"));
+        return Err(refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "postgres_unavailable",
+        ));
     }
     Ok(pg)
 }
@@ -446,9 +454,10 @@ pub(crate) async fn generate(
     Path(project_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
-    let viewer = store::access::matter_viewer(&state.surreal, session.person_id, session.role, project_id)
-        .await
-        .map_err(ApiError::Db)?;
+    let viewer =
+        store::access::matter_viewer(&state.surreal, session.person_id, session.role, project_id)
+            .await
+            .map_err(ApiError::Db)?;
     if !viewer.is_some_and(|viewer| viewer.is_firm_side()) {
         return Err(ApiError::NotFound);
     }

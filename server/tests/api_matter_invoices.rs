@@ -21,7 +21,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use billing::{BillingError, BillingProvider, ContactId, ContactRequest, InvoiceId, InvoiceRequest};
+use billing::{
+    BillingError, BillingProvider, ContactId, ContactRequest, InvoiceId, InvoiceRequest,
+};
 use chrono::{NaiveDate, Utc};
 use http_body_util::BodyExt;
 use portal::session::SessionData;
@@ -433,10 +435,7 @@ async fn the_hourly_path_bills_time_and_confirmed_costs_once() {
     let costs = store::project_costs::list_for_project(&pg, fx.project_id)
         .await
         .unwrap();
-    let confirmed_after = costs
-        .iter()
-        .find(|cost| cost.id == confirmed.id)
-        .unwrap();
+    let confirmed_after = costs.iter().find(|cost| cost.id == confirmed.id).unwrap();
     assert_eq!(confirmed_after.billing_status, "invoiced");
     assert_eq!(
         confirmed_after.xero_invoice_id.as_deref(),
@@ -481,7 +480,11 @@ async fn a_flat_fee_bills_the_fee_and_consumes_the_entries() {
         .await
         .unwrap();
     assert_eq!(
-        costs.iter().find(|c| c.id == cost.id).unwrap().billing_status,
+        costs
+            .iter()
+            .find(|c| c.id == cost.id)
+            .unwrap()
+            .billing_status,
         "invoiced"
     );
 
@@ -552,7 +555,10 @@ async fn nothing_unbilled_is_a_no_op() {
     // the zero-unbilled no-op.
     let resp = generate(&fx, &fx.lawyer, fx.project_id).await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
-    assert!(create_calls(&fx).is_empty(), "the provider was never called");
+    assert!(
+        create_calls(&fx).is_empty(),
+        "the provider was never called"
+    );
     assert!(mirror_rows(&fx.surreal, fx.project_id).await.is_empty());
 }
 
@@ -563,9 +569,11 @@ async fn a_provider_refusal_marks_nothing() {
     };
     let surreal = mem_surreal().await;
     let storage: Arc<dyn cloud::StorageService> = Arc::new(
-        cloud::FsStorage::new(std::env::temp_dir().join(format!("nav-invoice-fail-{}", Uuid::now_v7())))
-            .await
-            .unwrap(),
+        cloud::FsStorage::new(
+            std::env::temp_dir().join(format!("nav-invoice-fail-{}", Uuid::now_v7())),
+        )
+        .await
+        .unwrap(),
     );
     let project_id = seed_matter(&surreal, &format!("matter-{}", Uuid::now_v7())).await;
     let lawyer = store::persons::create(
@@ -668,7 +676,9 @@ async fn outsiders_and_clients_cannot_generate() {
     // itself — its own quiet-matter 409, never a 404 for the first matter's
     // sake.
     assert_eq!(
-        generate(&fx, &fx.lawyer, fx.other_project_id).await.status(),
+        generate(&fx, &fx.lawyer, fx.other_project_id)
+            .await
+            .status(),
         StatusCode::CONFLICT,
         "the lawyer is on both matters, so the other matter answers itself"
     );
@@ -692,10 +702,7 @@ impl BillingProvider for FailingProvider {
         Err(BillingError::Provider("synthetic outage".into()))
     }
 
-    async fn get_invoice(
-        &self,
-        _invoice_id: &str,
-    ) -> Result<billing::InvoiceStatus, BillingError> {
+    async fn get_invoice(&self, _invoice_id: &str) -> Result<billing::InvoiceStatus, BillingError> {
         Err(BillingError::Provider("synthetic outage".into()))
     }
 
@@ -717,9 +724,7 @@ impl BillingProvider for FailingProvider {
         Err(BillingError::Provider("synthetic outage".into()))
     }
 
-    async fn list_bank_accounts(
-        &self,
-    ) -> Result<Vec<billing::TrustBankAccount>, BillingError> {
+    async fn list_bank_accounts(&self) -> Result<Vec<billing::TrustBankAccount>, BillingError> {
         Err(BillingError::Provider("synthetic outage".into()))
     }
 
