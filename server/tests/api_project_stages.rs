@@ -292,58 +292,14 @@ async fn build_fixture() -> Fixture {
         seed_matter(&surreal, &format!("nofirm-{}", Uuid::now_v7()), None).await;
 
     let run = Uuid::now_v7().simple();
-    let lawyer = store::persons::create(
+    let (lawyer, client, outsider, clerk) = seed_actors(
         &surreal,
-        &store::persons::NewPerson::with_role(
-            "Lawyer",
-            format!("lawyer-{run}@example.com"),
-            Role::Lawyer,
-        ),
+        &run.to_string(),
+        project_id,
+        other_project_id,
+        no_firm_project_id,
     )
-    .await
-    .unwrap();
-    store::projects::add_participation(&surreal, project_id, lawyer.id, "lawyer")
-        .await
-        .unwrap();
-    store::projects::add_participation(&surreal, other_project_id, lawyer.id, "lawyer")
-        .await
-        .unwrap();
-    store::projects::add_participation(&surreal, no_firm_project_id, lawyer.id, "lawyer")
-        .await
-        .unwrap();
-    let client = store::persons::create(
-        &surreal,
-        &store::persons::NewPerson::with_role(
-            "Client",
-            format!("client-{run}@example.com"),
-            Role::Client,
-        ),
-    )
-    .await
-    .unwrap();
-    store::projects::add_participation(&surreal, project_id, client.id, "client")
-        .await
-        .unwrap();
-    let outsider = store::persons::create(
-        &surreal,
-        &store::persons::NewPerson::with_role(
-            "Outsider",
-            format!("outsider-{run}@example.com"),
-            Role::Lawyer,
-        ),
-    )
-    .await
-    .unwrap();
-    let clerk = store::persons::create(
-        &surreal,
-        &store::persons::NewPerson::with_role(
-            "Clerk",
-            format!("clerk-{run}@example.com"),
-            Role::Clerk,
-        ),
-    )
-    .await
-    .unwrap();
+    .await;
 
     let state = AppState {
         sessions: SessionStore::new(KEY),
@@ -356,11 +312,77 @@ async fn build_fixture() -> Fixture {
         project_id,
         other_project_id,
         no_firm_project_id,
-        lawyer: bearer(lawyer.id, Role::Lawyer),
-        client: bearer(client.id, Role::Client),
-        outsider: bearer(outsider.id, Role::Lawyer),
-        clerk: bearer(clerk.id, Role::Clerk),
+        lawyer,
+        client,
+        outsider,
+        clerk,
     }
+}
+
+/// Seeds the four actors and wires the participations the denial paths need:
+/// the lawyer on all three matters, the client on the primary one, and the
+/// outsider and clerk on none. Returns their bearer tokens.
+async fn seed_actors(
+    surreal: &store::surreal::SurrealDb,
+    run: &str,
+    project_id: Uuid,
+    other_project_id: Uuid,
+    no_firm_project_id: Uuid,
+) -> (String, String, String, String) {
+    let lawyer = store::persons::create(
+        surreal,
+        &store::persons::NewPerson::with_role(
+            "Lawyer",
+            format!("lawyer-{run}@example.com"),
+            Role::Lawyer,
+        ),
+    )
+    .await
+    .unwrap();
+    for matter in [project_id, other_project_id, no_firm_project_id] {
+        store::projects::add_participation(surreal, matter, lawyer.id, "lawyer")
+            .await
+            .unwrap();
+    }
+    let client = store::persons::create(
+        surreal,
+        &store::persons::NewPerson::with_role(
+            "Client",
+            format!("client-{run}@example.com"),
+            Role::Client,
+        ),
+    )
+    .await
+    .unwrap();
+    store::projects::add_participation(surreal, project_id, client.id, "client")
+        .await
+        .unwrap();
+    let outsider = store::persons::create(
+        surreal,
+        &store::persons::NewPerson::with_role(
+            "Outsider",
+            format!("outsider-{run}@example.com"),
+            Role::Lawyer,
+        ),
+    )
+    .await
+    .unwrap();
+    let clerk = store::persons::create(
+        surreal,
+        &store::persons::NewPerson::with_role(
+            "Clerk",
+            format!("clerk-{run}@example.com"),
+            Role::Clerk,
+        ),
+    )
+    .await
+    .unwrap();
+    (
+        bearer(lawyer.id, Role::Lawyer),
+        bearer(client.id, Role::Client),
+        bearer(outsider.id, Role::Lawyer),
+        bearer(clerk.id, Role::Clerk),
+    )
 }
 
 async fn get(fx: &Fixture, path: &str, auth: Option<&str>) -> axum::http::Response<Body> {
