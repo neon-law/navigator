@@ -351,7 +351,7 @@ async fn a_timer_runs_stops_and_captures_its_entry() {
     );
 
     // The recovery read: the open timer is the table's truth.
-    let read = body_json(get(&fx, &timer_path, Some(&fx.lawyer)).await);
+    let read = body_json(get(&fx, &timer_path, Some(&fx.lawyer)).await).await;
     assert_eq!(
         read["timer"]["id"].as_str(),
         timer["id"].as_str(),
@@ -381,7 +381,7 @@ async fn a_timer_runs_stops_and_captures_its_entry() {
     assert_eq!(captured["billing_status"], "unbilled");
 
     // The timer is gone, and the entry is on the matter's list.
-    let read = body_json(get(&fx, &timer_path, Some(&fx.lawyer)).await);
+    let read = body_json(get(&fx, &timer_path, Some(&fx.lawyer)).await).await;
     assert_eq!(read["timer"], serde_json::Value::Null);
     let entries = body_json(
         get(
@@ -416,7 +416,7 @@ async fn a_second_open_timer_is_a_conflict() {
     // timer keeps running.
     let resp = post(&fx, &second, Some(&fx.lawyer), json!({})).await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
-    let read = body_json(get(&fx, &first, Some(&fx.lawyer)).await);
+    let read = body_json(get(&fx, &first, Some(&fx.lawyer)).await).await;
     assert_ne!(
         read["timer"],
         serde_json::Value::Null,
@@ -444,7 +444,7 @@ async fn discard_records_nothing() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    let read = body_json(get(&fx, &timer_path, Some(&fx.lawyer)).await);
+    let read = body_json(get(&fx, &timer_path, Some(&fx.lawyer)).await).await;
     assert_eq!(read["timer"], serde_json::Value::Null);
     let entries = body_json(
         get(
@@ -654,7 +654,7 @@ async fn another_matters_time_is_hidden() {
     let resp = post(&fx, &timer_path, Some(&fx.lawyer), json!({})).await;
     assert_eq!(resp.status(), StatusCode::CREATED);
     let foreign_timer = format!("/app/api/projects/{}/timer", fx.other_project_id);
-    let read = body_json(get(&fx, &foreign_timer, Some(&fx.lawyer)).await);
+    let read = body_json(get(&fx, &foreign_timer, Some(&fx.lawyer)).await).await;
     assert_eq!(
         read["timer"],
         serde_json::Value::Null,
@@ -670,7 +670,7 @@ async fn another_matters_time_is_hidden() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // And the timer still runs where it was started.
-    let read = body_json(get(&fx, &timer_path, Some(&fx.lawyer)).await);
+    let read = body_json(get(&fx, &timer_path, Some(&fx.lawyer)).await).await;
     assert_ne!(read["timer"], serde_json::Value::Null);
 }
 
@@ -758,7 +758,7 @@ async fn the_flat_fee_door_round_trips() {
     let fx = build_fixture().await;
     let fee_path = format!("/app/api/projects/{}/flat-fee", fx.project_id);
 
-    let read = body_json(get(&fx, &fee_path, Some(&fx.lawyer)).await);
+    let read = body_json(get(&fx, &fee_path, Some(&fx.lawyer)).await).await;
     assert_eq!(
         read["fee_cents"],
         serde_json::Value::Null,
@@ -773,7 +773,7 @@ async fn the_flat_fee_door_round_trips() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let read = body_json(get(&fx, &fee_path, Some(&fx.lawyer)).await);
+    let read = body_json(get(&fx, &fee_path, Some(&fx.lawyer)).await).await;
     assert_eq!(read["fee_cents"], 150_000);
 
     // Replacing the figure is the whole edit surface; captured invoices are
@@ -786,7 +786,7 @@ async fn the_flat_fee_door_round_trips() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let read = body_json(get(&fx, &fee_path, Some(&fx.lawyer)).await);
+    let read = body_json(get(&fx, &fee_path, Some(&fx.lawyer)).await).await;
     assert_eq!(read["fee_cents"], 175_000);
 }
 
@@ -821,7 +821,7 @@ async fn the_entry_list_is_newest_work_first() {
     }
 
     // Newest work first, whatever order the rows were written in.
-    let entries = body_json(get(&fx, &entries_path, Some(&fx.lawyer)).await)["time_entries"]
+    let entries = body_json(get(&fx, &entries_path, Some(&fx.lawyer)).await).await["time_entries"]
         .as_array()
         .expect("the list wraps its rows")
         .clone();
