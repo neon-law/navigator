@@ -177,6 +177,34 @@ pub async fn flat_fee_cents(
         .transpose()
 }
 
+/// The firm's rate history for one attorney — firm defaults and matter
+/// overrides together, newest effective date first. Rows are never edited,
+/// so the table reads as its own history.
+pub async fn rates_for_person(
+    pg: &PostgresDb,
+    person_id: Uuid,
+) -> Result<Vec<AttorneyRate>, FeeStructureError> {
+    sqlx::query(
+        "SELECT id,person_id,project_id,hourly_rate_cents,effective_on \
+         FROM attorney_rate WHERE person_id=$1 \
+         ORDER BY effective_on DESC, inserted_at DESC",
+    )
+    .bind(person_id)
+    .fetch_all(&pg.0)
+    .await?
+    .iter()
+    .map(|row| {
+        Ok(AttorneyRate {
+            id: row.get(0),
+            person_id: row.get(1),
+            project_id: row.get(2),
+            hourly_rate_cents: row.get(3),
+            effective_on: row.get(4),
+        })
+    })
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{FeeStructureError, NewAttorneyRate};

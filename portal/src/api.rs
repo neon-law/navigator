@@ -505,6 +505,66 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             post(crate::project_tasks_api::transition),
         ),
         (
+            "GET",
+            "/app/api/projects/{id}/time-entries",
+            get(crate::time_tracking_api::list_entries),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entries",
+            post(crate::time_tracking_api::create_entry),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entries/{entry_id}/invoice",
+            post(crate::time_tracking_api::mark_invoiced),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/time-entries/{entry_id}/write-off",
+            post(crate::time_tracking_api::write_off),
+        ),
+        (
+            "GET",
+            "/app/api/projects/{id}/timer",
+            get(crate::time_tracking_api::running_timer),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/timer",
+            post(crate::time_tracking_api::start_timer),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/timer/stop",
+            post(crate::time_tracking_api::stop_timer),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/timer/discard",
+            post(crate::time_tracking_api::discard_timer),
+        ),
+        (
+            "GET",
+            "/app/api/attorney-rates",
+            get(crate::time_tracking_api::list_rates),
+        ),
+        (
+            "POST",
+            "/app/api/attorney-rates",
+            post(crate::time_tracking_api::create_rate),
+        ),
+        (
+            "GET",
+            "/app/api/projects/{id}/flat-fee",
+            get(crate::time_tracking_api::flat_fee),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/flat-fee",
+            post(crate::time_tracking_api::set_flat_fee),
+        ),
+        (
             "POST",
             "/app/api/projects/{id}/deadlines",
             post(crate::deadlines_api::create_deadline),

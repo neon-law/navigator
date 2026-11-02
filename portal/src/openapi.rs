@@ -2052,6 +2052,100 @@ fn canonical_document(base: &str) -> Value {
             "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such task on this Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The updated task; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The transition is not valid from the current state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
           }
         },
+        "/app/api/projects/{id}/time-entries": {
+          "get": {
+            "summary": "List a matter's time entries",
+            "description": "Returns the Project's time entries with their billing status and the rate snapshotted at creation, newest work first, for the dashboard's Billing tab. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The stored time entries, newest work first", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          },
+          "post": {
+            "summary": "Log time by hand",
+            "description": "Creates one manual time entry. The attorney must participate in the same Project. The hourly rate is never taken from the request: it is resolved from the attorney's fee structure for the performed date — a matter override over the firm default — and frozen onto the row; a billable entry with no rate is refused. Minutes are whole integers, at most one day. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["attorney_id", "performed_on", "minutes", "description", "billable"], "properties": { "attorney_id": { "type": "string", "format": "uuid" }, "performed_on": { "type": "string", "format": "date" }, "minutes": { "type": "integer" }, "description": { "type": "string" }, "billable": { "type": "boolean" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "201": { "description": "The stored time entry, with its rate snapshot", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "Invalid entry, the attorney is not a participant, or no rate is set for a billable entry", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/time-entries/{entry_id}/invoice": {
+          "post": {
+            "summary": "Mark a time entry invoiced",
+            "description": "Marks one unbilled entry `invoiced` under the Xero invoice that carries it, appending an audit event. Replaying the same call is a no-op; the same entry under a different invoice id is a conflict. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "entry_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["xero_invoice_id"], "properties": { "xero_invoice_id": { "type": "string" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such entry on this Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The updated entry; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } }, "409": { "description": "The entry is already invoiced under a different Xero invoice", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "422": { "description": "The entry is not unbilled", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/time-entries/{entry_id}/write-off": {
+          "post": {
+            "summary": "Write off a time entry",
+            "description": "Resolves one unbilled entry as a deliberate write-off, retaining the reason and appending an audit event. The row is retained; a resolved entry never reopens. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "entry_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["reason"], "properties": { "reason": { "type": "string" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such entry on this Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The updated entry; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The entry is not unbilled", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/timer": {
+          "get": {
+            "summary": "Read the caller's open timer on this matter",
+            "description": "Returns the calling attorney's open Timer when it runs on this matter, with its started_at; the elapsed time is computed from started_at, so a closed tab loses nothing. A Timer running on another matter is not disclosed here. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The open timer, or null when none runs on this matter", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          },
+          "post": {
+            "summary": "Start a timer",
+            "description": "Starts the calling attorney's single firm-wide Timer on this matter; the durable row exists the moment this returns. An attorney may hold only one open Timer firm-wide — a second is a conflict. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "note": { "type": "string", "nullable": true } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "201": { "description": "The open timer", "content": { "application/json": { "schema": { "type": "object" } } } }, "409": { "description": "The attorney already holds an open timer", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "422": { "description": "The attorney does not participate in this Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/timer/stop": {
+          "post": {
+            "summary": "Stop the caller's timer and capture a time entry",
+            "description": "Stops the calling attorney's open Timer on this matter and captures its elapsed minutes as a time entry in one transaction. The rate is resolved from the attorney's fee structure for the date the Timer started and frozen onto the entry; minutes are computed by the store, never taken from the request. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["description", "billable"], "properties": { "description": { "type": "string" }, "billable": { "type": "boolean" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No open timer on this matter, no such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The captured time entry, with its rate snapshot", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "Invalid capture, or no rate is set for a billable entry", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/timer/discard": {
+          "post": {
+            "summary": "Discard the caller's timer",
+            "description": "Discards the calling attorney's open Timer on this matter without recording anything. Deliberate, owner-only, and transactional. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No open timer on this matter, no such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "204": { "description": "The timer was discarded; nothing was recorded" } }
+          }
+        },
+        "/app/api/projects/{id}/flat-fee": {
+          "get": {
+            "summary": "Read the matter's agreed flat fee",
+            "description": "Returns the Project's current agreed flat fee in cents, or null when none is set. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The current fee in cents, or null", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          },
+          "post": {
+            "summary": "Set the matter's agreed flat fee",
+            "description": "Sets the Project's current agreed flat fee in integer cents, replacing any prior figure. Captured invoices are unaffected. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["fee_cents"], "properties": { "fee_cents": { "type": "integer" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The stored fee in cents", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The fee is not valid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/attorney-rates": {
+          "get": {
+            "summary": "List an attorney's rates",
+            "description": "Returns the firm's hourly-rate history for one attorney — firm defaults and matter overrides together, newest effective date first. Authorization: lawyer tier.",
+            "parameters": [{ "name": "person_id", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The rate history", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          },
+          "post": {
+            "summary": "Record an attorney's hourly rate",
+            "description": "Records an attorney's hourly rate in integer cents, either the firm default (project_id null) or a matter override. Rows are effective-dated and never edited: a row for the same scope and effective date replaces the prior one, any other date appends to the history. Authorization: lawyer tier.",
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["person_id", "hourly_rate_cents", "effective_on"], "properties": { "person_id": { "type": "string", "format": "uuid" }, "project_id": { "type": "string", "format": "uuid", "nullable": true }, "hourly_rate_cents": { "type": "integer" }, "effective_on": { "type": "string", "format": "date" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such attorney or matter", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "201": { "description": "The stored rate", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The rate is not valid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
         "/app/api/projects/{id}/deadlines": {
           "get": {
             "summary": "List a Project's deadlines",
