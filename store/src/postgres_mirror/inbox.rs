@@ -545,4 +545,38 @@ mod tests {
             .is_clean());
         pg.0.close().await;
     }
+
+    #[tokio::test]
+    async fn x_conversations_mirror_with_the_same_channel() {
+        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let mut input = inbound(firm);
+        input.channel = crate::inbox::channel::X;
+        let saved = crate::inbox::ingest_inbound(&db, &input).await.unwrap();
+        let entity = crate::firms::find_by_id(&db, firm)
+            .await
+            .unwrap()
+            .unwrap()
+            .entity_id
+            .unwrap();
+        crate::postgres_mirror::tests::mirror_identity(&pg, &[entity], &[]).await;
+        crate::postgres_mirror::mirror(
+            &db,
+            &pg,
+            &crate::postgres_mirror::MirrorKey::InboxConversation(saved.conversation_id),
+        )
+        .await
+        .unwrap();
+        let channel: String =
+            sqlx::query_scalar("SELECT channel FROM inbox_conversation WHERE id = $1")
+                .bind(saved.conversation_id)
+                .fetch_one(&pg.0)
+                .await
+                .unwrap();
+        assert_eq!(channel, "x");
+    }
 }

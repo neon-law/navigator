@@ -611,15 +611,13 @@ pub async fn mirror(
         key @ MirrorKey::ProjectReference { .. } => {
             project_references::mirror(surreal, pg, key).await
         }
-        MirrorKey::Post(id) => {
-            match crate::posts::find_by_id(surreal, *id)
-                .await
-                .map_err(|_| MirrorError::Source)?
-            {
-                Some(post) => upsert_post(pg, &post).await,
-                None => delete_post(pg, *id).await,
-            }
-        }
+        MirrorKey::Post(id) => match crate::posts::find_by_id(surreal, *id)
+            .await
+            .map_err(|_| MirrorError::Source)?
+        {
+            Some(post) => upsert_post(pg, &post).await,
+            None => delete_post(pg, *id).await,
+        },
         MirrorKey::BlogVideo(id) => blog_videos::mirror(surreal, pg, *id).await,
         MirrorKey::SocialHandle {
             brand_key,

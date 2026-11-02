@@ -1316,6 +1316,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261101210000_create_notation_transition.sql"),
             ),
             (
+                "20261101210000_allow_x_inbox_channel.sql",
+                include_str!("../postgres/migrations/20261101210000_allow_x_inbox_channel.sql"),
+            ),
+            (
                 "20261031090000_extend_identity_systems.sql",
                 include_str!("../postgres/migrations/20261031090000_extend_identity_systems.sql"),
             ),
