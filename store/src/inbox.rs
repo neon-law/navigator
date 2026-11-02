@@ -2741,6 +2741,8 @@ fn spine_channel(channel_name: &str, direction_value: &str) -> &'static str {
         (channel::TIKTOK, _) => communications::channel::TIKTOK_INBOUND,
         (channel::YOUTUBE, direction::OUTBOUND) => communications::channel::YOUTUBE_OUTBOUND,
         (channel::YOUTUBE, _) => communications::channel::YOUTUBE_INBOUND,
+        (channel::X, direction::OUTBOUND) => communications::channel::X_OUTBOUND,
+        (channel::X, _) => communications::channel::X_INBOUND,
         _ => "",
     }
 }
@@ -4365,7 +4367,7 @@ mod tests {
         // the social channel's structural rule stands with the identity
         // present, and no classifier is admitted for it.
         assert_eq!(
-            crate::inbox_triage::privilege_label(channel::FACEBOOK, None),
+            crate::inbox_triage::privilege_label(channel::FACEBOOK, true, None),
             crate::inbox_triage::PrivilegeLabel::NotPrivileged
         );
         assert!(!crate::inbox_triage::classifier_may_run(channel::FACEBOOK));

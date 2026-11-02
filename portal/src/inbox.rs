@@ -455,8 +455,8 @@ pub struct TriageResolveForm {
 /// `POST /app/inbox/{conversation_id}/triage/{triage_id}/resolve`
 ///
 /// A person settles an uncertain privilege label. The rule layer stays
-/// authoritative server-side: a social-origin channel is forced back to
-/// not-privileged whatever the form posts.
+/// authoritative server-side for public posts. Private messages accept a
+/// human privilege decision.
 pub async fn triage_resolve_post(
     State(db): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
@@ -1746,14 +1746,15 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(row.disposition, TriageDisposition::Confirmed);
+        assert_eq!(row.disposition, TriageDisposition::NeedsHuman);
         assert!(!row.labeled_example);
-        // The decided row leaves the queue.
-        assert!(
+        // Assignment is complete; uncertain privilege still waits for review.
+        assert_eq!(
             store::inbox_triage::list_for_review(&state.surreal, owner.id)
                 .await
                 .unwrap()
-                .is_empty()
+                .len(),
+            1
         );
     }
 
@@ -1835,11 +1836,12 @@ mod tests {
                 .unwrap();
         assert_eq!(conversation.project_id, Some(project.id));
         // The Owner's own door still works on another row: sanity in one.
-        assert!(
+        assert_eq!(
             store::inbox_triage::list_for_review(&state.surreal, owner.id)
                 .await
                 .unwrap()
-                .is_empty()
+                .len(),
+            1
         );
     }
 
@@ -1871,7 +1873,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(row.disposition, TriageDisposition::Overridden);
+        assert_eq!(row.disposition, TriageDisposition::NeedsHuman);
         assert!(row.labeled_example);
         let conversation =
             store::inbox::conversation_by_id(&state.surreal, message.conversation_id)

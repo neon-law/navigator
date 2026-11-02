@@ -2516,6 +2516,7 @@ DEFINE FIELD OVERWRITE channel ON communication TYPE string
                       'instagram_inbound', 'instagram_outbound',
                       'threads_inbound', 'threads_outbound',
                       'youtube_inbound', 'youtube_outbound', 'tiktok_inbound', 'tiktok_outbound',
+                      'x_inbound', 'x_outbound',
                       'call', 'note'];
 DEFINE FIELD OVERWRITE direction ON communication TYPE string
     ASSERT $value IN ['inbound', 'outbound', 'internal'];
@@ -2733,8 +2734,8 @@ DEFINE INDEX OVERWRITE inbox_delivery_attempt_message ON inbox_delivery_attempt
 -- `inbox_triage`: one triage row per inbound Message — whether the message
 -- is privileged, which Project is suggested for it, and the audit trail of
 -- how both were decided. Privilege is structural, not statistical: a
--- social-origin channel is never privileged, decided in code from the
--- channel alone; client email may be flagged privileged only by a
+-- public social post is not privileged; private or unknown visibility
+-- remains uncertain for human review. Client email may be flagged privileged by a
 -- classifier at or above the confidence floor, and every other automated
 -- outcome is `uncertain` — automation can never mark client email
 -- `not_privileged`. The suggested Project is never applied on its own: a

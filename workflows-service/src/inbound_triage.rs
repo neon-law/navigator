@@ -221,6 +221,8 @@ impl InboundTriageService {
 struct TriageContext {
     firm_id: Uuid,
     channel: String,
+    #[serde(default)]
+    public_social: bool,
 }
 
 async fn triage_context(
@@ -245,6 +247,8 @@ async fn triage_context(
     };
     Ok(Some(TriageContext {
         firm_id: conversation.firm_id,
+        public_social: message.visibility.as_deref() == Some("public")
+            && conversation.interaction_type != "direct_message",
         channel: conversation.channel,
     }))
 }
@@ -466,6 +470,7 @@ async fn record_triage_step(
                 message_id,
                 context.firm_id,
                 &context.channel,
+                context.public_social,
                 &lane,
                 attempt.output.as_ref(),
                 validated,
@@ -508,6 +513,7 @@ mod tests {
         let context = super::TriageContext {
             firm_id: uuid::Uuid::now_v7(),
             channel: "email".into(),
+            public_social: false,
         };
         let serialized = serde_json::to_value(context).unwrap();
         assert!(

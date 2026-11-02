@@ -3,7 +3,8 @@
 //! decided.
 //!
 //! The privilege label is structural, not statistical: a social-origin
-//! channel is never privileged, and client email may only be flagged
+//! public post is not privileged; private or unknown visibility waits for human
+//! review. Client email may only be flagged
 //! privileged or left uncertain by automation. The row is a suggestion
 //! until a person confirms or overrides it; every correction is recorded on
 //! the row itself.
@@ -26,9 +27,9 @@ const SELECT: &str = "id, message_id, firm_id, suggested_project_id, project_con
 /// Whether one inbound Message is privileged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrivilegeLabel {
-    /// Client email a confident classifier flagged; the flag a person sees.
+    /// A confident client-email classifier flag, or a human review decision.
     Privileged,
-    /// Social-origin channels, decided from the channel alone.
+    /// Explicitly public social posts, or a human review decision.
     NotPrivileged,
     /// Everything automation cannot settle — including client email below
     /// the confidence floor. These rows wait for a person.
@@ -311,18 +312,22 @@ pub struct ClassifierOutput {
 /// Decide the privilege label for one inbound Message. Structural, not
 /// statistical.
 ///
-/// A social-origin channel is never privileged: the label comes from the
-/// channel alone and `classifier` is never consulted for one. Client email
-/// and SMS may be flagged privileged only when a classifier ran and its
-/// confidence reaches [`PRIVILEGED_CONFIDENCE_FLOOR`]; every other
-/// automated outcome — no classifier, a "not privileged" verdict, low
-/// confidence — is [`PrivilegeLabel::Uncertain`]. Automation can never
-/// produce [`PrivilegeLabel::NotPrivileged`] for client email: that label
-/// belongs to social-origin channels and to a person's review.
+/// Explicitly public social posts are not privileged. Private messages and
+/// unknown visibility remain uncertain and never consult a classifier.
+/// Client email and SMS require a confident privileged classifier verdict;
+/// other automated outcomes remain uncertain until human review.
 #[must_use]
-pub fn privilege_label(channel: &str, classifier: Option<&ClassifierOutput>) -> PrivilegeLabel {
+pub fn privilege_label(
+    channel: &str,
+    public_social: bool,
+    classifier: Option<&ClassifierOutput>,
+) -> PrivilegeLabel {
     if crate::inbox::is_social_channel(channel) {
-        return PrivilegeLabel::NotPrivileged;
+        return if public_social {
+            PrivilegeLabel::NotPrivileged
+        } else {
+            PrivilegeLabel::Uncertain
+        };
     }
     match classifier {
         Some(output)
@@ -606,13 +611,18 @@ pub async fn confirm_project(
             "confirm assigns the suggested project only; choose override to correct it".into(),
         ));
     }
-    let assignment = crate::inbox::assign_for_triage_review(
-        db,
-        actor_id,
-        row_conversation_id(db, &row).await?,
-        project_id,
-    )
-    .await?;
+    let conversation_id = row_conversation_id(db, &row).await?;
+    if !crate::inbox::assignments(db, conversation_id)
+        .await?
+        .is_empty()
+        && row.privilege == PrivilegeLabel::Uncertain
+    {
+        return Err(InboxError::Invalid(
+            "resolve privilege before changing the attribution again".into(),
+        ));
+    }
+    let assignment =
+        crate::inbox::assign_for_triage_review(db, actor_id, conversation_id, project_id).await?;
     write_review_decision(
         db,
         triage_id,
@@ -622,7 +632,11 @@ pub async fn confirm_project(
             suggested_project_id: Some(assignment.to_project_id),
             project_confidence: row.project_confidence,
             rationale: row.rationale.clone(),
-            disposition: TriageDisposition::Confirmed,
+            disposition: if row.privilege == PrivilegeLabel::Uncertain {
+                TriageDisposition::NeedsHuman
+            } else {
+                TriageDisposition::Confirmed
+            },
             labeled_example: row.labeled_example,
         },
     )
@@ -682,7 +696,11 @@ pub async fn override_project(
             // The model's rationale survives in `raw_output`; the row
             // carries the human decision that superseded it.
             rationale: Some(format!("human override: {rationale}")),
-            disposition: TriageDisposition::Overridden,
+            disposition: if row.privilege == PrivilegeLabel::Uncertain {
+                TriageDisposition::NeedsHuman
+            } else {
+                TriageDisposition::Overridden
+            },
             labeled_example: true,
         },
     )
@@ -690,7 +708,7 @@ pub async fn override_project(
 }
 
 /// A person settles an uncertain privilege label. The rule layer stays
-/// authoritative on both sides of the form: a social-origin channel is
+/// authoritative on both sides of the form: an explicitly public social post is
 /// forced back to [`PrivilegeLabel::NotPrivileged`] whatever the form
 /// posts, and the disposition is recomputed from the settled label. The
 /// human's reason is kept on the row; the classifier's own artifact
@@ -725,10 +743,14 @@ pub async fn resolve_privilege(
     if !crate::inbox::triage_reviewer_may_resolve(db, &actor, row.firm_id).await? {
         return Err(InboxError::Denied);
     }
-    let channel = conversation_for_message(db, row.message_id).await?.channel;
-    // The structural rule outranks the form: a social-origin channel is
-    // never privileged, however the human asked.
-    let privilege = if crate::inbox::is_social_channel(&channel) {
+    let conversation = conversation_for_message(db, row.message_id).await?;
+    let message = crate::inbox::message_by_id(db, row.message_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    let public_social = message.visibility.as_deref() == Some("public")
+        && conversation.interaction_type != "direct_message";
+    // Public posts retain the structural rule; private messages accept human review.
+    let privilege = if crate::inbox::is_social_channel(&conversation.channel) && public_social {
         PrivilegeLabel::NotPrivileged
     } else {
         match requested {
@@ -749,7 +771,16 @@ pub async fn resolve_privilege(
             suggested_project_id: row.suggested_project_id,
             project_confidence: row.project_confidence,
             rationale: Some(format!("human review: {rationale}")),
-            disposition: automated_disposition(privilege, row.suggested_project_id),
+            disposition: if crate::inbox::assignments(db, conversation.id)
+                .await?
+                .is_empty()
+            {
+                automated_disposition(privilege, row.suggested_project_id)
+            } else if row.labeled_example {
+                TriageDisposition::Overridden
+            } else {
+                TriageDisposition::Confirmed
+            },
             labeled_example: row.labeled_example,
         },
     )
@@ -757,8 +788,8 @@ pub async fn resolve_privilege(
 }
 
 /// A fresh pass of the rule layer over a triage row: the label is
-/// recomputed from the message's channel alone — a social-origin channel
-/// lands `NotPrivileged`, client email and SMS land `Uncertain` (the
+/// recomputed from channel and visibility: public social posts land
+/// `NotPrivileged`; private social messages, client email and SMS land `Uncertain` (the
 /// hosted classifier's re-run rides the workflow lane, not the portal) —
 /// and the disposition follows. A row a person resolved returns to the
 /// queue; an existing labeled example stays labeled.
@@ -781,8 +812,13 @@ pub async fn rerun(
     if !crate::inbox::triage_reviewer_may_resolve(db, &actor, row.firm_id).await? {
         return Err(InboxError::Denied);
     }
-    let channel = conversation_for_message(db, row.message_id).await?.channel;
-    let privilege = privilege_label(&channel, None);
+    let conversation = conversation_for_message(db, row.message_id).await?;
+    let message = crate::inbox::message_by_id(db, row.message_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    let public_social = message.visibility.as_deref() == Some("public")
+        && conversation.interaction_type != "direct_message";
+    let privilege = privilege_label(&conversation.channel, public_social, None);
     write_review_decision(
         db,
         triage_id,
@@ -832,7 +868,7 @@ mod tests {
                 None,
             ] {
                 assert_eq!(
-                    privilege_label(channel, verdict.as_ref()),
+                    privilege_label(channel, true, verdict.as_ref()),
                     PrivilegeLabel::NotPrivileged,
                     "{channel} must settle privilege from the channel alone"
                 );
@@ -841,13 +877,26 @@ mod tests {
     }
 
     #[test]
+    fn private_or_unknown_social_visibility_requires_a_person_even_with_a_classifier() {
+        for channel in ["x", "instagram", "facebook", "threads", "youtube", "tiktok"] {
+            assert!(!super::classifier_may_run(channel));
+            let label = privilege_label(channel, false, Some(&classifier(true, 1.0)));
+            assert_eq!(label, PrivilegeLabel::Uncertain);
+            assert_eq!(
+                automated_disposition(label, Some(Uuid::now_v7())),
+                TriageDisposition::NeedsHuman
+            );
+        }
+    }
+
+    #[test]
     fn client_email_at_or_above_the_floor_is_flagged() {
         assert_eq!(
-            privilege_label("email", Some(&classifier(true, 0.90))),
+            privilege_label("email", true, Some(&classifier(true, 0.90))),
             PrivilegeLabel::Privileged
         );
         assert_eq!(
-            privilege_label("sms", Some(&classifier(true, 0.99))),
+            privilege_label("sms", true, Some(&classifier(true, 0.99))),
             PrivilegeLabel::Privileged
         );
     }
@@ -855,7 +904,7 @@ mod tests {
     #[test]
     fn client_email_below_the_floor_is_uncertain() {
         assert_eq!(
-            privilege_label("email", Some(&classifier(true, 0.89))),
+            privilege_label("email", true, Some(&classifier(true, 0.89))),
             PrivilegeLabel::Uncertain
         );
     }
@@ -873,7 +922,7 @@ mod tests {
                 None,
             ] {
                 assert_eq!(
-                    privilege_label(channel, verdict.as_ref()),
+                    privilege_label(channel, true, verdict.as_ref()),
                     PrivilegeLabel::Uncertain,
                     "{channel} must stay uncertain without a confident classifier"
                 );
@@ -915,7 +964,7 @@ mod tests {
                 interaction_type: None,
                 provider_post_id: None,
                 parent_provider_message_id: None,
-                visibility: None,
+                visibility: Some("public"),
                 channel,
                 provider_account: "synthetic-account",
                 provider_message_id,
@@ -992,7 +1041,7 @@ mod tests {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let message = inbound(&db, firm, "email", "triage-uncertain").await;
-        let label = privilege_label("email", None);
+        let label = privilege_label("email", true, None);
         assert_eq!(label, PrivilegeLabel::Uncertain);
         let row = record(
             &db,
@@ -1024,7 +1073,7 @@ mod tests {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let message = inbound(&db, firm, "instagram", "triage-social").await;
-        let label = privilege_label("instagram", None);
+        let label = privilege_label("instagram", true, None);
         assert_eq!(label, PrivilegeLabel::NotPrivileged);
         let project = seed_project(&db, firm, "Synthetic Triage Project").await;
         let row = record(
@@ -1276,7 +1325,7 @@ mod tests {
         let confirmed = confirm_project(&db, owner, triage_id, project.id)
             .await
             .unwrap();
-        assert_eq!(confirmed.disposition, TriageDisposition::Confirmed);
+        assert_eq!(confirmed.disposition, TriageDisposition::NeedsHuman);
         assert!(!confirmed.labeled_example);
         // The suggestion is now the conversation's assignment, recorded as
         // an auditable assignment row.
@@ -1295,8 +1344,8 @@ mod tests {
         let again = confirm_project(&db, owner, triage_id, project.id).await;
         assert!(matches!(again, Err(InboxError::Invalid(_))));
         assert!(
-            list_for_review(&db, owner).await.unwrap().is_empty(),
-            "a decided row leaves the queue"
+            list_for_review(&db, owner).await.unwrap().len() == 1,
+            "an attributed row still awaits privilege review"
         );
     }
 
@@ -1401,7 +1450,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(overridden.disposition, TriageDisposition::Overridden);
+        assert_eq!(overridden.disposition, TriageDisposition::NeedsHuman);
         assert!(overridden.labeled_example);
         assert_eq!(overridden.suggested_project_id, Some(corrected.id));
         assert_eq!(overridden.project_confidence, None);
@@ -1535,6 +1584,56 @@ mod tests {
             .await,
             Err(InboxError::Denied)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_private_social_message_waits_for_privilege_review_after_assignment() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let owner = person(&db, "Private Review Owner", Role::Owner).await;
+        let project = seed_project(&db, firm, "Private Review Matter").await;
+        let inbound = inbound(&db, firm, "x", "private-review").await;
+        db.query("UPDATE $message SET visibility = 'private'")
+            .bind((
+                "message",
+                crate::surreal::record_id("message", inbound.message_id),
+            ))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let row = record(
+            &db,
+            &new_triage(
+                inbound.message_id,
+                firm,
+                Some(project.id),
+                PrivilegeLabel::Uncertain,
+                TriageDisposition::NeedsHuman,
+            ),
+        )
+        .await
+        .unwrap();
+        let assigned = confirm_project(&db, owner, row.id, project.id)
+            .await
+            .unwrap();
+        assert_eq!(assigned.disposition, TriageDisposition::NeedsHuman);
+        assert_eq!(list_for_review(&db, owner).await.unwrap().len(), 1);
+        let settled = resolve_privilege(
+            &db,
+            owner,
+            row.id,
+            PrivilegeLabel::Privileged,
+            "private request for legal advice",
+        )
+        .await
+        .unwrap();
+        assert_eq!(settled.privilege, PrivilegeLabel::Privileged);
+        assert_eq!(settled.disposition, TriageDisposition::Confirmed);
+        assert!(list_for_review(&db, owner).await.unwrap().is_empty());
+        let reopened = rerun(&db, owner, row.id).await.unwrap();
+        assert_eq!(reopened.privilege, PrivilegeLabel::Uncertain);
+        assert_eq!(reopened.disposition, TriageDisposition::NeedsHuman);
     }
 
     #[tokio::test]

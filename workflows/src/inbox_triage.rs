@@ -313,6 +313,7 @@ pub fn assemble_triage(
     message_id: Uuid,
     firm_id: Uuid,
     channel: &str,
+    public_social: bool,
     lane: &ClassifierLane,
     classifier: Option<&TriageClassifierOutput>,
     validated_project: Option<Uuid>,
@@ -321,7 +322,7 @@ pub fn assemble_triage(
         privileged: output.privileged,
         privilege_confidence: output.privilege_confidence,
     });
-    let privilege = store::inbox_triage::privilege_label(channel, verdict.as_ref());
+    let privilege = store::inbox_triage::privilege_label(channel, public_social, verdict.as_ref());
     let disposition = store::inbox_triage::automated_disposition(privilege, validated_project);
     NewInboxTriage {
         message_id,
@@ -504,6 +505,7 @@ mod tests {
             message_id,
             firm_id,
             "email",
+            true,
             &lane,
             Some(&verdict),
             Some(project_id),
@@ -541,6 +543,7 @@ mod tests {
             message_id,
             firm_id,
             "email",
+            true,
             &ClassifierLane::rules_only(),
             Some(&low),
             Some(project_id),
@@ -557,6 +560,7 @@ mod tests {
             message_id,
             firm_id,
             "email",
+            true,
             &ClassifierLane::rules_only(),
             None,
             None,
@@ -582,6 +586,7 @@ mod tests {
                 message_id,
                 firm_id,
                 channel,
+                true,
                 &ClassifierLane {
                     model_id: Some("gemini-3.5-flash-lite".into()),
                     prompt_version: TRIAGE_PROMPT_VERSION.into(),
