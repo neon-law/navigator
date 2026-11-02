@@ -282,6 +282,16 @@ async fn build_fixture() -> Fixture {
     store::projects::add_participation(&surreal, other_project_id, lawyer.id, "lawyer")
         .await
         .unwrap();
+    // Designate the lawyer DRI: the fixture's Postgres-native writes (time
+    // entries, flat fees) demand a mirrored project.
+    store::projects::designate_dri_in_surreal(
+        &surreal,
+        project_id,
+        lawyer.id,
+        store::projects::DriSide::Lawyer,
+    )
+    .await
+    .unwrap();
     let client = store::persons::create(
         &surreal,
         &store::persons::NewPerson::with_role(
@@ -589,9 +599,16 @@ async fn a_provider_refusal_marks_nothing() {
     store::projects::add_participation(&surreal, project_id, lawyer.id, "lawyer")
         .await
         .unwrap();
-    store::projects::add_participation(&surreal, project_id, lawyer.id, "client")
-        .await
-        .unwrap();
+    // The lawyer DRI designation also mirrors the project for the
+    // Postgres-native time entries this test seeds.
+    store::projects::designate_dri_in_surreal(
+        &surreal,
+        project_id,
+        lawyer.id,
+        store::projects::DriSide::Lawyer,
+    )
+    .await
+    .unwrap();
 
     // A provider that refuses at the raise: the seam is crossed, Xero
     // (synthetically) rejects, and the retry must be safe.
