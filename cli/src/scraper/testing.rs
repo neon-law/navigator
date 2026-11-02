@@ -221,6 +221,7 @@ impl SiteAdapter for MockAdapter {
             let request = FetchRequest {
                 url,
                 range_start: None,
+                headers: std::collections::BTreeMap::new(),
             };
             let response = fetcher
                 .fetch(&request)
@@ -261,7 +262,8 @@ impl SiteAdapter for MockAdapter {
     }
 }
 
-type MockHandler = Arc<dyn Fn(&FetchRequest) -> Result<FetchResponse, FetchError> + Send + Sync>;
+pub(crate) type MockHandler =
+    Arc<dyn Fn(&FetchRequest) -> Result<FetchResponse, FetchError> + Send + Sync>;
 
 /// A fetcher double: records every request and answers through a canned
 /// handler. Tests assert on the request record — the mock never opens a
@@ -299,6 +301,15 @@ impl MockFetcher {
                 .filter(|request| request.url.contains(needle))
                 .count()
         })
+    }
+
+    /// Snapshots of every recorded request, in order — for assertions on
+    /// headers and shape that a URL needle cannot see.
+    #[must_use]
+    pub(crate) fn requests(&self) -> Vec<FetchRequest> {
+        self.requests
+            .lock()
+            .map_or_else(|_| Vec::new(), |requests| requests.clone())
     }
 }
 

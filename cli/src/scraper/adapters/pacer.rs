@@ -27,6 +27,8 @@
 //! Parsing is pure: [`parse_docket`] and [`billing_confirmation`] read
 //! response bodies handed to them and never open a connection themselves.
 
+use std::collections::BTreeMap;
+
 use crate::scraper::adapter::{AdapterError, NoticeQuery, NoticeRef, SiteAdapter, SiteKey};
 use crate::scraper::credentials::SiteLogin;
 use crate::scraper::download::DownloadSink;
@@ -161,6 +163,7 @@ impl SiteAdapter for PacerAdapter {
         let request = FetchRequest {
             url: notice.url.clone(),
             range_start: (offset > 0).then_some(offset),
+            headers: BTreeMap::new(),
         };
         let response = fetcher
             .fetch(&request)
@@ -191,6 +194,7 @@ async fn fetch_document(
     let request = FetchRequest {
         url: url.to_owned(),
         range_start: None,
+        headers: BTreeMap::new(),
     };
     let response = fetcher
         .fetch(&request)
