@@ -784,4 +784,463 @@ mod tests {
         archive.finish().unwrap();
         output.into_inner()
     }
+
+    #[tokio::test]
+    async fn a_non_docx_capture_is_reviewed_as_its_own_text() {
+        let file = ParsedArtifact::File {
+            bytes: b"SUPPLY AGREEMENT".to_vec(),
+            content_type: "text/plain".into(),
+            filename: "supply.txt".into(),
+        };
+        assert_eq!(
+            super::contract_text_for_review(&file).await.unwrap(),
+            "SUPPLY AGREEMENT"
+        );
+        let paste = ParsedArtifact::Text("pasted body".into());
+        assert_eq!(
+            super::contract_text_for_review(&paste).await.unwrap(),
+            "pasted body"
+        );
+        assert_eq!(paste.default_filename(), "inbound-contract.txt");
+        assert!(matches!(
+            paste.into_workflow_artifact(),
+            workflows::IntakeArtifact::Text { text } if text == "pasted body"
+        ));
+        let workflows::IntakeArtifact::File {
+            bytes_base64,
+            content_type,
+        } = file.into_workflow_artifact()
+        else {
+            panic!("a file capture stays a file");
+        };
+        assert_eq!(content_type, "text/plain");
+        assert_eq!(
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, bytes_base64)
+                .unwrap(),
+            b"SUPPLY AGREEMENT"
+        );
+        assert!(matches!(
+            super::ContractReviewError::from("lost".to_string()),
+            super::ContractReviewError::Db(message) if message == "lost"
+        ));
+    }
+
+    // --- the pipeline and its upload door ---
+
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use store::persons::{NewPerson, Role};
+    use tower::ServiceExt;
+    use uuid::Uuid;
+    use workflows::IntakeArtifact;
+
+    use super::{drive_contract_review, ContractReviewError, ReviewDeps};
+    use crate::session::{now_unix_secs, SessionSource, SessionStore};
+
+    const BOUNDARY: &str = "synthetic-contract-boundary";
+
+    /// A matter on a fresh store, its client (a participant) and the
+    /// client Entity the playbook belongs to.
+    struct Matter {
+        surreal: store::surreal::SurrealDb,
+        code: String,
+        project_id: Uuid,
+        client_id: Uuid,
+        entity_id: Uuid,
+    }
+
+    async fn matter() -> Matter {
+        let surreal = store::test_support::mem_surreal().await;
+        let entity_id = store::test_support::seed_entity(&surreal).await;
+        let code = format!("contract-review-{}", Uuid::now_v7().simple());
+        let project_id = store::projects::create(
+            &surreal,
+            &store::projects::NewProject {
+                code: code.clone(),
+                name: "Synthetic contract review".into(),
+                status: "open".into(),
+                entity_id,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let client_id = store::persons::create(
+            &surreal,
+            &NewPerson::with_role(
+                "Synthetic client",
+                format!("contract-client-{}@example.com", Uuid::now_v7()),
+                Role::Client,
+            ),
+        )
+        .await
+        .unwrap()
+        .id;
+        store::projects::add_participation(&surreal, project_id, client_id, "client")
+            .await
+            .unwrap();
+        Matter {
+            surreal,
+            code,
+            project_id,
+            client_id,
+            entity_id,
+        }
+    }
+
+    async fn seed_template(surreal: &store::surreal::SurrealDb) {
+        store::templates::save_version(
+            surreal,
+            None,
+            super::CONTRACT_REVIEW_TEMPLATE_CODE,
+            store::templates::Version {
+                title: "Inbound Contract Review".into(),
+                respondent_type: "person_and_entity".into(),
+                asset_id: None,
+                form_code: None,
+                kind: None,
+                source_commit_sha: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn seed_playbook(surreal: &store::surreal::SurrealDb, entity_id: Uuid) -> Uuid {
+        let positions = vec![store::playbooks::Position {
+            topic: "Limitation of liability".into(),
+            preferred: "Mutual cap at 12 months' fees".into(),
+            fallback: "Cap at 2x fees paid".into(),
+            walkaway: "Uncapped liability".into(),
+            severity: store::playbooks::SEVERITY_HIGH.into(),
+        }];
+        store::playbooks::create(
+            surreal,
+            &store::playbooks::NewPlaybook {
+                entity_id,
+                name: "Synthetic vendor playbook",
+                positions: &positions,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    fn bearer(person_id: Uuid, role: Role) -> String {
+        let token =
+            SessionStore::new(crate::test_support::TEST_SESSION_KEY).encode(&crate::SessionData {
+                sub: "synthetic-contract-uploader".into(),
+                email: None,
+                person_id: Some(person_id),
+                exp: now_unix_secs() + 60,
+                role,
+                csrf_token: "synthetic-csrf".into(),
+                source: SessionSource::Cli,
+                provider: None,
+                viewing_as_dri: None,
+                scope: None,
+            });
+        format!("Bearer {token}")
+    }
+
+    /// A multipart body of `(name, filename, content)` parts.
+    fn multipart(parts: &[(&str, Option<&str>, &[u8])]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (name, filename, content) in parts {
+            body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+            match filename {
+                Some(filename) => body.extend_from_slice(
+                    format!(
+                        "Content-Disposition: form-data; name=\"{name}\"; \
+                         filename=\"{filename}\"\r\nContent-Type: text/plain\r\n\r\n"
+                    )
+                    .as_bytes(),
+                ),
+                None => body.extend_from_slice(
+                    format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+                ),
+            }
+            body.extend_from_slice(content);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+        body
+    }
+
+    async fn upload(
+        surreal: &store::surreal::SurrealDb,
+        code: &str,
+        auth: &str,
+        body: Vec<u8>,
+    ) -> (StatusCode, String, String) {
+        let app = crate::router(crate::test_support::app_state(surreal.clone()).await);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/app/projects/{code}/contract-review"))
+                    .header(header::AUTHORIZATION, auth)
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={BOUNDARY}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            location,
+            String::from_utf8_lossy(&bytes).into_owned(),
+        )
+    }
+
+    #[tokio::test]
+    async fn the_upload_door_hides_a_matter_from_a_non_participant() {
+        let matter = matter().await;
+        let body = || multipart(&[("contract_text", None, b"A contract")]);
+        let client = bearer(matter.client_id, Role::Client);
+        let (status, _, _) = upload(&matter.surreal, "no-such-matter", &client, body()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "an unknown matter");
+        let stranger = store::persons::create(
+            &matter.surreal,
+            &NewPerson::with_role(
+                "Synthetic stranger",
+                format!("contract-stranger-{}@example.com", Uuid::now_v7()),
+                Role::Client,
+            ),
+        )
+        .await
+        .unwrap();
+        let (status, _, _) = upload(
+            &matter.surreal,
+            &matter.code,
+            &bearer(stranger.id, Role::Client),
+            body(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "a non-participant");
+    }
+
+    #[tokio::test]
+    async fn the_upload_door_returns_an_empty_form_and_refuses_a_broken_one() {
+        let matter = matter().await;
+        let client = bearer(matter.client_id, Role::Client);
+        let (status, location, _) = upload(
+            &matter.surreal,
+            &matter.code,
+            &client,
+            multipart(&[
+                ("contract_text", None, b"   "),
+                ("file", Some("empty.txt"), b""),
+                ("ignored", None, b"value"),
+            ]),
+        )
+        .await;
+        assert!(status.is_redirection(), "{status}");
+        assert_eq!(location, format!("/app/projects/{}", matter.code));
+        assert!(
+            store::notations::list_by_project(&matter.surreal, matter.project_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let truncated = format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"contract_text\"\r\n\r\nunterminated"
+        );
+        let (status, _, _) = upload(
+            &matter.surreal,
+            &matter.code,
+            &client,
+            truncated.into_bytes(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn the_upload_door_explains_a_missing_playbook() {
+        let matter = matter().await;
+        seed_template(&matter.surreal).await;
+        let (status, _, body) = upload(
+            &matter.surreal,
+            &matter.code,
+            &bearer(matter.client_id, Role::Client),
+            multipart(&[("contract_text", None, b"MASTER SERVICES AGREEMENT")]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(body.contains("no contract-review playbook"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn an_uploaded_file_is_filed_analysed_and_parked_for_lawyer_review() {
+        let matter = matter().await;
+        seed_template(&matter.surreal).await;
+        let playbook_id = seed_playbook(&matter.surreal, matter.entity_id).await;
+        let (status, location, body) = upload(
+            &matter.surreal,
+            &matter.code,
+            &bearer(matter.client_id, Role::Client),
+            multipart(&[(
+                "file",
+                Some("vendor-msa.txt"),
+                b"MASTER SERVICES AGREEMENT\nLiability is uncapped.",
+            )]),
+        )
+        .await;
+        assert!(status.is_redirection(), "{status}: {body}");
+        let review_id: Uuid = location
+            .strip_prefix("/app/lawyer/contract-reviews/")
+            .expect("redirects to the review")
+            .parse()
+            .unwrap();
+        let review = store::contract_reviews::by_id(&matter.surreal, review_id)
+            .await
+            .unwrap()
+            .expect("the review row exists");
+        assert_eq!(review.playbook_id, playbook_id);
+        assert_eq!(
+            store::contract_reviews::findings_of(&review).unwrap().len(),
+            1,
+            "one finding per playbook position"
+        );
+        let notation = store::notations::list_by_project(&matter.surreal, matter.project_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("a notation was opened");
+        assert_eq!(notation.state, "lawyer_review");
+        assert_eq!(notation.entity_id, Some(matter.entity_id));
+    }
+
+    #[tokio::test]
+    async fn the_pipeline_refuses_before_any_workflow_step_it_cannot_take() {
+        let matter = matter().await;
+        let state = crate::test_support::app_state(matter.surreal.clone()).await;
+        let deps = ReviewDeps {
+            surreal: &state.surreal,
+            workflow_runtime: state.workflow_runtime.as_ref(),
+            storage: &state.storage,
+            contract_reviewer: state.contract_reviewer.as_ref(),
+        };
+        let text = || IntakeArtifact::Text {
+            text: "contract body".into(),
+        };
+        let missing = Uuid::now_v7();
+        let error = drive_contract_review(
+            &deps,
+            missing,
+            matter.client_id,
+            "c.txt",
+            "contract body",
+            text(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, ContractReviewError::NotationMissing(id) if id == missing));
+
+        seed_playbook(&matter.surreal, matter.entity_id).await;
+        let error = drive_contract_review(
+            &deps,
+            matter.project_id,
+            matter.client_id,
+            "c.txt",
+            "contract body",
+            text(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, ContractReviewError::TemplateMissing),
+            "{error}"
+        );
+
+        seed_template(&matter.surreal).await;
+        let error = drive_contract_review(
+            &deps,
+            matter.project_id,
+            matter.client_id,
+            "c.docx",
+            "contract body",
+            text(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&error, ContractReviewError::Artifact(message) if message.contains("not supplied as a file")),
+            "{error}"
+        );
+        let error = drive_contract_review(
+            &deps,
+            matter.project_id,
+            matter.client_id,
+            "c.txt",
+            "contract body",
+            IntakeArtifact::File {
+                bytes_base64: "not base64!".into(),
+                content_type: "text/plain".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, ContractReviewError::Base64(_)), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_linked_or_already_stored_contract_reaches_lawyer_review() {
+        let matter = matter().await;
+        seed_template(&matter.surreal).await;
+        seed_playbook(&matter.surreal, matter.entity_id).await;
+        let state = crate::test_support::app_state(matter.surreal.clone()).await;
+        let deps = ReviewDeps {
+            surreal: &state.surreal,
+            workflow_runtime: state.workflow_runtime.as_ref(),
+            storage: &state.storage,
+            contract_reviewer: state.contract_reviewer.as_ref(),
+        };
+        let linked = drive_contract_review(
+            &deps,
+            matter.project_id,
+            matter.client_id,
+            "linked-contract",
+            "contract body",
+            IntakeArtifact::Link {
+                url: "https://example.com/contract".into(),
+            },
+        )
+        .await
+        .expect("a linked contract is filed as its address");
+        let stored = Uuid::now_v7();
+        let restaged = drive_contract_review(
+            &deps,
+            matter.project_id,
+            matter.client_id,
+            "stored-contract.txt",
+            "contract body",
+            IntakeArtifact::Stored { asset_id: stored },
+        )
+        .await
+        .expect("an already-stored contract is not filed twice");
+        assert_ne!(linked, restaged);
+        let notations = store::notations::list_by_project(&matter.surreal, matter.project_id)
+            .await
+            .unwrap();
+        assert_eq!(notations.len(), 2);
+        assert!(notations.iter().all(|row| row.state == "lawyer_review"));
+    }
 }
