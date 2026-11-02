@@ -1741,9 +1741,9 @@ B34: [logo.png](../../server/public/brand/guieb-shook/logo.png) — rendered fro
 B35: [logo.svg](../../server/public/brand/guieb-shook/logo.svg) — glyph outlines drawn from the tracked Tinos Regular
 WOFF2 (E32), so its font notice follows Tinos web Regular/Bold.
 
-B36: [logo.svg](../../server/public/brand/lex-tecnica/logo.svg) — Lex Tecnica, Ltd.'s brand mark.
+B36: [logo.svg](../../server/public/brand/lex-tecnica/logo.svg) — a brand mark of Lex Tecnica, Ltd.
 
-B37: [logo.svg](../../server/public/brand/iep-defenders/logo.svg) — Lex Tecnica, Ltd.'s brand mark.
+B37: [logo.svg](../../server/public/brand/iep-defenders/logo.svg) — a brand mark of Lex Tecnica, Ltd.
 
 ## Detailed matrix evidence
 
