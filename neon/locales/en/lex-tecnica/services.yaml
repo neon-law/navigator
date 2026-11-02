@@ -1,0 +1,144 @@
+head_title: "{site_name} | Legal Services"
+meta_description: >-
+  Legal services from Lex Tecnica: fractional general counsel, business law
+  and M&A, cyber-tech law, litigation, intellectual property, wealth
+  management, immigration, real estate, and child rights. Attorney advertisement.
+title: Legal Services
+hero_mark: helm
+tagline: Your general counsel
+hero_lines:
+  - text: Your general counsel
+    accent_words: 1
+hero_lead: >-
+  Lex Tecnica brings experienced attorneys, modern technology, and an
+  entrepreneurial view to legal work for people and businesses. You choose
+  your attorney, and the engagement sets out the scope and fees before work
+  begins. Attorney advertisement.
+hero_cta:
+  href: https://lextecnica.com/contact/
+  label: Contact Us
+skin: practice
+bands:
+  - kind: statement
+    heading: Who this is for
+    lead: ""
+    body:
+      - - text: >-
+            This page is for founders, companies, families, and individuals who
+            want to talk with a lawyer about a legal need. It is an attorney
+            advertisement, not legal advice, and not a promise of any result.
+            Not all attorneys are licensed in every jurisdiction.
+  - kind: cards
+    anchor: work
+    overline: Practice areas
+    heading: What we can discuss
+    description: >-
+      The right scope depends on your facts, the law, and whether we can
+      represent you. We explain the proposed work before it begins.
+    items:
+      - title: Fractional general counsel
+        body:
+          - - text: >-
+                Ongoing counsel for your company, from formation and contracts
+                to compliance and transactions, from attorneys who learn how
+                your business runs.
+      - title: Business law and M&A
+        body:
+          - - text: >-
+                Help through each stage of a business: forming it, growing it,
+                bringing in investors, and selling or merging it.
+      - title: Cyber-tech law and data centers
+        body:
+          - - text: >-
+                Counsel for companies that build, finance, run, or use data
+                centers, cloud platforms, AI, and other digital infrastructure.
+      - title: Litigation
+        body:
+          - - text: >-
+                Representation in civil and intellectual property disputes when
+                negotiation has not resolved the problem.
+      - title: Intellectual property
+        body:
+          - - text: >-
+                A strategy to identify, protect, manage, and enforce your ideas,
+                inventions, technology, creative work, and brand.
+      - title: Wealth management
+        body:
+          - - text: >-
+                Legal structures for individuals, families, and business owners
+                to protect what they have built and plan what comes next.
+      - title: Immigration
+        body:
+          - - text: >-
+                Help for individuals, families, professionals, and businesses
+                to understand their options in the U.S. immigration system.
+      - title: Real estate
+        body:
+          - - text: >-
+                Representation for buyers, sellers, investors, landlords,
+                tenants, and businesses in real estate deals and disputes.
+      - title: Child rights
+        body:
+          - - text: >-
+                Help for parents and caregivers with special education,
+                adoption, childhood injury, and related matters affecting a
+                child.
+  - kind: cards
+    anchor: fees
+    overline: Fees
+    heading: Choose how you pay
+    description: >-
+      We offer several fee structures instead of hourly billing alone. Any
+      discount or payment term is binding only once it is set out in a
+      signed engagement letter.
+    items:
+      - title: Hourly
+        body:
+          - - text: >-
+                Standard hourly rates with an initial retainer and no ongoing
+                commitment.
+      - title: Monthly counsel
+        body:
+          - - text: >-
+                A set number of attorney hours each month at a discounted rate.
+      - title: Fractional general counsel
+        body:
+          - - text: >-
+                A reduced rate for some clients in exchange for a small equity
+                stake, so our success follows yours.
+      - title: Hybrid litigation
+        body:
+          - - text: >-
+                A discounted rate combined with a bonus or contingency fee tied
+                to the result of the case.
+      - title: Flat fee
+        body:
+          - - text: >-
+                A fixed price for a defined project, agreed before work begins.
+  - kind: steps
+    anchor: how
+    overline: How it works
+    heading: Choose your attorney
+    description: >-
+      You pick the attorney who works with you, rather than being handed off.
+    items:
+      - title: Define what you need
+        body:
+          - - text: >-
+                Think through the legal need and the budget you have in mind.
+      - title: Meet up to three attorneys
+        body:
+          - - text: >-
+                Look through the team, pick up to three attorneys to meet, and
+                send us a contact request.
+      - title: Choose and confirm
+        body:
+          - - text: >-
+                After the meetings, choose your attorney. We confirm the scope
+                and fees in a signed engagement before work begins.
+  - kind: cta
+    heading: Ready to talk?
+    body: >-
+      Write to us with what you are trying to do. A contact request does not
+      create an attorney-client relationship.
+    email: "{firm_email}"

@@ -150,6 +150,7 @@ pub mod glossary;
 pub mod google_oauth;
 pub mod gov_forms;
 pub mod hcaptcha;
+pub mod host_handoff;
 pub mod hosting;
 pub mod idp_admin;
 pub mod inbound_email;
@@ -1380,6 +1381,10 @@ pub fn bootstrap_with_forgejo_oidc(
             // loop so cookies still round-trip in dev. The redirect URI
             // carries the external scheme even behind a TLS-terminating LB.
             secure_cookies: oauth.redirect_uri().starts_with("https://"),
+            canonical_host: state
+                .canonical_host
+                .clone()
+                .with_sign_in_origin(Some(oauth.redirect_uri())),
         })
         // Throttle the credential endpoints (login, password submit,
         // callback) per IP — the brute-force / credential-stuffing target.

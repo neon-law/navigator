@@ -60,8 +60,8 @@ is served by the redirect service, which sends both its apex and `www` host to t
 | `staging.deleteyourdata.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `staging.lawyershook.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `staging.guiebandshook.com` | the staging deployment | its `<prefix>-gateway-ip` |
-| `www.iepdefenders.com` | the production deployment | its `<prefix>-gateway-ip` |
-| `staging.iepdefenders.com` | the staging deployment | its `<prefix>-gateway-ip` |
+| `iep.neonlaw.com` / `lex-tecnica.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
+| `staging-iep.neonlaw.com` / `staging-lex-tecnica.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `neonlaw.org` / `www.neonlaw.org` | the redirect service | `https://www.neonlaw.com` (path-preserving 301) |
 
 The `neonlaw.com` apex is not a deployment entry: it carries a `URL` record that 301s to `https://www.neonlaw.com`,
@@ -70,12 +70,11 @@ GKE `ManagedCertificate`: the name does not resolve to the load balancer, and a 
 `Provisioning` until every listed name validates. The `neonlaw.org` zone has its own host-dispatched redirect service so
 deep links survive the domain migration.
 
-The `iepdefenders.com` zone follows the same shape. Its `www`/`staging` DNS records and the apex `URL` redirect
-(`iepdefenders.com` → `https://www.iepdefenders.com`) are operator steps per the cutover recipe above, applied outside
-the deploy tree; the `ManagedCertificate`s for `www.iepdefenders.com` and `staging.iepdefenders.com` render from the
-registry's release inventory (`views::brand::release_brand_hosts()`), so they ship with the release and sit in
-`Provisioning` until DNS resolves and the HTTP-01 challenge validates. `navigator ops brand-readiness` reports each host
-`Ready` once issuance completes.
+Lex Tecnica's two brands, Lex Tecnica and IEP Defenders, are served on `neonlaw.com` subdomains rather than domains of
+their own: `lex-tecnica` and `iep` in production, `staging-lex-tecnica` and `staging-iep` on staging. They have no apex
+to redirect. Their records sit in the `neonlaw.com` zone, and their `ManagedCertificate` entries render from the
+registry's release inventory (`views::brand::release_brand_hosts()`) like every other brand host. Bring each one online
+with `navigator ops host setup` (below).
 
 `DNS_ACCT` is the DNSimple account that holds the zone. Read it from `dnsimple accounts list` — a user token can span
 several accounts, and a command run against the wrong one fails with `Zone not found` rather than a permission error,
@@ -121,6 +120,26 @@ DNSIMPLE_TOKEN="$DNS_SIMPLE" dnsimple records delete "$DNS_ZONE" \
   "$RECORD_ID" --account "$DNS_ACCT"
 ```
 
+### Bringing a registered brand host online — `navigator ops host setup`
+
+Once a host is registered in `views::brand::BrandKey::hosts` and that release has shipped, one command does the rest:
+
+```bash
+navigator ops host setup --host iep.neonlaw.com --deployment <name>
+navigator ops host setup --host iep.neonlaw.com --deployment <name> --apply
+```
+
+1. **DNS:** an `A` record for the host's label in its zone, pointed at the gateway the deployment's own public host
+   resolves to (or `--gateway-ip`). Preview unless `--apply`.
+2. **Certificate:** a real TLS handshake and the brand's own page. Every registered host is already on the Firm
+   `ManagedCertificate` and Ingress `ops ship` renders, so a failure here means the release has not shipped or issuance
+   is still pending, about 15 minutes after DNS resolves.
+3. **Sign-in:** `/auth/login` on the host must detour to the deployment's callback origin and name the host as
+   `return_host`. Sign-in is handed back to the host for its own session ([per-host sign-in](oidc.md)), so no identity
+   provider needs a new redirect URI.
+
+It exits nonzero until all three are ready and is safe to rerun.
+
 ### Moving a live hostname onto a deployment
 
 Repointing a zone that already serves a site is a cutover with a TLS gap, because the Google-managed certificate covers
@@ -133,7 +152,9 @@ exactly `NAVIGATOR_PUBLIC_HOST` and cannot be issued until DNS already resolves 
 3. Point `www` and `workflows` at the gateway IP with `ops dns setup --apply`.
 4. Wait for first issuance—roughly 15 minutes from the moment DNS resolves. The HTTP-01 challenge is served over plain
    HTTP, so do not enable the FrontendConfig's `redirectToHttps` until the certificate first reports `Active`.
-5. Register the new origin's `/auth/callback` as an authorized OAuth redirect URI before expecting sign-in to work.
+5. If `NAVIGATOR_PUBLIC_HOST` itself moved, register the new origin's `/auth/callback` as an authorized OAuth redirect
+   URI before expecting sign-in to work. A brand host needs no registration: its sign-in goes through the existing
+   callback.
 
 Between steps 2 and 4 the hostname serves a certificate error. Schedule it deliberately rather than as a side effect of
 a release.

@@ -239,6 +239,42 @@ pub const PALETTE: &[Palette] = &[
         },
     },
     Palette {
+        id: "lex-tecnica",
+        label: "Lex Tecnica gold and parchment",
+        light: PaletteScheme {
+            primary: "#7A5E27",
+            primary_hover: "#614B1F",
+            primary_active: "#4D3B18",
+            on_primary: "#FFFFFF",
+            on_brand: "#FFFFFF",
+            link: "#7A5E27",
+            link_hover: "#614B1F",
+            surface_subtle: "#EFE8DA",
+            bg: Some("#FBF8F1"),
+            surface: Some("#FBF8F1"),
+            surface_raised: Some("#EFE8DA"),
+            text: Some("#1F1B16"),
+            text_muted: Some("#5A5247"),
+            border: Some("#8E8577"),
+        },
+        dark: PaletteScheme {
+            primary: "#D9B66E",
+            primary_hover: "#E8CB8E",
+            primary_active: "#C9A257",
+            on_primary: "#1C1812",
+            on_brand: "#1C1812",
+            link: "#D9B66E",
+            link_hover: "#E8CB8E",
+            surface_subtle: "#2A241B",
+            bg: Some("#1C1812"),
+            surface: Some("#1C1812"),
+            surface_raised: Some("#2A241B"),
+            text: Some("#F5EFE3"),
+            text_muted: Some("#C9BFAE"),
+            border: Some("#8E8577"),
+        },
+    },
+    Palette {
         id: "cyber-injury-law",
         label: "CyberInjuryLaw electric lime",
         light: PaletteScheme {
@@ -736,6 +772,8 @@ impl BrandKey {
             Self::Aegis | Self::CyberInjuryLaw => {
                 typeface_by_id("dm-sans").expect("invariant: dm-sans is catalogued above")
             }
+            // The nearest catalogued face to Lex Tecnica's classical capitals.
+            Self::LexTecnica => typeface_by_id("eb-garamond").expect("eb-garamond is catalogued"),
             Self::Neon => typeface_by_id("gorp-serif").expect("gorp-serif is catalogued"),
             Self::DeleteYourData => {
                 typeface_by_id("plus-jakarta-sans").expect("plus-jakarta-sans is catalogued")
@@ -797,7 +835,8 @@ impl BrandKey {
             | Self::Summons
             | Self::Daybridge
             | Self::Groundwork
-            | Self::DeathAndDivorce => None,
+            | Self::DeathAndDivorce
+            | Self::LexTecnica => None,
         }
     }
 
@@ -813,6 +852,7 @@ impl BrandKey {
             }
             Self::LawyerShook => palette_by_id("lawyer-shook").expect("lawyer-shook is catalogued"),
             Self::GuiebShook => palette_by_id("guieb-shook").expect("guieb-shook is catalogued"),
+            Self::LexTecnica => palette_by_id("lex-tecnica").expect("lex-tecnica is catalogued"),
             Self::Vesta => palette_by_id("vesta").expect("vesta is catalogued"),
             Self::Misericordia => {
                 palette_by_id("misericordia").expect("misericordia is catalogued")

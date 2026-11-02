@@ -2473,7 +2473,7 @@ fn tag_link(link: &str, provider: SocialProvider) -> Option<String> {
     let host = url.host_str()?;
     let ours = views::brand::BrandKey::ALL
         .iter()
-        .any(|key| key.apex() == host || key.hosts().contains(&host));
+        .any(|key| key.apex() == Some(host) || key.hosts().contains(&host));
     if !ours
         || url
             .query_pairs()

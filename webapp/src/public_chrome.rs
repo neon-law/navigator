@@ -1047,7 +1047,8 @@ mod tests {
     async fn every_brand_renders_only_its_firms_jta_standing() {
         let expected = JTA_STANDING.to_string();
 
-        for key in views::brand::BrandKey::ALL {
+        // Guieb & Shook's membership; another firm's brand never claims it.
+        for key in views::brand::BrandKey::GUIEB_SHOOK_FAMILY {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             let output = views::brand::scope(branding, async {
                 let chrome = chrome_for(&branding.firm, Vec::new());

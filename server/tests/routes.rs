@@ -10568,6 +10568,20 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
             copy: "written engagement before work begins",
         },
     ),
+    (
+        views::brand::BrandKey::LexTecnica,
+        LiveHomeContract::Authored {
+            title: "<title>Lex Tecnica | Home</title>",
+            copy: "A law firm for entrepreneurs, by entrepreneurs.",
+        },
+    ),
+    (
+        views::brand::BrandKey::IepDefenders,
+        LiveHomeContract::Authored {
+            title: "<title>IEP Defenders | Home</title>",
+            copy: "Special education lawyers defending your child",
+        },
+    ),
 ];
 
 fn live_home_contract(key: views::brand::BrandKey) -> &'static LiveHomeContract {
@@ -11188,11 +11202,20 @@ async fn assert_brand_home_lead_capture(
         StatusCode::OK,
         "{host}: confirmation"
     );
-    assert_eq!(
-        get_on_host(app, "/privacy", host).await.status(),
-        StatusCode::OK,
-        "{host}: privacy"
-    );
+    let privacy = get_on_host(app, "/privacy", host).await;
+    if brand.is_guieb_shook() {
+        assert_eq!(privacy.status(), StatusCode::OK, "{host}: privacy");
+    } else {
+        // Another firm's brand never presents Guieb & Shook PC's policy as its
+        // own: it sends the reader to the policy its firm publishes, or 404s.
+        let branding = brand.resolve_branding(&views::brand::DEFAULT_BRANDING);
+        if branding.privacy_url.is_empty() {
+            assert_eq!(privacy.status(), StatusCode::NOT_FOUND, "{host}: privacy");
+        } else {
+            assert_eq!(privacy.status(), StatusCode::SEE_OTHER, "{host}: privacy");
+            assert_eq!(privacy.headers()[header::LOCATION], branding.privacy_url);
+        }
+    }
 }
 
 async fn brand_home_lead_form(
@@ -11307,13 +11330,8 @@ async fn every_registered_host_serves_its_brand_and_its_apex_redirects_home() {
         let site_name = brand.firm.site_name;
         let mailbox = brand.firm_email;
 
-        for host in key
-            .hosts()
-            .iter()
-            .copied()
-            .chain(std::iter::once(key.apex()))
-        {
-            let apex = host == key.apex();
+        for host in key.hosts().iter().copied().chain(key.apex()) {
+            let apex = key.apex() == Some(host);
 
             if key.is_live() {
                 // A live served host renders; a live apex 301s to that

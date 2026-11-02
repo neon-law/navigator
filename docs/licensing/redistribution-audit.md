@@ -1667,6 +1667,8 @@ assets retain their upstream notice review separately; the synthetic PDF needs e
 | synthetic-initial-case-assessment.pdf | B33 | Unverified | R; U | Owner/release/counsel |
 | logo.png | B34 | Unverified | R; U; F | Owner/release/counsel |
 | logo.svg | B35 | Unverified | R; U; F | Owner/release/counsel |
+| logo.svg | B36 | Lex Tecnica, Ltd. | U | Owner/counsel |
+| logo.svg | B37 | Lex Tecnica, Ltd. | U | Owner/counsel |
 
 B1: [logo-neon-law.png](../../pdf/assets/brand/logo-neon-law.png)
 
@@ -1738,6 +1740,10 @@ B34: [logo.png](../../server/public/brand/guieb-shook/logo.png) — rendered fro
 
 B35: [logo.svg](../../server/public/brand/guieb-shook/logo.svg) — glyph outlines drawn from the tracked Tinos Regular
 WOFF2 (E32), so its font notice follows Tinos web Regular/Bold.
+
+B36: [logo.svg](../../server/public/brand/lex-tecnica/logo.svg) — Lex Tecnica, Ltd.'s brand mark.
+
+B37: [logo.svg](../../server/public/brand/iep-defenders/logo.svg) — Lex Tecnica, Ltd.'s brand mark.
 
 ## Detailed matrix evidence
 
