@@ -328,7 +328,7 @@ async fn build_fixture() -> Fixture {
 
     // The fixture holds the stub so the tests can count actual seam calls.
     let provider = Arc::new(billing::StubBillingProvider::new());
-    mirror_matters(&surreal, [project_id, other_project_id]).await;
+    mirror_matters(&surreal, &[project_id, other_project_id]).await;
     let base = portal::test_support::app_state(surreal.clone()).await;
     let state = AppState {
         sessions: SessionStore::new(KEY),
@@ -356,17 +356,17 @@ async fn build_fixture() -> Fixture {
 /// the stores must already be mirrored — no command runs first. Every
 /// test that builds a fixture has run `invoice_store()`, so the pool
 /// resolves.
-async fn mirror_matters(surreal: &store::surreal::SurrealDb, projects: [Uuid; 2]) {
+async fn mirror_matters(surreal: &store::surreal::SurrealDb, projects: &[Uuid]) {
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
     for project in projects {
         store::postgres_mirror::mirror(
             surreal,
             &pg,
-            &store::postgres_mirror::MirrorKey::Project(project),
+            &store::postgres_mirror::MirrorKey::Project(*project),
         )
         .await
         .unwrap();
-        for role in store::projects::participations_for_project(surreal, project)
+        for role in store::projects::participations_for_project(surreal, *project)
             .await
             .unwrap()
         {
@@ -448,10 +448,10 @@ async fn the_hourly_path_bills_time_and_confirmed_costs_once() {
     assert_eq!(resp.status(), StatusCode::OK, "the generation raises");
     let receipt = body_json(resp).await;
 
-    // Two entries at their snapshotted rate (90 and 30 minutes) plus the
-    // confirmed cost; the estimated cost and the non-billable entry are
-    // nobody's invoice.
-    let expected = 3 * i64::from(RATE_CENTS_PER_HOUR) / 2 + 1_250;
+    // Two entries at their snapshotted rate (90 and 30 minutes — two
+    // hours) plus the confirmed cost; the estimated cost and the
+    // non-billable entry are nobody's invoice.
+    let expected = 2 * i64::from(RATE_CENTS_PER_HOUR) + 1_250;
     assert_eq!(receipt["total_cents"], expected);
     assert_eq!(receipt["consumed_time_entries"], 2);
     assert_eq!(receipt["consumed_costs"], 1);
@@ -631,16 +631,10 @@ async fn a_provider_refusal_marks_nothing() {
     store::projects::add_participation(&surreal, project_id, lawyer.id, "lawyer")
         .await
         .unwrap();
-    // The lawyer DRI designation also mirrors the project for the
-    // Postgres-native time entries this test seeds.
-    store::projects::designate_dri_in_surreal(
-        &surreal,
-        project_id,
-        lawyer.id,
-        store::projects::DriSide::Lawyer,
-    )
-    .await
-    .unwrap();
+    // Prepare the PostgreSQL side the way `prepared_store` does for the
+    // app's own doors: this test seeds Postgres-native rows directly, so
+    // the matter and its participations must already be mirrored.
+    mirror_matters(&surreal, &[project_id]).await;
 
     // A provider that refuses at the raise: the seam is crossed, Xero
     // (synthetically) rejects, and the retry must be safe.
