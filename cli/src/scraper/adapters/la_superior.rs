@@ -802,10 +802,10 @@ mod tests {
                 .and_hms_opt(0, 0, 0)
                 .unwrap(),
         );
-        let body = r#"{"provider": "ECourt", "result": [{
+        let body = r#"[{"provider": "ECourt", "result": [{
             "caseId": "5436252",
             "documents": [{"documentId": "9", "name": "Order", "fileDate": "not a date"}]
-        }]}"#;
+        }]}]"#;
         let notices =
             parse_case_documents(body.as_bytes(), DEFAULT_BASE_URL, "ECourt", Some(since))
                 .expect("parses");
@@ -818,14 +818,15 @@ mod tests {
 
     #[test]
     fn a_register_without_a_documents_property_is_drift() {
-        let body = r#"{"provider": "ECourt", "result": [{"caseId": "5436252"}]}"#;
+        let body = r#"[{"provider": "ECourt", "result": [{"caseId": "5436252"}]}]"#;
         let outcome = parse_case_documents(body.as_bytes(), DEFAULT_BASE_URL, "ECourt", None);
         assert!(matches!(outcome, Err(AdapterError::StructureDrift { .. })));
     }
 
     #[test]
     fn an_empty_documents_array_is_a_well_formed_empty_register() {
-        let body = r#"{"provider": "ECourt", "result": [{"caseId": "5436252", "documents": []}]}"#;
+        let body =
+            r#"[{"provider": "ECourt", "result": [{"caseId": "5436252", "documents": []}]}]"#;
         let notices = parse_case_documents(body.as_bytes(), DEFAULT_BASE_URL, "ECourt", None)
             .expect("parses");
         assert!(notices.is_empty());
