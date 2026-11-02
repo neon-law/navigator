@@ -484,12 +484,12 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   denied; and a path deeper than one segment past the collection
     //   denied to Lawyer.
     // 645 + 7 = 652.
-// + 6 for the matter-stage doors (GET /app/api/projects/{id}/stages and
-//   POST .../stages/set): Lawyer admitted on both doors, Admin (bypass) on the
-//   set door; Clerk, Client, and anonymous denied at the boundary; and the
-//   method/path-shape boundary — POST/DELETE on the read, GET on the set, a
-//   deeper segment, and an extra path element denied even to Lawyer.
-// 652 + 6 = 658.
+    // + 6 for the matter-stage doors (GET /app/api/projects/{id}/stages and
+    //   POST .../stages/set): Lawyer admitted on both doors, Admin (bypass) on the
+    //   set door; Clerk, Client, and anonymous denied at the boundary; and the
+    //   method/path-shape boundary — POST/DELETE on the read, GET on the set, a
+    //   deeper segment, and an extra path element denied even to Lawyer.
+    // 652 + 6 = 658.
 
     assert_eq!(
         test_names.len(),
