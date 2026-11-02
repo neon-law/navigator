@@ -1356,6 +1356,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261102000000_allow_x_inbox_channel.sql"),
             ),
             (
+                "20261102010000_allow_voice_inbox_channel.sql",
+                include_str!("../postgres/migrations/20261102010000_allow_voice_inbox_channel.sql"),
+            ),
+            (
                 "20261102020000_linkedin_channel_and_raw_storage.sql",
                 include_str!("../postgres/migrations/20261102020000_linkedin_channel_and_raw_storage.sql"),
             ),

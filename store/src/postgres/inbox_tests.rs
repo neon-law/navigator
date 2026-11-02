@@ -450,6 +450,42 @@ async fn native_contact_link_preserves_a_persons_existing_number() {
 }
 
 #[tokio::test]
+async fn native_voice_ingest_preserves_transcripts_and_provider_replay() {
+    let Some(f) = fixture().await else { return };
+    let provider_id = format!("synthetic-call-{}", Uuid::now_v7());
+    let mut input = inbound(
+        f.firm,
+        channel::VOICE,
+        "synthetic-receiving-account",
+        &provider_id,
+        "synthetic-caller",
+    );
+    input.visibility = Some("private");
+    input.body = "Synthetic voice transcript.";
+    let first = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let replay = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    assert!(!first.deduped);
+    assert!(replay.deduped);
+    assert_eq!(first.conversation_id, replay.conversation_id);
+    assert_eq!(first.message_id, replay.message_id);
+    let saved_channel: String =
+        sqlx::query_scalar("SELECT channel FROM inbox_conversation WHERE id=$1")
+            .bind(first.conversation_id)
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(saved_channel, channel::VOICE);
+    let body: String = sqlx::query_scalar("SELECT body FROM message WHERE id=$1")
+        .bind(first.message_id)
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(body, input.body);
+    assert_eq!(message_count(&f.pg).await, 1);
+    assert_eq!(ingress_count(&f.pg).await, 1);
+}
+
+#[tokio::test]
 async fn native_sms_requires_consent_and_reuses_the_private_thread() {
     let Some(f) = fixture().await else { return };
     let account = format!("+{}", 15_550_100_000_u64);

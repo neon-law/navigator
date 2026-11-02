@@ -723,6 +723,40 @@ mod tests {
             .is_some());
     }
 
+    #[tokio::test]
+    async fn a_voice_transcript_preserves_its_channel_in_postgres() {
+        use crate::postgres_mirror::{self, MirrorKey};
+        let Some((options, database)) = postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = postgres_mirror::tests::connect(&options, &database).await;
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let mut input = inbound(firm);
+        input.channel = crate::inbox::channel::VOICE;
+        let saved = crate::inbox::ingest_inbound(&db, &input).await.unwrap();
+        let entity = crate::firms::find_by_id(&db, firm)
+            .await
+            .unwrap()
+            .unwrap()
+            .entity_id
+            .unwrap();
+        postgres_mirror::tests::mirror_identity(&pg, &[entity], &[]).await;
+        for key in [
+            MirrorKey::InboxConversation(saved.conversation_id),
+            MirrorKey::InboxMessage(saved.message_id),
+        ] {
+            postgres_mirror::mirror(&db, &pg, &key).await.unwrap();
+        }
+        let channel: String =
+            sqlx::query_scalar("SELECT channel FROM inbox_conversation WHERE id=$1")
+                .bind(saved.conversation_id)
+                .fetch_one(pg.pool())
+                .await
+                .unwrap();
+        assert_eq!(channel, crate::inbox::channel::VOICE);
+    }
+
     /// Seed one Suggested triage row for a mirrored message with model
     /// fields filled — the classifier-lane shape the mirror must carry.
     async fn seed_triage(

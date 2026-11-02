@@ -3645,6 +3645,11 @@ CREATE INDEX notation_transition_notation ON notation_transition(notation_id);
 ALTER TABLE inbox_conversation DROP CONSTRAINT inbox_conversation_channel_check;
 ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'scraper', 'x'));
 
+-- Migration: 20261102010000_allow_voice_inbox_channel.sql
+-- Preserve Inbox channel storage across voice, social, and scraper ingestion.
+ALTER TABLE inbox_conversation DROP CONSTRAINT inbox_conversation_channel_check;
+ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'voice', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'scraper', 'linkedin', 'x'));
+
 -- Migration: 20261102020000_linkedin_channel_and_raw_storage.sql
 -- Imported direct messages and scraper notices share the Inbox channel vocabulary.
 DO $$ BEGIN
