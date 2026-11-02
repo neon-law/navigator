@@ -123,7 +123,10 @@ mod tests {
     #[test]
     fn nautilus_home_renders_the_subscription_experience() {
         let html = render(MobilePage::Home);
-        assert!(html.contains("fm-page--nautilus"), "home must wear the Nautilus skin");
+        assert!(
+            html.contains("fm-page--nautilus"),
+            "home must wear the Nautilus skin"
+        );
         assert!(html.contains("Included"));
         assert!(html.contains("$29/month"), "monthly price must be present");
         assert!(html.contains("$290/year"), "annual price must be present");
@@ -138,7 +141,10 @@ mod tests {
         let html = render(MobilePage::Dyd);
         assert!(html.contains("Delete Your Data"));
         assert!(html.contains("erase your records"));
-        assert!(html.contains("fm-page--nautilus"), "the DYD page wears the same skin");
+        assert!(
+            html.contains("fm-page--nautilus"),
+            "the DYD page wears the same skin"
+        );
         assert!(
             html.contains(r#"data-mobile-nav="home""#),
             "the DYD page must expose the navigation hook back home"
@@ -157,6 +163,9 @@ mod tests {
         let html = dioxus_ssr::render_element(rsx! { MobileApp {} });
         assert!(html.contains("fm-page--nautilus"));
         assert!(html.contains("$29/month"));
-        assert!(!html.contains("Delete Your Data</h1>"), "must not open on the DYD page");
+        assert!(
+            !html.contains("Delete Your Data</h1>"),
+            "must not open on the DYD page"
+        );
     }
 }
