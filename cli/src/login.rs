@@ -364,7 +364,7 @@ async fn send_response(
 
 /// Best-effort browser open. The URL is always printed too, so a
 /// headless or SSH session can copy it manually.
-fn open_in_browser(url: &str) {
+pub(crate) fn open_in_browser(url: &str) {
     #[cfg(target_os = "macos")]
     let opener = ("open", vec![url.to_string()]);
     #[cfg(not(target_os = "macos"))]
