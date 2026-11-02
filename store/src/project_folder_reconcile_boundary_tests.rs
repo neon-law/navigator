@@ -13,7 +13,7 @@ impl AclScript {
     fn new(reads: Vec<Result<DriveFolderAccess, cloud::drive::DriveError>>) -> Self {
         Self {
             folders: std::sync::Mutex::new(reads.into()),
-            files: std::sync::Mutex::new(Default::default()),
+            files: std::sync::Mutex::new(std::collections::VecDeque::default()),
             restricted: std::sync::Mutex::new(None),
             inherited: None,
             ensured: std::sync::Mutex::new(Vec::new()),
@@ -513,7 +513,7 @@ async fn folder_environment_probe() {
     };
     let db = crate::test_support::mem_surreal().await;
     if mode == "unconfigured" {
-        assert!(reconcile_from_env(&db, Uuid::nil())
+        assert!(Box::pin(reconcile_from_env(&db, Uuid::nil()))
             .await
             .unwrap()
             .is_none());
@@ -532,14 +532,14 @@ async fn folder_environment_probe() {
             .unwrap()
             .check()
             .unwrap();
-        assert!(reconcile_from_env(&db, project.id).await.unwrap().is_none());
+        assert!(Box::pin(reconcile_from_env(&db, project.id)).await.unwrap().is_none());
         assert_eq!(
             nightly_from_env(&db, project.id).await,
             NightlyFolderOutcome::Skipped
         );
     } else {
         assert!(matches!(
-            reconcile_from_env(&db, project.id).await,
+            Box::pin(reconcile_from_env(&db, project.id)).await,
             Err(FolderReconcileError::Provider(
                 cloud::DriveError::MissingConfig(_)
             ))
