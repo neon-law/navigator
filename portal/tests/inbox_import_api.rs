@@ -156,6 +156,7 @@ async fn build_app_with_storage(
         signature_provider: state.signature_provider.clone(),
         contract_reviewer: state.contract_reviewer.clone(),
         integration_providers: state.integration_providers.clone(),
+        billing_provider: state.billing_provider.clone(),
     };
     let lawyer_session = portal::SessionData {
         person_id: Some(person_id),
