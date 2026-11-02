@@ -32,6 +32,7 @@ pub mod finance_aggregate;
 pub mod general_nag;
 pub mod health;
 pub mod inbound_message_alert;
+pub mod inbound_triage;
 pub mod journal;
 pub mod nightly_project_update;
 pub(crate) mod notation_logic;
@@ -43,6 +44,7 @@ pub mod registry;
 pub mod request_identity;
 pub mod social_publisher;
 mod tiktok_business;
+pub mod youtube_comments;
 
 pub use email_config::{from_env as email_from_env, EmailConfigError};
 pub use notation_service::{

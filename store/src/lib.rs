@@ -133,6 +133,7 @@ pub mod git_repositories;
 pub mod glossary;
 pub mod inbox;
 pub mod inbox_alerts;
+pub mod inbox_triage;
 pub mod iolta_accounts;
 pub mod iolta_withdrawals;
 pub mod journal_startup_migration;

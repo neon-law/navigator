@@ -17,7 +17,7 @@ struct Table {
     immutable: bool,
 }
 
-// The same five table names and columns are declared in the Inbox migration.
+// Inbox row images follow their canonical SQL migrations.
 // `references` names only RecordId columns; every other value retains its
 // source type through jsonb_populate_record.
 const TABLES: &[Table] = &[
@@ -57,6 +57,12 @@ const TABLES: &[Table] = &[
         references: "id,message_id",
         immutable: true,
     },
+    Table {
+        name: "inbox_triage",
+        columns: "id,message_id,firm_id,suggested_project_id,project_confidence,privilege,privilege_confidence,rationale,model_id,prompt_version,raw_output,disposition,labeled_example,inserted_at,updated_at",
+        references: "id,message_id,firm_id,suggested_project_id",
+        immutable: false,
+    },
 ];
 
 fn table(name: &str) -> Result<&'static Table, MirrorError> {
@@ -89,6 +95,7 @@ fn key(name: &str, id: Uuid) -> Result<MirrorKey, MirrorError> {
         "inbox_message_asset" => MirrorKey::InboxMessageAsset(id),
         "inbox_assignment" => MirrorKey::InboxAssignment(id),
         "inbox_delivery_attempt" => MirrorKey::InboxDeliveryAttempt(id),
+        "inbox_triage" => MirrorKey::InboxTriage(id),
         _ => return Err(MirrorError::Source),
     })
 }
@@ -193,12 +200,14 @@ fn upsert_sql(table: &Table) -> String {
 fn parent(column: &str, id: Uuid) -> Option<MirrorKey> {
     Some(match column {
         "firm_id" => MirrorKey::Firm(id),
-        "project_id" | "from_project_id" | "to_project_id" => MirrorKey::Project(id),
+        "project_id" | "from_project_id" | "to_project_id" | "suggested_project_id" => {
+            MirrorKey::Project(id)
+        }
         "email_conversation_id" => MirrorKey::EmailConversation(id),
         "conversation_id" => MirrorKey::InboxConversation(id),
         "parent_message_id" | "message_id" => MirrorKey::InboxMessage(id),
         "author_person_id" | "actor_person_id" => MirrorKey::Person(id),
-        "attachment_asset_id" => MirrorKey::Asset(id),
+        "attachment_asset_id" | "asset_id" => MirrorKey::Asset(id),
         "communication_id" => MirrorKey::Communication(id),
         _ => return None,
     })
@@ -216,8 +225,10 @@ pub async fn mirror(
         MirrorKey::InboxConversation(id)
         | MirrorKey::InboxMessage(id)
         | MirrorKey::InboxIngress(id)
+        | MirrorKey::InboxMessageAsset(id)
         | MirrorKey::InboxAssignment(id)
-        | MirrorKey::InboxDeliveryAttempt(id) => *id,
+        | MirrorKey::InboxDeliveryAttempt(id)
+        | MirrorKey::InboxTriage(id) => *id,
         _ => return Err(MirrorError::Source),
     };
     if let Some(row) = source_one(surreal, table, id).await? {
@@ -402,20 +413,66 @@ mod tests {
             .is_some());
     }
 
-    #[tokio::test]
-    async fn five_inbox_tables_mirror_and_mutable_drift_reconciles() {
-        use crate::postgres_mirror::{self, MirrorKey};
+    /// Seed one Suggested triage row for a mirrored message with model
+    /// fields filled — the classifier-lane shape the mirror must carry.
+    async fn seed_triage(
+        db: &crate::surreal::SurrealDb,
+        message_id: Uuid,
+        firm: Uuid,
+        project_id: Uuid,
+    ) -> Uuid {
+        crate::inbox_triage::record(
+            db,
+            &crate::inbox_triage::NewInboxTriage {
+                message_id,
+                firm_id: firm,
+                suggested_project_id: Some(project_id),
+                project_confidence: Some(0.8),
+                privilege: crate::inbox_triage::PrivilegeLabel::Privileged,
+                privilege_confidence: Some(0.95),
+                rationale: Some("mentions a closing".into()),
+                model_id: Some("gemini-flash-lite".into()),
+                prompt_version: "triage-v1".into(),
+                raw_output: Some("{\"privileged\":true}".into()),
+                disposition: crate::inbox_triage::TriageDisposition::Suggested,
+                labeled_example: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    struct InboxImageFixture {
+        db: crate::surreal::SurrealDb,
+        saved: crate::inbox::IngestedInbound,
+        assets: [Uuid; 2],
+        assignment: Uuid,
+        attempt: Uuid,
+        triage: Uuid,
+    }
+
+    async fn seed_inbox_image_fixture(pg: &crate::postgres::PostgresDb) -> InboxImageFixture {
+        use crate::postgres_mirror;
         use crate::surreal::record_id;
 
-        let Some((options, database)) = postgres_mirror::tests::fresh_schema().await else {
-            return;
-        };
-        let pg = postgres_mirror::tests::connect(&options, &database).await;
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        let saved = crate::inbox::ingest_inbound(&db, &inbound(firm))
-            .await
-            .unwrap();
+        let asset = crate::test_support::seed_body_asset(&db, b"Synthetic attachment").await;
+        let mut input = inbound(firm);
+        input.attachments.push(crate::inbox::IngestAttachment {
+            asset_id: asset,
+            filename: "synthetic.md".into(),
+            sha256: crate::assets::sha256_hex(b"Synthetic attachment"),
+        });
+        let second_asset =
+            crate::test_support::seed_body_asset(&db, b"Second synthetic attachment").await;
+        input.attachments.push(crate::inbox::IngestAttachment {
+            asset_id: second_asset,
+            filename: "second.md".into(),
+            sha256: crate::assets::sha256_hex(b"Second synthetic attachment"),
+        });
+        let saved = crate::inbox::ingest_inbound(&db, &input).await.unwrap();
         let project = crate::projects::create(
             &db,
             &crate::projects::NewProject {
@@ -451,6 +508,7 @@ mod tests {
             .unwrap()
             .check()
             .unwrap();
+        let triage = seed_triage(&db, saved.message_id, firm, project.id).await;
 
         let firm_entity = crate::firms::find_by_id(&db, firm)
             .await
@@ -458,8 +516,73 @@ mod tests {
             .unwrap()
             .entity_id
             .unwrap();
-        postgres_mirror::tests::mirror_identity(&pg, &[firm_entity, project.entity_id], &[]).await;
+        postgres_mirror::tests::mirror_identity(pg, &[firm_entity, project.entity_id], &[]).await;
 
+        InboxImageFixture {
+            db,
+            saved,
+            assets: [asset, second_asset],
+            assignment,
+            attempt,
+            triage,
+        }
+    }
+
+    async fn assert_inbox_image_rows(pg: &crate::postgres::PostgresDb, assets: &[Uuid; 2]) {
+        for table in super::TABLES {
+            let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM {}",
+                table.name
+            )))
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+            assert_eq!(
+                rows,
+                if table.name == "inbox_message_asset" {
+                    2
+                } else {
+                    1
+                },
+                "the {} parity proof needs persisted fixture rows",
+                table.name
+            );
+        }
+        let mirrored_assets: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM asset WHERE id = ANY($1)")
+                .bind(assets.to_vec())
+                .fetch_one(&pg.0)
+                .await
+                .unwrap();
+        assert_eq!(
+            mirrored_assets, 2,
+            "both attachment parents must mirror automatically"
+        );
+    }
+
+    #[tokio::test]
+    async fn seven_inbox_tables_mirror_and_mutable_drift_reconciles() {
+        use crate::postgres_mirror::{self, MirrorKey};
+
+        let Some((options, database)) = postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = postgres_mirror::tests::connect(&options, &database).await;
+        let InboxImageFixture {
+            db,
+            saved,
+            assets,
+            assignment,
+            attempt,
+            triage,
+        } = seed_inbox_image_fixture(&pg).await;
+        let links = source(&db, table("inbox_message_asset").unwrap())
+            .await
+            .unwrap();
+        let MirrorKey::InboxMessageAsset(attachment) = links.keys().next().unwrap() else {
+            panic!("expected an Inbox attachment link");
+        };
+        let attachment = *attachment;
         let ingress = source(&db, table("inbox_ingress").unwrap()).await.unwrap();
         let ingress = ingress.keys().next().unwrap().clone();
         for key in [
@@ -468,11 +591,16 @@ mod tests {
             ingress,
             MirrorKey::InboxAssignment(assignment),
             MirrorKey::InboxDeliveryAttempt(attempt),
-        ] {
+            MirrorKey::InboxTriage(triage),
+        ]
+        .into_iter()
+        .chain(links.keys().cloned())
+        {
             postgres_mirror::mirror(&db, &pg, &key)
                 .await
                 .unwrap_or_else(|error| panic!("{key}: {error}"));
         }
+        assert_inbox_image_rows(&pg, &assets).await;
         assert!(postgres_mirror::inbox::parity(&db, &pg)
             .await
             .unwrap()
@@ -484,6 +612,18 @@ mod tests {
                 .await
                 .is_err()
         );
+        assert!(
+            sqlx::query("UPDATE inbox_message_asset SET filename='drifted' WHERE id=$1")
+                .bind(attachment)
+                .execute(&pg.0)
+                .await
+                .is_err()
+        );
+        sqlx::query("UPDATE inbox_triage SET rationale='drifted' WHERE id=$1")
+            .bind(triage)
+            .execute(&pg.0)
+            .await
+            .unwrap();
         sqlx::query("UPDATE message SET body='drifted' WHERE id=$1")
             .bind(saved.message_id)
             .execute(&pg.0)
@@ -502,5 +642,39 @@ mod tests {
             .unwrap()
             .is_clean());
         pg.0.close().await;
+    }
+
+    #[tokio::test]
+    async fn x_conversations_mirror_with_the_same_channel() {
+        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let mut input = inbound(firm);
+        input.channel = crate::inbox::channel::X;
+        let saved = crate::inbox::ingest_inbound(&db, &input).await.unwrap();
+        let entity = crate::firms::find_by_id(&db, firm)
+            .await
+            .unwrap()
+            .unwrap()
+            .entity_id
+            .unwrap();
+        crate::postgres_mirror::tests::mirror_identity(&pg, &[entity], &[]).await;
+        crate::postgres_mirror::mirror(
+            &db,
+            &pg,
+            &crate::postgres_mirror::MirrorKey::InboxConversation(saved.conversation_id),
+        )
+        .await
+        .unwrap();
+        let channel: String =
+            sqlx::query_scalar("SELECT channel FROM inbox_conversation WHERE id = $1")
+                .bind(saved.conversation_id)
+                .fetch_one(&pg.0)
+                .await
+                .unwrap();
+        assert_eq!(channel, "x");
     }
 }

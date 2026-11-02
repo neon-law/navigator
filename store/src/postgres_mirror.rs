@@ -198,6 +198,7 @@ pub enum MirrorKey {
     InboxMessageAsset(Uuid),
     InboxAssignment(Uuid),
     InboxDeliveryAttempt(Uuid),
+    InboxTriage(Uuid),
     Mailroom(Uuid),
     Letter(Uuid),
     Lead(Uuid),
@@ -328,6 +329,7 @@ impl MirrorKey {
             Self::InboxMessageAsset(_) => "inbox_message_asset",
             Self::InboxAssignment(_) => "inbox_assignment",
             Self::InboxDeliveryAttempt(_) => "inbox_delivery_attempt",
+            Self::InboxTriage(_) => "inbox_triage",
             Self::Mailroom(_) => "mailroom",
             Self::Letter(_) => "letter",
             Self::Lead(_) => "lead",
@@ -421,6 +423,7 @@ impl std::fmt::Display for MirrorKey {
             Self::InboxMessageAsset(id) => write!(f, "inbox_message_asset:{id}"),
             Self::InboxAssignment(id) => write!(f, "inbox_assignment:{id}"),
             Self::InboxDeliveryAttempt(id) => write!(f, "inbox_delivery_attempt:{id}"),
+            Self::InboxTriage(id) => write!(f, "inbox_triage:{id}"),
             Self::Mailroom(id) => write!(f, "mailroom:{id}"),
             Self::Letter(id) => write!(f, "letter:{id}"),
             Self::Lead(id) => write!(f, "lead:{id}"),
@@ -595,7 +598,8 @@ pub async fn mirror(
         | MirrorKey::InboxIngress(_)
         | MirrorKey::InboxMessageAsset(_)
         | MirrorKey::InboxAssignment(_)
-        | MirrorKey::InboxDeliveryAttempt(_)) => inbox::mirror(surreal, pg, key).await,
+        | MirrorKey::InboxDeliveryAttempt(_)
+        | MirrorKey::InboxTriage(_)) => inbox::mirror(surreal, pg, key).await,
         MirrorKey::SocialAccount(key) => social_accounts::mirror(surreal, pg, key).await,
         key @ MirrorKey::SocialAccountSelection { .. } => {
             social_account_selections::mirror(surreal, pg, key).await
@@ -607,15 +611,13 @@ pub async fn mirror(
         key @ MirrorKey::ProjectReference { .. } => {
             project_references::mirror(surreal, pg, key).await
         }
-        MirrorKey::Post(id) => {
-            match crate::posts::find_by_id(surreal, *id)
-                .await
-                .map_err(|_| MirrorError::Source)?
-            {
-                Some(post) => upsert_post(pg, &post).await,
-                None => delete_post(pg, *id).await,
-            }
-        }
+        MirrorKey::Post(id) => match crate::posts::find_by_id(surreal, *id)
+            .await
+            .map_err(|_| MirrorError::Source)?
+        {
+            Some(post) => upsert_post(pg, &post).await,
+            None => delete_post(pg, *id).await,
+        },
         MirrorKey::BlogVideo(id) => blog_videos::mirror(surreal, pg, *id).await,
         MirrorKey::SocialHandle {
             brand_key,
@@ -1607,6 +1609,7 @@ fn row_id(key: &MirrorKey) -> Option<Uuid> {
         | MirrorKey::InboxMessageAsset(id)
         | MirrorKey::InboxAssignment(id)
         | MirrorKey::InboxDeliveryAttempt(id)
+        | MirrorKey::InboxTriage(id)
         | MirrorKey::Mailroom(id)
         | MirrorKey::Letter(id)
         | MirrorKey::Lead(id)

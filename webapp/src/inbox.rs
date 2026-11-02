@@ -141,7 +141,7 @@ pub struct InboxThreadPage {
 }
 
 #[cfg(feature = "server")]
-async fn chrome() -> (Option<crate::components::AppLogo>, String, String) {
+pub(crate) async fn chrome() -> (Option<crate::components::AppLogo>, String, String) {
     (
         crate::app_chrome::app_logo_from_context().await,
         crate::app_chrome::app_tokens_href_from_context().await,
@@ -150,7 +150,7 @@ async fn chrome() -> (Option<crate::components::AppLogo>, String, String) {
 }
 
 #[cfg(feature = "server")]
-async fn person_id() -> Option<uuid::Uuid> {
+pub(crate) async fn person_id() -> Option<uuid::Uuid> {
     dioxus_fullstack_core::FullstackContext::extract::<
         axum::Extension<crate::portal_project_list::PersonId>,
         _,
@@ -162,7 +162,7 @@ async fn person_id() -> Option<uuid::Uuid> {
 }
 
 #[cfg(feature = "server")]
-async fn csrf_token() -> String {
+pub(crate) async fn csrf_token() -> String {
     dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<crate::csrf::CsrfToken>, _>()
         .await
         .map(|axum::Extension(token)| token.0)
@@ -170,7 +170,7 @@ async fn csrf_token() -> String {
 }
 
 #[cfg(feature = "server")]
-async fn query_error() -> Option<String> {
+pub(crate) async fn query_error() -> Option<String> {
     #[derive(serde::Deserialize, Default)]
     struct Flash {
         error: Option<String>,
@@ -192,18 +192,9 @@ async fn selected_channel() -> Option<String> {
             .await
             .ok()
             .map(|axum::extract::Query(filter)| filter)?;
-    filter.channel.filter(|channel| {
-        matches!(
-            channel.as_str(),
-            store::inbox::channel::EMAIL
-                | store::inbox::channel::SMS
-                | store::inbox::channel::FACEBOOK
-                | store::inbox::channel::INSTAGRAM
-                | store::inbox::channel::THREADS
-                | store::inbox::channel::YOUTUBE
-                | store::inbox::channel::TIKTOK
-        )
-    })
+    filter
+        .channel
+        .filter(|channel| inbox_channels().contains(channel))
 }
 
 #[cfg(feature = "server")]
@@ -282,6 +273,7 @@ fn inbox_channels() -> Vec<String> {
         store::inbox::channel::THREADS.into(),
         store::inbox::channel::YOUTUBE.into(),
         store::inbox::channel::TIKTOK.into(),
+        store::inbox::channel::X.into(),
     ]
 }
 
@@ -359,17 +351,19 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let channel_filter = selected_channel().await;
     let unread_only = unread_only().await;
     let brand_filter = selected_brand().await;
-    let all_rows = store::inbox::list_intake(&surreal, actor)
+    let brands = store::inbox::intake_brands(&surreal, actor)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
-    let brands = inbox_brands(&all_rows);
     let brand_filter = brand_filter.filter(|brand| brands.contains(brand));
-    let rows = all_rows
+    let scoped_rows = match brand_filter.as_deref() {
+        Some(brand) => store::inbox::list_intake_in_brand(&surreal, actor, brand).await,
+        None => store::inbox::list_intake(&surreal, actor).await,
+    }
+    .map_err(|error| ServerFnError::new(error.to_string()))?;
+    let rows = scoped_rows
         .into_iter()
         .filter(|row| {
-            channel_matches(&row.channel, channel_filter.as_deref())
-                && brand_matches(row.brand_key.as_deref(), brand_filter.as_deref())
-                && (!unread_only || row.unread)
+            channel_matches(&row.channel, channel_filter.as_deref()) && (!unread_only || row.unread)
         })
         .collect::<Vec<_>>();
     let (logo, tokens_href, firm_name) = chrome().await;
@@ -1069,6 +1063,7 @@ mod tests {
                 "threads",
                 "youtube",
                 "tiktok",
+                "x",
             ]
             .into_iter()
             .map(str::to_string)

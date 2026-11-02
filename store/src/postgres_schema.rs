@@ -118,8 +118,8 @@ pub enum Error {
 /// Parses the canonical PostgreSQL DDL in a deliberately small, stable subset.
 /// The subset is sufficient for the checked-in migrations: CREATE TABLE,
 /// column declarations, inline REFERENCES, named table constraints,
-/// standalone indexes, and named CHECK constraints (which do not change
-/// table/column parity).
+/// standalone indexes, and named CHECK constraints and dropped named
+/// constraints (neither changes table/column parity).
 #[expect(
     clippy::too_many_lines,
     reason = "single ordered pass tracks SQL table and procedural block state"
@@ -270,6 +270,21 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
                     && constraint.as_bytes()[0].is_ascii_alphabetic();
                 if expression.is_empty() || !valid_identifier || !tables.contains_key(*name) {
+                    return Err(Error::UnsupportedSql(line.to_string()));
+                }
+                continue;
+            }
+            if let Some((name, constraint)) =
+                rest.trim_end_matches(';').split_once(" DROP CONSTRAINT ")
+            {
+                // Dropping a named constraint changes no table, column, or
+                // foreign key the parity model records; validate the shape
+                // and move on.
+                let valid_identifier = !constraint.is_empty()
+                    && constraint
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric() || character == '_');
+                if !valid_identifier || !tables.contains_key(name) {
                     return Err(Error::UnsupportedSql(line.to_string()));
                 }
                 continue;
@@ -682,7 +697,10 @@ fn surreal_erd_type(surreal_type: &str) -> &'static str {
         "uuid"
     } else if surreal_type.contains("bool") {
         "boolean"
-    } else if surreal_type.contains("int") || surreal_type.contains("float") {
+    } else if surreal_type.contains("int")
+        || surreal_type.contains("float")
+        || matches!(surreal_type, "number" | "option<number>")
+    {
         "number"
     } else if surreal_type.contains("datetime") {
         "datetime"
@@ -701,6 +719,7 @@ fn erd_type(sql_type: &str) -> &'static str {
         "UUID" => "uuid",
         "BOOLEAN" => "boolean",
         "BIGINT" | "INTEGER" | "SMALLINT" => "int",
+        "DOUBLE" | "DOUBLE PRECISION" | "REAL" | "FLOAT" => "number",
         "TIMESTAMPTZ" | "TIMESTAMP" | "DATE" => "datetime",
         "JSONB" | "JSON" => "json",
         _ => "string",
@@ -1289,12 +1308,24 @@ mod tests {
                 ),
             ),
             (
-                "20261101140000_create_notation_machine_state.sql",
-                include_str!("../postgres/migrations/20261101140000_create_notation_machine_state.sql"),
-            ),
-            (
                 "20261101170000_create_ssh_public_key.sql",
                 include_str!("../postgres/migrations/20261101170000_create_ssh_public_key.sql"),
+            ),
+            (
+                "20261101200000_create_inbox_triage.sql",
+                include_str!("../postgres/migrations/20261101200000_create_inbox_triage.sql"),
+            ),
+            (
+                "20261102000000_allow_x_inbox_channel.sql",
+                include_str!("../postgres/migrations/20261102000000_allow_x_inbox_channel.sql"),
+            ),
+            (
+                "20261031090000_extend_identity_systems.sql",
+                include_str!("../postgres/migrations/20261031090000_extend_identity_systems.sql"),
+            ),
+            (
+                "20261101140000_create_notation_machine_state.sql",
+                include_str!("../postgres/migrations/20261101140000_create_notation_machine_state.sql"),
             ),
             (
                 "20261101210000_create_notation_transition.sql",
@@ -1753,6 +1784,24 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_constraint_parses_without_changing_parity_shape() {
+        let ddl = "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
+                   ALTER TABLE brand DROP CONSTRAINT brand_font_licence_check;";
+        let tables = parse_schema(ddl).expect("dropped constraint parses");
+        assert_eq!(tables["brand"].columns.len(), 1);
+        assert!(parse_schema(
+            "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
+             ALTER TABLE absent DROP CONSTRAINT x;"
+        )
+        .is_err());
+        assert!(parse_schema(
+            "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
+             ALTER TABLE brand DROP CONSTRAINT has space;"
+        )
+        .is_err());
+    }
+
+    #[test]
     fn an_added_column_joins_its_table_and_brand_carries_its_website_url() {
         let sql = "CREATE TABLE firm (\n id UUID PRIMARY KEY\n);\n\
                    CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
@@ -1920,6 +1969,19 @@ mod tests {
             render_parity_manifest().expect("manifest serializes"),
             render_parity_manifest().expect("manifest serializes again")
         );
+    }
+
+    #[test]
+    fn confidence_fields_are_numeric_in_both_schema_diagrams() {
+        let source = super::render_surreal_source_erd();
+        let target = super::render_erd().unwrap();
+        for field in ["project_confidence", "privilege_confidence"] {
+            let label = format!("number {field}");
+            let source_numeric = source.contains(&label);
+            let target_numeric = target.contains(&label);
+            assert!(source_numeric && target_numeric,
+                "{field} must be numeric in both diagrams: source={source_numeric}, target={target_numeric}");
+        }
     }
 
     #[test]

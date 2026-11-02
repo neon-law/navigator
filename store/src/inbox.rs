@@ -10,6 +10,7 @@
 //! check for Lawyers/Clerks. A Lawyer approval is not a send. System
 //! acknowledgments only confirm persisted intake.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -20,6 +21,7 @@ use uuid::Uuid;
 
 use crate::access::can_see_project;
 use crate::communications::{self, IngestArgs};
+use crate::external_identities;
 use crate::persons::{self, Role};
 use crate::postgres_mirror::{after_write, MirrorKey};
 use crate::projects::{self, ProjectStoreError};
@@ -44,6 +46,7 @@ pub mod channel {
     /// handles them exactly like any other intake: the message carries the
     /// document as an attachment, and triage assigns it.
     pub const SCRAPER: &str = "scraper";
+    pub const X: &str = "x";
 }
 
 pub mod direction {
@@ -311,6 +314,8 @@ pub enum InboxError {
     Denied,
     #[error("conversation was not found")]
     NotFound,
+    #[error("{0}")]
+    Invalid(String),
     #[error("that project is in another firm")]
     CrossFirm,
     #[error("empty message")]
@@ -783,6 +788,123 @@ pub async fn assign(
     {
         return Err(InboxError::Denied);
     }
+    assign_write(db, actor_id, &conversation, project_id).await
+}
+
+/// The triage review queue's assignment door. Owner may act across Firms;
+/// Admin requires membership in the target Firm. A Lawyer or Clerk requires
+/// participation on the Project the suggestion or correction names.
+///
+/// # Errors
+///
+/// [`InboxError::Denied`] for a Client, an actor outside the Firm, or a
+/// Lawyer/Clerk without active participation on the Project. The other
+/// cases of [`assign`] apply unchanged.
+pub(crate) async fn assign_for_triage_review(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+    project_id: Uuid,
+) -> Result<Assignment, InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    let conversation = conversation_by_id(db, conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    let project = projects::find_by_id(db, project_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if project.firm_id != Some(conversation.firm_id) {
+        return Err(InboxError::CrossFirm);
+    }
+    if !triage_reviewer_may_assign(db, &actor, project_id).await? {
+        return Err(InboxError::Denied);
+    }
+    if matches!(actor.role, Role::Lawyer | Role::Clerk) {
+        if let Some(source_project) = conversation.project_id {
+            if !triage_reviewer_may_assign(db, &actor, source_project).await? {
+                return Err(InboxError::Denied);
+            }
+        }
+    }
+    assign_write(db, actor_id, &conversation, project_id).await
+}
+
+/// Whether the actor may act on a triage row whose human decision assigns
+/// `project_id`. Owner always, Admin within their Firm; a Lawyer or Clerk
+/// passes the participation check the reply doors use; a Client never.
+pub(crate) async fn triage_reviewer_may_assign(
+    db: &SurrealDb,
+    actor: &persons::Person,
+    project_id: Uuid,
+) -> Result<bool, InboxError> {
+    match actor.role {
+        Role::Owner => Ok(true),
+        Role::Admin => {
+            let Some(project) = projects::find_by_id(db, project_id).await? else {
+                return Ok(false);
+            };
+            match project.firm_id {
+                Some(firm_id) => triage_reviewer_may_resolve(db, actor, firm_id).await,
+                None => Ok(false),
+            }
+        }
+        Role::Lawyer | Role::Clerk => sees_project(db, actor.id, actor.role, project_id).await,
+        Role::Client => Ok(false),
+    }
+}
+
+/// Whether the actor may act on a triage row that names no Project —
+/// privilege resolution and re-runs. Owner always; Admin, Lawyer, or
+/// Clerk when they belong to the row's Firm (the same visibility the queue
+/// list grants); a Client never.
+pub(crate) async fn triage_reviewer_may_resolve(
+    db: &SurrealDb,
+    actor: &persons::Person,
+    firm_id: Uuid,
+) -> Result<bool, InboxError> {
+    match actor.role {
+        Role::Owner => Ok(true),
+        Role::Admin | Role::Lawyer | Role::Clerk => {
+            Ok(crate::firms::memberships_for_person(db, actor.id)
+                .await
+                .map_err(|error| InboxError::Db(error.to_string()))?
+                .iter()
+                .any(|membership| membership.firm_id == firm_id))
+        }
+        Role::Client => Ok(false),
+    }
+}
+
+/// Authorization-only door for the triage review actions: denies before any
+/// row or suggestion state is read, so an unauthorized actor learns nothing
+/// from the error it receives.
+///
+/// # Errors
+///
+/// [`InboxError::Denied`] when the actor fails the review authority,
+/// [`InboxError::NotFound`] when the actor does not exist.
+pub(crate) async fn require_triage_reviewer(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<(), InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    if triage_reviewer_may_assign(db, &actor, project_id).await? {
+        Ok(())
+    } else {
+        Err(InboxError::Denied)
+    }
+}
+
+/// The shared write behind both assignment doors: re-point the conversation,
+/// mirror it, rescope any email thread, and record the assignment row.
+async fn assign_write(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    conversation: &Conversation,
+    project_id: Uuid,
+) -> Result<Assignment, InboxError> {
+    let conversation_id = conversation.id;
     let from_project_id = conversation.project_id;
     db.query("UPDATE $id SET project_id = $project, unread = true, updated_at = time::now()")
         .bind(("id", record_id(CONVERSATION, conversation_id)))
@@ -1010,35 +1132,59 @@ pub async fn queue_social_reply(
     Ok(message_id)
 }
 
-/// The people with a recorded phone, read once when any listed conversation
-/// is a text.
-async fn phone_directory(
-    db: &SurrealDb,
-    conversations: &[Conversation],
-) -> Result<Vec<persons::Person>, InboxError> {
-    if conversations
-        .iter()
-        .any(|conversation| conversation.channel == channel::SMS)
-    {
-        Ok(persons::list_with_phone(db).await?)
-    } else {
-        Ok(Vec::new())
+/// The `ExternalSystem` a social channel's sender ids live under.
+fn social_system(channel_name: &str) -> Option<external_identities::ExternalSystem> {
+    match channel_name {
+        channel::FACEBOOK => Some(external_identities::ExternalSystem::Facebook),
+        channel::INSTAGRAM => Some(external_identities::ExternalSystem::Instagram),
+        channel::THREADS => Some(external_identities::ExternalSystem::Threads),
+        channel::YOUTUBE => Some(external_identities::ExternalSystem::Youtube),
+        channel::TIKTOK => Some(external_identities::ExternalSystem::Tiktok),
+        _ => None,
     }
 }
 
-fn contact_for(phones: &[persons::Person], conversation: &Conversation) -> Option<ContactLink> {
-    if conversation.channel != channel::SMS {
-        return None;
+/// Who a conversation's sender is — an address-book lookup, display only.
+/// Email resolves by the address a Person records, SMS by the phone a
+/// Person records, and the social channels through the identity address
+/// book keyed on the provider id the inbound webhook recorded — the same
+/// value `Conversation.external_address` carries.
+///
+/// The resolved [`ContactLink`] grants nothing: it never satisfies a
+/// dispatch, participation, or privilege check — those read the person's
+/// role and participation, never this table.
+///
+/// # Errors
+///
+/// Propagates any database error.
+async fn sender_identity(
+    db: &SurrealDb,
+    conversation: &Conversation,
+) -> Result<Option<ContactLink>, InboxError> {
+    match conversation.channel.as_str() {
+        channel::EMAIL => Ok(
+            persons::find_by_email_ci(db, conversation.external_address.trim())
+                .await?
+                .as_ref()
+                .map(ContactLink::of),
+        ),
+        channel::SMS => Ok(persons::find_by_phone(db, &conversation.external_address)
+            .await?
+            .as_ref()
+            .map(ContactLink::of)),
+        other => match social_system(other) {
+            Some(system) => Ok(external_identities::find_person_by_account(
+                db,
+                system,
+                &conversation.external_address,
+            )
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?
+            .as_ref()
+            .map(ContactLink::of)),
+            None => Ok(None),
+        },
     }
-    phones
-        .iter()
-        .find(|person| {
-            person
-                .phone
-                .as_deref()
-                .is_some_and(|phone| persons::same_phone(phone, &conversation.external_address))
-        })
-        .map(ContactLink::of)
 }
 
 /// Record that this text conversation's number is the direct line of the
@@ -1460,32 +1606,117 @@ pub async fn record_promotional_opt_out(
 ///
 /// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
 pub async fn list_intake(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<IntakeRow>, InboxError> {
+    intake_rows(db, actor_id, None).await
+}
+
+/// The Firm intake list narrowed to one Brand, in the store: the same
+/// Firm-scoped rule as [`list_intake`] decides what the actor may see, and
+/// the Brand narrowing happens beside it so a caller cannot widen the view.
+/// Message bodies are not included.
+///
+/// # Errors
+///
+/// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
+pub async fn list_intake_in_brand(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    brand_key: &str,
+) -> Result<Vec<IntakeRow>, InboxError> {
+    intake_rows(db, actor_id, Some(brand_key)).await
+}
+
+/// The Brand keys across the conversations this actor may see, sorted and
+/// deduplicated — the filter vocabulary an inbox renders. A Brand with no
+/// conversations this actor may see does not appear.
+///
+/// # Errors
+///
+/// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
+pub async fn intake_brands(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<String>, InboxError> {
     let actor = load_person(db, actor_id).await?;
-    let visible_firms = if actor.role == Role::Owner {
-        None
-    } else if matches!(actor.role, Role::Lawyer | Role::Clerk | Role::Admin) {
-        Some(
-            crate::firms::memberships_for_person(db, actor_id)
+    let brands: BTreeSet<String> = visible_conversations(db, &actor, None)
+        .await?
+        .into_iter()
+        .filter_map(|conversation| conversation.brand_key)
+        .collect();
+    Ok(brands.into_iter().collect())
+}
+
+/// The Firms whose inbox conversations this actor may see; `None` for the
+/// Owner, who reads across every Firm. A Client is refused — they read the
+/// matter log, not the inbox.
+async fn visible_firms(
+    db: &SurrealDb,
+    actor: &persons::Person,
+) -> Result<Option<Vec<Uuid>>, InboxError> {
+    if actor.role == Role::Owner {
+        return Ok(None);
+    }
+    if matches!(actor.role, Role::Lawyer | Role::Clerk | Role::Admin) {
+        return Ok(Some(
+            crate::firms::memberships_for_person(db, actor.id)
                 .await
                 .map_err(|error| InboxError::Db(error.to_string()))?
                 .into_iter()
                 .map(|membership| membership.firm_id)
                 .collect::<Vec<_>>(),
-        )
-    } else {
-        return Err(InboxError::Denied);
+        ));
+    }
+    Err(InboxError::Denied)
+}
+
+async fn conversations_in_brand(
+    db: &SurrealDb,
+    brand: Option<&str>,
+) -> Result<Vec<Conversation>, InboxError> {
+    let Some(brand) = brand else {
+        return all_conversations(db).await;
     };
-    let mut conversations = all_conversations(db).await?;
+    let mut response = db
+        .query(format!(
+            "SELECT {CONVERSATION_SELECT} FROM {CONVERSATION} \
+             WHERE brand_key = $brand ORDER BY updated_at DESC"
+        ))
+        .bind(("brand", brand.to_string()))
+        .await?
+        .check()?;
+    let rows: Vec<ConversationRow> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(ConversationRow::into_conversation)
+        .collect())
+}
+
+/// Conversations the actor may see, optionally narrowed to one Brand. The
+/// Firm scope is decided here in the store, and the Brand narrowing happens
+/// beside it, before any row reaches a caller.
+async fn visible_conversations(
+    db: &SurrealDb,
+    actor: &persons::Person,
+    brand: Option<&str>,
+) -> Result<Vec<Conversation>, InboxError> {
+    let visible_firms = visible_firms(db, actor).await?;
+    let mut conversations = conversations_in_brand(db, brand).await?;
     if let Some(firms) = visible_firms {
         conversations.retain(|conversation| firms.contains(&conversation.firm_id));
     }
-    let phones = phone_directory(db, &conversations).await?;
+    Ok(conversations)
+}
+
+async fn intake_rows(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    brand: Option<&str>,
+) -> Result<Vec<IntakeRow>, InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    let conversations = visible_conversations(db, &actor, brand).await?;
     let mut rows = Vec::with_capacity(conversations.len());
     for conversation in conversations {
+        let contact = sender_identity(db, &conversation).await?;
         let delivery_state = latest_outbound_state(db, conversation.id).await?;
         let assignee = assignee_label(db, conversation.project_id).await?;
         rows.push(IntakeRow {
-            contact: contact_for(&phones, &conversation),
+            contact,
             id: conversation.id,
             firm_id: conversation.firm_id,
             brand_key: conversation.brand_key.clone(),
@@ -1811,14 +2042,7 @@ pub async fn intake_detail(
         mark_read(db, conversation.id).await?;
     }
     let delivery_state = latest_outbound_state(db, conversation.id).await?;
-    let contact = if conversation.channel == channel::SMS {
-        persons::find_by_phone(db, &conversation.external_address)
-            .await?
-            .as_ref()
-            .map(ContactLink::of)
-    } else {
-        None
-    };
+    let contact = sender_identity(db, &conversation).await?;
     Ok(IntakeDetail {
         contact,
         projects: projects_in_firm(db, conversation.firm_id).await?,
@@ -1911,12 +2135,12 @@ pub async fn list_project(
         .into_iter()
         .filter_map(ConversationRow::into_conversation)
         .collect();
-    let phones = phone_directory(db, &conversations).await?;
     let mut listed = Vec::new();
     for conversation in conversations {
+        let contact = sender_identity(db, &conversation).await?;
         let delivery_state = latest_outbound_state(db, conversation.id).await?;
         listed.push(IntakeRow {
-            contact: contact_for(&phones, &conversation),
+            contact,
             id: conversation.id,
             firm_id: conversation.firm_id,
             brand_key: conversation.brand_key.clone(),
@@ -2152,7 +2376,7 @@ async fn participant_still_may_reply(
     sees_project(db, person_id, person.role, project_id).await
 }
 
-fn is_social_channel(channel_name: &str) -> bool {
+pub(crate) fn is_social_channel(channel_name: &str) -> bool {
     matches!(
         channel_name,
         channel::FACEBOOK
@@ -2160,6 +2384,7 @@ fn is_social_channel(channel_name: &str) -> bool {
             | channel::THREADS
             | channel::YOUTUBE
             | channel::TIKTOK
+            | channel::X
     )
 }
 
@@ -2523,6 +2748,8 @@ fn spine_channel(channel_name: &str, direction_value: &str) -> &'static str {
         (channel::TIKTOK, _) => communications::channel::TIKTOK_INBOUND,
         (channel::YOUTUBE, direction::OUTBOUND) => communications::channel::YOUTUBE_OUTBOUND,
         (channel::YOUTUBE, _) => communications::channel::YOUTUBE_INBOUND,
+        (channel::X, direction::OUTBOUND) => communications::channel::X_OUTBOUND,
+        (channel::X, _) => communications::channel::X_INBOUND,
         _ => "",
     }
 }
@@ -2704,7 +2931,10 @@ async fn assignee_label(db: &SurrealDb, project_id: Option<Uuid>) -> Result<Stri
         .map_or_else(|| "Unassigned".to_string(), |project| project.name))
 }
 
-async fn projects_in_firm(db: &SurrealDb, firm_id: Uuid) -> Result<Vec<ProjectChoice>, InboxError> {
+pub async fn projects_in_firm(
+    db: &SurrealDb,
+    firm_id: Uuid,
+) -> Result<Vec<ProjectChoice>, InboxError> {
     let mut response = db
         .query("SELECT id, code, name FROM project WHERE firm_id = $firm ORDER BY name")
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
@@ -3896,6 +4126,264 @@ mod tests {
                 && call.account == "+15550100000"
                 && call.to == "+15555550123"
         }));
+    }
+
+    #[tokio::test]
+    async fn brand_scoping_keeps_the_firm_scope_when_narrowing() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let mut branded = inbound(
+            world.firm,
+            channel::EMAIL,
+            "support",
+            "msg-vesta-1",
+            "vesta-sender@example.com",
+        );
+        branded.brand_key = Some("vesta");
+        let firm_vesta = ingest_inbound(&db, &branded).await.unwrap();
+        let mut other_branded = inbound(
+            world.other_firm,
+            channel::EMAIL,
+            "support",
+            "msg-vesta-2",
+            "other-sender@example.com",
+        );
+        other_branded.brand_key = Some("vesta");
+        let other_firm_vesta = ingest_inbound(&db, &other_branded).await.unwrap();
+        let mut firm_neon = inbound(
+            world.firm,
+            channel::EMAIL,
+            "support",
+            "msg-neon-1",
+            "neon-sender@example.com",
+        );
+        firm_neon.brand_key = Some("neon");
+        ingest_inbound(&db, &firm_neon).await.unwrap();
+        let mut firm_other_brand = inbound(
+            world.other_firm,
+            channel::EMAIL,
+            "support",
+            "msg-ob-1",
+            "ob-sender@example.com",
+        );
+        firm_other_brand.brand_key = Some("otherfirm-brand");
+        ingest_inbound(&db, &firm_other_brand).await.unwrap();
+
+        // The Owner reads across Firms: one Brand view carries both Firms'
+        // rows, and the brand vocabulary is everything visible.
+        let scoped = list_intake_in_brand(&db, world.owner, "vesta")
+            .await
+            .unwrap();
+        assert_eq!(scoped.len(), 2);
+        assert!(scoped
+            .iter()
+            .any(|row| row.id == firm_vesta.conversation_id));
+        assert!(scoped
+            .iter()
+            .any(|row| row.id == other_firm_vesta.conversation_id));
+        assert_eq!(
+            intake_brands(&db, world.owner).await.unwrap(),
+            vec![
+                "neon".to_string(),
+                "otherfirm-brand".to_string(),
+                "vesta".to_string()
+            ]
+        );
+
+        // The firm member sees the same Brand narrowed to their Firms, and
+        // never a Brand that only exists in a Firm they cannot see.
+        let scoped = list_intake_in_brand(&db, world.lawyer, "vesta")
+            .await
+            .unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].id, firm_vesta.conversation_id);
+        assert_eq!(scoped[0].firm_id, world.firm);
+        assert_eq!(
+            intake_brands(&db, world.lawyer).await.unwrap(),
+            vec!["neon".to_string(), "vesta".to_string()]
+        );
+
+        // A Client reads the matter log, not the inbox — brand views included.
+        assert!(matches!(
+            list_intake_in_brand(&db, world.client, "vesta")
+                .await
+                .map(|_| ())
+                .unwrap_err(),
+            InboxError::Denied
+        ));
+        assert!(matches!(
+            intake_brands(&db, world.client).await.unwrap_err(),
+            InboxError::Denied
+        ));
+    }
+
+    #[tokio::test]
+    async fn sender_identity_resolves_each_channel_through_its_address_book() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+
+        // Email resolves by the address a Person records.
+        let email = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::EMAIL,
+                "support",
+                "email-id-1",
+                "pat.sender@example.com",
+            ),
+        )
+        .await
+        .unwrap();
+        let pat = person(&db, "Pat Sender", "pat.sender@example.com", Role::Client).await;
+        let rows = list_intake(&db, world.owner).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.id == email.conversation_id)
+            .unwrap();
+        assert_eq!(row.contact.as_ref().map(|c| c.person_id), Some(pat));
+
+        // SMS keeps resolving by the phone a Person records.
+        let text = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::SMS,
+                "account",
+                "sms-id-1",
+                "+15555550123",
+            ),
+        )
+        .await
+        .unwrap();
+        let sam = person(
+            &db,
+            "synthetic contact",
+            "sam.texter@example.com",
+            Role::Client,
+        )
+        .await;
+        link_contact_phone(
+            &db,
+            world.owner,
+            text.conversation_id,
+            "sam.texter@example.com",
+        )
+        .await
+        .unwrap();
+        let rows = list_intake(&db, world.owner).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.id == text.conversation_id)
+            .unwrap();
+        assert_eq!(row.contact.as_ref().map(|c| c.person_id), Some(sam));
+
+        // A social channel resolves through the identity address book keyed
+        // on the provider id the webhook recorded — and until that link
+        // exists, the row shows the bare id, not a guess.
+        let social = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::FACEBOOK,
+                "page-account",
+                "fb-msg-1",
+                "fb-psid-123",
+            ),
+        )
+        .await
+        .unwrap();
+        let rows = list_intake(&db, world.owner).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.id == social.conversation_id)
+            .unwrap();
+        assert_eq!(row.contact, None);
+
+        external_identities::link(
+            &db,
+            pat,
+            external_identities::ExternalSystem::Facebook,
+            "fb-psid-123",
+            Some("Pat on Facebook"),
+        )
+        .await
+        .unwrap();
+
+        let rows = list_intake(&db, world.owner).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.id == social.conversation_id)
+            .unwrap();
+        assert_eq!(row.contact.as_ref().map(|c| c.person_id), Some(pat));
+        assert_eq!(
+            row.contact.as_ref().map(|c| c.role.as_str()),
+            Some("client")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sender_identity_never_satisfies_a_dispatch_or_privilege_check() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let mut incoming = inbound(
+            world.firm,
+            channel::FACEBOOK,
+            "page-account",
+            "fb-msg-9",
+            "fb-psid-9",
+        );
+        incoming.interaction_type = Some("comment");
+        incoming.visibility = Some("public");
+        let saved = ingest_inbound(&db, &incoming).await.unwrap();
+        let sender = person(
+            &db,
+            "synthetic sender",
+            "identity-sender@example.com",
+            Role::Client,
+        )
+        .await;
+
+        // Before the link exists: a Lawyer with no participation on the
+        // conversation cannot queue a social reply.
+        assert!(
+            queue_social_reply(&db, world.lawyer, saved.conversation_id, "Reply", "public")
+                .await
+                .is_err()
+        );
+
+        // The address book learns who the sender is...
+        external_identities::link(
+            &db,
+            sender,
+            external_identities::ExternalSystem::Facebook,
+            "fb-psid-9",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // ...and nothing changes about who may act: the link is display
+        // data, not authority.
+        assert!(
+            queue_social_reply(&db, world.lawyer, saved.conversation_id, "Reply", "public")
+                .await
+                .is_err()
+        );
+        assert!(
+            queue_social_reply(&db, world.owner, saved.conversation_id, "Reply", "public")
+                .await
+                .is_ok()
+        );
+
+        // The privilege rule layer never consults the address book either:
+        // the social channel's structural rule stands with the identity
+        // present, and no classifier is admitted for it.
+        assert_eq!(
+            crate::inbox_triage::privilege_label(channel::FACEBOOK, true, None),
+            crate::inbox_triage::PrivilegeLabel::NotPrivileged
+        );
+        assert!(!crate::inbox_triage::classifier_may_run(channel::FACEBOOK));
     }
 
     #[tokio::test]

@@ -209,6 +209,7 @@ pub mod visitor_analytics;
 pub mod webhook_auth;
 pub mod welcome;
 pub mod workshops;
+pub mod x_activity;
 
 pub use oauth::{AuthState as OAuthState, OAuthConfig};
 pub use session::{SessionData, SessionSource, SessionStore};
@@ -718,6 +719,7 @@ fn public_ingress_routes() -> Router<AppState> {
         .route("/assets/{*key}", get(public_asset))
         .merge(social_webhooks::routes())
         .merge(tiktok_comments::routes())
+        .merge(x_activity::routes())
         .merge(journal_webhooks::routes())
         .merge(social_oauth::public_routes())
         .route(
@@ -1048,6 +1050,12 @@ pub fn bootstrap_with_forgejo_oidc(
         state.surreal.clone(),
     );
     let dioxus_owner_inbox = dioxus_app::owner_inbox_router(
+        state.sessions.clone(),
+        state.policy.clone(),
+        state.auth.clone(),
+        state.surreal.clone(),
+    );
+    let dioxus_triage_queue = dioxus_app::triage_queue_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -2051,6 +2059,7 @@ pub fn bootstrap_with_forgejo_oidc(
         dioxus_app_owner,
         dioxus_deployment_keys,
         dioxus_owner_inbox,
+        dioxus_triage_queue,
         dioxus_owner_inbox_thread,
         dioxus_project_inbox,
         dioxus_project_inbox_thread,

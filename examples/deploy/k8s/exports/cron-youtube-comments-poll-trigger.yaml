@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: youtube-comments-poll-trigger
+  namespace: navigator
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: youtube-comments-poll-trigger
+              image: YOUR_IMAGE_REGISTRY/navigator-youtube-comments-poll-trigger:YY.M.D
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: RESTATE_INGRESS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: RESTATE_INGRESS_URL
+                      optional: true
+                - name: RESTATE_AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: RESTATE_AUTH_TOKEN
+                      optional: true
