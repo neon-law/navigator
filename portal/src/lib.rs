@@ -6,7 +6,7 @@
 // The OpenAPI document in `openapi.rs` is one large `serde_json::json!`
 // literal; each documented path/schema nests it deeper, so the default 128
 // recursion limit cannot expand it. Raise the ceiling for the whole crate.
-#![recursion_limit = "512"]
+#![recursion_limit = "1024"]
 //! Neon Law Navigator web server library.
 //!
 //! Exposes [`bootstrap`] so a brand binary and the integration tests that
