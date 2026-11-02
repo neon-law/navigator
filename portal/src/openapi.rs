@@ -169,9 +169,7 @@ fn upload_session_errors() -> Value {
 
 fn add_upload_session_operations(document: &mut Value) {
     let base = "/app/api/projects/{id}/documents/upload-session";
-    let session_path = format!("{base}/{{session_id}}");
     let project_parameter = json!({"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}});
-    let parameters = json!([project_parameter, {"name": "session_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}]);
     let status = json!({"description": "Acknowledged upload progress", "content": {"application/json": {"schema": upload_session_schema()}}});
     let mut responses = upload_session_errors();
     responses["200"] = status.clone();
@@ -183,46 +181,8 @@ fn add_upload_session_operations(document: &mut Value) {
         "parameters": [project_parameter], "requestBody": {"required": true, "content": {"application/json": {"schema": upload_session_request(document)}}},
         "responses": responses
     }});
-    let mut responses = upload_session_errors();
-    responses["200"] = status.clone();
-    document["paths"][&session_path] = json!({"get": {
-        "operationId": "getDocumentUploadSession", "summary": "Read the acknowledged upload offset",
-        "parameters": parameters, "responses": responses
-    }});
-    let pointer =
-        document["paths"]["/app/api/projects/{id}/documents"]["post"]["responses"]["201"].clone();
-    for (suffix, operation_id, summary) in [
-        (
-            "chunk",
-            "appendDocumentUploadChunk",
-            "Append one chunk at its declared offset",
-        ),
-        (
-            "complete",
-            "completeDocumentUpload",
-            "Verify the digest and file the document",
-        ),
-    ] {
-        let mut responses = upload_session_errors();
-        responses["410"] =
-            json!({"description": "The upload session expired; start a new session"});
-        responses["409"] = json!({"description": "Wrong chunk offset or size, or incomplete upload; read session progress before resuming"});
-        let mut operation = json!({"operationId": operation_id, "summary": summary, "parameters": parameters, "responses": responses});
-        if suffix == "chunk" {
-            operation["requestBody"] = json!({"required": true, "content": {"application/json": {"schema": {
-                "type": "object", "required": ["offset", "content_base64"], "properties": {
-                    "offset": {"type": "integer", "minimum": 0, "description": "The session's acknowledged received_bytes"},
-                    "content_base64": {"type": "string", "description": "Exactly one server-sized chunk, or the final remainder, encoded as base64"}
-                }
-            }}}});
-            operation["responses"]["200"] = status.clone();
-        } else {
-            operation["responses"]["200"] = pointer.clone();
-            operation["responses"]["201"] = pointer.clone();
-            operation["responses"]["422"] = json!({"description": "Digest mismatch; the session and staged parts were removed"});
-        }
-        document["paths"][format!("{session_path}/{suffix}")] = json!({"post": operation});
-    }
+    document["paths"][base]["post"]["responses"]["413"] =
+        json!({"description": "The declared upload exceeds the streaming limit"});
 }
 
 /// The three read-only relationship-graph doors (`portal/src/api.rs`
