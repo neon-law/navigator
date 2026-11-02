@@ -7945,6 +7945,7 @@ mod tests {
                 "www.aegiscriminaldefense.com",
                 "www.groundworkrealestatelaw.com",
                 "www.guiebandshook.com",
+                "www.iepdefenders.com",
             ],
             "a production public host pulls in every other registered brand's production host — \
              ENG-808: the full registry, not only the launched ones"
@@ -7965,8 +7966,14 @@ mod tests {
                 "staging.aegiscriminaldefense.com",
                 "staging.groundworkrealestatelaw.com",
                 "staging.guiebandshook.com",
+                "staging.iepdefenders.com",
             ],
             "a staging public host pulls in only the other brands' staging hosts"
+        );
+        assert!(!views::brand::BrandKey::IepDefenders.is_live());
+        assert!(
+            views::brand::admitted_brand_key("www.iepdefenders.com").is_none(),
+            "release TLS readiness does not admit a held-out public route"
         );
     }
 

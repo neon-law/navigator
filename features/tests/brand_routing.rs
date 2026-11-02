@@ -189,6 +189,207 @@ async fn body_does_not_contain(world: &mut BrandWorld, needle: String) {
     );
 }
 
+// --- Footer: the three-line legal strip ---------------------------------
+
+#[then(regex = r#"^the footer copyright names "(.+)"$"#)]
+async fn footer_copyright_names(world: &mut BrandWorld, entity: String) {
+    let body = &world.last_body;
+    let start = body
+        .find("site-footer__copyright")
+        .expect("the page renders the footer's copyright line");
+    let paragraph = &body[start..];
+    let end = paragraph
+        .find("</p>")
+        .expect("the copyright paragraph closes");
+    let paragraph = &paragraph[..end];
+    assert!(
+        html_forms(&entity)
+            .iter()
+            .any(|form| paragraph.contains(form.as_str())),
+        "the footer copyright names {entity:?}: {paragraph}",
+    );
+}
+
+#[then("the footer renders the attorney-advertising disclaimer")]
+async fn footer_renders_disclaimer(world: &mut BrandWorld) {
+    assert!(
+        world.last_body.contains("site-footer__disclaimer"),
+        "the footer renders the disclaimer line: {}",
+        world.last_body,
+    );
+}
+
+/// The shared footer renders an independent ownership disclosure instead of
+/// the generic trademark line when its registrant differs from the operator.
+fn footer_trademark_notice(body: &str) -> Option<String> {
+    for class in ["site-footer__trademark", "site-footer__ownership"] {
+        let Some((_, paragraph)) = body.split_once(&format!("class=\"{class}\"")) else {
+            continue;
+        };
+        let Some((_, inner)) = paragraph.split_once('>') else {
+            continue;
+        };
+        let Some((inner, _)) = inner.split_once("</p>") else {
+            continue;
+        };
+        let mut in_tag = false;
+        let text: String = inner
+            .chars()
+            .filter(|character| match *character {
+                '<' => {
+                    in_tag = true;
+                    false
+                }
+                '>' => {
+                    in_tag = false;
+                    false
+                }
+                _ => !in_tag,
+            })
+            .collect();
+        let text = text
+            .replace("&amp;", "&")
+            .replace("&#38;", "&")
+            .replace("&#x26;", "&");
+        if text.contains("trademark") || text.contains("common-law mark") {
+            return Some(text);
+        }
+    }
+    None
+}
+
+#[then(regex = r"^the footer renders the trademark notice: (yes|no)$")]
+async fn footer_renders_trademark(world: &mut BrandWorld, renders: String) {
+    let present = footer_trademark_notice(&world.last_body).is_some();
+    assert_eq!(
+        present,
+        renders == "yes",
+        "trademark notice presence mismatch (expected {renders})",
+    );
+}
+
+#[then(regex = r#"^the footer trademark owner remains "([^"]+)" and is not "([^"]+)"$"#)]
+async fn footer_keeps_trademark_owner(world: &mut BrandWorld, owner: String, operator: String) {
+    let notice =
+        footer_trademark_notice(&world.last_body).expect("visible trademark ownership notice");
+    assert!(
+        notice.contains(&format!("trademark of {owner}"))
+            || notice.contains(&format!("mark of {owner}")),
+        "original owner missing: {notice}"
+    );
+    assert!(
+        !notice.contains(&format!("trademark of {operator}"))
+            && !notice.contains(&format!("mark of {operator}")),
+        "operator falsely became trademark owner: {notice}"
+    );
+}
+
+#[given(regex = r#"^the brand "([^"]+)" is moved to a firm whose entity is "([^"]+)"$"#)]
+async fn move_brand_to_firm(_world: &mut BrandWorld, brand_key: String, entity_name: String) {
+    let surreal = features::shared_surreal().await;
+
+    // Two firms and one brand: the brand starts wearing the first firm
+    // and the Owner moves it to the second, whose entity no compiled
+    // fallback names.
+    let admin = store::test_support::ensure_person(
+        &surreal,
+        &store::persons::NewPerson::with_role(
+            "Mobility Firm Admin",
+            "mobility-firm-admin@example.com",
+            store::persons::Role::Admin,
+        ),
+    )
+    .await;
+    let new_entity = store::entities::create(
+        &surreal,
+        &store::entities::NewEntity {
+            name: entity_name.clone(),
+            entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
+            jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
+            phone: None,
+            url: None,
+            xero_id: None,
+            firm_anchor_key: None,
+        },
+    )
+    .await
+    .expect("the moved-to firm's entity creates");
+    let prior_entity = store::entities::create(
+        &surreal,
+        &store::entities::NewEntity {
+            name: "Prior Holder PC".to_string(),
+            entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
+            jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
+            phone: None,
+            url: None,
+            xero_id: None,
+            firm_anchor_key: None,
+        },
+    )
+    .await
+    .expect("the prior firm's entity creates");
+    let prior = store::firms::create(
+        &surreal,
+        &store::firms::NewFirm {
+            name: "Prior Holder (firm)".to_string(),
+            status: "active".to_string(),
+            entity_id: prior_entity.id,
+            admin_dri_person_id: admin.id,
+        },
+    )
+    .await
+    .expect("the prior firm creates");
+    let target = store::firms::create(
+        &surreal,
+        &store::firms::NewFirm {
+            name: format!("{entity_name} (firm)"),
+            status: "active".to_string(),
+            entity_id: new_entity.id,
+            admin_dri_person_id: admin.id,
+        },
+    )
+    .await
+    .expect("the moved-to firm creates");
+
+    // The brand row must exist before it can wear a firm. The shared store
+    // may already hold the key — the site seed upserts every house brand —
+    // so the create runs only for a brand it has never seen, wearing the
+    // prior firm. That create needs the firm's own Admin DRI, which `admin`
+    // is. Either way the Owner's move below re-points the brand to the
+    // target firm, which is the part the footer must follow.
+    if store::brands::find_by_key(&surreal, &brand_key)
+        .await
+        .expect("the brand row is readable")
+        .is_none()
+    {
+        store::brands::create(
+            &surreal,
+            store::persons::Role::Admin,
+            Some(admin.id),
+            &store::brands::NewBrand {
+                name: "Mobility Test Brand".to_string(),
+                key: brand_key.clone(),
+                firm_id: Some(prior.id),
+                primary_color: None,
+                accent_color: None,
+                typeface: None,
+            },
+        )
+        .await
+        .expect("the brand row creates wearing the prior firm");
+    }
+
+    store::firms::move_brand(
+        &surreal,
+        store::persons::Role::Owner,
+        None,
+        &brand_key,
+        target.id,
+    )
+    .await
+    .expect("the Owner's move succeeds");
+}
+
 #[tokio::main]
 async fn main() {
     BrandWorld::cucumber()

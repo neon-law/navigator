@@ -19,6 +19,11 @@ records:
     jurisdiction:
       name: Nevada
       jurisdiction_type: state
+  # A published LLC form does not establish how many members it has.
+  - name: Limited Liability Company
+    jurisdiction:
+      name: Nevada
+      jurisdiction_type: state
   - name: Single Member LLC
     jurisdiction:
       name: Nevada

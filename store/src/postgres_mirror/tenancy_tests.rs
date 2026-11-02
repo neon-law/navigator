@@ -177,7 +177,7 @@ async fn firm_brand_project_and_membership_rows_converge_through_their_lifecycle
             .await
             .unwrap();
     assert_eq!(website.as_deref(), Some("https://example.test"));
-    crate::firms::attach_brand(&surreal, firm.id, BRAND)
+    crate::firms::attach_brand(&surreal, crate::persons::Role::Owner, None, firm.id, BRAND)
         .await
         .unwrap();
     let worn = MirrorKey::FirmBrand {

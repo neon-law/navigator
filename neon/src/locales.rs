@@ -86,6 +86,8 @@ const LAWYER_SHOOK_HOME_YAML: &str = include_str!("../locales/en/lawyer-shook/ho
 const VESTA_SERVICES_YAML: &str = include_str!("../locales/en/vesta/services.yaml");
 const MISERICORDIA_HOME_YAML: &str = include_str!("../locales/en/misericordia/home.yaml");
 const MISERICORDIA_SERVICES_YAML: &str = include_str!("../locales/en/misericordia/services.yaml");
+const IEP_DEFENDERS_HOME_YAML: &str = include_str!("../locales/en/iep-defenders/home.yaml");
+const IEP_DEFENDERS_SERVICES_YAML: &str = include_str!("../locales/en/iep-defenders/services.yaml");
 const ABHAYA_HOME_YAML: &str = include_str!("../locales/en/abhaya/home.yaml");
 const ABHAYA_SERVICES_YAML: &str = include_str!("../locales/en/abhaya/services.yaml");
 const ABHAYA_SERVICES_CATALOG_YAML: &str =
@@ -198,6 +200,8 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Daybridge, "services") => Some(DAYBRIDGE_SERVICES_YAML),
         (BrandKey::DeathAndDivorce, "home") => Some(DEATH_AND_DIVORCE_HOME_YAML),
         (BrandKey::DeathAndDivorce, "services") => Some(DEATH_AND_DIVORCE_SERVICES_YAML),
+        (BrandKey::IepDefenders, "home") => Some(IEP_DEFENDERS_HOME_YAML),
+        (BrandKey::IepDefenders, "services") => Some(IEP_DEFENDERS_SERVICES_YAML),
         (BrandKey::Neon, "litigation") => Some(NEON_LITIGATION_YAML),
         (BrandKey::Neon, "fractional-gc") => Some(NEON_FRACTIONAL_GC_YAML),
         (BrandKey::Neon, "notations") => Some(NEON_NOTATIONS_YAML),
@@ -1817,7 +1821,7 @@ mod tests {
         // Neon Law's own site needs no Neon Law card, and the Lawyer Shook
         // and Guieb & Shook holding pages are firm marks, not services, so
         // neither is listed.
-        let brands: Vec<BrandKey> = BrandKey::ALL
+        let brands: Vec<BrandKey> = BrandKey::LIVE
             .iter()
             .copied()
             .filter(|key| {
@@ -1827,6 +1831,10 @@ mod tests {
                 )
             })
             .collect();
+        assert!(
+            !brands.contains(&BrandKey::IepDefenders),
+            "held-out brands are not public directory entries"
+        );
         assert_eq!(cards.len(), brands.len());
         for key in brands {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
@@ -3576,8 +3584,12 @@ mod tests {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             assert_eq!(
                 branding.firm.legal_entity,
-                "Guieb & Shook PC",
-                "{} names the firm",
+                if *key == views::brand::BrandKey::IepDefenders {
+                    "Lex Tecnica, Ltd."
+                } else {
+                    "Guieb & Shook PC"
+                },
+                "{} names its own firm",
                 key.as_str()
             );
             assert_ne!(

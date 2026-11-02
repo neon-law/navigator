@@ -1195,9 +1195,15 @@ mod tests {
         .unwrap();
 
         let brand_id = historical_orphan_brand(&db, "worn-orphan").await;
-        crate::firms::attach_brand(&db, firm.id, "worn-orphan")
-            .await
-            .unwrap();
+        crate::firms::attach_brand(
+            &db,
+            crate::persons::Role::Owner,
+            None,
+            firm.id,
+            "worn-orphan",
+        )
+        .await
+        .unwrap();
 
         // Re-apply, exactly as a boot would against an already-seeded
         // database: this is what runs the backfill now that the historical
@@ -1404,9 +1410,15 @@ mod tests {
 
         let brand_key = "project-firm-backfill";
         historical_orphan_brand(&db, brand_key).await;
-        crate::firms::attach_brand(&db, other_firm_id, brand_key)
-            .await
-            .unwrap();
+        crate::firms::attach_brand(
+            &db,
+            crate::persons::Role::Owner,
+            None,
+            other_firm_id,
+            brand_key,
+        )
+        .await
+        .unwrap();
         let fallback_brand = "project-firm-backfill-fallback";
         historical_orphan_brand(&db, fallback_brand).await;
         let unowned = crate::projects::create(

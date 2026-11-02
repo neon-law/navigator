@@ -87,6 +87,12 @@ const COMPILED_SITES: &[CompiledSite] = &[
         www: "www.guiebandshook.com",
         live: true,
     },
+    // Registered for isolated staging; public launch remains held back.
+    CompiledSite {
+        key: "iep-defenders",
+        www: "www.iepdefenders.com",
+        live: false,
+    },
 ];
 
 /// One brand key as `/app` listings should print it.

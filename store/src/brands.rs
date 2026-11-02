@@ -34,7 +34,7 @@ use crate::persons::Role;
 use crate::postgres_mirror::MirrorKey;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
-const TABLE: &str = "brand";
+pub(crate) const TABLE: &str = "brand";
 const FIRM_TABLE: &str = "firm";
 const PROJECT_TABLE: &str = "project";
 const FIRM_BRAND_TABLE: &str = "firm_brand";
@@ -539,18 +539,11 @@ async fn create_unchecked(surreal: &SurrealDb, input: &NewBrand) -> Result<Brand
         .ok_or(BrandError::WriteReturnedNothing)
 }
 
-/// System/seed-only: create `input`, or, if its name or key already exists,
-/// re-anchor its `firm_id` onto `input.firm_id` and refresh its `typeface`
-/// and `primary_color` — with no authorization check (ENG-659). This is the
-/// boot seed's own migration of each compiled house brand into a `brand` row
-/// scoped to the resolved practice Firm (`store::seed::seed_brands`); it must
-/// succeed even against a test engine where an unrelated fixture Firm
-/// already registered the same compiled keys
-/// (`store::surreal::test_support::mem`), which the authorized [`create`]/
-/// [`update`] pair would correctly refuse — this path is why the boot seed
-/// does not need to be that caller. Every human- or API-driven path still
-/// goes through the authorized [`create`]/[`update`], which never lets
-/// `firm_id` move.
+/// System/seed-only: create a compiled Brand or refresh its presentation.
+/// An existing Firm Brand seat controls ownership; only an unseated legacy
+/// or fixture row acquires `input.firm_id`. Repeated boots preserve Owner
+/// moves and an existing website URL. Human and API writes use the authorized
+/// [`create`]/[`update`] paths, which never let `firm_id` move.
 pub(crate) async fn seed_upsert(
     surreal: &SurrealDb,
     input: &NewBrand,
@@ -571,26 +564,22 @@ pub(crate) async fn seed_upsert(
             let existing = find_by_key(surreal, &input.key)
                 .await?
                 .ok_or_else(|| BrandError::NoSuchBrand(Uuid::nil()))?;
-            // Re-anchor a stale `firm_id` onto the resolved practice Firm.
-            // `update` never lets a caller move this field (ENG-659's whole
-            // point), but a compiled brand's own re-seed is the one place
-            // that must: a database prepared before this boot's practice
-            // Firm existed — a test fixture's own throwaway id
-            // (`store::surreal::test_support::mem`) is the only case this
-            // reaches in practice — otherwise carries this row under a
-            // Firm id nothing in this boot can resolve. Every production
-            // boot's row already carries the same id, so this is a no-op
-            // restatement there.
+            // Existing seats are Owner-controlled runtime state. Read the seat and
+            // refresh its owner in one retrying transaction so a concurrent move
+            // cannot be overwritten by a stale seed read. Unseated fixture rows
+            // still acquire the resolved compiled Firm.
             if let Some(firm_id) = input.firm_id {
-                if existing.firm_id != Some(firm_id) {
-                    writing(|| {
-                        surreal
-                            .query("UPDATE $id SET firm_id = $firm_id")
-                            .bind(("id", record_id(TABLE, existing.id)))
-                            .bind(("firm_id", record_id(FIRM_TABLE, firm_id)))
-                    })
-                    .await?;
-                }
+                writing(|| {
+                    surreal.query(
+                        "BEGIN TRANSACTION; \
+                         LET $seated_firm = (SELECT VALUE firm_id FROM firm_brand WHERE brand_key = $brand_key LIMIT 1)[0]; \
+                         UPDATE $id SET firm_id = $seated_firm ?? $firm_id; \
+                         COMMIT TRANSACTION;"
+                    )
+                    .bind(("id", record_id(TABLE, existing.id)))
+                    .bind(("brand_key", input.key.clone()))
+                    .bind(("firm_id", record_id(FIRM_TABLE, firm_id)))
+                }).await?;
             }
             update_unchecked(
                 surreal,
@@ -1845,9 +1834,15 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::firms::attach_brand(&db, firm.id, "worn-brand")
-            .await
-            .unwrap();
+        crate::firms::attach_brand(
+            &db,
+            crate::persons::Role::Owner,
+            None,
+            firm.id,
+            "worn-brand",
+        )
+        .await
+        .unwrap();
         let err = delete(&db, Role::Owner, None, worn.id).await.unwrap_err();
         assert!(matches!(err, BrandError::StillReferenced));
 

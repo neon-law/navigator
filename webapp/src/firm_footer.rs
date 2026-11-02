@@ -35,11 +35,23 @@ pub struct FirmFooterBrand {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct FirmFooterModel {
     pub legal_entity: String,
+    /// Server-proven canonical Entity may retain the compiled operator facts.
+    #[serde(default)]
+    pub compiled_identity_allowed: bool,
     /// Every brand the Firm wears, in registry order with the current one
     /// flagged. Not rendered by [`FirmFooter`]; kept for
-    /// `inject_public_utility`'s public-chrome override. See the module docs.
+    /// `inject_public_utility`'s public-chrome overlay seam. See the module docs.
     pub brands: Vec<FirmFooterBrand>,
     pub copyright_year: i32,
+    /// The resolved Firm's own home — the production home of the firm's own
+    /// brand when the Firm wears it. The public footer links the copyright's
+    /// legal-entity name here. Empty when the Firm wears no compiled firm
+    /// brand (a firm with no site of its own yet): its name then renders
+    /// unlinked rather than linking another firm's site. The compiled
+    /// fallback resolves to the compiled firm brand's production home, which
+    /// is also what a fresh deployment (no `firm` rows) renders.
+    #[serde(default)]
+    pub firm_home_href: String,
 }
 
 /// The `/app` footer: one centered copyright line naming the resolved Firm's
@@ -95,9 +107,27 @@ pub fn render_firm_footer(model: FirmFooterModel) -> String {
 /// cannot disagree about who is in the family before a Firm row overrides
 /// both.
 #[cfg(feature = "server")]
+fn compiled_site_brand(current: views::brand::BrandKey) -> &'static views::brand::SiteBrand {
+    if current == views::brand::brand_key() {
+        &views::brand::FIRM_BRAND
+    } else {
+        &current
+            .resolve_branding(&views::brand::DEFAULT_BRANDING)
+            .firm
+    }
+}
+
+#[cfg(feature = "server")]
 #[must_use]
 pub fn compiled_family_brands(current: views::brand::BrandKey) -> Vec<FirmFooterBrand> {
-    views::brand::firm_family()
+    let family = if current == views::brand::brand_key() {
+        views::brand::firm_family()
+    } else {
+        current
+            .resolve_branding(&views::brand::DEFAULT_BRANDING)
+            .firm_family
+    };
+    family
         .iter()
         // "Our Family" is a set of links, so it lists only brands a reader
         // can actually reach — the launch gate's set, the same one
@@ -152,27 +182,28 @@ pub fn compiled_firm_footer_model(
     current: views::brand::BrandKey,
     copyright_year: i32,
 ) -> FirmFooterModel {
-    let branding = current.resolve_branding(&views::brand::DEFAULT_BRANDING);
+    let brand = compiled_site_brand(current);
     let mut brands = compiled_family_brands(current);
     // A firm with no compiled family (a renamed white-label bundle) still
     // names its one brand, so the model is never empty of identity.
     if brands.is_empty() {
         brands.push(FirmFooterBrand {
-            label: compiled_footer_label(current),
+            label: brand.site_name.to_string(),
             href: String::new(),
             current: true,
-            logo_href: current
-                .resolve_branding(&views::brand::DEFAULT_BRANDING)
-                .firm
-                .logo_href
-                .to_string(),
+            logo_href: brand.logo_href.to_string(),
             byline: current.family_byline().to_string(),
         });
     }
     FirmFooterModel {
-        legal_entity: branding.firm.legal_entity.to_string(),
+        legal_entity: brand.legal_entity.to_string(),
+        compiled_identity_allowed: true,
         brands,
         copyright_year,
+        // The compiled firm brand's production home: the same door the
+        // practice footer's copyright has always linked, now single-sourced
+        // from the brand registry instead of a literal in the mapping.
+        firm_home_href: views::brand::BrandKey::GuiebShook.public_home_href(),
     }
 }
 
@@ -266,10 +297,33 @@ pub async fn resolve_firm_footer_model(
         return fallback();
     }
 
+    // The resolved Firm's home: the production home of the firm's own brand
+    // when the Firm wears it. A Firm with no compiled firm brand publishes
+    // no home yet — its entity name then renders unlinked on the public pages
+    // rather than linked to some other firm's site.
+    let firm_home_href = if keys
+        .iter()
+        .any(|key| key == views::brand::BrandKey::GuiebShook.as_str())
+    {
+        views::brand::BrandKey::GuiebShook.public_home_href()
+    } else {
+        String::new()
+    };
+
+    let compiled_identity_allowed = entity.firm_anchor_key.as_deref()
+        == Some(
+            compiled_site_brand(current)
+                .legal_entity
+                .trim()
+                .to_lowercase()
+                .as_str(),
+        );
     FirmFooterModel {
+        compiled_identity_allowed,
         legal_entity: entity.name,
         brands,
         copyright_year,
+        firm_home_href,
     }
 }
 
@@ -286,8 +340,10 @@ mod tests {
     fn model(brands: Vec<FirmFooterBrand>) -> FirmFooterModel {
         FirmFooterModel {
             legal_entity: "Guieb & Shook PC".to_string(),
+            compiled_identity_allowed: true,
             brands,
             copyright_year: 2026,
+            firm_home_href: "https://www.guiebandshook.com".to_string(),
         }
     }
 
@@ -420,6 +476,11 @@ mod tests {
         assert_eq!(model.brands[9].href, "https://www.deathanddivorcelaw.com");
         assert_eq!(model.brands[10].href, "https://www.cyberinjurylaw.com");
         assert_eq!(model.legal_entity, "Guieb & Shook PC");
+        assert_eq!(
+            model.firm_home_href,
+            views::brand::BrandKey::GuiebShook.public_home_href(),
+            "the compiled fallback resolves the compiled firm brand's production home"
+        );
     }
 
     #[cfg(feature = "server")]
@@ -476,19 +537,106 @@ mod tests {
         )
         .await
         .unwrap();
-        store::firms::attach_brand(&surreal, firm.id, "neon")
+        store::firms::attach_brand(&surreal, store::persons::Role::Owner, None, firm.id, "neon")
             .await
             .unwrap();
-        store::firms::attach_brand(&surreal, firm.id, "delete-your-data")
-            .await
-            .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm.id,
+            "delete-your-data",
+        )
+        .await
+        .unwrap();
 
         let model = resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
+        assert!(
+            !model.compiled_identity_allowed,
+            "a namesake Entity without the canonical anchor cannot inherit facts"
+        );
+        store::entities::set_firm_anchor_key(
+            &surreal,
+            entity.id,
+            Some(views::brand::FIRM_BRAND.legal_entity.trim().to_lowercase()),
+        )
+        .await
+        .unwrap();
+        let canonical =
+            resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
+        assert!(canonical.compiled_identity_allowed);
 
         assert_eq!(model.legal_entity, "Guieb & Shook PC");
         assert_eq!(model.brands.len(), 2);
         assert!(model.brands[0].current);
         assert_eq!(model.brands[0].label, "Neon Law");
+        // The firm wears `neon` but not its own compiled firm brand
+        // (`guieb-shook`): it publishes no home, so the public footer's
+        // copyright renders unlinked rather than linked to some other
+        // firm's site.
+        assert_eq!(model.firm_home_href, "");
+    }
+
+    /// ENG-589, continued: a Firm wearing the compiled firm brand resolves
+    /// that brand's production home as the Firm's own — the live answer to
+    /// "whose site is this" that the public footer's copyright links.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn the_firm_wearing_its_own_brand_resolves_a_home() {
+        let surreal = store::surreal::test_support::mem().await;
+        let entity = store::entities::create(
+            &surreal,
+            &store::entities::NewEntity {
+                name: "Guieb & Shook PC".to_string(),
+                entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
+                jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
+                phone: None,
+                url: None,
+                xero_id: None,
+                firm_anchor_key: None,
+            },
+        )
+        .await
+        .unwrap();
+        let firm = store::firms::create(
+            &surreal,
+            &store::firms::NewFirm {
+                name: "Guieb & Shook".to_string(),
+                status: "active".to_string(),
+                entity_id: entity.id,
+                admin_dri_person_id: store::test_support::ensure_person(
+                    &surreal,
+                    &store::persons::NewPerson::with_role(
+                        "Firm Admin",
+                        "firm-home-admin@example.com",
+                        store::persons::Role::Admin,
+                    ),
+                )
+                .await
+                .id,
+            },
+        )
+        .await
+        .unwrap();
+        store::firms::attach_brand(&surreal, store::persons::Role::Owner, None, firm.id, "neon")
+            .await
+            .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm.id,
+            "guieb-shook",
+        )
+        .await
+        .unwrap();
+
+        let model = resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
+
+        assert_eq!(
+            model.firm_home_href,
+            views::brand::BrandKey::GuiebShook.public_home_href()
+        );
     }
 
     /// A second Firm wearing a runtime-created brand (never one of the compiled
@@ -536,9 +684,15 @@ mod tests {
         )
         .await
         .unwrap();
-        store::firms::attach_brand(&surreal, firm_a.id, "neon")
-            .await
-            .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm_a.id,
+            "neon",
+        )
+        .await
+        .unwrap();
 
         // The second Firm, wearing the reachable compiled key plus a
         // runtime-created one with no dedicated host yet.
@@ -589,12 +743,24 @@ mod tests {
         )
         .await
         .unwrap();
-        store::firms::attach_brand(&surreal, firm_b.id, "lawyer-shook")
-            .await
-            .unwrap();
-        store::firms::attach_brand(&surreal, firm_b.id, "acme-runtime-brand")
-            .await
-            .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm_b.id,
+            "lawyer-shook",
+        )
+        .await
+        .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm_b.id,
+            "acme-runtime-brand",
+        )
+        .await
+        .unwrap();
 
         let model =
             resolve_firm_footer_model(&surreal, views::brand::BrandKey::LawyerShook, 2026).await;
@@ -755,5 +921,30 @@ mod tests {
                 key.as_str(),
             );
         }
+    }
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn scoped_fallback_preserves_custom_identity_and_explicit_other_brand() {
+        let mut custom = views::brand::DEFAULT_BRANDING;
+        custom.firm.legal_entity = "Synthetic Custom Entity LLC";
+        custom.firm.site_name = "Synthetic Custom Practice";
+        custom.firm.logo_href = "/synthetic-custom-logo.svg";
+        custom.firm_family = &[];
+        let custom = Box::leak(Box::new(custom));
+        views::brand::scope(custom, async {
+            let model = compiled_firm_footer_model(views::brand::BrandKey::Neon, 2026);
+            assert_eq!(model.legal_entity, "Synthetic Custom Entity LLC");
+            assert_eq!(model.brands.len(), 1);
+            assert_eq!(model.brands[0].label, "Synthetic Custom Practice");
+            assert_eq!(model.brands[0].logo_href, "/synthetic-custom-logo.svg");
+            let other = compiled_firm_footer_model(views::brand::BrandKey::IepDefenders, 2026);
+            assert_eq!(other.legal_entity, "Lex Tecnica, Ltd.");
+            assert_eq!(other.brands.len(), 1);
+            assert!(other.brands[0].current);
+            assert_ne!(other.brands[0].label, "Synthetic Custom Practice");
+        })
+        .await;
+        let other = compiled_firm_footer_model(views::brand::BrandKey::IepDefenders, 2026);
+        assert_eq!(other.legal_entity, "Lex Tecnica, Ltd.");
     }
 }

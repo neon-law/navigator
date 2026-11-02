@@ -162,15 +162,17 @@ impl From<EntityError> for EntityCommandError {
 }
 
 /// Whether `entity_name` is a firm anchor that application users may not
-/// delete or rename. The canonical seed's row always qualifies: a
+/// delete or rename. The canonical seed's firm rows always qualify: a
 /// `NAVIGATOR_BOOTSTRAP_COMPANY` naming a row that does not exist — a
 /// white-label operator's own firm before it is created, or a typo — must
-/// not leave the seeded firm deletable.
+/// not leave a seeded firm deletable.
 #[must_use]
 pub fn is_firm_anchor(configured: &str, entity_name: &str) -> bool {
     let name = entity_name.trim();
     configured.trim().eq_ignore_ascii_case(name)
-        || crate::seed::FIRM_ENTITY_NAME.eq_ignore_ascii_case(name)
+        || crate::seed::FIRM_ENTITY_NAMES
+            .iter()
+            .any(|anchor| anchor.eq_ignore_ascii_case(name))
 }
 
 /// The value `entities.firm_anchor_key` carries for a row named
