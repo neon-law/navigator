@@ -219,13 +219,68 @@ async fn footer_renders_disclaimer(world: &mut BrandWorld) {
     );
 }
 
+/// The shared footer renders an independent ownership disclosure instead of
+/// the generic trademark line when its registrant differs from the operator.
+fn footer_trademark_notice(body: &str) -> Option<String> {
+    for class in ["site-footer__trademark", "site-footer__ownership"] {
+        let Some((_, paragraph)) = body.split_once(&format!("class=\"{class}\"")) else {
+            continue;
+        };
+        let Some((_, inner)) = paragraph.split_once('>') else {
+            continue;
+        };
+        let Some((inner, _)) = inner.split_once("</p>") else {
+            continue;
+        };
+        let mut in_tag = false;
+        let text: String = inner
+            .chars()
+            .filter(|character| match *character {
+                '<' => {
+                    in_tag = true;
+                    false
+                }
+                '>' => {
+                    in_tag = false;
+                    false
+                }
+                _ => !in_tag,
+            })
+            .collect();
+        let text = text
+            .replace("&amp;", "&")
+            .replace("&#38;", "&")
+            .replace("&#x26;", "&");
+        if text.contains("trademark") || text.contains("common-law mark") {
+            return Some(text);
+        }
+    }
+    None
+}
+
 #[then(regex = r"^the footer renders the trademark notice: (yes|no)$")]
 async fn footer_renders_trademark(world: &mut BrandWorld, renders: String) {
-    let present = world.last_body.contains("site-footer__trademark");
+    let present = footer_trademark_notice(&world.last_body).is_some();
     assert_eq!(
         present,
         renders == "yes",
         "trademark notice presence mismatch (expected {renders})",
+    );
+}
+
+#[then(regex = r#"^the footer trademark owner remains "([^"]+)" and is not "([^"]+)"$"#)]
+async fn footer_keeps_trademark_owner(world: &mut BrandWorld, owner: String, operator: String) {
+    let notice =
+        footer_trademark_notice(&world.last_body).expect("visible trademark ownership notice");
+    assert!(
+        notice.contains(&format!("trademark of {owner}"))
+            || notice.contains(&format!("mark of {owner}")),
+        "original owner missing: {notice}"
+    );
+    assert!(
+        !notice.contains(&format!("trademark of {operator}"))
+            && !notice.contains(&format!("mark of {operator}")),
+        "operator falsely became trademark owner: {notice}"
     );
 }
 

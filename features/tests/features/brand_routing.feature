@@ -125,4 +125,5 @@ Feature: Public routing on the firm's own host
     Then the response status is 200
     And the footer copyright names "Mobility Test Holdings PC"
     And the footer renders the trademark notice: yes
+    And the footer trademark owner remains "Neon Law IP LLC" and is not "Mobility Test Holdings PC"
     And the footer renders the attorney-advertising disclaimer
