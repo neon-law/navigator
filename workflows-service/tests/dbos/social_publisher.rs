@@ -700,13 +700,17 @@ async fn a_denying_egress_gate_records_blocked_without_provider_requests() {
     );
 }
 
-/// A retained provider task survives executor loss during polling. Recovery
-/// reads its status and public link without submitting the video twice.
-#[tokio::test]
-async fn a_tiktok_task_resumes_polling_without_resubmitting() {
-    let Some(db) = database().await else { return };
-    let fixture = Fixture::new("social-tiktok-recovery").await;
-    let server = MockServer::start().await;
+fn atom(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
+    let mut bytes = u32::try_from(body.len() + 8)
+        .unwrap()
+        .to_be_bytes()
+        .to_vec();
+    bytes.extend(kind);
+    bytes.extend(body);
+    bytes
+}
+
+async fn scheduled_tiktok_post(fixture: &Fixture, publish_at: DateTime<Utc>) -> Uuid {
     let provider = store::social_accounts::SocialProvider::Tiktok;
     let account = store::social_accounts::connect(
         &fixture.db,
@@ -730,8 +734,7 @@ async fn a_tiktok_task_resumes_polling_without_resubmitting() {
     )
     .await
     .unwrap();
-    let publish_at = scheduled_in(1);
-    let post_id = scheduled_instagram_post(&fixture, publish_at).await;
+    let post_id = scheduled_instagram_post(fixture, publish_at).await;
     fixture
         .db
         .query("UPDATE $id SET selected_social_accounts = [$account], tiktok_ai_generated = false")
@@ -744,15 +747,6 @@ async fn a_tiktok_task_resumes_polling_without_resubmitting() {
     store::posts::record_video(&fixture.db, BRAND, "synthetic/video.mp4", 1080, 1920)
         .await
         .unwrap();
-    fn atom(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
-        let mut bytes = u32::try_from(body.len() + 8)
-            .unwrap()
-            .to_be_bytes()
-            .to_vec();
-        bytes.extend(kind);
-        bytes.extend(body);
-        bytes
-    }
     let mut handler = vec![0; 8];
     handler.extend(b"vide");
     let mut timing = vec![0; 12];
@@ -762,15 +756,19 @@ async fn a_tiktok_task_resumes_polling_without_resubmitting() {
     samples.extend(1_u32.to_be_bytes());
     samples.extend(900_u32.to_be_bytes());
     samples.extend(100_u32.to_be_bytes());
-    let mut media = atom(b"hdlr", &handler);
-    media.extend(atom(b"mdhd", &timing));
-    media.extend(atom(b"minf", &atom(b"stbl", &atom(b"stts", &samples))));
-    let video = atom(b"moov", &atom(b"trak", &atom(b"mdia", &media)));
+    let mut media = atom(*b"hdlr", &handler);
+    media.extend(atom(*b"mdhd", &timing));
+    media.extend(atom(*b"minf", &atom(*b"stbl", &atom(*b"stts", &samples))));
+    let video = atom(*b"moov", &atom(*b"trak", &atom(*b"mdia", &media)));
     fixture
         .storage
         .put("synthetic/video.mp4", &video, "video/mp4")
         .await
         .unwrap();
+    post_id
+}
+
+async fn mount_tiktok(server: &MockServer) {
     for (path, body) in [
         (
             "property/list",
@@ -790,7 +788,7 @@ async fn a_tiktok_task_resumes_polling_without_resubmitting() {
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":body})),
             )
-            .mount(&server)
+            .mount(server)
             .await;
     }
     Mock::given(matchers::method("POST"))
@@ -800,16 +798,28 @@ async fn a_tiktok_task_resumes_polling_without_resubmitting() {
                 .set_body_json(serde_json::json!({"code":0,"data":{"share_id":"synthetic-task"}})),
         )
         .expect(1)
-        .mount(&server)
+        .mount(server)
         .await;
-    let pending = Mock::given(matchers::method("GET"))
-        .and(matchers::path("/tiktok/business/publish/status/"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"code":0,"data":{"status":"PROCESSING_DOWNLOAD"}})),
-        )
-        .mount_as_scoped(&server)
-        .await;
+}
+
+/// A retained provider task survives executor loss during polling. Recovery
+/// reads its status and public link without submitting the video twice.
+#[tokio::test]
+async fn a_tiktok_task_resumes_polling_without_resubmitting() {
+    let Some(db) = database().await else { return };
+    let fixture = Fixture::new("social-tiktok-recovery").await;
+    let server = MockServer::start().await;
+    let publish_at = scheduled_in(1);
+    let post_id = scheduled_tiktok_post(&fixture, publish_at).await;
+    mount_tiktok(&server).await;
+    let pending =
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/tiktok/business/publish/status/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"code":0,"data":{"status":"PROCESSING_DOWNLOAD"}}),
+            ))
+            .mount_as_scoped(&server)
+            .await;
     let make_context = || {
         let refresh = workflows::social_publish::TokenRefreshConfig {
             tiktok_client: Some(("synthetic-app".into(), "synthetic-secret".into())),
