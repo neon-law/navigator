@@ -6914,7 +6914,10 @@ records:
 
     #[tokio::test]
     async fn seeds_two_firms_with_iep_defenders_at_lex() {
-        let surreal = mem_surreal().await;
+        // Prove a real fresh boot, not mem()'s deliberately key-named Brand
+        // fixtures whose existing display names the Owner may have customized.
+        let surreal = crate::surreal::test_support::unmigrated().await;
+        crate::schema::apply(&surreal).await.expect("fresh schema");
         seed_canonical(&surreal, &fs_storage().await)
             .await
             .expect("seed");
@@ -7000,7 +7003,7 @@ records:
         let firms_after = crate::firms::all(&surreal).await.unwrap();
         assert_eq!(firms_after.len(), 2);
         assert_eq!(
-            crate::firms::firm_id_for_brand_key(&surreal, "iep")
+            crate::firms::firm_id_for_brand_key(&surreal, "iep-defenders")
                 .await
                 .unwrap(),
             Some(lex.id)

@@ -1643,7 +1643,7 @@ fn portfolio_practices(copy: Vec<webapp::home::PracticeLink>) -> Vec<webapp::hom
         .into_iter()
         .map(|practice| (practice.href, practice.body))
         .collect();
-    let mut practices: Vec<webapp::home::PracticeLink> = views::brand::BrandKey::ALL
+    let mut practices: Vec<webapp::home::PracticeLink> = views::brand::BrandKey::LIVE
         .iter()
         .copied()
         .filter(|key| !matches!(key, BrandKey::LawyerShook | BrandKey::GuiebShook))
@@ -1811,6 +1811,10 @@ mod lawyer_shook_holding_page_tests {
             .iter()
             .map(|practice| practice.heading.as_str())
             .collect();
+        assert!(
+            !headings.contains(&"IEP Defenders"),
+            "a held-out practice must have no public portfolio door"
+        );
         assert_eq!(
             headings,
             vec![

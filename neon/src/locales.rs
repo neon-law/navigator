@@ -1821,7 +1821,7 @@ mod tests {
         // Neon Law's own site needs no Neon Law card, and the Lawyer Shook
         // and Guieb & Shook holding pages are firm marks, not services, so
         // neither is listed.
-        let brands: Vec<BrandKey> = BrandKey::ALL
+        let brands: Vec<BrandKey> = BrandKey::LIVE
             .iter()
             .copied()
             .filter(|key| {
@@ -1831,6 +1831,10 @@ mod tests {
                 )
             })
             .collect();
+        assert!(
+            !brands.contains(&BrandKey::IepDefenders),
+            "held-out brands are not public directory entries"
+        );
         assert_eq!(cards.len(), brands.len());
         for key in brands {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
@@ -3580,8 +3584,12 @@ mod tests {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             assert_eq!(
                 branding.firm.legal_entity,
-                "Guieb & Shook PC",
-                "{} names the firm",
+                if *key == views::brand::BrandKey::IepDefenders {
+                    "Lex Tecnica, Ltd."
+                } else {
+                    "Guieb & Shook PC"
+                },
+                "{} names its own firm",
                 key.as_str()
             );
             assert_ne!(

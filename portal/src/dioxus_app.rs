@@ -5540,8 +5540,18 @@ mod tests {
         assert!(!chrome.legal_entity.is_empty(), "the firm names its own");
         assert_eq!(
             chrome.firm_home_href,
-            views::brand::BrandKey::GuiebShook.public_home_href(),
-            "the compiled fallback resolves the firm's production home"
+            views::brand::FIRM_BRAND.home_href,
+            "the raw compiled chrome retains its configured Firm home"
+        );
+        // The request middleware overlays the resolved fallback model. This
+        // is the layer that supplies the canonical practice copyright target.
+        let mut resolved = chrome;
+        let model =
+            webapp::firm_footer::compiled_firm_footer_model(views::brand::brand_key(), 2026);
+        webapp::public_chrome::apply_resolved_firm_footer(&mut resolved, &model);
+        assert_eq!(
+            resolved.firm_home_href,
+            views::brand::BrandKey::GuiebShook.public_home_href()
         );
     }
 
