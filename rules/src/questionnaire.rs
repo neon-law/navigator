@@ -600,4 +600,77 @@ mod tests {
         assert_eq!(doc.questionnaire["custom_single_choice__path"]["_"], "END");
         assert_eq!(doc.questionnaire["custom_datetime__a_start"]["_"], "END");
     }
+
+    #[test]
+    fn each_malformed_questionnaire_is_refused_with_its_reason() {
+        let cases = [
+            (
+                "questionnaire:\n  - state: entity__company\n    columns:\n      - name: seats\n        type: number\n",
+                "only a `schedule__*` state collects repeating rows",
+            ),
+            (
+                "questionnaire:\n  - state: schedule__licenses\n    columns: seats\n",
+                "columns must be a list",
+            ),
+            (
+                "questionnaire:\n  - state: schedule__licenses\n    columns: []\n",
+                "needs at least one column",
+            ),
+            (
+                "questionnaire:\n  - state: schedule__licenses\n    columns:\n      - seats\n",
+                "column must be a map",
+            ),
+            (
+                "questionnaire:\n  - state: schedule__licenses\n    columns:\n      - name: Seats\n        type: number\n",
+                "must be a unique snake_case name",
+            ),
+            (
+                "questionnaire:\n  - state: schedule__licenses\n    columns:\n      - name: seats\n        type: number\n      - name: seats\n        type: text\n",
+                "must be a unique snake_case name",
+            ),
+            (
+                "questionnaire:\n  - heading: Licenses\n    questions:\n      - schedule__licenses\n",
+                "needs `columns:`",
+            ),
+            (
+                "questionnaire:\n  - heading: Licenses\n    questions:\n      - 5\n",
+                "must be a state name or a state map",
+            ),
+            (
+                "questionnaire:\n  - heading: Licenses\n    questions: []\n",
+                "heading `Licenses` has no questions",
+            ),
+            ("questionnaire:\n  - BEGIN\n", "written by the chain"),
+            ("questionnaire:\n  - 5\n", "must be a state or a heading"),
+            ("questionnaire: []\n", "questionnaire list is empty"),
+            ("questionnaire: 5\n", "must be a list or a state map"),
+            (
+                "questionnaire:\n  BEGIN:\n    _: person__client\n  person__client: 3\n  END: {}\n",
+                "`person__client` must be a map",
+            ),
+            (
+                "questionnaire:\n  BEGIN:\n    _: person__client\n  person__client:\n    prompt: [1]\n    _: END\n  END: {}\n",
+                "`person__client` prompt must be a string",
+            ),
+            (
+                "questionnaire:\n  BEGIN:\n    _: person__client\n  person__client:\n    _: [END]\n  END: {}\n",
+                "transition `person__client._` must be a state",
+            ),
+        ];
+        for (yaml, reason) in cases {
+            let mut value: Value = serde_yaml::from_str(yaml).expect("yaml");
+            let error = normalize_value(&mut value).expect_err(yaml);
+            assert!(error.contains(reason), "{yaml}\n=> {error}");
+        }
+    }
+
+    #[test]
+    fn a_column_without_a_label_is_labelled_from_its_name() {
+        let value = normalized(
+            "questionnaire:\n  - state: schedule__licenses\n    columns:\n      - name: renewal_date\n        type: date\n",
+        );
+        let column = &value["schedule_columns"]["licenses"][0];
+        assert_eq!(column["label"].as_str(), Some("renewal date"));
+        assert_eq!(column["type"].as_str(), Some("date"));
+    }
 }
