@@ -128,11 +128,12 @@ pub async fn for_project(
 
 #[cfg(test)]
 mod tests {
-    use super::{MatterFinancials, outstanding_cents, unbilled_costs_cents, unbilled_time_cents};
+    use super::{MatterFinancials, outstanding_cents, unbilled_time_cents};
     use crate::project_costs::ProjectCost;
     use crate::time_entries::{BillingStatus, TimeEntry, TimeEntrySource};
     use crate::xero_invoices::XeroInvoice;
     use chrono::{NaiveDate, Utc};
+    use uuid::Uuid;
 
     fn entry(minutes: i32, billable: bool, status: BillingStatus) -> TimeEntry {
         TimeEntry {
@@ -234,7 +235,10 @@ mod tests {
             invoice(50_000, 50_000, "PAID"),
             invoice(30_000, 0, "DRAFT"),
         ];
-        assert_eq!(outstanding_cents(&invoices), 140_000);
+        // Everything except the voided row counts, drafts included: the mirror
+        // row is the firm's own receivable, and the voided invoice is the one
+        // thing nobody owes. 60_000 + 0 + 30_000.
+        assert_eq!(outstanding_cents(&invoices), 90_000);
     }
 
     #[test]
