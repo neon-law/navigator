@@ -635,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_mounts_the_island_with_the_gated_endpoint_and_templates() {
+    fn the_shell_mounts_the_island_with_the_gated_endpoint_and_templates_coverage() {
         let html = render_shell(sample_view());
         assert!(html.contains("Graph: Cruller v. Prine"), "{html}");
         assert!(
@@ -686,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn the_legend_names_every_vertex_kind() {
+    fn the_legend_names_every_vertex_kind_coverage() {
         let mut dom = VirtualDom::new(GraphLegend);
         dom.rebuild_in_place();
         let html = dioxus_ssr::render(&dom);
