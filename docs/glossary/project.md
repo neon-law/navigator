@@ -98,13 +98,16 @@ Object-storage artifacts (rendered PDFs, signed documents, generated exports) li
 objects in GCS — so deleting a Project's database rows never deletes its archives.
 
 Working files live under the documents-bucket prefix `projects/{code}/documents` — a key convention in the deployment's
-private documents bucket, not a bucket per Project. Google Drive is the Project's ingest dropbox, with one folder per
-matter named for `project.code`. Workspace users drop files there, and Navigator copies them into the documents bucket.
-Drive never serves content or receives CI publishes. Project participation grants Navigator and deployed application
-access, never source-forge access. `store::project_surfaces` creates or adopts the handles. Their retry API/CLI are
-`POST /app/api/project-surfaces/{id}` and `navigator project setup <code>`. The [Nightly Project
+private documents bucket, not a bucket per Project. Google Drive is an ingest source. The firm working root holds the
+canonical [Matter Folder](matter-folder.md) tree. A separate [Client Submissions](client-submissions.md) root admits
+client Writers without granting access to working material. [Project Folders](project-folder.md) retain provider IDs and
+typed slots. Navigator checks provider access and copies admitted files into the documents bucket. Later document reads
+use object storage, and CI never publishes documents into Drive. Project participation grants Navigator and deployed
+application access, never source-forge access. `store::project_surfaces` creates or adopts the handles. Their retry
+API/CLI are `POST /app/api/project-surfaces/{id}` and `navigator project setup <code>`. The [Nightly Project
 Update](nightly-project-update.md) defines the planned nightly parent DAG and its membership, Slack, repository, and
-calendar children. Today's single workflow performs membership repair and repository create-or-adopt.
+calendar children. Both parent runtimes converge open Projects' folder trees before Slack admission; the implemented
+children perform membership, Slack, and repository work.
 
 **`onboarding_jurisdiction` is the state whose law and arbitration seat an onboarding letter names.** A
 [Clause](clause.md) input normally binds a questionnaire state, which forced every onboarding template to ask its own

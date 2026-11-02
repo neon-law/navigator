@@ -130,6 +130,33 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NightlyWorkflow> 
             .await?;
             tracing::info!(%ran_on, %started_at, "DBOS Nightly Project Update started");
 
+            let surreal = parent.context.surreal.clone();
+            let roster = dbos::step("discover-projects", move || {
+                let surreal = surreal.clone();
+                async move {
+                    nightly::discover_roster(&surreal)
+                        .await
+                        .map_err(|_| dbos::Error::Application(NightlyError::Roster))
+                }
+            })
+            .await?;
+
+            // Folder convergence precedes Slack posting and cannot be starved by it.
+            store::project_folder_reconcile::visit_nightly_roster(
+                roster.iter().filter(|project| project.open).map(|project| project.project_id).collect::<Vec<_>>(),
+                |project_id| {
+                    let surreal = parent.context.surreal.clone();
+                    async move {
+                        dbos::step(&format!("converge-project-folders-{project_id}"), move || {
+                            let surreal = surreal.clone();
+                            async move { Ok::<_, dbos::Error<NightlyError>>(
+                                store::project_folder_reconcile::nightly_from_env(&surreal, project_id).await,
+                            ) }
+                        }).await
+                    }
+                },
+            ).await?;
+
             let slack = Arc::clone(&parent.context.slack);
             let channel = parent.context.outcome_channel.clone();
             let correlation = format!("nightly-project-update-{ran_on}-start");
@@ -155,17 +182,6 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NightlyWorkflow> 
                     }
                 },
             )
-            .await?;
-
-            let surreal = parent.context.surreal.clone();
-            let roster = dbos::step("discover-projects", move || {
-                let surreal = surreal.clone();
-                async move {
-                    nightly::discover_roster(&surreal)
-                        .await
-                        .map_err(|_| dbos::Error::Application(NightlyError::Roster))
-                }
-            })
             .await?;
 
             let report = nightly::sweep(&roster, |tag, project_id| {
