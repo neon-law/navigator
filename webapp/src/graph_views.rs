@@ -508,6 +508,88 @@ mod tests {
         assert_eq!(entity, None);
     }
 
+    fn lawyer_view(depth: u8) -> GraphPageView {
+        let (href_person, href_firm, href_entity) = href_templates(ViewerRole::Lawyer);
+        GraphPageView {
+            tokens_href: "/public/css/tokens/neon-law.css".to_string(),
+            firm_name: "Neon Law".to_string(),
+            heading: "Cruller v. Prine".to_string(),
+            back_text: "Back to the matter".to_string(),
+            back_href: "/app/projects/sample-litigation".to_string(),
+            endpoint: format!("/app/api/graph/project/42?depth={depth}"),
+            depth,
+            href_person,
+            href_firm,
+            href_entity,
+        }
+    }
+
+    #[test]
+    fn the_shell_mounts_the_island_with_the_gated_endpoint_and_templates() {
+        let html = dioxus_ssr::render_element(rsx! { GraphPageShell { view: lawyer_view(2) } });
+        assert!(html.contains("Graph: Cruller v. Prine"));
+        assert!(html.contains(r#"href="/app/projects/sample-litigation""#));
+        assert!(html.contains("Back to the matter"));
+        assert!(html.contains(r#"data-endpoint="/app/api/graph/project/42?depth=2""#));
+        // A lawyer may open Entity pages only; the admin-tier templates stay empty.
+        assert!(html.contains(r#"data-href-entity="/app/admin/entities/{id}/edit""#));
+        assert!(html.contains(r#"data-href-person="""#));
+        assert!(html.contains(r#"data-href-firm="""#));
+        assert!(
+            html.contains("Loading graph…"),
+            "the no-JavaScript status line"
+        );
+        assert!(
+            html.contains("graph-legend"),
+            "the shell carries the legend"
+        );
+        assert!(
+            html.contains("graph-depth"),
+            "below the ceiling the selector shows"
+        );
+    }
+
+    #[test]
+    fn the_depth_selector_marks_only_the_active_depth() {
+        let html = dioxus_ssr::render_element(rsx! { DepthSelector { depth: 1 } });
+        for candidate in 1..=MAX_GRAPH_DEPTH {
+            assert!(html.contains(&format!(r#"href="?depth={candidate}""#)));
+        }
+        assert_eq!(html.matches(r#"aria-current="true""#).count(), 1);
+        assert!(html.contains(
+            r#"class="nav-link graph-depth__option graph-depth__option--active" href="?depth=1""#
+        ));
+    }
+
+    #[test]
+    fn the_depth_selector_disappears_at_the_ceiling() {
+        let html = dioxus_ssr::render_element(rsx! { DepthSelector { depth: MAX_GRAPH_DEPTH } });
+        assert!(
+            !html.contains("graph-depth"),
+            "nothing to raise to at the cap: {html}"
+        );
+    }
+
+    #[test]
+    fn the_legend_names_every_vertex_kind() {
+        let html = dioxus_ssr::render_element(rsx! { GraphLegend {} });
+        for kind in ["person", "entity", "project", "firm"] {
+            assert!(html.contains(&format!("graph-legend__chip--{kind}")));
+        }
+        assert!(html.contains("Red edges are adverse"));
+    }
+
+    #[test]
+    fn the_not_found_body_does_not_disclose_the_record() {
+        #[component]
+        fn NotFound() -> Element {
+            not_found_body()
+        }
+        let html = dioxus_ssr::render_element(rsx! { NotFound {} });
+        assert!(html.contains("That record was not found."));
+        assert!(!html.contains("data-endpoint"));
+    }
+
     #[test]
     fn the_page_carries_the_island() {
         assert_eq!(GRAPH_VIEW_SCRIPT_HREF, "/public/js/graph-view.js");

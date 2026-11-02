@@ -253,7 +253,8 @@ pub fn catalog_violations(dir: &Path, filter: &dyn FileFilter) -> io::Result<Vec
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, ProjectSkillError};
+    use super::{catalog_violations, parse, ProjectSkillError, DUPLICATE_CODE, MALFORMED_CODE};
+    use crate::DefaultFileFilter;
 
     const ESTATES: &str = "---\njurisdiction: NV\npractice_area: estates\nname: Nevada Estates Playbook\nversion: \"1\"\nnotations:\n  - onboarding__letter\n---\n\nSynthetic playbook body.\n";
     const PROBATE: &str = "---\njurisdiction: TX\npractice_area: probate\nname: Texas Probate Playbook\nversion: \"1\"\nnotations:\n  - onboarding__letter\n  - offboarding__letter\n---\n\nSynthetic playbook body.\n";
@@ -356,5 +357,102 @@ mod tests {
                 format!("---\njurisdiction: {code}\npractice_area: estates\nname: N\nversion: \"1\"\n---\nbody\n");
             assert!(parse(&body).is_ok(), "jurisdiction `{code}` should parse");
         }
+    }
+
+    #[test]
+    fn every_error_reads_as_a_sentence_naming_its_key() {
+        let cases = [
+            (
+                ProjectSkillError::MissingFrontmatter,
+                "missing YAML frontmatter",
+            ),
+            (
+                ProjectSkillError::InvalidYaml("bad indent".into()),
+                "frontmatter is not valid YAML: bad indent",
+            ),
+            (
+                ProjectSkillError::NotAMapping,
+                "frontmatter must be a mapping",
+            ),
+            (
+                ProjectSkillError::Missing("name"),
+                "frontmatter is missing required `name:` field",
+            ),
+            (
+                ProjectSkillError::Empty("version"),
+                "frontmatter `version:` is empty",
+            ),
+            (
+                ProjectSkillError::NotAScalar("practice_area"),
+                "frontmatter `practice_area:` must be a scalar value",
+            ),
+            (
+                ProjectSkillError::NotASequence("notations"),
+                "frontmatter `notations:` must be a list of strings",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+        let unknown = ProjectSkillError::UnknownJurisdiction("Nevada".into()).to_string();
+        assert!(
+            unknown.starts_with("unknown jurisdiction `Nevada`"),
+            "{unknown}"
+        );
+        assert!(
+            unknown.contains("store/seeds/Jurisdiction.yaml"),
+            "{unknown}"
+        );
+    }
+
+    #[test]
+    fn a_repository_without_a_skills_directory_has_no_catalog_violations() {
+        let dir = tempfile::tempdir().unwrap();
+        let violations = catalog_violations(dir.path(), &DefaultFileFilter::default()).unwrap();
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn the_catalog_reports_malformed_entries_and_duplicate_pairs_but_skips_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills = dir.path().join("skills");
+        std::fs::create_dir_all(skills.join("nv")).unwrap();
+        std::fs::create_dir_all(skills.join("tx")).unwrap();
+        std::fs::write(skills.join("nv/estates.md"), ESTATES).unwrap();
+        // The same (NV, estates) pair again, in a later file.
+        std::fs::write(skills.join("tx/estates-copy.md"), ESTATES).unwrap();
+        std::fs::write(skills.join("tx/probate.md"), PROBATE).unwrap();
+        std::fs::write(skills.join("tx/broken.md"), "no frontmatter here\n").unwrap();
+        std::fs::write(skills.join("tx/notes.txt"), "not a catalog entry").unwrap();
+
+        let violations = catalog_violations(dir.path(), &DefaultFileFilter::default()).unwrap();
+        assert_eq!(violations.len(), 2, "{violations:?}");
+
+        let malformed = violations
+            .iter()
+            .find(|violation| violation.code == MALFORMED_CODE)
+            .expect("the entry without frontmatter is malformed");
+        assert!(malformed.path.ends_with("tx/broken.md"));
+        assert_eq!(malformed.line, 1);
+        assert!(malformed.message.contains("missing YAML frontmatter"));
+
+        let duplicate = violations
+            .iter()
+            .find(|violation| violation.code == DUPLICATE_CODE)
+            .expect("the repeated pair is a duplicate");
+        assert!(
+            duplicate.path.ends_with("tx/estates-copy.md"),
+            "files are walked in path order"
+        );
+        assert!(
+            duplicate.message.contains("`NV`/`estates`"),
+            "{}",
+            duplicate.message
+        );
+        assert!(
+            duplicate.message.contains("nv/estates.md"),
+            "{}",
+            duplicate.message
+        );
     }
 }

@@ -1,0 +1,22 @@
+[package]
+name = "nautilus-mobile"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# The native launcher for the Nautilus mobile shell (`webapp::mobile`). Run dx
+# from this directory: `dx serve --platform ios|android`.
+#
+# Deliberately its own workspace with its own, untracked lockfile.
+# `dioxus/mobile` pulls `dioxus-desktop`, which hard-codes tungstenite's
+# `native-tls` on every non-Android target, so `openssl-sys` would land in the
+# root Cargo.lock and break the static musl images
+# (`no_crate_links_openssl_so_the_musl_images_can_build`). Keeping the native
+# renderer out here leaves the root lockfile openssl-free.
+[workspace]
+
+[dependencies]
+dioxus = { version = "0.7.9", features = ["mobile"] }
+webapp = { path = "../webapp" }

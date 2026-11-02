@@ -1,0 +1,3 @@
+/target
+# Untracked on purpose: this lockfile carries openssl-sys (see Cargo.toml).
+/Cargo.lock
