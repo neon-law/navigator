@@ -2106,6 +2106,23 @@ fn canonical_document(base: &str) -> Value {
             "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such attorney or matter", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "201": { "description": "The stored rate", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The rate is not valid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
           }
         },
+        "/app/api/projects/{id}/stages": {
+          "get": {
+            "summary": "Read a matter's stage",
+            "description": "Returns the Firm's stage vocabulary, the stage the matter currently holds (null until the Firm places it), and the matter's audited stage history, oldest first. A Case Stage is where the matter sits in the Firm's own workflow — distinct from project.status and case.status. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The Firm's vocabulary, the matter's current stage, and its history", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/stages/set": {
+          "post": {
+            "summary": "Set a matter's current stage",
+            "description": "Moves the matter to a stage from the Firm's own vocabulary and appends the audited history row; the history is immutable and setting the stage the matter already holds is a no-op. The stage must belong to the Project's Firm. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["stage_id"], "properties": { "stage_id": { "type": "string", "format": "uuid" }, "note": { "type": "string" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project or stage, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The appended stage event (or the current one on a no-op)", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The stage is not in the matter Firm's vocabulary, or the note is invalid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
         "/app/api/projects/{id}/deadlines": {
           "get": {
             "summary": "List a Project's deadlines",

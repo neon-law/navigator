@@ -565,6 +565,16 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             post(crate::time_tracking_api::set_flat_fee),
         ),
         (
+            "GET",
+            "/app/api/projects/{id}/stages",
+            get(crate::project_stages_api::list),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/stages/set",
+            post(crate::project_stages_api::set),
+        ),
+        (
             "POST",
             "/app/api/projects/{id}/deadlines",
             post(crate::deadlines_api::create_deadline),
