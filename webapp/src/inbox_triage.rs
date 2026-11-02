@@ -73,7 +73,6 @@ pub struct TriageQueuePage {
 /// The queue's rows for this viewer, firm-scoped exactly as the store
 /// decides. A Client never reaches the route (the Rego layer denies it) and
 /// the store denies them again here.
-#[cfg(feature = "server")]
 #[server]
 pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
     let role = crate::admin_listing::require_firm_person().await?;
