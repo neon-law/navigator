@@ -93,6 +93,7 @@ pub mod communications;
 pub mod config;
 pub mod conflicts;
 pub mod contract_reviews;
+pub mod court_seeds;
 pub mod courts;
 pub mod credentials;
 /// The Deadline mirror onto a Project's shared Google Calendar.

@@ -275,7 +275,8 @@ pub struct LitigationCopy {
 }
 
 /// The free court-form catalog's words around the registry rows. The rows
-/// themselves never pass through here — they come from `store/seeds/Court.yaml`
+/// themselves never pass through here — they come from the checked-in court
+/// seeds (`store/src/court_seeds.rs`)
 /// — so this catalog holds only the promises (free of charge, no outcome
 /// promised), the table labels, and the empty states. `{jurisdiction}` in
 /// `meta_description` and `courts_heading` is filled with the jurisdiction's
@@ -644,7 +645,7 @@ pub enum LocalePageKind {
     Team,
     /// `free-resources` — the free court-form catalog's words around the
     /// rows. The rows themselves never pass through here: they come from
-    /// `store/seeds/Court.yaml`, and the page builder joins them to this copy.
+    /// `store/src/court_seeds.rs`, and the page builder joins them to this copy.
     FreeResources,
     /// `shared.yaml` — the cross-repository copy catalog, not a page.
     Shared,
