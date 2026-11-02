@@ -334,4 +334,141 @@ mod tests {
             (1080, 1920)
         );
     }
+
+    /// A file whose only box is a valid `ftyp` header: no streams follow.
+    fn mp4_header_only(path: &Path) {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&24_u32.to_be_bytes());
+        bytes.extend_from_slice(b"ftypisom");
+        bytes.extend_from_slice(&[0; 12]);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn local_mp4_accepts_only_an_ftyp_container_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(local_mp4(&dir.path().join("missing.mp4"))
+            .unwrap_err()
+            .to_string()
+            .contains("metadata"));
+        assert!(local_mp4(dir.path())
+            .unwrap_err()
+            .to_string()
+            .contains("local MP4 file"));
+
+        let short = dir.path().join("short.mp4");
+        std::fs::write(&short, b"tiny").unwrap();
+        assert!(local_mp4(&short)
+            .unwrap_err()
+            .to_string()
+            .contains("MP4 header"));
+
+        let other = dir.path().join("other.mp4");
+        std::fs::write(&other, b"\0\0\0\x18moovabcdefgh").unwrap();
+        assert!(local_mp4(&other)
+            .unwrap_err()
+            .to_string()
+            .contains("MP4 container"));
+
+        let valid = dir.path().join("valid.mp4");
+        mp4_header_only(&valid);
+        local_mp4(&valid).unwrap();
+    }
+
+    #[tokio::test]
+    async fn output_must_be_a_new_mp4_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("original.mp4");
+        mp4_header_only(&input);
+        for name in ["ready.mov", "ready"] {
+            assert!(prepare(&input, &dir.path().join(name))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains(".mp4 extension"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dangling_symlink_output_is_never_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("original.mp4");
+        mp4_header_only(&input);
+        let target = dir.path().join("elsewhere.mp4");
+        let output = dir.path().join("ready.mp4");
+        std::os::unix::fs::symlink(&target, &output).unwrap();
+        assert!(prepare(&input, &output)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("already exists"));
+        assert!(!target.exists(), "the link target is never created");
+    }
+
+    #[tokio::test]
+    async fn a_header_only_mp4_fails_inspection_without_an_output() {
+        // Passes the local container check, then fails at ffprobe — either
+        // because FFmpeg is absent or because the file carries no streams.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("original.mp4");
+        let output = dir.path().join("ready.mp4");
+        mp4_header_only(&input);
+        let error = prepare(&input, &output).await.unwrap_err().to_string();
+        assert!(
+            error.contains("ffprobe") || error.contains("no video track"),
+            "{error}"
+        );
+        assert!(!output.exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_prepare_reports_failure_as_an_exit_code() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run_prepare(
+                &dir.path().join("missing.mp4"),
+                &dir.path().join("ready.txt")
+            )
+            .await,
+            ExitCode::FAILURE
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_maps_exit_status_and_spawn_failure_to_errors() {
+        run(&mut Command::new("true")).await.unwrap();
+        assert!(run(&mut Command::new("false"))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("original is unchanged"));
+        assert!(run(&mut Command::new("navigator-no-such-ffmpeg-binary"))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("install FFmpeg"));
+    }
+
+    #[test]
+    fn probe_output_decodes_dimensions_aspect_and_duration() {
+        let probe: Probe = serde_json::from_str(
+            r#"{"streams":[{"width":1080,"height":1920,"sample_aspect_ratio":"1:1"}],
+                "format":{"duration":"12.500000"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (probe.streams[0].width, probe.streams[0].height),
+            (1080, 1920)
+        );
+        assert_eq!(probe.streams[0].sample_aspect_ratio.as_deref(), Some("1:1"));
+        assert_eq!(probe.format.duration, "12.500000");
+        let bare: Probe = serde_json::from_str(
+            r#"{"streams":[{"width":640,"height":360}],"format":{"duration":"3"}}"#,
+        )
+        .unwrap();
+        assert!(bare.streams[0].sample_aspect_ratio.is_none());
+    }
 }

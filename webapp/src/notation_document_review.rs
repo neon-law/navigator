@@ -852,4 +852,291 @@ mod tests {
             "{html}"
         );
     }
+
+    #[cfg(feature = "server")]
+    mod loader {
+        use std::sync::Arc;
+
+        use crate::inbox::server_fn_test_support::{call, request_parts, runtime, Viewer};
+        use crate::notation_document_review::{
+            get_notation_document_review, protected_token_counts, NotationDocumentReviewView,
+        };
+        use crate::people::ViewerRole;
+
+        const ROUTE: &str = "/app/lawyer/contract-reviews/{id}/document";
+
+        struct Fixture {
+            surreal: store::surreal::SurrealDb,
+            storage: Arc<dyn cloud::StorageService>,
+            notation_id: uuid::Uuid,
+            project_id: uuid::Uuid,
+            person_id: uuid::Uuid,
+            review_id: uuid::Uuid,
+        }
+
+        /// A seeded Notation with a contract review open against it, and no
+        /// Word document imported yet.
+        async fn fixture() -> Fixture {
+            let surreal = store::test_support::mem_surreal().await;
+            let storage: Arc<dyn cloud::StorageService> =
+                Arc::new(store::test_support::MemoryStorage::default());
+            let notation_id = store::test_support::seed_notation(&surreal).await;
+            let notation = store::notations::find_by_id(&surreal, notation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let review_id = store::contract_reviews::create(
+                &surreal,
+                &store::contract_reviews::NewContractReview {
+                    notation_id,
+                    playbook_id: uuid::Uuid::now_v7(),
+                    asset_id: None,
+                },
+            )
+            .await
+            .unwrap();
+            Fixture {
+                surreal,
+                storage,
+                notation_id,
+                project_id: notation.project_id,
+                person_id: notation.person_id,
+                review_id,
+            }
+        }
+
+        fn manifest() -> Vec<u8> {
+            serde_json::to_vec(&vec![
+                word::BlockManifestEntry {
+                    anchor: "p0".into(),
+                    kind: word::CanonicalBlockKind::Outline,
+                    depth: Some(1),
+                    marker: Some("I.".into()),
+                    path: Some("I".into()),
+                    editable: true,
+                },
+                word::BlockManifestEntry {
+                    anchor: "t0".into(),
+                    kind: word::CanonicalBlockKind::Table,
+                    depth: None,
+                    marker: None,
+                    path: None,
+                    editable: false,
+                },
+            ])
+            .unwrap()
+        }
+
+        /// Import a root version, then append an edit on top of it, and
+        /// leave one comment on the edit.
+        async fn import_and_edit(fixture: &Fixture) -> uuid::Uuid {
+            let original_asset_id = store::assets::ingest_content(
+                &fixture.surreal,
+                &fixture.storage,
+                b"PK\x03\x04 synthetic docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            .await
+            .unwrap();
+            let manifest = manifest();
+            let root = store::notation_documents::import_root(
+                &fixture.surreal,
+                &fixture.storage,
+                store::notation_documents::ImportRoot {
+                    project_id: fixture.project_id,
+                    notation_id: fixture.notation_id,
+                    original_asset_id,
+                    markdown: b"Pay 10 dollars by the quick deadline.",
+                    anchor_manifest: &manifest,
+                    parser_version: "word-crate-1",
+                    schema_version: 1,
+                    authored_by_person_id: fixture.person_id,
+                    recorded_at: "2026-09-19T10:00:00+00:00",
+                },
+            )
+            .await
+            .unwrap()
+            .into_model();
+            let edit = store::notation_documents::append_edit(
+                &fixture.surreal,
+                &fixture.storage,
+                store::notation_documents::AppendEdit {
+                    project_id: fixture.project_id,
+                    notation_id: fixture.notation_id,
+                    expected_parent_version_id: root.id,
+                    markdown: b"Pay 10 dollars by the slow deadline, 5% late.",
+                    anchor_manifest: &manifest,
+                    parser_version: "word-crate-1",
+                    schema_version: 1,
+                    authored_by_person_id: fixture.person_id,
+                    recorded_at: "2026-09-19T11:00:00+00:00",
+                },
+            )
+            .await
+            .unwrap();
+            store::notation_documents::add_comment(
+                &fixture.surreal,
+                fixture.project_id,
+                fixture.notation_id,
+                edit.id,
+                "p0",
+                fixture.person_id,
+                "consider a cap",
+            )
+            .await
+            .unwrap();
+            edit.id
+        }
+
+        fn load(
+            rt: &tokio::runtime::Runtime,
+            fixture: &Fixture,
+            uri: &str,
+            viewer: &Viewer,
+        ) -> (NotationDocumentReviewView, axum::http::StatusCode) {
+            let parts = request_parts(rt, ROUTE, uri, viewer);
+            let (view, status) = call(
+                rt,
+                parts,
+                |dom| {
+                    dom.provide_root_context(fixture.surreal.clone());
+                    dom.provide_root_context(fixture.storage.clone());
+                },
+                get_notation_document_review,
+            );
+            (view.expect("the loader answers"), status)
+        }
+
+        fn uri(review_id: impl std::fmt::Display) -> String {
+            format!("/app/lawyer/contract-reviews/{review_id}/document")
+        }
+
+        #[test]
+        fn a_client_gets_the_not_found_body_and_a_404() {
+            let rt = runtime();
+            let fixture = rt.block_on(fixture());
+            let (view, status) = load(
+                &rt,
+                &fixture,
+                &uri(fixture.review_id),
+                &Viewer::new(ViewerRole::Client, Some(fixture.person_id)),
+            );
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+            assert!(!view.found);
+            assert!(view.review_id.is_empty(), "the id is not echoed");
+            assert_eq!(view.role, ViewerRole::Client);
+        }
+
+        #[test]
+        fn a_malformed_id_or_an_unknown_review_is_not_found() {
+            let rt = runtime();
+            let fixture = rt.block_on(fixture());
+            let owner = Viewer::new(ViewerRole::Owner, Some(fixture.person_id));
+
+            let (view, status) = load(&rt, &fixture, &uri("not-a-uuid"), &owner);
+            assert_eq!(status, axum::http::StatusCode::OK);
+            assert!(!view.found);
+
+            let missing = uuid::Uuid::now_v7();
+            let (view, status) = load(&rt, &fixture, &uri(missing), &owner);
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+            assert!(!view.found);
+            assert_eq!(view.review_id, missing.to_string());
+        }
+
+        #[test]
+        fn a_review_with_no_imported_document_renders_the_empty_state() {
+            let rt = runtime();
+            let fixture = rt.block_on(fixture());
+            let mut viewer = Viewer::new(ViewerRole::Owner, Some(fixture.person_id));
+            viewer.csrf_token = Some("TOKEN".into());
+            let (view, status) = load(
+                &rt,
+                &fixture,
+                &format!("{}?error=Moved%20on", uri(fixture.review_id)),
+                &viewer,
+            );
+            assert_eq!(status, axum::http::StatusCode::OK);
+            assert!(view.found);
+            assert!(view.version_id.is_empty());
+            assert!(view.blocks.is_empty());
+            assert_eq!(view.csrf_token, "TOKEN");
+            assert_eq!(view.error.as_deref(), Some("Moved on"));
+        }
+
+        #[test]
+        fn an_edited_document_loads_its_outline_diff_comments_and_counts() {
+            let rt = runtime();
+            let fixture = rt.block_on(fixture());
+            let version_id = rt.block_on(import_and_edit(&fixture));
+            let owner = Viewer::new(ViewerRole::Owner, Some(fixture.person_id));
+
+            let (view, _) = load(&rt, &fixture, &uri(fixture.review_id), &owner);
+            assert!(view.found);
+            assert!(!view.editable, "a pending review is not open for edits");
+            assert_eq!(view.version_id, version_id.to_string());
+            assert!(!view.parent_version_id.is_empty());
+
+            assert_eq!(view.blocks.len(), 2);
+            assert_eq!(view.blocks[0].anchor, "p0");
+            assert_eq!(view.blocks[0].path, "I");
+            assert_eq!(view.blocks[0].marker, "I.");
+            assert!(view.blocks[0].editable);
+            assert_eq!(view.blocks[1].path, "", "no outline identity");
+            assert!(!view.blocks[1].editable);
+
+            let kinds: Vec<&str> = view.diff.iter().map(|span| span.kind.as_str()).collect();
+            assert!(kinds.contains(&"equal"), "{kinds:?}");
+            assert!(kinds.contains(&"removed"), "{kinds:?}");
+            assert!(kinds.contains(&"added"), "{kinds:?}");
+            assert!(view
+                .diff
+                .iter()
+                .any(|span| span.kind == "removed" && span.text.contains("quick")));
+
+            assert_eq!(view.comments.len(), 1);
+            assert_eq!(view.comments[0].anchor, "p0");
+            assert_eq!(view.comments[0].body, "consider a cap");
+            assert!(!view.comments[0].is_decided());
+
+            assert_eq!(
+                view.protected_counts,
+                protected_token_counts("Pay 10 dollars by the slow deadline, 5% late.")
+            );
+
+            // Analyzed, with the matter parked at lawyer review: open for edits.
+            rt.block_on(async {
+                store::contract_reviews::set_status(
+                    &fixture.surreal,
+                    fixture.review_id,
+                    store::contract_reviews::STATUS_ANALYZED,
+                )
+                .await
+                .unwrap();
+                store::notations::update_state(
+                    &fixture.surreal,
+                    fixture.notation_id,
+                    "lawyer_review",
+                )
+                .await
+                .unwrap();
+            });
+            let (view, _) = load(&rt, &fixture, &uri(fixture.review_id), &owner);
+            assert!(view.editable);
+        }
+
+        #[test]
+        fn protected_counts_cover_every_kind_in_lock_order() {
+            let counts = protected_token_counts("Pay $1,000 and 15% on 2026-01-02, then 3 more.");
+            let kinds: Vec<&str> = counts.iter().map(|row| row.kind.as_str()).collect();
+            assert_eq!(kinds, ["number", "percentage", "currency", "date"]);
+            let count = |kind: &str| counts.iter().find(|row| row.kind == kind).unwrap().count;
+            assert_eq!(count("currency"), 1);
+            assert_eq!(count("percentage"), 1);
+            assert_eq!(count("date"), 1);
+            assert!(protected_token_counts("no figures here")
+                .iter()
+                .all(|row| row.count == 0));
+        }
+    }
 }

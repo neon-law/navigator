@@ -1840,4 +1840,386 @@ mod tests {
             .expect_err("a block with no END marker is malformed");
         assert!(error.to_string().contains("no END marker"), "{error}");
     }
+
+    fn running_cluster_json(endpoint: &str, ca: &str) -> String {
+        format!(
+            r#"{{"endpoint":"{endpoint}","status":"RUNNING","masterAuth":{{"clusterCaCertificate":"{ca}"}}}}"#
+        )
+    }
+
+    fn parse_error(response: &str) -> String {
+        match parse_gke_cluster_connection(response) {
+            Ok(connection) => panic!("expected a refusal, got {}", connection.endpoint),
+            Err(error) => format!("{error:#}"),
+        }
+    }
+
+    #[test]
+    fn a_cluster_connection_is_refused_until_it_is_complete() {
+        let provisioning = parse_error(&format!(
+            r#"{{"endpoint":"10.0.0.1","status":"PROVISIONING","masterAuth":{{"clusterCaCertificate":"{}"}}}}"#,
+            base64_pem(&[b"ca"])
+        ));
+        assert!(
+            provisioning.contains("not RUNNING yet (status: PROVISIONING)"),
+            "{provisioning}"
+        );
+
+        let blank = parse_error(&running_cluster_json("  ", &base64_pem(&[b"ca"])));
+        assert!(blank.contains("empty cluster endpoint"), "{blank}");
+
+        let not_base64 = parse_error(&running_cluster_json("10.0.0.1", "%%%"));
+        assert!(
+            not_base64.contains("decode GKE cluster CA certificate"),
+            "{not_base64}"
+        );
+
+        let empty_ca = parse_error(&running_cluster_json("10.0.0.1", ""));
+        assert!(
+            empty_ca.contains("empty cluster CA certificate"),
+            "{empty_ca}"
+        );
+
+        let malformed = parse_error("{\"endpoint\":");
+        assert!(
+            malformed.contains("parse GKE cluster connection response"),
+            "{malformed}"
+        );
+    }
+
+    #[test]
+    fn a_pem_bundle_must_be_utf8_with_base64_bodies() {
+        let not_utf8 =
+            pem_bundle_to_der(&[0xff, 0xfe, 0xfd]).expect_err("binary bytes are not PEM text");
+        assert!(not_utf8.to_string().contains("not UTF-8 PEM"), "{not_utf8}");
+
+        let bad_body =
+            pem_bundle_to_der(b"-----BEGIN CERTIFICATE-----\n%%%\n-----END CERTIFICATE-----\n")
+                .expect_err("a PEM body that is not base64 is refused");
+        assert!(
+            bad_body
+                .to_string()
+                .contains("decode a GKE cluster CA PEM block"),
+            "{bad_body}"
+        );
+    }
+
+    #[test]
+    fn gcloud_commands_are_pinned_to_the_deployments_project() {
+        let cfg = fixture_config();
+        let gsa = gsa_email(&cfg.project_id);
+        let project = &cfg.project_id;
+
+        assert_eq!(
+            render_command(&project_iam_policy_command(&cfg)),
+            format!("gcloud projects get-iam-policy {project} --format=json")
+        );
+        assert_eq!(
+            render_command(&service_account_iam_policy_command(&cfg, &gsa)),
+            format!(
+                "gcloud iam service-accounts get-iam-policy {gsa} --project={project} --format=json"
+            )
+        );
+        assert_eq!(
+            render_command(&workload_identity_binding_command(&cfg, &gsa)),
+            format!(
+                "gcloud iam service-accounts add-iam-policy-binding {gsa} --project={project} \
+                 --role roles/iam.workloadIdentityUser \
+                 --member=serviceAccount:{project}.svc.id.goog[{}/{OTEL_KSA}]",
+                cfg.namespace
+            )
+        );
+    }
+
+    fn shell(script: &str) -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    #[test]
+    fn an_iam_policy_is_read_from_the_commands_json_output() {
+        let policy = read_iam_policy(shell(
+            r#"printf '{"bindings":[{"role":"roles/a","members":["user:x"]}]}'"#,
+        ))
+        .expect("a JSON policy parses");
+        assert!(policy_grants_unconditional(&policy, "roles/a", "user:x"));
+
+        let failed = read_iam_policy(shell("echo denied >&2; exit 3"))
+            .expect_err("a failed read is an error");
+        let message = failed.to_string();
+        assert!(message.contains("read IAM policy failed"), "{message}");
+        assert!(
+            message.contains("denied"),
+            "the stderr must survive: {message}"
+        );
+
+        let garbled = read_iam_policy(shell("echo not-json")).expect_err("not a policy");
+        assert!(
+            garbled
+                .to_string()
+                .contains("parse IAM policy returned by sh -c"),
+            "{garbled}"
+        );
+
+        let missing = read_iam_policy(Command::new("navigator-no-such-program"))
+            .expect_err("a missing program is an error");
+        assert!(
+            missing
+                .to_string()
+                .contains("run navigator-no-such-program"),
+            "{missing}"
+        );
+    }
+
+    #[test]
+    fn only_an_unconditional_binding_counts_as_converged() {
+        let member = "serviceAccount:otel@example.iam.gserviceaccount.com";
+        let conditional = serde_json::json!({
+            "bindings": [{
+                "role": "roles/logging.logWriter",
+                "members": [member],
+                "condition": {"title": "expires", "expression": "request.time < timestamp('2030-01-01T00:00:00Z')"},
+            }],
+        });
+        assert!(!policy_grants_unconditional(
+            &conditional,
+            "roles/logging.logWriter",
+            member
+        ));
+
+        let null_condition = serde_json::json!({
+            "bindings": [{"role": "roles/logging.logWriter", "members": [member], "condition": null}],
+        });
+        assert!(policy_grants_unconditional(
+            &null_condition,
+            "roles/logging.logWriter",
+            member
+        ));
+        assert!(!policy_grants_unconditional(
+            &null_condition,
+            "roles/logging.logWriter",
+            "serviceAccount:someone-else@example.iam.gserviceaccount.com"
+        ));
+        assert!(!policy_grants_unconditional(
+            &null_condition,
+            "roles/cloudtrace.agent",
+            member
+        ));
+        assert!(!policy_grants_unconditional(
+            &serde_json::json!({"etag": "BwX"}),
+            "roles/logging.logWriter",
+            member
+        ));
+    }
+
+    #[test]
+    fn a_dry_run_prints_commands_and_a_live_run_reports_their_failure() {
+        exec(true, &mut Command::new("navigator-no-such-program"))
+            .expect("a dry run never spawns the program");
+        exec(false, &mut Command::new("true")).expect("a succeeding command is Ok");
+        let error = exec(false, &mut Command::new("false")).expect_err("a nonzero exit fails");
+        assert!(error.to_string().contains("command failed"), "{error}");
+    }
+
+    #[test]
+    fn a_control_plane_retry_returns_the_first_success_or_the_last_failure() {
+        use std::cell::Cell;
+
+        let built = Cell::new(0);
+        exec_with_control_plane_retry("IAM binding", true, 3, || {
+            built.set(built.get() + 1);
+            Command::new("navigator-no-such-program")
+        })
+        .expect("a dry run settles on its first attempt");
+        assert_eq!(built.get(), 1);
+
+        let built = Cell::new(0);
+        exec_with_control_plane_retry("IAM binding", false, 1, || {
+            built.set(built.get() + 1);
+            Command::new("true")
+        })
+        .expect("a succeeding command settles");
+        assert_eq!(built.get(), 1);
+
+        let error =
+            exec_with_control_plane_retry("IAM binding", false, 1, || Command::new("false"))
+                .expect_err("a permanent failure stays visible after the window");
+        assert!(error.to_string().contains("command failed"), "{error}");
+    }
+
+    #[test]
+    fn a_dry_run_renders_every_manifest_and_wires_both_binaries_without_a_cluster() {
+        let cfg = fixture_config();
+
+        apply_manifests(&cfg, Some(("ingress.example:4317", "default")), "20", true)
+            .expect("a dry run renders both manifests");
+        apply_manifests(&cfg, None, "100", true).expect("Dash0 is optional");
+        wait_for_gmp_operator(&cfg, true).expect("a dry run never reads the cluster");
+        wire_binaries(&cfg, true).expect("a dry run prints the patches");
+
+        let error = apply_manifests(&cfg, None, "101", true)
+            .expect_err("an out-of-range sampling percentage fails before any apply");
+        assert!(error.to_string().contains("between 0 and 100"), "{error}");
+    }
+
+    #[test]
+    fn a_failed_gsa_creation_or_binding_stops_the_iam_step() {
+        let cfg = fixture_config();
+        let gsa = gsa_email(&cfg.project_id);
+        let workload_member = format!(
+            "serviceAccount:{}.svc.id.goog[{}/{OTEL_KSA}]",
+            cfg.project_id, cfg.namespace
+        );
+        let iam = GsaIam {
+            gsa: &gsa,
+            workload_identity_member: &workload_member,
+        };
+
+        let create = ensure_gsa_iam_with(
+            iam,
+            || Ok(serde_json::json!({})),
+            || Ok(false),
+            || Err(anyhow::anyhow!("quota exceeded creating the GSA")),
+            || panic!("a GSA that failed to create has no policy to read"),
+            |_| panic!("no binding after a failed create"),
+            || panic!("no binding after a failed create"),
+        )
+        .expect_err("a failed create is an error");
+        assert!(create.to_string().contains("quota exceeded"), "{create}");
+
+        let probe = ensure_gsa_iam_with(
+            iam,
+            || Ok(serde_json::json!({})),
+            || Err(anyhow::anyhow!("gcloud is not authenticated")),
+            || panic!("an unknown GSA state must not create one"),
+            || panic!("an unknown GSA state stops the step"),
+            |_| panic!("no binding after a failed probe"),
+            || panic!("no binding after a failed probe"),
+        )
+        .expect_err("a failed probe is an error");
+        assert!(probe.to_string().contains("not authenticated"), "{probe}");
+
+        let bind = ensure_gsa_iam_with(
+            iam,
+            || Ok(serde_json::json!({})),
+            || Ok(true),
+            || panic!("an existing GSA is not recreated"),
+            || Ok(serde_json::json!({})),
+            |role| Err(anyhow::anyhow!("etag conflict binding {role}")),
+            || panic!("a failed project binding stops before Workload Identity"),
+        )
+        .expect_err("a failed binding is an error");
+        assert!(
+            bind.to_string()
+                .contains("etag conflict binding roles/cloudtrace.agent"),
+            "the first role fails first: {bind}"
+        );
+
+        let workload = ensure_gsa_iam_with(
+            iam,
+            || {
+                Ok(serde_json::json!({
+                    "bindings": OTEL_ROLES.iter().map(|role| serde_json::json!({
+                        "role": role,
+                        "members": [format!("serviceAccount:{gsa}")],
+                    })).collect::<Vec<_>>(),
+                }))
+            },
+            || Ok(true),
+            || panic!("an existing GSA is not recreated"),
+            || Ok(serde_json::json!({"bindings": []})),
+            |_| panic!("converged project roles are not rewritten"),
+            || Err(anyhow::anyhow!("workload identity pool not ready")),
+        )
+        .expect_err("a failed Workload Identity binding is an error");
+        assert!(
+            workload.to_string().contains("pool not ready"),
+            "{workload}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_cluster_connection_is_read_from_the_container_api() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let cfg = fixture_config();
+        let server = MockServer::start().await;
+        let cluster_path = format!(
+            "/v1/projects/{}/locations/{}/clusters/{}",
+            cfg.project_id, cfg.location, cfg.cluster
+        );
+        Mock::given(method("GET"))
+            .and(path(cluster_path.as_str()))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(running_cluster_json(
+                    "34.0.0.10",
+                    &base64_pem(&[b"cluster-ca"]),
+                )),
+            )
+            .mount(&server)
+            .await;
+        let client = GcpClient::new(std::sync::Arc::new(super::super::gcp::client::StaticToken(
+            "test-token".into(),
+        )))
+        .with_base_url(GcpService::Container, server.uri());
+
+        let connection = gke_cluster_connection(&client, &cfg)
+            .await
+            .expect("the selected cluster's connection is read");
+        assert_eq!(connection.endpoint, "34.0.0.10");
+        assert_eq!(connection.ca_bundle, vec![b"cluster-ca".to_vec()]);
+
+        let mut other = cfg;
+        other.cluster = "absent-cluster".into();
+        let Err(error) = gke_cluster_connection(&client, &other).await else {
+            panic!("an unmatched cluster must not resolve");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("did not return the selected cluster connection"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn operator_endpoints_are_absent_on_404_and_parsed_otherwise() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/ready"))
+            .and(header("authorization", "Bearer k8s-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "metadata": {"name": GMP_OPERATOR_ENDPOINTS},
+                "subsets": [{"addresses": [{"ip": "10.1.0.5"}]}],
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/broken"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+
+        let ready = get_endpoints(&client, &format!("{}/ready", server.uri()), "k8s-token")
+            .await
+            .expect("a ready endpoint reads");
+        assert!(gmp_operator_is_ready(ready.as_ref()));
+
+        let absent = get_endpoints(&client, &format!("{}/absent", server.uri()), "k8s-token")
+            .await
+            .expect("a 404 is not an error");
+        assert!(absent.is_none());
+        assert!(!gmp_operator_is_ready(absent.as_ref()));
+
+        get_endpoints(&client, &format!("{}/broken", server.uri()), "k8s-token")
+            .await
+            .expect_err("a server error is an error");
+    }
 }

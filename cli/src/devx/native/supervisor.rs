@@ -446,8 +446,9 @@ fn detach(_command: &mut Command) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        describes, is_live, ledger_path, matches_command, matches_identity, owns_pid,
-        process_identity, program_name, service_dir, still_ours, tail, Service, Started,
+        describes, discover, ensure_all_with_existing, expected_command, is_live, ledger_path,
+        log_path, matches_command, matches_identity, owns_pid, process_identity, program_name,
+        read_ledger, service_dir, start, still_ours, stop, tail, write_ledger, Service, Started,
     };
     use std::path::{Path, PathBuf};
 
@@ -634,6 +635,223 @@ mod tests {
         assert!(
             !still_ours(&record),
             "a record that outlived its process is not evidence of one"
+        );
+    }
+
+    /// A loopback listener the test holds open, standing in for a
+    /// dependency that has bound its port.
+    fn listener() -> (std::net::TcpListener, u16) {
+        let bound = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("the loopback interface hands out an ephemeral port");
+        let port = bound.local_addr().expect("bound listener").port();
+        (bound, port)
+    }
+
+    fn sleep_service(root: &Path, port: u16) -> Service {
+        Service {
+            label: "sleeper",
+            program: PathBuf::from("/bin/sleep"),
+            args: vec!["30".into()],
+            env: vec![("NAVIGATOR_SUPERVISOR_TEST".into(), "1".into())],
+            cwd: root.to_path_buf(),
+            port,
+        }
+    }
+
+    fn lsof_available() -> bool {
+        std::process::Command::new("lsof")
+            .arg("-v")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+    }
+
+    /// Wait out the `ps` refresh after a signal, bounded.
+    fn eventually_gone(record: &Started) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if !still_ours(record) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        false
+    }
+
+    #[test]
+    fn the_ledger_round_trips_and_an_unreadable_one_reads_as_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        assert!(read_ledger(root).is_empty(), "no ledger yet");
+
+        let record = Started {
+            label: "surreal".into(),
+            pid: 4242,
+            port: 20_034,
+            program: "surreal".into(),
+            command: "/opt/homebrew/bin/surreal start memory".into(),
+            start_time: "Mon Jan  1 00:00:00 2024".into(),
+        };
+        write_ledger(root, std::slice::from_ref(&record)).unwrap();
+        assert_eq!(read_ledger(root), vec![record]);
+
+        std::fs::write(ledger_path(root), "{ not json").unwrap();
+        assert!(
+            read_ledger(root).is_empty(),
+            "a corrupt ledger names no process, so nothing is signalled"
+        );
+    }
+
+    #[test]
+    fn the_expected_command_is_the_program_path_then_its_arguments() {
+        assert_eq!(
+            expected_command(&service()),
+            "/opt/homebrew/bin/surreal start memory"
+        );
+        let bare = Service {
+            args: Vec::new(),
+            ..service()
+        };
+        assert_eq!(expected_command(&bare), "/opt/homebrew/bin/surreal");
+    }
+
+    /// A record whose PID names no running process is never signalled.
+    #[test]
+    fn stopping_a_record_with_no_matching_process_is_a_no_op() {
+        let record = Started {
+            label: "ghost".into(),
+            pid: u32::MAX,
+            port: 1,
+            program: "navigator-no-such-program".into(),
+            command: "navigator-no-such-program".into(),
+            start_time: String::new(),
+        };
+        assert!(!still_ours(&record));
+        stop(&record);
+    }
+
+    /// A start is reported once the port answers, records the identity
+    /// `down` will re-check, and truncates the previous run's log.
+    #[test]
+    fn a_started_process_is_recorded_with_its_identity_and_stops_on_request() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let (_held, port) = listener();
+        let service = sleep_service(root, port);
+        std::fs::create_dir_all(service_dir(root, service.label)).unwrap();
+        std::fs::write(log_path(root, service.label), "an earlier run's failure\n").unwrap();
+
+        let record = start(root, &service).expect("the port answers, so the start succeeds");
+
+        assert_eq!(record.label, "sleeper");
+        assert_eq!(record.port, port);
+        assert_eq!(record.program, "sleep");
+        assert!(
+            record.command.starts_with("/bin/sleep 30"),
+            "{}",
+            record.command
+        );
+        assert!(!record.start_time.is_empty());
+        assert!(describes(&record, &service));
+        assert!(still_ours(&record));
+        assert!(
+            is_live(&record),
+            "the identity matches and the port answers"
+        );
+        assert_eq!(
+            std::fs::read_to_string(log_path(root, service.label)).unwrap(),
+            "",
+            "the log is truncated for the new process"
+        );
+
+        stop(&record);
+        assert!(
+            eventually_gone(&record),
+            "stop signals the recorded process"
+        );
+    }
+
+    /// A live record from the host registry is reused rather than started
+    /// again, and the worktree ledger records it.
+    #[test]
+    fn a_live_registered_record_is_reused_and_written_to_the_ledger() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let (_held, port) = listener();
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn a process to reuse");
+        let (command, start_time) =
+            process_identity(child.id()).expect("a just-spawned process is visible to ps");
+        let registered = Started {
+            label: "sleeper".into(),
+            pid: child.id(),
+            port,
+            program: "sleep".into(),
+            command,
+            start_time,
+        };
+
+        let records = ensure_all_with_existing(
+            root,
+            &[sleep_service(root, port)],
+            std::slice::from_ref(&registered),
+        )
+        .expect("a live record needs no start");
+
+        assert_eq!(records, vec![registered.clone()]);
+        assert_eq!(read_ledger(root), vec![registered]);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// With no reusable record, a listener that is not the expected command
+    /// is not adopted: the service is started instead.
+    #[test]
+    fn an_unrelated_listener_is_not_adopted_and_the_service_is_started() {
+        if !lsof_available() {
+            eprintln!("skipping: lsof is not installed");
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let (_held, port) = listener();
+        let service = sleep_service(root, port);
+
+        assert_eq!(
+            discover(root, &service).unwrap(),
+            None,
+            "the test's own listener is not /bin/sleep"
+        );
+        let records = ensure_all_with_existing(root, &[service], &[]).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].program, "sleep");
+        assert_eq!(read_ledger(root), records);
+
+        stop(&records[0]);
+        assert!(eventually_gone(&records[0]));
+    }
+
+    #[test]
+    fn a_port_nobody_listens_on_discovers_nothing() {
+        if !lsof_available() {
+            eprintln!("skipping: lsof is not installed");
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let port = {
+            let (held, port) = listener();
+            drop(held);
+            port
+        };
+        assert_eq!(
+            discover(temp.path(), &sleep_service(temp.path(), port)).unwrap(),
+            None
         );
     }
 }

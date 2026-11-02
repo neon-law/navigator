@@ -1913,4 +1913,586 @@ mod tests {
         assert!(html.contains("Showing Brand neon"), "{html}");
         assert!(html.contains("No conversations yet."), "{html}");
     }
+
+    #[cfg(feature = "server")]
+    mod loaders {
+        use super::super::*;
+        use crate::inbox::server_fn_test_support::{call, request_parts, runtime, Viewer};
+        use store::persons::{NewPerson, Role};
+
+        struct World {
+            surreal: store::surreal::SurrealDb,
+            owner: uuid::Uuid,
+            lawyer: uuid::Uuid,
+            project_code: String,
+            assigned: uuid::Uuid,
+            intake: uuid::Uuid,
+        }
+
+        async fn person(db: &store::surreal::SurrealDb, label: &str, role: Role) -> uuid::Uuid {
+            store::persons::create(
+                db,
+                &NewPerson::with_role(
+                    format!("{label} Person"),
+                    format!("{label}-{}@example.com", uuid::Uuid::now_v7()),
+                    role,
+                ),
+            )
+            .await
+            .unwrap()
+            .id
+        }
+
+        fn inbound<'a>(
+            firm: uuid::Uuid,
+            channel: &'a str,
+            provider_message_id: &'a str,
+            address: &'a str,
+            subject: Option<&'a str>,
+        ) -> store::inbox::IngestInbound<'a> {
+            store::inbox::IngestInbound {
+                project_id: None,
+                firm_id: firm,
+                brand_key: Some("neon"),
+                interaction_type: None,
+                provider_post_id: None,
+                parent_provider_message_id: None,
+                visibility: None,
+                channel,
+                provider_account: "support@example.com",
+                provider_message_id,
+                provider_thread_ref: None,
+                external_address: address,
+                external_name: Some("Sender Name"),
+                subject,
+                body: "Hello from outside.",
+                source_page: Some("/contact"),
+                source_channel: Some(channel),
+                matter_consent: true,
+                promotional_opt_in: false,
+                email_conversation_id: None,
+                attachments: Vec::new(),
+                occurred_at: "2026-09-27T00:00:00Z",
+                raw_storage_key: None,
+            }
+        }
+
+        /// A Firm with an Owner and a participating Lawyer, one Project, an
+        /// email conversation assigned to that Project (carrying two linked
+        /// attachments), and a text conversation still in intake.
+        async fn world() -> World {
+            let surreal = store::test_support::mem_surreal().await;
+            let owner = person(&surreal, "owner", Role::Owner).await;
+            let admin = person(&surreal, "admin", Role::Admin).await;
+            let lawyer = person(&surreal, "lawyer", Role::Lawyer).await;
+            let firm = store::firms::create(
+                &surreal,
+                &store::firms::NewFirm {
+                    name: "Inbox Loader Practice".into(),
+                    status: "active".into(),
+                    entity_id: store::test_support::seed_entity(&surreal).await,
+                    admin_dri_person_id: admin,
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            store::firms::ensure_membership(
+                &surreal,
+                &store::firms::NewPersonFirmRole {
+                    person_id: lawyer,
+                    firm_id: firm,
+                    membership: store::firms::FirmMembership::Lawyer,
+                    is_dri: false,
+                },
+            )
+            .await
+            .unwrap();
+            let project_code = "inbox-loader-matter".to_string();
+            let project = store::projects::create(
+                &surreal,
+                &store::projects::NewProject {
+                    code: project_code.clone(),
+                    name: "Inbox Loader Matter".into(),
+                    status: "open".into(),
+                    entity_id: store::test_support::seed_entity(&surreal).await,
+                    firm_id: Some(firm),
+                    ..store::projects::NewProject::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            store::projects::designate_dri_in_surreal(
+                &surreal,
+                project,
+                lawyer,
+                store::projects::DriSide::Lawyer,
+            )
+            .await
+            .unwrap();
+
+            let mut email = inbound(
+                firm,
+                store::inbox::channel::EMAIL,
+                "loader-email-1",
+                "client@example.com",
+                Some("Notice of hearing"),
+            );
+            email.attachments = vec![
+                store::inbox::IngestAttachment {
+                    asset_id: uuid::Uuid::now_v7(),
+                    filename: "notice.pdf".into(),
+                    sha256: "sha-notice".into(),
+                },
+                store::inbox::IngestAttachment {
+                    asset_id: uuid::Uuid::now_v7(),
+                    filename: "exhibit.pdf".into(),
+                    sha256: "sha-exhibit".into(),
+                },
+            ];
+            let assigned = store::inbox::ingest_inbound(&surreal, &email)
+                .await
+                .unwrap()
+                .conversation_id;
+            store::inbox::assign(&surreal, owner, assigned, project)
+                .await
+                .unwrap();
+            let intake = store::inbox::ingest_inbound(
+                &surreal,
+                &inbound(
+                    firm,
+                    store::inbox::channel::SMS,
+                    "loader-sms-1",
+                    "+15555550123",
+                    None,
+                ),
+            )
+            .await
+            .unwrap()
+            .conversation_id;
+            World {
+                surreal,
+                owner,
+                lawyer,
+                project_code,
+                assigned,
+                intake,
+            }
+        }
+
+        fn load<T, F: std::future::Future<Output = Result<T, ServerFnError>>>(
+            rt: &tokio::runtime::Runtime,
+            world: &World,
+            route: &str,
+            uri: &str,
+            viewer: &Viewer,
+            loader: impl FnOnce() -> F,
+        ) -> Result<T, ServerFnError> {
+            let parts = request_parts(rt, route, uri, viewer);
+            call(
+                rt,
+                parts,
+                |dom| dom.provide_root_context(world.surreal.clone()),
+                loader,
+            )
+            .0
+        }
+
+        #[test]
+        fn the_firm_list_reads_every_conversation_and_honors_its_filters() {
+            let rt = runtime();
+            let world = rt.block_on(world());
+            let owner = Viewer::new(ViewerRole::Owner, Some(world.owner));
+
+            let page = load(
+                &rt,
+                &world,
+                INBOX_PATH,
+                INBOX_PATH,
+                &owner,
+                owner_inbox_page,
+            )
+            .unwrap();
+            assert_eq!(page.title, "Inbox");
+            assert_eq!(page.base_href, INBOX_PATH);
+            assert_eq!(
+                page.rows.len(),
+                2,
+                "both conversations are in the Firm list"
+            );
+            assert_eq!(page.brands, vec!["neon".to_string()]);
+            assert_eq!(page.channels, inbox_channels());
+            assert_eq!(page.csrf_token, "CSRF");
+            let text = page
+                .rows
+                .iter()
+                .find(|row| row.id == world.intake.to_string())
+                .unwrap();
+            assert_eq!(text.subject, "(no subject)");
+            assert_eq!(text.sender, "Sender Name");
+            assert_eq!(text.href, format!("/app/inbox/{}", world.intake));
+            assert!(!text.updated_iso.is_empty());
+
+            let uri = format!(
+                "{INBOX_PATH}?channel=email&brand=neon&unread=true&direction=inbound&attachments=true&error=Choose%20a%20project"
+            );
+            let page = load(&rt, &world, INBOX_PATH, &uri, &owner, owner_inbox_page).unwrap();
+            assert_eq!(page.channel_filter.as_deref(), Some("email"));
+            assert_eq!(page.brand_filter.as_deref(), Some("neon"));
+            assert_eq!(page.direction_filter.as_deref(), Some("inbound"));
+            assert!(page.unread_only && page.attachments_only);
+            assert_eq!(page.error.as_deref(), Some("Choose a project"));
+            assert_eq!(page.rows.len(), 1);
+            assert_eq!(page.rows[0].id, world.assigned.to_string());
+            assert!(page.rows[0].has_attachments);
+
+            // Values the filter strip never offers are dropped, not applied.
+            let uri = format!("{INBOX_PATH}?channel=fax&brand=vesta&direction=sideways&brand=%20");
+            let page = load(&rt, &world, INBOX_PATH, &uri, &owner, owner_inbox_page).unwrap();
+            assert_eq!(page.channel_filter, None);
+            assert_eq!(page.brand_filter, None);
+            assert_eq!(page.direction_filter, None);
+            assert_eq!(page.rows.len(), 2);
+        }
+
+        #[test]
+        fn the_firm_list_refuses_a_client_and_an_unlinked_session() {
+            let rt = runtime();
+            let world = rt.block_on(world());
+            for viewer in [
+                Viewer::new(ViewerRole::Client, Some(world.owner)),
+                Viewer::new(ViewerRole::Owner, None),
+            ] {
+                assert!(load(
+                    &rt,
+                    &world,
+                    INBOX_PATH,
+                    INBOX_PATH,
+                    &viewer,
+                    owner_inbox_page
+                )
+                .is_err());
+            }
+        }
+
+        #[test]
+        fn the_firm_thread_shows_the_transcript_and_the_assign_control() {
+            let rt = runtime();
+            let world = rt.block_on(world());
+            let owner = Viewer::new(ViewerRole::Owner, Some(world.owner));
+
+            let page = load(
+                &rt,
+                &world,
+                INBOX_THREAD_PATH,
+                &format!("/app/inbox/{}", world.assigned),
+                &owner,
+                owner_inbox_thread,
+            )
+            .unwrap();
+            assert_eq!(page.title, "Notice of hearing");
+            assert_eq!(page.assignee, "Inbox Loader Matter");
+            assert_eq!(page.brand_key.as_deref(), Some("neon"));
+            assert_eq!(page.provider_account, "support@example.com");
+            assert_eq!(page.sender, "Sender Name");
+            assert_eq!(page.channel, "email");
+            assert_eq!(page.delivery, store::inbox::delivery::RECEIVED);
+            assert_eq!(
+                page.assign_action,
+                Some(format!("/app/inbox/{}/assign", world.assigned))
+            );
+            assert!(
+                !page.can_attribute,
+                "an Owner assigns rather than attributes"
+            );
+            assert!(page
+                .projects
+                .iter()
+                .any(|project| project.label == "Inbox Loader Matter (inbox-loader-matter)"));
+            if page.bodies_visible {
+                assert_eq!(page.messages.len(), 1);
+                assert_eq!(page.messages[0].body, "Hello from outside.");
+                assert_eq!(
+                    page.messages[0].provider_message_id.as_deref(),
+                    Some("loader-email-1")
+                );
+                assert!(!page.messages[0].internal);
+            }
+
+            let page = load(
+                &rt,
+                &world,
+                INBOX_THREAD_PATH,
+                &format!("/app/inbox/{}", world.intake),
+                &owner,
+                owner_inbox_thread,
+            )
+            .unwrap();
+            assert_eq!(
+                page.title, "+15555550123",
+                "no subject falls back to the address"
+            );
+            assert_eq!(page.assignee, "Unassigned");
+
+            assert!(load(
+                &rt,
+                &world,
+                INBOX_THREAD_PATH,
+                "/app/inbox/not-a-conversation",
+                &owner,
+                owner_inbox_thread,
+            )
+            .is_err());
+        }
+
+        #[test]
+        fn the_project_list_and_thread_read_the_assigned_conversation() {
+            let rt = runtime();
+            let world = rt.block_on(world());
+            let lawyer = Viewer::new(ViewerRole::Lawyer, Some(world.lawyer));
+            let code = &world.project_code;
+
+            let page = load(
+                &rt,
+                &world,
+                PROJECT_INBOX_PATH,
+                &format!("/app/projects/{code}/inbox?brand=neon"),
+                &lawyer,
+                project_inbox_page,
+            )
+            .unwrap();
+            assert_eq!(page.title, "Inbox Loader Matter inbox");
+            assert_eq!(page.base_href, format!("/app/projects/{code}/inbox"));
+            assert_eq!(page.brands, vec!["neon".to_string()]);
+            assert_eq!(page.brand_filter.as_deref(), Some("neon"));
+            assert_eq!(page.compose_action, None);
+            assert_eq!(page.rows.len(), 1, "only the assigned conversation");
+            assert_eq!(
+                page.rows[0].href,
+                format!("/app/projects/{code}/inbox/{}", world.assigned)
+            );
+
+            let page = load(
+                &rt,
+                &world,
+                PROJECT_INBOX_THREAD_PATH,
+                &format!("/app/projects/{code}/inbox/{}", world.assigned),
+                &lawyer,
+                project_inbox_thread,
+            )
+            .unwrap();
+            assert_eq!(page.title, "Notice of hearing");
+            assert!(page.bodies_visible);
+            assert_eq!(page.sender, "Sender Name");
+            assert_eq!(page.messages.len(), 1);
+            let attachments = &page.messages[0].attachments;
+            assert_eq!(attachments.len(), 2, "{:?}", attachments.len());
+            assert_eq!(attachments[0].filename.as_deref(), Some("notice.pdf"));
+            assert_eq!(attachments[1].filename.as_deref(), Some("exhibit.pdf"));
+            assert!(
+                attachments[0].href.starts_with("/app/api/projects/"),
+                "{}",
+                attachments[0].href
+            );
+            if let Some(note) = page.note_action.as_deref() {
+                assert_eq!(
+                    note,
+                    format!("/app/projects/{code}/inbox/{}/notes", world.assigned)
+                );
+            }
+        }
+
+        #[test]
+        fn the_project_pages_refuse_an_unknown_matter_and_a_bad_path() {
+            let rt = runtime();
+            let world = rt.block_on(world());
+            let lawyer = Viewer::new(ViewerRole::Lawyer, Some(world.lawyer));
+            assert!(load(
+                &rt,
+                &world,
+                PROJECT_INBOX_PATH,
+                "/app/projects/no-such-matter/inbox",
+                &lawyer,
+                project_inbox_page,
+            )
+            .is_err());
+            assert!(load(
+                &rt,
+                &world,
+                PROJECT_INBOX_THREAD_PATH,
+                &format!("/app/projects/{}/inbox/not-a-uuid", world.project_code),
+                &lawyer,
+                project_inbox_thread,
+            )
+            .is_err());
+            assert!(load(
+                &rt,
+                &world,
+                PROJECT_INBOX_THREAD_PATH,
+                &format!("/app/projects/no-such-matter/inbox/{}", world.assigned),
+                &lawyer,
+                project_inbox_thread,
+            )
+            .is_err());
+            assert!(load(
+                &rt,
+                &world,
+                PROJECT_INBOX_PATH,
+                &format!("/app/projects/{}/inbox", world.project_code),
+                &Viewer::new(ViewerRole::Lawyer, None),
+                project_inbox_page,
+            )
+            .is_err());
+        }
+
+        #[test]
+        fn intake_brands_are_sorted_and_deduplicated() {
+            let row = |brand: Option<&str>| store::inbox::IntakeRow {
+                contact: None,
+                id: uuid::Uuid::now_v7(),
+                firm_id: uuid::Uuid::nil(),
+                brand_key: brand.map(str::to_string),
+                project_id: None,
+                channel: "email".into(),
+                assignee: "Unassigned".into(),
+                unread: false,
+                delivery: "received".into(),
+                next_action: "Assign".into(),
+                external_address: "a@example.com".into(),
+                external_name: Some(" ".into()),
+                subject: Some("  ".into()),
+                direction: store::inbox::direction::INBOUND.into(),
+                has_attachments: false,
+                updated_at: chrono::Utc::now(),
+            };
+            let rows = [
+                row(Some("vesta")),
+                row(None),
+                row(Some("neon")),
+                row(Some("vesta")),
+            ];
+            assert_eq!(
+                inbox_brands(&rows),
+                vec!["neon".to_string(), "vesta".to_string()]
+            );
+            // A blank name and subject fall back to the address and a placeholder.
+            let view = row_view(&rows[1], "/x".into());
+            assert_eq!(view.sender, "a@example.com");
+            assert_eq!(view.subject, "(no subject)");
+        }
+    }
+}
+
+/// Drives a `#[server]` loader the way the portal router does, without a
+/// router-mounted render: the request parts carry the extensions the auth
+/// layer injects (viewer role, person id, CSRF token) and the path parameters
+/// a matched route records, and the loader runs inside a Dioxus scope that
+/// provides the store handles the portal's `ServeConfig` would.
+#[cfg(all(test, feature = "server"))]
+pub(crate) mod server_fn_test_support {
+    use std::future::Future;
+    use std::sync::{Arc, Mutex};
+
+    use dioxus::prelude::*;
+    use dioxus_fullstack_core::FullstackContext;
+
+    use crate::people::ViewerRole;
+
+    /// Who the request is from, as the auth layer would inject it.
+    #[derive(Clone, Default)]
+    pub(crate) struct Viewer {
+        pub role: Option<ViewerRole>,
+        pub person_id: Option<uuid::Uuid>,
+        pub csrf_token: Option<String>,
+    }
+
+    impl Viewer {
+        pub(crate) fn new(role: ViewerRole, person_id: Option<uuid::Uuid>) -> Self {
+            Self {
+                role: Some(role),
+                person_id,
+                csrf_token: Some("CSRF".to_string()),
+            }
+        }
+    }
+
+    /// A multi-threaded runtime, so the embedded store's own tasks keep
+    /// running while a loader is polled on the test thread.
+    pub(crate) fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("test runtime")
+    }
+
+    /// The request parts a router hands its handler for `uri` matched against
+    /// `route`, so `axum::extract::Path` resolves inside the loader.
+    pub(crate) fn request_parts(
+        rt: &tokio::runtime::Runtime,
+        route: &str,
+        uri: &str,
+        viewer: &Viewer,
+    ) -> axum::http::request::Parts {
+        let slot: Arc<Mutex<Option<axum::http::request::Parts>>> = Arc::default();
+        let captured = slot.clone();
+        let router = axum::Router::new().route(
+            route,
+            axum::routing::get(move |request: axum::extract::Request| {
+                let captured = captured.clone();
+                async move {
+                    *captured.lock().expect("slot") = Some(request.into_parts().0);
+                    axum::http::StatusCode::OK
+                }
+            }),
+        );
+        let mut request = axum::http::Request::builder()
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .expect("request");
+        let extensions = request.extensions_mut();
+        if let Some(role) = viewer.role {
+            extensions.insert(role);
+        }
+        extensions.insert(crate::portal_project_list::PersonId(
+            viewer.person_id.map(|id| id.to_string()),
+        ));
+        if let Some(token) = viewer.csrf_token.clone() {
+            extensions.insert(crate::csrf::CsrfToken(token));
+        }
+        let response = rt.block_on(axum::handler::Handler::call(
+            axum::routing::any_service(router),
+            request,
+            (),
+        ));
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::OK,
+            "`{uri}` does not match `{route}`"
+        );
+        let parts = slot.lock().expect("slot").take();
+        parts.expect("the route captured its request")
+    }
+
+    /// Run `loader` inside a Dioxus scope whose root context `provide` fills,
+    /// under a request context built from `parts`. Returns the loader's
+    /// result and the HTTP status the loader committed.
+    pub(crate) fn call<T, F>(
+        rt: &tokio::runtime::Runtime,
+        parts: axum::http::request::Parts,
+        provide: impl FnOnce(&VirtualDom),
+        loader: impl FnOnce() -> F,
+    ) -> (T, axum::http::StatusCode)
+    where
+        F: Future<Output = T>,
+    {
+        let dom = VirtualDom::new(|| rsx! {});
+        provide(&dom);
+        let context = FullstackContext::new(parts);
+        let result = dom.in_scope(ScopeId::ROOT, || {
+            rt.block_on(context.clone().scope(loader()))
+        });
+        (result, context.current_http_status().status)
+    }
 }

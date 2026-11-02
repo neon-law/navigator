@@ -414,4 +414,62 @@ mod tests {
         assert!(source.contains("\"NotationReset\""));
         assert!(source.contains("notation_reset::run_key(chrono::Utc::now())"));
     }
+
+    #[test]
+    fn the_journaled_clock_must_be_rfc_3339() {
+        let at = parse_clock("2026-10-21T04:20:00+02:00").expect("an RFC 3339 instant");
+        assert_eq!(at.to_rfc3339(), "2026-10-21T02:20:00+00:00");
+        let error = parse_clock("yesterday").expect_err("not RFC 3339");
+        assert!(
+            format!("{error:?}").contains("the journaled clock is not RFC 3339"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn configuration_failures_name_what_is_missing() {
+        let channel = validate_configuration("", true).unwrap_err();
+        assert!(format!("{channel:?}").contains("messages channel id"));
+        let bot = validate_configuration("C-MESSAGES", false).unwrap_err();
+        assert!(format!("{bot:?}").contains("SLACK_BOT_TOKEN"));
+    }
+
+    #[tokio::test]
+    async fn a_simulated_deployment_posts_to_its_staging_channel() {
+        let surreal = mem_surreal().await;
+        let bot: Arc<dyn SlackBot> = Arc::new(workflows::CapturingSlackBot::new());
+        let service = |simulated| {
+            NotationResetService::new(
+                surreal.clone(),
+                Arc::clone(&bot),
+                "C-MESSAGES".into(),
+                "C-STAGING-MESSAGES".into(),
+                "staging",
+                simulated,
+                true,
+            )
+        };
+        assert_eq!(service(true).channel_id(), "C-STAGING-MESSAGES");
+        assert_eq!(service(false).channel_id(), "C-MESSAGES");
+        assert_eq!(service(false).environment, "staging");
+        assert!(service(false).slack_enabled);
+    }
+
+    #[tokio::test]
+    async fn discovery_lists_drafts_and_skips_lawyer_review() {
+        let surreal = mem_surreal().await;
+        assert!(discover_drafts(&surreal)
+            .await
+            .unwrap()
+            .notations
+            .is_empty());
+        let draft = seed_notation(&surreal).await;
+        let reviewed = seed_notation(&surreal).await;
+        store::notations::update_state(&surreal, reviewed, "lawyer_review__pending")
+            .await
+            .unwrap();
+        let roster = discover_drafts(&surreal).await.unwrap();
+        assert_eq!(roster.notations, vec![draft]);
+        assert!(roster.previews.is_empty());
+    }
 }
