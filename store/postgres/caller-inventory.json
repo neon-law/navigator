@@ -396,6 +396,7 @@
       "portal/src/project_portal.rs",
       "portal/src/retainer_walk.rs",
       "portal/src/site_brand.rs",
+      "portal/src/ssh_keys.rs",
       "portal/src/visitor_analytics.rs",
       "rules/src/citation.rs",
       "rules/src/clauses.rs",
