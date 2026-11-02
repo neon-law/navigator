@@ -409,7 +409,7 @@ async fn the_hourly_path_bills_time_and_confirmed_costs_once() {
     // Two entries at their snapshotted rate (90 and 30 minutes) plus the
     // confirmed cost; the estimated cost and the non-billable entry are
     // nobody's invoice.
-    let expected = 3 * RATE_CENTS_PER_HOUR as i64 / 2 + 1_250;
+    let expected = 3 * i64::from(RATE_CENTS_PER_HOUR) / 2 + 1_250;
     assert_eq!(receipt["total_cents"], expected);
     assert_eq!(receipt["consumed_time_entries"], 2);
     assert_eq!(receipt["consumed_costs"], 1);
@@ -517,7 +517,7 @@ async fn already_invoiced_entries_are_skipped() {
             xero_invoice_id: earlier.clone(),
             reference: format!("Matter earlier-{}", Uuid::now_v7().simple()),
             status: "AUTHORISED".into(),
-            amount_cents: 3 * RATE_CENTS_PER_HOUR as i64 / 2,
+            amount_cents: 3 * i64::from(RATE_CENTS_PER_HOUR) / 2,
             currency: "USD".into(),
             issued_at: Utc::now(),
             due_at: None,
