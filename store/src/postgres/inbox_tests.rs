@@ -46,6 +46,167 @@ struct Fixture {
     entity: Uuid,
 }
 
+#[tokio::test]
+async fn native_sms_requires_consent_and_reuses_the_private_thread() {
+    let Some(f) = fixture().await else { return };
+    let account = format!("+{}", 15_550_100_000_u64);
+    let recipient = format!("+{}", 15_555_550_123_u64);
+    let open = |actor, consent, body: &'static str| {
+        let account = account.clone();
+        let recipient = recipient.clone();
+        let f = &f;
+        async move {
+            pg_inbox::open_sms_conversation_on(
+                &f.pg, &f.db, actor, f.firm, None, &account, &recipient, body, consent,
+            )
+            .await
+        }
+    };
+    assert!(matches!(
+        open(f.owner, false, "hello").await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        open(f.lawyer, true, "hello").await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        open(f.owner, true, "  ").await,
+        Err(InboxError::Empty)
+    ));
+    assert_eq!(conversation_count(&f.pg).await, 0);
+    let (conversation, first) = open(f.owner, true, " first text ").await.unwrap();
+    let (again, second) = open(f.owner, true, "second text").await.unwrap();
+    assert_eq!(again, conversation);
+    assert_ne!(first, second);
+    let row = pg_inbox::conversation_by_id_on(&f.pg, conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.channel, channel::SMS);
+    assert_eq!(row.external_address, recipient);
+    assert!(row.matter_consent);
+    let reply = pg_inbox::queue_sms_reply_on(&f.pg, &f.db, f.owner, conversation, " reply ")
+        .await
+        .unwrap();
+    let message = pg_inbox::message_by_id_on(&f.pg, reply)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(message.body, "reply");
+    assert_eq!(message.delivery_state, delivery::QUEUED);
+    assert_eq!(message.direction, direction::OUTBOUND);
+    assert!(matches!(
+        pg_inbox::queue_sms_reply_on(&f.pg, &f.db, f.lawyer, conversation, "denied").await,
+        Err(InboxError::Denied)
+    ));
+    for body in [String::new(), "x".repeat(crate::inbox::SMS_BODY_LIMIT + 1)] {
+        assert!(matches!(
+            pg_inbox::queue_sms_reply_on(&f.pg, &f.db, f.owner, conversation, &body).await,
+            Err(InboxError::Empty)
+        ));
+    }
+    let detail = pg_inbox::intake_detail_on(&f.pg, &f.db, f.owner, conversation)
+        .await
+        .unwrap();
+    assert!(detail.can_sms_reply && detail.bodies_visible);
+    assert_eq!(detail.messages.len(), 3);
+    let listed = pg_inbox::list_intake_on(&f.pg, &f.db, f.owner)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, conversation);
+}
+
+#[tokio::test]
+async fn native_contact_link_is_idempotent_and_refuses_number_takeover() {
+    let Some(f) = fixture().await else { return };
+    let account = format!("+{}", 15_550_100_000_u64);
+    let number = format!("+{}", 15_555_550_124_u64);
+    let sms = pg_inbox::ingest_inbound_on(
+        &f.pg,
+        &inbound(f.firm, channel::SMS, &account, "contact-link", &number),
+    )
+    .await
+    .unwrap();
+    let email = "synthetic.contact@example.com";
+    let contact = persons::create(
+        &f.db,
+        &NewPerson::with_role("synthetic contact", email, Role::Client),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.lawyer, sms.conversation_id, email).await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::link_contact_phone_on(
+            &f.pg,
+            &f.db,
+            f.owner,
+            sms.conversation_id,
+            "missing@example.com"
+        )
+        .await,
+        Err(InboxError::Contact(_))
+    ));
+    let linked = pg_inbox::link_contact_phone_on(
+        &f.pg,
+        &f.db,
+        f.owner,
+        sms.conversation_id,
+        " SYNTHETIC.CONTACT@example.com ",
+    )
+    .await
+    .unwrap();
+    assert_eq!(linked.person_id, contact.id);
+    let again = pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, sms.conversation_id, email)
+        .await
+        .unwrap();
+    assert_eq!(again.person_id, contact.id);
+    let rival = persons::create(
+        &f.db,
+        &NewPerson::with_role("synthetic rival", "rival@example.com", Role::Client),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, sms.conversation_id, &rival.email)
+            .await,
+        Err(InboxError::Contact(_))
+    ));
+    assert_eq!(
+        persons::find_by_id(&f.db, contact.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .phone
+            .as_deref(),
+        Some(number.as_str())
+    );
+    let detail = pg_inbox::intake_detail_on(&f.pg, &f.db, f.owner, sms.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(detail.contact.unwrap().person_id, contact.id);
+    let email_thread = pg_inbox::ingest_inbound_on(
+        &f.pg,
+        &inbound(f.firm, channel::EMAIL, "mailbox", "email-not-sms", email),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, email_thread.conversation_id, email)
+            .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::queue_sms_reply_on(&f.pg, &f.db, f.owner, email_thread.conversation_id, "text")
+            .await,
+        Err(InboxError::Denied)
+    ));
+}
+
 // Builds the full cross-store world: PostgreSQL schema plus reference rows
 // and the mem-Surreal firm/project/participation graph.
 #[allow(clippy::too_many_lines)]
@@ -941,6 +1102,76 @@ async fn assigned_email(fixture: &Fixture, provider_id: &str) -> crate::inbox::I
     .await
     .unwrap();
     ingested
+}
+
+#[tokio::test]
+async fn native_email_relay_loses_authority_when_participation_is_removed() {
+    let Some(f) = fixture().await else { return };
+    let ingested = assigned_email(&f, "relay-authority").await;
+    let email_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO email_conversation (id,token,external_email,subject,status,firm_id,project_id,inserted_at,updated_at) \
+         VALUES ($1,$2,'sender@example.com','Synthetic thread','open',$3,$4,now(),now())",
+    ).bind(email_id).bind(email_id.to_string()).bind(f.firm).bind(f.project)
+        .execute(f.pg.pool()).await.unwrap();
+    sqlx::query("UPDATE inbox_conversation SET email_conversation_id=$2 WHERE id=$1")
+        .bind(ingested.conversation_id)
+        .bind(email_id)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    let clerk = persons::create(
+        &f.db,
+        &NewPerson::with_role("synthetic clerk", "clerk@example.com", Role::Clerk),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, clerk.id, email_id)
+            .await
+            .unwrap()
+    );
+    let participation = projects::add_participation(
+        &f.db,
+        f.project,
+        clerk.id,
+        projects::participation_for_role(Role::Clerk),
+    )
+    .await
+    .unwrap();
+    assert!(
+        pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, clerk.id, email_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, f.lawyer, email_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, f.owner, email_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, Uuid::now_v7(), email_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, f.lawyer, Uuid::now_v7())
+            .await
+            .unwrap()
+    );
+    projects::remove_participation(&f.db, participation.id)
+        .await
+        .unwrap();
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, clerk.id, email_id)
+            .await
+            .unwrap()
+    );
 }
 
 #[derive(Default)]
