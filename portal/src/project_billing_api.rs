@@ -346,8 +346,9 @@ fn error(error: &InvoiceGenerationError, project_id: Uuid) -> Response {
             );
             return refused(StatusCode::BAD_GATEWAY, "provider_refused");
         }
-        InvoiceGenerationError::Time(time_entries::TimeEntryError::Invalid(_))
-        | InvoiceGenerationError::Time(time_entries::TimeEntryError::NotParticipant)
+        InvoiceGenerationError::Time(
+            time_entries::TimeEntryError::Invalid(_) | time_entries::TimeEntryError::NotParticipant,
+        )
         | InvoiceGenerationError::Cost(costs::ProjectCostError::Invalid(_)) => {
             (StatusCode::UNPROCESSABLE_ENTITY, "invalid_work")
         }
@@ -458,7 +459,7 @@ pub(crate) async fn generate(
         store::access::matter_viewer(&state.surreal, session.person_id, session.role, project_id)
             .await
             .map_err(ApiError::Db)?;
-    if !viewer.is_some_and(|viewer| viewer.is_firm_side()) {
+    if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
         return Err(ApiError::NotFound);
     }
     let pg = match prepared_store(&state, "generate", project_id).await {
