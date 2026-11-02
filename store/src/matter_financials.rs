@@ -128,7 +128,7 @@ pub async fn for_project(
 
 #[cfg(test)]
 mod tests {
-    use super::{MatterFinancials, outstanding_cents, unbilled_time_cents};
+    use super::{outstanding_cents, unbilled_time_cents, MatterFinancials};
     use crate::project_costs::ProjectCost;
     use crate::time_entries::{BillingStatus, TimeEntry, TimeEntrySource};
     use crate::xero_invoices::XeroInvoice;
@@ -171,11 +171,7 @@ mod tests {
         }
     }
 
-    fn invoice(
-        amount_cents: i64,
-        amount_paid_cents: i64,
-        status: &str,
-    ) -> XeroInvoice {
+    fn invoice(amount_cents: i64, amount_paid_cents: i64, status: &str) -> XeroInvoice {
         XeroInvoice {
             project_id: Uuid::new_v4(),
             xero_invoice_id: format!("inv-{}", Uuid::new_v4().simple()),
@@ -204,7 +200,10 @@ mod tests {
     fn wip_prices_time_at_its_snapshotted_rate() {
         // 90 minutes at 25,000 cents/hour is 37,500 cents; a full hour is
         // 25,000.
-        let entries = [entry(90, true, BillingStatus::Unbilled), entry(60, true, BillingStatus::Unbilled)];
+        let entries = [
+            entry(90, true, BillingStatus::Unbilled),
+            entry(60, true, BillingStatus::Unbilled),
+        ];
         assert_eq!(unbilled_time_cents(&entries), 62_500);
     }
 
@@ -213,8 +212,20 @@ mod tests {
         let entries = [
             entry(60, true, BillingStatus::Unbilled),
             entry(60, false, BillingStatus::Unbilled),
-            entry(60, true, BillingStatus::WrittenOff { reason: "Flat fee".into() }),
-            entry(60, true, BillingStatus::Invoiced { xero_invoice_id: "inv-1".into() }),
+            entry(
+                60,
+                true,
+                BillingStatus::WrittenOff {
+                    reason: "Flat fee".into(),
+                },
+            ),
+            entry(
+                60,
+                true,
+                BillingStatus::Invoiced {
+                    xero_invoice_id: "inv-1".into(),
+                },
+            ),
         ];
         let costs = [
             cost(4_210, "confirmed", "unbilled"),
