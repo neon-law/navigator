@@ -1187,10 +1187,10 @@ async fn find_by_provider_ref_on(
     provider_ref: &str,
 ) -> Result<Option<Message>, InboxError> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {MESSAGE_COLUMNS} FROM message JOIN inbox_conversation \
-         ON inbox_conversation.id = message.conversation_id \
-         WHERE message.provider_ref = $1 AND inbox_conversation.firm_id = $2 \
-         AND inbox_conversation.channel = $3 AND inbox_conversation.provider_account = $4 \
+        "SELECT {MESSAGE_COLUMNS} FROM message \
+         WHERE provider_ref = $1 AND conversation_id IN \
+         (SELECT id FROM inbox_conversation WHERE firm_id = $2 \
+          AND channel = $3 AND provider_account = $4) \
          LIMIT 1"
     )))
     .bind(provider_ref)

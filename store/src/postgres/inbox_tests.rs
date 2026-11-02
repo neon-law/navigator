@@ -918,3 +918,598 @@ async fn targeted_ingest_preserves_project_scope_and_all_attachments() {
         "unassigned intake cannot join a matter-scoped thread"
     );
 }
+
+async fn assigned_email(fixture: &Fixture, provider_id: &str) -> crate::inbox::IngestedInbound {
+    let input = inbound(
+        fixture.firm,
+        channel::EMAIL,
+        "inbox@example.com",
+        provider_id,
+        "sender@example.com",
+    );
+    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+        .await
+        .unwrap();
+    pg_inbox::assign_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+        fixture.project,
+    )
+    .await
+    .unwrap();
+    ingested
+}
+
+#[derive(Default)]
+struct CapturingTransport(std::sync::Mutex<Vec<crate::inbox::OutboundEnvelope>>);
+
+#[async_trait::async_trait]
+impl crate::inbox::OutboundTransport for CapturingTransport {
+    async fn deliver(
+        &self,
+        envelope: &crate::inbox::OutboundEnvelope,
+    ) -> Result<crate::inbox::TransportOutcome, String> {
+        self.0.lock().unwrap().push(envelope.clone());
+        match envelope.body.as_str() {
+            "unknown" => Ok(crate::inbox::TransportOutcome::Unknown),
+            "rejected" => Ok(crate::inbox::TransportOutcome::Rejected {
+                detail: "synthetic rejection".into(),
+            }),
+            "transport-error" => Err("synthetic transport failure".into()),
+            _ => Ok(crate::inbox::TransportOutcome::Submitted {
+                provider_ref: "synthetic-receipt".into(),
+            }),
+        }
+    }
+}
+
+async fn assert_native_receipts(fixture: &Fixture, message_id: Uuid) {
+    for (firm, channel_name, account) in [
+        (Uuid::now_v7(), channel::EMAIL, "inbox@example.com"),
+        (fixture.firm, channel::FACEBOOK, "inbox@example.com"),
+        (fixture.firm, channel::EMAIL, "other@example.com"),
+    ] {
+        assert_eq!(
+            pg_inbox::apply_delivery_on(
+                &fixture.pg,
+                &fixture.db,
+                firm,
+                channel_name,
+                account,
+                "synthetic-receipt",
+                delivery::DELIVERED
+            )
+            .await
+            .unwrap(),
+            None
+        );
+    }
+    assert_eq!(
+        pg_inbox::apply_delivery_on(
+            &fixture.pg,
+            &fixture.db,
+            fixture.firm,
+            channel::EMAIL,
+            "inbox@example.com",
+            "synthetic-receipt",
+            delivery::DELIVERED
+        )
+        .await
+        .unwrap(),
+        Some(message_id)
+    );
+    pg_inbox::apply_delivery_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.firm,
+        channel::EMAIL,
+        "inbox@example.com",
+        "synthetic-receipt",
+        delivery::SUBMITTED,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pg_inbox::message_by_id_on(&fixture.pg, message_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .delivery_state,
+        delivery::DELIVERED
+    );
+    assert_eq!(
+        pg_inbox::apply_delivery_on(
+            &fixture.pg,
+            &fixture.db,
+            fixture.firm,
+            channel::EMAIL,
+            "inbox@example.com",
+            "missing-receipt",
+            delivery::DELIVERED
+        )
+        .await
+        .unwrap(),
+        None
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM inbox_delivery_attempt")
+        .fetch_one(fixture.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 5, "four provider outcomes and one advancing receipt");
+}
+
+#[tokio::test]
+async fn native_dispatch_retains_each_outcome_and_never_resends_uncertain_messages() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = assigned_email(&fixture, "native-dispatch").await;
+    let note = pg_inbox::post_note_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.lawyer,
+        ingested.conversation_id,
+        " internal note ",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pg_inbox::message_by_id_on(&fixture.pg, note)
+            .await
+            .unwrap()
+            .unwrap()
+            .direction,
+        direction::INTERNAL
+    );
+    let mut ids = Vec::new();
+    for body in ["submitted", "unknown", "rejected", "transport-error"] {
+        ids.push(
+            pg_inbox::queue_reply_on(
+                &fixture.pg,
+                &fixture.db,
+                fixture.lawyer,
+                ingested.conversation_id,
+                body,
+                purpose::MATTER,
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let transport = CapturingTransport::default();
+    let report = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            report.submitted,
+            report.unknown,
+            report.failed,
+            report.suppressed
+        ),
+        (1, 1, 2, 0)
+    );
+    assert_eq!(transport.0.lock().unwrap().len(), 4);
+    for (id, expected) in ids.iter().zip([
+        delivery::SUBMITTED,
+        delivery::UNKNOWN,
+        delivery::FAILED,
+        delivery::FAILED,
+    ]) {
+        assert_eq!(
+            pg_inbox::message_by_id_on(&fixture.pg, *id)
+                .await
+                .unwrap()
+                .unwrap()
+                .delivery_state,
+            expected
+        );
+    }
+    let again = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+        .await
+        .unwrap();
+    assert_eq!(again, crate::inbox::DispatchReport::default());
+    assert_eq!(transport.0.lock().unwrap().len(), 4);
+    assert_native_receipts(&fixture, ids[0]).await;
+}
+
+#[tokio::test]
+async fn native_project_queries_preserve_scope_and_read_markers() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = assigned_email(&fixture, "native-thread").await;
+    let listed = pg_inbox::list_intake_on(&fixture.pg, &fixture.db, fixture.owner)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].unread);
+    let project =
+        pg_inbox::list_project_on(&fixture.pg, &fixture.db, fixture.lawyer, fixture.project)
+            .await
+            .unwrap();
+    assert_eq!(project[0].direction, direction::INBOUND);
+    let thread = pg_inbox::project_thread_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.lawyer,
+        fixture.project,
+        ingested.conversation_id,
+    )
+    .await
+    .unwrap();
+    assert!(thread.can_note && thread.can_send);
+    assert_eq!(thread.messages.len(), 1);
+    assert!(
+        !pg_inbox::conversation_by_id_on(&fixture.pg, ingested.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .unread
+    );
+    let assignments = pg_inbox::assignments_on(&fixture.pg, ingested.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].to_project_id, fixture.project);
+    let outsider = persons::create(
+        &fixture.db,
+        &NewPerson::with_role("Outside Lawyer", "outside@example.com", Role::Lawyer),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::list_project_on(&fixture.pg, &fixture.db, outsider.id, fixture.project).await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::project_thread_on(
+            &fixture.pg,
+            &fixture.db,
+            outsider.id,
+            fixture.project,
+            ingested.conversation_id
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::readable_attachment_on(
+            &fixture.pg,
+            &fixture.db,
+            outsider.id,
+            ingested.message_id
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::post_note_on(
+            &fixture.pg,
+            &fixture.db,
+            outsider.id,
+            ingested.conversation_id,
+            "private note"
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    let detail = pg_inbox::intake_detail_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !detail.bodies_visible,
+        "global intake admission does not grant matter participation"
+    );
+    assert!(detail.messages.is_empty());
+    assert!(!pg_inbox::clerk_may_relay_email_thread_on(
+        &fixture.pg,
+        &fixture.db,
+        outsider.id,
+        Uuid::now_v7()
+    )
+    .await
+    .unwrap());
+}
+
+#[tokio::test]
+async fn native_processing_and_acknowledgment_lifecycles_are_replay_safe() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = assigned_email(&fixture, "native-processing").await;
+    assert!(pg_inbox::process_state_on(&fixture.pg, Uuid::now_v7())
+        .await
+        .unwrap()
+        .is_none());
+    let initial = pg_inbox::process_state_on(&fixture.pg, ingested.message_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(initial.route.is_none() && initial.processed_at.is_none());
+    assert_eq!(
+        pg_inbox::unprocessed_inbox_on(&fixture.pg, Some(&[fixture.firm]))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        pg_inbox::unprocessed_inbox_on(&fixture.pg, Some(&[Uuid::now_v7()]))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let now = chrono::Utc::now();
+    pg_inbox::mark_processed_on(&fixture.pg, ingested.message_id, "other", now)
+        .await
+        .unwrap();
+    let processed = pg_inbox::process_state_on(&fixture.pg, ingested.message_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(processed.route.as_deref(), Some("other"));
+    assert_eq!(processed.processed_at, Some(now));
+    assert!(pg_inbox::unprocessed_inbox_on(&fixture.pg, None)
+        .await
+        .unwrap()
+        .is_empty());
+    let acknowledgment =
+        pg_inbox::reserve_acknowledgment_on(&fixture.pg, &ingested, "Synthetic acknowledgment")
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(pg_inbox::reserve_acknowledgment_on(
+        &fixture.pg,
+        &ingested,
+        "Synthetic acknowledgment"
+    )
+    .await
+    .unwrap()
+    .is_none());
+    pg_inbox::acknowledgment_submitted_on(
+        &fixture.pg,
+        acknowledgment,
+        Some("synthetic-ack".into()),
+    )
+    .await
+    .unwrap();
+    let message = pg_inbox::message_by_id_on(&fixture.pg, acknowledgment)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(message.delivery_state, delivery::SUBMITTED);
+    assert_eq!(message.provider_ref.as_deref(), Some("synthetic-ack"));
+}
+
+#[tokio::test]
+async fn native_social_replies_keep_private_threads_private_through_dispatch() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let mut input = inbound(
+        fixture.firm,
+        channel::FACEBOOK,
+        "synthetic-page",
+        "private-comment",
+        "synthetic-sender",
+    );
+    input.interaction_type = Some("comment");
+    input.provider_post_id = Some("synthetic-post");
+    input.visibility = Some("private");
+    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+        .await
+        .unwrap();
+    assert!(matches!(
+        pg_inbox::queue_social_reply_on(
+            &fixture.pg,
+            &fixture.db,
+            fixture.owner,
+            ingested.conversation_id,
+            "public reply",
+            "public"
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::queue_social_reply_on(
+            &fixture.pg,
+            &fixture.db,
+            fixture.owner,
+            ingested.conversation_id,
+            " ",
+            "private"
+        )
+        .await,
+        Err(InboxError::Empty)
+    ));
+    let reply = pg_inbox::queue_social_reply_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+        "private reply",
+        "private",
+    )
+    .await
+    .unwrap();
+    let transport = CapturingTransport::default();
+    let report = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+        .await
+        .unwrap();
+    assert_eq!(report.submitted, 1);
+    let sent = transport.0.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].visibility.as_deref(), Some("private"));
+    assert_eq!(
+        sent[0].reply_to_provider_message_id.as_deref(),
+        Some("private-comment")
+    );
+    drop(sent);
+    assert_eq!(
+        pg_inbox::message_by_id_on(&fixture.pg, reply)
+            .await
+            .unwrap()
+            .unwrap()
+            .delivery_state,
+        delivery::SUBMITTED
+    );
+    // Even a corrupted queued public reply is refused by the final send check.
+    let unsafe_reply = pg_inbox::queue_social_reply_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+        "unsafe reply",
+        "private",
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE message SET visibility = 'public' WHERE id = $1")
+        .bind(unsafe_reply)
+        .execute(fixture.pg.pool())
+        .await
+        .unwrap();
+    let refused = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+        .await
+        .unwrap();
+    assert_eq!(refused.suppressed, 1);
+    assert_eq!(transport.0.lock().unwrap().len(), 1);
+}
+
+async fn seed_native_attachment(
+    fixture: &Fixture,
+    message_id: Uuid,
+) -> crate::inbox::IngestAttachment {
+    let asset = Uuid::now_v7();
+    sqlx::query("INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex) VALUES ($1, 'synthetic/notice.pdf', 'application/pdf', 3, 'synthetic-digest')")
+        .bind(asset).execute(fixture.pg.pool()).await.unwrap();
+    pg_inbox::set_attachment_asset_on(&fixture.pg, message_id, asset)
+        .await
+        .unwrap();
+    let attachment = crate::inbox::IngestAttachment {
+        asset_id: asset,
+        filename: "notice.pdf".into(),
+        sha256: "synthetic-digest".into(),
+    };
+    for _ in 0..2 {
+        pg_inbox::link_message_assets_on(
+            &fixture.pg,
+            fixture.firm,
+            message_id,
+            std::slice::from_ref(&attachment),
+        )
+        .await
+        .unwrap();
+    }
+    attachment
+}
+
+#[tokio::test]
+async fn native_attachments_and_intake_details_follow_firm_and_project_scope() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = assigned_email(&fixture, "native-attachment-scope").await;
+    firms::add_membership(
+        &fixture.db,
+        &firms::NewPersonFirmRole {
+            person_id: fixture.lawyer,
+            firm_id: fixture.firm,
+            membership: firms::FirmMembership::Lawyer,
+            is_dri: false,
+        },
+    )
+    .await
+    .unwrap();
+    let attachment = seed_native_attachment(&fixture, ingested.message_id).await;
+    let asset = attachment.asset_id;
+    let attached = pg_inbox::message_assets_on(&fixture.pg, fixture.firm, ingested.message_id)
+        .await
+        .unwrap();
+    assert_eq!(attached.len(), 1);
+    assert_eq!(
+        (
+            attached[0].asset_id,
+            attached[0].filename.as_str(),
+            attached[0].position
+        ),
+        (asset, "notice.pdf", 0)
+    );
+    assert!(
+        pg_inbox::message_assets_on(&fixture.pg, Uuid::now_v7(), ingested.message_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        pg_inbox::link_message_assets_on(
+            &fixture.pg,
+            Uuid::now_v7(),
+            ingested.message_id,
+            &[attachment]
+        )
+        .await,
+        Err(InboxError::NotFound)
+    ));
+    assert_eq!(
+        pg_inbox::readable_attachment_on(
+            &fixture.pg,
+            &fixture.db,
+            fixture.lawyer,
+            ingested.message_id
+        )
+        .await
+        .unwrap(),
+        Some(asset)
+    );
+    let detail = pg_inbox::intake_detail_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.lawyer,
+        ingested.conversation_id,
+    )
+    .await
+    .unwrap();
+    assert!(detail.bodies_visible);
+    assert_eq!(detail.messages.len(), 1);
+    let listed = pg_inbox::list_intake_on(&fixture.pg, &fixture.db, fixture.lawyer)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].has_attachments);
+    assert!(!listed[0].unread);
+    let client = persons::create(
+        &fixture.db,
+        &NewPerson::new("Synthetic Client", "client@example.com"),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::list_intake_on(&fixture.pg, &fixture.db, client.id).await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::intake_detail_on(
+            &fixture.pg,
+            &fixture.db,
+            client.id,
+            ingested.conversation_id
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::readable_attachment_on(&fixture.pg, &fixture.db, client.id, ingested.message_id)
+            .await,
+        Err(InboxError::Denied)
+    ));
+}
