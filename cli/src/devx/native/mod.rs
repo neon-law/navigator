@@ -184,7 +184,12 @@ pub(super) fn append_environment(body: &mut String, slot: u16, database: &str) {
 }
 
 pub(super) fn claimed_slots(root: &Path) -> Result<std::collections::BTreeSet<u16>> {
-    let state = loaded(&registry::path())?;
+    claimed_slots_in(&registry::path(), root)
+}
+
+/// The slots every other worktree's claim holds in the registry at `path`.
+fn claimed_slots_in(path: &Path, root: &Path) -> Result<std::collections::BTreeSet<u16>> {
+    let state = loaded(path)?;
     Ok(state
         .claims
         .values()
@@ -356,8 +361,11 @@ pub(super) fn reload_workflows(root: &Path, slot: u16, admin_port: u16) -> Resul
 }
 
 pub(super) fn restore_environment(root: &Path) -> Result<()> {
-    let path = registry::path();
-    let state = loaded(&path)?;
+    restore_environment_in(&registry::path(), root)
+}
+
+fn restore_environment_in(path: &Path, root: &Path) -> Result<()> {
+    let state = loaded(path)?;
     let claim = state
         .claims
         .get(&registry::key(root))
@@ -373,12 +381,15 @@ pub(super) fn restore_environment(root: &Path) -> Result<()> {
 /// after re-identifying each one, so a teardown can never reach another
 /// checkout's tier or a stranger that inherited a PID.
 pub(super) fn down(root: &Path, cfg: &KindConfig) -> Result<()> {
-    let path = registry::path();
-    let mut state = loaded(&path)?;
+    down_in(&registry::path(), root, cfg)
+}
+
+fn down_in(path: &Path, root: &Path, cfg: &KindConfig) -> Result<()> {
+    let mut state = loaded(path)?;
     let Some(claim) = state.claims.get(&registry::key(root)).cloned() else {
         return Ok(());
     };
-    let shared_root = registry::state_dir(&path);
+    let shared_root = registry::state_dir(path);
     let tenant = seaweedfs::Tenant {
         buckets: claim.buckets.clone(),
         env: claim.seaweedfs_env.clone(),
@@ -393,7 +404,7 @@ pub(super) fn down(root: &Path, cfg: &KindConfig) -> Result<()> {
     let Some((_, final_claim, services)) = registry::release(&mut state, root) else {
         return Ok(());
     };
-    registry::save(&path, &state)?;
+    registry::save(path, &state)?;
     if final_claim {
         for service in services {
             supervisor::stop(&service);
@@ -407,7 +418,13 @@ pub(super) fn down(root: &Path, cfg: &KindConfig) -> Result<()> {
 pub(super) fn sweep_plan(
     live_worktrees: &[PathBuf],
 ) -> Result<(PathBuf, registry::NativeRegistry, Vec<registry::SweepEntry>)> {
-    let path = registry::path();
+    sweep_plan_in(registry::path(), live_worktrees)
+}
+
+fn sweep_plan_in(
+    path: PathBuf,
+    live_worktrees: &[PathBuf],
+) -> Result<(PathBuf, registry::NativeRegistry, Vec<registry::SweepEntry>)> {
     let state = loaded(&path)?;
     let plan = registry::plan_sweep(
         &state,
@@ -470,7 +487,11 @@ pub(super) fn apply_sweep(
 
 /// `status` lines for the processes this worktree started.
 pub(super) fn status_lines(root: &Path) -> Vec<String> {
-    let state = match registry::load(&registry::path()) {
+    status_lines_in(&registry::path(), root)
+}
+
+fn status_lines_in(path: &Path, root: &Path) -> Vec<String> {
+    let state = match registry::load(path) {
         registry::Load::Loaded(value) => value,
         registry::Load::Absent => return Vec::new(),
         registry::Load::Unreadable(error) => {
@@ -525,11 +546,13 @@ pub(super) fn deferred_lines() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        database_name, deferred_lines, registry, remove_worktree_process_state, restate, seaweedfs,
-        supervisor, worker, DEFERRED, EXEMPT, RAUTHY_API_PORT_BASE, RAUTHY_RAFT_PORT_BASE,
-        RESTATE_FABRIC_PORT_BASE, SEAWEEDFS_FILER_PORT_BASE, SEAWEEDFS_MASTER_PORT_BASE,
-        SEAWEEDFS_VOLUME_PORT_BASE, SUPERVISED, WORKFLOWS_SERVICE_HEALTH_PORT_BASE,
-        WORKFLOWS_SERVICE_LISTEN_PORT_BASE,
+        apply_sweep, claimed_slots_in, database_name, deferred_lines, down_in, is_worktree_process,
+        loaded, registry, remove_worktree_process_state, restate, restate_fabric_port,
+        restore_environment_in, seaweedfs, service_count, status_lines_in, supervisor,
+        sweep_plan_in, sweep_report, worker, worker_health_port, worker_listen_port, DEFERRED,
+        EXEMPT, RAUTHY_API_PORT_BASE, RAUTHY_RAFT_PORT_BASE, RESTATE_FABRIC_PORT_BASE,
+        SEAWEEDFS_FILER_PORT_BASE, SEAWEEDFS_MASTER_PORT_BASE, SEAWEEDFS_VOLUME_PORT_BASE,
+        SUPERVISED, WORKFLOWS_SERVICE_HEALTH_PORT_BASE, WORKFLOWS_SERVICE_LISTEN_PORT_BASE,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
@@ -807,5 +830,320 @@ mod tests {
         assert!(!supervisor::ledger_path(root).exists());
         assert!(!root.join(".devx/native").exists());
         assert!(!root.join(".devx/restate").exists());
+    }
+
+    /// A process record no running process matches, so nothing a test
+    /// does with it can signal a real PID.
+    fn ghost(label: &str, port: u16) -> supervisor::Started {
+        supervisor::Started {
+            label: label.into(),
+            pid: u32::MAX,
+            port,
+            program: "navigator-no-such-program".into(),
+            command: "navigator-no-such-program".into(),
+            start_time: String::new(),
+        }
+    }
+
+    fn claimed(
+        state: &mut registry::NativeRegistry,
+        root: &Path,
+        slot: u16,
+        database: &str,
+        env: &[(&str, &str)],
+        processes: Vec<supervisor::Started>,
+    ) {
+        registry::claim(
+            state,
+            root,
+            slot,
+            database.to_string(),
+            BTreeMap::new(),
+            env.iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+            processes,
+        );
+    }
+
+    #[test]
+    fn only_restate_and_the_worker_are_per_worktree_processes() {
+        assert!(is_worktree_process(&ghost("restate-server", 1)));
+        assert!(is_worktree_process(&ghost("workflows-service", 1)));
+        for shared in ["surreal", "seaweedfs", "rauthy"] {
+            assert!(!is_worktree_process(&ghost(shared, 1)), "{shared}");
+        }
+    }
+
+    #[test]
+    fn per_slot_ports_offset_their_bases() {
+        assert_eq!(restate_fabric_port(7), RESTATE_FABRIC_PORT_BASE + 7);
+        assert_eq!(worker_listen_port(7), worker::ports(7).listen);
+        assert_eq!(worker_health_port(7), worker::ports(7).health);
+    }
+
+    #[test]
+    fn an_absent_registry_loads_empty_and_an_unreadable_one_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtime.json");
+        assert_eq!(loaded(&path).unwrap(), registry::NativeRegistry::default());
+
+        std::fs::write(&path, "{ not json").unwrap();
+        let error = loaded(&path).unwrap_err().to_string();
+        assert!(error.contains("unreadable"), "{error}");
+        assert!(error.contains("refusing"), "{error}");
+    }
+
+    #[test]
+    fn claimed_slots_are_every_other_worktrees_slot() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtime.json");
+        assert!(claimed_slots_in(&path, Path::new("/tmp/a"))
+            .unwrap()
+            .is_empty());
+
+        let mut state = registry::NativeRegistry::default();
+        claimed(
+            &mut state,
+            Path::new("/tmp/a"),
+            1,
+            "navigator_a",
+            &[],
+            Vec::new(),
+        );
+        claimed(
+            &mut state,
+            Path::new("/tmp/b"),
+            2,
+            "navigator_b",
+            &[],
+            Vec::new(),
+        );
+        claimed(
+            &mut state,
+            Path::new("/tmp/c"),
+            5,
+            "navigator_c",
+            &[],
+            Vec::new(),
+        );
+        registry::save(&path, &state).unwrap();
+
+        assert_eq!(
+            claimed_slots_in(&path, Path::new("/tmp/a")).unwrap(),
+            BTreeSet::from([2, 5]),
+            "a worktree's own slot is not claimed against it"
+        );
+    }
+
+    #[test]
+    fn restoring_the_environment_needs_this_worktrees_claim() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtime.json");
+        let root = temp.path().join("worktree");
+        let key = "NAVIGATOR_NATIVE_TEST_RESTORED_ACCESS_KEY";
+
+        let mut state = registry::NativeRegistry::default();
+        registry::save(&path, &state).unwrap();
+        let error = restore_environment_in(&path, &root)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no host claim"), "{error}");
+
+        claimed(
+            &mut state,
+            &root,
+            1,
+            "navigator_a",
+            &[(key, "restored")],
+            Vec::new(),
+        );
+        registry::save(&path, &state).unwrap();
+        restore_environment_in(&path, &root).unwrap();
+        assert_eq!(std::env::var(key).as_deref(), Ok("restored"));
+        std::env::remove_var(key);
+    }
+
+    #[test]
+    fn status_lines_report_shared_and_this_worktrees_processes() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtime.json");
+        let root = temp.path().join("worktree");
+        assert!(status_lines_in(&path, &root).is_empty(), "no registry yet");
+
+        std::fs::write(&path, "{ not json").unwrap();
+        let unreadable = status_lines_in(&path, &root);
+        assert_eq!(unreadable.len(), 1);
+        assert!(unreadable[0].contains("unreadable"), "{unreadable:?}");
+
+        let mut state = registry::NativeRegistry::default();
+        state
+            .services
+            .insert("surreal".into(), ghost("surreal", 20_034));
+        claimed(
+            &mut state,
+            &root,
+            1,
+            "navigator_a",
+            &[],
+            vec![ghost("surreal", 20_034), ghost("restate-server", 21_701)],
+        );
+        registry::save(&path, &state).unwrap();
+
+        assert_eq!(
+            status_lines_in(&path, &root),
+            vec![
+                format!("  surreal 127.0.0.1:20034 (pid {}): no", u32::MAX),
+                format!("  restate-server 127.0.0.1:21701 (pid {}): no", u32::MAX),
+            ],
+            "a shared process is listed once, from the host record"
+        );
+    }
+
+    #[test]
+    fn a_sweep_plan_marks_a_claim_without_a_checkout_orphaned() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtime.json");
+        let live = temp.path().join("live");
+        std::fs::create_dir_all(&live).unwrap();
+        let gone = temp.path().join("gone");
+
+        let mut state = registry::NativeRegistry::default();
+        state
+            .services
+            .insert("surreal".into(), ghost("surreal", 20_034));
+        claimed(&mut state, &live, 1, "navigator_live", &[], Vec::new());
+        claimed(&mut state, &gone, 2, "navigator_gone", &[], Vec::new());
+        registry::save(&path, &state).unwrap();
+
+        let (planned_path, loaded_state, plan) = sweep_plan_in(path.clone(), &[]).unwrap();
+        assert_eq!(planned_path, path);
+        assert_eq!(loaded_state, state);
+        assert_eq!(service_count(&loaded_state), 1);
+        let orphaned: Vec<_> = plan
+            .iter()
+            .filter(|entry| entry.is_orphaned())
+            .map(|entry| entry.claim.root.clone())
+            .collect();
+        assert_eq!(orphaned, vec![gone]);
+
+        let report = sweep_report(&plan, 1, false);
+        assert!(report.contains("Dry run"), "{report}");
+    }
+
+    #[test]
+    fn applying_a_sweep_with_no_orphans_keeps_every_claim_and_service() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtime.json");
+        let live = temp.path().join("live");
+        std::fs::create_dir_all(&live).unwrap();
+        let mut state = registry::NativeRegistry::default();
+        state
+            .services
+            .insert("surreal".into(), ghost("surreal", 20_034));
+        claimed(&mut state, &live, 1, "navigator_live", &[], Vec::new());
+        let plan = registry::plan_sweep(&state, &[], &|path| path.is_dir(), &|_| false);
+        assert!(plan.iter().all(|entry| !entry.is_orphaned()));
+
+        let cfg = super::super::tests::default_cfg();
+        apply_sweep(&path, state.clone(), &plan, &cfg).unwrap();
+        assert_eq!(loaded(&path).unwrap(), state);
+    }
+
+    #[test]
+    fn applying_a_sweep_with_no_claims_left_clears_the_shared_services() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtime.json");
+        let shared_root = registry::state_dir(&path);
+        std::fs::create_dir_all(shared_root.join("native/surreal")).unwrap();
+        let mut state = registry::NativeRegistry::default();
+        state
+            .services
+            .insert("surreal".into(), ghost("surreal", 20_034));
+
+        let cfg = super::super::tests::default_cfg();
+        apply_sweep(&path, state, &[], &cfg).unwrap();
+
+        let saved = loaded(&path).unwrap();
+        assert!(saved.services.is_empty());
+        assert!(saved.claims.is_empty());
+        assert!(
+            !shared_root.exists(),
+            "the shared state directory is reclaimed"
+        );
+    }
+
+    /// A reclaim that fails partway must not persist a registry that has
+    /// already forgotten the claim, or the tenant leaks for good.
+    #[test]
+    fn a_failed_reclaim_leaves_the_saved_registry_untouched() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtime.json");
+        let gone = temp.path().join("gone");
+        let mut state = registry::NativeRegistry::default();
+        claimed(
+            &mut state,
+            &gone,
+            2,
+            "invalid-database-name",
+            &[],
+            vec![ghost("restate-server", 21_702)],
+        );
+        registry::save(&path, &state).unwrap();
+        let plan = registry::plan_sweep(&state, &[], &|_| false, &|_| false);
+        assert!(plan[0].is_orphaned());
+
+        let cfg = super::super::tests::default_cfg();
+        let error = apply_sweep(&path, state.clone(), &plan, &cfg).unwrap_err();
+        assert!(error.to_string().contains("invalid SurrealDB"), "{error:#}");
+        assert_eq!(loaded(&path).unwrap(), state);
+    }
+
+    #[test]
+    fn down_without_a_claim_is_a_no_op() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtime.json");
+        let cfg = super::super::tests::default_cfg();
+        down_in(&path, &temp.path().join("worktree"), &cfg).unwrap();
+        assert!(
+            !path.exists(),
+            "nothing is written for an unclaimed worktree"
+        );
+    }
+
+    #[test]
+    fn down_keeps_the_claim_when_tenant_cleanup_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("native-runtime.json");
+        let root = temp.path().join("worktree");
+        let mut state = registry::NativeRegistry::default();
+        registry::claim(
+            &mut state,
+            &root,
+            1,
+            "navigator_a".into(),
+            BTreeMap::from([("NAVIGATOR_STORAGE_BUCKET".into(), "Not A Bucket".into())]),
+            BTreeMap::new(),
+            Vec::new(),
+        );
+        claimed(
+            &mut state,
+            &temp.path().join("other"),
+            2,
+            "bad-name",
+            &[],
+            Vec::new(),
+        );
+        registry::save(&path, &state).unwrap();
+        let cfg = super::super::tests::default_cfg();
+
+        let bucket = down_in(&path, &root, &cfg).unwrap_err();
+        assert!(bucket.to_string().contains("SeaweedFS"), "{bucket:#}");
+        let database = down_in(&path, &temp.path().join("other"), &cfg).unwrap_err();
+        assert!(
+            database.to_string().contains("invalid SurrealDB"),
+            "{database:#}"
+        );
+        assert_eq!(loaded(&path).unwrap(), state, "both claims remain recorded");
     }
 }
