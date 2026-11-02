@@ -791,10 +791,9 @@ pub async fn assign(
     assign_write(db, actor_id, &conversation, project_id).await
 }
 
-/// The triage review queue's assignment door. Owner and Admin always; a
-/// Lawyer or Clerk only while their participation on the target Project is
-/// active — the `participant_still_may_reply` shape, evaluated against the
-/// Project the triage suggests or a correction names.
+/// The triage review queue's assignment door. Owner may act across Firms;
+/// Admin requires membership in the target Firm. A Lawyer or Clerk requires
+/// participation on the Project the suggestion or correction names.
 ///
 /// # Errors
 ///
@@ -824,22 +823,31 @@ pub(crate) async fn assign_for_triage_review(
 }
 
 /// Whether the actor may act on a triage row whose human decision assigns
-/// `project_id`. Owner and Admin always; a Lawyer or Clerk passes the same
-/// participation check the reply doors use; a Client never.
+/// `project_id`. Owner always, Admin within their Firm; a Lawyer or Clerk
+/// passes the participation check the reply doors use; a Client never.
 pub(crate) async fn triage_reviewer_may_assign(
     db: &SurrealDb,
     actor: &persons::Person,
     project_id: Uuid,
 ) -> Result<bool, InboxError> {
     match actor.role {
-        Role::Owner | Role::Admin => Ok(true),
+        Role::Owner => Ok(true),
+        Role::Admin => {
+            let Some(project) = projects::find_by_id(db, project_id).await? else {
+                return Ok(false);
+            };
+            match project.firm_id {
+                Some(firm_id) => triage_reviewer_may_resolve(db, actor, firm_id).await,
+                None => Ok(false),
+            }
+        }
         Role::Lawyer | Role::Clerk => sees_project(db, actor.id, actor.role, project_id).await,
         Role::Client => Ok(false),
     }
 }
 
 /// Whether the actor may act on a triage row that names no Project —
-/// privilege resolution and re-runs. Owner and Admin always; a Lawyer or
+/// privilege resolution and re-runs. Owner always; Admin, Lawyer, or
 /// Clerk when they belong to the row's Firm (the same visibility the queue
 /// list grants); a Client never.
 pub(crate) async fn triage_reviewer_may_resolve(
@@ -848,12 +856,14 @@ pub(crate) async fn triage_reviewer_may_resolve(
     firm_id: Uuid,
 ) -> Result<bool, InboxError> {
     match actor.role {
-        Role::Owner | Role::Admin => Ok(true),
-        Role::Lawyer | Role::Clerk => Ok(crate::firms::memberships_for_person(db, actor.id)
-            .await
-            .map_err(|error| InboxError::Db(error.to_string()))?
-            .iter()
-            .any(|membership| membership.firm_id == firm_id)),
+        Role::Owner => Ok(true),
+        Role::Admin | Role::Lawyer | Role::Clerk => {
+            Ok(crate::firms::memberships_for_person(db, actor.id)
+                .await
+                .map_err(|error| InboxError::Db(error.to_string()))?
+                .iter()
+                .any(|membership| membership.firm_id == firm_id))
+        }
         Role::Client => Ok(false),
     }
 }

@@ -428,7 +428,7 @@ pub async fn list_for_review(
                 continue;
             }
         }
-        let Some(row) = review_row(db, triage).await? else {
+        let Some(row) = review_row(db, &actor, triage).await? else {
             continue;
         };
         review_rows.push(row);
@@ -440,13 +440,23 @@ pub async fn list_for_review(
 /// landed in and the suggested Project's name.
 async fn review_row(
     db: &SurrealDb,
-    triage: InboxTriage,
+    actor: &crate::persons::Person,
+    mut triage: InboxTriage,
 ) -> Result<Option<TriageReviewRow>, InboxError> {
     let Ok(conversation) = conversation_for_message(db, triage.message_id).await else {
         // A message whose conversation vanished leaves no queue entry to
         // act on — the row is orphaned, not a routing decision.
         return Ok(None);
     };
+    if let Some(project_id) = conversation.project_id {
+        if !crate::access::can_see_project(db, Some(actor.id), actor.role, project_id)
+            .await
+            .map_err(InboxError::Db)?
+        {
+            triage.rationale = None;
+            triage.raw_output = None;
+        }
+    }
     let suggested_project_name = match triage.suggested_project_id {
         Some(project_id) => crate::projects::find_by_id(db, project_id)
             .await?
@@ -919,7 +929,8 @@ mod tests {
                 matter_consent: false,
                 promotional_opt_in: false,
                 email_conversation_id: None,
-                attachment_asset_id: None,
+                attachments: Vec::new(),
+                project_id: None,
                 occurred_at: "2026-10-20T00:00:00Z",
             },
         )
@@ -1339,6 +1350,7 @@ mod tests {
 
         // An Admin acts without participation; a Client never acts.
         let admin = person(&db, "Firm Admin", Role::Admin).await;
+        member(&db, admin, firm, FirmMembership::Admin).await;
         let admin_row = {
             let message = inbound(&db, firm, "email", "confirm-admin").await;
             record(
@@ -1573,5 +1585,79 @@ mod tests {
         let social_rerun = rerun(&db, owner, social.id).await.unwrap();
         assert_eq!(social_rerun.privilege, PrivilegeLabel::NotPrivileged);
         assert_eq!(social_rerun.disposition, TriageDisposition::Suggested);
+    }
+
+    #[tokio::test]
+    async fn an_admin_cannot_decide_another_firms_triage() {
+        let db = crate::test_support::mem_surreal().await;
+        let own_firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let other_firm = crate::test_support::seed_firm_with_brand(&db, "vesta").await;
+        let admin = person(&db, "Scoped Admin", Role::Admin).await;
+        member(&db, admin, own_firm, FirmMembership::Admin).await;
+        let project = seed_project(&db, other_firm, "Other Firm Project").await;
+        for action in ["confirm", "override", "resolve", "rerun"] {
+            let (row, _) =
+                needs_human_with_suggestion(&db, other_firm, action, Some(project.id)).await;
+            let result = match action {
+                "confirm" => confirm_project(&db, admin, row, project.id).await,
+                "override" => {
+                    override_project(&db, admin, row, project.id, "synthetic correction").await
+                }
+                "resolve" => {
+                    resolve_privilege(
+                        &db,
+                        admin,
+                        row,
+                        PrivilegeLabel::Privileged,
+                        "synthetic review",
+                    )
+                    .await
+                }
+                _ => rerun(&db, admin, row).await,
+            };
+            assert!(
+                matches!(result, Err(crate::inbox::InboxError::Denied)),
+                "{action} must retain Firm scope"
+            );
+            assert_eq!(
+                find_by_id(&db, row).await.unwrap().unwrap().disposition,
+                TriageDisposition::NeedsHuman
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn assigned_matter_audit_content_requires_project_participation() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let project = seed_project(&db, firm, "Private Audit Project").await;
+        let owner = person(&db, "Audit Owner", Role::Owner).await;
+        let lawyer = person(&db, "Audit Lawyer", Role::Lawyer).await;
+        member(&db, lawyer, firm, FirmMembership::Lawyer).await;
+        let message = inbound(&db, firm, "email", "scoped-audit").await;
+        crate::inbox::assign(&db, owner, message.conversation_id, project.id)
+            .await
+            .unwrap();
+        let mut input = new_triage(
+            message.message_id,
+            firm,
+            Some(project.id),
+            PrivilegeLabel::Uncertain,
+            TriageDisposition::NeedsHuman,
+        );
+        input.rationale = Some("Synthetic private message detail".into());
+        input.raw_output = Some("Synthetic private classifier output".into());
+        record(&db, &input).await.unwrap();
+        let hidden = list_for_review(&db, lawyer).await.unwrap();
+        assert_eq!(hidden.len(), 1);
+        assert!(
+            hidden[0].triage.rationale.is_none(),
+            "Firm membership does not expose matter content"
+        );
+        assert!(hidden[0].triage.raw_output.is_none());
+        participate(&db, lawyer, project.id).await;
+        let visible = list_for_review(&db, lawyer).await.unwrap();
+        assert_eq!(visible[0].triage.rationale, input.rationale);
+        assert_eq!(visible[0].triage.raw_output, input.raw_output);
     }
 }
