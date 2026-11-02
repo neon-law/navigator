@@ -308,6 +308,22 @@ events' private extended properties distinguish drift from a stale cache, so a r
 writes against Google Calendar require domain-wide delegation for the calendar scope — an account fact no repository
 carries — and the door and the CLI verb accept `dry-run` to rehearse without them.
 
+## Social publishing in the worker
+
+`NAVIGATOR_WORKFLOW_ENGINE=dbos` plus `NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED=true` registers the social publisher. Set
+`NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED=true` alongside it to run the five-minute reconciler. Both social
+switches default off. The Restate services remain registered; this change does not switch deployed schedules.
+
+Publisher workflow ids pair the Post id with its scheduled time. Durable waits cover scheduled publication, provider
+retry backoff, container readiness, TikTok processing, and permalink reads. Recovery consumes the scheduled timer's
+checkpoint even after its deadline. Provider writes reuse the shared store claim; an uncertain prior send settles as
+`unknown` rather than sending again. An uncheckpointed container creation can leave an orphaned private container.
+
+The reconciler requires `RESTATE_BROKER_URL` because pending inbound notices still use the Restate ingress, with
+`RESTATE_AUTH_TOKEN` when configured. Without that URL the run fails before starting publishers. Exhausted step retries
+fail the DBOS run; the Restate handler retains its own retry behavior. Keep these switches off until the deployment's
+provider credentials, egress policy, and ingress dependencies are configured.
+
 ## Port order
 
 Lowest risk first. Each port keeps its Restate twin until a deployment switches engines.
