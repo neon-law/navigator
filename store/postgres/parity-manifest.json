@@ -352,6 +352,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "ssh_public_key",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "stage_definition",
       "missing_column": null,
       "missing_table": null,
@@ -1768,7 +1775,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 142,
+    "table_count": 143,
     "tables": {
       "address": {
         "columns": {
@@ -4836,6 +4843,34 @@
         "name": "social_publication",
         "references": [
           "post"
+        ]
+      },
+      "ssh_public_key": {
+        "columns": {
+          "algorithm": "text",
+          "created_at": "timestamptz",
+          "fingerprint": "text",
+          "id": "uuid",
+          "label": "text",
+          "last_synced_at": "timestamptz",
+          "person_id": "uuid",
+          "public_key": "text",
+          "revoked_at": "timestamptz",
+          "revoked_by_person_id": "uuid"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "revoked_by_person_id",
+            "person"
+          ]
+        ],
+        "name": "ssh_public_key",
+        "references": [
+          "person"
         ]
       },
       "stage_definition": {

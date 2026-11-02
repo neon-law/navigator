@@ -191,6 +191,7 @@ pub mod signature;
 pub mod signature_render;
 pub mod social_oauth;
 pub mod social_webhooks;
+pub mod ssh_keys;
 pub mod start_door;
 pub mod template_api;
 pub mod template_gallery;

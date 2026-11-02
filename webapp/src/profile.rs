@@ -16,6 +16,13 @@
 //! identity, so a self-service edit here would drift from the OIDC identity
 //! the session was minted against. The disabled field carries a note to
 //! contact the firm instead.
+//!
+//! A Firm-tier viewer also manages their own SSH public keys here (ENG-1219):
+//! the card lists each key by label and fingerprint, posts a new key to
+//! `POST /app/profile/ssh-keys`, and removes one through
+//! `POST /app/profile/ssh-keys/{id}/delete`. Navigator reconciles the keys
+//! onto the viewer's Forgejo account after each change. A client has no Firm
+//! membership and sees no card.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -28,6 +35,68 @@ pub const PROFILE_PATH: &str = "/app/profile";
 /// The native multipart upload the page's avatar card posts to. Sibling of
 /// [`PROFILE_PATH`] so a relative resolution from that page still lands here.
 pub const PROFILE_AVATAR_PATH: &str = "/app/avatar";
+
+/// The SSH key card's native add form posts here.
+pub const PROFILE_SSH_KEYS_PATH: &str = "/app/profile/ssh-keys";
+
+/// The `?ssh_key=` / `?ssh_key_error=` outcome the SSH key forms redirect
+/// back with — a fixed code, never the submitted key.
+#[derive(Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
+pub struct ProfileQuery {
+    #[serde(default)]
+    pub ssh_key: Option<String>,
+    #[serde(default)]
+    pub ssh_key_error: Option<String>,
+}
+
+/// One of the viewer's registered SSH public keys, as the card lists it.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct SshKeyRow {
+    pub id: String,
+    pub label: String,
+    pub algorithm: String,
+    pub fingerprint: String,
+    pub created_on: String,
+    /// `None` until the key has reached the viewer's Forgejo account.
+    pub synced_on: Option<String>,
+}
+
+/// The SSH key card: the viewer's keys plus the outcome flash.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct SshKeysCard {
+    pub keys: Vec<SshKeyRow>,
+    /// `false` when the key store could not be read; the card says so
+    /// rather than showing an empty list.
+    pub available: bool,
+    pub notice: Option<String>,
+    pub error: Option<String>,
+}
+
+/// The sentence for a `?ssh_key=` outcome code.
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+fn ssh_key_notice(code: &str) -> Option<&'static str> {
+    match code {
+        "added" => Some("SSH key added."),
+        "removed" => Some("SSH key removed."),
+        _ => None,
+    }
+}
+
+/// The sentence for a `?ssh_key_error=` code.
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+fn ssh_key_error(code: &str) -> &'static str {
+    match code {
+        "invalid" => {
+            "That is not an accepted SSH public key. Paste one ed25519 or ECDSA public key \
+             (the .pub file), never the private key."
+        }
+        "duplicate" => "That SSH key is already registered.",
+        "not_member" => "Only a Firm member can register an SSH key.",
+        "not_found" => "That SSH key was not found.",
+        "unavailable" => "SSH keys are unavailable right now. Try again later.",
+        _ => "The SSH key could not be saved.",
+    }
+}
 
 /// The rendered self-service profile page.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -59,6 +128,51 @@ pub struct ProfileFields {
     /// Public availability applies only to firm-tier avatars. This derives
     /// from the current `person.role`, not a potentially stale session role.
     pub avatar_is_public: bool,
+    /// The SSH key card, for a Firm-tier viewer only.
+    #[serde(default)]
+    pub ssh_keys: Option<SshKeysCard>,
+}
+
+/// Read the viewer's SSH keys for the card. A store that cannot be reached
+/// yields an unavailable card, never a failed page.
+#[cfg(feature = "server")]
+async fn load_ssh_keys(person_id: uuid::Uuid, query: ProfileQuery) -> SshKeysCard {
+    let notice = query
+        .ssh_key
+        .as_deref()
+        .and_then(ssh_key_notice)
+        .map(str::to_string);
+    let error = query
+        .ssh_key_error
+        .as_deref()
+        .map(|code| ssh_key_error(code).to_string());
+    let listed = match store::postgres::PostgresDb::from_env().await {
+        Ok(pg) => store::ssh_public_keys::list_for_person(&pg, person_id)
+            .await
+            .ok(),
+        Err(_) => None,
+    };
+    let available = listed.is_some();
+    let keys = listed
+        .unwrap_or_default()
+        .into_iter()
+        .map(|key| SshKeyRow {
+            id: key.id.to_string(),
+            label: key.label,
+            algorithm: key.algorithm,
+            fingerprint: key.fingerprint,
+            created_on: key.created_at.format("%Y-%m-%d").to_string(),
+            synced_on: key
+                .last_synced_at
+                .map(|at| at.format("%Y-%m-%d").to_string()),
+        })
+        .collect();
+    SshKeysCard {
+        keys,
+        available,
+        notice,
+        error,
+    }
 }
 
 #[cfg(feature = "server")]
@@ -109,6 +223,20 @@ async fn load_profile(role: ViewerRole) -> Result<ProfileView, ServerFnError> {
         });
     };
 
+    let firm_tier = !matches!(person.role, store::persons::Role::Client);
+    let ssh_keys = if firm_tier {
+        let query = dioxus_fullstack_core::FullstackContext::extract::<
+            axum::extract::Query<ProfileQuery>,
+            _,
+        >()
+        .await
+        .map(|axum::extract::Query(query)| query)
+        .unwrap_or_default();
+        Some(load_ssh_keys(person_id, query).await)
+    } else {
+        None
+    };
+
     Ok(ProfileView {
         tokens_href,
         firm_name,
@@ -117,7 +245,8 @@ async fn load_profile(role: ViewerRole) -> Result<ProfileView, ServerFnError> {
             name: person.name,
             email: person.email,
             csrf_token,
-            avatar_is_public: !matches!(person.role, store::persons::Role::Client),
+            avatar_is_public: firm_tier,
+            ssh_keys,
         }),
         logo,
     })
@@ -209,6 +338,90 @@ fn contact_card(fields: &ProfileFields) -> Element {
     }
 }
 
+/// The SSH key card: the viewer's keys with a remove button each, then the
+/// add form. Only the public key is ever asked for.
+fn ssh_keys_card(card: &SshKeysCard, csrf_token: &str) -> Element {
+    rsx! {
+        section { id: "profile-ssh-keys",
+            h2 { "SSH keys" }
+            p { class: "nav-muted",
+                "Navigator adds these keys to your account on the Firm's source forge, \
+                 and removes them when you remove them here or leave the Firm."
+            }
+            if let Some(error) = card.error.as_ref() {
+                p { class: "nav-form-error", role: "alert", "{error}" }
+            }
+            if let Some(notice) = card.notice.as_ref() {
+                p { role: "status", "{notice}" }
+            }
+            if !card.available {
+                p { "SSH keys are unavailable right now." }
+            } else if card.keys.is_empty() {
+                p { "You have no SSH keys yet." }
+            } else {
+                div { class: "nav-table-wrap",
+                    table { class: "nav-table",
+                        thead {
+                            tr {
+                                th { "Label" }
+                                th { "Type" }
+                                th { "Fingerprint" }
+                                th { "Added" }
+                                th { "On the forge" }
+                                th { "" }
+                            }
+                        }
+                        tbody {
+                            for key in card.keys.iter().cloned() {
+                                tr { class: "ssh-key-row", key: "{key.id}",
+                                    td { "{key.label}" }
+                                    td { "{key.algorithm}" }
+                                    td { code { "{key.fingerprint}" } }
+                                    td { "{key.created_on}" }
+                                    td {
+                                        match key.synced_on.as_ref() {
+                                            Some(on) => rsx! { "Synced {on}" },
+                                            None => rsx! { "Not yet" },
+                                        }
+                                    }
+                                    td {
+                                        form {
+                                            class: "nav-form",
+                                            method: "post",
+                                            action: "{PROFILE_SSH_KEYS_PATH}/{key.id}/delete",
+                                            "aria-label": "Remove {key.label}",
+                                            input { r#type: "hidden", name: "_csrf", value: "{csrf_token}" }
+                                            button { class: "nav-btn nav-btn--secondary", r#type: "submit", "Remove" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if card.available {
+                FormCard {
+                    title: "Add an SSH key".to_string(),
+                    action: PROFILE_SSH_KEYS_PATH.to_string(),
+                    submit_label: "Add key".to_string(),
+                    heading: Heading::H2,
+                    csrf_token: Some(csrf_token.to_string()),
+                    fields: vec![
+                        Field::textarea("Public key", "public_key", "", 3)
+                            .id("profile-ssh-key")
+                            .required()
+                            .help("Paste one ed25519 or ECDSA public key, the contents of your .pub file. Never paste a private key."),
+                        Field::text("Label", "label", "")
+                            .maxlength(100)
+                            .help("Optional. Defaults to the key's comment."),
+                    ],
+                }
+            }
+        }
+    }
+}
+
 /// Render the resolved profile page.
 fn render_profile(resource: &Resource<Result<ProfileView, ServerFnError>>) -> Element {
     let view = match &*resource.read() {
@@ -243,6 +456,9 @@ fn render_profile(resource: &Resource<Result<ProfileView, ServerFnError>>) -> El
                 Some(fields) => rsx! {
                     {avatar_upload_card(&fields.csrf_token, fields.avatar_is_public)}
                     {contact_card(fields)}
+                    if let Some(card) = fields.ssh_keys.as_ref() {
+                        {ssh_keys_card(card, &fields.csrf_token)}
+                    }
                 },
                 None => rsx! {
                     p { "Your session has no linked profile to show." }
@@ -268,7 +484,59 @@ mod tests {
             email: "libra@example.com".to_string(),
             csrf_token: "csrf-token".to_string(),
             avatar_is_public: false,
+            ssh_keys: None,
         }
+    }
+
+    fn ssh_keys_app() -> Element {
+        let card = SshKeysCard {
+            keys: vec![SshKeyRow {
+                id: "00000000-0000-0000-0000-000000000001".to_string(),
+                label: "laptop".to_string(),
+                algorithm: "ssh-ed25519".to_string(),
+                fingerprint: "SHA256:synthetic".to_string(),
+                created_on: "2026-11-01".to_string(),
+                synced_on: None,
+            }],
+            available: true,
+            notice: None,
+            error: Some(ssh_key_error("invalid").to_string()),
+        };
+        ssh_keys_card(&card, "csrf-token")
+    }
+
+    #[test]
+    fn the_ssh_key_card_lists_keys_with_remove_forms_and_an_add_form() {
+        let out = ssr(ssh_keys_app);
+        assert!(out.contains("SHA256:synthetic"), "{out}");
+        assert!(
+            out.contains(
+                r#"action="/app/profile/ssh-keys/00000000-0000-0000-0000-000000000001/delete""#
+            ),
+            "each key carries its own remove form: {out}"
+        );
+        assert!(
+            out.contains(r#"action="/app/profile/ssh-keys""#),
+            "the add form posts to the profile's SSH key route: {out}"
+        );
+        assert!(out.contains(r#"name="public_key""#), "{out}");
+        assert!(out.contains("Never paste a private key."), "{out}");
+        assert!(out.contains("Not yet"), "an unsynced key says so: {out}");
+        assert!(
+            out.contains(r#"role="alert""#),
+            "the error flash renders: {out}"
+        );
+    }
+
+    #[test]
+    fn ssh_key_flash_codes_map_to_sentences_and_ignore_unknown_notices() {
+        assert_eq!(ssh_key_notice("added"), Some("SSH key added."));
+        assert_eq!(ssh_key_notice("<script>"), None);
+        assert_eq!(
+            ssh_key_error("<script>"),
+            "The SSH key could not be saved.",
+            "an unknown code never echoes request text"
+        );
     }
 
     fn avatar_app() -> Element {

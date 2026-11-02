@@ -1542,6 +1542,18 @@ erDiagram
         string state
         datetime updated_at
     }
+    ssh_public_key {
+        string algorithm
+        string created_at
+        string fingerprint
+        string id
+        string label
+        string last_synced_at
+        string person_id
+        string public_key
+        string revoked_at
+        string revoked_by_person_id
+    }
     stage_definition {
         string case_type
         uuid firm_id
@@ -1836,6 +1848,7 @@ erDiagram
     firm }o--|| social_account_selection : references
     brand }o--|| social_handle : references
     post }o--|| social_publication : references
+    person }o--|| ssh_public_key : references
     firm }o--|| stage_definition : references
     person }o--|| stage_event : references
     project }o--|| stage_event : references

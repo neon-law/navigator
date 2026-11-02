@@ -477,9 +477,16 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   exact path/method boundary pinned (a POST to the page, a GET to the
     //   messages route, and a deeper path are denied even to the client).
     // 642 + 3 = 645.
+    //
+    // + 7 for a Firm user's SSH public keys (ENG-1219), /app/api/ssh-keys and
+    //   /app/api/ssh-keys/{id}: Lawyer and Clerk admitted on the collection,
+    //   Admin (bypass) and Lawyer on the revoke door; Client and anonymous
+    //   denied; and a path deeper than one segment past the collection
+    //   denied to Lawyer.
+    // 645 + 7 = 652.
     assert_eq!(
         test_names.len(),
-        645,
+        652,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

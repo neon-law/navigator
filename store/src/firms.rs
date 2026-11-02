@@ -905,6 +905,23 @@ pub async fn remove_membership(
     person_id: Uuid,
     firm_id: Uuid,
 ) -> Result<(), FirmError> {
+    remove_membership_row(surreal, actor_role, actor_person_id, person_id, firm_id).await?;
+    // A Person who no longer belongs to a Firm wants no SSH keys on the
+    // forge (ENG-1219). Best-effort: the operator sweep retries a failure.
+    Box::pin(crate::ssh_public_keys::after_membership_removed(
+        surreal, person_id,
+    ))
+    .await;
+    Ok(())
+}
+
+async fn remove_membership_row(
+    surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    person_id: Uuid,
+    firm_id: Uuid,
+) -> Result<(), FirmError> {
     if crate::postgres::tenancy::enabled()? {
         return Box::pin(crate::postgres::tenancy::remove_membership(
             actor_role,

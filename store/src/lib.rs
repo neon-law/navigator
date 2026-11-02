@@ -211,6 +211,7 @@ pub mod social_handles;
 pub mod social_oauth_attempts;
 pub mod social_publications;
 pub mod source_pages;
+pub mod ssh_public_keys;
 pub mod statutory_deadlines;
 pub mod summary_sender_approvals;
 /// The store connection, over the `NAVIGATOR_SURREAL_*` contract.
