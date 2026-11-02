@@ -57,4 +57,4 @@ afterward. An existing Post is refused so a retry cannot replace content or chan
 
 The table is `post`.
 
-Schema: [`post`](../../store/src/schema/navigator.surql#L1002).
+Schema: [`post`](../../store/postgres/schema.sql).

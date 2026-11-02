@@ -9,4 +9,4 @@ A support email thread whose reply token routes later hops to the same exchange.
 
 The table is `email_conversation`.
 
-Schema: [`email_conversation`](../../store/src/schema/navigator.surql#L2469).
+Schema: [`email_conversation`](../../store/postgres/schema.sql).

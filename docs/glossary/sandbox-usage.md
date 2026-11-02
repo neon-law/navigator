@@ -21,4 +21,4 @@ the fresh period's credit and converts the closed month's overage rows into à l
 [`billing`](../../billing/README.md) contract, keyed on a deterministic per-subscriber-month invoice id so a retry never
 bills twice.
 
-Schema: [`sandbox_usage`](../../store/src/schema/navigator.surql#L2686).
+Schema: [`sandbox_usage`](../../store/postgres/schema.sql).

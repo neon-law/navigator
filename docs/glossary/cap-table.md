@@ -14,4 +14,4 @@ of each class, imported from the Project repository's seeds. Navigator keeps no 
 
 - Module: [`store::project_modules`](../../store/src/project_modules.rs) · Holdings:
   [`store::cap_table_holdings`](../../store/src/cap_table_holdings.rs) · Schema: [`project_module`,
-  `cap_table_holding`](../../store/src/schema/navigator.surql)
+  `cap_table_holding`](../../store/postgres/schema.sql)

@@ -17,4 +17,4 @@ the receipt reports its initial `not_attempted` value.
 
 The table is `email_receipt`.
 
-Schema: [`email_receipt`](../../store/src/schema/navigator.surql#L1441).
+Schema: [`email_receipt`](../../store/postgres/schema.sql).

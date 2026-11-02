@@ -9,4 +9,4 @@ record, so concurrent requests cannot create rival people for that mailbox.
 
 The table is `person_mailbox`.
 
-Schema: [`person_mailbox`](../../store/src/schema/navigator.surql#L641).
+Schema: [`person_mailbox`](../../store/postgres/schema.sql).

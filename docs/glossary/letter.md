@@ -6,8 +6,8 @@ description: "A Letter is one physical piece of mail, incoming or outgoing, scop
 One physical piece of mail, incoming or outgoing, scoped to a Mailroom.
 
 - Schema and queries: [`store::letters`](../../store/src/letters.rs) —
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `letter`.
 
-Schema: [`letter`](../../store/src/schema/navigator.surql#L1418).
+Schema: [`letter`](../../store/postgres/schema.sql).

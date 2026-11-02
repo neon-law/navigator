@@ -37,6 +37,6 @@ cannot be restored.
 
 - Write boundary: [`store::assets::soft_delete`](../../store/src/assets.rs)
 - Schema: the `deleted_at`, `purge_after`, `deleted_by_person_id`, `deleted_commit_sha`, and `purged_at` fields of
-  [`asset` in `navigator.surql`](../../store/src/schema/navigator.surql)
+  [`asset` in the PostgreSQL schema](../../store/postgres/schema.sql)
 - Purge: [`portal::expunge::purge`](../../portal/src/expunge/purge.rs)
 - Archive and restore: [`store::document_retention`](../../store/src/document_retention.rs)

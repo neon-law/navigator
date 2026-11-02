@@ -9,4 +9,4 @@ Navigator stores the token's digest, owner, scope, and expiry.
 
 The table is `git_access_token`.
 
-Schema: [`git_access_token`](../../store/src/schema/navigator.surql#L509).
+Schema: [`git_access_token`](../../store/postgres/schema.sql).

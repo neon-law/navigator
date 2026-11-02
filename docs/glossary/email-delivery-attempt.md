@@ -11,4 +11,4 @@ request does not create an attempt unless the delivery state permits a new send.
 
 The table is `email_delivery_attempt`.
 
-Schema: [`email_delivery_attempt`](../../store/src/schema/navigator.surql#L1500).
+Schema: [`email_delivery_attempt`](../../store/postgres/schema.sql).

@@ -107,8 +107,10 @@ unchanged. Repair the source-backed mirror and retry; never invent a version or 
 
 ## PostgreSQL mirror tables and reconciliation
 
-SurrealDB is the source of truth for every read and every write's outcome. The following tables also have a recoverable
-PostgreSQL mirror in [`store::postgres_mirror`](../store/src/postgres_mirror.rs):
+For domains using SurrealDB authority, the source accessor determines each write's outcome. PostgreSQL mirrors are
+recoverable copies. [Storage models and writes](storage-models.md) documents PostgreSQL-authoritative paths and their
+configuration; authority cutover takes precedence over the source mirror. The mirror coverage is implemented in
+[`store::postgres_mirror`](../store/src/postgres_mirror.rs):
 
 - **Identity:** `person`, `entity`, and the `entity_type` and `jurisdiction` rows an Entity names. The Person and
   Entity writers in `store::persons` and `store::entities` call the mirror. Mirroring an Entity first mirrors each

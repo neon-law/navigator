@@ -20,9 +20,8 @@ unknown slug, and a page with no face for the reader are the same 404. The matte
 each page with a face for the reader follows it in declared order.
 
 - Rules: [`rules::pages`](../../rules/src/pages.rs) · Store: [`store::matter_pages`](../../store/src/matter_pages.rs) ·
-  Schema: [`matter_page`](../../store/src/schema/navigator.surql) · Contract: [the
-  gate](../gate.md#declaring-a-matter-page)
+  Schema: [`matter_page`](../../store/postgres/schema.sql) · Contract: [the gate](../gate.md#declaring-a-matter-page)
 
 The table is `matter_page`.
 
-Schema: [`matter_page`](../../store/src/schema/navigator.surql#L371).
+Schema: [`matter_page`](../../store/postgres/schema.sql).

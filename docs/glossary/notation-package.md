@@ -9,4 +9,4 @@ Templates](notation-package-template.md) record its ordered members.
 
 The table is `notation_package`.
 
-Schema: [`notation_package`](../../store/src/schema/navigator.surql#L1757).
+Schema: [`notation_package`](../../store/postgres/schema.sql).

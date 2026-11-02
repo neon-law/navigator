@@ -19,8 +19,8 @@ A confirmed publication can then be encoded onto its Post as a link through the 
 Handle](social-handle.md).
 
 - Schema and transitions: [`store::social_publications`](../../store/src/social_publications.rs) —
-  [`social_publication`](../../store/src/schema/navigator.surql)
+  [`social_publication`](../../store/postgres/schema.sql)
 
 The table is `social_publication`.
 
-Schema: [`social_publication`](../../store/src/schema/navigator.surql#L1051).
+Schema: [`social_publication`](../../store/postgres/schema.sql).

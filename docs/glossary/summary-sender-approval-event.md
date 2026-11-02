@@ -9,4 +9,4 @@ which Firm and provider scope.
 
 The table is `summary_sender_approval_event`.
 
-Schema: [`summary_sender_approval_event`](../../store/src/schema/navigator.surql#L1471).
+Schema: [`summary_sender_approval_event`](../../store/postgres/schema.sql).

@@ -7,11 +7,11 @@ A legal organization — an LLC, trust, corporation, foundation, etc. Has a name
 [Jurisdiction](jurisdiction.md) it is organized under.
 
 - Schema and queries: [`store::entities`](../../store/src/entities.rs) — Lives in: `entity` table.
-  Its `entity_type_id` and `jurisdiction_id` are real `record<>` links; the firm's own row is protected from forking by
-  a claim in the `firm_anchor` table, whose record id is the anchor key, rather than by an advisory lock. The UNIQUE
+  Its `entity_type_id` and `jurisdiction_id` are foreign keys; the firm's own row is protected from forking by a claim
+  in the `firm_anchor` table, whose record id is the anchor key, rather than by an advisory lock. The UNIQUE
   `entity_firm_anchor` index is the backstop behind it — it refuses a fork that is not a race, but racers write no
   shared key for the engine to conflict on, so the claim is what serializes them.
 
 The table is `entity`.
 
-Schema: [`entity`](../../store/src/schema/navigator.surql#L844).
+Schema: [`entity`](../../store/postgres/schema.sql).

@@ -16,4 +16,4 @@ an entity, such as trustee of a trust that owns a company, it is an `entity_role
 in what successor order, is a [Fiduciary Role](fiduciary-role.md) on the Project.
 
 - Delegation: [`store::delegations`](../../store/src/delegations.rs) · Schema: [`person_delegate`,
-  `entity_role`](../../store/src/schema/navigator.surql)
+  `entity_role`](../../store/postgres/schema.sql)

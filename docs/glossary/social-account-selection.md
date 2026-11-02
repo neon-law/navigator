@@ -11,4 +11,4 @@ Account](social-account.md) or a scheduled Post. Connect verifies the saved iden
 
 The table is `social_account_selection`.
 
-Schema: [`social_account_selection`](../../store/src/schema/navigator.surql#L2650).
+Schema: [`social_account_selection`](../../store/postgres/schema.sql).

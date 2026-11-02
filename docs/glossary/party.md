@@ -18,4 +18,4 @@ three places, by what the record is for:
 Keeping the three apart is what stops a counterparty named on a caption from ever reading the matter.
 
 - Caption: [`word::matter`](../../word/src/matter.rs) · Schema: [`project_reference`,
-  `person_project_role`](../../store/src/schema/navigator.surql)
+  `person_project_role`](../../store/postgres/schema.sql)

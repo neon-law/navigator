@@ -109,4 +109,4 @@ those three: it is the owning practice beneath the brand registry.
 
 The table is `brand`.
 
-Schema: [`brand`](../../store/src/schema/navigator.surql#L950).
+Schema: [`brand`](../../store/postgres/schema.sql).

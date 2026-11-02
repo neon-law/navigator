@@ -9,4 +9,4 @@ assertion. [Verification](verification.md) records a human's check of that citat
 
 The table is `citation`.
 
-Schema: [`citation`](../../store/src/schema/navigator.surql#L2160).
+Schema: [`citation`](../../store/postgres/schema.sql).

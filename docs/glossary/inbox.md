@@ -13,4 +13,4 @@ identifiers, and message timestamps. Firm membership governs the queue; Project 
 conversation bodies and replies. Unassigned social replies require the Owner or the Firm's Admin DRI.
 
 - Schema and queries: [`store::inbox`](../../store/src/inbox.rs) —
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)

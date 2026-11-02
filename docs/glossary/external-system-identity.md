@@ -21,6 +21,6 @@ closed and fails closed; the values themselves are unverified, so a wrong id is 
 wrong data, not a security incident.
 
 - Schema and queries: [`store::external_identities`](../../store/src/external_identities.rs) —
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 - Inertness guard: `cli/tests/external_identity_is_inert.rs`
 - Access model: [`access-model`](../access-model.md#what-an-external-system-identity-is-not)

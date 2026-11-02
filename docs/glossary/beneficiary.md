@@ -13,5 +13,5 @@ check treats like any other structural tie. A beneficiary named in an estate pla
 questionnaire (for example, a residuary beneficiary), not a participant: being named in a plan grants no lens on the
 matter.
 
-- Schema: [`entity_role`](../../store/src/schema/navigator.surql) · Related: [Probate](probate.md), [Trust
+- Schema: [`entity_role`](../../store/postgres/schema.sql) · Related: [Probate](probate.md), [Trust
   Administration](trust-administration.md)

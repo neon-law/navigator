@@ -9,4 +9,4 @@ object when presenting its video.
 
 The table is `blog_video`.
 
-Schema: [`blog_video`](../../store/src/schema/navigator.surql#L1039).
+Schema: [`blog_video`](../../store/postgres/schema.sql).

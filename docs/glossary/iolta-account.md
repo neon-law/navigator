@@ -9,4 +9,4 @@ the account recorded in Xero; the [Journal Entry](journal-entry.md) records the 
 
 The table is `iolta_account`.
 
-Schema: [`iolta_account`](../../store/src/schema/navigator.surql#L218).
+Schema: [`iolta_account`](../../store/postgres/schema.sql).

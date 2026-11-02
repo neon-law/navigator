@@ -17,18 +17,18 @@ practice wears.
 letters are lowercased, and every other run of characters becomes one hyphen. The result has a Project code's shape, at
 most 40 characters, and is unique per installation. It must not be a reserved word: Forgejo's own reserved names, such
 as `admin`, `api`, and `explore`, and `navigator`. A name that derives an invalid slug, or another Firm's slug, is
-refused. Nothing appends a suffix. The slug is immutable: renaming a Firm never moves its organization. SurrealDB holds
-the field `READONLY`, and a PostgreSQL trigger refuses an update. Boot backfills a slug for each Firm that predates the
-field, and fails on an invalid or colliding one. `GET /app/api/firms` lists each visible Firm's slug. Navigator creates
-or reconciles the organization itself; see [Forgejo Organization](forgejo-organization.md).
+refused. Nothing appends a suffix. The slug is immutable: renaming a Firm never moves its organization. A PostgreSQL
+trigger refuses an update. Boot backfills a slug for each Firm that predates the field, and fails on an invalid or
+colliding one. `GET /app/api/firms` lists each visible Firm's slug. Navigator creates or reconciles the organization
+itself; see [Forgejo Organization](forgejo-organization.md).
 
 The repository `<firm-slug>/library` is the Firm's [Firm Library](firm-library.md): the Drafts and the default retainer
 every matter of that Firm starts from.
 
-Distinct from [`firm_anchor`](../../store/src/schema/navigator.surql), which still pins exactly one [Entity](entity.md)
-as the Firm-of-record on the [Conflict-Check Graph](conflict-check-graph.md). A deployment may hold several `firm` rows;
-it still holds at most one `firm_anchor` claim. `person.role = owner` remains the one system-wide Owner tier; it is not
-a value on `person_firm_role`. Owner reaches `/app/owner` to list every practice and its brands. Admin is scoped to the
+Distinct from [`firm_anchor`](../../store/postgres/schema.sql), which still pins exactly one [Entity](entity.md) as the
+Firm-of-record on the [Conflict-Check Graph](conflict-check-graph.md). A deployment may hold several `firm` rows; it
+still holds at most one `firm_anchor` claim. `person.role = owner` remains the one system-wide Owner tier; it is not a
+value on `person_firm_role`. Owner reaches `/app/owner` to list every practice and its brands. Admin is scoped to the
 firms they hold a `person_firm_role` row on: the people directory and the matter directory at `/app/admin` list only
 those firms' rows.
 
@@ -58,9 +58,9 @@ following the no-charting-library precedent `webapp::lawyer_dashboard`'s status 
 draws is a brand's or a person's display name (or `"Unassigned"`) — never a Project code, matter name, or Xero invoice
 id, which stay out of this surface entirely.
 
-- Schema: [`firm` in `navigator.surql`](../../store/src/schema/navigator.surql) ·
+- Schema: [`firm` in the PostgreSQL schema](../../store/postgres/schema.sql) ·
   [`store::firms`](../../store/src/firms.rs)
 
 The table is `firm`.
 
-Schema: [`firm`](../../store/src/schema/navigator.surql#L880).
+Schema: [`firm`](../../store/postgres/schema.sql).

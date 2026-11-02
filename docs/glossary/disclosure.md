@@ -8,8 +8,8 @@ disclosure on an entity is read by the [Conflict-Check Graph](conflict-check-gra
 finding when a new matter reaches that entity.
 
 - Commands: [`store::disclosures`](../../store/src/disclosures.rs) · Schema:
-  [`disclosure`](../../store/src/schema/navigator.surql)
+  [`disclosure`](../../store/postgres/schema.sql)
 
 The table is `disclosure`.
 
-Schema: [`disclosure`](../../store/src/schema/navigator.surql#L2389).
+Schema: [`disclosure`](../../store/postgres/schema.sql).

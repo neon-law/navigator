@@ -27,9 +27,9 @@ duplicating the lookup or rendering a second Firm's brands. Both also carry the 
 white-label bundle that renames the firm publishes neither row, because the family and the membership are Guieb & Shook
 PC's.
 
-- Schema: [`firm_brand` in `navigator.surql`](../../store/src/schema/navigator.surql) ·
+- Schema: [`firm_brand` in the PostgreSQL schema](../../store/postgres/schema.sql) ·
   [`store::firms`](../../store/src/firms.rs)
 
 The table is `firm_brand`.
 
-Schema: [`firm_brand`](../../store/src/schema/navigator.surql#L924).
+Schema: [`firm_brand`](../../store/postgres/schema.sql).

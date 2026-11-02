@@ -51,8 +51,8 @@ and source boundary. On the installation's Forgejo the repository is `<firm-slug
 (`store::firms::forgejo::repository_path`).
 
 `project.code` is **lowercase letters, digits, and single hyphens**, alphanumeric at both ends, at most 80 characters —
-enforced by [`store::projects::is_valid_code`](../../store/src/projects.rs) and the SurrealDB `project_code` unique
-index. No uppercase, no underscores, no other punctuation, and no spaces.
+enforced by [`store::projects::is_valid_code`](../../store/src/projects.rs) and the PostgreSQL constraints on
+`project.code`. No uppercase, no underscores, no other punctuation, and no spaces.
 
 **The code is the matter's URL.** Its show page is `/app/projects/{code}` and its Portal is
 `/app/projects/{code}/portal/`; the internal UUID appears in neither. That holds because both directions read the `code`
@@ -65,8 +65,8 @@ whitespace by `store::projects::normalize_code`, then checked against `is_valid_
 `store::projects::open_matter` never generates or appends anything to it: the code is a coordinate the caller already
 committed to elsewhere — the `project:` value in a repository's `navigator.yaml`, the matter's Drive folder name, the
 Notion `Project code` URL — so Navigator inventing a different one would strand those bindings the moment `project.code`
-(`READONLY`) is written. A collision with an already-open matter's code is refused as `OpenMatterError::CodeConflict`
-(surfaced as an HTTP 409 or an MCP `conflict`), not silently resolved; the caller picks a different code and retries.
+is written. A collision with an already-open matter's code is refused as `OpenMatterError::CodeConflict` (surfaced as an
+HTTP 409 or an MCP `conflict`), not silently resolved; the caller picks a different code and retries.
 `store::projects::code_from_name` still exists — it derives a default stem (name plus a short generated suffix) for the
 one caller that has no operator-supplied code to begin with, the self-serve retainer walk (`portal::retainer_walk`).
 Uppercase and underscores stay out deliberately: the code is also the repository name (see
@@ -75,16 +75,16 @@ Uppercase and underscores stay out deliberately: the code is also the repository
 **The code is immutable.** It is chosen once, at matter-open, and never changes — not on a client rename, not for a
 nicer slug, not ever. `code` addresses things Navigator does not own: the matter's route (`/app/projects/{code}`), its
 portal mount (`/app/projects/{code}/portal/`), and its documents-bucket prefix (`projects/{code}/documents`) all key off
-the spelling picked at creation. `project.code` is `READONLY` in the SurrealDB schema, so a direct write that tries to
-change it is refused by the engine; `UpdateProjectCommand` carries no `code` field. There is no rename path. The refusal
-is a rule with a reason, not an absence waiting to be filled in.
+the spelling picked at creation. The PostgreSQL `project_code_immutable` trigger refuses a direct change;
+`UpdateProjectCommand` carries no `code` field. There is no rename path. The refusal is a rule with a reason, not an
+absence waiting to be filled in.
 
 **`brand` records the house [Brand](brand.md) assigned to this Project.** A closed key from
 [`BrandKey`](../../views/src/brand.rs) (`neon`, `delete-your-data`, `lawyer-shook`), `NOT NULL`, `DEFAULT 'neon'` for a
 row written before the field existed. At matter-open the server derives it from the resolved request host; an Owner or
 authorized Firm Admin may later change it only together with the owning Firm through `UpdateProjectCommand` or
 `navigator project set --firm <name> --brand <key>`. `store` does not depend on `views`, so `Project::brand` is a plain
-validated `String`; the SurrealDB schema's `ASSERT` is the single source of truth for valid keys.
+validated `String`; the PostgreSQL schema defines the persisted constraints.
 
 **`firm_id` records which [Firm](firm.md) owns the Project.** The Firm must wear the same `brand`, as recorded by the
 [Firm Brand term](firm-brand.md). `store::projects::open_matter` and the self-serve retainer walk resolve this pair at
@@ -119,8 +119,8 @@ the *matter* answers to and derives the pooled IOLTA account; this one is the Fi
 onboarding prose. Absent means not yet chosen — nothing infers one.
 
 - Schema and commands: [`store::projects`](../../store/src/projects.rs) ·
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `project`.
 
-Schema: [`project`](../../store/src/schema/navigator.surql#L40).
+Schema: [`project`](../../store/postgres/schema.sql).

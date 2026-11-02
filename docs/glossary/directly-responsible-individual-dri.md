@@ -29,8 +29,7 @@ participation ledger still records the broader involvement/access it always did 
 visibility, co-counsel, other lawyers); the DRI flags single out *who is accountable* on each side. Participation
 answers "who's involved and what can they see?"; the flags answer "who owns this?".
 
-Two rules bound the sets, both enforced in `store::participation` rather than by the schema — SurrealDB has no partial
-unique index, so the cardinality rules live in Rust where they can be tested:
+Two rules bound the sets, both enforced in `store::participation` through tested cardinality checks:
 
 - **The lawyer set is never empty.** The last accountable lawyer cannot step off and cannot be removed from the matter.
 - **Changing either side is authorized and audited.** A matter's lawyer DRIs govern their own side — any of them may

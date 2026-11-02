@@ -14,4 +14,4 @@ Deletion](soft-deletion.md), and [Legal Hold](legal-hold.md). A [Docket Entry](d
 it records the same way it links any other asset.
 
 - Vocabulary: [`rules::kind::Kind::Exhibit`](../../rules/src/kind.rs) · Schema:
-  [`asset`](../../store/src/schema/navigator.surql)
+  [`asset`](../../store/postgres/schema.sql)

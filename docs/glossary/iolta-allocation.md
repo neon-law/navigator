@@ -9,4 +9,4 @@ from that invoice, so the matter sees its own share of the transfer.
 
 The table is `iolta_allocation`.
 
-Schema: [`iolta_allocation`](../../store/src/schema/navigator.surql#L268).
+Schema: [`iolta_allocation`](../../store/postgres/schema.sql).

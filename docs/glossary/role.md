@@ -24,7 +24,7 @@ a person holds exactly one:
 `role` is read from the DB row at callback time, never trusted from the OIDC token. A supported verified identity with
 an email creates a `client` on first sign-in; the system's configured Owner email instead creates an `owner`.
 
-- Schema: [`store::persons::Role`](../../store/src/persons.rs) — a stored `string` on `person`, defaulting to `client`
-  and gated by `ASSERT $value IN ['owner', 'admin', 'lawyer', 'clerk', 'client']` in
-  [`navigator.surql`](../../store/src/schema/navigator.surql); Anonymous is the absence of a row.
+- Schema: [`store::persons::Role`](../../store/src/persons.rs) — a stored `TEXT` on `person`, defaulting to `client`
+  in the [PostgreSQL schema](../../store/postgres/schema.sql). The store validates the five role values; Anonymous is
+  the absence of a row.
 - See [`docs/access-model`](../access-model.md) for the full role + [Participation](participation.md) model.

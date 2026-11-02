@@ -9,4 +9,4 @@ matters and [Contract Reviews](contract-review.md).
 
 The table is `playbook`.
 
-Schema: [`playbook`](../../store/src/schema/navigator.surql#L2190).
+Schema: [`playbook`](../../store/postgres/schema.sql).

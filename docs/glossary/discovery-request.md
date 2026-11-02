@@ -24,8 +24,8 @@ sufficiency badge from what is recorded, attributes an objection to counsel and 
 adds the firm's "where it leaves us" note on the lawyer [Lens](lens.md) only.
 
 - Commands: [`store::cases`](../../store/src/cases.rs) · Schema: [`discovery_request`,
-  `discovery_item`](../../store/src/schema/navigator.surql)
+  `discovery_item`](../../store/postgres/schema.sql)
 
 The table is `discovery_request`.
 
-Schema: [`discovery_request`](../../store/src/schema/navigator.surql#L2349).
+Schema: [`discovery_request`](../../store/postgres/schema.sql).

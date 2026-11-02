@@ -23,8 +23,8 @@ Values are stored folded — trimmed, lowercased, separators as single underscor
 [`docs/access-model`](../access-model.md).
 
 - Schema: [`store::projects`](../../store/src/projects.rs) ·
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `person_project_role`.
 
-Schema: [`person_project_role`](../../store/src/schema/navigator.surql#L284).
+Schema: [`person_project_role`](../../store/postgres/schema.sql).

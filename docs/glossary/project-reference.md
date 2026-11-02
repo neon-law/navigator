@@ -31,4 +31,4 @@ row the write appends on the Project.
 
 The table is `project_reference`.
 
-Schema: [`project_reference`](../../store/src/schema/navigator.surql#L1187).
+Schema: [`project_reference`](../../store/postgres/schema.sql).

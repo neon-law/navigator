@@ -9,4 +9,4 @@ vocabulary shared across matters; a document's own defined terms stay in that ma
 
 The table is `glossary_term`.
 
-Schema: [`glossary_term`](../../store/src/schema/navigator.surql#L1275).
+Schema: [`glossary_term`](../../store/postgres/schema.sql).

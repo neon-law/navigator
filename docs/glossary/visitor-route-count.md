@@ -9,4 +9,4 @@ status class. These records carry counts without visitor identities.
 
 The table is `visitor_route_count`.
 
-Schema: [`visitor_route_count`](../../store/src/schema/navigator.surql#L1362).
+Schema: [`visitor_route_count`](../../store/postgres/schema.sql).

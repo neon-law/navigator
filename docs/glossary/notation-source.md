@@ -9,4 +9,4 @@ facts. The record links the source and its ordering without copying the answer b
 
 The table is `notation_source`.
 
-Schema: [`notation_source`](../../store/src/schema/navigator.surql#L1813).
+Schema: [`notation_source`](../../store/postgres/schema.sql).

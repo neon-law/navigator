@@ -9,4 +9,4 @@ submitted a request.
 
 The table is `lead_consent`.
 
-Schema: [`lead_consent`](../../store/src/schema/navigator.surql#L559).
+Schema: [`lead_consent`](../../store/postgres/schema.sql).

@@ -12,8 +12,8 @@ provenance row tracks outside sources from which Navigator imports notation cont
 own source repository separately through `project.repository_url`.
 
 - Schema and queries: [`store::git_repositories`](../../store/src/git_repositories.rs) —
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `git_repository`.
 
-Schema: [`git_repository`](../../store/src/schema/navigator.surql#L1259).
+Schema: [`git_repository`](../../store/postgres/schema.sql).

@@ -15,8 +15,8 @@ The rows belong to the `cap_table` [Module](module.md). They are imported from a
 the firm, and for the matter's client while the module is enabled.
 
 - Store: [`store::cap_table_holdings`](../../store/src/cap_table_holdings.rs) · Schema:
-  [`cap_table_holding`](../../store/src/schema/navigator.surql)
+  [`cap_table_holding`](../../store/postgres/schema.sql)
 
 The table is `cap_table_holding`.
 
-Schema: [`cap_table_holding`](../../store/src/schema/navigator.surql#L499).
+Schema: [`cap_table_holding`](../../store/postgres/schema.sql).

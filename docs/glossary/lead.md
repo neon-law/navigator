@@ -15,9 +15,9 @@ link.
 
 Talking to a lead is attorney work under professional ethics (advertising and solicitation), not a sales sequence.
 
-- Schema: [`lead` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
+- Schema: [`lead` in the PostgreSQL schema](../../store/postgres/schema.sql) Queries:
   [`store::leads`](../../store/src/leads.rs)
 
 The table is `lead`.
 
-Schema: [`lead`](../../store/src/schema/navigator.surql#L537).
+Schema: [`lead`](../../store/postgres/schema.sql).

@@ -18,4 +18,4 @@ Neon Law's handles are seed data in [`store/seeds/neon/SocialHandle.yaml`](../..
 
 The table is `social_handle`.
 
-Schema: [`social_handle`](../../store/src/schema/navigator.surql#L1069).
+Schema: [`social_handle`](../../store/postgres/schema.sql).

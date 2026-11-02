@@ -7,8 +7,8 @@ A postal address attached to a Person, to an Entity, or to neither (the mailroom
 exclusivity is enforced by the application, not the schema.
 
 - Schema and queries: [`store::addresses`](../../store/src/addresses.rs) —
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `address`.
 
-Schema: [`address`](../../store/src/schema/navigator.surql#L1384).
+Schema: [`address`](../../store/postgres/schema.sql).

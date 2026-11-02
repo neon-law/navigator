@@ -9,4 +9,4 @@ another record so the earlier assignment remains visible.
 
 The table is `inbox_assignment`.
 
-Schema: [`inbox_assignment`](../../store/src/schema/navigator.surql#L2591).
+Schema: [`inbox_assignment`](../../store/postgres/schema.sql).

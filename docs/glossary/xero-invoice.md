@@ -9,4 +9,4 @@ Navigator uses this mirror to show invoice information without a live provider r
 
 The table is `xero_invoice`.
 
-Schema: [`xero_invoice`](../../store/src/schema/navigator.surql#L146).
+Schema: [`xero_invoice`](../../store/postgres/schema.sql).

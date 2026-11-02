@@ -9,4 +9,4 @@ purpose here lets different matters rely on the same authority independently.
 
 The table is `authority_use`.
 
-Schema: [`authority_use`](../../store/src/schema/navigator.surql#L2142).
+Schema: [`authority_use`](../../store/postgres/schema.sql).

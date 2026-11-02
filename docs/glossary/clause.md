@@ -22,4 +22,4 @@ See [Clause authoring](../clauses.md) for references, explicit jurisdiction inpu
 
 The table is `notation_clause`.
 
-Schema: [`notation_clause`](../../store/src/schema/navigator.surql#L1902).
+Schema: [`notation_clause`](../../store/postgres/schema.sql).

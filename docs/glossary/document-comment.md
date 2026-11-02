@@ -9,4 +9,4 @@ and optional [Communication](communication.md) association.
 
 The table is `document_comment`.
 
-Schema: [`document_comment`](../../store/src/schema/navigator.surql#L2022).
+Schema: [`document_comment`](../../store/postgres/schema.sql).

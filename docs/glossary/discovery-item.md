@@ -9,4 +9,4 @@ and objections for that item.
 
 The table is `discovery_item`.
 
-Schema: [`discovery_item`](../../store/src/schema/navigator.surql#L2373).
+Schema: [`discovery_item`](../../store/postgres/schema.sql).

@@ -9,4 +9,4 @@ itself grants no authority to act through a session.
 
 The table is `person_delegate`.
 
-Schema: [`person_delegate`](../../store/src/schema/navigator.surql#L704).
+Schema: [`person_delegate`](../../store/postgres/schema.sql).

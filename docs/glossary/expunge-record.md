@@ -9,4 +9,4 @@ Deletion](soft-deletion.md) and governed expunge while keeping the removed conte
 
 The table is `expunge_record`.
 
-Schema: [`expunge_record`](../../store/src/schema/navigator.surql#L2224).
+Schema: [`expunge_record`](../../store/postgres/schema.sql).

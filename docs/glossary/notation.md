@@ -9,4 +9,4 @@ Template and questionnaire snapshot as its workflow advances.
 
 The table is `notation`.
 
-Schema: [`notation`](../../store/src/schema/navigator.surql#L1857).
+Schema: [`notation`](../../store/postgres/schema.sql).

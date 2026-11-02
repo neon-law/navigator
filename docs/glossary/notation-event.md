@@ -11,9 +11,9 @@ appends these so replay is deterministic, and the "current state" of a pair is t
 The on-disk shape mirrors the runtime type [`workflows::runtime::WorkflowEvent`](../../workflows/src/runtime.rs); both
 layers stay in sync because the worker writes them through `ctx.run`.
 
-- Schema: [`notation_event` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
-  [`store::notation_events`](../../store/src/notation_events.rs) Lives in: the `notation_event` table in SurrealDB
+- Schema: [`notation_event` in the PostgreSQL schema](../../store/postgres/schema.sql) Queries:
+  [`store::notation_events`](../../store/src/notation_events.rs) Model: the PostgreSQL `notation_event` table
 
 The table is `notation_event`.
 
-Schema: [`notation_event`](../../store/src/schema/navigator.surql#L1985).
+Schema: [`notation_event`](../../store/postgres/schema.sql).

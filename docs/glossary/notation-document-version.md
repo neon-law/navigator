@@ -9,4 +9,4 @@ Each edit appends a child version so the earlier work remains addressable.
 
 The table is `notation_document_version`.
 
-Schema: [`notation_document_version`](../../store/src/schema/navigator.surql#L1940).
+Schema: [`notation_document_version`](../../store/postgres/schema.sql).

@@ -16,7 +16,7 @@ Only the asset lane has slug versioning. The notation lane versions already: `te
 change and every Notation pins a template row.
 
 - Write boundary: [`store::assets::file_revision`](../../store/src/assets.rs) · Schema:
-  [`asset` in `navigator.surql`](../../store/src/schema/navigator.surql)
+  [`asset` in the PostgreSQL schema](../../store/postgres/schema.sql)
 
 When a new recursive Drive import has no existing source-linked identity, Navigator reserves
 `drive/<hex-encoded-provider-file-id>.<initial-extension>` as its slug. The reversible lowercase hexadecimal provider

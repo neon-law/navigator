@@ -9,4 +9,4 @@ An approval scoped to the [Firm](firm.md), provider account, and optional Projec
 
 The table is `summary_sender_approval`.
 
-Schema: [`summary_sender_approval`](../../store/src/schema/navigator.surql#L1462).
+Schema: [`summary_sender_approval`](../../store/postgres/schema.sql).

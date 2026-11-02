@@ -35,4 +35,4 @@ shared that way in Notion.
 
 - Rendering and the audience filter: [`webapp::project_resources`](../../webapp/src/project_resources.rs) · marks:
   [`webapp::components::resource_mark`](../../webapp/src/components/resource_mark.rs) · columns:
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)

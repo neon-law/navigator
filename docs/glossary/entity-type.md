@@ -7,8 +7,8 @@ The kind of legal Entity (`LLC`, `Trust`, `Corporation`, `Foundation`, …). Ref
 [`store/seeds/EntityType.yaml`](../../store/seeds/EntityType.yaml).
 
 - Schema and queries: [`store::entity_types`](../../store/src/entity_types.rs) —
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `entity_type`.
 
-Schema: [`entity_type`](../../store/src/schema/navigator.surql#L815).
+Schema: [`entity_type`](../../store/postgres/schema.sql).
