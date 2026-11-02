@@ -2,8 +2,8 @@
 //! as a native Dioxus app.
 //!
 //! The web root ([`crate::App`]) is SSR-bound — server futures and
-//! SSR-injected context do not exist on a native target — so the mobile arm
-//! of `main.rs` launches this module's root instead. Navigation is a
+//! SSR-injected context do not exist on a native target — so the
+//! `nautilus-mobile` crate launches this module's root instead. Navigation is a
 //! two-state signal rather than `dioxus_router`: the crate has no router
 //! precedent, and this shell's tests render pages through `dioxus-ssr` the
 //! same way the `marketing_page` component tests do.
@@ -26,7 +26,7 @@ pub enum MobilePage {
     Dyd,
 }
 
-/// The mobile root. The launch arm in `main.rs` renders this; the page
+/// The mobile root. `nautilus-mobile` launches this; the page
 /// signal is the shell's router.
 #[component]
 pub fn MobileApp() -> Element {
@@ -63,7 +63,7 @@ pub fn NautilusHome(on_open_dyd: EventHandler<MouseEvent>) -> Element {
                 h2 { "Pricing" }
                 p { "$29/month or $290/year — cancel anytime." }
             }
-            button { class: "nautilus-dyd-link", "data-mobile-nav": "dyd", onclick: on_open_dyd,
+            button { class: "nav-mobile-dyd", "data-mobile-nav": "dyd", onclick: on_open_dyd,
                 "Delete Your Data"
             }
         }
@@ -87,7 +87,7 @@ pub fn DydPage(on_back_home: EventHandler<MouseEvent>) -> Element {
                     li { "We erase your records from the store and confirm the deletion in writing." }
                 }
             }
-            button { class: "nautilus-home-link", "data-mobile-nav": "home", onclick: on_back_home,
+            button { class: "nav-mobile-home", "data-mobile-nav": "home", onclick: on_back_home,
                 "Back to Nautilus"
             }
         }

@@ -1,7 +1,5 @@
 # Dioxus CLI configuration for the Nautilus mobile app. `dx` reads this from
-# the crate directory — run dx commands from webapp/. The web build never
-# reads it: the existing webapp wasm bundle is driven by
-# `navigator dev build-webapp` from the workspace root.
+# the crate directory — run dx commands from nautilus-mobile/.
 [application]
 name = "nautilus"
 default_platform = "ios"
