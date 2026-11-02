@@ -30,6 +30,18 @@ static DATABASE: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::
 /// Create one canonical-schema database on the lane and point the app's
 /// `PostgresDb::from_env()` pool at it. `None` when the lane is absent —
 /// the test then skips.
+/// The store's PostgreSQL pool is a process-wide OnceCell created on whichever
+/// runtime initializes it first. Tokio tests each get their own runtime, so a
+/// pool created in an early test dies with that test's runtime and later tests
+/// observe "A Tokio 1.x context was found, but it is being shutdown". Every
+/// test in this file therefore runs on one shared process-wide runtime, which
+/// keeps the pool's runtime alive for the whole suite.
+static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
+fn lane() -> &'static tokio::runtime::Runtime {
+    RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().expect("test runtime"))
+}
+
 async fn stage_store() -> Option<&'static str> {
     DATABASE
         .get_or_init(|| async {
@@ -244,7 +256,26 @@ async fn build_fixture() -> Fixture {
         .await
         .unwrap(),
     );
-    let firm_id = seed_firm(&surreal, "Stage Test Firm").await;
+    // One canonical lane database serves every test in this process: the
+    // Firm's unique slug must therefore be namespaced per fixture, or two
+    // parallel fixtures race on it (the mirror's stale-slug DELETE does not
+    // serialize against a concurrent INSERT).
+    let firm_id = seed_firm(
+        &surreal,
+        &format!("Stage Test Firm {}", Uuid::now_v7().simple()),
+    )
+    .await;
+    // The stage vocabulary hangs off the Firm in PostgreSQL: mirror the
+    // Firm's identity rows before any definition is authored, exactly as
+    // the pre-command mirror does in production.
+    let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+    store::postgres_mirror::mirror(
+        &surreal,
+        &pg,
+        &store::postgres_mirror::MirrorKey::Firm(firm_id),
+    )
+    .await
+    .unwrap();
     let project_id = seed_matter(
         &surreal,
         &format!("matter-{}", Uuid::now_v7()),
@@ -389,275 +420,291 @@ async fn set_stage(
     .await
 }
 
-#[tokio::test]
-async fn the_stage_chip_round_trips_a_transition() {
-    let Some(_) = stage_store().await else {
-        return;
-    };
-    let fx = build_fixture().await;
-    let (intake, discovery) = seed_definitions(fx.firm_id).await;
-    let path = stages_path(fx.project_id);
+#[test]
+fn the_stage_chip_round_trips_a_transition() {
+    lane().block_on(async {
+        let Some(_) = stage_store().await else {
+            return;
+        };
+        let fx = build_fixture().await;
+        let (intake, discovery) = seed_definitions(fx.firm_id).await;
+        let path = stages_path(fx.project_id);
 
-    // Before the first transition: the Firm's vocabulary is present, ordered,
-    // and the matter holds no stage.
-    let body = body_json(get(&fx, &path, Some(&fx.lawyer)).await).await;
-    let definitions = body["definitions"].as_array().expect("the vocabulary");
-    assert_eq!(definitions.len(), 2);
-    assert_eq!(definitions[0]["label"], "Intake");
-    assert_eq!(definitions[1]["label"], "Discovery");
-    assert_eq!(body["current"], serde_json::Value::Null);
-    assert_eq!(body["history"].as_array().unwrap().len(), 0);
+        // Before the first transition: the Firm's vocabulary is present, ordered,
+        // and the matter holds no stage.
+        let body = body_json(get(&fx, &path, Some(&fx.lawyer)).await).await;
+        let definitions = body["definitions"].as_array().expect("the vocabulary");
+        assert_eq!(definitions.len(), 2);
+        assert_eq!(definitions[0]["label"], "Intake");
+        assert_eq!(definitions[1]["label"], "Discovery");
+        assert_eq!(body["current"], serde_json::Value::Null);
+        assert_eq!(body["history"].as_array().unwrap().len(), 0);
 
-    // Set the first stage: the event has no origin, and the chip reflects it.
-    let resp = set_stage(&fx, fx.project_id, &fx.lawyer, discovery, None).await;
-    assert_eq!(resp.status(), StatusCode::OK, "the first transition lands");
-    let event = body_json(resp).await;
-    assert_eq!(event["from_stage_id"], serde_json::Value::Null);
-    assert_eq!(
-        event["to_stage_id"].as_str(),
-        Some(discovery.to_string().as_str())
-    );
+        // Set the first stage: the event has no origin, and the chip reflects it.
+        let resp = set_stage(&fx, fx.project_id, &fx.lawyer, discovery, None).await;
+        assert_eq!(resp.status(), StatusCode::OK, "the first transition lands");
+        let event = body_json(resp).await;
+        assert_eq!(event["from_stage_id"], serde_json::Value::Null);
+        assert_eq!(
+            event["to_stage_id"].as_str(),
+            Some(discovery.to_string().as_str())
+        );
 
-    let body = body_json(get(&fx, &path, Some(&fx.lawyer)).await).await;
-    assert_eq!(
-        body["current"]["id"].as_str(),
-        Some(discovery.to_string().as_str())
-    );
-    assert_eq!(body["history"].as_array().unwrap().len(), 1);
+        let body = body_json(get(&fx, &path, Some(&fx.lawyer)).await).await;
+        assert_eq!(
+            body["current"]["id"].as_str(),
+            Some(discovery.to_string().as_str())
+        );
+        assert_eq!(body["history"].as_array().unwrap().len(), 1);
 
-    // Stages may move backward — a matter can return to discovery — because
-    // the Firm's list orders the workflow, not the calendar.
-    let resp = set_stage(
-        &fx,
-        fx.project_id,
-        &fx.lawyer,
-        intake,
-        Some("Back to intake"),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let event = body_json(resp).await;
-    assert_eq!(
-        event["from_stage_id"].as_str(),
-        Some(discovery.to_string().as_str()),
-        "the transition continues the chain"
-    );
-    assert_eq!(event["note"].as_str(), Some("Back to intake"));
-
-    let body = body_json(get(&fx, &path, Some(&fx.lawyer)).await).await;
-    let history = body["history"].as_array().unwrap();
-    assert_eq!(history.len(), 2, "the history is append-only");
-    assert_eq!(
-        history[0]["to_stage_id"].as_str(),
-        Some(discovery.to_string().as_str())
-    );
-    assert_eq!(
-        body["current"]["id"].as_str(),
-        Some(intake.to_string().as_str())
-    );
-}
-
-#[tokio::test]
-async fn setting_the_current_stage_again_is_a_no_op() {
-    let Some(_) = stage_store().await else {
-        return;
-    };
-    let fx = build_fixture().await;
-    let (intake, _) = seed_definitions(fx.firm_id).await;
-
-    let first = body_json(set_stage(&fx, fx.project_id, &fx.lawyer, intake, None).await).await;
-    let second = body_json(set_stage(&fx, fx.project_id, &fx.lawyer, intake, None).await).await;
-
-    assert_eq!(
-        first["id"], second["id"],
-        "repeating the stage records no new event"
-    );
-    let body = body_json(get(&fx, &stages_path(fx.project_id), Some(&fx.lawyer)).await).await;
-    assert_eq!(body["history"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn an_unknown_stage_is_refused() {
-    let Some(_) = stage_store().await else {
-        return;
-    };
-    let fx = build_fixture().await;
-    let (_intake, _discovery) = seed_definitions(fx.firm_id).await;
-
-    let resp = set_stage(&fx, fx.project_id, &fx.lawyer, Uuid::nil(), None).await;
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "no such stage");
-
-    // And the matter still holds no stage.
-    let body = body_json(get(&fx, &stages_path(fx.project_id), Some(&fx.lawyer)).await).await;
-    assert_eq!(body["current"], serde_json::Value::Null);
-}
-
-#[tokio::test]
-async fn a_stage_from_another_firms_vocabulary_is_refused() {
-    let Some(_) = stage_store().await else {
-        return;
-    };
-    let surreal = mem_surreal().await;
-    let other_firm = seed_firm(&surreal, "Other Stage Firm").await;
-    let pg = store::postgres::PostgresDb::from_env().await.unwrap();
-    store::postgres_mirror::mirror(
-        &surreal,
-        &pg,
-        &store::postgres_mirror::MirrorKey::Firm(other_firm),
-    )
-    .await
-    .unwrap();
-    let foreign = store::case_stages::create_definition(
-        &pg,
-        other_firm,
-        &store::case_stages::NewStageDefinition {
-            label: "Foreign stage".into(),
-            position: 0,
-            case_type: None,
-        },
-    )
-    .await
-    .unwrap();
-
-    let fx = build_fixture().await;
-    let (_intake, _discovery) = seed_definitions(fx.firm_id).await;
-
-    let resp = set_stage(&fx, fx.project_id, &fx.lawyer, foreign.id, None).await;
-    assert_eq!(
-        resp.status(),
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "the stage is not in the matter Firm's own vocabulary"
-    );
-
-    // And the matter still holds no stage.
-    let body = body_json(get(&fx, &stages_path(fx.project_id), Some(&fx.lawyer)).await).await;
-    assert_eq!(body["current"], serde_json::Value::Null);
-}
-
-#[tokio::test]
-async fn an_invalid_note_is_refused() {
-    let Some(_) = stage_store().await else {
-        return;
-    };
-    let fx = build_fixture().await;
-    let (_intake, discovery) = seed_definitions(fx.firm_id).await;
-
-    let resp = set_stage(
-        &fx,
-        fx.project_id,
-        &fx.lawyer,
-        discovery,
-        Some(&"x".repeat(501)),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
-
-    // And nothing was recorded.
-    let body = body_json(get(&fx, &stages_path(fx.project_id), Some(&fx.lawyer)).await).await;
-    assert_eq!(body["current"], serde_json::Value::Null);
-}
-
-#[tokio::test]
-async fn a_matter_without_a_firm_has_no_vocabulary_and_no_stage() {
-    let Some(_) = stage_store().await else {
-        return;
-    };
-    let fx = build_fixture().await;
-    let (intake, _discovery) = seed_definitions(fx.firm_id).await;
-
-    // The read: an empty vocabulary and no stage — the panel explains itself.
-    let body =
-        body_json(get(&fx, &stages_path(fx.no_firm_project_id), Some(&fx.lawyer)).await).await;
-    assert_eq!(body["definitions"].as_array().unwrap().len(), 0);
-    assert_eq!(body["current"], serde_json::Value::Null);
-
-    // The command: the store refuses a transition that names no Firm.
-    let resp = set_stage(&fx, fx.no_firm_project_id, &fx.lawyer, intake, None).await;
-    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
-}
-
-#[tokio::test]
-async fn a_lawyer_off_the_matter_is_hidden() {
-    let Some(_) = stage_store().await else {
-        return;
-    };
-    let fx = build_fixture().await;
-    let (intake, _) = seed_definitions(fx.firm_id).await;
-    let path = stages_path(fx.project_id);
-
-    // A lawyer without a participation row: 404, the matter does not exist
-    // for them — never a 403 naming it.
-    assert_eq!(
-        get(&fx, &path, Some(&fx.outsider)).await.status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        set_stage(&fx, fx.project_id, &fx.outsider, intake, None)
-            .await
-            .status(),
-        StatusCode::NOT_FOUND
-    );
-
-    // A client-side participant is not lawyer tier: route admission refuses
-    // before the matter question is ever asked.
-    assert_eq!(
-        get(&fx, &path, Some(&fx.client)).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        set_stage(&fx, fx.project_id, &fx.client, intake, None)
-            .await
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    // A clerk is the same refusal.
-    assert_eq!(
-        get(&fx, &path, Some(&fx.clerk)).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    // No session at all: unauthorized.
-    assert_eq!(
-        get(&fx, &path, None).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        post(
+        // Stages may move backward — a matter can return to discovery — because
+        // the Firm's list orders the workflow, not the calendar.
+        let resp = set_stage(
             &fx,
-            &format!("{path}/set"),
-            None,
-            json!({"stage_id": intake.to_string()})
+            fx.project_id,
+            &fx.lawyer,
+            intake,
+            Some("Back to intake"),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let event = body_json(resp).await;
+        assert_eq!(
+            event["from_stage_id"].as_str(),
+            Some(discovery.to_string().as_str()),
+            "the transition continues the chain"
+        );
+        assert_eq!(event["note"].as_str(), Some("Back to intake"));
+
+        let body = body_json(get(&fx, &path, Some(&fx.lawyer)).await).await;
+        let history = body["history"].as_array().unwrap();
+        assert_eq!(history.len(), 2, "the history is append-only");
+        assert_eq!(
+            history[0]["to_stage_id"].as_str(),
+            Some(discovery.to_string().as_str())
+        );
+        assert_eq!(
+            body["current"]["id"].as_str(),
+            Some(intake.to_string().as_str())
+        );
+    });
+}
+
+#[test]
+fn setting_the_current_stage_again_is_a_no_op() {
+    lane().block_on(async {
+        let Some(_) = stage_store().await else {
+            return;
+        };
+        let fx = build_fixture().await;
+        let (intake, _) = seed_definitions(fx.firm_id).await;
+
+        let first = body_json(set_stage(&fx, fx.project_id, &fx.lawyer, intake, None).await).await;
+        let second = body_json(set_stage(&fx, fx.project_id, &fx.lawyer, intake, None).await).await;
+
+        assert_eq!(
+            first["id"], second["id"],
+            "repeating the stage records no new event"
+        );
+        let body = body_json(get(&fx, &stages_path(fx.project_id), Some(&fx.lawyer)).await).await;
+        assert_eq!(body["history"].as_array().unwrap().len(), 1);
+    });
+}
+
+#[test]
+fn an_unknown_stage_is_refused() {
+    lane().block_on(async {
+        let Some(_) = stage_store().await else {
+            return;
+        };
+        let fx = build_fixture().await;
+        let (_intake, _discovery) = seed_definitions(fx.firm_id).await;
+
+        let resp = set_stage(&fx, fx.project_id, &fx.lawyer, Uuid::nil(), None).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "no such stage");
+
+        // And the matter still holds no stage.
+        let body = body_json(get(&fx, &stages_path(fx.project_id), Some(&fx.lawyer)).await).await;
+        assert_eq!(body["current"], serde_json::Value::Null);
+    });
+}
+
+#[test]
+fn a_stage_from_another_firms_vocabulary_is_refused() {
+    lane().block_on(async {
+        let Some(_) = stage_store().await else {
+            return;
+        };
+        let surreal = mem_surreal().await;
+        let other_firm = seed_firm(&surreal, "Other Stage Firm").await;
+        let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+        store::postgres_mirror::mirror(
+            &surreal,
+            &pg,
+            &store::postgres_mirror::MirrorKey::Firm(other_firm),
         )
         .await
-        .status(),
-        StatusCode::UNAUTHORIZED
-    );
+        .unwrap();
+        let foreign = store::case_stages::create_definition(
+            &pg,
+            other_firm,
+            &store::case_stages::NewStageDefinition {
+                label: "Foreign stage".into(),
+                position: 0,
+                case_type: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let fx = build_fixture().await;
+        let (_intake, _discovery) = seed_definitions(fx.firm_id).await;
+
+        let resp = set_stage(&fx, fx.project_id, &fx.lawyer, foreign.id, None).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the stage is not in the matter Firm's own vocabulary"
+        );
+
+        // And the matter still holds no stage.
+        let body = body_json(get(&fx, &stages_path(fx.project_id), Some(&fx.lawyer)).await).await;
+        assert_eq!(body["current"], serde_json::Value::Null);
+    });
 }
 
-#[tokio::test]
-async fn stages_are_scoped_to_their_matter() {
-    let Some(_) = stage_store().await else {
-        return;
-    };
-    let fx = build_fixture().await;
-    let (_intake, discovery) = seed_definitions(fx.firm_id).await;
+#[test]
+fn an_invalid_note_is_refused() {
+    lane().block_on(async {
+        let Some(_) = stage_store().await else {
+            return;
+        };
+        let fx = build_fixture().await;
+        let (_intake, discovery) = seed_definitions(fx.firm_id).await;
 
-    // The lawyer is on both matters. Moving the second matter's stage never
-    // touches the first's history.
-    let resp = set_stage(&fx, fx.other_project_id, &fx.lawyer, discovery, None).await;
-    assert_eq!(resp.status(), StatusCode::OK);
+        let resp = set_stage(
+            &fx,
+            fx.project_id,
+            &fx.lawyer,
+            discovery,
+            Some(&"x".repeat(501)),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-    let first = body_json(get(&fx, &stages_path(fx.project_id), Some(&fx.lawyer)).await).await;
-    assert_eq!(
-        first["current"],
-        serde_json::Value::Null,
-        "the first matter's stage is untouched"
-    );
-    assert_eq!(first["history"].as_array().unwrap().len(), 0);
+        // And nothing was recorded.
+        let body = body_json(get(&fx, &stages_path(fx.project_id), Some(&fx.lawyer)).await).await;
+        assert_eq!(body["current"], serde_json::Value::Null);
+    });
+}
 
-    let second =
-        body_json(get(&fx, &stages_path(fx.other_project_id), Some(&fx.lawyer)).await).await;
-    assert_eq!(
-        second["current"]["id"].as_str(),
-        Some(discovery.to_string().as_str())
-    );
+#[test]
+fn a_matter_without_a_firm_has_no_vocabulary_and_no_stage() {
+    lane().block_on(async {
+        let Some(_) = stage_store().await else {
+            return;
+        };
+        let fx = build_fixture().await;
+        let (intake, _discovery) = seed_definitions(fx.firm_id).await;
+
+        // The read: an empty vocabulary and no stage — the panel explains itself.
+        let body =
+            body_json(get(&fx, &stages_path(fx.no_firm_project_id), Some(&fx.lawyer)).await).await;
+        assert_eq!(body["definitions"].as_array().unwrap().len(), 0);
+        assert_eq!(body["current"], serde_json::Value::Null);
+
+        // The command: the store refuses a transition that names no Firm.
+        let resp = set_stage(&fx, fx.no_firm_project_id, &fx.lawyer, intake, None).await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    });
+}
+
+#[test]
+fn a_lawyer_off_the_matter_is_hidden() {
+    lane().block_on(async {
+        let Some(_) = stage_store().await else {
+            return;
+        };
+        let fx = build_fixture().await;
+        let (intake, _) = seed_definitions(fx.firm_id).await;
+        let path = stages_path(fx.project_id);
+
+        // A lawyer without a participation row: 404, the matter does not exist
+        // for them — never a 403 naming it.
+        assert_eq!(
+            get(&fx, &path, Some(&fx.outsider)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            set_stage(&fx, fx.project_id, &fx.outsider, intake, None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // A client-side participant is not lawyer tier: route admission refuses
+        // before the matter question is ever asked.
+        assert_eq!(
+            get(&fx, &path, Some(&fx.client)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            set_stage(&fx, fx.project_id, &fx.client, intake, None)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        // A clerk is the same refusal.
+        assert_eq!(
+            get(&fx, &path, Some(&fx.clerk)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        // No session at all: unauthorized.
+        assert_eq!(
+            get(&fx, &path, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            post(
+                &fx,
+                &format!("{path}/set"),
+                None,
+                json!({"stage_id": intake.to_string()})
+            )
+            .await
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
+    });
+}
+
+#[test]
+fn stages_are_scoped_to_their_matter() {
+    lane().block_on(async {
+        let Some(_) = stage_store().await else {
+            return;
+        };
+        let fx = build_fixture().await;
+        let (_intake, discovery) = seed_definitions(fx.firm_id).await;
+
+        // The lawyer is on both matters. Moving the second matter's stage never
+        // touches the first's history.
+        let resp = set_stage(&fx, fx.other_project_id, &fx.lawyer, discovery, None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let first = body_json(get(&fx, &stages_path(fx.project_id), Some(&fx.lawyer)).await).await;
+        assert_eq!(
+            first["current"],
+            serde_json::Value::Null,
+            "the first matter's stage is untouched"
+        );
+        assert_eq!(first["history"].as_array().unwrap().len(), 0);
+
+        let second =
+            body_json(get(&fx, &stages_path(fx.other_project_id), Some(&fx.lawyer)).await).await;
+        assert_eq!(
+            second["current"]["id"].as_str(),
+            Some(discovery.to_string().as_str())
+        );
+    });
 }
