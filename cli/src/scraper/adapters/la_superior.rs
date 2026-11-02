@@ -571,8 +571,9 @@ mod tests {
 
     /// The documents register, recorded from the live portal's
     /// `/bff/case-details/{caseId}?includeProperties=documents` endpoint
-    /// (2026-11-01), trimmed to two documents. Field names are the contract.
-    const CASE_DOCUMENTS: &str = r#"{
+    /// (2026-11-01), trimmed to two documents. The live endpoint answers a
+    /// top-level JSON array of case envelopes; field names are the contract.
+    const CASE_DOCUMENTS: &str = r#"[{
         "provider": "ECourt",
         "result": [{
             "caseId": "5436252",
@@ -606,7 +607,7 @@ mod tests {
                 }
             ]
         }]
-    }"#;
+    }]"#;
 
     /// The live portal's SPA shell: every HTML route answers this
     /// client-side-rendered page (recorded 2026-11-01, trimmed). It parses
