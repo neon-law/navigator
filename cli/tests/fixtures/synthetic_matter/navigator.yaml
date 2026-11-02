@@ -37,3 +37,12 @@ matter:
 dockets:
   - 00CV000000
   - B327654
+scrapers:
+  sites:
+    pacer:
+      adapter: pacer
+      portal_url: https://www.pacer.gov
+  options:
+    schedule_hint: daily 06:00 UTC
+allowed_hosts:
+  www.pacer.gov: the PACER portal
