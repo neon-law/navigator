@@ -73,6 +73,10 @@ COPY billing           billing
 COPY billing-workflows billing-workflows
 COPY gateway gateway
 COPY sandbox-skills sandbox-skills
+# `sandbox-skills` embeds the vendored legal-aid plugin's SKILL.md files with
+# include_str!("../../vendor/legal-aid-plugin/..."), outside the crate dir,
+# so that tree must be staged too (deploy run 41431655963 failed on it).
+COPY vendor/legal-aid-plugin vendor/legal-aid-plugin
 # Every scheduled-job crate (workflows-service, archives, billing-workflows, cli)
 # reaches the `views` crate through `workflows`, and
 # `views` bakes in `docs/lsp/*.md` with include_str!(concat!(
