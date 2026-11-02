@@ -5476,15 +5476,23 @@ pub fn team_profile_router(path: &str, content: webapp::team_page::TeamProfileCo
 /// never touch a URL. Public and firm-scoped;
 /// `reject_unpublished_firm_path` 404s it off Vesta.
 pub fn world_router(path: &str, content: webapp::world_page::WorldContent) -> Router {
-    Router::<FullstackState>::new()
-        .route(
-            path,
-            get(render_handler)
-                .layer(from_fn(dioxus_document_head))
-                .layer(from_fn(inject_public_utility))
-                .layer(from_fn_with_state(content, inject_world)),
-        )
-        .with_state(FullstackState::new(ServeConfig::new(), webapp::App))
+    let mut router = Router::<FullstackState>::new().route(
+        path,
+        get(render_handler)
+            .layer(from_fn(dioxus_document_head))
+            .layer(from_fn(inject_public_utility))
+            .layer(from_fn_with_state(content, inject_world)),
+    );
+    // Mount the world page's own typed server-function endpoint, and only
+    // that one: `register_server_functions` would publish every `#[server]`
+    // function in the binary — including the admin ones — to this public
+    // router, so the inventory is filtered to the world page's endpoint.
+    for function in dioxus_server::ServerFunction::collect() {
+        if function.path() == webapp::world_page::RESOLVE_BIRTH_DATA_PATH {
+            router = router.route(function.path(), function.method_router());
+        }
+    }
+    router.with_state(FullstackState::new(ServeConfig::new(), webapp::App))
 }
 
 /// Hand the resolved [`webapp::world_page::WorldContent`] to the render task

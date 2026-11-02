@@ -192,6 +192,12 @@ pub async fn resolve_birth_data(
         .collect())
 }
 
+/// The endpoint path the `#[server]` macro generates for
+/// [`resolve_birth_data`]. The router mounts exactly this endpoint from the
+/// `ServerFunction` inventory (and nothing else) so the wasm client stub has
+/// a handler; see `world_router` in `portal::dioxus_app`.
+pub const RESOLVE_BIRTH_DATA_PATH: &str = "/world/resolve_birth_data";
+
 /// The server function's wire entry: the page's staged form flattened to what
 /// the calculation needs. Not server-gated — the wasm client names the type
 /// to serialize its form state onto the wire.
