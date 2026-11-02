@@ -217,10 +217,222 @@ pub async fn start_dbos_nightly_project_update<B: Serialize + ?Sized>(
     .await
 }
 
-#[cfg(feature = "dbos")]
-/// The base URL of the worker's authenticated DBOS ingress.
+/// Start an `EmailSummary` run through the worker's authenticated DBOS
+/// ingress, keyed by the receipt the run summarizes.
+#[tracing::instrument(
+    level = "info",
+    skip(ingress, token, body),
+    fields(service = "EmailSummary", operation = "DBOS ingress")
+)]
+pub async fn start_dbos_email_summary<B: Serialize + ?Sized>(
+    ingress: &str,
+    token: &str,
+    body: &B,
+) -> Result<(), TriggerError> {
+    start_dbos_at(ingress, token, "/internal/dbos/email-summary", body).await
+}
+
+/// Start an `InboundMessageAlert` run through the worker's authenticated
+/// DBOS ingress, keyed by the inbound Message the alert reports.
+#[tracing::instrument(
+    level = "info",
+    skip(ingress, token, body),
+    fields(service = "InboundMessageAlert", operation = "DBOS ingress")
+)]
+pub async fn start_dbos_inbound_message_alert<B: Serialize + ?Sized>(
+    ingress: &str,
+    token: &str,
+    body: &B,
+) -> Result<(), TriggerError> {
+    start_dbos_at(ingress, token, "/internal/dbos/inbound-message-alert", body).await
+}
+
+/// Start (or join) a `ProjectSlack` lane through the worker's authenticated
+/// DBOS ingress. The workflow id names the Project and the lane event.
+#[tracing::instrument(
+    level = "info",
+    skip(ingress, token, body),
+    fields(service = "project-slack", operation = "DBOS ingress")
+)]
+pub async fn start_dbos_project_slack<B: Serialize + ?Sized>(
+    ingress: &str,
+    token: &str,
+    body: &B,
+) -> Result<(), TriggerError> {
+    start_dbos_at(ingress, token, "/internal/dbos/project-slack", body).await
+}
+
+/// Start a `SocialPublisher` run through the worker's authenticated DBOS
+/// ingress, keyed by the `(post, scheduled time)` pair the Restate ingress
+/// used as the invocation key.
+#[tracing::instrument(
+    level = "info",
+    skip(ingress, token, body),
+    fields(service = "SocialPublisher", operation = "DBOS ingress")
+)]
+pub async fn start_dbos_social_publisher<B: Serialize + ?Sized>(
+    ingress: &str,
+    token: &str,
+    body: &B,
+) -> Result<(), TriggerError> {
+    start_dbos_at(ingress, token, "/internal/dbos/social-publisher", body).await
+}
+
+/// Start (or join) a `SocialPublishReconciler` slot through the worker's
+/// authenticated DBOS ingress. A slot-floored id joins the run the worker's
+/// internal schedule already started.
+#[tracing::instrument(
+    level = "info",
+    skip(ingress, token, body),
+    fields(service = "SocialPublishReconciler", operation = "DBOS ingress")
+)]
+pub async fn start_dbos_social_publish_reconciler<B: Serialize + ?Sized>(
+    ingress: &str,
+    token: &str,
+    body: &B,
+) -> Result<(), TriggerError> {
+    start_dbos_at(
+        ingress,
+        token,
+        "/internal/dbos/social-publish-reconciler",
+        body,
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// The ported services' workflow ids: one constructor per id format, shared by
+// every caller (web, the triggers, the worker's own handlers) and by the
+// worker's ingress validators. The id is the idempotency key — a caller and
+// an ingress that disagree about its format either split one logical run in
+// two or silently merge two — so the format is defined exactly once here.
+// `workflows-service`'s twin modules delegate to these, and their ingress
+// validators re-derive the same ids from the payload.
+
+/// The `EmailSummary` workflow id for one archived receipt: every redelivery
+/// of the message joins the same run.
+#[must_use]
+pub fn email_summary_workflow_id(receipt_id: uuid::Uuid) -> String {
+    format!("EmailSummary:{receipt_id}")
+}
+
+/// The `InboundMessageAlert` workflow id for one inbound Message: every
+/// provider redelivery joins the same run.
+#[must_use]
+pub fn inbound_message_alert_workflow_id(message_id: uuid::Uuid) -> String {
+    format!("InboundMessageAlert:{message_id}")
+}
+
+/// The `ProjectSlack` client-view lane's workflow id for one Project: one
+/// stable id per Project, so repeated views join the first run.
+#[must_use]
+pub fn project_slack_client_view_workflow_id(project_id: uuid::Uuid) -> String {
+    format!("ProjectSlack:{}:client-view", project_id.simple())
+}
+
+/// The `ProjectSlack` main-push lane's workflow id for one
+/// `(sha, run attempt)` per Project — the same idempotency key the Restate
+/// object carried.
+#[must_use]
+pub fn project_slack_main_push_workflow_id(
+    project_id: uuid::Uuid,
+    short_sha: &str,
+    run_attempt: u32,
+) -> String {
+    format!(
+        "ProjectSlack:{}:{short_sha}:{run_attempt}",
+        project_id.simple()
+    )
+}
+
+/// The `SocialPublisher` workflow id for one `(post, scheduled time)` pair —
+/// the Restate invocation key's twin.
+#[must_use]
+pub fn social_publisher_workflow_id(
+    post_id: uuid::Uuid,
+    publish_at: chrono::DateTime<chrono::Utc>,
+) -> String {
+    format!("SocialPublisher:{post_id}:{}", publish_at.timestamp())
+}
+
+/// The `SocialPublishReconciler` slot's workflow id — the five-minute UTC
+/// slot, formatted to the minute.
+#[must_use]
+pub fn social_publish_reconciler_workflow_id(slot: chrono::DateTime<chrono::Utc>) -> String {
+    format!("SocialPublishReconciler:{}", slot.format("%Y-%m-%dT%H-%M"))
+}
+
+/// Which ingress a caller of a ported service hands its start to, chosen by
+/// that service's `NAVIGATOR_DBOS_*_ENABLED` switch.
+///
+/// Unlike [`TriggerTarget`] (the thin trigger binaries' selection, which
+/// must fail a run when the Restate ingress is unconfigured), this caller
+/// selection leaves the Restate branch's availability to the caller: a
+/// portal without `RESTATE_BROKER_URL` reports "unavailable" today and keeps
+/// doing so while the switch is off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServiceTarget {
+    /// The worker's authenticated DBOS ingress; `ingress` has no trailing `/`.
+    Dbos {
+        /// The worker's DBOS ingress base URL.
+        ingress: String,
+        /// The bearer for the app-to-worker hop.
+        token: String,
+    },
+    /// The Restate ingress while the service's switch is off — the caller's
+    /// existing Restate-or-unavailable behavior.
+    Restate,
+}
+
+/// A caller's ingress selection the environment does not complete.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ServiceTargetError {
+    /// The service's switch is neither `true` nor `false`.
+    #[error(transparent)]
+    Switch(#[from] crate::flags::SettingsError),
+    /// The selected DBOS ingress needs this variable set to a non-blank value.
+    #[error("{0} must be set to start this workflow on DBOS")]
+    Missing(&'static str),
+}
+
+/// Select a caller's ingress for one ported service from its DBOS switch.
+///
+/// With the switch on, both the worker's DBOS ingress URL and its bearer
+/// must be non-blank — pointing a service at nothing is never the safe
+/// default, so the caller reports the misconfiguration instead of silently
+/// dropping the durable start. With the switch off (the default), the caller
+/// keeps its existing Restate path.
+///
+/// # Errors
+///
+/// [`ServiceTargetError::Switch`] for a switch other than `true` / `false`;
+/// [`ServiceTargetError::Missing`] for an absent or blank DBOS ingress
+/// setting while the switch is on.
+pub fn service_target(
+    flag: &'static str,
+    enabled: Option<&str>,
+    dbos_ingress_url: Option<String>,
+    dbos_ingress_token: Option<String>,
+) -> Result<ServiceTarget, ServiceTargetError> {
+    if crate::flags::flag_enabled(flag, enabled)? {
+        let ingress = dbos_ingress_url
+            .map(|url| url.trim().trim_end_matches('/').to_owned())
+            .filter(|url| !url.is_empty())
+            .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_URL_ENV))?;
+        let token = dbos_ingress_token
+            .map(|token| token.trim().to_owned())
+            .filter(|token| !token.is_empty())
+            .ok_or(ServiceTargetError::Missing(DBOS_INGRESS_TOKEN_ENV))?;
+        Ok(ServiceTarget::Dbos { ingress, token })
+    } else {
+        Ok(ServiceTarget::Restate)
+    }
+}
+
+/// The base URL of the worker's authenticated DBOS ingress. Ungated: every
+/// caller crate — `web`, the thin triggers, the worker's own handlers —
+/// selects an ingress by these names without hosting the executor.
 pub const DBOS_INGRESS_URL_ENV: &str = "NAVIGATOR_DBOS_INGRESS_URL";
-#[cfg(feature = "dbos")]
 /// The bearer secret for the worker's DBOS ingress.
 pub const DBOS_INGRESS_TOKEN_ENV: &str = "NAVIGATOR_DBOS_INGRESS_TOKEN";
 #[cfg(feature = "dbos")]
@@ -229,6 +441,19 @@ pub const RESTATE_INGRESS_URL_ENV: &str = "RESTATE_INGRESS_URL";
 #[cfg(feature = "dbos")]
 /// The optional Restate Cloud bearer.
 pub const RESTATE_AUTH_TOKEN_ENV: &str = "RESTATE_AUTH_TOKEN";
+
+/// The `EmailSummary` rollout switch. Default off; the Restate lane keeps
+/// serving until cutover flips it.
+pub const EMAIL_SUMMARY_ENABLED_ENV: &str = "NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED";
+/// The `InboundMessageAlert` rollout switch. Default off.
+pub const INBOUND_MESSAGE_ALERT_ENABLED_ENV: &str = "NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED";
+/// The `project-slack` rollout switch. Default off.
+pub const PROJECT_SLACK_ENABLED_ENV: &str = "NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED";
+/// The `SocialPublisher` rollout switch. Default off.
+pub const SOCIAL_PUBLISHER_ENABLED_ENV: &str = "NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED";
+/// The `SocialPublishReconciler` rollout switch. Default off.
+pub const SOCIAL_PUBLISH_RECONCILER_ENABLED_ENV: &str =
+    "NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED";
 
 #[cfg(feature = "dbos")]
 /// Which durable ingress a thin daily trigger hands its run to.
@@ -834,5 +1059,136 @@ mod target_tests {
                 .to_string(),
             "RESTATE_INGRESS_URL must be set for the selected workflow ingress"
         );
+    }
+}
+
+#[cfg(test)]
+mod service_target_tests {
+    use super::{
+        service_target, social_publish_reconciler_workflow_id, social_publisher_workflow_id,
+        ServiceTarget, ServiceTargetError,
+    };
+    use crate::flags::SettingsError;
+    use chrono::TimeZone;
+
+    const FLAG: &str = super::SOCIAL_PUBLISHER_ENABLED_ENV;
+
+    fn target(
+        enabled: Option<&str>,
+        ingress: Option<&str>,
+        token: Option<&str>,
+    ) -> Result<ServiceTarget, ServiceTargetError> {
+        service_target(
+            FLAG,
+            enabled,
+            ingress.map(str::to_owned),
+            token.map(str::to_owned),
+        )
+    }
+
+    #[test]
+    fn service_target_defaults_to_restate_until_the_switch_flips() {
+        assert_eq!(target(None, None, None), Ok(ServiceTarget::Restate));
+        assert_eq!(
+            target(Some("false"), None, None),
+            Ok(ServiceTarget::Restate)
+        );
+        assert_eq!(
+            target(Some("yes"), Some("http://worker"), Some("t")),
+            Err(ServiceTargetError::Switch(SettingsError::Invalid(FLAG)))
+        );
+    }
+
+    #[test]
+    fn service_target_on_dbos_requires_a_non_blank_ingress_and_bearer() {
+        assert_eq!(
+            target(
+                Some("true"),
+                Some(" http://worker:9083/ "),
+                Some(" secret ")
+            ),
+            Ok(ServiceTarget::Dbos {
+                ingress: "http://worker:9083".into(),
+                token: "secret".into(),
+            })
+        );
+        for (ingress, token, missing) in [
+            (None, Some("t"), super::DBOS_INGRESS_URL_ENV),
+            (Some("  "), Some("t"), super::DBOS_INGRESS_URL_ENV),
+            (Some("///"), Some("t"), super::DBOS_INGRESS_URL_ENV),
+            (Some("http://worker"), None, super::DBOS_INGRESS_TOKEN_ENV),
+            (
+                Some("http://worker"),
+                Some(" "),
+                super::DBOS_INGRESS_TOKEN_ENV,
+            ),
+        ] {
+            assert_eq!(
+                target(Some("true"), ingress, token),
+                Err(ServiceTargetError::Missing(missing))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dbos_social_handoffs_target_their_internal_allowlisted_routes() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/internal/dbos/social-publisher"))
+            .and(wiremock::matchers::header(
+                "authorization",
+                "Bearer worker-secret",
+            ))
+            .and(wiremock::matchers::body_partial_json(serde_json::json!({
+                "workflow_id": "SocialPublisher:0190e0d0-0000-7000-8000-000000000001:1793577600",
+                "request": { "post_id": "0190e0d0-0000-7000-8000-000000000001" }
+            })))
+            .respond_with(wiremock::ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+        super::start_dbos_social_publisher(
+            &server.uri(),
+            "worker-secret",
+            &serde_json::json!({
+                "workflow_id": social_publisher_workflow_id(
+                    uuid::Uuid::parse_str("0190e0d0-0000-7000-8000-000000000001").expect("uuid"),
+                    chrono::Utc.timestamp_opt(1_793_577_600, 0).single().expect("ts"),
+                ),
+                "request": {
+                    "post_id": "0190e0d0-0000-7000-8000-000000000001",
+                    "publish_at": "2026-11-02T00:00:00Z"
+                }
+            }),
+        )
+        .await
+        .expect("publisher handoff accepted");
+
+        let slot = chrono::Utc
+            .timestamp_opt(1_793_568_000, 0)
+            .single()
+            .expect("ts");
+        assert_eq!(
+            social_publish_reconciler_workflow_id(slot),
+            "SocialPublishReconciler:2026-11-01T21-20"
+        );
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/internal/dbos/social-publish-reconciler",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+        super::start_dbos_social_publish_reconciler(
+            &server.uri(),
+            "worker-secret",
+            &serde_json::json!({
+                "workflow_id": social_publish_reconciler_workflow_id(slot),
+                "request": { "tick": "2026-11-02T00:00:00+00:00" }
+            }),
+        )
+        .await
+        .expect("reconciler handoff accepted");
     }
 }

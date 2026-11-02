@@ -878,6 +878,14 @@ async fn main() -> anyhow::Result<()> {
                                     social_publisher.clone(),
                                 ),
                             )?;
+                        if let Some(token) = dbos_ingress_token.clone() {
+                            registered_ingress.social_publisher = Some(
+                                workflows_service::dbos_ingress::SocialPublisherIngress::new(
+                                    token,
+                                    social_workflow.clone(),
+                                ),
+                            );
+                        }
                         if social_reconciler_enabled {
                             let reconciler = workflows_service::dbos_social_publisher
                                 ::register_reconciler(
@@ -888,8 +896,20 @@ async fn main() -> anyhow::Result<()> {
                                             social_publisher,
                                             social_workflow.clone(),
                                             lookup,
-                                        ),
+                                        )
+                                        .map_err(|error| {
+                                            dbos::Error::Config(error.to_string())
+                                        })?,
                                 )?;
+                            if let Some(token) = dbos_ingress_token.clone() {
+                                registered_ingress.social_reconciler = Some(
+                                    workflows_service::dbos_ingress
+                                        ::SocialReconcilerIngress::new(
+                                            token,
+                                            reconciler.clone(),
+                                        ),
+                                );
+                            }
                             launchers.push(Box::new(move |stop| {
                                 let clock: workflows_service::dbos_social_publisher::Clock =
                                     Arc::new(chrono::Utc::now);

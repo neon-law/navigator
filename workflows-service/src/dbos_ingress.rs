@@ -20,6 +20,7 @@ use crate::dbos_inbound_message_alert::InboundMessageAlertWorkflow;
 use crate::dbos_nightly_project_update::NightlyWorkflow;
 use crate::dbos_project_slack::{self, LaneKey, LaneRequest, ProjectSlackWorkflow};
 use crate::dbos_reconcile::ReconcileWorkflow;
+use crate::dbos_social_publisher::{ReconcilerWorkflow, SocialPublishWorkflow};
 use crate::project_slack::{LaneError, MainPushRequest};
 
 const MAX_BODY_BYTES: usize = 16 * 1024;
@@ -39,6 +40,8 @@ pub struct WorkerIngress {
     pub email_summary: Option<EmailSummaryIngress>,
     pub inbound_message_alert: Option<AlertIngress>,
     pub project_slack: Option<ProjectSlackIngress>,
+    pub social_publisher: Option<SocialPublisherIngress>,
+    pub social_reconciler: Option<SocialReconcilerIngress>,
     pub notation: Option<NotationIngress>,
 }
 
@@ -64,6 +67,18 @@ pub struct EmailSummaryIngress {
 pub struct AlertIngress {
     token: Arc<str>,
     workflow: InboundMessageAlertWorkflow,
+}
+
+#[derive(Clone)]
+pub struct SocialPublisherIngress {
+    token: Arc<str>,
+    workflow: SocialPublishWorkflow,
+}
+
+#[derive(Clone)]
+pub struct SocialReconcilerIngress {
+    token: Arc<str>,
+    workflow: ReconcilerWorkflow,
 }
 
 #[async_trait::async_trait]
@@ -111,6 +126,26 @@ impl EmailSummaryIngress {
 impl AlertIngress {
     #[must_use]
     pub fn new(token: String, workflow: InboundMessageAlertWorkflow) -> Self {
+        Self {
+            token: Arc::from(token),
+            workflow,
+        }
+    }
+}
+
+impl SocialPublisherIngress {
+    #[must_use]
+    pub fn new(token: String, workflow: SocialPublishWorkflow) -> Self {
+        Self {
+            token: Arc::from(token),
+            workflow,
+        }
+    }
+}
+
+impl SocialReconcilerIngress {
+    #[must_use]
+    pub fn new(token: String, workflow: ReconcilerWorkflow) -> Self {
         Self {
             token: Arc::from(token),
             workflow,
@@ -390,55 +425,75 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
     } else {
         router
     };
-    let router = if let Some(notation) = ingress.notation {
-        // The Restate virtual object's seven handlers, plus a journal-backed
-        // `workflow_events` read the Restate side never served (the caller
-        // degrades its absence to an empty list — see `RestateRuntime::events`).
+    let router = if let Some(social_publisher) = ingress.social_publisher {
+        router.route(
+            "/internal/dbos/social-publisher",
+            post(start_social_publisher).with_state(social_publisher),
+        )
+    } else {
         router
-            .route(
-                "/notation/{notation_id}/questionnaire_start",
-                post(notation_start)
-                    .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
-            )
-            .route(
-                "/notation/{notation_id}/questionnaire_signal",
-                post(notation_signal)
-                    .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
-            )
-            .route(
-                "/notation/{notation_id}/questionnaire_back",
-                post(notation_back)
-                    .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
-            )
-            .route(
-                "/notation/{notation_id}/questionnaire_current_state",
-                post(notation_current_state)
-                    .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
-            )
-            .route(
-                "/notation/{notation_id}/workflow_start",
-                post(notation_start)
-                    .with_state(notation.route_state(workflows::MachineKind::Workflow)),
-            )
-            .route(
-                "/notation/{notation_id}/workflow_signal",
-                post(notation_signal)
-                    .with_state(notation.route_state(workflows::MachineKind::Workflow)),
-            )
-            .route(
-                "/notation/{notation_id}/workflow_current_state",
-                post(notation_current_state)
-                    .with_state(notation.route_state(workflows::MachineKind::Workflow)),
-            )
-            .route(
-                "/notation/{notation_id}/workflow_events",
-                post(notation_events)
-                    .with_state(notation.route_state(workflows::MachineKind::Workflow)),
-            )
+    };
+    let router = if let Some(social_reconciler) = ingress.social_reconciler {
+        router.route(
+            "/internal/dbos/social-publish-reconciler",
+            post(start_social_reconcile).with_state(social_reconciler),
+        )
+    } else {
+        router
+    };
+    let router = if let Some(notation) = ingress.notation {
+        add_notation_routes(router, &notation)
     } else {
         router
     };
     router.layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
+}
+
+/// The notation virtual object's eight routes: the Restate object's seven
+/// handlers, plus a journal-backed `workflow_events` read the Restate side
+/// never served (the caller degrades its absence to an empty list — see
+/// `RestateRuntime::events`).
+fn add_notation_routes(router: Router, notation: &NotationIngress) -> Router {
+    router
+        .route(
+            "/notation/{notation_id}/questionnaire_start",
+            post(notation_start)
+                .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+        )
+        .route(
+            "/notation/{notation_id}/questionnaire_signal",
+            post(notation_signal)
+                .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+        )
+        .route(
+            "/notation/{notation_id}/questionnaire_back",
+            post(notation_back)
+                .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+        )
+        .route(
+            "/notation/{notation_id}/questionnaire_current_state",
+            post(notation_current_state)
+                .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+        )
+        .route(
+            "/notation/{notation_id}/workflow_start",
+            post(notation_start).with_state(notation.route_state(workflows::MachineKind::Workflow)),
+        )
+        .route(
+            "/notation/{notation_id}/workflow_signal",
+            post(notation_signal)
+                .with_state(notation.route_state(workflows::MachineKind::Workflow)),
+        )
+        .route(
+            "/notation/{notation_id}/workflow_current_state",
+            post(notation_current_state)
+                .with_state(notation.route_state(workflows::MachineKind::Workflow)),
+        )
+        .route(
+            "/notation/{notation_id}/workflow_events",
+            post(notation_events)
+                .with_state(notation.route_state(workflows::MachineKind::Workflow)),
+        )
 }
 
 async fn start_finance(
@@ -1035,6 +1090,118 @@ fn validate_request(request: &FinanceRequest) -> Result<(), StatusCode> {
         return Err(StatusCode::BAD_REQUEST);
     }
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct SocialPublishStart {
+    workflow_id: String,
+    request: workflows::SocialPublishRequest,
+}
+
+#[derive(Debug, Deserialize)]
+struct SocialReconcileStart {
+    workflow_id: String,
+    request: crate::social_publisher::ReconcileRequest,
+}
+
+/// The social twins' ids are deterministic per `(post, scheduled time)` and
+/// per five-minute slot — the same identity the Restate ingress keyed the
+/// invocations with — so a caller may not split the id from the payload it
+/// names.
+fn validate_social_publisher_request(request: &SocialPublishStart) -> Result<(), StatusCode> {
+    if request.workflow_id.len() > MAX_WORKFLOW_ID_BYTES
+        || request.workflow_id
+            != crate::dbos_social_publisher::publisher_workflow_id(
+                request.request.post_id,
+                request.request.publish_at,
+            )
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(())
+}
+
+fn validate_social_reconcile_request(request: &SocialReconcileStart) -> Result<(), StatusCode> {
+    // The id pins the slot the tick names: parse it back from the RFC3339
+    // tick (`to_rfc3339()` in `fire`) and require the derived id to match.
+    let slot = chrono::DateTime::parse_from_rfc3339(&request.request.tick)
+        .ok()
+        .map(chrono::DateTime::<chrono::Utc>::from);
+    if request.workflow_id.len() > MAX_WORKFLOW_ID_BYTES
+        || request.workflow_id
+            != slot
+                .map(crate::dbos_social_publisher::reconciler_workflow_id)
+                .unwrap_or_default()
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(())
+}
+
+async fn start_social_publisher(
+    State(ingress): State<SocialPublisherIngress>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Accepted>), StatusCode> {
+    if !authorized(&headers, &ingress.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let request: SocialPublishStart =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_social_publisher_request(&request)?;
+    ingress
+        .workflow
+        .start_with(
+            request.request,
+            dbos::StartOptions {
+                workflow_id: Some(&request.workflow_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(Accepted {
+            workflow_id: request.workflow_id,
+        }),
+    ))
+}
+
+async fn start_social_reconcile(
+    State(ingress): State<SocialReconcilerIngress>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Accepted>), StatusCode> {
+    if !authorized(&headers, &ingress.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let request: SocialReconcileStart =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_social_reconcile_request(&request)?;
+    ingress
+        .workflow
+        .start_with(
+            request.request,
+            dbos::StartOptions {
+                workflow_id: Some(&request.workflow_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(Accepted {
+            workflow_id: request.workflow_id,
+        }),
+    ))
 }
 
 async fn start_email_summary(

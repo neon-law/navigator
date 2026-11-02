@@ -2087,7 +2087,8 @@ impl MainPushEvent {
 /// CI reports a push to `main`. The caller is the document-scoped CI session
 /// `project-gate.yml` mints for exactly this Project; any other session, and
 /// a CI session scoped to another Project, is refused with 403. The event is
-/// handed to the `project-slack` virtual object keyed by the Project id,
+/// handed to the `project-slack` lane the service's switch selects — the
+/// worker's DBOS ingress, else the Restate object keyed by the Project id —
 /// which resolves the channel from the Project row and posts once per
 /// `(sha, run attempt)`. `202 Accepted` when queued.
 async fn main_push_event_door(
@@ -2107,19 +2108,41 @@ async fn main_push_event_door(
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
-    let Some(broker) = crate::cron_schedules::restate_broker_url() else {
+    let dbos_flag = std::env::var(workflows::trigger::PROJECT_SLACK_ENABLED_ENV).ok();
+    let Ok(dbos_ingress) = project_slack_dbos_ingress_config(
+        dbos_flag.as_deref(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
+    ) else {
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
                 "error": "workflows_unavailable",
-                "message": "No Restate ingress is configured for this deployment."
+                "message": "DBOS project-slack is enabled but its ingress configuration is invalid."
             })),
         )
             .into_response());
     };
-    let token = std::env::var("RESTATE_AUTH_TOKEN").ok();
-    match queue_main_push(&broker, token.as_deref(), id, &event).await {
-        Ok(_) => {
+    let dispatch = if let Some((url, token)) = dbos_ingress {
+        queue_main_push_dbos(&url, &token, id, &event).await
+    } else {
+        let Some(broker) = crate::cron_schedules::restate_broker_url() else {
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "workflows_unavailable",
+                    "message": "No durable workflow ingress is configured for this deployment."
+                })),
+            )
+                .into_response());
+        };
+        let token = std::env::var("RESTATE_AUTH_TOKEN").ok();
+        queue_main_push(&broker, token.as_deref(), id, &event)
+            .await
+            .map(|_| ())
+    };
+    match dispatch {
+        Ok(()) => {
             tracing::info!(
                 project_id = %id,
                 short_sha = %event.short_sha,
@@ -2218,6 +2241,52 @@ async fn queue_finance_run_dbos(
         &serde_json::json!({
             "workflow_id": format!("FinanceAggregate:{run_id}"),
             "request": { "project_id": project_id, "project_code": project_code }
+        }),
+    )
+    .await
+}
+
+fn project_slack_dbos_ingress_config(
+    enabled: Option<&str>,
+    ingress_url: Option<String>,
+    token: Option<String>,
+) -> Result<Option<(String, String)>, ()> {
+    let enabled = workflows::dbos_engine::flag_enabled(
+        workflows::trigger::PROJECT_SLACK_ENABLED_ENV,
+        enabled,
+    )
+    .map_err(|_| ())?;
+    if !enabled {
+        return Ok(None);
+    }
+    let ingress_url = ingress_url
+        .map(|url| url.trim().trim_end_matches('/').to_owned())
+        .filter(|url| !url.is_empty())
+        .ok_or(())?;
+    let token = token.filter(|token| !token.trim().is_empty()).ok_or(())?;
+    Ok(Some((ingress_url, token)))
+}
+
+/// Start the `ProjectSlack` main-push lane through the authenticated
+/// internal DBOS worker ingress, keyed by the same `(sha, run attempt)`
+/// identity per Project the Restate object carried. The caller has already
+/// checked the CI session's scope and the Project's existence.
+async fn queue_main_push_dbos(
+    ingress: &str,
+    token: &str,
+    project_id: Uuid,
+    event: &MainPushEvent,
+) -> Result<(), workflows::TriggerError> {
+    workflows::trigger::start_dbos_project_slack(
+        ingress,
+        token,
+        &serde_json::json!({
+            "workflow_id": workflows::trigger::project_slack_main_push_workflow_id(
+                project_id,
+                &event.short_sha,
+                event.run_attempt,
+            ),
+            "event": event,
         }),
     )
     .await

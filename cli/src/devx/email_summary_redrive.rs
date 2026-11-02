@@ -42,6 +42,30 @@ async fn redrive(receipt_id: Uuid, after_failed_result: Option<&str>) -> Result<
     let config = workflows::EmailSummaryConfig::from_env()
         .context("configure inbound email summary lane")?
         .with_context(|| "NAVIGATOR_SUMMARY_ENABLED is not set; nothing to redrive against")?;
+    // The purge-and-resubmit flow below is Restate's invocation lifecycle.
+    // While the EmailSummary switch selects the worker's DBOS lane (or the
+    // switch is on with an incomplete ingress), new runs never land on
+    // Restate, and the DBOS ingress exposes no discard route — so refuse
+    // rather than purge a lane the workflow no longer runs on.
+    match workflows::trigger::service_target(
+        workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV,
+        std::env::var(workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
+    ) {
+        Ok(workflows::trigger::ServiceTarget::Restate) => {}
+        Ok(workflows::trigger::ServiceTarget::Dbos { .. }) => bail!(
+            "{} is enabled: the EmailSummary workflow runs on the DBOS lane, \
+             and redrive's Restate purge-and-resubmit flow does not apply to it",
+            workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV
+        ),
+        Err(error) => bail!(
+            "{error}: the EmailSummary switch is on, so redrive's Restate \
+             purge-and-resubmit flow does not apply"
+        ),
+    }
     let admin_url = std::env::var("RESTATE_ADMIN_URL")
         .context("RESTATE_ADMIN_URL is required to purge the completed invocation")?;
     let admin_token = std::env::var("RESTATE_ADMIN_TOKEN")
