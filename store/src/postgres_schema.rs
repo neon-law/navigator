@@ -1280,6 +1280,10 @@ mod tests {
                     "../postgres/migrations/20261101130000_create_firm_forgejo_organization.sql"
                 ),
             ),
+            (
+                "20261101170000_create_ssh_public_key.sql",
+                include_str!("../postgres/migrations/20261101170000_create_ssh_public_key.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
