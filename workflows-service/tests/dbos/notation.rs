@@ -195,7 +195,7 @@ async fn a_pending_notation_start_recovers_after_the_executor_stops() {
 }
 
 struct PersistedNotation {
-    _database: crate::support::TestDatabase,
+    database: crate::support::TestDatabase,
     _directory: tempfile::TempDir,
     worker: dbos::DBOS,
     workflow: dbos_notation::NotationTransitionWorkflow,
@@ -231,7 +231,7 @@ impl PersistedNotation {
         .unwrap();
         worker.launch().await.unwrap();
         Some(Self {
-            _database: database,
+            database,
             _directory: directory,
             worker,
             workflow,
@@ -724,7 +724,7 @@ async fn invalid_preflight_does_not_leave_a_pending_owner_or_cached_machine_read
         "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
     )
     .bind(fixture.id)
-    .fetch_one(&fixture._database.pool)
+    .fetch_one(&fixture.database.pool)
     .await
     .unwrap();
     assert_eq!(pending, 0);
@@ -749,7 +749,7 @@ async fn invalid_preflight_does_not_leave_a_pending_owner_or_cached_machine_read
         "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
     )
     .bind(fixture.id)
-    .fetch_one(&fixture._database.pool)
+    .fetch_one(&fixture.database.pool)
     .await
     .unwrap();
     assert_eq!(pending, 0);
@@ -770,7 +770,7 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
     sqlx::query(
         "ALTER TABLE notation_transition ADD CONSTRAINT synthetic_mark_denied CHECK (NOT started)",
     )
-    .execute(&fixture._database.pool)
+    .execute(&fixture.database.pool)
     .await
     .unwrap();
     let logical = format!("preflight-failure-{}", fixture.id);
@@ -800,11 +800,11 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
         "SELECT id FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
     )
     .bind(fixture.id)
-    .fetch_one(&fixture._database.pool)
+    .fetch_one(&fixture.database.pool)
     .await
     .unwrap();
     sqlx::query("ALTER TABLE notation_transition DROP CONSTRAINT synthetic_mark_denied")
-        .execute(&fixture._database.pool)
+        .execute(&fixture.database.pool)
         .await
         .unwrap();
     let repaired = fixture
@@ -826,14 +826,14 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
     let rows: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1")
             .bind(fixture.id)
-            .fetch_one(&fixture._database.pool)
+            .fetch_one(&fixture.database.pool)
             .await
             .unwrap();
     assert_eq!(rows, 1);
     let finished: bool =
         sqlx::query_scalar("SELECT result IS NOT NULL FROM notation_transition WHERE id=$1")
             .bind(original)
-            .fetch_one(&fixture._database.pool)
+            .fetch_one(&fixture.database.pool)
             .await
             .unwrap();
     assert!(finished);

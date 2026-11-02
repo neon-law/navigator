@@ -1071,6 +1071,15 @@ erDiagram
         string source_ref
         datetime updated_at
     }
+    notation_transition {
+        datetime completed_at
+        uuid id
+        datetime inserted_at
+        uuid notation_id
+        string request_fingerprint
+        json result
+        boolean started
+    }
     person {
         string apple_subject
         string email

@@ -282,6 +282,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "notation_transition",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "project_archive_generation",
       "missing_column": null,
       "missing_table": null,
@@ -1789,7 +1796,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 144,
+    "table_count": 146,
     "tables": {
       "address": {
         "columns": {
@@ -3919,6 +3926,20 @@
           "communication",
           "notation"
         ]
+      },
+      "notation_transition": {
+        "columns": {
+          "completed_at": "TIMESTAMPTZ",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "request_fingerprint": "TEXT",
+          "result": "JSONB",
+          "started": "BOOLEAN"
+        },
+        "foreign_keys": [],
+        "name": "notation_transition",
+        "references": []
       },
       "person": {
         "columns": {
