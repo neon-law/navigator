@@ -1088,4 +1088,656 @@ mod tests {
                 .unwrap();
         }
     }
+    async fn root_metadata(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/files/root"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(metadata(false, true)))
+            .mount(server)
+            .await;
+    }
+    async fn children(server: &MockServer, parent: &str, body: serde_json::Value) {
+        Mock::given(method("GET"))
+            .and(path("/files"))
+            .and(query_param(
+                "q",
+                format!("'{parent}' in parents and trashed = false"),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+    fn child(id: &str, name: &str, mime: &str, parent: &str) -> serde_json::Value {
+        serde_json::json!({"id":id,"name":name,"mimeType":mime,"driveId":"shared-drive","parents":[parent],"trashed":false})
+    }
+
+    #[tokio::test]
+    async fn allocated_identity_is_one_valid_provider_id_or_an_explicit_failure() {
+        for (body, accepted) in [
+            (serde_json::json!({"ids":["reserved_1-A"]}), true),
+            (serde_json::json!({"ids":[]}), false),
+            (serde_json::json!({"ids":["one","two"]}), false),
+            (serde_json::json!({"ids":["bad/id"]}), false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/files/generateIds"))
+                .and(query_param("count", "1"))
+                .and(query_param("space", "drive"))
+                .and(query_param("type", "files"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = google(&server).allocate_folder_id().await;
+            if accepted {
+                assert_eq!(result.unwrap(), "reserved_1-A");
+            } else {
+                assert!(matches!(result, Err(DriveError::TreeBoundary)));
+            }
+            server.verify().await;
+        }
+        for (status, body) in [(503, "{}"), (200, "not-json")] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/files/generateIds"))
+                .respond_with(ResponseTemplate::new(status).set_body_string(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = google(&server).allocate_folder_id().await.unwrap_err();
+            if status == 503 {
+                assert!(matches!(error, DriveError::Api { status: 503, .. }));
+            } else {
+                assert!(matches!(
+                    error,
+                    DriveError::Response {
+                        action: "allocating folder identity",
+                        ..
+                    }
+                ));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reserved_create_requires_the_exact_persisted_provider_identity() {
+        let valid = child("reserved", "Work Product", FOLDER_MIME_TYPE, "root");
+        for field in [
+            "valid", "id", "name", "mimeType", "driveId", "parents", "trashed",
+        ] {
+            let server = MockServer::start().await;
+            root_metadata(&server).await;
+            Mock::given(method("GET"))
+                .and(path("/files/reserved"))
+                .respond_with(ResponseTemplate::new(404))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut returned = valid.clone();
+            match field {
+                "id" => returned["id"] = serde_json::json!("unexpected"),
+                "name" => returned["name"] = serde_json::json!("Other"),
+                "mimeType" => returned["mimeType"] = serde_json::json!("text/plain"),
+                "driveId" => returned["driveId"] = serde_json::json!("other-drive"),
+                "parents" => returned["parents"] = serde_json::json!(["root", "other"]),
+                "trashed" => returned["trashed"] = serde_json::json!(true),
+                _ => {}
+            }
+            Mock::given(method("POST")).and(path("/files"))
+                .and(body_json(serde_json::json!({"id":"reserved","name":"Work Product","mimeType":FOLDER_MIME_TYPE,"parents":["root"]})))
+                .respond_with(ResponseTemplate::new(201).set_body_json(returned)).expect(1).mount(&server).await;
+            let result = google(&server)
+                .ensure_child_folder_with_id("root", "Work Product", "reserved")
+                .await;
+            if field == "valid" {
+                assert_eq!(result.unwrap().id, "reserved");
+            } else {
+                assert!(
+                    matches!(result, Err(DriveError::TreeBoundary)),
+                    "provider mismatch: {field}"
+                );
+            }
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn child_lookup_refuses_ambiguity_and_never_creates_during_discovery() {
+        for (files, expected) in [
+            (vec![], 0),
+            (
+                vec![child("child", "Work Product", FOLDER_MIME_TYPE, "root")],
+                1,
+            ),
+            (
+                vec![
+                    child("a", "Work Product", FOLDER_MIME_TYPE, "root"),
+                    child("b", "Work Product", FOLDER_MIME_TYPE, "root"),
+                ],
+                2,
+            ),
+        ] {
+            let server = MockServer::start().await;
+            root_metadata(&server).await;
+            children(&server, "root", serde_json::json!({"files":files})).await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let drive = google(&server);
+            let result = drive.find_child_folder("root", "Work Product").await;
+            match expected {
+                0 => assert!(result.unwrap().is_none()),
+                1 => {
+                    assert_eq!(result.unwrap().unwrap().id, "child");
+                    assert_eq!(
+                        drive
+                            .ensure_child_folder("root", "Work Product")
+                            .await
+                            .unwrap()
+                            .id,
+                        "child"
+                    );
+                }
+                _ => assert!(matches!(
+                    result,
+                    Err(DriveError::AmbiguousFolderName { count: 2 })
+                )),
+            }
+            server.verify().await;
+        }
+        let server = MockServer::start().await;
+        root_metadata(&server).await;
+        children(
+            &server,
+            "root",
+            serde_json::json!({"files":[{"name":"Work Product","mimeType":FOLDER_MIME_TYPE}]}),
+        )
+        .await;
+        assert!(matches!(
+            google(&server)
+                .find_child_folder("root", "Work Product")
+                .await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(matches!(
+            google(&server)
+                .ensure_child_folder("root", "Work Product")
+                .await,
+            Err(DriveError::TreeBoundary)
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_child_creation_and_reserved_probe_errors_do_not_acknowledge_a_folder() {
+        for (status, body) in [(200, "{}"), (200, "not-json"), (503, "{}")] {
+            let server = MockServer::start().await;
+            root_metadata(&server).await;
+            children(&server, "root", serde_json::json!({"files":[]})).await;
+            Mock::given(method("POST"))
+                .and(path("/files"))
+                .respond_with(ResponseTemplate::new(status).set_body_string(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = google(&server)
+                .ensure_child_folder("root", "Work Product")
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                DriveError::MissingFolderId { .. }
+                    | DriveError::Response { .. }
+                    | DriveError::Api { status: 503, .. }
+            ));
+        }
+        let server = MockServer::start().await;
+        root_metadata(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/files/reserved"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            google(&server)
+                .ensure_child_folder_with_id("root", "Work Product", "reserved")
+                .await,
+            Err(DriveError::Api {
+                status: 403,
+                action: "reading reserved folder"
+            })
+        ));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn invalid_names_and_query_identifiers_are_refused_before_provider_traffic() {
+        let server = MockServer::start().await;
+        let drive = google(&server);
+        for name in ["", ".", "..", "a/b", "a\\b", "nul\0name"] {
+            assert!(matches!(
+                drive.ensure_child_folder("root", name).await,
+                Err(DriveError::TreeBoundary)
+            ));
+            assert!(matches!(
+                drive.find_child_folder("root", name).await,
+                Err(DriveError::TreeBoundary)
+            ));
+        }
+        for id in ["", "a/b", "x' or '1'='1", "a b"] {
+            assert!(matches!(
+                drive
+                    .ensure_child_folder_with_id("root", "Work Product", id)
+                    .await,
+                Err(DriveError::TreeBoundary)
+            ));
+            assert!(matches!(
+                drive.item_permissions(id).await,
+                Err(DriveError::TreeBoundary)
+            ));
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn listing_capability_and_bounded_pagination_are_mandatory() {
+        let server = MockServer::start().await;
+        let mut denied = metadata(false, true);
+        denied["capabilities"]["canListChildren"] = serde_json::json!(false);
+        Mock::given(method("GET"))
+            .and(path("/files/root"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(denied))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/files"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            google(&server).list_tree("root").await,
+            Err(DriveError::TreeBoundary)
+        ));
+        server.verify().await;
+        let server = MockServer::start().await;
+        root_metadata(&server).await;
+        children(
+            &server,
+            "root",
+            serde_json::json!({"files":[],"nextPageToken":"repeat"}),
+        )
+        .await;
+        assert!(matches!(
+            google(&server).list_tree("root").await,
+            Err(DriveError::TreeBoundary)
+        ));
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests.iter().filter(|r| r.url.path() == "/files").count(),
+            2,
+            "a repeated page must terminate"
+        );
+        let server = MockServer::start().await;
+        root_metadata(&server).await;
+        Mock::given(method("GET")).and(path("/files")).and(query_param("pageSize","100"))
+            .respond_with(|request:&wiremock::Request|{
+                let page=request.url.query_pairs().find(|(key,_)|key=="pageToken")
+                    .and_then(|(_,value)|value.parse::<usize>().ok()).unwrap_or_default();
+                let count=if page<50{100}else{1};
+                let files=(0..count).map(|index|child(&format!("file-{page}-{index}"),"memo.txt","text/plain","root")).collect::<Vec<_>>();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"files":files,"nextPageToken":(page<50).then(||(page+1).to_string())}))
+            }).expect(51).mount(&server).await;
+        assert!(matches!(
+            google(&server).list_tree("root").await,
+            Err(DriveError::TreeBoundary)
+        ));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn tree_walk_rejects_foreign_trashed_uncontained_and_invalid_provider_entries() {
+        for field in ["driveId", "trashed", "parents", "name", "id", "mimeType"] {
+            let server = MockServer::start().await;
+            root_metadata(&server).await;
+            let mut entry = child("file", "memo.txt", "text/plain", "root");
+            match field {
+                "driveId" => entry["driveId"] = serde_json::json!("other-drive"),
+                "trashed" => entry["trashed"] = serde_json::json!(true),
+                "parents" => entry["parents"] = serde_json::json!(["other-root"]),
+                "name" => entry["name"] = serde_json::json!("../memo.txt"),
+                "id" => {
+                    entry.as_object_mut().unwrap().remove("id");
+                }
+                "mimeType" => {
+                    entry.as_object_mut().unwrap().remove("mimeType");
+                }
+                _ => {}
+            }
+            children(&server, "root", serde_json::json!({"files":[entry]})).await;
+            assert!(
+                matches!(
+                    google(&server).list_tree("root").await,
+                    Err(DriveError::TreeBoundary)
+                ),
+                "invalid provider field {field}"
+            );
+        }
+        let server = MockServer::start().await;
+        root_metadata(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/files/child"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(metadata(false, true)))
+            .mount(&server)
+            .await;
+        children(
+            &server,
+            "root",
+            serde_json::json!({"files":[child("child","Child",FOLDER_MIME_TYPE,"root")]}),
+        )
+        .await;
+        children(
+            &server,
+            "child",
+            serde_json::json!({"files":[child("root","Cycle",FOLDER_MIME_TYPE,"child")]}),
+        )
+        .await;
+        assert!(matches!(
+            google(&server).list_tree_folders("root").await,
+            Err(DriveError::TreeBoundary)
+        ));
+    }
+
+    #[tokio::test]
+    async fn permission_pages_preserve_direct_inherited_and_metadata_only_evidence() {
+        let server = MockServer::start().await;
+        root_metadata(&server).await;
+        Mock::given(method("GET")).and(path("/files/root/permissions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"nextPageToken":"second","permissions":[
+                {"id":"owner","type":"user","emailAddress":"owner@example.com","role":"organizer","permissionDetails":[{"inherited":true}]},
+                {"id":"mixed","type":"user","emailAddress":"lawyer@example.com","role":"writer","permissionDetails":[{"inherited":true},{"inherited":false}]},
+                {"id":"metadata","type":"group","role":"reader","view":"metadata"}
+            ]}))).with_priority(1).up_to_n_times(1).expect(1).mount(&server).await;
+        Mock::given(method("GET")).and(path("/files/root/permissions")).and(query_param("pageToken","second"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"permissions":[
+                {"id":"direct","type":"user","emailAddress":"client@example.com","role":"reader","permissionDetails":[{}]}
+            ]}))).expect(1).mount(&server).await;
+        let rows = google(&server).item_permissions("root").await.unwrap();
+        assert_eq!(rows.len(), 4);
+        assert!(rows[0].inherited && !rows[0].direct);
+        assert!(rows[1].inherited && rows[1].direct);
+        assert_eq!(rows[2].view.as_deref(), Some("metadata"));
+        assert!(rows[2].email.is_none());
+        assert!(!rows[2].direct && !rows[2].inherited);
+        assert!(rows[3].direct && !rows[3].inherited);
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn permission_audits_refuse_foreign_items_repeated_pages_and_unbounded_grants() {
+        for field in ["id", "driveId", "trashed"] {
+            let server = MockServer::start().await;
+            let mut item = metadata(false, true);
+            match field {
+                "id" => item["id"] = serde_json::json!("other"),
+                "driveId" => item["driveId"] = serde_json::json!("other-drive"),
+                _ => item["trashed"] = serde_json::json!(true),
+            }
+            Mock::given(method("GET"))
+                .and(path("/files/root"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(item))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/files/root/permissions"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+            assert!(matches!(
+                google(&server).item_permissions("root").await,
+                Err(DriveError::TreeBoundary)
+            ));
+            server.verify().await;
+        }
+        for repeated in [true, false] {
+            let server = MockServer::start().await;
+            root_metadata(&server).await;
+            Mock::given(method("GET")).and(path("/files/root/permissions")).and(query_param("pageSize","100"))
+                .respond_with(move |request:&wiremock::Request|{
+                    if repeated{return ResponseTemplate::new(200).set_body_json(serde_json::json!({"permissions":[],"nextPageToken":"repeat"}));}
+                    let page=request.url.query_pairs().find(|(key,_)|key=="pageToken")
+                        .and_then(|(_,value)|value.parse::<usize>().ok()).unwrap_or_default();
+                    let count=if page<50{100}else{1};
+                    let rows=(0..count).map(|index|serde_json::json!({"id":format!("grant-{page}-{index}"),"type":"user","role":"reader"})).collect::<Vec<_>>();
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"permissions":rows,"nextPageToken":(page<50).then(||(page+1).to_string())}))
+                }).mount(&server).await;
+            assert!(matches!(
+                google(&server).item_permissions("root").await,
+                Err(DriveError::TreeBoundary)
+            ));
+            if repeated {
+                assert_eq!(
+                    server
+                        .received_requests()
+                        .await
+                        .unwrap()
+                        .iter()
+                        .filter(|r| r.url.path().ends_with("/permissions"))
+                        .count(),
+                    2
+                );
+            } else {
+                assert_eq!(
+                    server
+                        .received_requests()
+                        .await
+                        .unwrap()
+                        .iter()
+                        .filter(|r| r.url.path().ends_with("/permissions"))
+                        .count(),
+                    51
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_tree_and_permission_responses_are_errors_not_empty_audits() {
+        for listing in [true, false] {
+            let server = MockServer::start().await;
+            root_metadata(&server).await;
+            let endpoint = if listing {
+                "/files"
+            } else {
+                "/files/root/permissions"
+            };
+            Mock::given(method("GET"))
+                .and(path(endpoint))
+                .respond_with(ResponseTemplate::new(200).set_body_string("not-json"))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = if listing {
+                google(&server).list_tree("root").await.unwrap_err()
+            } else {
+                google(&server).item_permissions("root").await.unwrap_err()
+            };
+            assert!(matches!(error, DriveError::Response { .. }));
+            server.verify().await;
+        }
+        let server = MockServer::start().await;
+        root_metadata(&server).await;
+        Mock::given(method("GET")).and(path("/files/root"))
+            .and(query_param("fields","parents,inheritedPermissionsDisabled,capabilities(canDisableInheritedPermissions,canEnableInheritedPermissions,canListChildren)"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not-json")).with_priority(1).expect(1).mount(&server).await;
+        assert!(matches!(
+            google(&server).folder_access("root").await,
+            Err(DriveError::Response {
+                action: "reading folder capabilities",
+                ..
+            })
+        ));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn inheritance_requires_capability_and_post_write_readback() {
+        for (limited, capable) in [(false, false), (true, false)] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/files/root"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(metadata(limited, capable)))
+                .mount(&server)
+                .await;
+            permissions(&server).await;
+            Mock::given(method("PATCH"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let result = google(&server).inherit_folder("root").await.unwrap();
+            assert_eq!(result.is_some(), !limited);
+            server.verify().await;
+        }
+        for status in [403, 405, 500] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/files/root"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(metadata(true, true)))
+                .mount(&server)
+                .await;
+            permissions(&server).await;
+            Mock::given(method("PATCH"))
+                .and(path("/files/root"))
+                .and(body_json(
+                    serde_json::json!({"inheritedPermissionsDisabled":false}),
+                ))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = google(&server).inherit_folder("root").await;
+            if status == 500 {
+                assert!(matches!(result, Err(DriveError::Api { status: 500, .. })));
+            } else {
+                assert!(result.unwrap().is_none());
+            }
+            server.verify().await;
+        }
+        for (limited, listable) in [(true, true), (false, false)] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/files/root"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(metadata(true, true)))
+                .with_priority(1)
+                .up_to_n_times(2)
+                .expect(2)
+                .mount(&server)
+                .await;
+            let mut after = metadata(limited, true);
+            after["capabilities"]["canListChildren"] = serde_json::json!(listable);
+            Mock::given(method("GET"))
+                .and(path("/files/root"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(after))
+                .with_priority(2)
+                .expect(2)
+                .mount(&server)
+                .await;
+            permissions(&server).await;
+            Mock::given(method("PATCH"))
+                .and(path("/files/root"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert!(google(&server)
+                .inherit_folder("root")
+                .await
+                .unwrap()
+                .is_none());
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn restriction_preserves_provider_denial_and_readback_failure_contracts() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/files/root"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(metadata(true, false)))
+            .mount(&server)
+            .await;
+        permissions(&server).await;
+        Mock::given(method("PATCH"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            google(&server).restrict_folder("root").await.unwrap(),
+            DriveIsolationOutcome::Restricted(_)
+        ));
+        server.verify().await;
+        for status in [403, 500] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/files/root"))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = google(&server).restrict_folder("root").await;
+            if status == 403 {
+                assert_eq!(
+                    result.unwrap(),
+                    DriveIsolationOutcome::Blocked(DriveIsolationBlock::ProviderDenied)
+                );
+            } else {
+                assert!(matches!(result, Err(DriveError::Api { status: 500, .. })));
+            }
+        }
+        for status in [403, 500] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/files/root"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(metadata(false, true)))
+                .with_priority(1)
+                .up_to_n_times(2)
+                .expect(2)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/files/root"))
+                .respond_with(ResponseTemplate::new(status))
+                .with_priority(2)
+                .expect(1)
+                .mount(&server)
+                .await;
+            permissions(&server).await;
+            Mock::given(method("PATCH"))
+                .and(path("/files/root"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = google(&server).restrict_folder("root").await;
+            if status == 403 {
+                assert_eq!(
+                    result.unwrap(),
+                    DriveIsolationOutcome::Blocked(DriveIsolationBlock::ProviderDenied)
+                );
+            } else {
+                assert!(matches!(result, Err(DriveError::Api { status: 500, .. })));
+            }
+            server.verify().await;
+        }
+    }
 }

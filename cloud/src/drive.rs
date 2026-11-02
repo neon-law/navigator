@@ -1897,9 +1897,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        md5_hex, DriveError, DriveFolder, DriveMember, DriveMemberKind, DriveRole, DriveService,
-        DriveWorkspace, DriveWorkspaceConfig, FakeDrive, GoogleDrive, FOLDER_MIME_TYPE,
-        MAX_DRIVE_DOWNLOAD_BYTES, MAX_IMPORT_FILE_LIST,
+        md5_hex, DriveError, DriveFolder, DriveIsolationOutcome, DriveMember, DriveMemberKind,
+        DriveRole, DriveService, DriveWorkspace, DriveWorkspaceConfig, FakeDrive, GoogleDrive,
+        FOLDER_MIME_TYPE, MAX_DRIVE_DOWNLOAD_BYTES, MAX_IMPORT_FILE_LIST,
     };
     use async_trait::async_trait;
     use wiremock::matchers::{body_json, method, path, query_param};
@@ -2852,6 +2852,286 @@ mod tests {
                 action: "reading folder parents",
                 ..
             })
+        ));
+    }
+    async fn direct_permission_metadata(server: &MockServer, permissions: serde_json::Value) {
+        Mock::given(method("GET")).and(path("/files/folder-direct"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id":"folder-direct","mimeType":FOLDER_MIME_TYPE,"driveId":"projects-drive","trashed":false,
+                "inheritedPermissionsDisabled":true,"capabilities":{"canListChildren":true}
+            }))).mount(server).await;
+        Mock::given(method("GET"))
+            .and(path("/files/folder-direct/permissions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"permissions":permissions})),
+            )
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn direct_grant_updates_only_the_direct_permission_and_propagates_mutation_denial() {
+        for status in [204, 403] {
+            let server = MockServer::start().await;
+            direct_permission_metadata(&server,serde_json::json!([
+                {"id":"direct","type":"user","emailAddress":"LAWYER@EXAMPLE.COM","role":"reader","permissionDetails":[{"inherited":false}]}
+            ])).await;
+            Mock::given(method("PATCH"))
+                .and(path("/files/folder-direct/permissions/direct"))
+                .and(query_param("supportsAllDrives", "true"))
+                .and(body_json(serde_json::json!({"role":"writer"})))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let result = google(&server)
+                .ensure_direct_member_permission("folder-direct", &lawyer(), DriveRole::Writer)
+                .await;
+            if status == 204 {
+                result.unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DriveError::Api {
+                        status: 403,
+                        action: "updating direct folder permission"
+                    })
+                ));
+            }
+            server.verify().await;
+        }
+        let server = MockServer::start().await;
+        direct_permission_metadata(&server,serde_json::json!([
+            {"id":"direct","type":"user","emailAddress":"lawyer@example.com","role":"writer","permissionDetails":[{"inherited":false}]}
+        ])).await;
+        Mock::given(method("PATCH"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        google(&server)
+            .ensure_direct_member_permission("folder-direct", &lawyer(), DriveRole::Writer)
+            .await
+            .unwrap();
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn creating_direct_access_is_silent_and_a_provider_denial_is_not_success() {
+        for status in [204, 403] {
+            let server = MockServer::start().await;
+            direct_permission_metadata(&server, serde_json::json!([])).await;
+            Mock::given(method("POST")).and(path("/files/folder-direct/permissions"))
+                .and(query_param("supportsAllDrives","true")).and(query_param("sendNotificationEmail","false"))
+                .and(body_json(serde_json::json!({"type":"user","role":"writer","emailAddress":"lawyer@example.com"})))
+                .respond_with(ResponseTemplate::new(status)).expect(1).mount(&server).await;
+            let result = google(&server)
+                .ensure_direct_member_permission("folder-direct", &lawyer(), DriveRole::Writer)
+                .await;
+            if status == 204 {
+                result.unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(DriveError::Api {
+                        status: 403,
+                        action: "creating direct folder permission"
+                    })
+                ));
+            }
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn fake_inheritance_tracks_effective_access_and_capability_failure_without_losing_direct_grants(
+    ) {
+        let drive = FakeDrive::default();
+        let root = drive.create_folder("synthetic-root").await.unwrap();
+        let child = drive
+            .ensure_child_folder(&root.id, "Work Product")
+            .await
+            .unwrap();
+        let client = DriveMember {
+            kind: DriveMemberKind::User,
+            email: "client@example.com".into(),
+        };
+        drive
+            .set_member_permission(&root.id, &client, DriveRole::Reader)
+            .await
+            .unwrap();
+        drive
+            .set_member_permission(&child.id, &lawyer(), DriveRole::Writer)
+            .await
+            .unwrap();
+        let before = drive.folder_access(&child.id).await.unwrap();
+        assert!(before
+            .permissions
+            .iter()
+            .any(|p| p.email.as_deref() == Some("client@example.com") && p.inherited && !p.direct));
+        assert!(matches!(
+            drive.restrict_folder(&child.id).await.unwrap(),
+            DriveIsolationOutcome::Restricted(_)
+        ));
+        let restricted = drive.folder_access(&child.id).await.unwrap();
+        assert!(restricted
+            .permissions
+            .iter()
+            .all(|p| p.email.as_deref() != Some("client@example.com")));
+        assert!(restricted
+            .permissions
+            .iter()
+            .any(|p| p.email.as_deref() == Some("lawyer@example.com") && p.direct));
+        assert!(drive.set_folder_access_state(&child.id, true, false));
+        assert!(drive.inherit_folder(&child.id).await.unwrap().is_none());
+        assert!(
+            drive
+                .folder_access(&child.id)
+                .await
+                .unwrap()
+                .inherited_permissions_disabled
+        );
+        assert!(drive.set_folder_access_state(&child.id, true, true));
+        let restored = drive.inherit_folder(&child.id).await.unwrap().unwrap();
+        assert!(!restored.inherited_permissions_disabled);
+        assert!(restored
+            .permissions
+            .iter()
+            .any(|p| p.email.as_deref() == Some("client@example.com") && p.inherited));
+        assert_eq!(
+            drive.members(&root.id),
+            vec![(client, DriveRole::Reader)],
+            "inheritance changes never remove shared-drive grants"
+        );
+    }
+
+    #[tokio::test]
+    async fn fake_reserved_identity_is_idempotent_but_cannot_adopt_foreign_or_archived_folders() {
+        let drive = FakeDrive::default();
+        let root = drive.create_folder("synthetic-root").await.unwrap();
+        let other = drive.create_folder("other-root").await.unwrap();
+        let reserved = drive.allocate_folder_id().await.unwrap();
+        let child = drive
+            .ensure_child_folder_with_id(&root.id, "Work Product", &reserved)
+            .await
+            .unwrap();
+        assert_eq!(
+            drive
+                .ensure_child_folder_with_id(&root.id, "Work Product", &reserved)
+                .await
+                .unwrap(),
+            child
+        );
+        assert_eq!(
+            drive
+                .find_child_folder(&root.id, "Work Product")
+                .await
+                .unwrap(),
+            Some(child.clone())
+        );
+        assert!(matches!(
+            drive
+                .ensure_child_folder_with_id(&other.id, "Work Product", &reserved)
+                .await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(matches!(
+            drive
+                .ensure_child_folder_with_id("absent", "Work Product", "unused")
+                .await,
+            Err(DriveError::TreeBoundary)
+        ));
+        drive.move_to_archive(&child.id).await.unwrap();
+        assert!(drive
+            .find_child_folder(&root.id, "Work Product")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            drive
+                .ensure_child_folder_with_id(&root.id, "Work Product", &reserved)
+                .await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(matches!(
+            drive.folder_access(&child.id).await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(matches!(
+            drive.item_permissions(&child.id).await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(matches!(
+            drive.inherit_folder("absent").await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(matches!(
+            drive.restrict_folder("absent").await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(matches!(
+            drive.list_tree("absent").await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(matches!(
+            drive.list_tree_folders("absent").await,
+            Err(DriveError::TreeBoundary)
+        ));
+    }
+
+    #[tokio::test]
+    async fn fake_tree_depth_and_folder_count_limits_refuse_incomplete_audits() {
+        let drive = FakeDrive::default();
+        let root = drive.create_folder("synthetic-root").await.unwrap();
+        let mut parent = root.id.clone();
+        for depth in 0..33 {
+            parent = drive
+                .ensure_child_folder(&parent, &format!("Level-{depth}"))
+                .await
+                .unwrap()
+                .id;
+        }
+        assert!(matches!(
+            drive.list_tree(&root.id).await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(matches!(
+            drive.list_tree_folders(&root.id).await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(
+            matches!(
+                drive.folder_access(&parent).await,
+                Err(DriveError::TreeBoundary)
+            ),
+            "effective ancestor access is also bounded"
+        );
+        let drive = FakeDrive::default();
+        let root = drive.create_folder("synthetic-root").await.unwrap();
+        for index in 0..513 {
+            drive
+                .ensure_child_folder(&root.id, &format!("Folder-{index}"))
+                .await
+                .unwrap();
+        }
+        assert!(matches!(
+            drive.list_tree(&root.id).await,
+            Err(DriveError::TreeBoundary)
+        ));
+        assert!(matches!(
+            drive.list_tree_folders(&root.id).await,
+            Err(DriveError::TreeBoundary)
         ));
     }
 }

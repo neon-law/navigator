@@ -1394,4 +1394,5 @@ mod tests {
             16
         );
     }
+    include!("project_folder_reconcile_boundary_tests.rs");
 }

@@ -571,4 +571,90 @@ mod tests {
             PathBuf::from("Work Product/Motions (Work Product)/motions/dismiss.pdf")
         );
     }
+    fn migration_pointer() -> String {
+        format!("kind: exhibit\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 01990000-0000-7000-8000-000000000001\n  created_at: '2026-01-01T00:00:00Z'\n  sha256: '{}'\n  size_bytes: 5\n", "a".repeat(64))
+    }
+    #[test]
+    fn offline_checkout_migration_dry_run_then_publish_retains_pointer_identity() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("navigator.yaml"), "project: synthetic\n").unwrap();
+        std::fs::write(
+            root.path().join(".gitignore"),
+            crate::projects::repository::ROOT_GITIGNORE,
+        )
+        .unwrap();
+        let documents = root.path().join("documents");
+        std::fs::create_dir_all(documents.join("nested")).unwrap();
+        let bytes = documents.join("nested/evidence.pdf");
+        let legacy = documents.join("nested/evidence.pdf.yaml");
+        std::fs::write(&bytes, b"bytes").unwrap();
+        let yaml = migration_pointer();
+        std::fs::write(&legacy, &yaml).unwrap();
+        migrate_checkout(root.path(), true).unwrap();
+        assert!(legacy.is_file() && bytes.is_file());
+        assert!(!root.path().join("blobs/nested/evidence.pdf.yaml").exists());
+        migrate_checkout(root.path(), false).unwrap();
+        assert!(!legacy.exists() && !bytes.exists());
+        let pointer = root.path().join("blobs/nested/evidence.pdf.yaml");
+        assert_eq!(std::fs::read_to_string(&pointer).unwrap(), yaml);
+        let destination = documents.join("Client Production/nested/evidence.pdf");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"bytes");
+        migrate_checkout(root.path(), false).unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"bytes");
+        assert_eq!(std::fs::read_to_string(pointer).unwrap(), yaml);
+    }
+    #[test]
+    fn relocation_keeps_conflicting_edited_destination_and_moves_distinct_live_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let documents = root.path().join("documents");
+        std::fs::create_dir_all(documents.join("Client Production")).unwrap();
+        for file in ["conflict.pdf", "removed.pdf", "fresh.pdf"] {
+            std::fs::write(documents.join(file), file.as_bytes()).unwrap();
+        }
+        std::fs::write(
+            documents.join("Client Production/conflict.pdf"),
+            b"local edit",
+        )
+        .unwrap();
+        let live = vec![
+            (PathBuf::from("conflict.pdf"), "exhibit".into()),
+            (PathBuf::from("removed.pdf"), "exhibit".into()),
+            (PathBuf::from("fresh.pdf"), "exhibit".into()),
+        ];
+        let moves = relocate_unpointed(root.path(), &live, |slug| slug == "removed.pdf").unwrap();
+        assert_eq!(moves.len(), 1);
+        assert_eq!(
+            std::fs::read(documents.join("Client Production/conflict.pdf")).unwrap(),
+            b"local edit"
+        );
+        assert_eq!(
+            std::fs::read(documents.join("conflict.pdf")).unwrap(),
+            b"conflict.pdf"
+        );
+        assert!(documents.join("removed.pdf").exists());
+        assert!(!documents.join("fresh.pdf").exists());
+        assert_eq!(
+            std::fs::read(documents.join("Client Production/fresh.pdf")).unwrap(),
+            b"fresh.pdf"
+        );
+        assert!(
+            relocate_unpointed(root.path(), &live, |slug| slug == "removed.pdf")
+                .unwrap()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn offline_migrations_refuse_non_checkout_before_creating_any_tree() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(migrate_checkout(root.path(), false)
+            .unwrap_err()
+            .to_string()
+            .contains("navigator.yaml"));
+        assert!(migrate_folder_tree(root.path(), false)
+            .unwrap_err()
+            .to_string()
+            .contains("navigator.yaml"));
+        assert!(!root.path().join("documents").exists());
+        assert!(!root.path().join("blobs").exists());
+    }
 }

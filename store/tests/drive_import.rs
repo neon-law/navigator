@@ -997,3 +997,300 @@ async fn client_intake_is_production_even_when_kind_is_letter() {
     assert_eq!(MatterFolder::TREE.len(), 14);
     assert!(!assets[0].documents_path().contains("Client Submissions"));
 }
+
+/// Historical source identity may be repaired by a lawyer, never guessed by import.
+async fn seed_drive_identity(world: &World, file_id: &str, slug: &str) -> store::assets::Asset {
+    let filed = store::assets::file_revision(
+        &world.surreal,
+        &world.storage,
+        &store::documents::IngestArgs {
+            project_id: world.project.id,
+            source: source::DRIVE,
+            filename: "notice.pdf",
+            kind: "unclassified",
+            content_type: "application/pdf",
+            description: None,
+            secondary_storage_key: None,
+            visibility: visibility::CLIENT,
+        },
+        &store::documents::DocumentIdentity {
+            slug: Some(slug),
+            metadata: Some(json!({"drive_file_id":file_id})),
+            ..Default::default()
+        },
+        b"original",
+    )
+    .await
+    .unwrap();
+    let id = match filed {
+        store::assets::Filed::Revision(document) => document.asset_id,
+        store::assets::Filed::Unchanged { asset_id } => asset_id,
+    };
+    store::assets::find_by_id(&world.surreal, id)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn deleted_drive_source_is_never_resurrected_by_a_retry() {
+    let Some(world) = setup("drive-deleted-identity").await else {
+        return;
+    };
+    let file = world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "notice.pdf",
+            "application/pdf",
+            b"original".to_vec(),
+            None,
+        )
+        .unwrap();
+    let asset = seed_drive_identity(&world, &file.id, "retained.pdf").await;
+    store::assets::soft_delete(
+        &world.surreal,
+        world.project.id,
+        asset.id,
+        world.actor,
+        None,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+    let screen = Screen::default();
+    let report = world.import(&screen).await.unwrap();
+    assert!(report.imported.is_empty());
+    assert_eq!(report.refused[0].reason, "deleted_source");
+    assert_eq!(world.drive.download_calls(), 0);
+    assert_eq!(screen.calls.load(Ordering::SeqCst), 0);
+    assert!(store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        store::assets::for_project_including_deleted(&world.surreal, world.project.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn conflicting_historical_slugs_require_explicit_repair_before_download() {
+    let Some(world) = setup("drive-ambiguous-identity").await else {
+        return;
+    };
+    let file = world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "notice.pdf",
+            "application/pdf",
+            b"original".to_vec(),
+            None,
+        )
+        .unwrap();
+    let first = seed_drive_identity(&world, &file.id, "first.pdf").await;
+    let second = seed_drive_identity(&world, &file.id, "second.pdf").await;
+    let screen = Screen::default();
+    let report = world.import(&screen).await.unwrap();
+    assert!(report.imported.is_empty());
+    assert_eq!(report.refused[0].reason, "ambiguous_source_identity");
+    assert_eq!(world.drive.download_calls(), 0);
+    assert_eq!(screen.calls.load(Ordering::SeqCst), 0);
+    let assets = store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .unwrap();
+    assert_eq!(assets.len(), 2);
+    assert!(assets.iter().any(|a| a.id == first.id));
+    assert!(assets.iter().any(|a| a.id == second.id));
+}
+
+#[tokio::test]
+async fn missing_historical_slug_does_not_invent_a_second_document_identity() {
+    let Some(world) = setup("drive-missing-identity").await else {
+        return;
+    };
+    let file = world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "notice.pdf",
+            "application/pdf",
+            b"original".to_vec(),
+            None,
+        )
+        .unwrap();
+    let asset = seed_drive_identity(&world, &file.id, "retained.pdf").await;
+    world
+        .surreal
+        .query("UPDATE $id UNSET slug")
+        .bind(("id", store::surreal::record_id("asset", asset.id)))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    let report = world.import(&Screen::default()).await.unwrap();
+    assert!(report.imported.is_empty());
+    assert_eq!(report.refused[0].reason, "ambiguous_source_identity");
+    assert_eq!(world.drive.download_calls(), 0);
+    assert_eq!(
+        store::assets::for_project(&world.surreal, world.project.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn extensionless_file_is_reported_without_download_or_asset_creation() {
+    let Some(world) = setup("drive-extensionless").await else {
+        return;
+    };
+    world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "README",
+            "text/plain",
+            b"metadata only".to_vec(),
+            None,
+        )
+        .unwrap();
+    let screen = Screen::default();
+    let report = world.import(&screen).await.unwrap();
+    assert!(report.imported.is_empty());
+    assert_eq!(report.refused[0].reason, "unsupported_source_identity");
+    assert_eq!(world.drive.download_calls(), 0);
+    assert_eq!(screen.calls.load(Ordering::SeqCst), 0);
+    assert!(store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn reserved_document_head_owned_by_another_source_is_never_overwritten() {
+    let Some(world) = setup("drive-head-owner-conflict").await else {
+        return;
+    };
+    let file = world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "notice.pdf",
+            "application/pdf",
+            b"original".to_vec(),
+            None,
+        )
+        .unwrap();
+    let initial = world.import(&Screen::default()).await.unwrap();
+    let asset = initial.imported[0].asset_id;
+    world
+        .surreal
+        .query("UPDATE $id SET metadata.drive_file_id='another-source'")
+        .bind(("id", store::surreal::record_id("asset", asset)))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    let downloads = world.drive.download_calls();
+    world
+        .drive
+        .replace_file(&file.id, b"replacement".to_vec(), None);
+    let screen = Screen::default();
+    let report = world.import(&screen).await.unwrap();
+    assert!(report.imported.is_empty());
+    assert_eq!(report.refused[0].reason, "name_collision");
+    assert_eq!(world.drive.download_calls(), downloads);
+    assert_eq!(screen.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        store::assets::for_project(&world.surreal, world.project.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn oversized_batch_is_refused_before_any_download_or_screening() {
+    let Some(world) = setup("drive-batch-admission").await else {
+        return;
+    };
+    for index in 0..51 {
+        world
+            .drive
+            .add_file(
+                &world.folder_id,
+                &format!("notice-{index}.pdf"),
+                "application/pdf",
+                b"original".to_vec(),
+                None,
+            )
+            .unwrap();
+    }
+    let screen = Screen::default();
+    assert!(matches!(
+        world.import(&screen).await,
+        Err(DriveImportError::TooManyFiles { .. })
+    ));
+    assert_eq!(world.drive.download_calls(), 0);
+    assert_eq!(screen.calls.load(Ordering::SeqCst), 0);
+    assert!(store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn a_group_address_matching_a_firm_person_is_not_an_authorized_file_grant() {
+    let Some(world) = setup("drive-group-permission").await else {
+        return;
+    };
+    let file = world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "notice.pdf",
+            "application/pdf",
+            b"original".to_vec(),
+            None,
+        )
+        .unwrap();
+    world
+        .drive
+        .set_member_permission(
+            &file.id,
+            &cloud::drive::DriveMember {
+                kind: cloud::drive::DriveMemberKind::Group,
+                email: "drive-operator@example.com".into(),
+            },
+            cloud::drive::DriveRole::Reader,
+        )
+        .await
+        .unwrap();
+    let before = world.drive.item_permissions(&file.id).await.unwrap();
+    let screen = Screen::default();
+    assert!(matches!(
+        world.import(&screen).await,
+        Err(DriveImportError::FolderAccess(
+            store::project_folder_reconcile::FolderReconcileError::PolicyBlocked(
+                store::project_folder_reconcile::FolderBlock::UntrustedPermission
+            )
+        ))
+    ));
+    assert_eq!(
+        world.drive.item_permissions(&file.id).await.unwrap(),
+        before
+    );
+    assert_eq!(world.drive.download_calls(), 0);
+    assert_eq!(screen.calls.load(Ordering::SeqCst), 0);
+    assert!(store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .unwrap()
+        .is_empty());
+}

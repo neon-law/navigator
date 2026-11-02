@@ -4109,4 +4109,167 @@ mod drive_placement_tests {
         assert!(!staging_path.exists());
         assert!(!pull_transaction_path(root.path()).exists());
     }
+    #[test]
+    fn missing_staged_download_rolls_back_partial_checkout_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("documents/first.pdf");
+        let second = root.path().join("documents/nested/second.pdf");
+        std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+        std::fs::write(&first, b"before").unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        let downloads = staging.path().join("downloads");
+        std::fs::create_dir(&downloads).unwrap();
+        std::fs::write(downloads.join("first"), b"replacement").unwrap();
+        let mut tx = begin_pull_transaction(
+            root.path(),
+            staging,
+            vec![
+                StagedPull {
+                    target: first.clone(),
+                    staged: downloads.join("first"),
+                    delete_sha256: None,
+                },
+                StagedPull {
+                    target: second.clone(),
+                    staged: downloads.join("missing"),
+                    delete_sha256: None,
+                },
+            ],
+        )
+        .unwrap();
+        assert!(matches!(
+            publish_pull_transaction(root.path(), &mut tx),
+            Err(PublicationFailure::BeforeCommit(_))
+        ));
+        assert_eq!(std::fs::read(&first).unwrap(), b"replacement");
+        recover_interrupted_pull(root.path()).unwrap();
+        assert_eq!(std::fs::read(&first).unwrap(), b"before");
+        assert!(!second.exists());
+        assert!(!tx.path.exists());
+    }
+
+    #[test]
+    fn placement_delete_refuses_changed_source_before_removing_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("documents/source.pdf");
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::write(&original, b"initial").unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        std::fs::create_dir(staging.path().join("downloads")).unwrap();
+        let mut tx = begin_pull_transaction(
+            root.path(),
+            staging,
+            vec![StagedPull {
+                target: original.clone(),
+                staged: original.clone(),
+                delete_sha256: Some(store::documents::sha256_hex(b"initial")),
+            }],
+        )
+        .unwrap();
+        std::fs::write(&original, b"edited during pull").unwrap();
+        assert!(matches!(
+            publish_pull_transaction(root.path(), &mut tx),
+            Err(PublicationFailure::BeforeCommit(_))
+        ));
+        assert_eq!(std::fs::read(&original).unwrap(), b"edited during pull");
+        // Nothing was published: retain the user's edit and remove only this fixture's state.
+        std::fs::remove_dir_all(tx.path).unwrap();
+    }
+
+    #[test]
+    fn scoped_recovery_refuses_another_document_then_unscoped_restores_it() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("documents/foreign.pdf");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"before").unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        let downloads = staging.path().join("downloads");
+        std::fs::create_dir(&downloads).unwrap();
+        std::fs::write(downloads.join("replacement"), b"after").unwrap();
+        let tx = begin_pull_transaction(
+            root.path(),
+            staging,
+            vec![StagedPull {
+                target: target.clone(),
+                staged: downloads.join("replacement"),
+                delete_sha256: None,
+            }],
+        )
+        .unwrap();
+        std::fs::write(&target, b"partially published").unwrap();
+        let scope = DocumentScope(Some(PathBuf::from("allowed.pdf")));
+        assert!(recover_interrupted_pull_scoped(root.path(), &scope)
+            .unwrap_err()
+            .to_string()
+            .contains("out-of-scope"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"partially published");
+        assert!(tx.path.exists());
+        recover_interrupted_pull_scoped(root.path(), &DocumentScope::all()).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"before");
+    }
+
+    #[test]
+    fn recovery_cleans_only_abandoned_or_committed_staging_and_keeps_corrupt_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("documents/committed.pdf");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"committed bytes").unwrap();
+        let transaction = pull_transaction_path(root.path());
+        for phase in [
+            None,
+            Some(PullTransactionPhase::Staging),
+            Some(PullTransactionPhase::Committed),
+        ] {
+            std::fs::create_dir_all(&transaction).unwrap();
+            if let Some(phase) = phase {
+                write_pull_transaction_state(
+                    &transaction,
+                    &PullTransactionState {
+                        phase,
+                        targets: Vec::new(),
+                    },
+                )
+                .unwrap();
+            }
+            recover_interrupted_pull(root.path()).unwrap();
+            assert!(!transaction.exists());
+            assert_eq!(std::fs::read(&target).unwrap(), b"committed bytes");
+        }
+        std::fs::create_dir_all(&transaction).unwrap();
+        std::fs::write(pull_transaction_state_path(&transaction), b"{bad json").unwrap();
+        assert!(recover_interrupted_pull(root.path()).is_err());
+        assert!(transaction.exists());
+        assert_eq!(std::fs::read(&target).unwrap(), b"committed bytes");
+        std::fs::remove_dir_all(&transaction).unwrap();
+        std::fs::write(&transaction, b"not a directory").unwrap();
+        assert!(recover_interrupted_pull(root.path())
+            .unwrap_err()
+            .to_string()
+            .contains("not a directory"));
+        std::fs::remove_file(transaction).unwrap();
+    }
+
+    #[test]
+    fn native_checkout_guards_refuse_leaf_and_parent_symlinks_and_file_parents() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("documents")).unwrap();
+        std::fs::write(outside.path().join("private"), b"outside bytes").unwrap();
+        let alias = root.path().join("documents/alias");
+        symlink(outside.path(), &alias).unwrap();
+        assert!(ensure_pull_target_is_safe(root.path(), &alias.join("private")).is_err());
+        assert!(ensure_documents_tree_is_safe(&root.path().join("documents")).is_err());
+        std::fs::remove_file(&alias).unwrap();
+        symlink(outside.path().join("private"), &alias).unwrap();
+        assert!(ensure_pull_target_is_safe(root.path(), &alias).is_err());
+        std::fs::remove_file(&alias).unwrap();
+        std::fs::write(&alias, b"file parent").unwrap();
+        assert!(ensure_pull_target_is_safe(root.path(), &alias.join("nested")).is_err());
+        assert!(ensure_pull_target_is_safe(root.path(), root.path()).is_err());
+        assert_eq!(
+            std::fs::read(outside.path().join("private")).unwrap(),
+            b"outside bytes"
+        );
+    }
 }
