@@ -18,6 +18,8 @@
 //!    Postgres. A second holder waits up to [`LANE_LOCK_TIMEOUT`] before
 //!    failing with [`MachineStateError::LaneTimeout`] (the DBOS step retries
 //!    with its backoff); a crashed holder's lock dies with its connection.
+//!    The operations module retains durable pending ownership across that gap,
+//!    so another operation cannot overtake unfinished effects.
 //! 2. **Compare-and-set transitions.** [`apply_transition`] writes
 //!    `current_state` only from the state the caller read. Under the lane
 //!    that CAS is the crash-recovery check: a replayed workflow sees
@@ -614,3 +616,6 @@ mod tests {
         assert_ne!(lane_key(fixed_a), lane_key(fixed_b));
     }
 }
+
+/// Crash-spanning admission for the DBOS transition body.
+pub mod operations;

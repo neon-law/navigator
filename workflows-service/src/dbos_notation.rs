@@ -5,10 +5,12 @@
 //! journaled side effects. DBOS has no virtual-object primitive, so the port
 //! reproduces the three guarantees with its own pieces:
 //!
-//! - **The lane** is a PostgreSQL advisory lock held for the whole
-//!   transition body (`store::notation_machine_state::acquire_lane`) —
+//! - **The lane** combines durable pending-operation admission with a live
+//!   PostgreSQL advisory lock (`store::notation_machine_state::acquire_lane`) —
 //!   questionnaire and workflow transitions on one notation still serialize,
-//!   while the DBOS engine runs them. The Restate object has its own lane;
+//!   including failure and repair. A checkpointed logical UUID survives
+//!   `LastFailure` forks; completion releases ownership atomically with its result.
+//!   The Restate object has its own lane;
 //!   operators must drain it before moving a notation to DBOS.
 //! - **The K/V state** is the `notation_machine_state` row; every state move
 //!   is a compare-and-set step (`apply_transition`), so a recovery replay
@@ -35,6 +37,7 @@ use std::sync::Arc;
 
 use dbos::{StepOptions, WorkflowRef};
 use serde::{Deserialize, Serialize};
+use store::notation_machine_state::operations;
 use store::notation_machine_state::{MachineStateError, TransitionOutcome};
 use store::postgres::PostgresDb;
 use store::surreal::SurrealDb;
@@ -286,8 +289,8 @@ pub fn register(dbos: &dbos::DBOS, context: Context) -> dbos::Result<NotationTra
 
 /// One durable notation transition — the port of the three mutation
 /// handlers. The lane is taken in the body (re-taken on recovery), every
-/// side effect is a checkpointed step, and the guard's rollback releases
-/// the lane on any failure path.
+/// side effect is a checkpointed step. The live guard releases on failure;
+/// durable pending ownership remains until the original operation completes.
 async fn transition(
     context: Context,
     request: TransitionRequest,
@@ -307,7 +310,57 @@ async fn transition(
             other => dbos::Error::Application(NotationTransitionError::Store(other.to_string())),
         })?;
 
-    match request.operation {
+    // A checkpointed UUID survives resume/relaunch and LastFailure forks.
+    // It commits before admission, so a lost identity checkpoint cannot own work.
+    let operation_id = dbos::step("notation-operation-id", || async {
+        Ok::<_, dbos::Error<NotationTransitionError>>(uuid::Uuid::now_v7())
+    })
+    .await?;
+    // LastFailure excludes its selected step. Its outside-step-error fallback
+    // is the last recorded step, so commit this anchor before owning work:
+    // every possible repair of an admitted operation retains the UUID above.
+    dbos::step("notation-operation-anchor", || async {
+        Ok::<_, dbos::Error<NotationTransitionError>>(())
+    })
+    .await?;
+    let encoded = serde_json::to_vec(&request).map_err(|error| {
+        dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
+    })?;
+    let fingerprint = store::assets::sha256_hex(&encoded);
+    let started =
+        match operations::admit(&context.postgres, operation_id, notation_id, &fingerprint)
+            .await
+            .map_err(|error| operation_error(error, notation_id))?
+        {
+            operations::Admission::Completed(result) => {
+                return serde_json::from_value(result).map_err(|error| {
+                    dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
+                })
+            }
+            operations::Admission::Pending { started } => started,
+        };
+    if !started {
+        // Fresh validation is intentionally NOT a DBOS step. If rejected, no
+        // cached machine read may survive release and later replay stale state.
+        if let Err(error) = preflight(&context, &request).await {
+            if matches!(
+                &error,
+                dbos::Error::Application(
+                    NotationTransitionError::Terminal(_)
+                        | NotationTransitionError::MachineMissing { .. }
+                )
+            ) {
+                operations::discard_unstarted(&context.postgres, operation_id)
+                    .await
+                    .map_err(|error| operation_error(error, notation_id))?;
+            }
+            return Err(error);
+        }
+        operations::mark_started(&context.postgres, operation_id)
+            .await
+            .map_err(|error| operation_error(error, notation_id))?;
+    }
+    let report = match request.operation {
         Operation::Start {
             spec_yaml,
             ephemeral,
@@ -338,7 +391,71 @@ async fn transition(
             )
             .await
         }
+    }?;
+    let result = serde_json::to_value(&report).map_err(|error| {
+        dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
+    })?;
+    operations::complete(&context.postgres, operation_id, &result)
+        .await
+        .map_err(|error| operation_error(error, notation_id))?;
+    Ok(report)
+}
+
+fn operation_error(
+    error: operations::OperationError,
+    notation_id: uuid::Uuid,
+) -> dbos::Error<NotationTransitionError> {
+    dbos::Error::Application(match error {
+        operations::OperationError::Busy => NotationTransitionError::LaneBusy { notation_id },
+        operations::OperationError::Conflict => NotationTransitionError::Terminal(
+            "Notation operation identity conflicts with its receipt".into(),
+        ),
+        operations::OperationError::Database(error) => {
+            NotationTransitionError::Store(error.to_string())
+        }
+    })
+}
+
+async fn preflight(
+    context: &Context,
+    request: &TransitionRequest,
+) -> dbos::Result<(), NotationTransitionError> {
+    if let Operation::Start { spec_yaml, .. } = &request.operation {
+        return match request.kind {
+            MachineKind::Questionnaire => validate_questionnaire_spec(spec_yaml),
+            MachineKind::Workflow => validate_workflow_spec(spec_yaml),
+        }
+        .map_err(NotationTransitionError::from_logic)
+        .map_err(dbos::Error::Application);
     }
+    let kind = match &request.operation {
+        Operation::Back { .. } => MachineKind::Questionnaire,
+        _ => request.kind,
+    };
+    let machine = store::notation_machine_state::read(
+        &context.postgres,
+        request.notation_id,
+        kind_token(kind),
+    )
+    .await
+    .map_err(|error| dbos::Error::Application(store_error(error)))?
+    .ok_or_else(|| {
+        dbos::Error::Application(NotationTransitionError::MachineMissing {
+            notation_id: request.notation_id,
+            machine_kind: kind_token(kind).into(),
+        })
+    })?;
+    let spec = parse_spec(kind, &machine.spec_yaml).map_err(dbos::Error::Application)?;
+    if let Operation::Signal { condition, .. } = &request.operation {
+        advance(
+            spec.inner(),
+            &StateName::from(machine.current_state.as_str()),
+            condition,
+        )
+        .map_err(NotationTransitionError::from_logic)
+        .map_err(dbos::Error::Application)?;
+    }
+    Ok(())
 }
 
 /// Read one machine row as a durable step — the parity of the Restate K/V

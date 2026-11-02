@@ -779,8 +779,8 @@ fn notation_run_status(
 
 /// Run one transition to completion and return its `next_state`. The run is
 /// durable: a worker that dies mid-transition leaves a `PENDING` row a later
-/// executor recovers, and the caller's retry starts a fresh run whose CAS
-/// step reconciles the two.
+/// executor recovers. A fresh caller run is refused while the original
+/// operation owns the Notation; repair resumes or forks that original run.
 async fn notation_run(
     state: NotationRouteState,
     notation_id: uuid::Uuid,

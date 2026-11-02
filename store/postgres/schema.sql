@@ -3530,3 +3530,19 @@ CREATE UNIQUE INDEX ssh_public_key_live_fingerprint
 
 -- The sync and the profile page read one Person's keys.
 CREATE INDEX ssh_public_key_person_idx ON ssh_public_key (person_id);
+
+-- Migration: 20261101210000_create_notation_transition.sql
+-- Target-only DBOS runtime ownership; ephemeral Notations need no domain row.
+CREATE TABLE notation_transition (
+    id UUID PRIMARY KEY,
+    notation_id UUID NOT NULL,
+    request_fingerprint TEXT NOT NULL,
+    started BOOLEAN NOT NULL DEFAULT false,
+    result JSONB,
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    CONSTRAINT notation_transition_completion CHECK ((result IS NULL) = (completed_at IS NULL))
+);
+-- A pending operation itself is the durable owner, across both machine kinds.
+CREATE UNIQUE INDEX notation_transition_pending ON notation_transition(notation_id) WHERE result IS NULL;
+CREATE INDEX notation_transition_notation ON notation_transition(notation_id);

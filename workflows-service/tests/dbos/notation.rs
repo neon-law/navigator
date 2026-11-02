@@ -458,3 +458,384 @@ async fn a_persisted_email_dispatch_is_captured_and_journaled() {
     );
     fixture.worker.shutdown().await;
 }
+
+#[derive(Default)]
+struct RepairableEmail {
+    available: std::sync::atomic::AtomicBool,
+    captured: std::sync::Mutex<Vec<workflows::email::OutboundEmail>>,
+}
+#[async_trait::async_trait]
+impl workflows::EmailService for RepairableEmail {
+    async fn send(
+        &self,
+        email: workflows::email::OutboundEmail,
+    ) -> Result<workflows::email::service::SendReceipt, workflows::email::service::EmailError> {
+        if !self.available.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(workflows::email::service::EmailError::Transport(
+                "synthetic unavailable".into(),
+            ));
+        }
+        self.captured.lock().unwrap().push(email);
+        Ok(workflows::email::service::SendReceipt::default())
+    }
+}
+
+fn ephemeral_signal(
+    notation: uuid::Uuid,
+    value: Option<String>,
+) -> dbos_notation::TransitionRequest {
+    dbos_notation::TransitionRequest {
+        kind: MachineKind::Workflow,
+        notation_id: notation,
+        operation: dbos_notation::Operation::Signal {
+            condition: "_".into(),
+            value,
+            acting_person_id: None,
+            ephemeral: true,
+        },
+    }
+}
+async fn repair_worker(
+    database: &crate::support::TestDatabase,
+    postgres: &store::postgres::PostgresDb,
+    directory: &std::path::Path,
+    email: Arc<RepairableEmail>,
+) -> (dbos::DBOS, dbos_notation::NotationTransitionWorkflow) {
+    let worker = dbos::DBOS::new(workflows::dbos_engine::config(&database.url, APP_VERSION));
+    let workflow = dbos_notation::register(
+        &worker,
+        Context::new(
+            store::test_support::mem_surreal().await,
+            postgres.clone(),
+            email,
+            Arc::new(cloud::FsStorage::new(directory).await.unwrap()),
+        ),
+    )
+    .unwrap();
+    worker.launch().await.unwrap();
+    (worker, workflow)
+}
+
+/// Regression: replay must not emit an obsolete predecessor's effects after
+/// a different successful operation has already moved this same machine onward.
+/// This is ordering, not exactly-once delivery: the first attempt sent no email.
+#[tokio::test]
+async fn an_unfinished_predecessor_owns_the_notation_through_repair() {
+    let Some(database) = database().await else {
+        return;
+    };
+    let postgres = database.store().await;
+    let directory = tempfile::tempdir().unwrap();
+    let email = Arc::new(RepairableEmail::default());
+    let (worker, workflow) =
+        repair_worker(&database, &postgres, directory.path(), email.clone()).await;
+    let notation = uuid::Uuid::now_v7();
+    workflow
+        .run(dbos_notation::TransitionRequest {
+            kind: MachineKind::Workflow,
+            notation_id: notation,
+            operation: dbos_notation::Operation::Start {
+                spec_yaml:
+                    "BEGIN:\n  _: email_send__welcome\nemail_send__welcome:\n  _: END\nEND: {}\n"
+                        .into(),
+                ephemeral: true,
+            },
+        })
+        .await
+        .unwrap();
+    let logical = format!("failed-predecessor-{notation}");
+    let failed = workflow
+        .start_with(
+            ephemeral_signal(
+                notation,
+                Some(
+                    serde_json::to_string(&workflows::email::dispatch::EmailPayload::new(
+                        "Synthetic",
+                        "synthetic@example.com",
+                    ))
+                    .unwrap(),
+                ),
+            ),
+            dbos::StartOptions {
+                workflow_id: Some(&logical),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(tokio::time::timeout(DEADLINE, failed.result())
+        .await
+        .unwrap()
+        .is_err());
+    assert!(
+        email.captured.lock().unwrap().is_empty(),
+        "no earlier accepted external effect to duplicate"
+    );
+    assert_eq!(
+        store::notation_machine_state::read(&postgres, notation, "workflow")
+            .await
+            .unwrap()
+            .unwrap()
+            .current_state,
+        "email_send__welcome"
+    );
+    // Durable ownership survives release of the live advisory lane.
+    let successor = workflow.run(ephemeral_signal(notation, None)).await;
+    assert!(matches!(
+        successor,
+        Err(dbos::Error::Application(
+            dbos_notation::NotationTransitionError::LaneBusy { .. }
+        ))
+    ));
+    email
+        .available
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let repaired = worker
+        .fork::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(
+            &logical,
+            dbos::ForkFrom::LastFailure,
+        )
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(DEADLINE, repaired.result())
+        .await
+        .unwrap();
+    assert_eq!(result.unwrap().next_state, "email_send__welcome");
+    assert_eq!(
+        email.captured.lock().unwrap().len(),
+        1,
+        "the original rejected send happens once after repair"
+    );
+    let successor = workflow
+        .run(ephemeral_signal(notation, None))
+        .await
+        .unwrap();
+    assert_eq!(successor.next_state, "END");
+    assert_eq!(
+        store::notation_machine_state::read(&postgres, notation, "workflow")
+            .await
+            .unwrap()
+            .unwrap()
+            .current_state,
+        "END"
+    );
+    worker.shutdown().await;
+}
+
+#[tokio::test]
+async fn pending_operation_uniqueness_and_completion_are_atomic_under_contention() {
+    use store::notation_machine_state::operations::{self, Admission, OperationError};
+    let Some(database) = database().await else {
+        return;
+    };
+    let pg = database.store().await;
+    let notation = uuid::Uuid::now_v7();
+    let barrier = Arc::new(tokio::sync::Barrier::new(8));
+    let mut writers = Vec::new();
+    for _ in 0..8 {
+        let pg = pg.clone();
+        let barrier = barrier.clone();
+        writers.push(tokio::spawn(async move {
+            let id = uuid::Uuid::now_v7();
+            barrier.wait().await;
+            (id, operations::admit(&pg, id, notation, "same-input").await)
+        }));
+    }
+    let mut winner = None;
+    let mut refused = 0;
+    for writer in writers {
+        let (id, result) = writer.await.unwrap();
+        match result {
+            Ok(Admission::Pending { started: false }) => {
+                assert!(winner.replace(id).is_none());
+            }
+            Err(OperationError::Busy) => refused += 1,
+            other => panic!("unexpected admission: {other:?}"),
+        }
+    }
+    assert_eq!(refused, 7);
+    let winner = winner.unwrap();
+    assert_eq!(
+        operations::admit(&pg, winner, notation, "same-input")
+            .await
+            .unwrap(),
+        Admission::Pending { started: false }
+    );
+    assert!(matches!(
+        operations::admit(&pg, winner, notation, "changed-input").await,
+        Err(OperationError::Conflict)
+    ));
+    operations::mark_started(&pg, winner).await.unwrap();
+    operations::discard_unstarted(&pg, winner).await.unwrap();
+    let successor = uuid::Uuid::now_v7();
+    assert!(matches!(
+        operations::admit(&pg, successor, notation, "next").await,
+        Err(OperationError::Busy)
+    ));
+    let independent = uuid::Uuid::now_v7();
+    assert!(matches!(
+        operations::admit(&pg, independent, uuid::Uuid::now_v7(), "other").await,
+        Ok(Admission::Pending { .. })
+    ));
+    let result = serde_json::json!({"next_state":"B"});
+    operations::complete(&pg, winner, &result).await.unwrap();
+    operations::complete(&pg, winner, &result).await.unwrap();
+    assert!(matches!(
+        operations::complete(&pg, winner, &serde_json::json!({"next_state":"C"})).await,
+        Err(OperationError::Conflict)
+    ));
+    assert_eq!(
+        operations::admit(&pg, successor, notation, "next")
+            .await
+            .unwrap(),
+        Admission::Pending { started: false }
+    );
+    assert_eq!(
+        operations::admit(&pg, winner, notation, "same-input")
+            .await
+            .unwrap(),
+        Admission::Completed(result)
+    );
+    operations::discard_unstarted(&pg, successor).await.unwrap();
+    assert!(matches!(
+        operations::admit(&pg, uuid::Uuid::now_v7(), notation, "replacement").await,
+        Ok(Admission::Pending { started: false })
+    ));
+}
+
+#[tokio::test]
+async fn invalid_preflight_does_not_leave_a_pending_owner_or_cached_machine_read() {
+    let Some(fixture) = PersistedNotation::new().await else {
+        return;
+    };
+    let invalid = fixture
+        .workflow
+        .run(dbos_notation::TransitionRequest {
+            kind: MachineKind::Workflow,
+            notation_id: fixture.id,
+            operation: dbos_notation::Operation::Start {
+                spec_yaml: "not: [a valid machine".into(),
+                ephemeral: false,
+            },
+        })
+        .await;
+    assert!(invalid.is_err());
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
+    )
+    .bind(fixture.id)
+    .fetch_one(&fixture._database.pool)
+    .await
+    .unwrap();
+    assert_eq!(pending, 0);
+    fixture
+        .start(MachineKind::Workflow, "BEGIN:\n  _: END\nEND: {}\n")
+        .await;
+    let invalid = fixture
+        .workflow
+        .run(dbos_notation::TransitionRequest {
+            kind: MachineKind::Workflow,
+            notation_id: fixture.id,
+            operation: dbos_notation::Operation::Signal {
+                condition: "not-declared".into(),
+                value: None,
+                acting_person_id: None,
+                ephemeral: false,
+            },
+        })
+        .await;
+    assert!(invalid.is_err());
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
+    )
+    .bind(fixture.id)
+    .fetch_one(&fixture._database.pool)
+    .await
+    .unwrap();
+    assert_eq!(pending, 0);
+    assert_eq!(
+        fixture.signal(MachineKind::Workflow, "_", None).await,
+        "END"
+    );
+    fixture.worker.shutdown().await;
+}
+
+/// Mark-started fails outside a DBOS step. The anchor must preserve the first
+/// logical UUID even when `LastFailure` falls back to its last recorded step.
+#[tokio::test]
+async fn a_live_preflight_failure_repairs_under_the_original_operation_identity() {
+    let Some(fixture) = PersistedNotation::new().await else {
+        return;
+    };
+    sqlx::query(
+        "ALTER TABLE notation_transition ADD CONSTRAINT synthetic_mark_denied CHECK (NOT started)",
+    )
+    .execute(&fixture._database.pool)
+    .await
+    .unwrap();
+    let logical = format!("preflight-failure-{}", fixture.id);
+    let handle = fixture
+        .workflow
+        .start_with(
+            dbos_notation::TransitionRequest {
+                kind: MachineKind::Workflow,
+                notation_id: fixture.id,
+                operation: dbos_notation::Operation::Start {
+                    spec_yaml: "BEGIN:\n  _: END\nEND: {}\n".into(),
+                    ephemeral: false,
+                },
+            },
+            dbos::StartOptions {
+                workflow_id: Some(&logical),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(tokio::time::timeout(DEADLINE, handle.result())
+        .await
+        .unwrap()
+        .is_err());
+    let original: uuid::Uuid = sqlx::query_scalar(
+        "SELECT id FROM notation_transition WHERE notation_id=$1 AND result IS NULL",
+    )
+    .bind(fixture.id)
+    .fetch_one(&fixture._database.pool)
+    .await
+    .unwrap();
+    sqlx::query("ALTER TABLE notation_transition DROP CONSTRAINT synthetic_mark_denied")
+        .execute(&fixture._database.pool)
+        .await
+        .unwrap();
+    let repaired = fixture
+        .worker
+        .fork::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(
+            &logical,
+            dbos::ForkFrom::LastFailure,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(DEADLINE, repaired.result())
+            .await
+            .unwrap()
+            .unwrap()
+            .next_state,
+        "BEGIN"
+    );
+    let rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM notation_transition WHERE notation_id=$1")
+            .bind(fixture.id)
+            .fetch_one(&fixture._database.pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 1);
+    let finished: bool =
+        sqlx::query_scalar("SELECT result IS NOT NULL FROM notation_transition WHERE id=$1")
+            .bind(original)
+            .fetch_one(&fixture._database.pool)
+            .await
+            .unwrap();
+    assert!(finished);
+    fixture.worker.shutdown().await;
+}
