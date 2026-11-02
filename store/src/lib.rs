@@ -81,7 +81,9 @@ pub mod assistant_turns;
 pub mod attestations;
 pub mod attorney_rates;
 pub mod authorities;
+pub mod billed_calls;
 pub mod brand_domains;
+pub mod brand_phone_numbers;
 pub mod brands;
 pub mod cap_table_holdings;
 /// Firm-authored Case Stage vocabulary and audited per-matter transitions.
@@ -242,3 +244,7 @@ pub use config::{
     sample_matters, sample_matters_from, DeploymentEnvironment, DeploymentEnvironmentError,
     SampleMattersError, NAVIGATOR_ENVIRONMENT, NAVIGATOR_SIMULATED_MATTERS,
 };
+
+pub mod communication_dashboard;
+
+pub mod fi_import;

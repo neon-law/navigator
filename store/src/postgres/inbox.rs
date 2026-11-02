@@ -237,7 +237,7 @@ pub(crate) async fn ingest_message_on(
 ) -> Result<IngestedInbound, InboxError> {
     let channel_supported = matches!(
         inbound.channel,
-        channel::EMAIL | channel::SMS | channel::SCRAPER
+        channel::EMAIL | channel::SMS | channel::SCRAPER | channel::VOICE
     ) || inbox::is_social_channel(inbound.channel);
     if !channel_supported
         || !matches!(
@@ -810,6 +810,9 @@ pub(crate) async fn queue_reply_on(
     let conversation = conversation_by_id_on(pg, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
+    if crate::fi_import::is_account(&conversation.provider_account) {
+        return Err(InboxError::Denied);
+    }
     let Some(project_id) = conversation.project_id else {
         return Err(InboxError::Denied);
     };
@@ -1028,6 +1031,9 @@ async fn queue_sms_message_on(
     actor_id: Uuid,
     body: &str,
 ) -> Result<Uuid, InboxError> {
+    if crate::fi_import::is_account(&conversation.provider_account) {
+        return Err(InboxError::Denied);
+    }
     let message_id = create_message_on(
         pg,
         conversation.id,
@@ -1097,14 +1103,20 @@ pub(crate) async fn dispatch_queued_on(
             }
             None => false,
         };
-        if !allowed {
+        if !allowed || crate::fi_import::is_account(&conversation.provider_account) {
             set_delivery_on(pg, message.id, delivery::SUPPRESSED, None).await?;
             journal_attempt_on(
                 pg,
                 message.id,
                 delivery::SUPPRESSED,
                 None,
-                Some("participation revoked"),
+                Some(
+                    if crate::fi_import::is_account(&conversation.provider_account) {
+                        "import source is read-only"
+                    } else {
+                        "participation revoked"
+                    },
+                ),
             )
             .await?;
             report.suppressed += 1;
@@ -1387,7 +1399,7 @@ pub(crate) async fn set_attachment_asset_on(
     Ok(())
 }
 
-async fn messages_for_on(
+pub(crate) async fn messages_for_on(
     pg: &PostgresDb,
     conversation_id: Uuid,
 ) -> Result<Vec<Message>, InboxError> {
@@ -1527,6 +1539,7 @@ pub(crate) async fn intake_detail_on(
     let can_social_reply = inbox::is_social_channel(&conversation.channel)
         && inbox::social_reply_actor_still_authorized(db, actor_id, &conversation).await?;
     let can_sms_reply = conversation.channel == channel::SMS
+        && !crate::fi_import::is_account(&conversation.provider_account)
         && inbox::social_reply_actor_still_authorized(db, actor_id, &conversation).await?;
     let bodies_visible =
         conversation.project_id.is_none() || participates || can_social_reply || can_sms_reply;
@@ -1591,7 +1604,7 @@ async fn intake_rows(
                 role,
                 assigned || conversation.project_id.is_some(),
                 &delivery_state,
-                can_send_default,
+                can_send_default && !crate::fi_import::is_account(&conversation.provider_account),
             )
             .to_string(),
             delivery: delivery_state,
@@ -1676,7 +1689,8 @@ pub(crate) async fn project_thread_on(
         return Err(InboxError::NotFound);
     }
     let can_note = matches!(actor.role, Role::Lawyer | Role::Clerk);
-    let can_send = matches!(actor.role, Role::Lawyer | Role::Clerk);
+    let can_send = matches!(actor.role, Role::Lawyer | Role::Clerk)
+        && !crate::fi_import::is_account(&conversation.provider_account);
     let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
     let messages = messages_for_on(pg, conversation.id).await?;
     mark_read_on(pg, conversation.id).await?;

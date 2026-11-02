@@ -132,7 +132,16 @@ async fn seed_firm_membership(db: &SurrealDb, person_id: Uuid) -> Uuid {
 }
 
 async fn build_app(db: SurrealDb, person_id: Uuid) -> Fixture {
+    build_app_with_storage(db, person_id, None).await
+}
+
+async fn build_app_with_storage(
+    db: SurrealDb,
+    person_id: Uuid,
+    storage: Option<std::sync::Arc<dyn cloud::StorageService>>,
+) -> Fixture {
     let state = portal::test_support::app_state(db).await;
+    let storage = storage.unwrap_or_else(|| state.storage.clone());
     let api_state = ApiState {
         surreal: state.surreal.clone(),
         canonical_base_url: None,
@@ -140,7 +149,7 @@ async fn build_app(db: SurrealDb, person_id: Uuid) -> Fixture {
         bootstrap_owner_email: state.bootstrap_owner_email.clone(),
         bootstrap_company: "Synthetic Firm".into(),
         questionnaire_runtime: state.questionnaire_runtime.clone(),
-        storage: state.storage.clone(),
+        storage: storage.clone(),
         workflow_runtime: state.workflow_runtime.clone(),
         assets_storage: state.assets_storage.clone(),
         forms_registry: state.forms_registry.clone(),
@@ -156,7 +165,7 @@ async fn build_app(db: SurrealDb, person_id: Uuid) -> Fixture {
         app: portal::api::routes().with_state(api_state),
         lawyer_session,
         surreal: state.surreal,
-        storage: state.storage,
+        storage,
     }
 }
 
@@ -511,7 +520,7 @@ async fn a_dry_run_previews_the_parse_and_writes_nothing() {
 #[tokio::test]
 async fn an_import_walks_the_postgres_ingest_idempotently() {
     if std::env::var("NAV_INBOX_IMPORT_CHILD").as_deref() == Ok("1") {
-        run_lifecycle().await;
+        Box::pin(run_lifecycle()).await;
         return;
     }
     let Some((port, database)) = isolated_database().await else {
@@ -637,6 +646,7 @@ async fn run_lifecycle() {
     assert_linkedin_lifecycle(&fixture).await;
     assert_interrupted_import_recovers_attachments(&fixture, project.firm_id.unwrap()).await;
     assert_extensionless_attachment_filing(&fixture).await;
+    Box::pin(assert_fi_lifecycle(&fixture, &pg, project_id)).await;
 }
 
 async fn assert_native_provider_attachment_ingest(
@@ -1004,4 +1014,518 @@ async fn remove_isolated_database(port: &str, database: &str) {
         .await
         .expect("drop the isolated database");
     admin.close().await;
+}
+
+struct NoFiArchive;
+#[async_trait::async_trait]
+impl cloud::StorageService for NoFiArchive {
+    async fn put(
+        &self,
+        _key: &str,
+        _bytes: &[u8],
+        _content_type: &str,
+    ) -> Result<(), cloud::StorageError> {
+        panic!("Fi metadata import must not archive raw CSV or attachments");
+    }
+    async fn get(&self, _key: &str) -> Result<cloud::StoredObject, cloud::StorageError> {
+        panic!("Fi metadata import must not read provider storage");
+    }
+    async fn delete(&self, _key: &str) -> Result<(), cloud::StorageError> {
+        panic!("Fi metadata import must not delete provider storage");
+    }
+    async fn signed_url(
+        &self,
+        _key: &str,
+        _expires_in: std::time::Duration,
+    ) -> Result<String, cloud::StorageError> {
+        panic!("Fi metadata import must not create storage URLs");
+    }
+}
+
+fn fi_mapping_json() -> Value {
+    json!({"columns":{"kind":"type","direction":"way","counterparty":"phone","timestamp":["at"],"duration":"length","identity":"id","status":null},
+        "kinds":{"C":"call","S":"sms"},"directions":{"I":"inbound","O":"outbound"},
+        "timestamp_format":"%+","timestamp_separator":" ","timezone":{"mode":"embedded_offset"},"duration_unit":"seconds"})
+}
+
+fn fi_body(csv: &str, extra: &Value) -> Value {
+    merge_extra(
+        json!({"account":"+15555550123","brand":"fi-http","mapping":fi_mapping_json(),
+        "payload_base64":base64::engine::general_purpose::STANDARD.encode(csv.as_bytes())}),
+        extra,
+    )
+}
+
+async fn post_fi_json(
+    app: &Router,
+    session: Option<&portal::SessionData>,
+    body: Value,
+) -> (u16, Value) {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/app/api/inbox/import/fi")
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(session) = session {
+        request = request.extension(session.clone());
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+async fn fi_counts(pg: &store::postgres::PostgresDb) -> Vec<i64> {
+    sqlx::query_scalar("SELECT ARRAY[(SELECT count(*) FROM message),(SELECT count(*) FROM inbox_conversation),(SELECT count(*) FROM inbox_ingress),(SELECT count(*) FROM asset),(SELECT count(*) FROM billed_call)]")
+        .fetch_one(pg.pool()).await.unwrap()
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one isolated real-PostgreSQL lifecycle proves preview, apply, replay and attribution share exact state"
+)]
+async fn assert_fi_lifecycle(
+    fixture: &Fixture,
+    pg: &store::postgres::PostgresDb,
+    project_id: Uuid,
+) {
+    let actor = fixture.lawyer_session.person_id.unwrap();
+    let project = store::projects::find_by_id(&fixture.surreal, project_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let firm = project.firm_id.unwrap();
+    let admin = store::firms::memberships_for_firm(&fixture.surreal, firm)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|member| member.is_dri)
+        .unwrap()
+        .person_id;
+    store::brands::create(
+        &fixture.surreal,
+        Role::Admin,
+        Some(admin),
+        &store::brands::NewBrand {
+            key: "fi-http".into(),
+            name: "Fi HTTP".into(),
+            firm_id: Some(firm),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    store::firms::ensure_brand(&fixture.surreal, firm, "fi-http")
+        .await
+        .unwrap();
+    let app = build_app_with_storage(
+        fixture.surreal.clone(),
+        actor,
+        Some(std::sync::Arc::new(NoFiArchive)),
+    )
+    .await;
+    let csv="type,way,phone,at,length,id,content\nC,I,+15555550456,2026-10-30T18:00:00Z,61,fi-call,never archive me\nS,O,+15555550789,2026-10-30T18:01:00Z,,fi-sms,never archive me\n";
+    let before = fi_counts(pg).await;
+    let (status, _) = post_fi_json(&app.app, None, fi_body(csv, &json!({}))).await;
+    assert_eq!(status, 401);
+    let (status, preview) = post_fi_json(
+        &app.app,
+        Some(&app.lawyer_session),
+        fi_body(csv, &json!({})),
+    )
+    .await;
+    assert_eq!(status, 200, "{preview}");
+    assert_eq!(preview["dry_run"], true);
+    assert_eq!(preview["new"], 2);
+    assert_eq!(
+        fi_counts(pg).await,
+        before,
+        "default preview must write nothing"
+    );
+    let malformed = format!("{csv}C,UNKNOWN,+15555550456,2026-10-30T18:02:00Z,1,bad,ignored\n");
+    let (status, _) = post_fi_json(
+        &app.app,
+        Some(&app.lawyer_session),
+        fi_body(&malformed, &json!({"dry_run":false})),
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert_eq!(
+        fi_counts(pg).await,
+        before,
+        "invalid last row must not commit an earlier valid row"
+    );
+    let (status, _) = post_fi_json(
+        &app.app,
+        Some(&app.lawyer_session),
+        fi_body(csv, &json!({"brand":"neon","dry_run":false})),
+    )
+    .await;
+    assert_eq!(status, 404);
+    assert_eq!(fi_counts(pg).await, before);
+    let (status, first) = post_fi_json(
+        &app.app,
+        Some(&app.lawyer_session),
+        fi_body(csv, &json!({"dry_run":false})),
+    )
+    .await;
+    assert_eq!(status, 201, "{first}");
+    assert_eq!(first["imported"].as_array().unwrap().len(), 2);
+    let after = fi_counts(pg).await;
+    assert_eq!(after[0], before[0] + 2);
+    assert_eq!(after[2], before[2] + 2);
+    assert_eq!(after[3], before[3], "metadata adds no Assets");
+    assert_eq!(after[4], before[4], "historical metadata adds no billing");
+    for accepted in first["imported"].as_array().unwrap() {
+        let id: Uuid = accepted["message_id"].as_str().unwrap().parse().unwrap();
+        let message = store::inbox::message_by_id(&app.surreal, id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(message.delivery_state, store::inbox::delivery::RECEIVED);
+        assert!(
+            message.author_person_id.is_none(),
+            "CSV direction cannot establish the original human author"
+        );
+        assert!(message.raw_storage_key.is_none());
+        assert!(!message.body.contains("never archive me"));
+        let conversation = store::inbox::conversation_by_id(&app.surreal, message.conversation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(conversation.project_id, None);
+        assert!(conversation.provider_account.starts_with("google_fi:"));
+    }
+    let parked = store::billed_calls::parked_calls(pg, &app.surreal, admin)
+        .await
+        .unwrap();
+    let fi_call = parked
+        .iter()
+        .find(|call| call.provider_message_id.starts_with("google_fi:"))
+        .unwrap();
+    assert_eq!(fi_call.duration_seconds, Some(61));
+    assert_eq!(fi_call.tenths, None);
+    let report = store::communication_dashboard::for_brand(pg, &app.surreal, admin, "fi-http")
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            report.calls,
+            report.sms,
+            report.billed_tenths,
+            report.parked_calls
+        ),
+        (1, 1, 0, 1)
+    );
+    assert!(
+        report.registered_numbers.is_empty(),
+        "Fi must not manufacture a Twilio registration"
+    );
+    let (status, replay) = post_fi_json(
+        &app.app,
+        Some(&app.lawyer_session),
+        fi_body(csv, &json!({"project":"alpha-matter","dry_run":false})),
+    )
+    .await;
+    assert_eq!(status, 201, "{replay}");
+    assert!(replay["imported"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["deduped"] == true));
+    assert_eq!(fi_counts(pg).await, after);
+    let report = store::communication_dashboard::for_brand(pg, &app.surreal, admin, "fi-http")
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            report.calls,
+            report.sms,
+            report.billed_tenths,
+            report.parked_calls
+        ),
+        (1, 1, 0, 0)
+    );
+    let assignments:i64=sqlx::query_scalar("SELECT count(*) FROM inbox_assignment WHERE conversation_id IN (SELECT id FROM inbox_conversation WHERE provider_account='google_fi:+15555550123')")
+        .fetch_one(pg.pool()).await.unwrap();
+    let (status, _) = post_fi_json(
+        &app.app,
+        Some(&app.lawyer_session),
+        fi_body(csv, &json!({"project":"alpha-matter","dry_run":false})),
+    )
+    .await;
+    assert_eq!(status, 201);
+    let repeated_assignments:i64=sqlx::query_scalar("SELECT count(*) FROM inbox_assignment WHERE conversation_id IN (SELECT id FROM inbox_conversation WHERE provider_account='google_fi:+15555550123')")
+        .fetch_one(pg.pool()).await.unwrap();
+    assert_eq!(assignments, repeated_assignments);
+    let changed = csv.replace(",61,fi-call,", ",62,fi-call,");
+    let (status, conflict) = post_fi_json(
+        &app.app,
+        Some(&app.lawyer_session),
+        fi_body(&changed, &json!({"dry_run":false})),
+    )
+    .await;
+    assert_eq!(status, 409, "{conflict}");
+    assert_eq!(fi_counts(pg).await, after);
+    // Both HTTP batches may have preflighted an unassigned native identity.
+    // Their later Project writes still need one initial-attribution winner.
+    let other = store::projects::create(
+        &fixture.surreal,
+        &store::projects::NewProject {
+            code: "fi-race-other".into(),
+            name: "Synthetic Other Project".into(),
+            status: "open".into(),
+            entity_id: project.entity_id,
+            firm_id: Some(firm),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    store::participation::add_participant(
+        &fixture.surreal,
+        &store::participation::AddParticipantCommand {
+            project_id: other.id,
+            person_id: actor,
+            dri: store::participation::DriRequest::Unchanged,
+            actor: store::participation::DriActor::System,
+        },
+    )
+    .await
+    .unwrap();
+    store::postgres_mirror::mirror(
+        &fixture.surreal,
+        pg,
+        &store::postgres_mirror::MirrorKey::Project(other.id),
+    )
+    .await
+    .unwrap();
+    let race_csv="type,way,phone,at,length,id,content\nS,O,+15555550999,2026-10-30T18:09:00Z,,fi-race,unmapped-content\n";
+    let (status, race) = post_fi_json(
+        &app.app,
+        Some(&app.lawyer_session),
+        fi_body(race_csv, &json!({"dry_run":false})),
+    )
+    .await;
+    assert_eq!(status, 201, "{race}");
+    let conversation: Uuid = race["imported"][0]["conversation_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+    let mut tasks = Vec::new();
+    for destination in [project_id, other.id] {
+        let db = fixture.surreal.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            store::inbox::assign(&db, actor, conversation, destination).await
+        }));
+    }
+    let mut winners = Vec::new();
+    for task in tasks {
+        match task.await.unwrap() {
+            Ok(assignment) => winners.push(assignment),
+            Err(store::inbox::InboxError::Denied) => {}
+            Err(store::inbox::InboxError::Db(error)) => assert!(
+                error.contains("busy"),
+                "unexpected attribution failure: {error}"
+            ),
+            Err(error) => panic!("unexpected attribution failure: {error}"),
+        }
+    }
+    assert_eq!(
+        winners.len(),
+        1,
+        "conflicting destinations cannot both acknowledge success"
+    );
+    let winner = &winners[0];
+    let current = store::inbox::conversation_by_id(&fixture.surreal, conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.project_id, Some(winner.to_project_id));
+    let repeat = store::inbox::assign(&fixture.surreal, actor, conversation, winner.to_project_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        repeat.id, winner.id,
+        "same-Project repair reuses the assignment"
+    );
+    let loser = if winner.to_project_id == project_id {
+        other.id
+    } else {
+        project_id
+    };
+    assert!(matches!(
+        store::inbox::assign(&fixture.surreal, actor, conversation, loser).await,
+        Err(store::inbox::InboxError::Denied)
+    ));
+    let assignments: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inbox_assignment WHERE conversation_id=$1")
+            .bind(conversation)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(assignments, 1);
+    let bills: i64 = sqlx::query_scalar("SELECT count(*) FROM billed_call")
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        bills, after[4],
+        "Fi SMS attribution creates no BilledCall rows"
+    );
+    assert_call_coordinators_do_not_starve_the_native_pool(&app, pg, actor, firm, project_id).await;
+}
+
+/// More independent coordinators than the actual ten-connection cached pool.
+/// Distinct legitimate callbacks and assignments must complete, not return Busy.
+#[expect(
+    clippy::too_many_lines,
+    reason = "two barrier phases exercise both nested-pool coordinators against the exact isolated native authority"
+)]
+async fn assert_call_coordinators_do_not_starve_the_native_pool(
+    fixture: &Fixture,
+    pg: &store::postgres::PostgresDb,
+    actor: Uuid,
+    firm: Uuid,
+    project: Uuid,
+) {
+    const CALLS: usize = 12;
+    let started: chrono::DateTime<chrono::Utc> = "2026-10-30T20:00:00Z".parse().unwrap();
+    let mut inputs = Vec::with_capacity(CALLS);
+    for index in 0..CALLS {
+        let sid = format!("CApool-liveness-{index}");
+        let address = format!("+1555555{index:04}");
+        let saved = store::inbox::ingest_inbound(
+            &fixture.surreal,
+            &store::inbox::IngestInbound {
+                project_id: None,
+                firm_id: firm,
+                brand_key: Some("fi-http"),
+                interaction_type: None,
+                provider_post_id: None,
+                parent_provider_message_id: None,
+                visibility: Some("private"),
+                channel: store::inbox::channel::VOICE,
+                provider_account: "+15555550888",
+                provider_message_id: &sid,
+                provider_thread_ref: None,
+                external_address: &address,
+                external_name: None,
+                subject: None,
+                body: "Synthetic completed voice-call metadata",
+                source_page: Some("+15555550888"),
+                source_channel: Some(store::inbox::channel::VOICE),
+                matter_consent: false,
+                promotional_opt_in: false,
+                email_conversation_id: None,
+                attachments: Vec::new(),
+                occurred_at: "2026-10-30T20:00:00Z",
+                raw_storage_key: None,
+            },
+        )
+        .await
+        .unwrap();
+        let input = store::billed_calls::NewBilledCall {
+            call_sid: sid,
+            conversation_id: saved.conversation_id,
+            firm_id: firm,
+            duration_seconds: 61,
+            call_started_at: started,
+        };
+        store::billed_calls::record(pg, &input).await.unwrap();
+        inputs.push(input);
+    }
+    let unique = inputs
+        .iter()
+        .map(|input| input.conversation_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        unique.len(),
+        CALLS,
+        "the saturation test must use distinct Conversation lock keys"
+    );
+
+    // Native Conversation lookup happens inside each callback's outer SQL tx.
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(CALLS));
+    let mut tasks = Vec::with_capacity(CALLS);
+    for input in &inputs {
+        let input = input.clone();
+        let db = fixture.surreal.clone();
+        let pg = pg.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            store::billed_calls::record_for_conversation(&pg, &db, &input).await
+        }));
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        for task in tasks {
+            let row = task
+                .await
+                .unwrap()
+                .expect("distinct legitimate callbacks must queue rather than fail pool admission");
+            assert_eq!(row.duration_seconds, 61);
+            assert_eq!(row.tenths, 1);
+            assert_eq!(row.project_id, None);
+        }
+    })
+    .await
+    .expect("twelve distinct callbacks must not deadlock the ten-connection native pool");
+
+    // Attribution also retains its own SQL transaction over native assign_on.
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(CALLS));
+    let mut tasks = Vec::with_capacity(CALLS);
+    for input in &inputs {
+        let conversation = input.conversation_id;
+        let db = fixture.surreal.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            store::inbox::assign(&db, actor, conversation, project).await
+        }));
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        for task in tasks {
+            let assignment = task
+                .await
+                .unwrap()
+                .expect("distinct legitimate attributions must queue rather than return Busy");
+            assert_eq!(assignment.to_project_id, project);
+        }
+    })
+    .await
+    .expect("twelve distinct attributions must not deadlock the ten-connection native pool");
+
+    for input in &inputs {
+        let row = store::billed_calls::find_by_call_sid(pg, &input.call_sid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.project_id, Some(project));
+        assert_eq!(row.duration_seconds, 61);
+        assert_eq!(row.tenths, 1);
+        let conversation =
+            store::inbox::conversation_by_id(&fixture.surreal, input.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(conversation.project_id, Some(project));
+    }
+    let conversations = unique.into_iter().collect::<Vec<_>>();
+    let assignments: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inbox_assignment WHERE conversation_id=ANY($1)")
+            .bind(&conversations)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(assignments, i64::try_from(CALLS).unwrap());
 }

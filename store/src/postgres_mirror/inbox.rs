@@ -216,15 +216,45 @@ fn parent(column: &str, id: Uuid) -> Option<MirrorKey> {
 }
 
 // No Source row is deletion or overwrite evidence after native Inbox cutover.
-fn require_source_authority() -> Result<(), MirrorError> {
+fn native_inbox_authority_selected() -> Result<bool, MirrorError> {
     let setting = match std::env::var(crate::postgres::inbox::AUTHORITY_ENV) {
         Ok(value) => Some(value),
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => return Err(MirrorError::InboxAuthority),
     };
-    match crate::postgres::inbox::enabled_from(setting.as_deref()) {
-        Ok(false) => Ok(()),
-        Ok(true) | Err(_) => Err(MirrorError::InboxAuthority),
+    crate::postgres::inbox::enabled_from(setting.as_deref())
+        .map_err(|_| MirrorError::InboxAuthority)
+}
+
+fn require_source_authority() -> Result<(), MirrorError> {
+    if native_inbox_authority_selected()? {
+        Err(MirrorError::InboxAuthority)
+    } else {
+        Ok(())
+    }
+}
+
+async fn require_native_triage_parent(pg: &PostgresDb, row: &Value) -> Result<(), MirrorError> {
+    let message = row
+        .get("message_id")
+        .and_then(uuid_in)
+        .ok_or(MirrorError::Source)?;
+    let firm = row
+        .get("firm_id")
+        .and_then(uuid_in)
+        .ok_or(MirrorError::Source)?;
+    let valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM message m JOIN inbox_conversation c \
+         ON c.id=m.conversation_id WHERE m.id=$1 AND c.firm_id=$2)",
+    )
+    .bind(message)
+    .bind(firm)
+    .fetch_one(&pg.0)
+    .await?;
+    if valid {
+        Ok(())
+    } else {
+        Err(MirrorError::Source)
     }
 }
 
@@ -244,7 +274,12 @@ async fn mirror_inner(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
-    require_source_authority()?;
+    let native_triage = if matches!(key, MirrorKey::InboxTriage(_)) {
+        native_inbox_authority_selected()?
+    } else {
+        require_source_authority()?;
+        false
+    };
     let table = table(key.table())?;
     let id = match key {
         MirrorKey::InboxConversation(id)
@@ -257,12 +292,18 @@ async fn mirror_inner(
         _ => return Err(MirrorError::Source),
     };
     if let Some(row) = source_one(surreal, table, id).await? {
+        if native_triage {
+            require_native_triage_parent(pg, &row).await?;
+        }
         for column in table.references.split(',').filter(|column| *column != "id") {
             if let Some(parent) = row
                 .get(column)
                 .and_then(uuid_in)
                 .and_then(|id| parent(column, id))
             {
+                if native_triage && matches!(parent, MirrorKey::InboxMessage(_)) {
+                    continue;
+                }
                 Box::pin(super::mirror(surreal, pg, &parent)).await?;
             }
         }

@@ -3278,3 +3278,15 @@ test_stage_doors_are_shape_bound if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "s1"], "method": "POST", "session": lawyer_session}
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set", "extra"], "method": "POST", "session": lawyer_session}
 }
+
+
+# Call triage uses the existing firm Inbox intent; reporting is admin-only.
+test_call_queue_admits_lawyer_but_not_client if {
+    authz.allow with input as {"path": ["app", "inbox", "calls"], "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "inbox", "calls"], "method": "GET", "session": client_session}
+}
+
+test_brand_communications_admits_admin_but_not_lawyer if {
+    authz.allow with input as {"path": ["app", "admin", "communications"], "method": "GET", "session": admin_session}
+    not authz.allow with input as {"path": ["app", "admin", "communications"], "method": "GET", "session": lawyer_session}
+}

@@ -366,6 +366,7 @@ fn inbox_channels() -> Vec<String> {
     vec![
         store::inbox::channel::EMAIL.into(),
         store::inbox::channel::SMS.into(),
+        store::inbox::channel::VOICE.into(),
         store::inbox::channel::FACEBOOK.into(),
         store::inbox::channel::INSTAGRAM.into(),
         store::inbox::channel::THREADS.into(),
@@ -970,6 +971,7 @@ pub fn inbox_list_body(page: &InboxPage) -> Element {
         main { id: "inbox", class: "nav-theme",
             header { class: "page-header",
                 h1 { "{title}" }
+                a { href: crate::communication_dashboard::PARKED_CALLS_PATH, "Parked calls" }
                 p { class: "page-subtitle",
                     "Every email, text, and message to the firm, newest first."
                 }
@@ -1443,6 +1445,19 @@ mod tests {
         assert!(!brand_matches(Some("other"), Some("neon")));
         assert!(!brand_matches(None, Some("neon")));
         assert!(brand_matches(None, None));
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn voice_filter_preserves_the_selected_brand() {
+        let mut view = page(ViewerRole::Owner, Vec::new());
+        view.channels = super::inbox_channels();
+        view.brand_filter = Some("neon".into());
+        let html = dioxus_ssr::render_element(inbox_list_body(&view));
+        assert!(
+            html.contains(r#"href="/app/inbox?channel=voice&#38;brand=neon""#),
+            "the Inbox must offer voice calls without dropping the Brand filter: {html}"
+        );
     }
 
     fn page(role: ViewerRole, rows: Vec<InboxRowView>) -> InboxPage {

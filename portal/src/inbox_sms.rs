@@ -54,6 +54,9 @@ impl OutboundTransport for TwilioSmsTransport {
         let refused = |detail: &str| TransportOutcome::Rejected {
             detail: detail.into(),
         };
+        if store::fi_import::is_account(&envelope.account) {
+            return Ok(refused("Google Fi history is a read-only import source"));
+        }
         if envelope.channel != channel::SMS {
             return Ok(refused("Twilio accepts SMS replies only"));
         }
@@ -253,5 +256,18 @@ mod tests {
             panic!("missing account must reject")
         };
         assert!(detail.contains("TWILIO_ACCOUNT_SID"));
+    }
+    #[tokio::test]
+    async fn fi_history_is_refused_before_any_twilio_configuration_or_http() {
+        let mut transport = TwilioSmsTransport::new(None);
+        transport.egress = SocialEgressGate::new(|| Ok(()));
+        transport.api_base = "http://127.0.0.1:1".into();
+        let mut historical = envelope();
+        historical.account = "google_fi:+15555550123".into();
+        let TransportOutcome::Rejected { detail } = transport.deliver(&historical).await.unwrap()
+        else {
+            panic!("Fi source must be read-only")
+        };
+        assert!(detail.contains("read-only"));
     }
 }

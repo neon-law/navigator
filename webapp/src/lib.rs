@@ -195,3 +195,5 @@ pub fn App() -> Element {
         main { id: "dioxus-demo" }
     }
 }
+
+pub mod communication_dashboard;
