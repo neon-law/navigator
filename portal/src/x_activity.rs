@@ -135,16 +135,17 @@ async fn challenge(Query(query): Query<ChallengeQuery>) -> (StatusCode, String) 
         return (StatusCode::BAD_REQUEST, String::new());
     };
     match response_token(&secret, &token) {
-        Some(token) => (
-            StatusCode::OK,
-            format!(r#"{{"response_token":"{token}"}}"#),
-        ),
+        Some(token) => (StatusCode::OK, format!(r#"{{"response_token":"{token}"}}"#)),
         None => (StatusCode::SERVICE_UNAVAILABLE, String::new()),
     }
 }
 
 /// `POST /webhook/x` verified Account Activity deliveries.
-async fn receive(State(state): State<crate::AppState>, headers: HeaderMap, body: Bytes) -> StatusCode {
+async fn receive(
+    State(state): State<crate::AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
     let Ok(secret) = std::env::var("NAVIGATOR_X_CLIENT_SECRET") else {
         return StatusCode::SERVICE_UNAVAILABLE;
     };
@@ -170,8 +171,7 @@ async fn receive_authenticated(
     if !verify_signature(secret, headers, body) {
         return Ok(StatusCode::UNAUTHORIZED);
     }
-    let activity = serde_json::from_slice::<Activity>(body)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let activity = serde_json::from_slice::<Activity>(body).map_err(|_| StatusCode::BAD_REQUEST)?;
     ingest_activity(state, &activity).await
 }
 
@@ -235,7 +235,10 @@ async fn ingest_tweet(
             firm_id: account.firm_id,
             brand_key: Some(&account.brand_key),
             interaction_type: Some("comment"),
-            provider_post_id: tweet.in_reply_to_status_id_str.as_deref().or(Some(&tweet.id_str)),
+            provider_post_id: tweet
+                .in_reply_to_status_id_str
+                .as_deref()
+                .or(Some(&tweet.id_str)),
             parent_provider_message_id: tweet.in_reply_to_status_id_str.as_deref(),
             visibility: Some("public"),
             channel: "x",
@@ -255,7 +258,8 @@ async fn ingest_tweet(
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments: Vec::new(),
+            project_id: None,
             occurred_at: &occurred.to_rfc3339(),
         },
     )
@@ -308,7 +312,8 @@ async fn ingest_dm(
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments: Vec::new(),
+            project_id: None,
             occurred_at: &occurred.to_rfc3339(),
         },
     )
@@ -364,12 +369,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             SIGNATURE_HEADER,
-            format!(
-                "sha256={}",
-                STANDARD.encode(mac.finalize().into_bytes())
-            )
-            .parse()
-            .unwrap(),
+            format!("sha256={}", STANDARD.encode(mac.finalize().into_bytes()))
+                .parse()
+                .unwrap(),
         );
         headers
     }
@@ -424,7 +426,8 @@ mod tests {
                 provider: SocialProvider::X,
                 provider_account_id: "1200000000000000001",
                 display_name: None,
-                scopes: &SocialProvider::X.required_scopes()
+                scopes: &SocialProvider::X
+                    .required_scopes()
                     .iter()
                     .map(|scope| (*scope).to_string())
                     .collect::<Vec<String>>(),
@@ -455,7 +458,12 @@ mod tests {
     #[tokio::test]
     async fn mention_ingests_with_full_attribution_and_replays_dedup() {
         let state = state_with_account().await;
-        let body = mention_body("1200000000000000001", "1800000000000000001", "5500000000000000001", "A public mention");
+        let body = mention_body(
+            "1200000000000000001",
+            "1800000000000000001",
+            "5500000000000000001",
+            "A public mention",
+        );
         let headers = signed("synthetic-secret", &body);
         for _ in 0..2 {
             assert_eq!(
@@ -494,7 +502,12 @@ mod tests {
     #[tokio::test]
     async fn unsigned_tampered_and_wrong_secret_deliveries_are_refused() {
         let state = state_with_account().await;
-        let body = mention_body("1200000000000000001", "1800000000000000002", "5500000000000000001", "Unsigned");
+        let body = mention_body(
+            "1200000000000000001",
+            "1800000000000000002",
+            "5500000000000000001",
+            "Unsigned",
+        );
         assert_eq!(
             receive_authenticated(&state, &HeaderMap::new(), &body, "synthetic-secret")
                 .await
@@ -616,7 +629,12 @@ mod tests {
     #[tokio::test]
     async fn an_unknown_receiving_account_is_unprocessable() {
         let state = state_with_account().await;
-        let body = mention_body("9999999999999999999", "1800000000000000004", "5500000000000000001", "For someone else");
+        let body = mention_body(
+            "9999999999999999999",
+            "1800000000000000004",
+            "5500000000000000001",
+            "For someone else",
+        );
         let headers = signed("synthetic-secret", &body);
         assert_eq!(
             receive_authenticated(&state, &headers, &body, "synthetic-secret")

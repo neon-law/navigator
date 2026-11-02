@@ -265,7 +265,8 @@ impl YoutubeCommentsPollerService {
                 matter_consent: false,
                 promotional_opt_in: false,
                 email_conversation_id: None,
-                attachment_asset_id: None,
+                attachments: Vec::new(),
+                project_id: None,
                 occurred_at: &occurred.to_rfc3339(),
             },
         )
