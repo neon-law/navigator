@@ -2650,15 +2650,7 @@ async fn admin_uploads_an_avatar_and_sees_the_profile_menu() {
         avatar.attr("src").await.unwrap().as_deref(),
         Some("/app/me/avatar")
     );
-    let trigger = c
-        .find(Locator::Css(".lawyer-nav__profile-trigger"))
-        .await
-        .expect("the avatar is a profile-menu trigger");
-    trigger.click().await.expect("open the profile menu");
-    let open_menu = c
-        .find(Locator::Css(".lawyer-nav__profile[open]"))
-        .await
-        .expect("the native disclosure opens");
+    let open_menu = open_profile_menu(&c).await;
     assert!(
         open_menu
             .find(Locator::Css("a[href='/app/projects']"))
@@ -3721,23 +3713,30 @@ async fn profile_page_shows_a_read_only_email_with_a_contact_us_note() {
 
 // ---------- nav collapse: Firm(s)/Brands -> Firm, plus Profile everywhere ----------
 
+/// Native `.click()` on `<summary>` can miss the disclosure toggle in headless
+/// Chrome; wait for the trigger, then use the JS click helper and the open
+/// state itself as the proof.
+async fn open_profile_menu(c: &Client) -> fantoccini::elements::Element {
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(".lawyer-nav__profile-trigger"))
+        .await
+        .expect("the shared app chrome renders the profile menu trigger");
+    scroll_and_js_click(c, ".lawyer-nav__profile-trigger").await;
+    c.wait()
+        .at_most(Duration::from_secs(5))
+        .for_element(Locator::Css(".lawyer-nav__profile[open]"))
+        .await
+        .expect("the native disclosure opens")
+}
+
 #[tokio::test]
 async fn owner_nav_collapses_firm_and_brands_into_one_link() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
     login_as_owner(&c).await;
-    let trigger = c
-        .wait()
-        .at_most(Duration::from_secs(10))
-        .for_element(Locator::Css(".lawyer-nav__profile-trigger"))
-        .await
-        .expect("the shared app chrome renders the profile menu trigger");
-    trigger.click().await.expect("open the profile menu");
-    let open_menu = c
-        .find(Locator::Css(".lawyer-nav__profile[open]"))
-        .await
-        .expect("the native disclosure opens");
+    let open_menu = open_profile_menu(&c).await;
 
     let firm_link = open_menu
         .find(Locator::Css("a[href='/app/owner']"))
@@ -3769,17 +3768,7 @@ async fn a_client_sees_profile_but_never_the_owner_only_firm_link() {
         return;
     };
     login_as_client(&c).await;
-    let trigger = c
-        .wait()
-        .at_most(Duration::from_secs(10))
-        .for_element(Locator::Css(".lawyer-nav__profile-trigger"))
-        .await
-        .expect("the shared app chrome renders the profile menu trigger");
-    trigger.click().await.expect("open the profile menu");
-    let open_menu = c
-        .find(Locator::Css(".lawyer-nav__profile[open]"))
-        .await
-        .expect("the native disclosure opens");
+    let open_menu = open_profile_menu(&c).await;
 
     let profile_link = open_menu
         .find(Locator::Css("a[href='/app/profile']"))
