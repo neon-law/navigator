@@ -917,6 +917,46 @@ fn brand_blog_catalog_body(page: &BlogCatalogPage) -> Element {
 mod tests {
     use super::*;
 
+    #[test]
+    fn provider_labels_use_the_display_name_and_pass_unknown_providers_through() {
+        assert_eq!(provider_label("tiktok"), "TikTok for Business");
+        assert_eq!(provider_label("youtube"), "YouTube");
+        assert_eq!(provider_label("x"), "X");
+        assert_eq!(provider_label("mastodon"), "mastodon");
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn a_schedule_refusal_keeps_the_copy_and_resubmits_with_the_session_token() {
+        let html = schedule_refusal_html(
+            "vesta",
+            "TOK",
+            "Facebook is not connected for <vesta>.",
+            vec![
+                Field::text("Title", "title", "Spring filing deadlines"),
+                Field::select(
+                    "facebook destination",
+                    "facebook",
+                    vec![Choice::new("page-1", "page-1")],
+                    Some("page-1".to_string()),
+                ),
+            ],
+        );
+        assert!(html.starts_with("<!doctype html>"), "a whole page: {html}");
+        assert!(html.contains("<title>Review Post schedule</title>"));
+        assert!(html.contains(crate::components::THEME_STYLESHEET_HREF));
+        // The refusal is announced, and its text is escaped, not injected.
+        assert!(html.contains(r#"role="alert""#));
+        assert!(html.contains("&#60;vesta&#62;"), "{html}");
+        assert!(!html.contains("<vesta>"));
+        assert!(html.contains(r#"href="/app/admin/brands/vesta/edit""#));
+        assert!(html.contains(r#"action="/app/api/blog/schedule""#));
+        assert!(html.contains(r#"name="_csrf" value="TOK""#));
+        assert!(html.contains(r#"value="Spring filing deadlines""#));
+        assert!(html.contains("Approve and schedule"));
+        crate::components::assert_forms_accessible(&html, "schedule_refusal_html");
+    }
+
     #[allow(clippy::too_many_lines)]
     fn page() -> BlogCatalogPage {
         BlogCatalogPage {

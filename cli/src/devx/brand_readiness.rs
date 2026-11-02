@@ -380,8 +380,13 @@ fn print_report(cfg: &ShipConfig, reports: &[HostReport]) {
 /// the commands that provision what this one only verifies.
 pub fn run(cfg: &ShipConfig, timeout_secs: u32) -> Result<()> {
     let mut runner = ProcessCommandRunner;
-    let reports = run_with(&mut runner, cfg, timeout_secs);
-    print_report(cfg, &reports);
+    conclude(cfg, &run_with(&mut runner, cfg, timeout_secs))
+}
+
+/// Print the table and turn the reports into the command's exit: `Ok` only
+/// when every check is ready, else an error naming each failed host.
+fn conclude(cfg: &ShipConfig, reports: &[HostReport]) -> Result<()> {
+    print_report(cfg, reports);
     let failed: Vec<&HostReport> = reports.iter().filter(|r| !r.verdict.is_ready()).collect();
     if failed.is_empty() {
         eprintln!(
@@ -490,6 +495,89 @@ mod tests {
             workflows_url: None,
             context: "gke_test-project_example-region_navigator".into(),
         }
+    }
+
+    #[test]
+    fn the_process_runner_reports_output_and_a_missing_program() {
+        let echoed = ProcessCommandRunner.run("echo", &["ready".into()]);
+        assert_eq!(echoed.exit_code, Some(0));
+        assert_eq!(echoed.stdout.trim(), "ready");
+
+        let missing = ProcessCommandRunner.run("navigator-no-such-program", &[]);
+        assert_eq!(
+            missing.exit_code, None,
+            "a program that cannot spawn has no exit code"
+        );
+        assert!(!missing.stderr.is_empty());
+    }
+
+    #[test]
+    fn a_subdomain_brand_has_no_apex_to_check_and_a_dead_apex_is_reported() {
+        let mut runner = ScriptedRunner::new(vec![transport_failure(60, "certificate problem")]);
+        let subdomain = check_apex_redirect(&mut runner, BrandKey::IepDefenders, 5);
+        assert_eq!(subdomain.verdict, Verdict::Ready);
+        assert!(runner.calls.is_empty(), "no apex means no request");
+
+        let dead = check_apex_redirect(&mut runner, BrandKey::GuiebShook, 5);
+        assert_eq!(dead.verdict, Verdict::CertificateNotReady);
+        assert!(dead.detail.contains("certificate problem"));
+    }
+
+    #[test]
+    fn an_unrecognized_curl_exit_is_unreachable() {
+        assert_eq!(
+            classify_transport_failure(&transport_failure(1, "unsupported protocol")),
+            Some(Verdict::Unreachable)
+        );
+    }
+
+    #[test]
+    fn an_unknown_deployment_is_refused_before_any_check() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(dir.path().join("deployments")).expect("deployments tree");
+        let err = run_for_deployment("no-such-row", Some(dir.path()), None, 5).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no-such-row"),
+            "the error names the missing row: {err:#}"
+        );
+    }
+
+    fn report(host: &'static str, verdict: Verdict) -> HostReport {
+        HostReport {
+            key: BrandKey::GuiebShook,
+            name: host,
+            verdict,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn concluding_passes_only_when_every_check_is_ready() {
+        let cfg = ship_config_for("staging.navigator.example.invalid");
+        conclude(
+            &cfg,
+            &[
+                report("staging.guiebandshook.com", Verdict::Ready),
+                report("staging.daybridgedivorce.com", Verdict::Ready),
+            ],
+        )
+        .expect("every ready check passes");
+
+        let err = conclude(
+            &cfg,
+            &[
+                report("staging.guiebandshook.com", Verdict::CertificateNotReady),
+                report("staging.daybridgedivorce.com", Verdict::Ready),
+                report("staging-iep.neonlaw.com", Verdict::Unreachable),
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            err,
+            "2 of 3 release-readiness checks failed for test-deployment: \
+             staging.guiebandshook.com (CertificateNotReady), staging-iep.neonlaw.com (Unreachable)"
+        );
     }
 
     #[test]

@@ -106,6 +106,9 @@ pub mod litigation_page;
 pub mod marketing_page;
 pub mod matter_directory;
 pub mod matter_surface;
+// The Nautilus subscription shell. `nautilus-mobile/` launches it natively;
+// it lives here so the workspace suite renders and tests it.
+pub mod mobile;
 pub mod notation_demo;
 pub mod notation_document_review;
 pub mod notation_draft;
