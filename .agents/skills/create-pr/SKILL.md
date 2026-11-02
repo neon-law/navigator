@@ -6,8 +6,8 @@ description: >
   any user-visible change, push, and open the PR ready for review, not as a draft. Trigger when the user says
   "/create-pr", "create a PR", "open a pull request", "commit and PR these changes", "group these into commits and ship
   them", or has a dirty working tree they want landed, and as the ship step of
-  [`implement-issue`](../implement-issue/SKILL.md). Stops at "PR open"; building images and deploying to prod is a
-  separate flow.
+  [`implement-issue`](../implement-issue/SKILL.md). Stops once the PR is open and every review comment on it is
+  answered; building images and deploying to prod is a separate flow.
 ---
 
 # create-pr
@@ -70,3 +70,7 @@ Rules:
   repository arm App-owned squash auto-merge without a label. Then check `gh pr view --json autoMergeRequest,state`; an
   already-green PR may merge immediately. Report the PR URL and whether it merged or auto-merge is armed. Use `--draft`
   when the user asks to hold the PR. Required checks and resolved review threads still govern merging.
+- **Wait for the review comments, then answer them.** Greptile and any human reviewer post after CI starts, and an
+  unresolved thread blocks auto-merge as surely as a red check. Wait for the review to land, then address every comment
+  with [[review-pr]] — fix it or reply with the reason not to — and resolve its thread. The PR is not done, and is not
+  reported as done, until every thread is answered.

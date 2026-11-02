@@ -82,7 +82,11 @@ When a dirty tree is ready to land:
    `Closes ENG-NN` trailer in the body — see [Linking a PR to its Linear issue](#linking-a-pr-to-its-linear-issue).
    Ready PRs from this repository arm App-owned auto-merge automatically. Use draft status to hold a PR. Do not run `gh
    pr merge` yourself.
-8. Clean up task-owned local resources before ending the session. See [Resource cleanup](#resource-cleanup).
+8. Wait for the review comments before calling the PR done. Greptile and any human reviewer post after CI starts, and
+   an unresolved review thread blocks auto-merge just as a red check does. Answer every comment through [Address a PR
+   comment](#address-a-pr-comment) — fix it or reply with the reason not to — and resolve its thread. Report the PR only
+   once every thread is answered.
+9. Clean up task-owned local resources before ending the session. See [Resource cleanup](#resource-cleanup).
 
 If the work should become multiple PRs, decide that before committing. Use the Engineering Council for real sequencing
 questions.
