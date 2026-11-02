@@ -12499,11 +12499,51 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             ),
             ("DELETE", format!("/app/api/entities/{r}"), None),
         ];
-        for (method, path, body) in doors {
-            let (status, json) = call(&f.state, Some(&f.lawyer), method, &path, body).await;
+        // A door naming the fresh `r` answers 404 for the missing record even
+        // with no access check, so it proves only that an unknown record looks
+        // the same as one the lawyer may not see. The scoping itself is proven
+        // by the doors whose every id is seeded, and the control below.
+        // These reads name a record the fixture never seeds (a finance
+        // summary, an `a.pdf` document, a surfaces row), so they belong with
+        // the unknown-record doors too.
+        let unseeded_reads = [
+            format!("/app/api/projects/{p}/finance"),
+            format!("/app/api/projects/{p}/documents/revisions?slug=a.pdf"),
+            format!("/app/api/project-surfaces/{p}"),
+        ];
+        let r = r.to_string();
+        let (seeded, unseeded): (Vec<_>, Vec<_>) =
+            doors.into_iter().partition(|(_, path, body)| {
+                !unseeded_reads.contains(path)
+                    && !path.contains(&r)
+                    && !body.as_ref().is_some_and(|b| b.to_string().contains(&r))
+            });
+        for (method, path, body) in seeded.iter().chain(&unseeded) {
+            let (status, json) = call(&f.state, Some(&f.lawyer), method, path, body.clone()).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}: {json}");
             assert_eq!(json["error"], "not_found", "{method} {path}");
         }
+        // The control: once the same lawyer participates, every seeded read
+        // stops answering 404, so the refusals above came from the scoping.
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: p,
+                person_id: f.lawyer.person_id.unwrap(),
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .expect("add the lawyer to the matter");
+        let mut still_missing = Vec::new();
+        for (method, path, _) in seeded.iter().filter(|(method, ..)| *method == "GET") {
+            let (status, json) = call(&f.state, Some(&f.lawyer), method, path, None).await;
+            if status == StatusCode::NOT_FOUND {
+                still_missing.push(format!("{method} {path}: {json}"));
+            }
+        }
+        assert!(still_missing.is_empty(), "{still_missing:#?}");
     }
 
     /// Deployment-wide reads and Firm administration are Owner/Admin doors:
