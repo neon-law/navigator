@@ -326,7 +326,7 @@ mod tests {
     /// Owns one isolated test database and drops it when it leaves scope —
     /// on success, an early return, or a panic unwind alike. The work runs
     /// on a separate thread with its own runtime because `Drop` fires
-    /// inside the test's tokio runtime, where a nested block_on would
+    /// inside the test's tokio runtime, where a nested `block_on` would
     /// panic. Best-effort: a failure is printed, never raised, from Drop.
     struct TestDatabaseCleanup {
         port: u16,
@@ -366,8 +366,9 @@ mod tests {
                             sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
                                 .execute(&admin)
                                 .await;
+                        let outcome = terminate.and(drop);
                         admin.close().await;
-                        if let Err(err) = terminate.and_then(|_| drop) {
+                        if let Err(err) = outcome {
                             eprintln!("test database {name}: drop failed: {err}");
                         }
                     });
