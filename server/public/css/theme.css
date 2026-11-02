@@ -6010,3 +6010,12 @@ a.nav-steps__step:focus-visible {
   height: auto;
   margin: 1.5rem auto 0;
 }
+/* Aster perches on the /world map section's top-right corner: absolute over
+   the card, decorative, and pointer-transparent so map interactions pass
+   through. Hidden on narrow viewports, where it would crowd the per-person
+   and per-body visibility toggles and the birth form. */
+.world-page__map { position: relative; }
+.world-page__aster { position: absolute; top: .75rem; right: .75rem; width: clamp(6rem, 12vw, 10rem); pointer-events: none; z-index: 1; }
+.world-page__aster svg.aster-artwork { width: 100%; height: auto; }
+.world-page__aster-note { max-width: 70ch; margin: -.25rem auto 2rem; padding-inline: 1rem; font-size: .95rem; font-style: italic; }
+@media (max-width: 719px) { .world-page__aster { display: none; } }

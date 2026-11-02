@@ -389,21 +389,31 @@ pub fn WorldPage(chrome: PublicChrome, content: WorldContent) -> Element {
                          logged, shared with the map's tile provider, or sent to analytics."
                     }
                 }
-                AsterGuide { aster_asset_href: content.aster_asset_href.clone() }
-                WorldMapSection {}
+                WorldMapSection { aster_asset_href: content.aster_asset_href.clone() }
                 BirthFormSection { country_names: content.country_names.clone() }
             }
         }
     }
 }
 
-/// Aster the Astrocartographer, framed from the canonical board, introducing
-/// the reading. Decorative artwork: the nearby copy carries the meaning.
+/// Aster the Astrocartographer, framed from the canonical board, overlaid on
+/// the map section's top-right corner. Decorative artwork only — the quote
+/// below the map carries the meaning — and it never takes a pointer event.
 #[component]
-fn AsterGuide(aster_asset_href: String) -> Element {
+fn AsterOverlay(aster_asset_href: String) -> Element {
     rsx! {
-        aside { class: "world-page__aster", "aria-label": "A note from Aster, the guide",
+        div { class: "world-page__aster",
             AsterArtwork { src: aster_asset_href, pose: AsterPose::Guide }
+        }
+    }
+}
+
+/// Aster's framing note, carried below the map as a caption so the artwork
+/// itself can sit on the map.
+#[component]
+fn AsterNote() -> Element {
+    rsx! {
+        aside { class: "world-page__aster-note", "aria-label": "A note from Aster, the guide",
             p {
                 "I'm Aster, the Astrocartographer. A chart is not a verdict — it is a \
                  map of what the sky was doing. Read it the way you would read a map of \
@@ -414,14 +424,17 @@ fn AsterGuide(aster_asset_href: String) -> Element {
 }
 
 /// The specimen chart section: the fully server-rendered calculated specimen
-/// with its provenance, the static SVG map, the `MapLibre` island, and the map
-/// reading text. Composes the public `AstrocartographyDesign` component.
+/// with its provenance, the static SVG map, the `MapLibre` island, the map
+/// reading text, and Aster perched on the map's top-right corner. Composes
+/// the public `AstrocartographyDesign` component.
 #[component]
-fn WorldMapSection() -> Element {
+fn WorldMapSection(aster_asset_href: String) -> Element {
     rsx! {
         section { class: "world-page__map", "aria-label": "Calculated specimen chart",
+            AsterOverlay { aster_asset_href }
             crate::astrocartography::AstrocartographyDesign {}
         }
+        AsterNote {}
     }
 }
 
