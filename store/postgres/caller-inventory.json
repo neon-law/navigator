@@ -7981,6 +7981,7 @@
       "store/src/entity_types.rs",
       "store/src/external_identities.rs",
       "store/src/fi_import.rs",
+      "store/src/fi_import_tests.rs",
       "store/src/firm_capability.rs",
       "store/src/firm_journal.rs",
       "store/src/firms.rs",

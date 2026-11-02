@@ -208,3 +208,170 @@ fn timestamp_precision_matches_postgresql_without_silent_truncation() {
     )
     .is_err());
 }
+
+#[test]
+fn mapped_call_statuses_round_trip_without_becoming_message_content() {
+    let mut mapped = mapping();
+    mapped.columns.status = Some("content".into());
+    mapped.statuses = BTreeMap::from([
+        ("answered".into(), Status::Completed),
+        ("unanswered".into(), Status::Missed),
+        ("unclassified".into(), Status::Unknown),
+    ]);
+    for (value, expected) in [
+        ("answered", Some(Status::Completed)),
+        ("unanswered", Some(Status::Missed)),
+        ("unclassified", Some(Status::Unknown)),
+        ("", None),
+    ] {
+        let rows = parse(
+            &mapped,
+            "+15555550123",
+            &csv(&format!(
+                "C,O,+15555550456,2026-10-30T18:00:00Z,,one,{value}"
+            )),
+        )
+        .unwrap();
+        for row in rows {
+            assert!(
+                row.metadata.status == expected,
+                "explicit status mapping must survive"
+            );
+            assert!(row.metadata.duration_seconds.is_none());
+            assert!(
+                metadata(&row.body).as_ref() == Some(&row.metadata),
+                "generated metadata must round-trip without inventing a duration"
+            );
+        }
+    }
+    assert!(matches!(
+        parse(
+            &mapped,
+            "+15555550123",
+            &csv("C,O,+15555550456,2026-10-30T18:00:00Z,,one,unmapped")
+        ),
+        Err(FiImportError::Row {
+            row: 2,
+            field: "status"
+        })
+    ));
+}
+
+#[test]
+fn metadata_decoder_refuses_source_text_and_malformed_adapter_fields() {
+    let rows = parse(
+        &mapping(),
+        "+15555550123",
+        &csv("S,I,+15555550456,2026-10-30T18:00:00Z,,one,ignored"),
+    )
+    .unwrap();
+    for row in rows {
+        assert!(metadata(&row.body).is_some());
+        for invalid in [
+            row.body.replace("Google Fi history", "Source message"),
+            row.body.replace("Kind: SMS", "Kind: Email"),
+            row.body
+                .replace("Direction: Inbound", "Direction: Unspecified"),
+            row.body.replace("Counterparty: ", "Sender: "),
+            row.body.replace("Occurred at: ", "Date: "),
+            row.body.replace(
+                "Duration seconds: Not recorded",
+                "Duration seconds: invalid",
+            ),
+            row.body.replace("Status: Not recorded", "Status: Unmapped"),
+            format!("{}\nAdditional source content", row.body),
+        ] {
+            assert!(
+                metadata(&invalid).is_none(),
+                "source text must not masquerade as adapter metadata"
+            );
+        }
+    }
+}
+
+#[test]
+fn invalid_mapping_shapes_and_unknown_timezones_fail_before_reading_rows() {
+    let changes: [fn(&mut Mapping); 8] = [
+        |m| m.columns.timestamp.clear(),
+        |m| m.columns.timestamp = vec!["at".into(); 3],
+        |m| m.timestamp_format.clear(),
+        |m| m.timestamp_separator = " ".repeat(9),
+        |m| m.kinds.clear(),
+        |m| m.columns.kind = "missing".into(),
+        |m| {
+            m.timestamp_format = "%Y-%m-%d %H:%M:%S".into();
+            m.timezone = Zone::Iana("Not/A_Zone".into());
+        },
+        |m| {
+            m.timestamp_format = "%Y-%m-%d %H:%M:%S".into();
+            m.timezone = Zone::FixedOffset("invalid".into());
+        },
+    ];
+    let bytes = csv("C,I,+15555550456,2026-10-30T18:00:00Z,1,one,ignored");
+    for change in changes {
+        let mut mapped = mapping();
+        change(&mut mapped);
+        assert!(matches!(
+            parse(&mapped, "+15555550123", &bytes),
+            Err(FiImportError::Mapping(_))
+        ));
+    }
+    let mut mapped = mapping();
+    mapped.columns.status = Some("content".into());
+    assert!(matches!(
+        parse(&mapped, "+15555550123", &bytes),
+        Err(FiImportError::Mapping(_))
+    ));
+}
+
+#[test]
+fn malformed_rows_report_the_field_without_accepting_partial_history() {
+    for (row, field) in [
+        (
+            "C,UNKNOWN,+15555550456,2026-10-30T18:00:00Z,1,one,ignored",
+            "direction",
+        ),
+        (
+            "C,I,not-a-phone,2026-10-30T18:00:00Z,1,one,ignored",
+            "counterparty phone",
+        ),
+        (
+            "C,I,+15555550456,not-a-timestamp,1,one,ignored",
+            "timestamp or timezone",
+        ),
+        (
+            "C,I,+15555550456,2026-10-30T18:00:00Z,invalid,one,ignored",
+            "duration",
+        ),
+        (
+            "C,I,+15555550456,2026-10-30T18:00:00Z,1,,ignored",
+            "identity",
+        ),
+        ("C,I,+15555550456", "CSV structure"),
+    ] {
+        let result = parse(&mapping(), "+15555550123", &csv(row));
+        assert!(
+            matches!(result, Err(FiImportError::Row { row: 2, field: actual }) if actual == field)
+        );
+    }
+    assert!(matches!(
+        parse(&mapping(), "+15555550123", &[]),
+        Err(FiImportError::Limit)
+    ));
+    assert!(matches!(
+        parse(
+            &mapping(),
+            "+15555550123",
+            b"type,way,phone,at,length,id,content\n"
+        ),
+        Err(FiImportError::Limit)
+    ));
+    assert!(matches!(
+        parse(&mapping(), "+15555550123", &[0xff]),
+        Err(FiImportError::Headers)
+    ));
+    assert!(matches!(
+        parse(&mapping(), "invalid", &csv("")),
+        Err(FiImportError::Mapping(_))
+    ));
+}

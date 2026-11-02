@@ -183,6 +183,60 @@ pub fn communications_body(page: &CommunicationsPage) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_parked_queue_remains_usable_without_a_brand_report() {
+        let page = CommunicationsPage {
+            role: ViewerRole::Lawyer,
+            parked: Vec::new(),
+            brands: Vec::new(),
+            report: None,
+            logo: None,
+            tokens_href: String::new(),
+        };
+        let html = dioxus_ssr::render_element(communications_body(&page));
+        assert!(html.contains("No parked calls."));
+        assert!(html.contains("href=\"/app/inbox\""));
+        assert!(!html.contains("communications-brand"));
+        assert!(!html.contains(BRAND_COMMUNICATIONS_PATH));
+        assert!(!html.contains("Registered numbers"));
+    }
+
+    #[test]
+    fn empty_brand_report_keeps_the_selected_brand_and_explicit_zero_totals() {
+        let page = CommunicationsPage {
+            role: ViewerRole::Admin,
+            parked: Vec::new(),
+            brands: vec!["other".into(), "example".into()],
+            report: Some(BrandReport {
+                brand: "example".into(),
+                calls: 0,
+                sms: 0,
+                tenths: 0,
+                parked: 0,
+                numbers: Vec::new(),
+            }),
+            logo: None,
+            tokens_href: String::new(),
+        };
+        let html = dioxus_ssr::render_element(communications_body(&page));
+        assert!(html.contains("No registered numbers."));
+        assert!(html.contains("No parked calls."));
+        assert!(html.contains("class=\"nav-select\""));
+        assert!(html.contains("class=\"nav-btn nav-btn--primary\""));
+        assert_eq!(html.matches("<dd>0</dd>").count(), 4);
+        let selected = html
+            .split("<option")
+            .find(|option| option.starts_with(" value=\"example\""))
+            .expect("the selected Brand remains in the report filter");
+        assert!(selected.split('>').next().unwrap().contains("selected"));
+        let other = html
+            .split("<option")
+            .find(|option| option.starts_with(" value=\"other\""))
+            .expect("other allowed Brands remain available");
+        assert!(!other.split('>').next().unwrap().contains("selected"));
+    }
+
     #[test]
     fn reporting_escapes_source_metadata_and_exposes_no_credential_fields() {
         let page = CommunicationsPage {
