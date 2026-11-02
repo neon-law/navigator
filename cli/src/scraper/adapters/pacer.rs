@@ -626,10 +626,7 @@ mod tests {
         let charges =
             billing_confirmation(CONFIRMATION.as_bytes()).expect("the confirmation is detected");
         // The assert prints the operand on failure; no parsed content in the message.
-        assert!(
-            charges.contains("$0.20"),
-            "the charge amount is present"
-        );
+        assert!(charges.contains("$0.20"), "the charge amount is present");
         assert!(
             billing_confirmation(b"%PDF-1.7 the document bytes").is_none(),
             "a document body is never a confirmation"
