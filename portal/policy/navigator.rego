@@ -410,6 +410,13 @@ route_allow if {
 # the same gate the `LawyerSession` extractor applies; the handler resolves
 # `store::access::matter_viewer` and answers 404 for a caller with no
 # firm-side participation row, Owner and Admin included.
+#
+# Matter stages: the stage chip's read and write surface. GET (the Firm's
+# vocabulary, the matter's current stage, and its audited history) and POST
+# .../stages/set (a transition) at /app/api/projects/{id}/stages. Lawyer tier,
+# the same gate the `LawyerSession` extractor applies; the handler resolves
+# `store::access::matter_viewer` and answers 404 for a caller with no
+# firm-side participation row, Owner and Admin included.
 route_allow if {
     input.path[0] == "app"
     input.path[1] == "api"
@@ -417,6 +424,16 @@ route_allow if {
     input.path[4] in {"time-entries", "timer", "flat-fee"}
     count(input.path) == 5
     input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "stages"
+    count(input.path) == 5
+    input.method == "GET"
     is_lawyer(input.session)
 }
 
@@ -437,6 +454,17 @@ route_allow if {
     input.path[2] == "projects"
     input.path[4] == "timer"
     input.path[5] in {"stop", "discard"}
+    count(input.path) == 6
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "stages"
+    input.path[5] == "set"
     count(input.path) == 6
     input.method == "POST"
     is_lawyer(input.session)

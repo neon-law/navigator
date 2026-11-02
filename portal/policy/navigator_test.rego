@@ -3195,3 +3195,46 @@ test_task_doors_are_shape_bound if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "delete"], "method": "POST", "session": lawyer_session}
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "assign", "extra"], "method": "POST", "session": lawyer_session}
 }
+
+# ---------- Matter stages under /app/api/projects/{id}/stages (lawyer tier) ----------
+
+# The stage chip's doors: the read (the Firm's vocabulary, the matter's
+# current stage, its audited history) and the set command. Lawyer tier at
+# route admission; the handler resolves `matter_viewer` and answers 404 for a
+# caller with no firm-side participation row, so route admission must not
+# answer the tenant question either.
+
+test_lawyer_can_read_and_set_stages if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages"], "method": "GET", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "POST", "session": lawyer_session}
+}
+
+test_admin_can_set_a_stage if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "POST", "session": admin_session}
+}
+
+# Clerk and client are denied the set command at the boundary. The GET rides
+# the matter-read-cluster rule, which admits any authenticated session to
+# five-segment /app/api/projects sub-reads and leaves the tier question to the
+# handler — the handler's `LawyerSession` extractor answers a clerk or client
+# 403 before the matter question is ever asked.
+test_clerk_denied_the_stage_set_door if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "POST", "session": clerk_session}
+}
+
+test_client_denied_the_stage_set_door if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "POST", "session": client_session}
+}
+
+test_anonymous_denied_the_stage_doors if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages"], "method": "GET", "session": null}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "POST", "session": null}
+}
+
+test_stage_doors_are_shape_bound if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages"], "method": "POST", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages"], "method": "DELETE", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "GET", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "s1"], "method": "POST", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set", "extra"], "method": "POST", "session": lawyer_session}
+}
