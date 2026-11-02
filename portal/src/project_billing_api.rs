@@ -5,7 +5,7 @@
 //! it through the provider seam: unbilled billable Time Entries at their
 //! snapshotted rates plus unbilled confirmed Project Costs (the same parts
 //! `store::matter_financials` prices Work In Progress from), or — when the
-//! matter carries an agreed Flat Fee — the fee itself plus those costs. The
+//! matter carries an agreed flat fee — the fee itself plus those costs. The
 //! raised invoice is mirrored locally (`store::xero_invoices::upsert`, the
 //! same ingest path the nightly reconcile uses), and the consumed entries and
 //! costs flip to invoiced under the Xero id through their own audited
@@ -19,7 +19,7 @@
 //! is retryable. Every other write here is local state describing what Xero
 //! now holds.
 //!
-//! A matter whose Flat Fee is agreed bills the fee rather than itemized time:
+//! A matter whose flat fee is agreed bills the fee rather than itemized time:
 //! the fee is the agreed price of the matter's work, so its unbilled entries
 //! are consumed by (marked under) the fee invoice and never billed again —
 //! which is also what makes a second generation on a flat matter answer the
@@ -75,7 +75,7 @@ struct Compose {
 /// Compose the invoice lines for a matter: one line per unbilled billable
 /// Time Entry at its snapshotted rate (the same per-entry amount Work In
 /// Progress shows), one per unbilled confirmed Project Cost, or — when the
-/// matter carries an agreed Flat Fee — the fee as one line covering the
+/// matter carries an agreed flat fee — the fee as one line covering the
 /// entries. Money is integer cents throughout; quantity is always 1 because
 /// each line is already priced in cents, never in fractional hours.
 fn compose_lines(
@@ -172,7 +172,7 @@ pub(crate) struct InvoiceReceipt {
     /// are covered by the fee line, not itemized on it.
     pub consumed_time_entries: usize,
     pub consumed_costs: usize,
-    /// Whether the invoice billed the matter's agreed Flat Fee instead of
+    /// Whether the invoice billed the matter's agreed flat fee instead of
     /// itemized time.
     pub flat_fee: bool,
 }
