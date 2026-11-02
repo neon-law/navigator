@@ -1462,9 +1462,11 @@ impl BrandKey {
             return true;
         }
         // `/world` is Vesta's calculated astrocartography page — the birth-form
-        // surface that stays request-local. Every other brand's host 404s it
-        // through `reject_unpublished_firm_path`.
-        if path == "/world" {
+        // surface that stays request-local. Its server-function endpoint rides
+        // beneath it (`/world/resolve_birth_data`), so subpaths publish too.
+        // Every other brand's host 404s it through
+        // `reject_unpublished_firm_path`.
+        if path == "/world" || path.starts_with("/world/") {
             return self == Self::Vesta;
         }
         match self {

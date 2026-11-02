@@ -163,7 +163,7 @@ pub struct UnresolvedBirth {
 /// A transport failure surfaces as its [`ServerFnError`]; per-person input
 /// problems come back as [`PersonOutcome::Unresolved`] so one bad field never
 /// fails the whole family's chart.
-#[server]
+#[server(prefix = "", endpoint = "world/resolve_birth_data")]
 // A server function's wire shape is `async` by contract even when its body
 // never awaits; the macro's generated transport requires it.
 #[allow(clippy::unused_async)]
