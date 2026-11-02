@@ -50,6 +50,19 @@ use crate::social_publisher::{
 };
 use store::social_accounts::SocialProvider;
 
+/// Validate both registration switches before constructing worker services.
+///
+/// # Errors
+/// Refuses malformed switches and a reconciler whose publisher is disabled.
+pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<(bool, bool), &'static str> {
+    let publisher = publisher_enabled(&get)?;
+    let reconciler = reconciler_enabled(&get)?;
+    if reconciler && !publisher {
+        return Err("NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED requires NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED");
+    }
+    Ok((publisher, reconciler))
+}
+
 pub const PUBLISHER_ENABLED_ENV: &str = "NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED";
 pub const RECONCILER_ENABLED_ENV: &str = "NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED";
 const PUBLISHER_WORKFLOW: &str = "SocialPublisher";
@@ -986,5 +999,22 @@ mod tests {
         );
         // A slot boundary is its own floor.
         assert_eq!(reconcile_slot(slot), slot);
+    }
+
+    #[test]
+    fn reconciler_registration_requires_its_publisher() {
+        for (publisher,reconciler,expected) in [
+            (false,false,Ok((false,false))),
+            (true,false,Ok((true,false))),
+            (true,true,Ok((true,true))),
+            (false,true,Err("NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED requires NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED")),
+        ] {
+            assert_eq!(enabled(|key| match key {
+                PUBLISHER_ENABLED_ENV=>Some(publisher.to_string()),
+                RECONCILER_ENABLED_ENV=>Some(reconciler.to_string()),
+                _=>None,
+            }),expected);
+        }
+        assert!(enabled(|key| (key == RECONCILER_ENABLED_ENV).then(|| "yes".into())).is_err());
     }
 }

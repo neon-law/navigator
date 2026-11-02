@@ -227,14 +227,10 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         };
-        let social_publisher_enabled =
-            workflows_service::dbos_social_publisher::publisher_enabled(lookup)
+        let (social_publisher_enabled, social_reconciler_enabled) =
+            workflows_service::dbos_social_publisher::enabled(lookup)
                 .map_err(anyhow::Error::msg)
-                .context("read NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED")?;
-        let social_reconciler_enabled =
-            workflows_service::dbos_social_publisher::reconciler_enabled(lookup)
-                .map_err(anyhow::Error::msg)
-                .context("read NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED")?;
+                .context("validate DBOS social registration flags")?;
         let finance_claim_postgres = if finance_aggregate_enabled {
             Some(
                 store::postgres::PostgresDb::from_env()
