@@ -699,3 +699,185 @@ async fn a_denying_egress_gate_records_blocked_without_provider_requests() {
         "a denied destination never reaches a provider"
     );
 }
+
+/// A retained provider task survives executor loss during polling. Recovery
+/// reads its status and public link without submitting the video twice.
+#[tokio::test]
+async fn a_tiktok_task_resumes_polling_without_resubmitting() {
+    let Some(db) = database().await else { return };
+    let fixture = Fixture::new("social-tiktok-recovery").await;
+    let server = MockServer::start().await;
+    let provider = store::social_accounts::SocialProvider::Tiktok;
+    let account = store::social_accounts::connect(
+        &fixture.db,
+        store::social_accounts::ConnectSocialAccount {
+            actor_role: store::persons::Role::Admin,
+            actor_person_id: fixture.admin,
+            brand_key: BRAND,
+            provider,
+            provider_account_id: "tiktok-user",
+            display_name: None,
+            scopes: &provider
+                .required_scopes()
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>(),
+            expires_at: None,
+            access_token: "synthetic-access-token",
+            refresh_token: None,
+        },
+        &fixture.kms,
+    )
+    .await
+    .unwrap();
+    let publish_at = scheduled_in(1);
+    let post_id = scheduled_instagram_post(&fixture, publish_at).await;
+    fixture
+        .db
+        .query("UPDATE $id SET selected_social_accounts = [$account], tiktok_ai_generated = false")
+        .bind(("id", store::surreal::record_id("post", post_id)))
+        .bind(("account", account.id))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    store::posts::record_video(&fixture.db, BRAND, "synthetic/video.mp4", 1080, 1920)
+        .await
+        .unwrap();
+    fn atom(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut bytes = u32::try_from(body.len() + 8)
+            .unwrap()
+            .to_be_bytes()
+            .to_vec();
+        bytes.extend(kind);
+        bytes.extend(body);
+        bytes
+    }
+    let mut handler = vec![0; 8];
+    handler.extend(b"vide");
+    let mut timing = vec![0; 12];
+    timing.extend(3000_u32.to_be_bytes());
+    timing.extend(90000_u32.to_be_bytes());
+    let mut samples = vec![0; 4];
+    samples.extend(1_u32.to_be_bytes());
+    samples.extend(900_u32.to_be_bytes());
+    samples.extend(100_u32.to_be_bytes());
+    let mut media = atom(b"hdlr", &handler);
+    media.extend(atom(b"mdhd", &timing));
+    media.extend(atom(b"minf", &atom(b"stbl", &atom(b"stts", &samples))));
+    let video = atom(b"moov", &atom(b"trak", &atom(b"mdia", &media)));
+    fixture
+        .storage
+        .put("synthetic/video.mp4", &video, "video/mp4")
+        .await
+        .unwrap();
+    for (path, body) in [
+        (
+            "property/list",
+            serde_json::json!({"url_property_info_list":[{"property_type":1,"property_status":1,"url":"example.test"}]}),
+        ),
+        (
+            "video/settings",
+            serde_json::json!({"privacy_level_options":["PUBLIC_TO_EVERYONE"],"max_video_post_duration_sec":600}),
+        ),
+        (
+            "video/list",
+            serde_json::json!({"videos":[{"item_id":"synthetic-public","share_url":"https://www.tiktok.com/@synthetic/video/123","media_type":"VIDEO","is_ad":false}]}),
+        ),
+    ] {
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path(format!("/tiktok/business/{path}/")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":body})),
+            )
+            .mount(&server)
+            .await;
+    }
+    Mock::given(matchers::method("POST"))
+        .and(matchers::path("/tiktok/business/video/publish/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"code":0,"data":{"share_id":"synthetic-task"}})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let pending = Mock::given(matchers::method("GET"))
+        .and(matchers::path("/tiktok/business/publish/status/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"code":0,"data":{"status":"PROCESSING_DOWNLOAD"}})),
+        )
+        .mount_as_scoped(&server)
+        .await;
+    let make_context = || {
+        let refresh = workflows::social_publish::TokenRefreshConfig {
+            tiktok_client: Some(("synthetic-app".into(), "synthetic-secret".into())),
+            ..workflows::social_publish::TokenRefreshConfig::from_env()
+        };
+        let publisher = Publisher::with_parts(
+            fixture.db.clone(),
+            Arc::new(fixture.kms.clone()),
+            fixture.storage.clone(),
+            store::config::SocialEgressGate::new(|| Ok(())),
+            refresh,
+            reqwest::Client::new(),
+            |key| format!("https://assets.example.test/{key}"),
+        )
+        .with_provider_base(&server.uri());
+        PublisherContext::new(publisher)
+            .with_pacing(Pacing::default().with_tiktok_poll(Duration::from_millis(50)))
+    };
+    let worker = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+    let workflow = dbos_social_publisher::register_publisher(&worker, make_context()).unwrap();
+    worker.launch().await.unwrap();
+    dbos_social_publisher::fire_publisher(
+        &workflow,
+        SocialPublishRequest {
+            post_id,
+            publish_at,
+        },
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(DEADLINE, async {
+        while request_count(&server, "/tiktok/business/publish/status/").await < 2 {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .expect("the accepted task is polled before executor loss");
+    worker.shutdown().await;
+    drop(pending);
+    Mock::given(matchers::method("GET")).and(matchers::path("/tiktok/business/publish/status/"))
+        .and(matchers::query_param("publish_id", "synthetic-task"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"status":"PUBLISH_COMPLETE","post_ids":["synthetic-public"]}})))
+        .mount(&server).await;
+    let resumed = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+    let _workflow = dbos_social_publisher::register_publisher(&resumed, make_context()).unwrap();
+    resumed.launch().await.unwrap();
+    wait_for_status(
+        &db,
+        &dbos_social_publisher::publisher_workflow_id(post_id, publish_at),
+        "SUCCESS",
+    )
+    .await;
+    resumed.shutdown().await;
+    assert_eq!(
+        request_count(&server, "/tiktok/business/video/publish/").await,
+        1
+    );
+    let publication = store::social_publications::for_posts(&fixture.db, &[post_id])
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(publication.state, "confirmed");
+    assert_eq!(
+        publication.provider_post_id.as_deref(),
+        Some("synthetic-public")
+    );
+    assert_eq!(
+        publication.permalink.as_deref(),
+        Some("https://www.tiktok.com/@synthetic/video/123")
+    );
+}
