@@ -143,6 +143,10 @@ COPY billing           billing
 COPY billing-workflows billing-workflows
 COPY gateway gateway
 COPY sandbox-skills sandbox-skills
+# `sandbox-skills` embeds the vendored legal-aid plugin's SKILL.md files with
+# include_str!("../../vendor/legal-aid-plugin/..."), outside the crate dir,
+# so that tree must be staged too (deploy run 41431655963 failed on it).
+COPY vendor/legal-aid-plugin vendor/legal-aid-plugin
 # `store::glossary` bakes `docs/glossary/` into the binary with
 # include_dir!("$CARGO_MANIFEST_DIR/../docs/glossary"), and other crates
 # include_str! files under `docs/`. Those files

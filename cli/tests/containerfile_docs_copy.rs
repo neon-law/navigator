@@ -164,6 +164,60 @@ fn every_containerfile_that_copies_views_also_copies_docs() {
     );
 }
 
+/// `sandbox-skills` embeds the vendored legal-aid plugin's skills with
+/// `include_str!("../../vendor/legal-aid-plugin/skills/*/SKILL.md")`, a tree
+/// outside any crate dir. Every image stages `sandbox-skills` for workspace
+/// resolution, and deploy run 41431655963 failed because `neon` compiles it
+/// without `vendor/legal-aid-plugin` staged.
+#[test]
+fn every_containerfile_that_copies_sandbox_skills_also_copies_the_vendored_plugin() {
+    let lib_rs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sandbox-skills/src/lib.rs");
+    let lib_body =
+        fs::read_to_string(&lib_rs).unwrap_or_else(|e| panic!("read {}: {e}", lib_rs.display()));
+    assert!(
+        lib_body.contains("../../vendor/legal-aid-plugin/"),
+        "{} no longer embeds the vendored legal-aid plugin; if that is deliberate, drop this guard",
+        lib_rs.display()
+    );
+
+    let dir = images_dir();
+    let entries = fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+
+    let mut checked = 0;
+    let mut offenders = Vec::new();
+    for entry in entries {
+        let path = entry.expect("dir entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if !name.starts_with("Containerfile") {
+            continue;
+        }
+        let body =
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        if copies_crate(&body, "sandbox-skills") {
+            checked += 1;
+            if !copies_crate(&body, "vendor/legal-aid-plugin") && !copies_crate(&body, "vendor") {
+                offenders.push(name);
+            }
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "no Containerfile stages `sandbox-skills` — this guard has lost its subject"
+    );
+    assert!(
+        offenders.is_empty(),
+        "these Containerfiles stage `sandbox-skills` but not the vendored plugin, so a \
+         build that compiles it fails on its include_str! of \
+         `vendor/legal-aid-plugin/skills/*/SKILL.md`; add \
+         `COPY vendor/legal-aid-plugin vendor/legal-aid-plugin`: {offenders:?}"
+    );
+}
+
 /// `Cargo.lock`'s package dependency graph: crate name -> the names of the
 /// crates it depends on. `dependencies` entries disambiguate a duplicate crate
 /// name with a trailing " <version>" (e.g. `"base64 0.23.1"`); only the bare
