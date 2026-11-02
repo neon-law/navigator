@@ -2789,14 +2789,14 @@ async fn fi_scope(f: &Fixture) -> crate::fi_import::Scope {
 }
 
 fn fi_rows(rows: &str) -> Vec<crate::fi_import::Row> {
-    match crate::fi_import::parse(
+    let Ok(parsed) = crate::fi_import::parse(
         &fi_mapping(),
         "+15555550123",
         format!("type,way,phone,at,length,id\n{rows}\n").as_bytes(),
-    ) {
-        Ok(rows) => rows,
-        Err(_) => panic!("the synthetic Fi CSV fixture must parse"),
-    }
+    ) else {
+        panic!("the synthetic Fi CSV fixture must parse");
+    };
+    parsed
 }
 
 #[tokio::test]
