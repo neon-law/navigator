@@ -105,7 +105,7 @@ reason = "The firm's published voice line."
 values = ["+1 510 800 2090"]
 
 [[phones]]
-reason = "Lex Tecnica, Ltd.'s published voice line (lextecnica.com/contact/)."
+reason = "The published voice line of Lex Tecnica, Ltd. (lextecnica.com/contact/)."
 values = ["+1 725 239 8413"]
 
 [[phones]]
@@ -174,8 +174,8 @@ values = [
 ]
 
 [[names]]
-reason = "A public firm named on /nautilus as the provider of à la carte sandbox pricing."
-values = ["Lex Tecnica"]
+reason = "The published firm and legal Entity names verified at lextecnica.com/terms-conditions/."
+values = ["Lex Tecnica", "Lex Tecnica, Ltd."]
 
 [[name_tokens]]
 reason = "Synthetic fixture names: zodiac personas, placeholder people, and the sample matters."
