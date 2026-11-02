@@ -328,6 +328,7 @@ async fn build_fixture() -> Fixture {
 
     // The fixture holds the stub so the tests can count actual seam calls.
     let provider = Arc::new(billing::StubBillingProvider::new());
+    mirror_matters(&surreal, [project_id, other_project_id]).await;
     let base = portal::test_support::app_state(surreal.clone()).await;
     let state = AppState {
         sessions: SessionStore::new(KEY),
@@ -346,6 +347,37 @@ async fn build_fixture() -> Fixture {
         client: bearer(client.id, Role::Client),
         outsider: bearer(outsider.id, Role::Lawyer),
         clerk: bearer(clerk.id, Role::Clerk),
+    }
+}
+
+/// Mirror the matters and their participations the way `prepared_store`
+/// does before the app's own doors write PostgreSQL-native rows: the
+/// tests below seed those rows directly (time entries, fees, costs), so
+/// the stores must already be mirrored — no command runs first. Every
+/// test that builds a fixture has run `invoice_store()`, so the pool
+/// resolves.
+async fn mirror_matters(surreal: &store::surreal::SurrealDb, projects: [Uuid; 2]) {
+    let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+    for project in projects {
+        store::postgres_mirror::mirror(
+            surreal,
+            &pg,
+            &store::postgres_mirror::MirrorKey::Project(project),
+        )
+        .await
+        .unwrap();
+        for role in store::projects::participations_for_project(surreal, project)
+            .await
+            .unwrap()
+        {
+            store::postgres_mirror::mirror(
+                surreal,
+                &pg,
+                &store::postgres_mirror::MirrorKey::ProjectParticipation(role.id),
+            )
+            .await
+            .unwrap();
+        }
     }
 }
 
