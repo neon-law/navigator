@@ -262,7 +262,7 @@
 {"file":"cli/src/lsp_source_export.rs","line":187,"function":"generate_root_manifest","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":283,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail/login.rs","line":408,"function":"prompt_hidden","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/main.rs","line":7996,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/main.rs","line":8007,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/notices.rs","line":500,"function":"identical_texts_collapse_into_one_entry","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/pii_audit.rs","line":401,"function":"audit_tree","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/postgres_backfill.rs","line":75,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
