@@ -2789,12 +2789,14 @@ async fn fi_scope(f: &Fixture) -> crate::fi_import::Scope {
 }
 
 fn fi_rows(rows: &str) -> Vec<crate::fi_import::Row> {
-    crate::fi_import::parse(
+    match crate::fi_import::parse(
         &fi_mapping(),
         "+15555550123",
         format!("type,way,phone,at,length,id\n{rows}\n").as_bytes(),
-    )
-    .unwrap()
+    ) {
+        Ok(rows) => rows,
+        Err(_) => panic!("the synthetic Fi CSV fixture must parse"),
+    }
 }
 
 #[tokio::test]
@@ -2895,8 +2897,18 @@ async fn fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch()
 async fn raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the_winner() {
     let Some(f) = fixture().await else { return };
     let scope = fi_scope(&f).await;
-    let first = fi_rows("C,I,+15555550456,2026-10-30T18:00:00Z,61,same-native-id").remove(0);
-    let second = fi_rows("S,O,+15555550456,2026-10-30T18:00:00Z,,same-native-id").remove(0);
+    let Some(first) = fi_rows("C,I,+15555550456,2026-10-30T18:00:00Z,61,same-native-id")
+        .into_iter()
+        .next()
+    else {
+        panic!("the synthetic call fixture must contain a row");
+    };
+    let Some(second) = fi_rows("S,O,+15555550456,2026-10-30T18:00:00Z,,same-native-id")
+        .into_iter()
+        .next()
+    else {
+        panic!("the synthetic SMS fixture must contain a row");
+    };
     assert!(
         first.provider_message_id == second.provider_message_id,
         "the native ID must identify the same imported event across channels"
