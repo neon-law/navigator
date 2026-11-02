@@ -3,6 +3,13 @@
 Import exported email and LinkedIn messages into a Firm's Inbox. The server retains the original payload, parses
 Messages, threads and deduplicates them, and files attachments when a Project is supplied.
 
+The command is ingest-only: there is no `navigator inbox send` command. `--dry-run` needs no login.
+
+Log in with `navigator site login --host https://your-deployment.example` before transferring imports.
+
+A successful import exits 0, including a fully deduplicated replay. Retrying is a reconcile step: existing ids are
+reused and any missing attachment filing or attribution is completed.
+
 Supported sources:
 
 - `--source=email`: one RFC 5322 message per `.eml` file, or a directory of files with `--dir`.
