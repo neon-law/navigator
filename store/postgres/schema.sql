@@ -3468,6 +3468,32 @@ CREATE TABLE firm_forgejo_organization (
     reconciled_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Migration: 20261101140000_create_notation_machine_state.sql
+-- Durable state for the Notation state machines on DBOS.
+--
+-- The Restate virtual object held four keyed values per notation — the
+-- questionnaire and workflow spec YAML plus each machine's current state.
+-- DBOS has no virtual-object primitive, so the port moves those keys into
+-- this table: one row per `(notation_id, machine_kind)`, read and written
+-- by the DBOS transition workflow while it holds the notation's advisory
+-- lane (see `store::notation_machine_state::acquire_lane`).
+--
+-- Rows are imported from the Restate Cloud export during the state drain
+-- (`store::notation_machine_state::import`), which never overwrites an
+-- existing row: once a machine lives here, Postgres — not the export — is
+-- its source of truth.
+CREATE TABLE notation_machine_state (
+    notation_id UUID NOT NULL,
+    machine_kind TEXT NOT NULL
+        CHECK (machine_kind IN ('questionnaire', 'workflow')),
+    spec_yaml TEXT NOT NULL,
+    current_state TEXT NOT NULL,
+    ephemeral BOOLEAN NOT NULL DEFAULT false,
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (notation_id, machine_kind)
+);
+
 -- Migration: 20261101170000_create_ssh_public_key.sql
 -- A Firm user's SSH public keys, the authoritative list Navigator reconciles
 -- onto the Person's account on the installation's Forgejo (ENG-1219). Only
@@ -3504,3 +3530,19 @@ CREATE UNIQUE INDEX ssh_public_key_live_fingerprint
 
 -- The sync and the profile page read one Person's keys.
 CREATE INDEX ssh_public_key_person_idx ON ssh_public_key (person_id);
+
+-- Migration: 20261101210000_create_notation_transition.sql
+-- Target-only DBOS runtime ownership; ephemeral Notations need no domain row.
+CREATE TABLE notation_transition (
+    id UUID PRIMARY KEY,
+    notation_id UUID NOT NULL,
+    request_fingerprint TEXT NOT NULL,
+    started BOOLEAN NOT NULL DEFAULT false,
+    result JSONB,
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ,
+    CONSTRAINT notation_transition_completion CHECK ((result IS NULL) = (completed_at IS NULL))
+);
+-- A pending operation itself is the durable owner, across both machine kinds.
+CREATE UNIQUE INDEX notation_transition_pending ON notation_transition(notation_id) WHERE result IS NULL;
+CREATE INDEX notation_transition_notation ON notation_transition(notation_id);

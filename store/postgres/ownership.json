@@ -28,7 +28,7 @@
     "migration_slice": "identity-storage",
     "parity_scenario": "owner-scoped conversation history; cross-owner isolation; purge removes every stored turn",
     "scope": "identity",
-    "through": "person_id — owner-scoped sandbox transcript with no firm or project anchor"
+    "through": "person_id \u2014 owner-scoped sandbox transcript with no firm or project anchor"
   },
   "attestation": {
     "migration_slice": "workflow-storage",
@@ -503,6 +503,13 @@
     "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "scope": "project",
     "through": "notation_id -> owning parent scope"
+  },
+  "notation_transition": {
+    "migration_slice": "workflow-storage",
+    "parity_scenario": "pending operation fences both machine kinds through failure and LastFailure repair; exact input/result replay and atomic completion release",
+    "scope": "project-or-platform",
+    "target_only": true,
+    "through": "notation_id -> Notation Project when present; ephemeral runtime ownership grants no matter access"
   },
   "person": {
     "migration_slice": "identity-storage",

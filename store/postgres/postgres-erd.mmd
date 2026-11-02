@@ -1007,6 +1007,15 @@ erDiagram
         string to_state
         datetime updated_at
     }
+    notation_machine_state {
+        string current_state
+        boolean ephemeral
+        datetime inserted_at
+        string machine_kind
+        uuid notation_id
+        string spec_yaml
+        datetime updated_at
+    }
     notation_meter_entry {
         string currency
         uuid id
@@ -1061,6 +1070,15 @@ erDiagram
         int position
         string source_ref
         datetime updated_at
+    }
+    notation_transition {
+        datetime completed_at
+        uuid id
+        datetime inserted_at
+        uuid notation_id
+        string request_fingerprint
+        json result
+        boolean started
     }
     person {
         string apple_subject

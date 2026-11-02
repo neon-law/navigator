@@ -227,11 +227,14 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         };
+        let notation_enabled = workflows_service::dbos_notation::enabled(lookup)
+            .map_err(anyhow::Error::msg)
+            .context("read NAVIGATOR_DBOS_NOTATION_ENABLED")?;
         let (social_publisher_enabled, social_reconciler_enabled) =
             workflows_service::dbos_social_publisher::enabled(lookup)
                 .map_err(anyhow::Error::msg)
                 .context("validate DBOS social registration flags")?;
-        let finance_claim_postgres = if finance_aggregate_enabled {
+        let finance_claim_postgres = if finance_aggregate_enabled || notation_enabled {
             Some(
                 store::postgres::PostgresDb::from_env()
                     .await
@@ -246,6 +249,7 @@ async fn main() -> anyhow::Result<()> {
             || email_summary_enabled
             || inbound_message_alert_enabled
             || project_slack_enabled
+            || notation_enabled
         {
             let token = lookup("NAVIGATOR_DBOS_INGRESS_TOKEN")
                 .filter(|token| !token.trim().is_empty())
@@ -269,6 +273,7 @@ async fn main() -> anyhow::Result<()> {
             || email_summary_enabled
             || inbound_message_alert_enabled
             || project_slack_enabled
+            || notation_enabled
             || social_publisher_enabled
             || social_reconciler_enabled
         {
@@ -405,6 +410,7 @@ async fn main() -> anyhow::Result<()> {
             },
             project_slack_enabled,
             project_slack_postgres,
+            notation_enabled,
             if social_publisher_enabled {
                 surreal
                     .clone()
@@ -520,6 +526,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("configure object storage")?;
     let dbos_finance_storage = storage.clone();
+    let dbos_notation_email = Arc::clone(&email);
+    let dbos_notation_storage = Arc::clone(&storage);
     let assets_storage = cloud::assets_from_env()
         .await
         .context("configure public assets storage")?;
@@ -540,6 +548,7 @@ async fn main() -> anyhow::Result<()> {
             .map_or(RepositoryForge::None, RepositoryForge::GitHub),
     };
     let dbos_nightly_surreal = surreal.clone();
+    let dbos_notation_surreal = surreal.clone();
     let dbos_nightly_slack = slack_bot.clone();
     let dbos_project_slack_surreal = surreal.clone();
     let dbos_project_slack_bot = slack_bot.clone();
@@ -630,6 +639,7 @@ async fn main() -> anyhow::Result<()> {
         event_surreal,
         project_slack_enabled,
         project_slack_postgres,
+        notation_enabled,
         social_surreal,
     )) = dbos_hosting
     {
@@ -663,6 +673,20 @@ async fn main() -> anyhow::Result<()> {
                     slack_bot_enabled,
                     dbos_alert_portal_origin,
                 ),
+            ))
+        } else {
+            None
+        };
+        let dbos_notation_postgres = finance_claim_postgres.clone();
+        // Both stores, resolved before the executor launch so a misconfigured
+        // notation flag fails boot with a clear message rather than inside
+        // the registration closure (whose error type is the engine's).
+        let dbos_notation_stores = if notation_enabled {
+            Some((
+                dbos_notation_surreal.clone(),
+                dbos_notation_postgres
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("notation port requires PostgreSQL"))?,
             ))
         } else {
             None
@@ -794,7 +818,7 @@ async fn main() -> anyhow::Result<()> {
                         let workflow =
                             workflows_service::dbos_finance_aggregate::register(dbos, context)?;
                         if let (Some(token), Some(surreal), Some(postgres)) = (
-                            dbos_ingress_token,
+                            dbos_ingress_token.clone(),
                             finance_aggregate_surreal_for_ingress,
                             finance_claim_postgres,
                         ) {
@@ -806,6 +830,22 @@ async fn main() -> anyhow::Result<()> {
                                 postgres,
                             );
                             registered_ingress.finance = Some(ingress);
+                        }
+                    }
+                    if let Some((surreal, postgres)) = dbos_notation_stores.clone() {
+                        let context = workflows_service::dbos_notation::Context::new(
+                            surreal.clone(),
+                            postgres.clone(),
+                            Arc::clone(&dbos_notation_email),
+                            Arc::clone(&dbos_notation_storage),
+                        );
+                        let workflow = workflows_service::dbos_notation::register(dbos, context)?;
+                        if let Some(token) = dbos_ingress_token.clone() {
+                            registered_ingress.notation = Some(
+                                workflows_service::dbos_ingress::NotationIngress::new(
+                                    token, surreal, postgres, workflow,
+                                ),
+                            );
                         }
                     }
                     // Social publishing twins: the same SurrealDB handle the
