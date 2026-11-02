@@ -902,15 +902,14 @@ jobs:
           # not find the profile data.
           #
           # The floor sits under what THIS command measures. Last published
-          # CI print before this raise: 90.86% line coverage (20094 missed of
-          # 219755) on 2026-09-21. The 91.0 floor is the merge gate from this
+          # CI print before this raise: 91.02% line coverage (40228 missed of
+          # 447774) on 2026-11-02. The 91.2 floor is the merge gate from this
           # change onward.
           #
-          # Raising the floor means moving four constants together — here,
-          # `docs/agent-workflows.md`, `docs/oss-install.md`, and
-          # `.agents/skills/create-pr/SKILL.md` — so raise it deliberately, in
-          # one change, never as a side effect of another. And never lower it to
-          # make a red build green.
+          # Raising the floor means moving three constants together — here,
+          # `docs/agent-workflows.md`, and `docs/oss-install.md` — so raise it
+          # deliberately, in one change, never as a side effect of another. And
+          # never lower it to make a red build green.
           #
           # Do NOT compare this job's percentage against one measured over a
           # different denominator, and do not set a floor from a local run. The
@@ -967,7 +966,7 @@ jobs:
           # capability shape, port polling — stay counted in
           # `scraper/session.rs` with their tests.
           cargo llvm-cov report \
-              --fail-under-lines 91.0 \
+              --fail-under-lines 91.2 \
               --ignore-filename-regex '(cli/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|cli/src/devx/forgejo/(cluster|oidc|smoke)|cli/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|cli/src/scraper/browser)\.rs$'
       - name: stop covered PostgreSQL fixture
         if: always()
