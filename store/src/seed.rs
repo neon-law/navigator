@@ -7210,4 +7210,49 @@ records:
         );
         assert!(require_firm_domain("aries@mail.example.org", Role::Admin).is_err());
     }
+    #[tokio::test]
+    async fn full_canonical_reseeds_preserve_owner_brand_moves_in_both_directions() {
+        let db = crate::test_support::mem_surreal().await;
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(crate::test_support::MemoryStorage::default());
+        super::seed_canonical(&db, &storage).await.unwrap();
+        let neon = crate::firms::firm_id_for_brand_key(&db, "neon")
+            .await
+            .unwrap()
+            .unwrap();
+        let lex = crate::firms::firm_id_for_brand_key(&db, "iep-defenders")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(neon, lex);
+        crate::firms::move_brand(&db, crate::persons::Role::Owner, None, "neon", lex)
+            .await
+            .unwrap();
+        crate::firms::move_brand(
+            &db,
+            crate::persons::Role::Owner,
+            None,
+            "iep-defenders",
+            neon,
+        )
+        .await
+        .unwrap();
+        for _ in 0..2 {
+            super::seed_canonical(&db, &storage).await.unwrap();
+            for (key, owner) in [("neon", lex), ("iep-defenders", neon)] {
+                assert_eq!(
+                    crate::brands::find_by_key(&db, key)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .firm_id,
+                    Some(owner)
+                );
+                assert_eq!(
+                    crate::firms::firm_id_for_brand_key(&db, key).await.unwrap(),
+                    Some(owner)
+                );
+            }
+        }
+    }
 }

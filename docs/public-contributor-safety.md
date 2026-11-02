@@ -67,6 +67,8 @@ privately.
 - Guieb & Shook PC, a California Professional Corporation (`Entity.yaml`): the firm website footer and `LICENSE`.
 - Lex Tecnica, Ltd. (`Entity.yaml`): [official terms](https://lextecnica.com/terms-conditions/) — the second firm
   anchor, parent of the held-out IEP brand.
+- IEP Defenders' published email and dedicated telephone line (`views::brand` and its catalogs):
+  [official contact page](https://iepdefenders.com/contact-us/).
 - Nick Shook, name (`Person.yaml`): the California, Nevada, and Washington bar directories.
 - Nevada Bar No. 13400 (`Credential.yaml`): [nvbar.org](https://nvbar.org/find-a-lawyer/?usearch=13400), verified
   active 2026-10-14.

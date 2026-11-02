@@ -229,25 +229,6 @@ async fn footer_renders_trademark(world: &mut BrandWorld, renders: String) {
     );
 }
 
-/// The surfaces the simplified footer no longer renders, as the compiled
-/// branding used to spell them: an office address, an association name,
-/// the family-row label, a social handle, and the contact band's email.
-const REMOVED_FOOTER_DETAIL: &[&str] = &[
-    "site-footer__offices",
-    "site-footer__contact",
-    "site-footer__memberships",
-    "site-footer__family",
-    "site-footer__social",
-    "site-footer__nav",
-    "site-footer__attribution",
-    "site-footer__provider",
-    "1515 20th Street, Bakersfield",
-    "Justice Technology Association",
-    "Our Family",
-    "x.com/NeonLawUSA",
-    "contact@neonlaw.com",
-];
-
 #[given(regex = r#"^the brand "([^"]+)" is moved to a firm whose entity is "([^"]+)"$"#)]
 async fn move_brand_to_firm(_world: &mut BrandWorld, brand_key: String, entity_name: String) {
     let surreal = features::shared_surreal().await;

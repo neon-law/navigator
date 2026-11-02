@@ -919,6 +919,7 @@ fn FirmFooterShowcase() -> Element {
             }
             FirmFooter {
                 model: crate::firm_footer::FirmFooterModel {
+                    compiled_identity_allowed: true,
                     legal_entity: "Guieb & Shook PC".to_string(),
                     firm_home_href: views::brand::BrandKey::GuiebShook.public_home_href(),
                     brands: Vec::new(),

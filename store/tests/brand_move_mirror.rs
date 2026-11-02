@@ -145,6 +145,10 @@ async fn assert_ownership(pg: &PostgresDb, brand_id: Uuid, expected: Uuid) {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one isolated ownership lifecycle proves projection, retries and final-write rollback"
+)]
 async fn brand_move_mirror_probe() {
     if std::env::var("NAVIGATOR_BRAND_MOVE_MIRROR_PROBE").as_deref() != Ok("1") {
         return;
@@ -331,4 +335,31 @@ async fn brand_move_mirror_probe() {
         .execute(pg.pool())
         .await
         .unwrap();
+    // The compiled seed points elsewhere after an Owner move. Native restart
+    // refresh must respect its current seat and preserve the Owner's website.
+    let before_reseed = store::postgres::tenancy::brand_by_key("neon")
+        .await
+        .unwrap()
+        .unwrap();
+    let input = store::brands::NewBrand {
+        name: before_reseed.name.clone(),
+        key: "neon".into(),
+        firm_id: Some(target.id),
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        let refreshed =
+            store::postgres::tenancy::seed_brand(&input, Some("https://example.test/compiled"))
+                .await
+                .unwrap();
+        assert_eq!(refreshed.firm_id, Some(from.id));
+        assert_eq!(refreshed.website_url, before_reseed.website_url);
+        assert_eq!(ownership_snapshot(&pg, brand.id).await.owner, Some(from.id));
+        let seated: Uuid =
+            sqlx::query_scalar("SELECT firm_id FROM firm_brand WHERE brand_key='neon'")
+                .fetch_one(pg.pool())
+                .await
+                .unwrap();
+        assert_eq!(seated, from.id);
+    }
 }

@@ -160,7 +160,7 @@ fn move_brand_form(view: &MoveBrandView) -> Element {
 
     rsx! {
         if let Some(error) = q.error.as_ref() {
-            p { class: "nav-form-error", role: "alert", "{error}" }
+            p { class: "nav-flash nav-flash--danger", role: "alert", "{error}" }
         }
         if let Some(moved) = q.moved.as_ref() {
             p { role: "status", "Moved {moved}. Its public pages now name {q.firm.clone().unwrap_or_default()}'s legal entity." }
@@ -183,6 +183,10 @@ fn move_body(view: &MoveBrandView) -> Element {
         header { class: "page-header",
             h1 { "Move brand" }
             p { a { href: "/app/owner", "← Back to firms" } }
+        }
+        p {
+            "Moving to another firm clears the previous firm's contact details and "
+            "professional credentials from the public footer."
         }
         {move_brand_form(view)}
         p { class: "project-form-cancel",

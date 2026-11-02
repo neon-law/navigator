@@ -814,9 +814,22 @@ pub async fn seed_brand(
         None
     };
     if let Some(existing) = brand_by_key(&input.key).await? {
+        // Lock the Brand before reading its fresh seat. A concurrent move updates
+        // the same row, so both ownership records remain aligned.
+        let mut tx = pg.pool().begin().await?;
+        sqlx::query("SELECT id FROM brand WHERE id=$1 FOR UPDATE")
+            .bind(existing.id)
+            .fetch_one(&mut *tx)
+            .await?;
+        let seated_firm: Option<Uuid> =
+            sqlx::query_scalar("SELECT firm_id FROM firm_brand WHERE brand_key=$1")
+                .bind(&input.key)
+                .fetch_optional(&mut *tx)
+                .await?;
         let row = sqlx::query("UPDATE brand SET firm_id=$2,primary_color=$3,accent_color=$4,typeface=$5,updated_at=now() WHERE id=$1 RETURNING id,name,brand_key,firm_id,primary_color,accent_color,typeface,is_law_firm,legal_entity,logo_object_key,logo_content_type,font_family,font_object_key,font_licence,website_url,inserted_at,updated_at")
-            .bind(existing.id).bind(firm_id).bind(&input.primary_color).bind(&input.accent_color).bind(&input.typeface)
-            .fetch_one(pg.pool()).await.map_err(map_brand_write)?;
+            .bind(existing.id).bind(seated_firm.unwrap_or(firm_id)).bind(&input.primary_color).bind(&input.accent_color).bind(&input.typeface)
+            .fetch_one(&mut *tx).await.map_err(map_brand_write)?;
+        tx.commit().await?;
         return brand(&row).map_err(brands::BrandError::Postgres);
     }
     let website_url = website_url

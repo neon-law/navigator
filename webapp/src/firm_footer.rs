@@ -35,6 +35,9 @@ pub struct FirmFooterBrand {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct FirmFooterModel {
     pub legal_entity: String,
+    /// Server-proven canonical Entity may retain the compiled operator facts.
+    #[serde(default)]
+    pub compiled_identity_allowed: bool,
     /// Every brand the Firm wears, in registry order with the current one
     /// flagged. Not rendered by [`FirmFooter`]; kept for
     /// `inject_public_utility`'s public-chrome overlay seam. See the module docs.
@@ -104,9 +107,27 @@ pub fn render_firm_footer(model: FirmFooterModel) -> String {
 /// cannot disagree about who is in the family before a Firm row overrides
 /// both.
 #[cfg(feature = "server")]
+fn compiled_site_brand(current: views::brand::BrandKey) -> &'static views::brand::SiteBrand {
+    if current == views::brand::brand_key() {
+        &views::brand::FIRM_BRAND
+    } else {
+        &current
+            .resolve_branding(&views::brand::DEFAULT_BRANDING)
+            .firm
+    }
+}
+
+#[cfg(feature = "server")]
 #[must_use]
 pub fn compiled_family_brands(current: views::brand::BrandKey) -> Vec<FirmFooterBrand> {
-    views::brand::firm_family()
+    let family = if current == views::brand::brand_key() {
+        views::brand::firm_family()
+    } else {
+        current
+            .resolve_branding(&views::brand::DEFAULT_BRANDING)
+            .firm_family
+    };
+    family
         .iter()
         // "Our Family" is a set of links, so it lists only brands a reader
         // can actually reach — the launch gate's set, the same one
@@ -161,25 +182,22 @@ pub fn compiled_firm_footer_model(
     current: views::brand::BrandKey,
     copyright_year: i32,
 ) -> FirmFooterModel {
-    let branding = current.resolve_branding(&views::brand::DEFAULT_BRANDING);
+    let brand = compiled_site_brand(current);
     let mut brands = compiled_family_brands(current);
     // A firm with no compiled family (a renamed white-label bundle) still
     // names its one brand, so the model is never empty of identity.
     if brands.is_empty() {
         brands.push(FirmFooterBrand {
-            label: compiled_footer_label(current),
+            label: brand.site_name.to_string(),
             href: String::new(),
             current: true,
-            logo_href: current
-                .resolve_branding(&views::brand::DEFAULT_BRANDING)
-                .firm
-                .logo_href
-                .to_string(),
+            logo_href: brand.logo_href.to_string(),
             byline: current.family_byline().to_string(),
         });
     }
     FirmFooterModel {
-        legal_entity: branding.firm.legal_entity.to_string(),
+        legal_entity: brand.legal_entity.to_string(),
+        compiled_identity_allowed: true,
         brands,
         copyright_year,
         // The compiled firm brand's production home: the same door the
@@ -292,7 +310,16 @@ pub async fn resolve_firm_footer_model(
         String::new()
     };
 
+    let compiled_identity_allowed = entity.firm_anchor_key.as_deref()
+        == Some(
+            compiled_site_brand(current)
+                .legal_entity
+                .trim()
+                .to_lowercase()
+                .as_str(),
+        );
     FirmFooterModel {
+        compiled_identity_allowed,
         legal_entity: entity.name,
         brands,
         copyright_year,
@@ -313,6 +340,7 @@ mod tests {
     fn model(brands: Vec<FirmFooterBrand>) -> FirmFooterModel {
         FirmFooterModel {
             legal_entity: "Guieb & Shook PC".to_string(),
+            compiled_identity_allowed: true,
             brands,
             copyright_year: 2026,
             firm_home_href: "https://www.guiebandshook.com".to_string(),
@@ -523,6 +551,20 @@ mod tests {
         .unwrap();
 
         let model = resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
+        assert!(
+            !model.compiled_identity_allowed,
+            "a namesake Entity without the canonical anchor cannot inherit facts"
+        );
+        store::entities::set_firm_anchor_key(
+            &surreal,
+            entity.id,
+            Some(views::brand::FIRM_BRAND.legal_entity.trim().to_lowercase()),
+        )
+        .await
+        .unwrap();
+        let canonical =
+            resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
+        assert!(canonical.compiled_identity_allowed);
 
         assert_eq!(model.legal_entity, "Guieb & Shook PC");
         assert_eq!(model.brands.len(), 2);
@@ -879,5 +921,30 @@ mod tests {
                 key.as_str(),
             );
         }
+    }
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn scoped_fallback_preserves_custom_identity_and_explicit_other_brand() {
+        let mut custom = views::brand::DEFAULT_BRANDING;
+        custom.firm.legal_entity = "Synthetic Custom Entity LLC";
+        custom.firm.site_name = "Synthetic Custom Practice";
+        custom.firm.logo_href = "/synthetic-custom-logo.svg";
+        custom.firm_family = &[];
+        let custom = Box::leak(Box::new(custom));
+        views::brand::scope(custom, async {
+            let model = compiled_firm_footer_model(views::brand::BrandKey::Neon, 2026);
+            assert_eq!(model.legal_entity, "Synthetic Custom Entity LLC");
+            assert_eq!(model.brands.len(), 1);
+            assert_eq!(model.brands[0].label, "Synthetic Custom Practice");
+            assert_eq!(model.brands[0].logo_href, "/synthetic-custom-logo.svg");
+            let other = compiled_firm_footer_model(views::brand::BrandKey::IepDefenders, 2026);
+            assert_eq!(other.legal_entity, "Lex Tecnica, Ltd.");
+            assert_eq!(other.brands.len(), 1);
+            assert!(other.brands[0].current);
+            assert_ne!(other.brands[0].label, "Synthetic Custom Practice");
+        })
+        .await;
+        let other = compiled_firm_footer_model(views::brand::BrandKey::IepDefenders, 2026);
+        assert_eq!(other.legal_entity, "Lex Tecnica, Ltd.");
     }
 }

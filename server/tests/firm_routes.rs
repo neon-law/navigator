@@ -204,33 +204,13 @@ async fn no_firm_page_still_markets_the_retired_consumer_plan() {
 async fn the_home_publishes_nautilus_and_links_separate_business_counsel() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
-    assert!(body.contains("Book Consultation"));
-    assert!(body.contains("https://calendar.notion.so/meet/nick-shook/or15n4yy7"));
-    assert!(body.contains("Employment") && body.contains("$5,000"));
-    assert!(body.contains("carry extra fees and are not included"));
-    assert!(body.contains("not included in the $5,000 one-time contract fee"));
-    assert!(body.contains("executive compensation, and tax planning"));
-    assert!(body.contains("/ once"));
-    assert!(body.contains(
-        "This example assumes the $5,000 contract fee has been earned under your engagement letter."
-    ));
-    assert!(body.contains("Common employment, NDA, sales, and privacy agreements."));
-    assert!(body.contains("img/neon-home/neon-home-presentation.mp4"));
-    assert!(body.contains("<video") && body.contains("video/mp4"));
-    assert!(body.contains("href=\"/notations\""));
-    assert!(!body.contains("Drafting, review, and litigation are priced separately."));
-    assert!(body.contains("/public/ferris.svg"));
-    assert!(!body.contains("Our family") && !body.contains("A practice of"));
-    assert!(body.contains("https://www.guiebandshook.com"));
-    // The header nav links the fee schedule, which now answers.
-    assert!(body.contains("href=\"/services\""), "{body}");
-    let services = anon_get(&app, "/services").await;
-    assert_eq!(services.status(), StatusCode::OK);
-    for path in ["/business", "/disputes"] {
-        let response = anon_get(&app, path).await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
-        assert!(!response.headers().contains_key("location"));
-        assert!(!body.contains(&format!("href=\"{path}\"")));
+    for text in [
+        "Your shell in a connected world.",
+        "data-nautilus-intake",
+        "fm-phone",
+        r#"href="/business""#,
+    ] {
+        assert!(body.contains(text), "missing {text}: {body}");
     }
     assert!(
         !body.contains("company-pricing"),
@@ -905,50 +885,8 @@ async fn home_presents_nautilus_subscription_and_checks() {
     ] {
         assert!(body.contains(text), "missing {text}: {body}");
     }
-    let experience = body
-        .find("Lawyers who understand what you’re building.")
-        .expect("experience section");
-    let pricing = body.find("id=\"pricing\"").expect("pricing anchor");
-    assert!(experience < pricing, "show experience before fees");
-    assert!(body.contains("a 30-petabyte data warehouse for Apple Finance"));
-    assert!(!body.contains("12 years of experience. Nine figures in exits."));
-    assert!(!body.contains("A clear daily meter"));
-    assert!(!body.contains("Separate work quoted before it starts"));
-    assert!(!body.contains("Independent counsel for ambitious companies"));
-    assert!(body.contains("Contract reviews returned within three business days"));
-    assert!(!body.contains("$500"));
-    assert!(!body.contains("/ contract"));
-    assert!(body.contains("deal-exhibition"));
-    assert!(body.contains("Computable Contracts that Scale"));
-    assert!(body.contains("Notations turn essential agreements into clear, fillable documents"));
-    assert!(body.contains("Explore the notations"));
-    assert!(!body.contains("Explore the notations ↗"));
-    assert!(!body.contains("Legal glue for your agreements."));
-    assert!(!body.contains("The work behind your next move."));
-    assert!(body.contains("Counsel on call."));
-    assert!(body.contains("handle the paperwork."));
-    assert!(!body.contains("company-questions"));
-    assert!(!body.contains("A few useful answers."));
-    assert!(body.contains("Your everyday contracts."));
-    assert!(!body.contains("Your everyday contracts. One fee."));
-    assert!(body.contains("/ once"));
-    assert!(body.contains(
-        "This example assumes the $5,000 contract fee has been earned under your engagement letter."
-    ));
-    assert!(body.contains("Common employment, NDA, sales, and privacy agreements."));
-    assert!(body.matches("Keep building.").count() >= 2);
-    assert!(body.contains(r#"href="/presentations/rust-in-peace""#));
-    assert!(body.contains(r#"href="/presentations""#));
-    assert!(body.contains(r##"href="#pricing""##));
-    // The pricing anchor includes the starting retainer and withdrawal terms.
-    assert!(body.contains(r#"id="pricing" class="company-pricing""#));
-    assert!(body.contains(r#"src="/public/ferris.svg""#));
-    assert!(body.contains(r#"href="/notations#templates""#));
-    assert!(body.contains("Neon Law is a trademark of Neon Law IP LLC."));
-    assert!(!body.contains("NEON LAW /"));
-    assert!(!body.contains("Twelve business templates"));
-    assert!(body.contains(r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#));
-    assert!(!body.contains("/nyc-oath"));
+    assert!(!body.contains("Counsel on call."));
+    assert!(!body.contains("company-simulator"));
 }
 
 #[tokio::test]

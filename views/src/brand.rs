@@ -1027,7 +1027,7 @@ pub const IEP_DEFENDERS_BRANDING: Branding = Branding {
     firm: SiteBrand {
         site_name: "IEP Defenders",
         home_href: "/",
-        tagline: "Free special education lawyers defending your child's rights.",
+        tagline: "Special education lawyers defending your child's rights.",
         // No address published for Lex Tecnica, Ltd. yet; the live Firm row,
         // not this fallback, is what the footer's copyright resolves from.
         postal_address: "",

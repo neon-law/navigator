@@ -25,7 +25,12 @@ reason = "The firm's published voice line, printed in neon/content/privacy.md an
 [[allow]]
 class = "phone"
 match = "7252398413"
-reason = "Lex Tecnica, Ltd.'s published voice line (lextecnica.com/contact and its court filings), carried by the held-out IEP brand."
+reason = "Lex Tecnica, Ltd.'s published voice line (lextecnica.com/contact/)."
+
+[[allow]]
+class = "phone"
+match = "7434374357"
+reason = "IEP Defenders' published voice line (iepdefenders.com/contact-us/), carried by the held-out IEP Brand."
 
 # --- Third-party attributions and machine identities ------------------------
 

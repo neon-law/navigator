@@ -1036,19 +1036,7 @@ async fn inject_public_utility(mut req: Request, next: Next) -> Response {
         .extensions()
         .get::<webapp::firm_footer::FirmFooterModel>()
     {
-        chrome.legal_entity.clone_from(&model.legal_entity);
-        chrome.firm_home_href.clone_from(&model.firm_home_href);
-        chrome.brands = model
-            .brands
-            .iter()
-            .map(|brand| webapp::public_chrome::ChromeBrand {
-                label: brand.label.clone(),
-                href: brand.href.clone(),
-                current: brand.current,
-                logo_href: brand.logo_href.clone(),
-                byline: brand.byline.clone(),
-            })
-            .collect();
+        webapp::public_chrome::apply_resolved_firm_footer(&mut chrome, model);
     }
     req.extensions_mut().insert(chrome);
     req.extensions_mut()

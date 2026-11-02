@@ -553,6 +553,64 @@ fn firm_attribution(brand: &views::brand::SiteBrand) -> String {
     }
 }
 
+/// Overlay a resolved operator without inheriting another Entity's public credentials.
+#[cfg(feature = "server")]
+pub fn apply_resolved_firm_footer(
+    chrome: &mut PublicChrome,
+    model: &crate::firm_footer::FirmFooterModel,
+) {
+    if !model.compiled_identity_allowed {
+        let old_entity = chrome.legal_entity.clone();
+        if chrome.disclosure.ownership.is_empty() && !chrome.trademark.is_empty() {
+            chrome.disclosure.ownership = if chrome.trademark_registration.is_empty() {
+                format!(
+                    "{}™ is a common-law mark of {}",
+                    chrome.trademark, old_entity
+                )
+            } else {
+                format!(
+                    "{}® is a registered trademark of {},",
+                    chrome.trademark, old_entity
+                )
+            };
+            // The component appends the linked registration when one exists.
+            if !chrome.trademark_registration.is_empty() && chrome.trademark_record_url.is_empty() {
+                chrome.disclosure.ownership.push_str(" U.S. Reg. No. ");
+                chrome
+                    .disclosure
+                    .ownership
+                    .push_str(&chrome.trademark_registration);
+            }
+        }
+        if !old_entity.is_empty() {
+            chrome.disclaimer = chrome.disclaimer.replace(&old_entity, &model.legal_entity);
+        }
+        chrome.firm_name.clone_from(&model.legal_entity);
+        chrome.firm_logo_href.clear();
+        chrome.firm_email.clear();
+        chrome.firm_phone.clear();
+        chrome.offices.clear();
+        chrome.attorneys.clear();
+        chrome.memberships.clear();
+        chrome.social.clear();
+        chrome.attribution = format!("A practice of {}", model.legal_entity);
+    }
+    chrome.legal_entity.clone_from(&model.legal_entity);
+    chrome.firm_home_href.clone_from(&model.firm_home_href);
+    chrome.copyright_year = model.copyright_year;
+    chrome.brands = model
+        .brands
+        .iter()
+        .map(|brand| ChromeBrand {
+            label: brand.label.clone(),
+            href: brand.href.clone(),
+            current: brand.current,
+            logo_href: brand.logo_href.clone(),
+            byline: brand.byline.clone(),
+        })
+        .collect();
+}
+
 /// Public social destinations scoped to the request Brand.
 #[cfg(feature = "server")]
 fn chrome_social() -> Vec<ChromeSocial> {
@@ -1002,8 +1060,7 @@ mod tests {
 
             if branding.firm_memberships.is_empty() {
                 assert!(
-                    !output.contains(&expected)
-                        && !output.contains("site-footer__membership-link"),
+                    !output.contains(&expected) && !output.contains("site-footer__membership-link"),
                     "{key:?} must not inherit another Firm's association standing"
                 );
                 continue;
@@ -1229,5 +1286,113 @@ mod tests {
                 );
             }
         }
+    }
+    #[cfg(feature = "server")]
+    fn resolved_operator(entity: &str, allowed: bool) -> crate::firm_footer::FirmFooterModel {
+        crate::firm_footer::FirmFooterModel {
+            legal_entity: entity.into(),
+            compiled_identity_allowed: allowed,
+            firm_home_href: String::new(),
+            brands: Vec::new(),
+            copyright_year: 2026,
+        }
+    }
+    #[cfg(feature = "server")]
+    fn render_chrome(chrome: PublicChrome) -> String {
+        let mut dom = VirtualDom::new_with_props(PublicFooter, PublicFooterProps { chrome });
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+    #[test]
+    #[cfg(feature = "server")]
+    fn changed_operator_keeps_advertising_warning_and_original_trademark_owner() {
+        let mut chrome = firm_chrome();
+        chrome.is_practice = true;
+        chrome.disclaimer = "Attorney advertisement. Guieb & Shook PC. Non-legal services do not create an attorney-client relationship.".into();
+        chrome.disclosure.provider = "Independent Provider".into();
+        apply_resolved_firm_footer(
+            &mut chrome,
+            &resolved_operator("Synthetic New Entity LLC", false),
+        );
+        assert!(chrome.offices.is_empty() && chrome.attorneys.is_empty());
+        assert!(chrome.memberships.is_empty() && chrome.social.is_empty());
+        assert!(
+            chrome.firm_logo_href.is_empty()
+                && chrome.firm_email.is_empty()
+                && chrome.firm_phone.is_empty()
+        );
+        assert_eq!(chrome.disclaimer, "Attorney advertisement. Synthetic New Entity LLC. Non-legal services do not create an attorney-client relationship.");
+        let html = render_chrome(chrome);
+        assert!(
+            html.contains("Synthetic New Entity LLC") && html.contains("Attorney advertisement."),
+            "{html}"
+        );
+        assert!(html.contains("Independent Provider"), "{html}");
+        let ownership = element_text(&html, "site-footer__ownership");
+        assert!(
+            ownership.contains("is a registered trademark of Guieb & Shook PC"),
+            "{ownership}"
+        );
+        assert!(
+            !ownership.contains("is a registered trademark of Synthetic New Entity LLC"),
+            "{ownership}"
+        );
+        assert!(
+            !html.contains("Aquarius Lumen")
+                && !html.contains("Justice Technology Association")
+                && !html.contains("support@neonlaw.com"),
+            "{html}"
+        );
+    }
+    #[test]
+    #[cfg(feature = "server")]
+    fn namesake_without_canonical_identity_cannot_inherit_credentials() {
+        let mut chrome = firm_chrome();
+        let entity = chrome.legal_entity.clone();
+        apply_resolved_firm_footer(&mut chrome, &resolved_operator(&entity, false));
+        assert!(
+            chrome.attorneys.is_empty()
+                && chrome.memberships.is_empty()
+                && chrome.firm_email.is_empty()
+        );
+    }
+    #[test]
+    #[cfg(feature = "server")]
+    fn canonical_identity_preserves_all_compiled_facts_and_existing_ip_notice() {
+        let mut chrome = firm_chrome();
+        chrome.disclosure.ownership = "Independent IP owner".into();
+        let model = crate::firm_footer::FirmFooterModel {
+            legal_entity: chrome.legal_entity.clone(),
+            compiled_identity_allowed: true,
+            firm_home_href: chrome.firm_home_href.clone(),
+            brands: Vec::new(),
+            copyright_year: chrome.copyright_year,
+        };
+        chrome.brands.clear();
+        let before = serde_json::to_value(&chrome).unwrap();
+        apply_resolved_firm_footer(&mut chrome, &model);
+        assert_eq!(serde_json::to_value(&chrome).unwrap(), before);
+    }
+    #[test]
+    #[cfg(feature = "server")]
+    fn common_law_and_existing_independent_property_notices_keep_their_owner() {
+        let mut chrome = firm_chrome();
+        chrome.trademark_registration.clear();
+        apply_resolved_firm_footer(&mut chrome, &resolved_operator("New Entity", false));
+        assert!(chrome
+            .disclosure
+            .ownership
+            .contains("is a common-law mark of Guieb & Shook PC"));
+        let mut chrome = firm_chrome();
+        chrome.disclosure.ownership = "Independent IP owner".into();
+        apply_resolved_firm_footer(&mut chrome, &resolved_operator("New Entity", false));
+        assert_eq!(chrome.disclosure.ownership, "Independent IP owner");
+        let mut chrome = firm_chrome();
+        chrome.trademark_record_url.clear();
+        apply_resolved_firm_footer(&mut chrome, &resolved_operator("New Entity", false));
+        let html = render_chrome(chrome);
+        let ownership = element_text(&html, "site-footer__ownership");
+        assert!(ownership.contains("Guieb & Shook PC"), "{ownership}");
+        assert!(ownership.contains("U.S. Reg. No. 6,325,650"), "{ownership}");
     }
 }
