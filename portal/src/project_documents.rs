@@ -1048,6 +1048,29 @@ async fn stream_through(
     }
 }
 
+/// Serve provider-named Inbox bytes with the document download safeguards.
+pub(crate) fn attachment_bytes_response(
+    bytes: Vec<u8>,
+    content_type: &str,
+    filename: &str,
+) -> Response {
+    let filename = filename
+        .chars()
+        .filter(|character| !character.is_control() && !matches!(character, '"' | '\\'))
+        .collect::<String>();
+    let filename = if filename.is_empty() {
+        "attachment"
+    } else {
+        &filename
+    };
+    let mut response = bytes_response(bytes, content_type, filename, Disposition::Attachment);
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
+    response
+}
+
 fn bytes_response(
     bytes: Vec<u8>,
     content_type: &str,
@@ -1161,6 +1184,29 @@ mod tests {
         store::project_folder_reconcile::verify_for_import(&state.surreal, pg, drive, project_id)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn inbox_attachment_names_cannot_inject_headers_or_allow_shared_caching() {
+        let response = super::attachment_bytes_response(
+            Vec::new(),
+            "text/html",
+            "file\"\r\nX-Injected: yes\\.html",
+        );
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert!(response.headers()[axum::http::header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .starts_with("attachment; filename=\""));
+        assert!(!response.headers().contains_key("x-injected"));
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_SECURITY_POLICY],
+            "sandbox"
+        );
+        assert_eq!(
+            response.headers()[axum::http::header::CACHE_CONTROL],
+            "private, no-store"
+        );
     }
 
     /// An [`AdminState`] wired against a fresh embedded engine, plus the one

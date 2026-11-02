@@ -2929,6 +2929,7 @@ mod tests {
                 promotional_opt_in: false,
                 email_conversation_id: Some(conversation.id),
                 attachments: Vec::new(),
+                raw_storage_key: None,
                 occurred_at: "2026-09-27T00:00:00Z",
             },
         )

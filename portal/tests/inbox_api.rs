@@ -25,6 +25,15 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
+    fixture_with_integrations(std::sync::Arc::new(
+        portal::integrations::UnconfiguredIntegrations,
+    ))
+    .await
+}
+
+async fn fixture_with_integrations(
+    integrations: std::sync::Arc<dyn portal::integrations::IntegrationProviders>,
+) -> Fixture {
     let db = mem_surreal().await;
     let firm_id = seed_firm_with_brand(&db, "neon").await;
     let lawyer = ensure_person(
@@ -61,7 +70,7 @@ async fn fixture() -> Fixture {
         forms_registry: state.forms_registry.clone(),
         signature_provider: state.signature_provider.clone(),
         contract_reviewer: state.contract_reviewer.clone(),
-        integration_providers: state.integration_providers.clone(),
+        integration_providers: integrations,
         canonical_base_url: None,
     };
     let session = portal::SessionData {
@@ -89,6 +98,7 @@ async fn seed_message(
     let ingested = store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            raw_storage_key: None,
             project_id: None,
             firm_id,
             brand_key: None,
@@ -346,4 +356,85 @@ async fn an_unknown_message_is_not_found() {
     .await;
 
     assert_eq!(status, 404, "an unknown message answers 404: {body}");
+}
+
+#[tokio::test]
+async fn processing_records_even_when_the_project_notice_is_unavailable() {
+    use cloud::SlackService;
+    let providers = std::sync::Arc::new(portal::integrations::FakeIntegrations::new());
+    let f = fixture_with_integrations(providers.clone()).await;
+    let project = store::projects::create(
+        &f.surreal,
+        &store::projects::NewProject {
+            code: "synthetic-routing".into(),
+            name: "Synthetic Project".into(),
+            status: "open".into(),
+            entity_id: store::test_support::seed_entity(&f.surreal).await,
+            firm_id: Some(f.firm_id),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    store::projects::designate_dri_in_surreal(
+        &f.surreal,
+        project.id,
+        f.lawyer_session.person_id.unwrap(),
+        store::projects::DriSide::Lawyer,
+    )
+    .await
+    .unwrap();
+    let message = seed_message(
+        &f.surreal,
+        f.firm_id,
+        "project-process",
+        "sender@example.com",
+        "Synthetic question",
+        "Synthetic body",
+    )
+    .await;
+    let conversation = store::inbox::message_by_id(&f.surreal, message)
+        .await
+        .unwrap()
+        .unwrap()
+        .conversation_id;
+    store::inbox::assign(
+        &f.surreal,
+        f.lawyer_session.person_id.unwrap(),
+        conversation,
+        project.id,
+    )
+    .await
+    .unwrap();
+    for expected in ["no_channel", "notified", "provider_unavailable"] {
+        match expected {
+            "notified" => {
+                providers
+                    .slack
+                    .create_private_channel(&project.code)
+                    .await
+                    .unwrap();
+            }
+            "provider_unavailable" => providers.slack.set_unavailable(true),
+            _ => {}
+        }
+        let (status, body) = request(
+            &f.app,
+            "POST",
+            "/app/api/inbox/process",
+            Some(&f.lawyer_session),
+            Some(json!({"message": message, "apply": true})),
+        )
+        .await;
+        assert_eq!(
+            status, 200,
+            "notice failure must not lose processing: {body}"
+        );
+        assert_eq!(body["slack_notice"], expected);
+        assert!(body["result"]["recorded_at"].is_string());
+        assert_eq!(body["already_recorded"], expected != "no_channel");
+    }
+    let messages = providers.slack.messages();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].1, "Navigator integration event: inbox_routed.");
 }

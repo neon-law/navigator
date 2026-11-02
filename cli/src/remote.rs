@@ -949,6 +949,30 @@ pub(crate) struct DocumentClient {
     project_code: String,
 }
 
+/// Build an authenticated transfer transport for the selected deployment.
+/// Remote endpoints require HTTPS; loopback HTTP supports the local fixture.
+/// Redirects stay disabled so credentials and payloads remain on that endpoint.
+///
+/// # Errors
+///
+/// Rejects invalid URLs and non-loopback plaintext origins.
+pub(crate) fn authenticated_client_builder(base: &str) -> Result<reqwest::ClientBuilder> {
+    let origin = url::Url::parse(base).context("parse authenticated deployment URL")?;
+    let loopback = match origin.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain("localhost")) => true,
+        _ => false,
+    };
+    anyhow::ensure!(
+        origin.scheme() == "https" || (origin.scheme() == "http" && loopback),
+        "authenticated transfers require HTTPS except for a loopback deployment"
+    );
+    Ok(reqwest::Client::builder()
+        .https_only(!loopback)
+        .redirect(reqwest::redirect::Policy::none()))
+}
+
 impl DocumentClient {
     /// The deployment this client is logged in to.
     pub(crate) fn base(&self) -> &str {
@@ -1005,22 +1029,7 @@ impl DocumentClient {
         project_code: &str,
         timeout: Option<std::time::Duration>,
     ) -> Result<Self> {
-        let origin = url::Url::parse(&base).context("parse document deployment URL")?;
-        let loopback = match origin.host() {
-            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-            Some(url::Host::Domain("localhost")) => true,
-            _ => false,
-        };
-        anyhow::ensure!(
-            origin.scheme() == "https" || (origin.scheme() == "http" && loopback),
-            "document transfers require HTTPS except for a loopback deployment"
-        );
-        // Keep credentials and document bytes on the selected deployment.
-        // A checked origin alone does not prevent a redirect from downgrading TLS.
-        let mut builder = reqwest::Client::builder()
-            .https_only(!loopback)
-            .redirect(reqwest::redirect::Policy::none());
+        let mut builder = authenticated_client_builder(&base)?;
         if let Some(timeout) = timeout {
             builder = builder.timeout(timeout);
         }
@@ -10000,7 +10009,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("document transfers require HTTPS"),
+                .contains("authenticated transfers require HTTPS"),
             "{error:#}"
         );
     }

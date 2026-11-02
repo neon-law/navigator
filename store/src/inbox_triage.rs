@@ -1040,6 +1040,7 @@ mod tests {
                 attachments: Vec::new(),
                 project_id: None,
                 occurred_at: "2026-10-20T00:00:00Z",
+                raw_storage_key: None,
             },
         )
         .await

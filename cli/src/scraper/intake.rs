@@ -238,11 +238,14 @@ impl InboxIntake for StoreInboxIntake {
         // The bytes become a content-addressed Asset first — the same
         // store and dedupe-by-sha the support app's attachments use — so
         // the attachment link row's key always matches the stored content.
-        let asset_id = store::assets::ingest_content(
+        let attachment = store::inbox::ingest_attachment(
             self.db.as_ref(),
             &self.storage,
-            &document.bytes,
+            self.firm_id,
+            None,
+            &document.filename,
             content_type_for(&document.extension),
+            &document.bytes,
         )
         .await
         .map_err(|error| IntakeError::Transient {
@@ -267,6 +270,7 @@ impl InboxIntake for StoreInboxIntake {
         let ingested = store::inbox::ingest_inbound(
             self.db.as_ref(),
             &store::inbox::IngestInbound {
+                raw_storage_key: None,
                 // No project attribution at ingest time: like support-app
                 // intake, the conversation stays on the Firm until triage
                 // assigns it to the docket task's Project.
@@ -290,11 +294,7 @@ impl InboxIntake for StoreInboxIntake {
                 matter_consent: false,
                 promotional_opt_in: false,
                 email_conversation_id: None,
-                attachments: vec![store::inbox::IngestAttachment {
-                    asset_id,
-                    filename: document.filename.clone(),
-                    sha256: document.sha256.clone(),
-                }],
+                attachments: vec![attachment],
                 occurred_at: &occurred_at,
             },
         )

@@ -291,6 +291,7 @@ async fn receive(
                 email_conversation_id: None,
                 attachments: Vec::new(),
                 occurred_at: &interaction.occurred_at,
+                raw_storage_key: None,
             },
         )
         .await;

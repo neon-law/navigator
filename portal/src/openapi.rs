@@ -101,6 +101,8 @@ pub fn document_with_base(base: &str) -> Value {
     add_blog_operations(&mut document);
     add_graph_operations(&mut document);
     add_upload_session_operations(&mut document);
+    add_inbox_import_operation(&mut document);
+    add_inbox_attachment_operation(&mut document);
     document["paths"]["/app/api/projects/{id}/section-counts"] = serde_json::json!({
       "get": {
         "operationId": "getProjectSectionCounts", "tags": ["Projects"],
@@ -427,6 +429,83 @@ fn add_draft_aliases(document: &mut Value) {
         }
         document["paths"][twin] = item;
     }
+}
+
+fn add_inbox_attachment_operation(document: &mut Value) {
+    let parameters = ["id", "conversation_id", "message_id", "asset_id"]
+        .map(|name| json!({"name": name, "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}));
+    document["paths"]["/app/api/projects/{id}/inbox/{conversation_id}/messages/{message_id}/attachments/{asset_id}"] = json!({"get": {
+        "operationId": "downloadInboxMessageAttachment", "tags": ["Inbox"],
+        "summary": "Download a Project Message attachment",
+        "description": "Requires a Lawyer participating in the Project. The Conversation must belong to that Project, the Message to that Conversation, and the Asset to that Message and Firm. The attachment retains its provider filename; bare Inbox assets do not need a Project document identity.",
+        "parameters": parameters,
+        "responses": {
+            "200": {"description": "Attachment bytes with Content-Disposition attachment and the provider filename", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+            "401": {"description": "No authenticated session"},
+            "403": {"description": "The caller is not Lawyer tier"},
+            "404": {"description": "No visible Project/Conversation/Message attachment with these identities"}
+        }
+    }});
+}
+
+fn add_inbox_import_operation(document: &mut Value) {
+    let project = json!({"type": ["string", "null"], "description": "Optional visible Project code for attribution."});
+    let attachment = json!({
+        "type": "object", "required": ["filename", "content_type", "size_bytes", "asset_id"],
+        "properties": {
+            "filename": {"type": "string", "description": "Original provider filename."},
+            "content_type": {"type": "string"}, "size_bytes": {"type": "integer", "minimum": 0},
+            "asset_id": {"type": "string", "format": "uuid"}
+        }
+    });
+    let message = json!({
+        "type": "object", "required": ["message_id", "conversation_id", "deduped", "direction", "attachments"],
+        "properties": {
+            "message_id": {"type": "string", "format": "uuid"},
+            "conversation_id": {"type": "string", "format": "uuid"},
+            "deduped": {"type": "boolean", "description": "The Message already existed; interrupted filing or attribution can still finish."},
+            "direction": {"type": "string", "enum": ["inbound", "outbound"]},
+            "attachments": {"type": "array", "items": attachment}
+        }
+    });
+    let preview = json!({
+        "type": "object", "required": ["source", "mailbox", "dry_run", "would_import", "project"],
+        "properties": {
+            "source": {"type": "string"}, "mailbox": {"type": "string"},
+            "dry_run": {"const": true}, "would_import": {"type": "integer", "minimum": 1}, "project": project
+        }
+    });
+    let imported = json!({
+        "type": "object", "required": ["source", "mailbox", "archived_key", "project", "imported"],
+        "properties": {
+            "source": {"type": "string"}, "mailbox": {"type": "string"},
+            "archived_key": {"type": "string", "description": "The Firm-scoped verbatim payload object key."},
+            "project": project, "imported": {"type": "array", "minItems": 1, "items": message}
+        }
+    });
+    document["paths"]["/app/api/inbox/import"] = json!({"post": {
+        "operationId": "importInboxMessages", "tags": ["Inbox"], "summary": "Import historical Messages without sending",
+        "description": "Requires lawyer-tier access; writing imports also requires the PostgreSQL Inbox authority. Imports RFC 5322 email or a LinkedIn messages.csv export. The mailbox identifies the importing account. Optional Project attribution requires access; filed content is internal by default. Retries reuse Messages and finish missing attachment filings. A dry run parses and previews without archiving or writing records.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+            "type": "object", "additionalProperties": false, "required": ["source", "mailbox", "payload_base64"],
+            "properties": {
+                "source": {"type": "string", "enum": ["email", "linkedin"]},
+                "mailbox": {"type": "string", "minLength": 1, "description": "Mailbox address or LinkedIn profile URL."},
+                "payload_base64": {"type": "string", "contentEncoding": "base64", "description": "Verbatim .eml or CSV payload bytes."},
+                "project": project, "dry_run": {"type": "boolean", "default": false}
+            }
+        }}}},
+        "responses": {
+            "200": {"description": "Dry-run preview; nothing written", "content": {"application/json": {"schema": preview}}},
+            "201": {"description": "Imported or resumed Messages", "content": {"application/json": {"schema": imported}}},
+            "400": {"description": "Invalid source, mailbox, payload, Project code, or ambiguous Firm"},
+            "401": {"description": "No authenticated session"},
+            "403": {"description": "Lawyer-tier access required"},
+            "404": {"description": "Project or Conversation outside the caller's scope"},
+            "413": {"description": "Payload exceeds the request limit"},
+            "500": {"description": "Database, storage, or Inbox authority unavailable"}
+        }
+    }});
 }
 
 #[allow(clippy::too_many_lines)]

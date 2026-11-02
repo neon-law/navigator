@@ -99,6 +99,7 @@ pub(crate) mod docket_api;
 pub(crate) mod efilings_api;
 pub(crate) mod firm_forgejo_api;
 pub(crate) mod handoffs_api;
+pub(crate) mod inbox_import_api;
 pub(crate) mod lawyer_mailbox;
 pub(crate) mod matter_caption_api;
 pub(crate) mod module_records_api;

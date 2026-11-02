@@ -269,6 +269,8 @@ uuid = { version = "1", default-features = false, features = ["std", "v7", "serd
 # message (send_raw=true) with no parsed text part, so `web` extracts the
 # plain-text body itself when threading a support email.
 mail-parser = "1.0"
+# RFC 4180 reader for multiline data-export fields.
+csv = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -45,6 +45,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "clap",
     "cloud",
     "comfy-table",
+    "csv",
     "cucumber",
     "dbos",
     "dioxus",

@@ -205,6 +205,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "inbox_attachment_receipt",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "journal_entry_source",
       "missing_column": null,
       "missing_table": null,
@@ -1217,6 +1224,7 @@
         "provider_message_id": "option<string>",
         "provider_ref": "option<string>",
         "purpose": "string",
+        "raw_storage_key": "option<string>",
         "route": "option<string>",
         "updated_at": "datetime",
         "visibility": "option<string>"
@@ -1814,7 +1822,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 147,
+    "table_count": 148,
     "tables": {
       "address": {
         "columns": {
@@ -3009,6 +3017,29 @@
           "project"
         ]
       },
+      "inbox_attachment_receipt": {
+        "columns": {
+          "asset_id": "UUID",
+          "firm_id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "sha256": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "asset_id",
+            "asset"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "inbox_attachment_receipt",
+        "references": [
+          "asset",
+          "firm"
+        ]
+      },
       "inbox_conversation": {
         "columns": {
           "brand_key": "TEXT",
@@ -3575,6 +3606,7 @@
           "provider_message_id": "TEXT",
           "provider_ref": "TEXT",
           "purpose": "TEXT",
+          "raw_storage_key": "TEXT",
           "route": "TEXT",
           "updated_at": "TIMESTAMPTZ",
           "visibility": "TEXT"

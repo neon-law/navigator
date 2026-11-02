@@ -43,6 +43,14 @@ pub struct InboxRowView {
     /// Last activity as RFC 3339, for the `<time>` element.
     #[serde(default)]
     pub updated_iso: String,
+    /// The direction of the conversation's most recent message — what the
+    /// `?direction=` filter matches rows on (LAW-238 D3).
+    #[serde(default)]
+    pub direction: String,
+    /// Whether any message on the conversation carries a filed attachment —
+    /// what the `?attachments=true` filter matches rows on.
+    #[serde(default)]
+    pub has_attachments: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +66,21 @@ pub struct InboxMessageView {
     pub provider_message_id: Option<String>,
     #[serde(default)]
     pub visibility: Option<String>,
+    /// Attachments in provider order, with primary and filed document slots
+    /// filling older records' gaps. Empty outside a Project-scoped thread.
+    #[serde(default)]
+    pub attachments: Vec<InboxAttachmentView>,
+}
+
+/// One transcript attachment: its provider filename, optional document kind,
+/// and authorized document or Message download link.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxAttachmentView {
+    #[serde(default)]
+    pub filename: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    pub href: String,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +100,12 @@ pub struct InboxPage {
     pub unread_only: bool,
     #[serde(default)]
     pub brand_filter: Option<String>,
+    #[serde(default)]
+    pub direction_filter: Option<String>,
+    /// Whether the `?attachments=true` filter is on — rows with a filed
+    /// attachment only (LAW-238 D3).
+    #[serde(default)]
+    pub attachments_only: bool,
     #[serde(default)]
     pub brands: Vec<String>,
     #[serde(default)]
@@ -223,9 +252,54 @@ async fn unread_only() -> bool {
         .unwrap_or(false)
 }
 
-fn filter_href(base: &str, channel: Option<&str>, brand: Option<&str>, unread: bool) -> String {
+#[cfg(feature = "server")]
+async fn selected_direction() -> Option<String> {
+    #[derive(serde::Deserialize, Default)]
+    struct Filter {
+        direction: Option<String>,
+    }
+    let filter =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<Filter>, _>()
+            .await
+            .ok()
+            .map(|axum::extract::Query(filter)| filter)?;
+    filter.direction.filter(|direction| {
+        matches!(
+            direction.as_str(),
+            store::inbox::direction::INBOUND
+                | store::inbox::direction::OUTBOUND
+                | store::inbox::direction::INTERNAL
+        )
+    })
+}
+
+#[cfg(feature = "server")]
+async fn attachments_only() -> bool {
+    #[derive(serde::Deserialize, Default)]
+    struct Filter {
+        attachments: Option<bool>,
+    }
+    dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<Filter>, _>()
+        .await
+        .ok()
+        .and_then(|axum::extract::Query(filter)| filter.attachments)
+        .unwrap_or(false)
+}
+
+fn filter_href(
+    base: &str,
+    channel: Option<&str>,
+    brand: Option<&str>,
+    unread: bool,
+    direction: Option<&str>,
+    attachments: bool,
+) -> String {
     let mut parameters = Vec::new();
-    for (key, value) in [("channel", channel), ("brand", brand)] {
+    for (key, value) in [
+        ("channel", channel),
+        ("brand", brand),
+        ("direction", direction),
+    ] {
         if let Some(value) = value {
             let encoded =
                 percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC);
@@ -234,6 +308,9 @@ fn filter_href(base: &str, channel: Option<&str>, brand: Option<&str>, unread: b
     }
     if unread {
         parameters.push("unread=true".into());
+    }
+    if attachments {
+        parameters.push("attachments=true".into());
     }
     if parameters.is_empty() {
         base.to_string()
@@ -250,6 +327,27 @@ fn channel_matches(row_channel: &str, selected: Option<&str>) -> bool {
 #[cfg(any(feature = "server", test))]
 fn brand_matches(row_brand: Option<&str>, selected: Option<&str>) -> bool {
     selected.is_none_or(|brand| row_brand == Some(brand))
+}
+
+#[cfg(any(feature = "server", test))]
+fn direction_matches(row_direction: &str, selected: Option<&str>) -> bool {
+    selected.is_none_or(|direction| direction == row_direction)
+}
+
+#[cfg(feature = "server")]
+fn row_matches(
+    row: &store::inbox::IntakeRow,
+    channel_filter: Option<&str>,
+    brand_filter: Option<&str>,
+    unread_only: bool,
+    direction_filter: Option<&str>,
+    attachments_only: bool,
+) -> bool {
+    channel_matches(&row.channel, channel_filter)
+        && brand_matches(row.brand_key.as_deref(), brand_filter)
+        && (!unread_only || row.unread)
+        && direction_matches(&row.direction, direction_filter)
+        && (!attachments_only || row.has_attachments)
 }
 
 #[cfg(feature = "server")]
@@ -304,6 +402,8 @@ fn row_view(row: &store::inbox::IntakeRow, href: String) -> InboxRowView {
         ),
         updated: row.updated_at.format("%b %-d, %H:%M UTC").to_string(),
         updated_iso: row.updated_at.to_rfc3339(),
+        direction: row.direction.clone(),
+        has_attachments: row.has_attachments,
     }
 }
 
@@ -327,6 +427,115 @@ fn message_view(message: &store::inbox::Message) -> InboxMessageView {
             .provider_message_id
             .clone()
             .or_else(|| message.provider_ref.clone()),
+        attachments: Vec::new(),
+    }
+}
+
+/// The attachments one transcript Message renders, as the thread page
+/// receives them: provider links retain their names and order; older primary
+/// and provenance slots fill any gaps. Document assets link to their revision;
+/// bare Inbox assets use the Project/Conversation/Message-authorized download.
+#[cfg(feature = "server")]
+#[must_use]
+fn thread_attachment_views(
+    code: &str,
+    project_id: uuid::Uuid,
+    conversation_id: uuid::Uuid,
+    message_id: uuid::Uuid,
+    primary: Option<store::assets::Asset>,
+    filed: Vec<store::assets::Asset>,
+    linked: Vec<store::inbox::MessageAttachment>,
+) -> Vec<InboxAttachmentView> {
+    let mut attachments = Vec::new();
+    let mut seen = Vec::new();
+    let assets = primary.into_iter().chain(filed).collect::<Vec<_>>();
+    let href = |id, asset: Option<&store::assets::Asset>| {
+        if asset.is_some_and(|asset| asset.project_id == Some(project_id)) {
+            format!("/app/projects/{code}/documents/{id}")
+        } else {
+            format!("/app/api/projects/{project_id}/inbox/{conversation_id}/messages/{message_id}/attachments/{id}")
+        }
+    };
+    for link in linked {
+        if seen.contains(&link.asset_id) {
+            continue;
+        }
+        seen.push(link.asset_id);
+        let asset = assets.iter().find(|asset| asset.id == link.asset_id);
+        attachments.push(InboxAttachmentView {
+            filename: Some(link.filename),
+            kind: asset.and_then(|asset| asset.kind.clone()),
+            href: href(link.asset_id, asset),
+        });
+    }
+    for asset in assets {
+        if seen.contains(&asset.id) {
+            continue;
+        }
+        seen.push(asset.id);
+        attachments.push(InboxAttachmentView {
+            filename: asset.filename.clone(),
+            kind: asset.kind.clone(),
+            href: href(asset.id, Some(&asset)),
+        });
+    }
+    attachments
+}
+
+/// Resolve a Project thread's ordered Message attachments and older primary
+/// or provenance slots. A failed lookup keeps the readable transcript and
+/// whatever attachment sources remain available.
+#[cfg(feature = "server")]
+async fn thread_messages_with_attachments(
+    surreal: &store::surreal::SurrealDb,
+    code: &str,
+    project_id: uuid::Uuid,
+    firm_id: uuid::Uuid,
+    conversation_id: uuid::Uuid,
+    messages: &[store::inbox::Message],
+) -> Vec<InboxMessageView> {
+    let mut views = Vec::with_capacity(messages.len());
+    for message in messages {
+        let mut view = message_view(message);
+        let primary = match message.attachment_asset_id {
+            Some(asset_id) => store::assets::find_by_id(surreal, asset_id)
+                .await
+                .unwrap_or_default(),
+            None => None,
+        };
+        let filed =
+            store::assets::find_by_source_message_id(surreal, project_id, &message.id.to_string())
+                .await
+                .unwrap_or_default();
+        let linked = store::inbox::message_assets(surreal, firm_id, message.id)
+            .await
+            .unwrap_or_default();
+        view.attachments = thread_attachment_views(
+            code,
+            project_id,
+            conversation_id,
+            message.id,
+            primary,
+            filed,
+            linked,
+        );
+        views.push(view);
+    }
+    views
+}
+
+/// The link text for one inline attachment: its filename, falling back to
+/// "Untitled attachment", with the kind in parentheses when the asset
+/// carries one.
+#[must_use]
+fn attachment_label(attachment: &InboxAttachmentView) -> String {
+    let name = attachment
+        .filename
+        .as_deref()
+        .unwrap_or("Untitled attachment");
+    match attachment.kind.as_deref() {
+        Some(kind) if !kind.is_empty() => format!("{name} ({kind})"),
+        _ => name.to_string(),
     }
 }
 
@@ -351,6 +560,8 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let channel_filter = selected_channel().await;
     let unread_only = unread_only().await;
     let brand_filter = selected_brand().await;
+    let direction_filter = selected_direction().await;
+    let attachments_only = attachments_only().await;
     let brands = store::inbox::intake_brands(&surreal, actor)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -363,7 +574,14 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let rows = scoped_rows
         .into_iter()
         .filter(|row| {
-            channel_matches(&row.channel, channel_filter.as_deref()) && (!unread_only || row.unread)
+            row_matches(
+                row,
+                channel_filter.as_deref(),
+                brand_filter.as_deref(),
+                unread_only,
+                direction_filter.as_deref(),
+                attachments_only,
+            )
         })
         .collect::<Vec<_>>();
     let (logo, tokens_href, firm_name) = chrome().await;
@@ -374,6 +592,8 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
         channel_filter,
         unread_only,
         brand_filter,
+        direction_filter,
+        attachments_only,
         brands,
         channels: inbox_channels(),
         rows: rows
@@ -501,6 +721,8 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let channel_filter = selected_channel().await;
     let unread_only = unread_only().await;
     let brand_filter = selected_brand().await;
+    let direction_filter = selected_direction().await;
+    let attachments_only = attachments_only().await;
     let all_rows = store::inbox::list_project(&surreal, actor, project.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -509,9 +731,14 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let rows = all_rows
         .into_iter()
         .filter(|row| {
-            channel_matches(&row.channel, channel_filter.as_deref())
-                && brand_matches(row.brand_key.as_deref(), brand_filter.as_deref())
-                && (!unread_only || row.unread)
+            row_matches(
+                row,
+                channel_filter.as_deref(),
+                brand_filter.as_deref(),
+                unread_only,
+                direction_filter.as_deref(),
+                attachments_only,
+            )
         })
         .collect::<Vec<_>>();
     let (logo, tokens_href, firm_name) = chrome().await;
@@ -522,6 +749,8 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
         channel_filter,
         unread_only,
         brand_filter,
+        direction_filter,
+        attachments_only,
         brands,
         channels: inbox_channels(),
         rows: rows
@@ -589,7 +818,15 @@ pub async fn project_inbox_thread() -> Result<InboxThreadPage, ServerFnError> {
         delivery: thread.delivery,
         next_action: thread.next_action,
         bodies_visible: true,
-        messages: thread.messages.iter().map(message_view).collect(),
+        messages: thread_messages_with_attachments(
+            &surreal,
+            &project_code,
+            project.id,
+            thread.conversation.firm_id,
+            thread.conversation.id,
+            &thread.messages,
+        )
+        .await,
         projects: Vec::new(),
         assign_action: thread
             .can_attribute
@@ -737,19 +974,19 @@ pub fn inbox_list_body(page: &InboxPage) -> Element {
                     "Every email, text, and message to the firm, newest first."
                 }
                 nav { aria_label: "Filter inbox by channel",
-                    a { href: filter_href(&page.base_href, None, page.brand_filter.as_deref(), page.unread_only), "All channels" }
+                    a { href: filter_href(&page.base_href, None, page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "All channels" }
                     for channel in page.channels.iter() {
                         " · "
-                        a { href: filter_href(&page.base_href, Some(channel), page.brand_filter.as_deref(), page.unread_only), "{channel}" }
+                        a { href: filter_href(&page.base_href, Some(channel), page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "{channel}" }
                     }
                     if let Some(selected) = page.channel_filter.as_ref() {
                         " · Showing {selected}"
                     }
                 }
                 nav { aria_label: "Filter inbox by Brand",
-                    a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), None, page.unread_only), "All Brands" }
+                    a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), None, page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "All Brands" }
                     for brand in page.brands.iter() {
-                        " · " a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), Some(brand), page.unread_only), "{brand}" }
+                        " · " a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), Some(brand), page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "{brand}" }
                     }
                     if let Some(selected) = page.brand_filter.as_ref() {
                         " · Showing Brand {selected}"
@@ -757,9 +994,24 @@ pub fn inbox_list_body(page: &InboxPage) -> Element {
                 }
             }
             nav { aria_label: "Inbox unread filter",
-                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), false), "All messages" }
+                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), false, page.direction_filter.as_deref(), page.attachments_only), "All messages" }
                 " · "
-                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), true), "Unread only" }
+                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), true, page.direction_filter.as_deref(), page.attachments_only), "Unread only" }
+            }
+            nav { aria_label: "Inbox direction filter",
+                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, None, page.attachments_only), "Any direction" }
+                for direction in ["inbound", "outbound", "internal"] {
+                    " · "
+                    a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, Some(direction), page.attachments_only), "{direction}" }
+                }
+                if let Some(selected) = page.direction_filter.as_ref() {
+                    " · Showing {selected}"
+                }
+            }
+            nav { aria_label: "Inbox attachments filter",
+                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), false), "Any attachment state" }
+                " · "
+                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), true), "With attachments" }
             }
             if let Some(error) = page.error.clone() {
                 p { class: "page-subtitle", "{error}" }
@@ -825,6 +1077,17 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
                 }
                 time { datetime: "{message.occurred_at}", "{message.occurred_at}" }
                 p { "{message.body}" }
+                if !message.attachments.is_empty() {
+                    ul { class: "inbox-message-attachments",
+                        for attachment in &message.attachments {
+                            li {
+                                a { class: "nav-link", href: "{attachment.href}",
+                                    "{attachment_label(attachment)}"
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(reference) = message.provider_message_id.as_ref() {
                     p { class: "nav-muted", "Provider message: {reference}" }
                 }
@@ -980,6 +1243,151 @@ mod tests {
     }
 
     #[test]
+    fn direction_and_attachment_filters_compose_with_the_existing_ones() {
+        let mut view = page(
+            ViewerRole::Lawyer,
+            vec![
+                InboxRowView {
+                    id: "c1".into(),
+                    href: "/app/inbox/c1".into(),
+                    channel: "email".into(),
+                    brand_key: Some("neon".into()),
+                    assignee: "Unassigned".into(),
+                    unread: true,
+                    delivery: "received".into(),
+                    next_action: String::new(),
+                    subject: "Notice".into(),
+                    sender: "court@example.com".into(),
+                    updated: "Oct 11, 04:06 UTC".into(),
+                    updated_iso: "2026-10-11T04:06:15+00:00".into(),
+                    direction: store::inbox::direction::INBOUND.into(),
+                    has_attachments: true,
+                },
+                InboxRowView {
+                    id: "c2".into(),
+                    href: "/app/inbox/c2".into(),
+                    channel: "email".into(),
+                    brand_key: Some("neon".into()),
+                    assignee: "Unassigned".into(),
+                    unread: false,
+                    delivery: "sent".into(),
+                    next_action: String::new(),
+                    subject: "Reply".into(),
+                    sender: "firm@example.com".into(),
+                    updated: "Oct 12, 04:06 UTC".into(),
+                    updated_iso: "2026-10-12T04:06:15+00:00".into(),
+                    direction: store::inbox::direction::OUTBOUND.into(),
+                    has_attachments: false,
+                },
+            ],
+        );
+        // All five filters at once: the channel/brand/unread trio from
+        // before, plus direction and has-attachments (LAW-238 D3).
+        view.channel_filter = Some("email".into());
+        view.brand_filter = Some("neon".into());
+        view.unread_only = true;
+        view.direction_filter = Some(store::inbox::direction::INBOUND.into());
+        view.attachments_only = true;
+        let html = dioxus_ssr::render_element(inbox_list_body(&view));
+        // Every filter link preserves the other four selections.
+        assert!(
+            html.contains("channel=email&#38;brand=neon&#38;direction=inbound&#38;unread=true&#38;attachments=true"),
+            "{html}"
+        );
+        // Dropping a filter drops it from every link — the all-channels
+        // link carries only the surviving filters.
+        view.attachments_only = false;
+        view.direction_filter = None;
+        let html = dioxus_ssr::render_element(inbox_list_body(&view));
+        assert!(
+            html.contains(r#"href="/app/inbox?brand=neon&#38;unread=true""#),
+            "{html}"
+        );
+    }
+
+    /// The conversation's latest message direction and attachment flag
+    /// decide the new filters, composed with the existing three.
+    #[test]
+    #[cfg(feature = "server")]
+    fn row_matches_requires_every_selected_filter() {
+        let row = store::inbox::IntakeRow {
+            contact: None,
+            id: uuid::Uuid::nil(),
+            firm_id: uuid::Uuid::nil(),
+            brand_key: Some("neon".into()),
+            project_id: None,
+            channel: "email".into(),
+            assignee: "Unassigned".into(),
+            unread: true,
+            delivery: "received".into(),
+            next_action: "Assign".into(),
+            external_address: "court@example.com".into(),
+            external_name: None,
+            subject: Some("Notice".into()),
+            direction: store::inbox::direction::INBOUND.into(),
+            has_attachments: true,
+            updated_at: chrono::Utc::now(),
+        };
+        let selected = (
+            Some("email"),
+            Some("neon"),
+            true,
+            Some(store::inbox::direction::INBOUND),
+            true,
+        );
+        assert!(row_matches(
+            &row, selected.0, selected.1, selected.2, selected.3, selected.4
+        ));
+        // Each filter is load-bearing: drop the match on any one of the
+        // five and the row is excluded.
+        for (index, miss) in [
+            Some("call"),  // channel
+            Some("vesta"), // brand
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (channel, brand) = if index == 0 {
+                (miss, selected.1)
+            } else {
+                (selected.0, miss)
+            };
+            assert!(
+                !row_matches(&row, channel, brand, selected.2, selected.3, selected.4),
+                "filter {index} is load-bearing"
+            );
+        }
+        assert!(row_matches(
+            &row, selected.0, selected.1,
+            false, // unread_only off: the unread row still matches
+            selected.3, selected.4
+        ));
+        // unread_only on excludes a read row.
+        let mut read_row = row.clone();
+        read_row.unread = false;
+        assert!(!row_matches(
+            &read_row, selected.0, selected.1, true, selected.3, selected.4
+        ));
+        assert!(!row_matches(
+            &row,
+            selected.0,
+            selected.1,
+            true,
+            Some(store::inbox::direction::OUTBOUND),
+            selected.4
+        ));
+        // attachments_only on excludes a row with nothing filed.
+        let mut bare_row = row.clone();
+        bare_row.has_attachments = false;
+        assert!(row_matches(
+            &bare_row, selected.0, selected.1, true, selected.3, false
+        ));
+        assert!(!row_matches(
+            &bare_row, selected.0, selected.1, true, selected.3, true
+        ));
+    }
+
+    #[test]
     fn unread_links_keep_channel_and_brand_and_thread_shows_the_source() {
         let mut view = page(ViewerRole::Lawyer, Vec::new());
         view.brand_filter = Some("neon".into());
@@ -1052,6 +1460,8 @@ mod tests {
             channel_filter: None,
             unread_only: false,
             brand_filter: None,
+            direction_filter: None,
+            attachments_only: false,
             brands,
             compose_action: None,
             csrf_token: String::new(),
@@ -1105,6 +1515,7 @@ mod tests {
                 occurred_at: "2026-10-10T12:00:00Z".into(),
                 provider_message_id: Some("source-message-1".into()),
                 visibility: None,
+                attachments: Vec::new(),
             }],
             projects: vec![ProjectOption {
                 id: "project-1".into(),
@@ -1154,6 +1565,118 @@ mod tests {
     }
 
     #[test]
+    fn the_transcript_renders_attachments_under_their_message() {
+        let mut page = base_thread();
+        page.messages[0].attachments = vec![
+            InboxAttachmentView {
+                filename: Some("exhibit-a.pdf".into()),
+                kind: Some("pdf".into()),
+                href: "/app/projects/24-1043/documents/9f2c".into(),
+            },
+            InboxAttachmentView {
+                filename: None,
+                kind: None,
+                href: "/app/projects/24-1043/documents/aaa1".into(),
+            },
+        ];
+        let html = thread(&page);
+        assert!(
+            html.contains("href=\"/app/projects/24-1043/documents/9f2c\""),
+            "{html}"
+        );
+        assert!(html.contains("exhibit-a.pdf (pdf)"), "{html}");
+        assert!(html.contains("Untitled attachment"), "{html}");
+
+        // A message with nothing filed renders no attachment list.
+        page.messages[0].attachments = Vec::new();
+        let html = thread(&page);
+        assert!(!html.contains("inbox-message-attachments"), "{html}");
+    }
+
+    #[test]
+    fn thread_attachments_dedupe_the_first_slot_and_keep_list_order() {
+        let project_id = uuid::Uuid::from_u128(10);
+        let primary_id = uuid::Uuid::nil();
+        let filed_id = uuid::Uuid::from_u128(2);
+        let asset = |id, filename: &str| store::assets::Asset {
+            id,
+            filename: Some(filename.into()),
+            kind: Some("pdf".into()),
+            project_id: Some(project_id),
+            ..asset_fixture()
+        };
+        let views = thread_attachment_views(
+            "sample-litigation",
+            project_id,
+            uuid::Uuid::from_u128(11),
+            uuid::Uuid::from_u128(12),
+            Some(asset(primary_id, "exhibit-a.pdf")),
+            vec![
+                asset(primary_id, "exhibit-a.pdf"),
+                asset(filed_id, "exhibit-b.pdf"),
+            ],
+            Vec::new(),
+        );
+        assert_eq!(views.len(), 2, "the first attachment occupies both slots");
+        assert_eq!(views[0].filename.as_deref(), Some("exhibit-a.pdf"));
+        assert_eq!(views[1].filename.as_deref(), Some("exhibit-b.pdf"));
+        assert_eq!(
+            views[1].href,
+            format!("/app/projects/sample-litigation/documents/{filed_id}")
+        );
+        assert_eq!(
+            attachment_label(&views[0]),
+            "exhibit-a.pdf (pdf)".to_string()
+        );
+    }
+
+    #[test]
+    fn bare_inbox_attachments_keep_provider_names_order_and_download_scope() {
+        let project = uuid::Uuid::from_u128(10);
+        let conversation = uuid::Uuid::from_u128(11);
+        let message = uuid::Uuid::from_u128(12);
+        let links = [(1_u128, 0_i64, "first.txt"), (2, 1, "second.txt")]
+            .into_iter()
+            .map(|(id, position, name)| store::inbox::MessageAttachment {
+                asset_id: uuid::Uuid::from_u128(id),
+                filename: name.into(),
+                position,
+                sha256: String::new(),
+            })
+            .collect();
+        let views = thread_attachment_views(
+            "sample-litigation",
+            project,
+            conversation,
+            message,
+            None,
+            Vec::new(),
+            links,
+        );
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].filename.as_deref(), Some("first.txt"));
+        assert_eq!(views[1].filename.as_deref(), Some("second.txt"));
+        assert_eq!(views[1].href, format!("/app/api/projects/{project}/inbox/{conversation}/messages/{message}/attachments/{}", uuid::Uuid::from_u128(2)));
+    }
+
+    fn asset_fixture() -> store::assets::Asset {
+        // Only the fields thread_attachment_views reads are load-bearing;
+        // the struct is a plain record, so the rest holds neutral values.
+        serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::nil(),
+            "storage_key": "assets/test",
+            "content_type": "application/pdf",
+            "byte_size": 1,
+            "sha256_hex": "abc",
+            "visibility": "internal",
+            "notarization": [],
+            "inserted_at": "2026-10-30T00:00:00Z",
+            "updated_at": "2026-10-30T00:00:00Z"
+        }))
+        .expect("fixture asset")
+    }
+
+    #[test]
     fn a_linked_text_sender_shows_the_person_and_role() {
         let row = store::inbox::IntakeRow {
             contact: Some(store::inbox::ContactLink {
@@ -1173,6 +1696,8 @@ mod tests {
             external_address: "+15555550123".into(),
             external_name: None,
             subject: None,
+            direction: store::inbox::direction::INBOUND.into(),
+            has_attachments: false,
             updated_at: chrono::Utc::now(),
         };
         assert_eq!(row_view(&row, "/x".into()).sender, "Pat Client (client)");
@@ -1205,6 +1730,8 @@ mod tests {
                 sender: "Pat Client".into(),
                 updated: "Oct 11, 04:06 UTC".into(),
                 updated_iso: "2026-10-11T04:06:15+00:00".into(),
+                direction: store::inbox::direction::INBOUND.into(),
+                has_attachments: false,
             }],
         )));
         assert!(html.contains("<table"), "{html}");
@@ -1269,6 +1796,7 @@ mod tests {
             occurred_at: "2026-10-10T12:00:00Z".into(),
             provider_message_id: None,
             visibility: None,
+            attachments: Vec::new(),
         });
         let html = thread(&page);
         assert!(html.contains("Internal note"), "{html}");
@@ -1299,6 +1827,7 @@ mod tests {
             occurred_at: "2026-10-10T12:00:00Z".into(),
             provider_message_id: None,
             visibility: Some("private".into()),
+            attachments: Vec::new(),
         });
         let html = thread(&page);
         assert!(html.contains("Reconcile delivery"), "{html}");
