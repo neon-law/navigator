@@ -187,26 +187,11 @@ impl YoutubeCommentsPollerService {
             &target.account_id,
         )
         .await?;
-        let response = self
-            .http
-            .get(format!("{}/commentThreads", self.base))
-            .query(&[
-                ("part", "snippet,replies"),
-                ("videoId", target.video_id.as_str()),
-                ("maxResults", PAGE_LIMIT),
-                ("order", "time"),
-            ])
-            .bearer_auth(credential.access_token())
-            .send()
+        let comments = self
+            .fetch_comments(&target.video_id, credential.access_token())
             .await?;
-        let status = response.status();
-        let bytes = response.bytes().await?;
-        if !status.is_success() {
-            anyhow::bail!("commentThreads read returned {status}");
-        }
-        let threads: CommentThreads = serde_json::from_slice(&bytes)?;
         let mut outcome = VideoOutcome::default();
-        for comment in parse_threads(&threads) {
+        for comment in comments {
             if comment.author_channel_id == target.account_id {
                 // The Brand's own reply echoes back as a thread comment; like
                 // the TikTok seam, an owner echo is never an inbound message.
@@ -235,6 +220,109 @@ impl YoutubeCommentsPollerService {
             });
         }
         Ok(outcome)
+    }
+
+    /// Fetch every thread page and every omitted reply page before publishing effects.
+    /// Explicit limits fail the poll instead of silently reporting a truncated success.
+    async fn fetch_comments(
+        &self,
+        video_id: &str,
+        token: &str,
+    ) -> anyhow::Result<Vec<ParsedComment>> {
+        let mut output = Vec::new();
+        let mut ids = std::collections::BTreeSet::new();
+        let mut page_token: Option<String> = None;
+        let mut seen = std::collections::BTreeSet::new();
+        let mut requests = 0_usize;
+        loop {
+            requests += 1;
+            anyhow::ensure!(requests <= 4096, "YouTube pagination request limit");
+            let mut request = self
+                .http
+                .get(format!("{}/commentThreads", self.base))
+                .query(&[
+                    ("part", "snippet,replies"),
+                    ("videoId", video_id),
+                    ("maxResults", PAGE_LIMIT),
+                    ("order", "time"),
+                    ("textFormat", "plainText"),
+                ])
+                .bearer_auth(token);
+            if let Some(page) = page_token.as_deref() {
+                request = request.query(&[("pageToken", page)]);
+            }
+            let response = request.send().await?;
+            let status = response.status();
+            anyhow::ensure!(status.is_success(), "commentThreads read returned {status}");
+            let page: CommentThreads = response.json().await?;
+            for thread in &page.items {
+                let parent = &thread.snippet.top_level_comment.id;
+                let mut comments = vec![parse_comment(&thread.snippet.top_level_comment, None)];
+                let embedded = thread.replies.as_ref().or(thread.snippet.replies.as_ref());
+                if let Some(replies) = embedded {
+                    comments.extend(
+                        replies
+                            .comments
+                            .iter()
+                            .map(|reply| parse_comment(reply, Some(parent.clone()))),
+                    );
+                }
+                if thread.snippet.total_reply_count > embedded.map_or(0, |r| r.comments.len()) {
+                    let mut reply_token: Option<String> = None;
+                    let mut reply_seen = std::collections::BTreeSet::new();
+                    loop {
+                        requests += 1;
+                        anyhow::ensure!(requests <= 4096, "YouTube pagination request limit");
+                        let mut request = self
+                            .http
+                            .get(format!("{}/comments", self.base))
+                            .query(&[
+                                ("part", "snippet"),
+                                ("parentId", parent.as_str()),
+                                ("maxResults", PAGE_LIMIT),
+                                ("textFormat", "plainText"),
+                            ])
+                            .bearer_auth(token);
+                        if let Some(page) = reply_token.as_deref() {
+                            request = request.query(&[("pageToken", page)]);
+                        }
+                        let response = request.send().await?;
+                        let status = response.status();
+                        anyhow::ensure!(status.is_success(), "comments read returned {status}");
+                        let replies: CommentPage = response.json().await?;
+                        comments.extend(
+                            replies
+                                .items
+                                .iter()
+                                .map(|reply| parse_comment(reply, Some(parent.clone()))),
+                        );
+                        reply_token = replies.next_page_token;
+                        match reply_token.as_ref() {
+                            None => break,
+                            Some(next) => anyhow::ensure!(
+                                reply_seen.insert(next.clone()),
+                                "YouTube repeated reply page token"
+                            ),
+                        }
+                    }
+                }
+                for comment in comments {
+                    if ids.insert(comment.id.clone()) {
+                        output.push(comment);
+                    }
+                }
+                anyhow::ensure!(output.len() <= 100_000, "YouTube comment count limit");
+            }
+            page_token = page.next_page_token;
+            match page_token.as_ref() {
+                None => break,
+                Some(next) => anyhow::ensure!(
+                    seen.insert(next.clone()),
+                    "YouTube repeated thread page token"
+                ),
+            }
+        }
+        Ok(output)
     }
 
     async fn ingest_comment(
@@ -331,17 +419,23 @@ pub struct ParsedComment {
 
 #[derive(Deserialize)]
 struct CommentThreads {
+    #[serde(rename = "nextPageToken", default)]
+    next_page_token: Option<String>,
     #[serde(default)]
     items: Vec<CommentThread>,
 }
 
 #[derive(Deserialize)]
 struct CommentThread {
+    #[serde(default)]
+    replies: Option<CommentReplies>,
     snippet: ThreadSnippet,
 }
 
 #[derive(Deserialize)]
 struct ThreadSnippet {
+    #[serde(rename = "totalReplyCount", default)]
+    total_reply_count: usize,
     #[serde(rename = "topLevelComment")]
     top_level_comment: CommentResource,
     #[serde(default)]
@@ -352,6 +446,14 @@ struct ThreadSnippet {
 struct CommentReplies {
     #[serde(default)]
     comments: Vec<CommentResource>,
+}
+
+#[derive(Deserialize)]
+struct CommentPage {
+    #[serde(default)]
+    items: Vec<CommentResource>,
+    #[serde(rename = "nextPageToken", default)]
+    next_page_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -382,12 +484,13 @@ struct AuthorChannelId {
 
 /// Flatten a `commentThreads` response: top-level comments first, then each
 /// thread's replies under their top-level parent.
+#[cfg(test)]
 #[must_use]
 fn parse_threads(threads: &CommentThreads) -> Vec<ParsedComment> {
     let mut parsed = Vec::new();
     for thread in &threads.items {
         parsed.push(parse_comment(&thread.snippet.top_level_comment, None));
-        if let Some(replies) = thread.snippet.replies.as_ref() {
+        if let Some(replies) = thread.replies.as_ref().or(thread.snippet.replies.as_ref()) {
             for reply in &replies.comments {
                 parsed.push(parse_comment(
                     reply,
@@ -735,5 +838,95 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["body"], "A question");
         assert_eq!(messages[1]["body"], "From another viewer");
+    }
+    fn comment(id: &str) -> serde_json::Value {
+        serde_json::json!({"id":id,"snippet":{"textOriginal":"Synthetic comment","authorChannelId":{"value":"viewer"},"publishedAt":"2026-10-30T12:00:00Z"}})
+    }
+    #[tokio::test]
+    async fn fetch_reads_every_thread_page_and_missing_reply_page_without_duplicates() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/commentThreads"))
+            .respond_with(|request:&wiremock::Request| {
+                if request.url.query_pairs().any(|(key,_)|key=="pageToken") {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"items":[{"snippet":{"topLevelComment":comment("c2")}}]}))
+                }else{ResponseTemplate::new(200).set_body_json(serde_json::json!({"nextPageToken":"thread2","items":[{
+                    "snippet":{"topLevelComment":comment("c1"),"totalReplyCount":3},"replies":{"comments":[comment("r1")]}
+                }]}))}
+            }).expect(2).mount(&server).await;
+        Mock::given(method("GET")).and(path("/comments"))
+            .respond_with(|request:&wiremock::Request| {
+                assert!(request.url.query_pairs().any(|(key,value)|key=="parentId"&&value=="c1"));
+                if request.url.query_pairs().any(|(key,_)|key=="pageToken") {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"items":[comment("r3")]}))
+                }else{ResponseTemplate::new(200).set_body_json(serde_json::json!({"nextPageToken":"reply2","items":[comment("r1"),comment("r2")]}))}
+            }).expect(2).mount(&server).await;
+        let service = YoutubeCommentsPollerService::new(
+            mem_surreal().await,
+            Arc::new(cloud::FakeKms::new("pagination")),
+        )
+        .with_base(server.uri());
+        let comments = service
+            .fetch_comments(VIDEO_ID, "synthetic-token")
+            .await
+            .unwrap();
+        assert_eq!(
+            comments
+                .iter()
+                .map(|comment| comment.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c1", "r1", "r2", "r3", "c2"]
+        );
+        assert!(comments
+            .iter()
+            .filter(|c| c.id.starts_with('r'))
+            .all(|c| c.parent_id.as_deref() == Some("c1")));
+    }
+    #[tokio::test]
+    async fn repeated_page_token_and_later_page_failure_never_report_partial_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/commentThreads"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"items":[],"nextPageToken":"same"})),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        let service = YoutubeCommentsPollerService::new(
+            mem_surreal().await,
+            Arc::new(cloud::FakeKms::new("pagination")),
+        )
+        .with_base(server.uri());
+        assert!(service
+            .fetch_comments(VIDEO_ID, "synthetic-token")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("repeated"));
+        let server = MockServer::start().await;
+        let failed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let state = failed.clone();
+        Mock::given(method("GET")).and(path("/commentThreads"))
+            .respond_with(move|request:&wiremock::Request| {
+                if request.url.query_pairs().any(|(key,_)|key=="pageToken") {
+                    if state.load(std::sync::atomic::Ordering::SeqCst){ResponseTemplate::new(503)}
+                    else{ResponseTemplate::new(200).set_body_json(serde_json::json!({"items":[{"snippet":{"topLevelComment":comment("c2")}}]}))}
+                }else{ResponseTemplate::new(200).set_body_json(serde_json::json!({"nextPageToken":"page2","items":[{"snippet":{"topLevelComment":comment("c1")}}]}))}
+            }).mount(&server).await;
+        let service = service.with_base(server.uri());
+        assert!(service
+            .fetch_comments(VIDEO_ID, "synthetic-token")
+            .await
+            .is_err());
+        failed.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            service
+                .fetch_comments(VIDEO_ID, "synthetic-token")
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }
