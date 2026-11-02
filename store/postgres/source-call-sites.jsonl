@@ -231,9 +231,9 @@
 {"file":"cli/src/devx/ship.rs","line":7773,"function":"dri_digest_on_dbos_requires_its_webhook_secret","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/ship.rs","line":7776,"function":"dri_digest_on_dbos_requires_its_webhook_secret","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/ship.rs","line":7782,"function":"dri_digest_on_dbos_requires_its_webhook_secret","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/devx/ship.rs","line":8944,"function":"rendered_release_plan_includes_collector_when_config_changes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/devx/ship.rs","line":8947,"function":"rendered_release_plan_includes_collector_when_config_changes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/devx/ship.rs","line":8950,"function":"rendered_release_plan_includes_collector_when_config_changes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/devx/ship.rs","line":8951,"function":"rendered_release_plan_includes_collector_when_config_changes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/devx/ship.rs","line":8954,"function":"rendered_release_plan_includes_collector_when_config_changes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/devx/ship.rs","line":8957,"function":"rendered_release_plan_includes_collector_when_config_changes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/social_key_changes.rs","line":139,"function":"validate_requests","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/worktree_env.rs","line":1005,"function":"acquire_worktree_env_lock","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/worktree_env.rs","line":1022,"function":"acquire_host_worktree_env_lock","operation":"create","sql_operations":[],"tables":[],"transaction":false}
@@ -529,9 +529,9 @@
 {"file":"mcp/src/tools/delete_closed_repository.rs","line":385,"function":"commit_generation","operation":"bind","sql_operations":[],"tables":["asset"],"transaction":false}
 {"file":"mcp/src/tools/delete_closed_repository.rs","line":385,"function":"commit_generation","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
 {"file":"neon/src/firm_pages.rs","line":1449,"function":"inject_branded","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"neon/src/firm_pages.rs","line":2064,"function":"collect_markdown_paths","operation":"insert","sql_operations":[],"tables":["template"],"transaction":false}
-{"file":"neon/src/firm_pages.rs","line":2124,"function":"business_notations_have_fillable_previews_and_review_workflows","operation":"insert","sql_operations":[],"tables":["question"],"transaction":false}
-{"file":"neon/src/firm_pages.rs","line":2125,"function":"business_notations_have_fillable_previews_and_review_workflows","operation":"insert","sql_operations":[],"tables":["question"],"transaction":false}
+{"file":"neon/src/firm_pages.rs","line":2068,"function":"collect_markdown_paths","operation":"insert","sql_operations":[],"tables":["template"],"transaction":false}
+{"file":"neon/src/firm_pages.rs","line":2128,"function":"business_notations_have_fillable_previews_and_review_workflows","operation":"insert","sql_operations":[],"tables":["question"],"transaction":false}
+{"file":"neon/src/firm_pages.rs","line":2129,"function":"business_notations_have_fillable_previews_and_review_workflows","operation":"insert","sql_operations":[],"tables":["question"],"transaction":false}
 {"file":"neon/src/lib.rs","line":227,"function":"sitemap_paths","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"neon/src/lib.rs","line":228,"function":"sitemap_paths","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"neon/src/lib.rs","line":229,"function":"sitemap_paths","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
@@ -648,7 +648,7 @@
 {"file":"portal/src/dioxus_app.rs","line":4365,"function":"inject_certificate_sent","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/dioxus_app.rs","line":4533,"function":"redirect_draft_alias","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/dioxus_app.rs","line":5069,"function":"inject_glossary","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/dioxus_app.rs","line":5893,"function":"inject_analytics","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/dioxus_app.rs","line":5903,"function":"inject_analytics","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/email_events.rs","line":389,"function":"signed_request","operation":"insert","sql_operations":[],"tables":["signature"],"transaction":false}
 {"file":"portal/src/email_events.rs","line":393,"function":"signed_request","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/email_events.rs","line":421,"function":"a_missing_signature_header_is_rejected_when_a_key_is_configured","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
@@ -4162,7 +4162,7 @@
 {"file":"store/src/seed.rs","line":883,"function":"require_unique","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/seed.rs","line":2957,"function":"seed_entity_types","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/seed.rs","line":3797,"function":"remote_hash","operation":"update","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/seed.rs","line":7069,"function":"seeds_attorney_credentials_with_correct_numbers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/seed.rs","line":7072,"function":"seeds_attorney_credentials_with_correct_numbers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/sent_emails.rs","line":149,"function":"record","operation":"bind","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/sent_emails.rs","line":149,"function":"record","operation":"bind","sql_operations":[],"tables":["sent_email"],"transaction":false}
 {"file":"store/src/sent_emails.rs","line":149,"function":"record","operation":"query","sql_operations":["SELECT","CREATE"],"tables":[],"transaction":false}
