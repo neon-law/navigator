@@ -605,6 +605,120 @@ async fn nothing_unbilled_is_a_no_op() {
 }
 
 #[tokio::test]
+async fn a_matter_with_no_client_to_bill_is_refused() {
+    let Some(_) = invoice_store().await else {
+        return;
+    };
+    // The refusal test's fixture, minus the client-side participation: the
+    // composition resolves the billed party from the matter's client
+    // participation, so a matter with unbilled work but nobody to bill
+    // refuses before the seam is ever crossed.
+    let surreal = mem_surreal().await;
+    let storage: Arc<dyn cloud::StorageService> = Arc::new(
+        cloud::FsStorage::new(
+            std::env::temp_dir().join(format!("nav-invoice-no-party-{}", Uuid::now_v7())),
+        )
+        .await
+        .unwrap(),
+    );
+    let project_id = seed_matter(&surreal, &format!("matter-{}", Uuid::now_v7())).await;
+    let lawyer = store::persons::create(
+        &surreal,
+        &store::persons::NewPerson::with_role(
+            "Lawyer",
+            format!("lawyer-{}@example.com", Uuid::now_v7().simple()),
+            Role::Lawyer,
+        ),
+    )
+    .await
+    .unwrap();
+    store::projects::add_participation(&surreal, project_id, lawyer.id, "lawyer")
+        .await
+        .unwrap();
+    mirror_matters(&surreal, &[project_id]).await;
+    let base = portal::test_support::app_state(surreal.clone()).await;
+    let state = AppState {
+        sessions: SessionStore::new(KEY),
+        billing_provider: Arc::new(billing::StubBillingProvider::new()),
+        storage,
+        ..base
+    };
+    let fx = Fixture {
+        app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
+        surreal,
+        provider: Arc::new(billing::StubBillingProvider::new()),
+        project_id,
+        other_project_id: project_id,
+        lawyer: bearer(lawyer.id, Role::Lawyer),
+        lawyer_id: lawyer.id,
+        client: bearer(lawyer.id, Role::Client),
+        outsider: bearer(lawyer.id, Role::Lawyer),
+        clerk: bearer(lawyer.id, Role::Clerk),
+    };
+    let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+    seed_entry(&pg, project_id, lawyer.id, 90, true).await;
+
+    let resp = generate(&fx, &fx.lawyer, project_id).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(resp).await;
+    assert_eq!(body["reason"], "no_billed_party");
+    assert!(
+        create_calls(&fx).is_empty(),
+        "the provider was never called"
+    );
+    assert!(mirror_rows(&fx.surreal, project_id).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_cost_in_another_currency_is_refused() {
+    let Some(_) = invoice_store().await else {
+        return;
+    };
+    let fx = build_fixture().await;
+    let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+    // A confirmed, unbilled cost in euros: the matter bills in USD, so the
+    // composition refuses the raise rather than silently converting.
+    let receipt_document_id = seed_receipt_asset(&fx.surreal, fx.project_id).await;
+    let cost = store::project_costs::create(
+        &fx.surreal,
+        &pg,
+        fx.project_id,
+        fx.lawyer_id,
+        &store::project_costs::NewProjectCost {
+            occurred_on: NaiveDate::from_ymd_opt(2026, 10, 29).unwrap(),
+            payee: "Synthetic Vendor".into(),
+            description: "Filing copy".into(),
+            amount_cents: 41_00,
+            currency: "EUR".into(),
+            amount_status: "estimated".into(),
+            receipt_document_id,
+            idempotency_key: format!("receipt:{}", Uuid::now_v7()),
+            source_reference: store::project_costs::mercury_source_reference(Uuid::now_v7()),
+        },
+    )
+    .await
+    .unwrap();
+    store::project_costs::confirm_amount(&pg, cost.id, fx.lawyer_id, 41_00)
+        .await
+        .unwrap();
+
+    let resp = generate(&fx, &fx.lawyer, fx.project_id).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(resp).await;
+    assert_eq!(body["reason"], "currency_mismatch");
+    assert!(
+        create_calls(&fx).is_empty(),
+        "the provider was never called"
+    );
+
+    // The euro cost is exactly where it started: confirmed and unbilled.
+    let cost = store::project_costs::find_by_id(&pg, cost.id)
+        .await
+        .unwrap();
+    assert_eq!(cost.billing_status.as_str(), "unbilled");
+}
+
+#[tokio::test]
 async fn a_provider_refusal_marks_nothing() {
     let Some(_) = invoice_store().await else {
         return;
