@@ -294,6 +294,72 @@ mod tests {
         dioxus_ssr::render(&dom)
     }
 
+    const EVERY_ICON: &[IconName] = &[
+        IconName::StarFill,
+        IconName::BuildingFill,
+        IconName::ShieldFillCheck,
+        IconName::ShieldLock,
+        IconName::Eyeglasses,
+        IconName::PencilSquare,
+        IconName::Trash3Fill,
+        IconName::Eye,
+        IconName::Github,
+        IconName::Diagram3Fill,
+        IconName::CheckLg,
+        IconName::XLg,
+        IconName::HouseDoorFill,
+        IconName::HddNetworkFill,
+        IconName::TreeFill,
+        IconName::AwardFill,
+        IconName::VinylFill,
+        IconName::Bank2,
+        IconName::HeartFill,
+        IconName::CloudFill,
+        IconName::Incognito,
+        IconName::BoxArrowUpRight,
+        IconName::ArrowLeft,
+        IconName::LibraScales,
+        IconName::EnvelopeFill,
+        IconName::TelephoneFill,
+        IconName::X,
+        IconName::LinkedIn,
+        IconName::YouTube,
+    ];
+
+    #[test]
+    fn every_icon_round_trips_its_catalog_name_and_draws_a_shape() {
+        // Chrome-only glyphs (the off-site arrow, the breadcrumb arrow) never
+        // come from catalog data, so the legacy resolver does not name them.
+        let chrome_only = [IconName::BoxArrowUpRight, IconName::ArrowLeft];
+        for &icon in EVERY_ICON {
+            let glyph = icon.glyph();
+            if !chrome_only.contains(&icon) {
+                assert_eq!(IconName::from_catalog_name(glyph), Some(icon), "{glyph}");
+            }
+            let html = render(icon, None);
+            assert!(
+                ["<path", "<circle", "<rect"]
+                    .iter()
+                    .any(|shape| html.contains(shape)),
+                "{glyph} renders no shape: {html}"
+            );
+        }
+        let mut glyphs: Vec<_> = EVERY_ICON.iter().map(|icon| icon.glyph()).collect();
+        glyphs.sort_unstable();
+        glyphs.dedup();
+        assert_eq!(
+            glyphs.len(),
+            EVERY_ICON.len(),
+            "two icons share a catalog name"
+        );
+    }
+
+    #[test]
+    fn an_unknown_catalog_name_is_not_an_icon() {
+        assert_eq!(IconName::from_catalog_name("not-an-icon"), None);
+        assert_eq!(IconName::from_catalog_name(""), None);
+    }
+
     #[test]
     fn decorative_icon_is_aria_hidden_and_has_no_title() {
         let html = render(IconName::StarFill, None);
