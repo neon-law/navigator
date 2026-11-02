@@ -14,10 +14,10 @@ uses `blobs/<sha>`, an object-storage key that addresses a [Blob](blob.md) and i
 client's view of the matter page and "download all documents" archive; every ingest call site states it explicitly.
 Property in an estate plan is an [Estate Asset](estate-asset.md), a different table.
 
-- Schema: [`asset` in `navigator.surql`](../../store/src/schema/navigator.surql) · Write
+- Schema: [`asset` in the PostgreSQL schema](../../store/postgres/schema.sql) · Write
   lanes: [`store::documents::ingest_bytes`](../../store/src/documents.rs) (document assets),
   [`store::assets::ingest_content`](../../store/src/assets.rs) (bare content).
 
 The table is `asset`.
 
-Schema: [`asset`](../../store/src/schema/navigator.surql#L1622).
+Schema: [`asset`](../../store/postgres/schema.sql).

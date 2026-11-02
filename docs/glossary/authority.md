@@ -25,9 +25,9 @@ A composition references an Authority by id and the server resolves it under the
 instead is the failure mode: it drifts from the record and cannot be re-verified.
 
 - Vocabulary: [`rules::citation`](../../rules/src/citation.rs) · Schema:
-  [`authority` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
-  [`store::authorities`](../../store/src/authorities.rs) Lives in: the `authority` table in SurrealDB
+  [`authority` in the PostgreSQL schema](../../store/postgres/schema.sql) Queries:
+  [`store::authorities`](../../store/src/authorities.rs) Model: the PostgreSQL `authority` table
 
 The table is `authority`.
 
-Schema: [`authority`](../../store/src/schema/navigator.surql#L2120).
+Schema: [`authority`](../../store/postgres/schema.sql).

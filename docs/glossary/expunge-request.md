@@ -9,4 +9,4 @@ Record](expunge-record.md); pending and denied requests retain their decisions.
 
 The table is `expunge_request`.
 
-Schema: [`expunge_request`](../../store/src/schema/navigator.surql#L2244).
+Schema: [`expunge_request`](../../store/postgres/schema.sql).

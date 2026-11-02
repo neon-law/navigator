@@ -9,4 +9,4 @@ identifier together distinguish one delivery from another.
 
 The table is `inbox_ingress`.
 
-Schema: [`inbox_ingress`](../../store/src/schema/navigator.surql#L2579).
+Schema: [`inbox_ingress`](../../store/postgres/schema.sql).

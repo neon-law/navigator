@@ -28,4 +28,4 @@ values onto it, and the renderer refuses a body whose bytes do not match the cop
 
 The table is `template`.
 
-Schema: [`template`](../../store/src/schema/navigator.surql#L1707).
+Schema: [`template`](../../store/postgres/schema.sql).

@@ -10,4 +10,4 @@ that keeps the original filename and the attachment's position in the provider's
 primary attachment, the one a Communication projection references. Re-ingesting the same attachment bytes on a message
 reuses the link, so a retried delivery cannot duplicate one.
 
-The table is `inbox_message_asset`. Schema: [`inbox_message_asset`](../../store/src/schema/navigator.surql).
+The table is `inbox_message_asset`. Schema: [`inbox_message_asset`](../../store/postgres/schema.sql).

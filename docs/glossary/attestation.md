@@ -9,4 +9,4 @@ Configured chain references accompany the durable record.
 
 The table is `attestation`.
 
-Schema: [`attestation`](../../store/src/schema/navigator.surql#L2057).
+Schema: [`attestation`](../../store/postgres/schema.sql).

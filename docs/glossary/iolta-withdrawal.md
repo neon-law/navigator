@@ -9,4 +9,4 @@ how the transfer settles individual matters' invoices.
 
 The table is `iolta_withdrawal`.
 
-Schema: [`iolta_withdrawal`](../../store/src/schema/navigator.surql#L250).
+Schema: [`iolta_withdrawal`](../../store/postgres/schema.sql).

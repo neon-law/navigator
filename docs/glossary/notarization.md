@@ -21,4 +21,4 @@ no gate requires it.
 
 The table is `notarization`.
 
-Schema: [`notarization`](../../store/src/schema/navigator.surql#L2104).
+Schema: [`notarization`](../../store/postgres/schema.sql).

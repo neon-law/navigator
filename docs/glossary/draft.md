@@ -38,9 +38,9 @@ their own meanings:
 - The [Document Drafts](document-drafts.md) workflow prefix `document_drafts__*`, a system wait state for web-rendered
   review-document rows.
 - `review_document.status`, whose default is `draft` — the status of one attorney-reviewed instrument a client reads,
-  not of the authored source it was rendered from. Schema: [`review_document` in
-  `navigator.surql`](../../store/src/schema/navigator.surql).
+  not of the authored source it was rendered from. Schema: [`review_document` in PostgreSQL
+  schema](../../store/postgres/schema.sql).
 
 The table is `draft`.
 
-Schema: [`draft`](../../store/src/schema/navigator.surql#L1752).
+Schema: [`template`](../../store/postgres/schema.sql).

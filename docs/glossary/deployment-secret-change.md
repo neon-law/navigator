@@ -17,4 +17,4 @@ Firm integration secrets and Brand account OAuth tokens remain separate stores w
 
 The table is `deployment_secret_change`.
 
-Schema: [`deployment_secret_change`](../../store/src/schema/navigator.surql#L2631).
+Schema: [`deployment_secret_change`](../../store/postgres/schema.sql).

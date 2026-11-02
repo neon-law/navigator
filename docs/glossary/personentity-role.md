@@ -16,4 +16,4 @@ There is no surrogate key: a tie's identity is its two endpoints plus its `role`
 
 The table is `entity_role`.
 
-Schema: [`entity_role`](../../store/src/schema/navigator.surql#L1170).
+Schema: [`entity_role`](../../store/postgres/schema.sql).

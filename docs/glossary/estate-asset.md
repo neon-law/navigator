@@ -21,8 +21,8 @@ The rows belong to the `estate` [Module](module.md). They are imported from a Pr
 and for the matter's client while the module is enabled.
 
 - Store: [`store::estate_assets`](../../store/src/estate_assets.rs) · Schema:
-  [`estate_asset`](../../store/src/schema/navigator.surql)
+  [`estate_asset`](../../store/postgres/schema.sql)
 
 The table is `estate_asset`.
 
-Schema: [`estate_asset`](../../store/src/schema/navigator.surql#L482).
+Schema: [`estate_asset`](../../store/postgres/schema.sql).

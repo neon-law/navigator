@@ -9,4 +9,4 @@ contain several cases, each with its own [Docket Entries](docket-entry.md).
 
 The table is `case`.
 
-Schema: [`case`](../../store/src/schema/navigator.surql#L2264).
+Schema: [`case`](../../store/postgres/schema.sql).

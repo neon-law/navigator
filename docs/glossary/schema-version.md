@@ -1,12 +1,12 @@
 ---
 title: "Schema Version"
-description: >-
-  An internal marker of the schema version applied to the standing data store.
+description: "A Schema Version identifies an applied database schema change."
 ---
 
-Internal plumbing for the [Standing Data Store](standing-data-store.md). Startup reads this marker to decide which
-schema backfills must run.
+An applied change to the [Standing Data Store](standing-data-store.md) schema. PostgreSQL's SQLx migration runner
+records ordered versions and checksums in `_sqlx_migrations`. Run the explicit migration command before serving
+requests; see [PostgreSQL access and migrations](../postgres-tooling.md).
+
+The compatibility engine's version marker is described in [SurrealDB compatibility](../surreal-compatibility.md#schema).
 
 The table is `schema_version`.
-
-Schema: [`schema_version`](../../store/src/schema/navigator.surql#L31).

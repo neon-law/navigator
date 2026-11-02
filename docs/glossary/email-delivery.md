@@ -12,4 +12,4 @@ Each admitted send records an [Email Delivery Attempt](email-delivery-attempt.md
 
 The table is `email_delivery`.
 
-Schema: [`email_delivery`](../../store/src/schema/navigator.surql#L1484).
+Schema: [`email_delivery`](../../store/postgres/schema.sql).

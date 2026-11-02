@@ -139,3 +139,6 @@ cannot decay the way the old seven-line stub did.
 
 - [`lsp/README.md`](lsp/README.md) — `navigator-lsp`, the Language Server Protocol backend for Navigator's Markdown and
   Notation diagnostics.
+
+- [Storage models and writes](storage-models.md) — PostgreSQL models, domain authority, and supported write paths.
+- [SurrealDB compatibility](surreal-compatibility.md) — source-engine contracts and migration coverage.

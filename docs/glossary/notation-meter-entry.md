@@ -9,4 +9,4 @@ Package](notation-package.md). Its saved unit price keeps later rate edits from 
 
 The table is `notation_meter_entry`.
 
-Schema: [`notation_meter_entry`](../../store/src/schema/navigator.surql#L1795).
+Schema: [`notation_meter_entry`](../../store/postgres/schema.sql).

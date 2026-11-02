@@ -13,4 +13,4 @@ The workflow prefix `filing` records a named government filing. It is an outboun
 
 The table is `filing`.
 
-Schema: [`filing`](../../store/src/schema/navigator.surql#L2042).
+Schema: [`filing`](../../store/postgres/schema.sql).

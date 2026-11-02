@@ -13,4 +13,4 @@ See [`notation-authoring`](../notation-authoring.md#what-runs-after-intake--the-
 
 The table is `signature`.
 
-Schema: [`signature`](../../store/src/schema/navigator.surql#L2076).
+Schema: [`signature`](../../store/postgres/schema.sql).

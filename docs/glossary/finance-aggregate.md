@@ -9,4 +9,4 @@ result, and the latest run supplies the matter's finance view.
 
 The table is `finance_aggregate`.
 
-Schema: [`finance_aggregate`](../../store/src/schema/navigator.surql#L2617).
+Schema: [`finance_aggregate`](../../store/postgres/schema.sql).

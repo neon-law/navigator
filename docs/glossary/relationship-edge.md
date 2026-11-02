@@ -13,7 +13,7 @@ Each edge carries provenance (`source_kind` ∈ `manual` / `disclosure` / `relat
 free-form detail land lower, and the conflict check multiplies confidence along a path so a chain of weak guesses cannot
 raise a finding on its own.
 
-Both endpoints are native `record<person|entity>` links, so an endpoint-kind typo cannot be written at all.
+Both endpoints identify a Person or Entity. The store validates endpoint kinds before writing the edge.
 
 A matter asserts adversity through `POST /app/api/projects/{id}/relationships/adverse` (`navigator project adverse
 add`): a `manual` `adverse_to` edge at `confidence_pct` 100 from the client — the Project's Entity, or its client DRI —
@@ -26,4 +26,4 @@ that lived the adversity.
 
 The table is `relationship`.
 
-Schema: [`relationship`](../../store/src/schema/navigator.surql#L1210).
+Schema: [`relationship`](../../store/postgres/schema.sql).

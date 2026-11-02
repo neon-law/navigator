@@ -9,8 +9,8 @@ also snapshots the selected linked Instagram identity; changing a saved selectio
 contains no Social Account credentials.
 
 - Schema and lifecycle: [`store::social_oauth_attempts`](../../store/src/social_oauth_attempts.rs) —
-  [`social_oauth_attempt`](../../store/src/schema/navigator.surql)
+  [`social_oauth_attempt`](../../store/postgres/schema.sql)
 
 The table is `social_oauth_attempt`.
 
-Schema: [`social_oauth_attempt`](../../store/src/schema/navigator.surql#L1107).
+Schema: [`social_oauth_attempt`](../../store/postgres/schema.sql).

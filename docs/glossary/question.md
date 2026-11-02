@@ -9,4 +9,4 @@ and collects an [Answer](answer.md).
 
 The table is `question`.
 
-Schema: [`question`](../../store/src/schema/navigator.surql#L1525).
+Schema: [`question`](../../store/postgres/schema.sql).

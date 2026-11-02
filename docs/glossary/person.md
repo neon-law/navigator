@@ -10,17 +10,13 @@ links that pair to a Person via the presenting provider's own subject column —
 authorized for Navigator legal work, not a firm email or source-forge membership. See
 [`docs/access-model`](../access-model.md) and [`docs/oidc`](../oidc.md).
 
-This is a SurrealDB table and [`store::persons`](../../store/src/persons.rs) is the only module that reads or writes it.
-Every `person_id` on another table is therefore an unenforced cross-engine id, resolved in Rust. A [Lead](lead.md) is a
-public contact request, not a second directory: conversion and linking write this table and point `lead.person_id` at
-the row.
+The PostgreSQL `person` table holds the model, and [`store::persons`](../../store/src/persons.rs) is its public
+accessor. With People authority enabled, Person rows and mailbox claims commit in one PostgreSQL transaction. A
+[Lead](lead.md) converts into a Person and records that row's id in `lead.person_id`.
 
-One Person per mailbox is protected from forking by a claim in the `person_mailbox` table, whose record id is the
-lowercased email, rather than by the UNIQUE `person_email_lower` index alone. The index is the backstop behind it — it
-refuses a fork that is not a race, but racers write no shared key for the engine to conflict on, so the claim is what
-serializes them. It matters here more than elsewhere because `role` is the authorization root: a forked mailbox is one
-human carrying two roles. The claim moves when an edit moves the email and is released when the Person is deleted, so a
-mailbox is reusable rather than locked out.
+The `person_mailbox` table gives each normalized mailbox one Person. Claims move with email edits and are released on
+deletion. Authority selection and compatibility projection are described in [Storage models and
+writes](../storage-models.md#people).
 
 **One human, several addresses.** A second claim for the same Person is an *alias*: an attorney who changes firms keeps
 the old address, and `store::persons::find_by_any_email` finds the row by either. No new table holds aliases — they are
@@ -29,12 +25,13 @@ more `person_mailbox` rows, so they are exactly as unique as a primary email and
 any of them is updated to the record's `email` instead of duplicated, and the rest are kept as aliases. When a duplicate
 already exists, `navigator site person merge <keep> <drop>` ([`store::person_merge`](../../store/src/person_merge.rs))
 moves the dropped client Person's relationships — Conflict-Check Graph edges, Project participation, Relationship Log
-rows — to the kept Person in one transaction, hands over both addresses, and deletes the duplicate last. Aliases are
-written through the SurrealDB claim only; they are refused under PostgreSQL People authority until that path lands.
+rows — to the kept Person in one transaction, hands over both addresses, and deletes the duplicate last. Alias writes
+and Person merges require the compatibility path; PostgreSQL People authority refuses them. See [SurrealDB
+compatibility](../surreal-compatibility.md#people).
 
-- Schema: [`person` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
+- Schema: [`person` in the PostgreSQL schema](../../store/postgres/schema.sql) Queries:
   [`store::persons`](../../store/src/persons.rs)
 
 The table is `person`.
 
-Schema: [`person`](../../store/src/schema/navigator.surql#L584).
+Schema: [`person`](../../store/postgres/schema.sql).

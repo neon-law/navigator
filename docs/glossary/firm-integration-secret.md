@@ -9,4 +9,4 @@ credential within the Firm's scope.
 
 The table is `firm_integration_secret`.
 
-Schema: [`firm_integration_secret`](../../store/src/schema/navigator.surql#L903).
+Schema: [`firm_integration_secret`](../../store/postgres/schema.sql).

@@ -9,4 +9,4 @@ preserves its anchor and individual decision as the document gains later version
 
 The table is `notation_document_comment`.
 
-Schema: [`notation_document_comment`](../../store/src/schema/navigator.surql#L1963).
+Schema: [`notation_document_comment`](../../store/postgres/schema.sql).

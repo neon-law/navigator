@@ -9,4 +9,4 @@ review status. A matter can have several instruments, each with its own comments
 
 The table is `review_document`.
 
-Schema: [`review_document`](../../store/src/schema/navigator.surql#L2004).
+Schema: [`review_document`](../../store/postgres/schema.sql).

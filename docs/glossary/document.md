@@ -23,5 +23,5 @@ transcribe <pointer>` renders and OCRs each PDF page locally.
 > `navigator project sync`. Sync uploads each staged file, writes its Pointer, and keeps the local copy. Neither folder
 > is part of the portal bundle or a second document store. Raw legal-document bytes never enter Project Git.
 
-- Schema: [`asset` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
-  [`store::assets`](../../store/src/assets.rs) Lives in: the `asset` table in SurrealDB (document-shaped rows)
+- Schema: [`asset` in the PostgreSQL schema](../../store/postgres/schema.sql) Queries:
+  [`store::assets`](../../store/src/assets.rs) Model: the PostgreSQL `asset` table

@@ -9,14 +9,10 @@ The graph the firm walks **before opening a matter** to decide whether the new e
 it already serves. Every node is a [Person](person.md) or an [Entity](entity.md); every edge is a typed relationship
 between two of them.
 
-The graph **is** the store. Its two edge tables are Surreal-resident, and `store::conflicts` traverses them on the
-deployment's own connection:
-
-- `entity_role` — structural ties (manages / owns / member-of), always full confidence, written as
-  `RELATE person->entity_role->entity`. Owned by [`store::entity_roles`](../../store/src/entity_roles.rs).
-- [`relationship`](relationship-edge.md) — the supplemental typed edges: adversity, related-party, and edges an LLM
-  later parses out of a [Relationship Log](relationship-log.md)'s free-form detail. Written as `RELATE
-  (person|entity)->relationship->(person|entity)`, owned by [`store::relationships`](../../store/src/relationships.rs).
+The PostgreSQL model holds `entity_role` structural ties and `relationship` supplemental typed edges. Apache AGE
+traverses their `navigator_graph` projection when graph authority is `age`. The domain accessors are
+[`store::entity_roles`](../../store/src/entity_roles.rs) and [`store::relationships`](../../store/src/relationships.rs).
+Authority selection and cutover verification live in the [AGE graph runbook](../age-graph-runbook.md).
 
 A matter writes into the graph through a [Project Reference](project-reference.md): it first references the counterparty
 it verified, then records adversity against that referenced party with `POST
@@ -24,15 +20,8 @@ it verified, then records adversity against that referenced party with `POST
 Relationship Log row the write appends on the Project. The traversal does not read `project_reference` itself; a
 reference is how a counterparty gets a node without getting a lens.
 
-It was once a *transient view*: each check loaded the rows and projected a name-only copy into an embedded in-memory
-SurrealDB that was dropped with the check. That projection was deliberately written in the shape the persistent store
-would hold, so making the rows resident deleted the projection — and its separate schema file — rather than rewriting
-the traversal.
-
-The engine walks — one bounded SurrealQL query collects every edge within three hops of the anchors — and Rust scores:
-the confidence product along a path and the review/block floors are conflict judgments, not graph operations. The
-traversal is read-only by construction, which matters more now that it runs against the live store than it did against a
-throwaway one.
+The engine collects edges within three hops of the anchors. Rust scores the confidence product along each path and
+applies the review and block floors. The traversal is read-only.
 
 A check anchors on the proposed client and entity and surfaces every distinct firm-served party it reaches. It reads
 **across matters, unscoped**, because imputed conflicts under Model Rule 1.10 live on other people's matters; the

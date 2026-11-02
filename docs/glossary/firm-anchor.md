@@ -9,4 +9,4 @@ creating rival firm identities.
 
 The table is `firm_anchor`.
 
-Schema: [`firm_anchor`](../../store/src/schema/navigator.surql#L1158).
+Schema: [`firm_anchor`](../../store/postgres/schema.sql).

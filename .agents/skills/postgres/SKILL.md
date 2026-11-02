@@ -12,13 +12,15 @@ description: >
 
 Before beginning, always ground in the code, its tests, and the [glossary](../../../docs/glossary).
 
-We are swapping SurrealDB for PostgreSQL. The image and infrastructure foundation are tested. A partial experimental SQL
-schema and parity inventory exist under `store/postgres/`; they are not a complete application schema. The Firm journal
-uses SQLx and PostgreSQL-only writes, with a temporary boot-time import of Surreal Journal Entries. Missing insertion
-timestamps require read-only triage; they are never invented. Other accessors still use SurrealDB. Run
-`navigator-migrate` before a PostgreSQL-configured boot ([tooling](../../../docs/postgres-tooling.md)); the runtime
-importer performs no DDL. No deployment's `web` reads PostgreSQL until its `config.toml` opts in. Until then,
-[surreal-migrations](../surreal-migrations/SKILL.md) governs every live schema change.
+Use PostgreSQL relational models and ordered SQLx migrations for new storage work. Prefer supported PostgreSQL writes
+through the domain accessor. [Storage models and writes](../../../docs/storage-models.md) records authority selection
+for People and the AGE graph, PostgreSQL-native domains, and cutover limits. A mirror alone does not transfer write
+authority. The schema and parity inventory live under `store/postgres/`.
+
+Run `navigator-migrate` before a PostgreSQL-configured boot ([tooling](../../../docs/postgres-tooling.md)); request
+handlers and the runtime importer perform no DDL. Deployment configuration selects each domain's active backend.
+[SurrealDB compatibility](../../../docs/surreal-compatibility.md) holds the remaining source-engine contracts, and
+[surreal-migrations](../surreal-migrations/SKILL.md) governs schema changes to those live paths.
 
 ## The image
 

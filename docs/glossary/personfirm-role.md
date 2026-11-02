@@ -9,8 +9,7 @@ A Person's membership at a [Firm](firm.md). Shaped like [Person–Project Role](
 through person–project participation. `owner` is not a membership value: the deployment-wide Owner identity stays on
 `person.role`.
 
-The command seam reads both referenced rows before writing, because a `record<>` link constrains the target table but
-does not prove the row exists.
+The command validates both referenced rows before writing. PostgreSQL foreign keys also enforce their existence.
 
 **`is_dri` is the Firm's Admin DRI marker — a different noun from a matter's DRI.** Every active Firm holds exactly one:
 `person_firm_role.membership = 'admin'` and `person.role` either `admin` or `owner`, never Lawyer, Clerk, or Client.
@@ -37,8 +36,8 @@ explicit — this door grants nothing for either — and a Client is never offer
 they are seeded `client` and promoted afterward, past the point this rule can see them.
 
 - Schema: [`store::firms`](../../store/src/firms.rs) ·
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `person_firm_role`.
 
-Schema: [`person_firm_role`](../../store/src/schema/navigator.surql#L309).
+Schema: [`person_firm_role`](../../store/postgres/schema.sql).

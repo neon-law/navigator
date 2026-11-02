@@ -14,4 +14,4 @@ the committed document pointer, and mirrored to PostgreSQL in the same change. A
 read reads back as unrecorded rather than failing the document. Every field is optional: an exhibit with no evidence
 block is a gap the [Evidence Index](evidence-index.md) shows, not a broken record.
 
-Schema: [`asset.evidence`](../../store/src/schema/navigator.surql).
+Schema: [`asset.evidence`](../../store/postgres/migrations/20261030020000_add_asset_evidence.sql).

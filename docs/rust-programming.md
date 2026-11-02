@@ -18,9 +18,10 @@ Navigator is application code. The public Rust guides come first; advice for pub
   crate declares `[lints] workspace = true`.
 - `unsafe_code = "forbid"`; clippy pedantic runs with `-D warnings`. When a lint can enforce a rule, enable the lint
   instead of adding prose.
-- The stack is Tokio, Axum, and SurrealDB, the source of truth for application reads and writes. PostgreSQL holds the
-  Firm journal and an opt-in mirror of selected stores, and is replacing SurrealDB (see the
-  [`postgres`](../.agents/skills/postgres/SKILL.md) skill and the [PostgreSQL tooling guide](postgres-tooling.md)).
+- The stack is Tokio, Axum, and PostgreSQL through SQLx. New models use relational tables and ordered migrations.
+  Prefer PostgreSQL writes through supported domain accessors; [storage models and writes](storage-models.md) records
+  authority selection and cutover limits. SurrealDB compatibility paths remain for domains awaiting cutover; see
+  [SurrealDB compatibility](surreal-compatibility.md) and the [PostgreSQL tooling guide](postgres-tooling.md).
   `workflows-service`, `archives`, and `billing-workflows` use the Restate SDK directly; `workflows` does not.
 
 ## Error handling

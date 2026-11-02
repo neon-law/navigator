@@ -16,8 +16,8 @@ Neon when that setting is absent. Other Firms and missing configuration produce 
 message bodies. Historical Messages without a notice state are not replayed.
 
 - Schema and queries: [`store::inbox`](../../store/src/inbox.rs) —
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `message`.
 
-Schema: [`message`](../../store/src/schema/navigator.surql#L2551).
+Schema: [`message`](../../store/postgres/schema.sql).

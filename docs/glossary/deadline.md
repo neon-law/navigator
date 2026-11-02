@@ -82,4 +82,4 @@ contract binds the date, and *soft* for an internal target. The mark is read fro
 - Panel: [`webapp::project_deadlines`](../../webapp/src/project_deadlines.rs) · Store:
   [`store::project_deadlines`](../../store/src/project_deadlines.rs)
 
-Schema: [`project_deadlines`](../../store/src/schema/navigator.surql#L344).
+Schema: [`project_deadlines`](../../store/postgres/schema.sql).

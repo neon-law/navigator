@@ -23,5 +23,5 @@ Inbound channels share one entry point — `store::documents::ingest_bytes` — 
 in one transaction. Per-channel data (email headers, fax metadata) belongs in per-channel tables (`inbound_emails`,
 `inbound_faxes`) when those channels ship.
 
-- Schema: [`asset` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
-  [`store::assets`](../../store/src/assets.rs) Lives in: the `asset` table in SurrealDB
+- Schema: [`asset` in the PostgreSQL schema](../../store/postgres/schema.sql) Queries:
+  [`store::assets`](../../store/src/assets.rs) Model: the PostgreSQL `asset` table

@@ -24,9 +24,9 @@ The corresponding telemetry event carries identifiers and outcomes only — veri
 axis, the outcome, the verifier, the revision SHA, and a duration. No quote, no citation string, no proposition.
 
 - Vocabulary: [`rules::citation`](../../rules/src/citation.rs) · Schema:
-  [`verification` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
-  [`store::verifications`](../../store/src/verifications.rs) Lives in: the `verification` table in SurrealDB
+  [`verification` in the PostgreSQL schema](../../store/postgres/schema.sql) Queries:
+  [`store::verifications`](../../store/src/verifications.rs) Model: the PostgreSQL `verification` table
 
 The table is `verification`.
 
-Schema: [`verification`](../../store/src/schema/navigator.surql#L2176).
+Schema: [`verification`](../../store/postgres/schema.sql).

@@ -18,7 +18,7 @@ length that offset names, and carries that offset explicitly, so a retried appen
 A session expires 24 hours after `created_at` and is removed at completion; it is not a [Pointer](pointer.md) (no
 revision exists yet) and not a [Blob](blob.md) (no whole bytes are stored until the last chunk lands).
 
-- Schema: [`document_upload_session` in `navigator.surql`](../../store/src/schema/navigator.surql)
+- Schema: [`document_upload_session` in the PostgreSQL schema](../../store/postgres/schema.sql)
 - Lanes: [`create_upload_session`, `append_upload_chunk`, `complete_upload`](../../store/src/documents.rs)
 
 The table is `document_upload_session`.

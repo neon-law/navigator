@@ -36,9 +36,9 @@ const OFFSITE_ARROW: &str = concat!(
     "</svg>",
 );
 
-/// The Surreal schema diagram the public page embeds. The viewer rejects a
+/// The PostgreSQL schema diagram the public page embeds. The viewer rejects a
 /// longer fence, so this stays at or under that limit.
-const SCHEMA_ERD: &str = include_str!("../../store/postgres/surreal-source-erd.mmd");
+const SCHEMA_ERD: &str = include_str!("../../store/postgres/postgres-erd.mmd");
 const MERMAID_SOURCE_LIMIT: usize = 200_000;
 const _: () = assert!(SCHEMA_ERD.len() <= MERMAID_SOURCE_LIMIT);
 
@@ -320,8 +320,8 @@ mod tests {
     #[test]
     fn rewrite_link_maps_repo_relative_paths_to_github() {
         assert_eq!(
-            rewrite_link("../../store/src/schema/navigator.surql"),
-            at_release("blob", "store/src/schema/navigator.surql")
+            rewrite_link("../../store/postgres/schema.sql"),
+            at_release("blob", "store/postgres/schema.sql")
         );
         assert_eq!(rewrite_link("../../store/"), at_release("tree", "store"));
         assert_eq!(
@@ -390,8 +390,8 @@ mod tests {
         assert!(
             content()
                 .preamble_html
-                .contains("href=\"/public/glossary/ERD.svg\""),
-            "the opening links the schema diagram"
+                .contains("store/postgres/schema.sql"),
+            "the opening links the PostgreSQL model"
         );
         assert!(
             content()
@@ -403,12 +403,11 @@ mod tests {
             content().preamble_html.contains("erDiagram"),
             "the embedded diagram is the entity-relationship diagram"
         );
-        for table in store::schema::table_names() {
-            assert!(
-                super::SCHEMA_ERD.contains(&format!("    {table} {{")),
-                "{table} is missing from the glossary diagram"
-            );
-        }
+        assert_eq!(
+            super::SCHEMA_ERD,
+            store::postgres_schema::render_erd().expect("PostgreSQL schema renders"),
+            "the glossary diagram must match the PostgreSQL model"
+        );
         assert!(
             !content().preamble_html.contains("defined in one place"),
             "the opening states the vocabulary without restating the page"
@@ -449,7 +448,7 @@ mod tests {
             .iter()
             .map(|e| e.body_html.as_str())
             .collect();
-        let surql = at_release("blob", "store/src/schema/navigator.surql");
+        let surql = at_release("blob", "store/postgres/schema.sql");
         assert!(
             html.contains(&format!(
                 "href=\"{surql}\" target=\"_blank\" rel=\"noopener noreferrer\""

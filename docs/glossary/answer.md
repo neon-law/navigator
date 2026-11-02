@@ -9,4 +9,4 @@ response; a Notation reads the latest response for its questionnaire state.
 
 The table is `answer`.
 
-Schema: [`answer`](../../store/src/schema/navigator.surql#L1572).
+Schema: [`answer`](../../store/postgres/schema.sql).

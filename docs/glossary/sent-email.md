@@ -9,4 +9,4 @@ delivery to that matter; firm mail may have no Project.
 
 The table is `sent_email`.
 
-Schema: [`sent_email`](../../store/src/schema/navigator.surql#L1323).
+Schema: [`sent_email`](../../store/postgres/schema.sql).

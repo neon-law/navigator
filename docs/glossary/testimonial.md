@@ -9,4 +9,4 @@ Publication selects endorsements with recorded consent for a [Brand](brand.md)'s
 
 The table is `testimonial`.
 
-Schema: [`testimonial`](../../store/src/schema/navigator.surql#L519).
+Schema: [`testimonial`](../../store/postgres/schema.sql).

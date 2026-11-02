@@ -17,8 +17,8 @@ connection asks a Brand manager to reconnect it. TikTok Business connects one ve
 username with publishing and readback permissions; expiring tokens refresh with rotation and the same account identity.
 
 - Schema and credential lifecycle: [`store::social_accounts`](../../store/src/social_accounts.rs) —
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `social_account`.
 
-Schema: [`social_account`](../../store/src/schema/navigator.surql#L1081).
+Schema: [`social_account`](../../store/postgres/schema.sql).

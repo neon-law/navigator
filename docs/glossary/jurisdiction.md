@@ -9,9 +9,9 @@ A US state, federal jurisdiction, or foreign jurisdiction that an Entity can be 
 [Credential](credential.md) is issued by. Identified by short code (`NV`, `CA`, `US`, …).
 
 - Queries: [`store::jurisdictions`](../../store/src/jurisdictions.rs) Schema:
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql) Seed:
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql) Seed:
   [`store/seeds/Jurisdiction.yaml`](../../store/seeds/Jurisdiction.yaml)
 
 The table is `jurisdiction`.
 
-Schema: [`jurisdiction`](../../store/src/schema/navigator.surql#L776).
+Schema: [`jurisdiction`](../../store/postgres/schema.sql).

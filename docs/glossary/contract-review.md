@@ -9,4 +9,4 @@ durable attribution in [Notation Event](notation-event.md).
 
 The table is `contract_review`.
 
-Schema: [`contract_review`](../../store/src/schema/navigator.surql#L2206).
+Schema: [`contract_review`](../../store/postgres/schema.sql).

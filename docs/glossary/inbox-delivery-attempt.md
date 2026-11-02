@@ -9,4 +9,4 @@ reconciliation before another transmission is considered.
 
 The table is `inbox_delivery_attempt`.
 
-Schema: [`inbox_delivery_attempt`](../../store/src/schema/navigator.surql#L2603).
+Schema: [`inbox_delivery_attempt`](../../store/postgres/schema.sql).

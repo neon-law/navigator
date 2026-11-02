@@ -12,4 +12,4 @@ Notation. A local author preview (`navigator notation preview --offline`) is dry
 
 The table is `notation_draft`.
 
-Schema: [`notation_draft`](../../store/src/schema/navigator.surql#L1890).
+Schema: [`notation_draft`](../../store/postgres/schema.sql).

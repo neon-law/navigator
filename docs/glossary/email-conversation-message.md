@@ -9,4 +9,4 @@ any parsed reply directives. The latest hop supplies the conversation's current 
 
 The table is `email_conversation_message`.
 
-Schema: [`email_conversation_message`](../../store/src/schema/navigator.surql#L2495).
+Schema: [`email_conversation_message`](../../store/postgres/schema.sql).

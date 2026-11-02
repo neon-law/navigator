@@ -16,4 +16,4 @@ delivery state and provider identity that an Assistant Turn never has.
 
 The table is `assistant_turn`.
 
-Schema: [`assistant_turn`](../../store/src/schema/navigator.surql).
+Schema: [`assistant_turn`](../../store/postgres/schema.sql).

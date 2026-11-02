@@ -9,4 +9,4 @@ preserves the rate actually quoted.
 
 The table is `notation_rate`.
 
-Schema: [`notation_rate`](../../store/src/schema/navigator.surql#L1784).
+Schema: [`notation_rate`](../../store/postgres/schema.sql).

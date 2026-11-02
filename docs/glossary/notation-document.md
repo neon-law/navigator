@@ -9,4 +9,4 @@ current [Notation Document Version](notation-document-version.md).
 
 The table is `notation_document`.
 
-Schema: [`notation_document`](../../store/src/schema/navigator.surql#L1921).
+Schema: [`notation_document`](../../store/postgres/schema.sql).

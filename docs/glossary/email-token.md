@@ -9,4 +9,4 @@ so a consumed link cannot be used again.
 
 The table is `email_token`.
 
-Schema: [`email_token`](../../store/src/schema/navigator.surql#L1294).
+Schema: [`email_token`](../../store/postgres/schema.sql).

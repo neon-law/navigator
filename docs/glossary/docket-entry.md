@@ -55,8 +55,8 @@ filed the same day keep the register's order. The [DKT Number](dkt-number.md) th
 the case number is not an entry number, and the DKT name refuses it.
 
 - Commands: [`store::cases`](../../store/src/cases.rs) · Schema:
-  [`case_docket_entry`](../../store/src/schema/navigator.surql)
+  [`case_docket_entry`](../../store/postgres/schema.sql)
 
 The table is `case_docket_entry`.
 
-Schema: [`case_docket_entry`](../../store/src/schema/navigator.surql#L2306).
+Schema: [`case_docket_entry`](../../store/postgres/schema.sql).

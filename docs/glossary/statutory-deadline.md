@@ -9,4 +9,4 @@ general-purpose docketed obligation is a [Deadline](deadline.md).
 
 The table is `statutory_deadline`.
 
-Schema: [`statutory_deadline`](../../store/src/schema/navigator.surql#L330).
+Schema: [`statutory_deadline`](../../store/postgres/schema.sql).

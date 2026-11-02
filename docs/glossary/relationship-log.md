@@ -11,8 +11,8 @@ on a subject), whereas the graph's edges are two-sided [Relationship Edges](rela
 graph — an LLM can parse a row's free-form detail into typed edges — and the graph writes back to the log when lawyers
 acknowledge a conflict override.
 
-It moved to SurrealDB with the graph because its **writers** did: `store::projects` and `store::project_modules` reached
-across engines for this one insert, so a matter open was a two-engine write with no transaction spanning it.
+The relational model is the PostgreSQL `relationship_log` table. Its active append path is described in [SurrealDB
+compatibility](../surreal-compatibility.md#relationship-log).
 
 An operator appends rows through the `relationship_log` model of `navigator site import`, keyed by the subject Person's
 email, the action, and the detail, so re-importing an identical row appends nothing. `navigator project docket ingest`
@@ -27,4 +27,4 @@ Project and refuses a row naming another; `docket ingest` stamps the checkout's 
 
 The table is `relationship_log`.
 
-Schema: [`relationship_log`](../../store/src/schema/navigator.surql#L1238).
+Schema: [`relationship_log`](../../store/postgres/schema.sql).

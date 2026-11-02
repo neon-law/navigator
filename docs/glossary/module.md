@@ -20,8 +20,8 @@ Disabling hides a capability; it never deletes what the module owns. Every toggl
 relationship-log entry naming the module and the actor.
 
 - Commands and schema: [`store::project_modules`](../../store/src/project_modules.rs) ·
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `project_module`.
 
-Schema: [`project_module`](../../store/src/schema/navigator.surql#L319).
+Schema: [`project_module`](../../store/postgres/schema.sql).

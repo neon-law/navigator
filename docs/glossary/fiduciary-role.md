@@ -19,8 +19,8 @@ The rows belong to the `estate` [Module](module.md). They are imported from a Pr
 firm, and for the matter's client while the module is enabled.
 
 - Store: [`store::fiduciary_roles`](../../store/src/fiduciary_roles.rs) · Schema:
-  [`fiduciary_role`](../../store/src/schema/navigator.surql)
+  [`fiduciary_role`](../../store/postgres/schema.sql)
 
 The table is `fiduciary_role`.
 
-Schema: [`fiduciary_role`](../../store/src/schema/navigator.surql#L465).
+Schema: [`fiduciary_role`](../../store/postgres/schema.sql).

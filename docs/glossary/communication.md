@@ -23,8 +23,8 @@ receipt of an outbound email in the same Project through `--acknowledges`. The s
 sent time. This records an acknowledgment; it does not independently verify delivery with an email provider.
 
 - Schema and queries: [`store::communications`](../../store/src/communications.rs) —
-  [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+  [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `communication`.
 
-Schema: [`communication`](../../store/src/schema/navigator.surql#L2415).
+Schema: [`communication`](../../store/postgres/schema.sql).
