@@ -284,7 +284,10 @@ mod tests {
 
     /// A fresh synthetic database on the test PostgreSQL server, or `None`
     /// when none is configured. Mirrors the `tests/dbos` support lane.
-    async fn database_url() -> Option<String> {
+    /// Returns a cleanup guard alongside the URL: dropping it removes the
+    /// database even when the test fails mid-body, so long-lived dev
+    /// servers never accumulate `dbos_email_summary_*` databases.
+    async fn database_url() -> Option<(String, TestDatabaseCleanup)> {
         let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
             assert!(
                 std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
@@ -314,9 +317,66 @@ mod tests {
             .await
             .expect("create the test database");
         admin.close().await;
-        Some(format!(
-            "postgres://postgres:synthetic@127.0.0.1:{port}/{name}?sslmode=disable"
+        Some((
+            format!("postgres://postgres:synthetic@127.0.0.1:{port}/{name}?sslmode=disable"),
+            TestDatabaseCleanup { port, name },
         ))
+    }
+
+    /// Owns one isolated test database and drops it when it leaves scope —
+    /// on success, an early return, or a panic unwind alike. The work runs
+    /// on a separate thread with its own runtime because `Drop` fires
+    /// inside the test's tokio runtime, where a nested block_on would
+    /// panic. Best-effort: a failure is printed, never raised, from Drop.
+    struct TestDatabaseCleanup {
+        port: u16,
+        name: String,
+    }
+
+    impl Drop for TestDatabaseCleanup {
+        fn drop(&mut self) {
+            let port = self.port;
+            let name = self.name.clone();
+            let result = std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build the database cleanup runtime")
+                    .block_on(async {
+                        let options = PgConnectOptions::new()
+                            .host("127.0.0.1")
+                            .port(port)
+                            .username("postgres")
+                            .password("synthetic")
+                            .ssl_mode(PgSslMode::Disable);
+                        let admin = match sqlx::PgPool::connect_with(options).await {
+                            Ok(admin) => admin,
+                            Err(err) => {
+                                eprintln!("test database {name}: reconnect for drop failed: {err}");
+                                return;
+                            }
+                        };
+                        let terminate = sqlx::query(
+                            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1",
+                        )
+                        .bind(&name)
+                        .execute(&admin)
+                        .await;
+                        let drop =
+                            sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
+                                .execute(&admin)
+                                .await;
+                        admin.close().await;
+                        if let Err(err) = terminate.and_then(|_| drop) {
+                            eprintln!("test database {name}: drop failed: {err}");
+                        }
+                    });
+            })
+            .join();
+            if result.is_err() {
+                eprintln!("test database {}: cleanup thread panicked", self.name);
+            }
+        }
     }
 
     /// A Firm whose Client DRI is an approved, confirmed sender on one
@@ -446,7 +506,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_dbos_twin_gates_summarizes_and_delivers_once_per_receipt() {
-        let Some(url) = database_url().await else {
+        // `_cleanup` (not `_`) keeps the guard alive to the end of the test.
+        let Some((url, _cleanup)) = database_url().await else {
             return;
         };
         let surreal = store::test_support::mem_surreal().await;
@@ -530,7 +591,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unassigned_message_skips_the_provider_and_still_posts() {
-        let Some(url) = database_url().await else {
+        let Some((url, _cleanup)) = database_url().await else {
             return;
         };
         let surreal = store::test_support::mem_surreal().await;
