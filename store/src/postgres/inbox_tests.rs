@@ -2897,7 +2897,10 @@ async fn raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the
     let scope = fi_scope(&f).await;
     let first = fi_rows("C,I,+15555550456,2026-10-30T18:00:00Z,61,same-native-id").remove(0);
     let second = fi_rows("S,O,+15555550456,2026-10-30T18:00:00Z,,same-native-id").remove(0);
-    assert_eq!(first.provider_message_id, second.provider_message_id);
+    assert!(
+        first.provider_message_id == second.provider_message_id,
+        "the native ID must identify the same imported event across channels"
+    );
     let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(8));
     let mut tasks = Vec::new();
     for index in 0..8 {
