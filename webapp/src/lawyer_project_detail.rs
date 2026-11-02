@@ -42,6 +42,8 @@ use crate::lawyer_project_participation::{
 };
 use crate::lawyer_project_testimonial::{admin_testimonial_card, AdminTestimonialView};
 use crate::people::ViewerRole;
+use crate::project_stages::{MatterStageView, StageChip, StageSection};
+use crate::project_tasks::{AssigneeChoice, TaskRow, TasksTab};
 
 #[cfg(feature = "server")]
 use crate::lawyer_project_documents::{
@@ -152,8 +154,9 @@ fn matter_tab_strip(code: &str, active: MatterTab) -> Vec<Tab> {
 /// The summary strip under the tab bar: the handful of facts a matter opens
 /// with, derived from data the view already carries. A fact this matter does
 /// not have is left out rather than shown as a zero, and the strip itself is
-/// skipped when nothing renders in it. Tasks and correspondence tiles still
-/// wait on those models; the Work in Progress and Outstanding Balance tiles
+/// skipped when nothing renders in it. The tasks tile renders from the task
+/// rows the view now carries; the correspondence tile still waits on the
+/// unread projection. The Work in Progress and Outstanding Balance tiles
 /// render from the projections the server fn derives through
 /// `store::matter_financials`.
 fn matter_fact_grid(view: &LawyerDetailView) -> Element {
@@ -161,12 +164,14 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     let deadline_count = view.deadlines.len();
     let document_count = view.documents.len();
     let people_count = view.participations.len();
+    let open_tasks = view.tasks.iter().filter(|row| row.state != "done").count();
     let trust_held = view.trust.held.clone();
     let wip = view.wip.clone();
     let outstanding = view.outstanding.clone();
     let has_facts = deadline_count > 0
         || document_count > 0
         || people_count > 0
+        || open_tasks > 0
         || view.trust.any
         || wip.is_some()
         || outstanding.is_some();
@@ -178,6 +183,11 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     rsx! {
         section { class: "lawyer-detail__section lawyer-detail__summary",
             FactGrid {
+                if open_tasks > 0 {
+                    FactCard { title: "Open tasks".to_string(),
+                        span { class: "lawyer-detail__fact-value", "{open_tasks}" }
+                    }
+                }
                 if deadline_count > 0 {
                     FactCard { title: "Open deadlines".to_string(),
                         span { class: "lawyer-detail__fact-value", "{deadline_count}" }
@@ -314,6 +324,23 @@ pub struct LawyerDetailView {
     /// emails without a call (LAW-230); this is that log's surface.
     #[serde(default)]
     pub correspondence: Vec<CommunicationRow>,
+    /// The matter's tasks — assignable work with a state and an assignee,
+    /// deliberately not the docket's deadlines. Empty when the deployment
+    /// has no PostgreSQL configured (the task store is PostgreSQL-native).
+    #[serde(default)]
+    pub tasks: Vec<TaskRow>,
+    /// The people a task on this matter can be assigned to, resolved
+    /// server-side to `(person id, display name)` — the matter's
+    /// participants, since the store refuses an assignee off the matter.
+    #[serde(default)]
+    pub task_assignees: Vec<AssigneeChoice>,
+    /// The matter's stage — where it sits in the Firm's workflow. Not a
+    /// lifecycle status (`project.status`) and not a court case's status
+    /// (`case.status`); the copy keeps the three apart. Empty when the
+    /// deployment has no PostgreSQL configured (the stage store is
+    /// PostgreSQL-native).
+    #[serde(default)]
+    pub stage: MatterStageView,
     pub role: ViewerRole,
     /// The deploy's brand mark for the navbar. `None` when the mounted brand
     /// configures none.
@@ -489,14 +516,15 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // workbench without the two billing tiles rather than failing the whole
     // page; a read failure inside a configured deployment is a 500 like every
     // other read here. A zero projection is left out like any other fact the
-    // matter does not have.
-    let financials = match store::postgres::PostgresDb::from_env().await {
-        Ok(pg) => Some(
-            store::matter_financials::for_project(&surreal, &pg, id)
+    // matter does not have. The same handle feeds the task store below.
+    let pg = store::postgres::PostgresDb::from_env().await.ok();
+    let financials = match pg.as_ref() {
+        Some(pg) => Some(
+            store::matter_financials::for_project(&surreal, pg, id)
                 .await
                 .map_err(server_error)?,
         ),
-        Err(_) => None,
+        None => None,
     };
     let (wip, outstanding) = financials.map_or((None, None), |financials| {
         let wip = (financials.wip_cents != 0)
@@ -506,11 +534,45 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         (wip, outstanding)
     });
 
+    // The Tasks tab's rows — assignable work, not the docket's deadlines. A
+    // deployment without PostgreSQL renders the workbench without them, the
+    // same absence rule as the financial projections; a read failure inside a
+    // configured deployment is a 500.
+    let tasks = match pg.as_ref() {
+        Some(pg) => crate::project_tasks::read_rows(&surreal, pg, id).await?,
+        None => Vec::new(),
+    };
+
+    // The stage surface's read — where the matter sits in the Firm's
+    // workflow. Same absence rule as the task rows: a deployment without
+    // PostgreSQL renders the workbench without a stage; a read failure
+    // inside a configured deployment is a 500.
+    let stage = match pg.as_ref() {
+        Some(pg) => crate::project_stages::read_stage(&surreal, pg, &project).await?,
+        None => MatterStageView::default(),
+    };
+
     // The two DRIs — a read failure is a 500, never a silently-blank DRI on an
     // accountability surface.
     let participation_rows = store::projects::participations_for_project(&surreal, id)
         .await
         .map_err(server_error)?;
+    // Who a task on this matter can name as assignee: the matter's own
+    // participants, resolved to display names, alphabetical. The store
+    // refuses an assignee off the matter, so the picker offers exactly the
+    // set the command would honour.
+    let task_assignees = {
+        let person_ids: Vec<uuid::Uuid> =
+            participation_rows.iter().map(|row| row.person_id).collect();
+        let mut people = store::persons::find_by_ids(&surreal, &person_ids)
+            .await
+            .map_err(server_error)?;
+        people.sort_by(|a, b| a.name.cmp(&b.name));
+        people
+            .into_iter()
+            .map(|person| (person.id.to_string(), person.name))
+            .collect()
+    };
     let lawyer_dri_ids: Vec<uuid::Uuid> = participation_rows
         .iter()
         .filter(|row| row.is_lawyer_dri)
@@ -702,6 +764,9 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         past_deadlines: deadline_groups.past,
         notes,
         correspondence,
+        tasks,
+        task_assignees,
+        stage,
         role,
         logo,
         tokens_href,
@@ -812,6 +877,7 @@ pub fn LawyerProjectDetail() -> Element {
                 p { class: "nav-muted",
                     "Code: " code { "{view.code}" }
                     " · Status: {view.status}"
+                    StageChip { current: view.stage.current.as_ref().map(|row| row.label.clone()) }
                     " · Brand: {brand_disp}"
                     " · Entity: {entity_disp}"
                     if let Some(entity_id) = view.entity_id.as_ref() {
@@ -853,6 +919,13 @@ pub fn LawyerProjectDetail() -> Element {
             {
                 match view.active_tab {
                     MatterTab::Overview => rsx! {
+                        StageSection {
+                            code: view.code.clone(),
+                            csrf: csrf.clone(),
+                            stage: view.stage.clone(),
+                            error: view.error.clone(),
+                        }
+
                         crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
 
                         crate::project_deadlines::ProjectDeadlinesPanel {
@@ -924,11 +997,12 @@ pub fn LawyerProjectDetail() -> Element {
                         }
                     },
                     MatterTab::Tasks => rsx! {
-                        section { class: "lawyer-detail__section",
-                            Empty {
-                                title: "No tasks on this project yet".to_string(),
-                                description: Some("Assignable work — an owner, a due date, and a state — will appear here once it is tracked for this project. Court deadlines remain docket obligations and stay on Overview.".to_string()),
-                            }
+                        TasksTab {
+                            code: view.code.clone(),
+                            csrf: csrf.clone(),
+                            tasks: view.tasks.clone(),
+                            assignees: view.task_assignees.clone(),
+                            error: view.error.clone(),
                         }
                     },
                     MatterTab::Correspondence => rsx! {
