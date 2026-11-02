@@ -8,13 +8,15 @@
 //! - **The lane** is a PostgreSQL advisory lock held for the whole
 //!   transition body (`store::notation_machine_state::acquire_lane`) —
 //!   questionnaire and workflow transitions on one notation still serialize,
-//!   whichever engine's flag runs them.
+//!   while the DBOS engine runs them. The Restate object has its own lane;
+//!   operators must drain it before moving a notation to DBOS.
 //! - **The K/V state** is the `notation_machine_state` row; every state move
 //!   is a compare-and-set step (`apply_transition`), so a recovery replay
 //!   re-derives the same outcome instead of overwriting a newer one.
 //! - **The side effects** run as DBOS steps through the same shared logic the
-//!   Restate handlers call (`crate::notation_logic`), so a retry reuses the
-//!   checkpoint instead of re-sending mail or appending a second journal row.
+//!   Restate handlers call (`crate::notation_logic`). Completed checkpoints
+//!   are reused. Effects remain at least once when a process dies after a
+//!   send or journal append but before its checkpoint commits.
 //!
 //! One DBOS workflow carries exactly one transition (`start`, `signal`, or
 //! `back`) and gets a fresh workflow id per call — the parity for Restate

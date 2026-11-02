@@ -1911,7 +1911,7 @@ mod tests {
         // route that answers with an engine error.
         let router = add_routes(axum::Router::new(), WorkerIngress::default());
         let uri = format!(
-            "/internal/dbos/notation/{}/questionnaire_current_state",
+            "/notation/{}/questionnaire_current_state",
             uuid::Uuid::now_v7()
         );
         let request = Request::builder()
