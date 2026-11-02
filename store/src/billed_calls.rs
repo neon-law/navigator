@@ -181,6 +181,95 @@ pub async fn find_by_call_sid(
         .map_err(BilledCallError::Database)
 }
 
+/// Attribute every parked call of one conversation to a Project — the
+/// conversation-keyed mutation behind the portal's assignment flow: the
+/// lawyer moves the conversation, and every call Twilio billed into it
+/// follows. The call's facts — duration, tenths, provider start time — are
+/// never touched. The Project must belong to the same Firm as the parked
+/// rows; a re-link of already-attributed rows to the *same* Project
+/// converges idempotently, any other re-attribution is a loud conflict, and
+/// an unknown conversation is a `NotFound` — billing never moves silently.
+///
+/// # Errors
+///
+/// [`BilledCallError::Invalid`] when the Project does not exist or belongs
+/// to another Firm, [`BilledCallError::Conflict`] when the conversation's
+/// rows are parked on a different Project, [`BilledCallError::NotFound`]
+/// when the conversation has no billing rows.
+pub async fn attribute_conversation(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+    conversation_id: Uuid,
+    project_id: Uuid,
+) -> Result<(), BilledCallError> {
+    let project_firm = sqlx::query_scalar::<_, Uuid>("SELECT firm_id FROM project WHERE id = $1")
+        .bind(project_id)
+        .fetch_optional(&pg.0)
+        .await?
+        .ok_or(BilledCallError::Invalid(
+            "project does not belong to this firm",
+        ))?;
+    if project_firm != firm_id {
+        return Err(BilledCallError::Invalid(
+            "project does not belong to this firm",
+        ));
+    }
+    let result = sqlx::query(
+        "UPDATE billed_call SET project_id = $3, updated_at = now() \
+         WHERE firm_id = $1 AND conversation_id = $2 AND project_id IS NULL",
+    )
+    .bind(firm_id)
+    .bind(conversation_id)
+    .bind(project_id)
+    .execute(&pg.0)
+    .await?;
+    if result.rows_affected() == 0 {
+        let current = sqlx::query_scalar::<_, Option<Uuid>>(
+            "SELECT project_id FROM billed_call \
+             WHERE firm_id = $1 AND conversation_id = $2",
+        )
+        .bind(firm_id)
+        .bind(conversation_id)
+        .fetch_optional(&pg.0)
+        .await?;
+        match current {
+            // Already attributed: a re-link to the same Project converges,
+            // anything else — parked rows on a different Project, or no
+            // rows at all — is refused loudly, never silently moved.
+            Some(Some(attributed)) if attributed == project_id => Ok(()),
+            Some(_) => Err(BilledCallError::Conflict),
+            None => Err(BilledCallError::NotFound),
+        }
+    } else {
+        Ok(())
+    }
+}
+
+/// The Firm's parked queue: unattributed calls, newest first, with their
+/// computed tenths — everything a lawyer sees before attributing, so
+/// nothing is silently billed before a human links it to a Project.
+///
+/// # Errors
+///
+/// [`BilledCallError::Database`] when the query fails.
+pub async fn parked_for_firm(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+) -> Result<Vec<BilledCall>, BilledCallError> {
+    let rows = sqlx::query(
+        "SELECT * FROM billed_call \
+         WHERE firm_id = $1 AND project_id IS NULL ORDER BY call_started_at DESC",
+    )
+    .bind(firm_id)
+    .fetch_all(&pg.0)
+    .await?;
+    let mut parked = Vec::with_capacity(rows.len());
+    for row in &rows {
+        parked.push(from_row(row)?);
+    }
+    Ok(parked)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

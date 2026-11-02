@@ -2,7 +2,7 @@
 //! table. These tests arm themselves only where a PostgreSQL test lane
 //! exists; the pure rollup and validation tests live in the module.
 use chrono::TimeZone;
-use store::billed_calls::{self, BilledCallError, NewBilledCall};
+use store::billed_calls::{self, BilledCall, BilledCallError, NewBilledCall};
 use store::postgres::PostgresDb;
 use uuid::Uuid;
 
@@ -167,4 +167,249 @@ async fn a_zero_duration_completed_call_is_recorded_with_zero_tenths() {
         .await
         .unwrap();
     assert_eq!(recorded, redelivered, "the zero row is idempotent too");
+}
+
+/// One Firm row with its own Entity, EntityType, and Jurisdiction, so a
+/// Project can be seeded against it: attribution is firm-scoped, so the
+/// tests need real tenant rows, not just identifiers.
+async fn seed_firm(pg: &PostgresDb) -> Uuid {
+    let unique = Uuid::now_v7().simple().to_string();
+    let entity_type: Uuid = sqlx::query_scalar(
+        "INSERT INTO entity_type (name) VALUES ('test-law-firm-' || $1::text) RETURNING id",
+    )
+    .bind(&unique)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    let jurisdiction: Uuid = sqlx::query_scalar(
+        "INSERT INTO jurisdiction (name) VALUES ('Test ' || $1::text) RETURNING id",
+    )
+    .bind(&unique)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    let entity: Uuid = sqlx::query_scalar(
+        "INSERT INTO entity (name, entity_type_id, jurisdiction_id) \
+         VALUES ('Test Entity', $1, $2) RETURNING id",
+    )
+    .bind(entity_type)
+    .bind(jurisdiction)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    sqlx::query_scalar(
+        "INSERT INTO firm (name, status, entity_id) VALUES ('Test Firm', 'active', $1) RETURNING id",
+    )
+    .bind(entity)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap()
+}
+
+/// One open Project owned by the Firm.
+async fn seed_project(pg: &PostgresDb, firm_id: Uuid) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO project (code, name, status, entity_id, firm_id) \
+         VALUES ('P' || $2::text, 'Test Project', 'open', \
+                 (SELECT entity_id FROM firm WHERE id = $1), $1) RETURNING id",
+    )
+    .bind(firm_id)
+    .bind(Uuid::now_v7().simple().to_string())
+    .fetch_one(pg.pool())
+    .await
+    .unwrap()
+}
+
+/// One parked completed call for the conversation, attributed to no Project.
+async fn parked_call(pg: &PostgresDb, firm_id: Uuid, sid: &str, hour: u32) -> BilledCall {
+    let mut input = completed_call(sid, 361);
+    input.firm_id = firm_id;
+    input.call_started_at = chrono::Utc
+        .with_ymd_and_hms(2026, 10, 30, hour, 0, 0)
+        .unwrap();
+    billed_calls::record(pg, &input).await.unwrap()
+}
+
+/// Attribution through the conversation-keyed door links every parked call
+/// of the conversation to the Project and never rewrites the call's facts.
+#[tokio::test]
+async fn conversation_attribution_moves_the_project_never_the_facts() {
+    let Some(pg) = postgres().await else {
+        return;
+    };
+    let firm = seed_firm(&pg).await;
+    let project = seed_project(&pg, firm).await;
+    let parked = parked_call(&pg, firm, "CAconversation-42", 18).await;
+
+    billed_calls::attribute_conversation(&pg, firm, parked.conversation_id, project)
+        .await
+        .expect("attribution succeeds");
+    let stored = billed_calls::find_by_call_sid(&pg, "CAconversation-42")
+        .await
+        .unwrap()
+        .expect("the row survives attribution");
+    assert_eq!(stored.project_id, Some(project));
+    assert_eq!(
+        stored.duration_seconds, parked.duration_seconds,
+        "attribution never touches the duration"
+    );
+    assert_eq!(
+        stored.tenths, parked.tenths,
+        "attribution never touches the tenths"
+    );
+    assert_eq!(
+        stored.call_started_at, parked.call_started_at,
+        "attribution never touches the provider time"
+    );
+}
+
+/// Re-linking a conversation to the Project it is already on converges —
+/// the portal's re-assign must be idempotent, never a conflict.
+#[tokio::test]
+async fn conversation_attribution_is_idempotent_for_a_same_project_relink() {
+    let Some(pg) = postgres().await else {
+        return;
+    };
+    let firm = seed_firm(&pg).await;
+    let project = seed_project(&pg, firm).await;
+    let parked = parked_call(&pg, firm, "CAconversation-idem", 18).await;
+
+    billed_calls::attribute_conversation(&pg, firm, parked.conversation_id, project)
+        .await
+        .expect("first attribution succeeds");
+    billed_calls::attribute_conversation(&pg, firm, parked.conversation_id, project)
+        .await
+        .expect("a re-link to the same Project is idempotent, not a conflict");
+    let stored = billed_calls::find_by_call_sid(&pg, "CAconversation-idem")
+        .await
+        .unwrap()
+        .expect("the row survives the re-link");
+    assert_eq!(stored.project_id, Some(project));
+}
+
+/// Re-attributing a conversation to a different Project fails loudly; the
+/// original attribution stands and the billing facts never move.
+#[tokio::test]
+async fn conversation_re_attribution_to_a_different_project_conflicts() {
+    let Some(pg) = postgres().await else {
+        return;
+    };
+    let firm = seed_firm(&pg).await;
+    let first = seed_project(&pg, firm).await;
+    let second = seed_project(&pg, firm).await;
+    let parked = parked_call(&pg, firm, "CAconversation-move", 18).await;
+
+    billed_calls::attribute_conversation(&pg, firm, parked.conversation_id, first)
+        .await
+        .expect("the first attribution succeeds");
+    let error = billed_calls::attribute_conversation(&pg, firm, parked.conversation_id, second)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, BilledCallError::Conflict),
+        "re-attribution to a different Project must conflict loudly, got {error:?}"
+    );
+    let stored = billed_calls::find_by_call_sid(&pg, "CAconversation-move")
+        .await
+        .unwrap()
+        .expect("the row survives the refused move");
+    assert_eq!(
+        stored.project_id,
+        Some(first),
+        "the refused move leaves the original attribution standing"
+    );
+    assert_eq!(stored.duration_seconds, parked.duration_seconds);
+    assert_eq!(stored.tenths, parked.tenths);
+}
+
+/// A Project belonging to another Firm is refused — billing cannot move
+/// across tenants. An unknown Project is refused the same way, without
+/// confirming that it exists.
+#[tokio::test]
+async fn conversation_attribution_to_another_firms_project_is_rejected() {
+    let Some(pg) = postgres().await else {
+        return;
+    };
+    let firm_a = seed_firm(&pg).await;
+    let firm_b = seed_firm(&pg).await;
+    let project_b = seed_project(&pg, firm_b).await;
+    let parked = parked_call(&pg, firm_a, "CAconversation-cross", 18).await;
+
+    let error =
+        billed_calls::attribute_conversation(&pg, firm_a, parked.conversation_id, project_b)
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            BilledCallError::Invalid("project does not belong to this firm")
+        ),
+        "another Firm's Project must be rejected, got {error:?}"
+    );
+    let missing =
+        billed_calls::attribute_conversation(&pg, firm_a, parked.conversation_id, Uuid::now_v7())
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(
+            missing,
+            BilledCallError::Invalid("project does not belong to this firm")
+        ),
+        "an unknown Project must be rejected without confirming existence, got {missing:?}"
+    );
+    let stored = billed_calls::find_by_call_sid(&pg, "CAconversation-cross")
+        .await
+        .unwrap()
+        .expect("the row survives the refused attribution");
+    assert_eq!(
+        stored.project_id, None,
+        "the row stays parked at the Firm level"
+    );
+}
+
+/// The parked queue lists only the Firm's own unattributed rows, newest
+/// first, and attribution removes a row from it.
+#[tokio::test]
+async fn the_parked_queue_lists_only_the_firms_own_unattributed_rows() {
+    let Some(pg) = postgres().await else {
+        return;
+    };
+    let firm_a = seed_firm(&pg).await;
+    let firm_b = seed_firm(&pg).await;
+    let earlier = parked_call(&pg, firm_a, "CAqueue-a-early", 17).await;
+    let later = parked_call(&pg, firm_a, "CAqueue-a-late", 19).await;
+    let other = parked_call(&pg, firm_b, "CAqueue-b", 18).await;
+
+    let queue_a = billed_calls::parked_for_firm(&pg, firm_a).await.unwrap();
+    assert_eq!(
+        queue_a
+            .iter()
+            .map(|row| row.call_sid.clone())
+            .collect::<Vec<_>>(),
+        vec![later.call_sid, earlier.call_sid.clone()],
+        "the queue is newest first and holds only this Firm's rows"
+    );
+    let queue_b = billed_calls::parked_for_firm(&pg, firm_b).await.unwrap();
+    assert_eq!(
+        queue_b
+            .iter()
+            .map(|row| row.call_sid.clone())
+            .collect::<Vec<_>>(),
+        vec![other.call_sid],
+        "another Firm's row never appears in the queue"
+    );
+
+    let project = seed_project(&pg, firm_a).await;
+    billed_calls::attribute_conversation(&pg, firm_a, later.conversation_id, project)
+        .await
+        .expect("attribution succeeds");
+    let queue_after = billed_calls::parked_for_firm(&pg, firm_a).await.unwrap();
+    assert_eq!(
+        queue_after
+            .iter()
+            .map(|row| row.call_sid.clone())
+            .collect::<Vec<_>>(),
+        vec![earlier.call_sid],
+        "an attributed row leaves the parked queue"
+    );
 }
