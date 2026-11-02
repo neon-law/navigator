@@ -403,6 +403,57 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Time tracking: the Billing tab's time surface. GET/POST at
+# /app/api/projects/{id}/time-entries, POST .../time-entries/{entry_id}/
+# {invoice,write-off} on one entry, the durable Timer at
+# .../timer[/stop|/discard], and the matter's agreed flat fee. Lawyer tier,
+# the same gate the `LawyerSession` extractor applies; the handler resolves
+# `store::access::matter_viewer` and answers 404 for a caller with no
+# firm-side participation row, Owner and Admin included.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] in {"time-entries", "timer", "flat-fee"}
+    count(input.path) == 5
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "time-entries"
+    input.path[6] in {"invoice", "write-off"}
+    count(input.path) == 7
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "timer"
+    input.path[5] in {"stop", "discard"}
+    count(input.path) == 6
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+# Fee structures: the firm's attorney rates, firm defaults and matter
+# overrides together — the same attorney-tier fee catalog the rate doors
+# resolve against. Lawyer tier.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "attorney-rates"
+    count(input.path) == 3
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
 # /app/api/projects/{id}/deadlines, PATCH .../deadlines/{deadline_id}, and POST
 # .../deadlines/{deadline_id}/{complete,cancel,reopen}. Lawyer tier, the same gate the
 # `LawyerSession` extractor applies; the handler repeats the matter-scope check
