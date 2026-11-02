@@ -137,7 +137,13 @@ pub fn communications_body(page: &CommunicationsPage) -> Element {
                     label { r#for:"communications-brand", "Brand" }
                     select { id:"communications-brand", name:"brand", required:true,
                         option { value:"", "Choose a Brand" }
-                        for brand in &page.brands { option { value:"{brand}", "{brand}" } }
+                        for brand in &page.brands {
+                            option {
+                                value:"{brand}",
+                                selected:page.report.as_ref().is_some_and(|report| report.brand == *brand),
+                                "{brand}"
+                            }
+                        }
                     }
                     button { r#type:"submit", "View communications" }
                 }

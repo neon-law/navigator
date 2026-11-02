@@ -22,8 +22,8 @@
 //! Twilio's redeliveries and out-of-order retries return the original row.
 //! A completed call also rolls up to billed tenths in PostgreSQL: the
 //! provider's duration rounds UP to the six-minute unit and lands as one
-//! idempotent [`store::billed_calls`] row per `CallSid`, parked at the Firm
-//! level until a lawyer attributes it. A missed or zero-duration call still
+//! idempotent [`store::billed_calls`] row per `CallSid`. It inherits an
+//! existing Project or parks at the Firm until authorized initial attribution. A missed or zero-duration call still
 //! lands in the transcript — the record shows the client tried to reach the
 //! firm — and bills zero, because only a completed event carries billing.
 

@@ -1052,6 +1052,15 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
     let firm_name = page.firm_name.clone();
     let title = page.title.clone();
     let unread = if page.unread { "Unread" } else { "Read" };
+    let fi_metadata = page.provider_account.starts_with("google_fi:");
+    let next_action = if page.next_action == "Reassign"
+        && page.assign_action.is_none()
+        && (page.channel == "voice" || fi_metadata)
+    {
+        "Review"
+    } else {
+        page.next_action.as_str()
+    };
     let messages = page.messages.iter().map(|message| {
         let label = if message.internal {
             "Internal note"
@@ -1205,11 +1214,13 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
                 }
                 if let Some(reference) = page.provider_post_id.as_ref() { p { class: "nav-muted", "Provider post: {reference}" } }
                 if let Some(reference) = page.provider_thread_ref.as_ref() { p { class: "nav-muted", "Provider thread: {reference}" } }
-                p { class: "page-subtitle", "Next: {page.next_action}" }
+                p { class: "page-subtitle", "Next: {next_action}" }
                 if unsupported_private {
                     p { "This channel supports public comment replies only; private replies are unavailable." }
                 }
-                if page.reply_action.is_none() {
+                if fi_metadata {
+                    p { class: "nav-muted", "Imported Fi history cannot send external replies." }
+                } else if page.reply_action.is_none() {
                     p { class: "nav-muted", "Replies require an assigned Project and active Lawyer or Clerk participation. Owner and the Firm Admin DRI may reply to texts and supported social interactions." }
                 }
             }

@@ -98,6 +98,6 @@ with the same account and Project to reconcile it. Already accepted identities d
 silently replace history. A busy concurrent Fi import also asks for an unchanged retry. There is no whole-file
 transaction across Inbox and Project projection.
 
-A Fi import adds no BilledCall rows or invoices. Calls appear in the parked queue, and Brand call/SMS totals include
+A Fi import adds no BilledCall rows or invoices. Unassigned calls appear in the parked queue, and Brand totals include
 imported metadata. Known duration remains metadata; billed units stay absent. Project attribution changes scope, not
 historical facts.

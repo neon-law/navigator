@@ -1,7 +1,7 @@
 //! The Twilio webhook resolution spine.
 //!
-//! Every Twilio event — an inbound text, its delivery callback, and one day
-//! a voice call's status — takes the same spine: look the key number up in
+//! Every Twilio event — an inbound text, its delivery callback, and a voice
+//! call's status — takes the same spine: look the key number up in
 //! the Firm's PostgreSQL registry, verify `X-Twilio-Signature` with that
 //! number's own KMS-backed credential over the canonical URL rebuilt from
 //! the deployment host, then resolve the registered Brand to its Firm.

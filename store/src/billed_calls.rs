@@ -3,10 +3,10 @@
 //! One row per `CallSid`, written only from Twilio's final
 //! `CallStatus=completed` event: the call's provider-reported duration
 //! rounds UP to six-minute tenths of an hour — a one-second call bills one
-//! tenth, a 6:01 call bills two. The row parks at the Firm level
-//! (`project_id` is null) until a lawyer attributes the conversation to a
-//! Project; attribution is the only mutation after the row lands and never
-//! rewrites the call's facts. No foreign keys on purpose — the conversation
+//! tenth, a 6:01 call bills two. The row inherits the conversation's Project
+//! when already assigned; otherwise it parks at the Firm level until
+//! authorized initial attribution. Attribution is the only mutation after
+//! the row lands and never rewrites the call's facts. No foreign keys on purpose — the conversation
 //! is authored in the store the webhook serves and attribution happens at
 //! intake; either can lag the completed event, and billing must not fail
 //! closed on a mirror race.
