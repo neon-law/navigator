@@ -1782,7 +1782,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 143,
+    "table_count": 144,
     "tables": {
       "address": {
         "columns": {
