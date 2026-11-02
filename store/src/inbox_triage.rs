@@ -318,7 +318,10 @@ pub const PRIVILEGED_CONFIDENCE_FLOOR: f64 = 0.90;
 /// contains a social message's provider invocation.
 #[must_use]
 pub fn classifier_may_run(channel: &str) -> bool {
-    !crate::inbox::is_social_channel(channel)
+    matches!(
+        channel,
+        crate::inbox::channel::EMAIL | crate::inbox::channel::SMS
+    )
 }
 
 /// The schema-validated privilege verdict from the hosted classifier, as
@@ -916,6 +919,19 @@ mod tests {
                     "{channel} must settle privilege from the channel alone"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn hosted_classifier_is_limited_to_email_and_sms() {
+        for channel in ["email", "sms"] {
+            assert!(super::classifier_may_run(channel));
+        }
+        for channel in ["x", "instagram", "linkedin", "voice", "scraper", "unknown"] {
+            assert!(
+                !super::classifier_may_run(channel),
+                "{channel} must not spend a model call"
+            );
         }
     }
 

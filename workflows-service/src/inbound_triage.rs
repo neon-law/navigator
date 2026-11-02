@@ -1,8 +1,8 @@
 //! Durable triage for one persisted inbound Message.
 //!
-//! The structural privilege rule (`store::inbox_triage`) runs first: a
-//! social-origin channel settles its label from the channel alone and the
-//! hosted classifier is never consulted. Client email and SMS may consult
+//! Social messages bypass hosted classification. Explicitly public posts are
+//! not privileged; private or unknown visibility waits for human review.
+//! Client email and SMS may consult
 //! Gemini Flash-Lite through the shared Vertex path; its verdict can only
 //! flag a message privileged or leave it uncertain for a person — automation
 //! never labels client email not privileged. Every failure — a provider
@@ -22,7 +22,7 @@ use uuid::Uuid;
 use workflows::inbox_triage::ClassifierLane;
 use workflows::{
     assemble_triage, build_triage_prompt, parse_triage, triage_input_digest, InboundTriageReport,
-    InboundTriageRequest, ProjectOption, TriageRunConfig, TRIAGE_PROMPT_VERSION,
+    InboundTriageRequest, ProjectOption, TriageRunConfig,
 };
 
 const DEFAULT_METADATA_TOKEN_URL: &str =
@@ -124,6 +124,22 @@ fn non_empty(value: Option<String>) -> Option<String> {
 pub struct ClassifierAttempt {
     pub output: Option<workflows::TriageClassifierOutput>,
     pub raw_output: Option<String>,
+    /// The invocation choices retained with this journaled result.
+    #[serde(default)]
+    pub run_config: Option<TriageRunConfig>,
+}
+
+impl ClassifierAttempt {
+    fn lane(&self) -> ClassifierLane {
+        match &self.run_config {
+            Some(config) => ClassifierLane {
+                model_id: Some(config.model.clone()),
+                prompt_version: config.prompt_version.clone(),
+                raw_output: self.raw_output.clone(),
+            },
+            None => ClassifierLane::rules_only(),
+        }
+    }
 }
 
 /// The run's classifier step, outside `ctx.run`'s journaling — pub so a
@@ -158,16 +174,19 @@ pub async fn classify_message(
                     // A truncated candidate is not a verdict; its text stays
                     // only as the audit artifact.
                     return ClassifierAttempt {
+                        run_config: Some(config),
                         output: None,
                         raw_output: Some(response.text),
                     };
                 }
                 return match parse_triage(&response.text) {
                     Ok(output) => ClassifierAttempt {
+                        run_config: Some(config),
                         output: Some(output),
                         raw_output: Some(response.text),
                     },
                     Err(_) => ClassifierAttempt {
+                        run_config: Some(config),
                         output: None,
                         raw_output: Some(response.text),
                     },
@@ -181,6 +200,7 @@ pub async fn classify_message(
                 // Identifiers and outcomes only — never message content.
                 tracing::warn!(error = %error, "inbox triage classifier failed");
                 return ClassifierAttempt {
+                    run_config: Some(config),
                     output: None,
                     raw_output: None,
                 };
@@ -188,6 +208,7 @@ pub async fn classify_message(
         }
     }
     ClassifierAttempt {
+        run_config: Some(config),
         output: None,
         raw_output: None,
     }
@@ -213,21 +234,29 @@ impl InboundTriageService {
     }
 }
 
-/// The persisted Message's Firm and channel. Only this metadata enters the
-/// context checkpoint. The
-/// classifier step reads subject and body directly from the store; its
-/// checkpoint retains the provider's verdict and audit output.
+/// Routing metadata and immutable classifier choices enter the context
+/// checkpoint. Message text stays in the store and the provider call;
+/// the classifier result retains the verdict and audit output.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ClassifierConfig {
+    project_id: String,
+    run: TriageRunConfig,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct TriageContext {
     firm_id: Uuid,
     channel: String,
     #[serde(default)]
     public_social: bool,
+    #[serde(default)]
+    classifier: Option<ClassifierConfig>,
 }
 
 async fn triage_context(
     surreal: &SurrealDb,
     message_id: Uuid,
+    providers: Option<&TriageProviders>,
 ) -> Result<Option<TriageContext>, HandlerError> {
     let Some(message): Option<Message> = store::inbox::message_by_id(surreal, message_id)
         .await
@@ -245,7 +274,23 @@ async fn triage_context(
     else {
         return Err(TerminalError::new("inbound conversation not found").into());
     };
+    let classifier = match providers {
+        Some(providers) if store::inbox_triage::classifier_may_run(&conversation.channel) => {
+            let digest = triage_input_digest(
+                &conversation.channel,
+                conversation.subject.as_deref(),
+                &message.body,
+            );
+            Some(ClassifierConfig {
+                project_id: providers.project_id.clone(),
+                run: TriageRunConfig::new(&providers.model, &providers.location, digest)
+                    .map_err(HandlerError::from)?,
+            })
+        }
+        _ => None,
+    };
     Ok(Some(TriageContext {
+        classifier,
         firm_id: conversation.firm_id,
         public_social: message.visibility.as_deref() == Some("public")
             && conversation.interaction_type != "direct_message",
@@ -281,7 +326,13 @@ impl InboundTriageService {
         Json(request): Json<InboundTriageRequest>,
     ) -> Result<Json<InboundTriageReport>, HandlerError> {
         let message_id = request.message_id;
-        let context = load_triage_context(&ctx, self.surreal.clone(), message_id).await?;
+        let context = load_triage_context(
+            &ctx,
+            self.surreal.clone(),
+            message_id,
+            self.providers.clone(),
+        )
+        .await?;
         let Some(context) = context else {
             return Ok(Json(non_inbound_report(message_id)));
         };
@@ -294,17 +345,16 @@ impl InboundTriageService {
         // The rule layer decides whether a model may be consulted at all.
         // Social-origin channels skip the classifier step entirely, so no
         // journal ever holds a social message's provider invocation.
-        let classifier_ran =
-            self.providers.is_some() && store::inbox_triage::classifier_may_run(&context.channel);
+        let classifier_ran = context.classifier.is_some();
         let menu = if classifier_ran {
             load_firm_menu(&ctx, self.surreal.clone(), context.firm_id).await?
         } else {
             Vec::new()
         };
-        let attempt = if let Some(providers) = self.providers.as_ref().filter(|_| classifier_ran) {
+        let attempt = if classifier_ran {
             run_classifier_step(
                 &ctx,
-                providers,
+                self.providers.as_ref(),
                 self.surreal.clone(),
                 message_id,
                 &context,
@@ -315,17 +365,10 @@ impl InboundTriageService {
             ClassifierAttempt {
                 output: None,
                 raw_output: None,
+                run_config: None,
             }
         };
-        let lane = if classifier_ran {
-            ClassifierLane {
-                model_id: self.providers.as_ref().map(|p| p.model.clone()),
-                prompt_version: TRIAGE_PROMPT_VERSION.into(),
-                raw_output: attempt.raw_output.clone(),
-            }
-        } else {
-            ClassifierLane::rules_only()
-        };
+        let lane = attempt.lane();
         record_triage_step(
             &ctx,
             self.surreal.clone(),
@@ -345,9 +388,14 @@ async fn load_triage_context(
     ctx: &WorkflowContext<'_>,
     surreal: SurrealDb,
     message_id: Uuid,
+    providers: Option<TriageProviders>,
 ) -> Result<Option<TriageContext>, HandlerError> {
     let context = ctx
-        .run(move || async move { Ok(Json(triage_context(&surreal, message_id).await?)) })
+        .run(move || async move {
+            Ok(Json(
+                triage_context(&surreal, message_id, providers.as_ref()).await?,
+            ))
+        })
         .name("load-inbound-triage-context")
         .await?
         .into_inner();
@@ -403,19 +451,31 @@ async fn load_firm_menu(
 /// artifacts as the step's result.
 async fn run_classifier_step(
     ctx: &WorkflowContext<'_>,
-    providers: &TriageProviders,
+    providers: Option<&TriageProviders>,
     surreal: SurrealDb,
     message_id: Uuid,
     context: &TriageContext,
     menu: &[ProjectOption],
 ) -> Result<ClassifierAttempt, HandlerError> {
-    let providers = providers.clone();
+    let providers = providers.cloned();
+    let invocation = context.classifier.clone().ok_or_else(|| {
+        TerminalError::new("classifier configuration missing from triage context")
+    })?;
     let channel = context.channel.clone();
     let menu = menu.to_vec();
     let attempt = ctx
         .run(move || async move {
             // Only the attempt leaves this step. Raw input stays in the
             // store and in this provider call, outside the context checkpoint.
+            let config = invocation.run;
+            let Some(mut providers) = providers else {
+                return Ok(Json(ClassifierAttempt {
+                    output: None,
+                    raw_output: None,
+                    run_config: Some(config),
+                }));
+            };
+            providers.project_id = invocation.project_id;
             let message = store::inbox::message_by_id(&surreal, message_id)
                 .await
                 .map_err(HandlerError::from)?
@@ -424,10 +484,6 @@ async fn run_classifier_step(
                 .await
                 .map_err(HandlerError::from)?
                 .ok_or_else(|| TerminalError::new("inbound conversation not found"))?;
-            let digest =
-                triage_input_digest(&channel, conversation.subject.as_deref(), &message.body);
-            let config = TriageRunConfig::new(&providers.model, &providers.location, digest)
-                .map_err(HandlerError::from)?;
             let prompt = build_triage_prompt(
                 &channel,
                 conversation.subject.as_deref(),
@@ -514,6 +570,7 @@ mod tests {
             firm_id: uuid::Uuid::now_v7(),
             channel: "email".into(),
             public_social: false,
+            classifier: None,
         };
         let serialized = serde_json::to_value(context).unwrap();
         assert!(
@@ -549,6 +606,84 @@ mod tests {
         }
     }
 
+    async fn context_fixture(
+        channel: &'static str,
+        providers: Option<&TriageProviders>,
+    ) -> super::TriageContext {
+        let db = store::test_support::mem_surreal().await;
+        let firm_id = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let saved = store::inbox::ingest_inbound(
+            &db,
+            &store::inbox::IngestInbound {
+                firm_id,
+                brand_key: Some("neon"),
+                interaction_type: Some("message"),
+                provider_post_id: None,
+                parent_provider_message_id: None,
+                visibility: None,
+                channel,
+                provider_account: "synthetic-account",
+                provider_message_id: "snapshot-message",
+                provider_thread_ref: None,
+                external_address: "sender@example.com",
+                external_name: None,
+                subject: Some("Synthetic subject"),
+                body: "Synthetic private text",
+                source_page: None,
+                source_channel: None,
+                matter_consent: false,
+                promotional_opt_in: false,
+                email_conversation_id: None,
+                attachments: Vec::new(),
+                project_id: None,
+                occurred_at: "2026-11-01T00:00:00Z",
+            },
+        )
+        .await
+        .unwrap();
+        super::triage_context(&db, saved.message_id, providers)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn context_checkpoint_keeps_classifier_choices_after_boot_configuration_changes() {
+        let server = MockServer::start().await;
+        let mut current = providers(&server.uri());
+        let context = context_fixture("email", Some(&current)).await;
+        let checkpoint = serde_json::to_value(&context).unwrap();
+        assert!(!checkpoint.to_string().contains("Synthetic private text"));
+        assert!(!checkpoint.to_string().contains("Synthetic subject"));
+        current.model = "changed-bootstrap-model".into();
+        current.project_id = "changed-bootstrap-project".into();
+        let fresh = context_fixture("email", Some(&current))
+            .await
+            .classifier
+            .unwrap();
+        assert_eq!(fresh.run.model, "changed-bootstrap-model");
+        assert_eq!(fresh.project_id, "changed-bootstrap-project");
+        let replayed: super::TriageContext = serde_json::from_value(checkpoint).unwrap();
+        let pinned = replayed.classifier.unwrap();
+        assert_eq!(pinned.run.model, TRIAGE_MODEL);
+        assert_eq!(pinned.project_id, SYNTHETIC_PROJECT);
+        assert!(context_fixture("email", None).await.classifier.is_none());
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn social_and_scraper_contexts_never_select_the_classifier() {
+        let server = MockServer::start().await;
+        let configured = providers(&server.uri());
+        for channel in ["x", "scraper"] {
+            assert!(context_fixture(channel, Some(&configured))
+                .await
+                .classifier
+                .is_none());
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
     fn config(digest: &str) -> TriageRunConfig {
         TriageRunConfig::new(TRIAGE_MODEL, TRIAGE_LOCATION, digest).expect("valid test config")
     }
@@ -577,8 +712,14 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let attempt =
-            classify_message(&providers(&server.uri()), config(&digest), "prompt".into()).await;
+        let mut runtime = providers(&server.uri());
+        runtime.model = "different-bootstrap-model".into();
+        let attempt = classify_message(&runtime, config(&digest), "prompt".into()).await;
+        let checkpoint = serde_json::to_value(&attempt).unwrap();
+        assert_eq!(checkpoint["run_config"], serde_json::to_value(config(&digest)).unwrap(),
+            "the journal must retain the actual invocation choices independently of boot configuration");
+        let replayed: super::ClassifierAttempt = serde_json::from_value(checkpoint).unwrap();
+        assert_eq!(replayed.lane().model_id.as_deref(), Some(TRIAGE_MODEL));
         let output = attempt
             .output
             .expect("a well-formed verdict becomes the classifier's output");
