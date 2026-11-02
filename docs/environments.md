@@ -46,7 +46,7 @@ cluster.
 | Deployment | Brand host |
 | --- | --- |
 | `<deployment>` | `staging.deleteyourdata.com` |
-| `<deployment>` | `staging.lawyershook.com` |
+| `<deployment>` | `staging.guiebandshook.com` |
 | the production deployment | its configured brand hosts |
 
 Each row also serves a workflows host beside its public one: `workflows-<deployment>` for `<deployment>` and
@@ -69,7 +69,7 @@ deployment's `config.toml` as `NAVIGATOR_GATEWAY_IP`, and `gcloud compute addres
 
 `<deployment>` and `<deployment>` both resolve to that address and are served by this deployment's Ingress, each with
 its own `ManagedCertificate` Active, and every other registered brand host the same way — the release inventory covers
-all of them, launched or not; see [`dns.md`'s Grounding TLS in the release
+all of them, launched or not, except a moved brand, which redirects at DNS; see [`dns.md`'s Grounding TLS in the release
 inventory](dns.md#grounding-tls-in-the-release-inventory). This deployment's Ingress serves the complete public route
 table at `<deployment>`; there is no separate marketing-site deployment or publishing tool.
 

@@ -58,17 +58,27 @@ is served by the redirect service, which sends both its apex and `www` host to t
 | `www.neonlaw.com` / `workflows.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
 | `staging.neonlaw.com` / `workflows-staging.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `staging.deleteyourdata.com` | the staging deployment | its `<prefix>-gateway-ip` |
-| `staging.lawyershook.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `staging.guiebandshook.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `iep.neonlaw.com` / `lex-tecnica.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
 | `staging-iep.neonlaw.com` / `staging-lex-tecnica.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `neonlaw.org` / `www.neonlaw.org` | the redirect service | `https://www.neonlaw.com` (path-preserving 301) |
+| `lawyershook.com` / `www.lawyershook.com` | DNSimple `URL` records | `https://www.guiebandshook.com` (301) |
 
 The `neonlaw.com` apex is not a deployment entry: it carries a `URL` record that 301s to `https://www.neonlaw.com`,
 which is a record inside the production zone. It is the Apex→www row of the record table below. It must not appear on a
 GKE `ManagedCertificate`: the name does not resolve to the load balancer, and a Google-managed certificate stays in
 `Provisioning` until every listed name validates. The `neonlaw.org` zone has its own host-dispatched redirect service so
 deep links survive the domain migration.
+
+A **moved brand** — a key whose `views::brand::BrandKey::moved_to` names the brand it moved to — redirects at DNS, not
+in the cluster. Lawyer Shook moved to Guieb & Shook: `lawyershook.com` and `www.lawyershook.com` each carry a DNSimple
+`URL` record that 301s to `https://www.guiebandshook.com`, and `staging.lawyershook.com` needs no record. The release
+inventory (`views::brand::release_brand_hosts()`) leaves a moved brand out, so none of its hosts reaches a
+`ManagedCertificate` or an Ingress rule in either environment, and every roll deletes its old `navigator-web-<key>`
+certificate. That matters because the brand hosts share one certificate, `navigator-firm`: Google issues it only once
+every listed name validates, and GKE recreates it whenever its domain list changes, so a redirect-only name whose zone
+lapsed would hold TLS off every brand on it. The `URL` records need the same HTTPS setup as an apex redirect — see [The
+apex redirect is not done when the `URL` record lands](#the-apex-redirect-is-not-done-when-the-url-record-lands).
 
 Lex Tecnica's two brands, Lex Tecnica and IEP Defenders, are served on `neonlaw.com` subdomains rather than domains of
 their own: `lex-tecnica` and `iep` in production, `staging-lex-tecnica` and `staging-iep` on staging. They have no apex
@@ -367,10 +377,10 @@ Workspace as usual.
 ## Grounding TLS in the release inventory
 
 A next release must carry every registered house brand's certificate, not only the launched ones.
-`views::brand::BrandKey::ALL` names nine compiled keys today; `views::brand::release_brand_hosts()` is those keys
+`views::brand::release_brand_hosts()` is the compiled keys of `views::brand::BrandKey::ALL`, less any moved brand,
 crossed with the hosts each one serves (`www.<domain>` and `staging.<domain>`) — the **release inventory**
 `cli::devx::ship` reads to render every brand's `ManagedCertificate` and Ingress rule, in both environments, whether or
-not that brand has launched.
+not that brand has launched. A moved brand redirects at DNS and is never on it.
 
 This is a deliberate split from `views::brand::BrandKey::LIVE`, the **launch gate** — the approved list that controls
 the request router's host admission, the crawler's `robots.txt`/sitemap base, the apex redirect, and the footer's "Our

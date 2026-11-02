@@ -971,6 +971,10 @@ fn additional_brand_bindings(public_host: &str) -> Vec<AdditionalBrandBinding> {
     // and then a `404`, never a TLS handshake failure. See the launch-gate
     // note in `views::brand` and `the_render_covers_the_full_registry_while_the_router_stays_live_gated`.
     //
+    // `release_brand_hosts` also leaves out every moved brand
+    // (`BrandKey::moved_to`): its domain redirects at DNS, so its hosts would
+    // never validate and must not sit on the shared Firm certificate.
+    //
     // `release_brand_hosts` mixes production and staging names for the same
     // key (e.g. `www.deleteyourdata.com` and `staging.deleteyourdata.com`);
     // this keeps only the one matching `public_host`'s own `staging.`-prefix
@@ -1024,10 +1028,21 @@ fn has_own_certificate(key: BrandKey) -> bool {
 /// namespace whether or not the Ingress names it. Left in place they push the
 /// target proxy past its 15 certificates, the Ingress stops syncing, and
 /// `navigator-firm` is never attached, so it can never validate.
+///
+/// A moved brand ([`BrandKey::moved_to`]) is retired the same way: it is out
+/// of the release inventory, so no render produces its certificate either,
+/// and its domain now redirects at DNS rather than reaching the cluster.
 fn retired_brand_certificates() -> Vec<String> {
     FIRM_CERTIFICATE_ONLY
         .iter()
-        .map(|key| brand_certificate_name(*key))
+        .copied()
+        .chain(
+            BrandKey::ALL
+                .iter()
+                .copied()
+                .filter(|key| key.moved_to().is_some() && !FIRM_CERTIFICATE_ONLY.contains(key)),
+        )
+        .map(brand_certificate_name)
         .collect()
 }
 
@@ -6785,7 +6800,7 @@ mod tests {
             "the GKE overlay includes the additional brand certificates"
         );
         let ingress = fs::read_to_string(gke.join("ingress/ingress.yaml")).unwrap();
-        for key in views::brand::BrandKey::ALL {
+        for key in released_keys() {
             if *key == views::brand::BrandKey::default() {
                 continue;
             }
@@ -7769,7 +7784,8 @@ mod tests {
                 "navigator-web-death-and-divorce",
                 "navigator-web-guieb-shook",
                 "navigator-web-lex-tecnica",
-                "navigator-web-iep-defenders"
+                "navigator-web-iep-defenders",
+                "navigator-web-lawyer-shook"
             ]
         );
         for name in &retired {
@@ -7955,7 +7971,6 @@ mod tests {
                 "www.vestaestateplanning.com",
                 "www.misericordialaw.com",
                 "www.abhayaimmigration.com",
-                "www.lawyershook.com",
                 "www.summonsdefense.nyc",
                 "www.daybridgedivorce.com",
                 "www.deathanddivorcelaw.com",
@@ -7967,7 +7982,7 @@ mod tests {
                 "iep.neonlaw.com",
             ],
             "a production public host pulls in every other registered brand's production host — \
-             ENG-808: the full registry, not only the launched ones"
+             ENG-808: the full registry, not only the launched ones — except a moved brand's"
         );
         assert_eq!(
             additional_brand_hosts("staging.navigator.example.invalid"),
@@ -7977,7 +7992,6 @@ mod tests {
                 "staging.vestaestateplanning.com",
                 "staging.misericordialaw.com",
                 "staging.abhayaimmigration.com",
-                "staging.lawyershook.com",
                 "staging.summonsdefense.nyc",
                 "staging.daybridgedivorce.com",
                 "staging.deathanddivorcelaw.com",
@@ -8034,8 +8048,50 @@ mod tests {
         );
     }
 
+    /// A moved brand's hosts reach no certificate and no Ingress rule, in
+    /// either environment, and its old certificate is deleted on every roll.
+    ///
+    /// Its domain redirects at DNS (a `DNSimple` `URL` record), so its hosts never
+    /// resolve to the load balancer. On the shared Firm certificate they would
+    /// fail validation the moment its zone lapsed, and Google issues a
+    /// managed certificate only once every domain on it validates — so one
+    /// redirect-only domain could hold TLS off every live brand.
+    #[test]
+    fn a_moved_brand_stays_off_every_certificate_and_ingress_rule() {
+        let moved: Vec<_> = views::brand::BrandKey::ALL
+            .iter()
+            .copied()
+            .filter(|key| key.moved_to().is_some())
+            .collect();
+        assert!(
+            moved.contains(&views::brand::BrandKey::LawyerShook),
+            "Lawyer Shook has moved to Guieb & Shook"
+        );
+        let retired = retired_brand_certificates();
+        for public_host in ["www.neonlaw.com", "staging.neonlaw.com"] {
+            let rendered = additional_brand_hosts(public_host);
+            let firm = firm_certificate_hosts(public_host);
+            let bindings = additional_brand_bindings(public_host);
+            let annotation = managed_certificates_annotation(&bindings);
+            for key in &moved {
+                for host in key.hosts() {
+                    assert!(
+                        !rendered.contains(host) && !firm.iter().any(|name| name == host),
+                        "{public_host}: moved host {host} must reach no certificate or Ingress rule"
+                    );
+                }
+                let name = brand_certificate_name(*key);
+                assert!(
+                    !annotation.contains(&name),
+                    "{public_host}: the Ingress must not attach {name}"
+                );
+                assert!(retired.contains(&name), "{name} is deleted on every roll");
+            }
+        }
+    }
+
     /// Every registered brand reaches its own certificate and Ingress rule,
-    /// launched or not.
+    /// launched or not — every brand but a moved one.
     ///
     /// Before ENG-808 a brand without an approved launch had no TLS at all
     /// until the same change that launched it. Certificate issuance is
@@ -8047,7 +8103,7 @@ mod tests {
     /// `the_render_covers_the_full_registry_while_the_router_stays_live_gated`.
     #[test]
     fn every_registered_brand_reaches_its_own_certificate_regardless_of_launch_status() {
-        for key in views::brand::BrandKey::ALL {
+        for key in released_keys() {
             if *key == views::brand::BrandKey::default() {
                 continue;
             }
@@ -8094,9 +8150,12 @@ mod tests {
             // Every host the router would admit on this environment, for a
             // brand other than the default, has a certificate and an
             // Ingress rule. A host the process answers for but the
-            // deployment never routes would be a live-brand regression.
+            // deployment never routes would be a live-brand regression. A
+            // moved brand is the exception: its domain redirects at DNS, so
+            // the router's 301 only answers a request that still arrives.
             for (key, host) in views::brand::live_brand_hosts() {
                 if key == views::brand::BrandKey::default()
+                    || key.moved_to().is_some()
                     || views::brand::is_staging_host(host) != staging
                 {
                     continue;
@@ -8175,7 +8234,7 @@ mod tests {
         let brand_certs =
             fs::read_to_string(gke.join("ingress/brand-managed-certificates.yaml")).unwrap();
         let ingress = fs::read_to_string(gke.join("ingress/ingress.yaml")).unwrap();
-        for key in views::brand::BrandKey::ALL {
+        for key in released_keys() {
             if *key == views::brand::BrandKey::default() {
                 continue;
             }
@@ -8204,8 +8263,17 @@ mod tests {
         );
     }
 
+    /// Every registered key the release inventory covers: all of
+    /// [`views::brand::BrandKey::ALL`] but a moved brand, whose domain
+    /// redirects at DNS and so never reaches a certificate or Ingress rule.
+    fn released_keys() -> impl Iterator<Item = &'static views::brand::BrandKey> {
+        views::brand::BrandKey::ALL
+            .iter()
+            .filter(|key| key.moved_to().is_none())
+    }
+
     /// The full `networking.gke.io/managed-certificates` annotation ENG-808
-    /// expects: the default brand, every other registered key that still has
+    /// expects: the default brand, every other released key that still has
     /// its own certificate in registry order, the workflows and Forgejo
     /// services, then the Firm certificate — derived from the same
     /// [`views::brand::BrandKey::ALL`] the render reads, so this drifts with
@@ -8213,8 +8281,7 @@ mod tests {
     fn expected_managed_certificates_annotation() -> String {
         let mut names = vec!["navigator-web".to_string()];
         names.extend(
-            views::brand::BrandKey::ALL
-                .iter()
+            released_keys()
                 .copied()
                 .filter(|key| *key != views::brand::BrandKey::default())
                 .filter(|key| has_own_certificate(*key))
@@ -8256,7 +8323,7 @@ mod tests {
     fn the_firm_certificate_carries_every_brand_host_for_its_environment() {
         let production = firm_certificate_hosts("www.neonlaw.com");
         let staging = firm_certificate_hosts("staging.neonlaw.com");
-        for key in views::brand::BrandKey::ALL {
+        for key in released_keys() {
             let www = key.canonical_host();
             let staging_host = key.staging_host();
             assert!(
@@ -8462,7 +8529,7 @@ mod tests {
             "navigator-web".to_string(),
             FIRM_CERTIFICATE_NAME.to_string(),
         ];
-        for key in views::brand::BrandKey::ALL {
+        for key in released_keys() {
             if *key == views::brand::BrandKey::default() {
                 continue;
             }
@@ -8521,7 +8588,7 @@ mod tests {
             .iter()
             .filter_map(|rule| rule.get("host").and_then(serde_yaml::Value::as_str))
             .collect();
-        for key in views::brand::BrandKey::ALL {
+        for key in released_keys() {
             if *key == views::brand::BrandKey::default() {
                 continue;
             }
