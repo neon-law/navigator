@@ -58,15 +58,17 @@ pub(crate) enum NefOutcome {
 }
 
 impl NefOutcome {
-    /// Whether the run finished its work, so the caller may record the
-    /// processing time. Every other outcome leaves the message in the
-    /// triage backlog for a lawyer.
+    /// The storage spelling recorded beside the route (`nef_outcome::*`).
     #[must_use]
-    pub(crate) fn recorded(&self) -> bool {
-        matches!(
-            self,
-            Self::Filed { .. } | Self::AlreadyRecorded { .. } | Self::TextOnly { .. }
-        )
+    pub(crate) fn spelling(&self) -> &'static str {
+        match self {
+            Self::Filed { .. } => store::inbox::nef_outcome::FILED,
+            Self::AlreadyRecorded { .. } => store::inbox::nef_outcome::ALREADY_RECORDED,
+            Self::TextOnly { .. } => store::inbox::nef_outcome::TEXT_ONLY,
+            Self::NoProject => store::inbox::nef_outcome::NO_PROJECT,
+            Self::NotANotice => store::inbox::nef_outcome::NOT_A_NOTICE,
+            Self::NoCaseNumber => store::inbox::nef_outcome::NO_CASE_NUMBER,
+        }
     }
 }
 

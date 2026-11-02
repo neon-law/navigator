@@ -2673,6 +2673,13 @@ DEFINE FIELD OVERWRITE alert_timestamp ON message TYPE option<string>;
 DEFINE FIELD OVERWRITE route ON message TYPE option<string>
     ASSERT $value IS NONE OR $value IN ['nef', 'claims_agent', 'chambers', 'other'];
 DEFINE FIELD OVERWRITE processed_at ON message TYPE option<string>;
+-- The NEF pipeline's recorded outcome beside the route: filed, a text-only
+-- filing, a rerun over an already-recorded entry, or one of the triage
+-- results that leaves the message in the backlog (`docs/glossary/
+-- inbox-process.md`). Unset for messages processed through no NEF pipeline.
+DEFINE FIELD OVERWRITE nef_outcome ON message TYPE option<string>
+    ASSERT $value IS NONE OR $value IN
+    ['filed', 'text_only', 'already_recorded', 'no_project', 'not_a_notice', 'no_case_number'];
 DEFINE FIELD OVERWRITE inserted_at ON message TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON message TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE message_conversation ON message FIELDS conversation_id;

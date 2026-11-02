@@ -3552,3 +3552,10 @@ CREATE TABLE notation_transition (
 -- A pending operation itself is the durable owner, across both machine kinds.
 CREATE UNIQUE INDEX notation_transition_pending ON notation_transition(notation_id) WHERE result IS NULL;
 CREATE INDEX notation_transition_notation ON notation_transition(notation_id);
+
+-- Migration: 20261102000000_add_message_nef_outcome.sql
+-- The NEF pipeline's recorded outcome beside the route: filed, a text-only
+-- filing, a rerun over an already-recorded entry, or one of the triage
+-- results that leaves the message in the backlog. NULL for messages that
+-- were never processed through the NEF pipeline.
+ALTER TABLE message ADD COLUMN nef_outcome TEXT CHECK (nef_outcome IS NULL OR nef_outcome IN ('filed', 'text_only', 'already_recorded', 'no_project', 'not_a_notice', 'no_case_number'));

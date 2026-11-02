@@ -1299,6 +1299,8 @@ mod tests {
             (
                 "20261101210000_create_notation_transition.sql",
                 include_str!("../postgres/migrations/20261101210000_create_notation_transition.sql"),
+                "20261102000000_add_message_nef_outcome.sql",
+                include_str!("../postgres/migrations/20261102000000_add_message_nef_outcome.sql"),
             ),
         ])
         .expect("timestamped migration assembles");

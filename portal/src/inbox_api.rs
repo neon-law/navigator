@@ -45,6 +45,8 @@ pub(crate) struct ProcessView {
     /// The route a previous process run recorded, if any.
     pub recorded_route: Option<String>,
     pub recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The NEF-pipeline outcome a previous run recorded, if any.
+    pub recorded_nef_outcome: Option<String>,
     /// The matter the conversation is assigned to, for the plan's context.
     pub project_id: Option<Uuid>,
     pub occurred_at: String,
@@ -69,6 +71,7 @@ fn view(row: store::inbox::UnprocessedRow, state: store::inbox::ProcessState) ->
         reason: decision.reason,
         recorded_route: state.route,
         recorded_at: state.processed_at,
+        recorded_nef_outcome: state.nef_outcome,
         project_id: row.project_id,
         occurred_at: row.occurred_at,
         inserted_at: row.inserted_at,
@@ -97,6 +100,7 @@ pub(crate) async fn unprocessed(
                 store::inbox::ProcessState {
                     route: None,
                     processed_at: None,
+                    nef_outcome: None,
                 },
             )
         })
@@ -141,28 +145,28 @@ pub(crate) async fn process(
     let already_recorded = context.state.processed_at.is_some();
     let recorded_at = Utc::now();
     // LAW-171: a NEF-classified message on an attributed matter is not
-    // merely routed — the pipeline files the notice onto the matter. It
-    // runs before the recording, and only an outcome that finished its
-    // work records the processing time; a triage outcome (no matter, an
-    // unparseable notice, no case number) stays in the backlog.
+    // merely routed — the pipeline files the notice onto the matter. Its
+    // outcome rides beside the recording; a triage outcome (no matter, an
+    // unparseable notice, no case number) keeps the message in the backlog
+    // through the recorded `nef_outcome`.
     let nef_outcome = if decision.route == crate::inbound_email::InboxRoute::Nef {
-        Some(crate::nef_pipeline::process_nef(&state, &context.row).await?)
+        let outcome = crate::nef_pipeline::process_nef(&state, &context.row).await?;
+        let spelling = outcome.spelling();
+        Some((outcome, spelling))
     } else {
         None
     };
-    let nef_recorded = nef_outcome
-        .as_ref()
-        .is_none_or(crate::nef_pipeline::NefOutcome::recorded);
-    if nef_recorded {
-        store::inbox::mark_processed(
-            &state.surreal,
-            request.message,
-            decision.route.as_str(),
-            recorded_at,
-        )
-        .await
-        .map_err(map_inbox)?;
-    }
+    // LAW-166: apply always records the route and the processing time, so
+    // a re-run reports idempotency instead of duplicating work.
+    store::inbox::mark_processed(
+        &state.surreal,
+        request.message,
+        decision.route.as_str(),
+        recorded_at,
+        nef_outcome.as_ref().map(|(_, spelling)| *spelling),
+    )
+    .await
+    .map_err(map_inbox)?;
     let slack_notice = match context.row.project_id {
         Some(project_id) => notify_inbox_routed(&state, project_id).await,
         None => SlackNotice::NoProject,
@@ -172,7 +176,10 @@ pub(crate) async fn process(
             context.row,
             store::inbox::ProcessState {
                 route: Some(decision.route.as_str().to_owned()),
-                processed_at: nef_recorded.then_some(recorded_at),
+                processed_at: Some(recorded_at),
+                nef_outcome: nef_outcome
+                    .as_ref()
+                    .map(|(_, spelling)| (*spelling).to_owned()),
             },
         ),
         route: decision.route.as_str(),
@@ -180,7 +187,7 @@ pub(crate) async fn process(
         reason: decision.reason,
         recorded_at,
         already_recorded,
-        nef: nef_outcome,
+        nef: nef_outcome.map(|(outcome, _)| outcome),
         slack_notice,
     })
     .into_response())

@@ -213,7 +213,7 @@ const NEF_SUBJECT: &str = "Notice of Electronic Filing";
 /// `9:26-cv-00042-XYZ`, document number 12, one main document plus two
 /// notice-listed exhibits.
 fn district_notice() -> Vec<u8> {
-    std::fs::read("../cli/tests/fixtures/nef/district-motion.eml")
+    std::fs::read("../store/tests/fixtures/nef/district-motion.eml")
         .expect("read the synthetic NEF fixture")
 }
 
@@ -386,10 +386,10 @@ async fn a_matterless_notice_stays_in_the_backlog() {
         applied["nef"]["outcome"], "no_project",
         "a message with no matter is never filed by guessing: {applied}"
     );
-    assert_eq!(
+    assert_ne!(
         applied["result"]["recorded_at"],
         Value::Null,
-        "an unfiled notice records no processing time"
+        "the run is recorded even when the pipeline filed nothing"
     );
 
     let (status, backlog) = request(
@@ -436,10 +436,25 @@ async fn an_unparseable_message_on_a_matter_stays_in_the_backlog() {
         applied["nef"]["outcome"], "not_a_notice",
         "an unparseable notice is never guessed into a docket entry: {applied}"
     );
-    assert_eq!(
+    assert_ne!(
         applied["result"]["recorded_at"],
         Value::Null,
-        "an unfiled notice records no processing time"
+        "the run is recorded even when the notice cannot be parsed"
+    );
+
+    let (status, backlog) = request(
+        &fixture.app,
+        "GET",
+        "/app/api/inbox/unprocessed",
+        Some(&fixture.lawyer_session),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "the backlog answers 200: {backlog}");
+    let rows = backlog.as_array().expect("the backlog is a JSON array");
+    assert!(
+        rows.iter().any(|m| m["id"] == message.to_string()),
+        "the unparseable notice stays in the triage backlog"
     );
 }
 
