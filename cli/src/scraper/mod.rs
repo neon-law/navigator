@@ -467,23 +467,31 @@ fn map_step_failure(step: &str, failure: RetryFailure<AdapterError>) -> ScraperE
 }
 
 /// The adapter registry: every portal the framework can scrape today. Site
-/// adapters register here as they land — the La Superior adapter is the
-/// first.
+/// adapters register here as they land — La Superior first, PACER as the
+/// second.
 #[must_use]
 pub(crate) fn registered_adapters() -> Vec<Box<dyn SiteAdapter>> {
-    let la_superior = crate::scraper::adapters::LaSuperiorAdapter::new(
+    let mut adapters: Vec<Box<dyn SiteAdapter>> = Vec::new();
+    // The checked-in key literals are valid, so a failure here is a bug,
+    // not a runtime state; surface it loudly rather than panic. `scraper
+    // run` reports an unregistered site and `sites` lists the rest.
+    match crate::scraper::adapters::LaSuperiorAdapter::new(
         crate::scraper::adapters::la_superior::DEFAULT_BASE_URL,
-    );
-    match la_superior {
-        Ok(adapter) => vec![Box::new(adapter)],
-        // The checked-in key literal is valid, so this is a bug, not a
-        // runtime state; surface it loudly rather than panic. `scraper run`
-        // reports an unregistered site and `sites` lists nothing.
+    ) {
+        Ok(adapter) => adapters.push(Box::new(adapter)),
         Err(error) => {
             eprintln!("scraper: the built-in la-superior site key is invalid: {error}");
-            vec![]
         }
     }
+    match crate::scraper::adapters::PacerAdapter::new(
+        crate::scraper::adapters::pacer::DEFAULT_BASE_URL,
+    ) {
+        Ok(adapter) => adapters.push(Box::new(adapter)),
+        Err(error) => {
+            eprintln!("scraper: the built-in pacer site key is invalid: {error}");
+        }
+    }
+    adapters
 }
 
 #[cfg(test)]
@@ -493,12 +501,14 @@ mod tests {
         ScraperError,
     };
     use crate::scraper::adapter::{find_adapter, AdapterError, SiteKey};
+    use crate::scraper::fetcher::{FetchRequest, FetchResponse};
     use crate::scraper::intake::RecordingIntake;
     use crate::scraper::retry::RetryPolicy;
     use crate::scraper::testing::{
         DownloadStep, LoginStep, MockAdapter, MockFetcher, StubClock, StubSessions,
     };
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::Duration;
 
     fn site() -> SiteKey {
@@ -618,6 +628,11 @@ mod tests {
         let binding = registered_adapters();
         let real = find_adapter(&binding, &site()).expect("the la-superior adapter is registered");
         assert_eq!(real.site(), &site());
+        let pacer = SiteKey::new(crate::scraper::adapters::pacer::SITE_KEY).expect("valid key");
+        let pacer_real = find_adapter(&binding, &pacer).expect("the pacer adapter is registered");
+        assert_eq!(pacer_real.site(), &pacer);
+        assert_eq!(pacer_real.credential_key(), "pacer");
+        assert!(pacer_real.requires_login(), "PACER runs behind the account");
         let adapters: Vec<Box<dyn crate::scraper::adapter::SiteAdapter>> =
             vec![Box::new(MockAdapter::simple(site()))];
         let found = find_adapter(&adapters, &site()).expect("the mock is found");
@@ -894,6 +909,67 @@ mod tests {
             "the error names the remedy: {error}"
         );
         assert_eq!(fixture.factory.opens(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_pacer_run_without_a_provisioned_credential_refuses_before_the_browser_opens() {
+        let fixture = fixture().await;
+        let adapter = crate::scraper::adapters::PacerAdapter::new(
+            crate::scraper::adapters::pacer::DEFAULT_BASE_URL,
+        )
+        .expect("the checked-in key is valid");
+        let error = run_scraper(&adapter, &query(), &deps(&fixture))
+            .await
+            .expect_err("no pacer credential is provisioned");
+        assert!(
+            matches!(error, ScraperError::Credentials(_)),
+            "the run stops at the credential seam: {error}"
+        );
+        assert_eq!(fixture.factory.opens(), 0, "no browser ever opens");
+        assert_eq!(fixture.intake.received().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_pacer_run_with_a_provisioned_credential_logs_in_and_enqueues_notices() {
+        let fixture = fixture().await;
+        fixture
+            .put_portal_secret(&serde_json::json!({
+                "pacer": {"username": "firm@example.com", "password": "staple"}
+            }))
+            .await;
+        let handler = |request: &FetchRequest| {
+            if request.url.contains("CaseNumber=") {
+                Ok(FetchResponse {
+                    status: 200,
+                    body: crate::scraper::adapters::pacer::fixtures::DOCKET
+                        .as_bytes()
+                        .to_vec(),
+                })
+            } else {
+                Ok(FetchResponse {
+                    status: 200,
+                    body: b"%PDF-fixture".to_vec(),
+                })
+            }
+        };
+        let fetcher = MockFetcher::with_handler(Arc::new(handler));
+        let adapter = crate::scraper::adapters::PacerAdapter::new(
+            crate::scraper::adapters::pacer::DEFAULT_BASE_URL,
+        )
+        .expect("the checked-in key is valid");
+        let mut deps = deps(&fixture);
+        deps.fetcher = &fetcher;
+        let report = run_scraper(&adapter, &query(), &deps)
+            .await
+            .expect("the run completes");
+        assert_eq!(report.discovered, 2, "the linkless entry is skipped");
+        assert_eq!(report.downloaded, 2);
+        assert_eq!(report.enqueued.len(), 2);
+        assert!(
+            fixture.factory.opens() >= 1,
+            "the login hook ran in a session"
+        );
+        assert_eq!(fixture.intake.received().len(), 2);
     }
 
     #[tokio::test]

@@ -3,5 +3,7 @@
 //! contract and registers in [`crate::scraper::registered_adapters`].
 
 pub(crate) mod la_superior;
+pub(crate) mod pacer;
 
 pub(crate) use la_superior::LaSuperiorAdapter;
+pub(crate) use pacer::PacerAdapter;
