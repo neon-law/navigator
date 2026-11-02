@@ -3097,6 +3097,14 @@ BEGIN
 END
 $$;
 
+-- Migration: 20261031090000_extend_identity_systems.sql
+-- The sender-identity vocabulary grows with the inbox: the social channels
+-- Navigator ingests on (Meta's three surfaces, YouTube, and TikTok) can name
+-- a Person's identity the same way GitHub or Slack already do, so the inbox
+-- can resolve a sender instead of showing a bare provider id.
+ALTER TABLE person_external_identity DROP CONSTRAINT person_external_identity_system_check;
+ALTER TABLE person_external_identity ADD CONSTRAINT person_external_identity_system_check CHECK (system IN ('github', 'slack', 'docusign', 'google', 'linear', 'claude', 'chatgpt', 'notion', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok'));
+
 -- Migration: 20261031120000_add_project_onboarding_jurisdiction.sql
 -- The jurisdiction an onboarding Notation's Clauses bind to. NULL until recorded.
 ALTER TABLE project ADD COLUMN onboarding_jurisdiction TEXT;
@@ -3537,6 +3545,29 @@ CREATE UNIQUE INDEX ssh_public_key_live_fingerprint
 -- The sync and the profile page read one Person's keys.
 CREATE INDEX ssh_public_key_person_idx ON ssh_public_key (person_id);
 
+-- Migration: 20261101200000_create_inbox_triage.sql
+-- SurrealDB remains the write authority; the Inbox triage row is an opt-in mirror.
+CREATE TABLE inbox_triage (
+    id UUID PRIMARY KEY,
+    message_id UUID NOT NULL REFERENCES message(id),
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    suggested_project_id UUID REFERENCES project(id),
+    project_confidence DOUBLE PRECISION,
+    privilege TEXT NOT NULL CHECK (privilege IN ('privileged', 'not_privileged', 'uncertain')),
+    privilege_confidence DOUBLE PRECISION,
+    rationale TEXT,
+    model_id TEXT,
+    prompt_version TEXT NOT NULL,
+    raw_output TEXT,
+    disposition TEXT NOT NULL
+        CHECK (disposition IN ('suggested', 'confirmed', 'overridden', 'needs_human')),
+    labeled_example BOOLEAN NOT NULL DEFAULT FALSE,
+    inserted_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT inbox_triage_one_per_message UNIQUE (message_id)
+);
+CREATE INDEX inbox_triage_firm ON inbox_triage (firm_id);
+
 -- Migration: 20261101210000_create_notation_transition.sql
 -- Target-only DBOS runtime ownership; ephemeral Notations need no domain row.
 CREATE TABLE notation_transition (
@@ -3552,3 +3583,8 @@ CREATE TABLE notation_transition (
 -- A pending operation itself is the durable owner, across both machine kinds.
 CREATE UNIQUE INDEX notation_transition_pending ON notation_transition(notation_id) WHERE result IS NULL;
 CREATE INDEX notation_transition_notation ON notation_transition(notation_id);
+
+-- Migration: 20261102000000_allow_x_inbox_channel.sql
+-- Retain the current Inbox channels while admitting X activity to the mirror.
+ALTER TABLE inbox_conversation DROP CONSTRAINT inbox_conversation_channel_check;
+ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'scraper', 'x'));

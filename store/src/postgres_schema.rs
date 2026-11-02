@@ -1308,24 +1308,28 @@ mod tests {
                 ),
             ),
             (
-                "20261101140000_create_notation_machine_state.sql",
-                include_str!("../postgres/migrations/20261101140000_create_notation_machine_state.sql"),
-            ),
-            (
                 "20261101170000_create_ssh_public_key.sql",
                 include_str!("../postgres/migrations/20261101170000_create_ssh_public_key.sql"),
             ),
             (
-                "20261101210000_create_notation_transition.sql",
-                include_str!("../postgres/migrations/20261101210000_create_notation_transition.sql"),
+                "20261101200000_create_inbox_triage.sql",
+                include_str!("../postgres/migrations/20261101200000_create_inbox_triage.sql"),
             ),
             (
-                "20261101210000_allow_x_inbox_channel.sql",
-                include_str!("../postgres/migrations/20261101210000_allow_x_inbox_channel.sql"),
+                "20261102000000_allow_x_inbox_channel.sql",
+                include_str!("../postgres/migrations/20261102000000_allow_x_inbox_channel.sql"),
             ),
             (
                 "20261031090000_extend_identity_systems.sql",
                 include_str!("../postgres/migrations/20261031090000_extend_identity_systems.sql"),
+            ),
+            (
+                "20261101140000_create_notation_machine_state.sql",
+                include_str!("../postgres/migrations/20261101140000_create_notation_machine_state.sql"),
+            ),
+            (
+                "20261101210000_create_notation_transition.sql",
+                include_str!("../postgres/migrations/20261101210000_create_notation_transition.sql"),
             ),
         ])
         .expect("timestamped migration assembles");
