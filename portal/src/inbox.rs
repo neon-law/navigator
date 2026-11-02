@@ -305,6 +305,13 @@ pub async fn assign_post(
     match store::inbox::attribute_to_project(&db, actor_id, conversation_id, form.project_id).await
     {
         Ok(assignment) => {
+            if let Err(billing) = attribute_calls_on_assignment(&assignment, form.project_id).await
+            {
+                // The conversation moved; billing must not move silently.
+                // The lawyer sees the failure here, and a re-assign to the
+                // same Project converges — attribution is idempotent.
+                return redirect_error(&back, &billing);
+            }
             let project = store::projects::find_by_id(&db, assignment.to_project_id)
                 .await
                 .ok()
@@ -320,6 +327,41 @@ pub async fn assign_post(
         }
         Err(error) => redirect_error(&back, &error.to_string()),
     }
+}
+
+/// The billing side of a conversation assignment: attribute the
+/// conversation's parked calls to the same Project. A deployment without
+/// the PostgreSQL lane has no billing rows, so the missing lane is not an
+/// error; a failing attribution does not undo the assignment (the
+/// conversation moved), but it is never silent.
+async fn attribute_calls_on_assignment(
+    assignment: &store::inbox::Assignment,
+    project_id: Uuid,
+) -> Result<(), String> {
+    match store::postgres::PostgresDb::from_env().await {
+        Ok(pg) => attribute_calls(&pg, assignment, project_id).await,
+        Err(store::postgres::PostgresError::Configuration) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Attribute a conversation's parked calls against one PostgreSQL lane.
+/// Rows already on this Project stay; a row on a different Project fails
+/// loudly and nothing moves.
+async fn attribute_calls(
+    pg: &store::postgres::PostgresDb,
+    assignment: &store::inbox::Assignment,
+    project_id: Uuid,
+) -> Result<(), String> {
+    store::billed_calls::attribute_conversation(
+        pg,
+        assignment.firm_id,
+        assignment.conversation_id,
+        project_id,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 /// `POST /app/projects/{project_code}/inbox/{conversation_id}/notes`

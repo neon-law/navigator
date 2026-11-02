@@ -15,6 +15,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::MethodRouter;
 use axum::{Json, Router};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -169,6 +170,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         ("GET", "/app/api/entities", get(list_entities)),
         ("GET", "/app/api/firms", get(list_firms)),
+        ("GET", "/app/api/inbox/parked-calls", get(parked_calls_get)),
         (
             "GET",
             "/app/api/firms/{id}/journal/audits",
@@ -4363,6 +4365,55 @@ async fn list_firms(
 struct FirmDirectoryEntry {
     id: Uuid,
     name: String,
+}
+
+/// One parked call in the lawyer's billing queue: a completed call's
+/// billing facts, still waiting for a Project to land on.
+#[derive(Debug, Serialize)]
+struct ParkedCallView {
+    call_sid: String,
+    conversation_id: Uuid,
+    firm_id: Uuid,
+    project_id: Option<Uuid>,
+    duration_seconds: i64,
+    tenths: i64,
+    call_started_at: DateTime<Utc>,
+}
+
+/// `GET /app/api/inbox/parked-calls` — the caller's Firms' unattributed
+/// calls, newest first, with their computed tenths: everything waiting for
+/// a lawyer to link it to a Project.
+async fn parked_calls_get(
+    State(surreal): State<store::surreal::SurrealDb>,
+    LawyerSession(session): LawyerSession,
+) -> Result<Json<Vec<ParkedCallView>>, ApiError> {
+    let person_id = session.person_id.ok_or(ApiError::NotFound)?;
+    let memberships = store::firms::memberships_for_person(&surreal, person_id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    // A deployment without the PostgreSQL lane has no billing rows at all:
+    // an unconfigured lane is an empty queue, not an error.
+    let pg = match store::postgres::PostgresDb::from_env().await {
+        Ok(pg) => pg,
+        Err(store::postgres::PostgresError::Configuration) => return Ok(Json(Vec::new())),
+        Err(error) => return Err(ApiError::Db(error.to_string())),
+    };
+    let mut parked = Vec::new();
+    for membership in memberships {
+        let rows = store::billed_calls::parked_for_firm(&pg, membership.firm_id)
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+        parked.extend(rows.into_iter().map(|row| ParkedCallView {
+            call_sid: row.call_sid,
+            conversation_id: row.conversation_id,
+            firm_id: row.firm_id,
+            project_id: row.project_id,
+            duration_seconds: row.duration_seconds,
+            tenths: row.tenths,
+            call_started_at: row.call_started_at,
+        }));
+    }
+    Ok(Json(parked))
 }
 
 async fn get_entity(

@@ -619,6 +619,32 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/inbox/parked-calls": {
+          "get": {
+            "summary": "List the caller's Firms' parked calls",
+            "description":
+              "Every unattributed call the caller's Firms have billed, newest first, with its computed tenths — the lawyer's waiting queue for calls not yet linked to a Project. Authorization: Lawyer tier only. A deployment without the PostgreSQL billing lane returns an empty queue.",
+            "responses": {
+              "200": { "description": "Unattributed calls across the caller's Firms", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "type": "object", "required": ["call_sid", "conversation_id", "firm_id", "project_id", "duration_seconds", "tenths", "call_started_at"], "properties": {
+                  "call_sid": { "type": "string" },
+                  "conversation_id": { "type": "string", "format": "uuid" },
+                  "firm_id": { "type": "string", "format": "uuid" },
+                  "project_id": { "type": ["string", "null"], "format": "uuid", "description": "`null` while the call parks at the Firm level" },
+                  "duration_seconds": { "type": "integer" },
+                  "tenths": { "type": "integer", "description": "Billed tenths of an hour, rounded up to the six-minute unit" },
+                  "call_started_at": { "type": "string", "format": "date-time" }
+                } } }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Authenticated caller is not Lawyer tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/seed": {
           "post": {
             "summary": "Reconcile a seed document",
