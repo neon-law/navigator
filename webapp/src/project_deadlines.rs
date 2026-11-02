@@ -428,7 +428,7 @@ mod tests {
         let html = panel(Vec::new());
         assert!(html.contains(HEADING), "{html}");
         assert!(html.contains(EMPTY_MESSAGE), "{html}");
-        assert!(html.contains("colspan=\"4\""), "{html}");
+        assert!(html.contains("colspan=\"5\""), "{html}");
         assert!(!html.contains("role=\"alert\""), "{html}");
     }
 
