@@ -81,6 +81,12 @@ Law PC. Neither license grants general trademark permission; Apache-2.0 section 
 option. Configure a fork's branding through `views::brand_bundle`; copyright permission does not authorize presenting a
 deployment as Neon Law.
 
+<!-- Draft — pending review by counsel. -->
+Lex Tecnica and IEP Defenders material belongs to Lex Tecnica, Ltd.: the page copy, logos, names, marks, and brand
+presentation for both brands, listed in [NOTICE](../NOTICE). `MIT OR Apache-2.0` does not cover it. Neither license
+grants any right to copy or use it, or the names LEX TECNICA or IEP DEFENDERS. Permission must come from Lex Tecnica,
+Ltd. in writing.
+
 ## Distributed notices
 
 Cargo member manifests inherit `MIT OR Apache-2.0` from the workspace. The editor extension declares it in its own
