@@ -363,6 +363,11 @@ mod tests {
     use sha2::Sha256;
     use store::{brands::NewBrand, firms::NewFirm, persons::NewPerson, persons::Role};
 
+    fn fresh_secret() -> String {
+        let key: [u8; 32] = rand::random();
+        STANDARD.encode(key)
+    }
+
     fn signed(secret: &str, body: &[u8]) -> HeaderMap {
         let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
         mac.update(body);
@@ -457,6 +462,7 @@ mod tests {
 
     #[tokio::test]
     async fn mention_ingests_with_full_attribution_and_replays_dedup() {
+        let secret = fresh_secret();
         let state = state_with_account().await;
         let body = mention_body(
             "1200000000000000001",
@@ -464,10 +470,10 @@ mod tests {
             "5500000000000000001",
             "A public mention",
         );
-        let headers = signed("synthetic-secret", &body);
+        let headers = signed(&secret, &body);
         for _ in 0..2 {
             assert_eq!(
-                receive_authenticated(&state, &headers, &body, "synthetic-secret")
+                receive_authenticated(&state, &headers, &body, &secret)
                     .await
                     .unwrap(),
                 StatusCode::OK
@@ -501,6 +507,8 @@ mod tests {
 
     #[tokio::test]
     async fn unsigned_tampered_and_wrong_secret_deliveries_are_refused() {
+        let secret = fresh_secret();
+        let wrong_secret = fresh_secret();
         let state = state_with_account().await;
         let body = mention_body(
             "1200000000000000001",
@@ -509,20 +517,20 @@ mod tests {
             "Unsigned",
         );
         assert_eq!(
-            receive_authenticated(&state, &HeaderMap::new(), &body, "synthetic-secret")
+            receive_authenticated(&state, &HeaderMap::new(), &body, &secret)
                 .await
                 .unwrap(),
             StatusCode::UNAUTHORIZED
         );
-        let headers = signed("synthetic-secret", &body);
+        let headers = signed(&secret, &body);
         assert_eq!(
-            receive_authenticated(&state, &headers, b"tampered", "synthetic-secret")
+            receive_authenticated(&state, &headers, b"tampered", &secret)
                 .await
                 .unwrap(),
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
-            receive_authenticated(&state, &headers, &body, "another-secret")
+            receive_authenticated(&state, &headers, &body, &wrong_secret)
                 .await
                 .unwrap(),
             StatusCode::UNAUTHORIZED
@@ -540,6 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn brand_echoes_and_unknown_events_acknowledge_without_filing() {
+        let secret = fresh_secret();
         let state = state_with_account().await;
         let echo = serde_json::to_vec(&serde_json::json!({
             "for_user_id": "1200000000000000001",
@@ -551,9 +560,9 @@ mod tests {
             }]
         }))
         .unwrap();
-        let headers = signed("synthetic-secret", &echo);
+        let headers = signed(&secret, &echo);
         assert_eq!(
-            receive_authenticated(&state, &headers, &echo, "synthetic-secret")
+            receive_authenticated(&state, &headers, &echo, &secret)
                 .await
                 .unwrap(),
             StatusCode::OK
@@ -563,9 +572,9 @@ mod tests {
             "favorite_events": [{"favorited_status": {"id_str": "1"}}]
         }))
         .unwrap();
-        let headers = signed("synthetic-secret", &likes);
+        let headers = signed(&secret, &likes);
         assert_eq!(
-            receive_authenticated(&state, &headers, &likes, "synthetic-secret")
+            receive_authenticated(&state, &headers, &likes, &secret)
                 .await
                 .unwrap(),
             StatusCode::OK
@@ -583,6 +592,7 @@ mod tests {
 
     #[tokio::test]
     async fn direct_messages_file_as_private_direct_message_threads() {
+        let secret = fresh_secret();
         let state = state_with_account().await;
         let body = serde_json::to_vec(&serde_json::json!({
             "for_user_id": "1200000000000000001",
@@ -596,9 +606,9 @@ mod tests {
             }]
         }))
         .unwrap();
-        let headers = signed("synthetic-secret", &body);
+        let headers = signed(&secret, &body);
         assert_eq!(
-            receive_authenticated(&state, &headers, &body, "synthetic-secret")
+            receive_authenticated(&state, &headers, &body, &secret)
                 .await
                 .unwrap(),
             StatusCode::OK
@@ -628,6 +638,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_receiving_account_is_unprocessable() {
+        let secret = fresh_secret();
         let state = state_with_account().await;
         let body = mention_body(
             "9999999999999999999",
@@ -635,9 +646,9 @@ mod tests {
             "5500000000000000001",
             "For someone else",
         );
-        let headers = signed("synthetic-secret", &body);
+        let headers = signed(&secret, &body);
         assert_eq!(
-            receive_authenticated(&state, &headers, &body, "synthetic-secret")
+            receive_authenticated(&state, &headers, &body, &secret)
                 .await
                 .unwrap_err(),
             StatusCode::UNPROCESSABLE_ENTITY
@@ -655,30 +666,34 @@ mod tests {
 
     #[test]
     fn crc_tokens_are_hmacs_of_the_challenge() {
+        let secret = fresh_secret();
+        let wrong_secret = fresh_secret();
+        let empty_secret = String::new();
         assert_eq!(
-            crc("synthetic-secret", "challenge-token"),
-            response_token("synthetic-secret", "challenge-token").unwrap()
+            crc(&secret, "challenge-token"),
+            response_token(&secret, "challenge-token").unwrap()
         );
         assert_ne!(
-            crc("synthetic-secret", "challenge-token"),
-            response_token("another-secret", "challenge-token").unwrap()
+            crc(&secret, "challenge-token"),
+            response_token(&wrong_secret, "challenge-token").unwrap()
         );
-        assert!(response_token("", "challenge-token").is_none());
+        assert!(response_token(&empty_secret, "challenge-token").is_none());
     }
 
     #[test]
     fn signature_header_shapes_are_exact() {
+        let secret = fresh_secret();
         let body = b"payload";
-        let headers = signed("synthetic-secret", body);
-        assert!(verify_signature("synthetic-secret", &headers, body));
+        let headers = signed(&secret, body);
+        assert!(verify_signature(&secret, &headers, body));
         let mut missing_prefix = headers.clone();
         missing_prefix.insert(
             SIGNATURE_HEADER,
             HeaderValue::from_str(&STANDARD.encode([0_u8; 32])).unwrap(),
         );
-        assert!(!verify_signature("synthetic-secret", &missing_prefix, body));
+        assert!(!verify_signature(&secret, &missing_prefix, body));
         let mut short = headers.clone();
         short.insert(SIGNATURE_HEADER, "sha256=YQ==".parse().unwrap());
-        assert!(!verify_signature("synthetic-secret", &short, body));
+        assert!(!verify_signature(&secret, &short, body));
     }
 }
