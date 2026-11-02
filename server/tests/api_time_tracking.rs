@@ -313,7 +313,7 @@ async fn log_entry(
     post(
         fx,
         &format!("/app/api/projects/{project_id}/time-entries"),
-        Some(&fx.lawyer),
+        Some(&fx.attorney),
         json!({
             "attorney_id": fx.attorney_id,
             "performed_on": "2026-11-01",
