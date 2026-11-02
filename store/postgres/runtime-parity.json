@@ -512,8 +512,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
       }
     ],
     "remaining": [
@@ -525,8 +525,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
       }
     ],
     "remaining": [
@@ -538,8 +538,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
       }
     ],
     "remaining": [
@@ -551,8 +551,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
       }
     ],
     "remaining": [
@@ -569,8 +569,8 @@
       },
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "The inbox_message_asset image mirrors to PostgreSQL and immutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "The populated inbox_message_asset image mirrors to PostgreSQL and immutable updates are refused."
       }
     ],
     "remaining": [
@@ -582,8 +582,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
       }
     ],
     "remaining": [
@@ -725,8 +725,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
       }
     ],
     "remaining": [
