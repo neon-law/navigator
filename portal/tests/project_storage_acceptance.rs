@@ -269,8 +269,16 @@ async fn a_synthetic_project_survives_its_whole_storage_lifecycle() {
 
     // 3. Optional Drive ingest; the first download fails.
     let drive = FakeDrive::default();
+    let parent = drive
+        .create_folder("synthetic-projects-parent")
+        .await
+        .unwrap();
     let folder = drive
-        .create_folder("acceptance display name")
+        .ensure_child_folder_with_id(
+            &parent.id,
+            "acceptance display name",
+            &drive.allocate_folder_id().await.unwrap(),
+        )
         .await
         .unwrap();
     projects::set_drive_folder_id(&surreal, project.id, Some(&folder.id))
@@ -291,9 +299,33 @@ async fn a_synthetic_project_survives_its_whole_storage_lifecycle() {
         description: None,
         dry_run: false,
     };
-    drive.fail_downloads(1);
-    assert!(store::drive_import::import_project_files(
+    surreal.query("UPSERT $jurisdiction SET name='Synthetic Source',code='ZZ',jurisdiction_type='country'; UPSERT $kind SET name='Synthetic Source';")
+        .bind(("jurisdiction",store::surreal::record_id("jurisdiction",store::test_support::SEED_ENTITY_JURISDICTION_ID)))
+        .bind(("kind",store::surreal::record_id("entity_type",store::test_support::SEED_ENTITY_TYPE_ID)))
+        .await.unwrap().check().unwrap();
+    let folders = store::project_folder_reconcile::reconcile(
         &surreal,
+        &pg,
+        &drive,
+        project.id,
+        &store::project_folder_reconcile::FolderProvisioningPolicy {
+            projects_parent_id: parent.id,
+            trusted_organizers: std::collections::BTreeSet::new(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        folders.outcome,
+        store::project_folder_reconcile::FolderOutcome::Complete
+    );
+    store::project_folder_reconcile::verify_for_import(&surreal, &pg, &drive, project.id)
+        .await
+        .unwrap();
+    drive.fail_downloads(1);
+    assert!(store::drive_import::import_project_files_with_folders(
+        &surreal,
+        &pg,
         &documents,
         &drive,
         &Clean,
@@ -303,8 +335,9 @@ async fn a_synthetic_project_survives_its_whole_storage_lifecycle() {
     )
     .await
     .is_err());
-    let ingested = store::drive_import::import_project_files(
+    let ingested = store::drive_import::import_project_files_with_folders(
         &surreal,
+        &pg,
         &documents,
         &drive,
         &Clean,

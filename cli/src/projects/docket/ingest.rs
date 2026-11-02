@@ -2030,6 +2030,7 @@ mod tests {
     async fn our_own_filing_from_the_drafts_lane_is_recognised_named() {
         let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
         let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "pleading".into(),
             visibility: "internal".into(),
             folder: None,
@@ -2080,6 +2081,7 @@ mod tests {
     async fn a_filing_under_this_name_is_not_filed_again(slug: &str) {
         let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
         let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: None,
             kind: "pleading".into(),
             visibility: "internal".into(),
             folder: None,

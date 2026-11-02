@@ -533,21 +533,8 @@ async fn main() -> anyhow::Result<()> {
     let dbos_nightly_portal_origin = portal_origin.clone();
     let dbos_nightly_messages_channel = messages_channel.clone();
     let dbos_nightly_staging_messages_channel = staging_messages_channel.clone();
-    if dbos_hosting.as_ref().is_some_and(|hosting| hosting.8) {
-        anyhow::ensure!(
-            slack_bot_enabled,
-            "DBOS NightlyProjectUpdate requires SLACK_BOT_TOKEN"
-        );
-        let channel = if simulated_matters {
-            &dbos_nightly_staging_messages_channel
-        } else {
-            &dbos_nightly_messages_channel
-        };
-        anyhow::ensure!(
-            !channel.trim().is_empty(),
-            "DBOS NightlyProjectUpdate requires its messages channel"
-        );
-    }
+    // Nightly Folder convergence must remain available without Slack configuration.
+    // The parent validates/posts Slack only after visiting the full Project roster.
     let summary_providers = SummaryProviders::from_env().context("configure summary providers")?;
     let email_summary = EmailSummaryService::new(
         surreal.clone(),

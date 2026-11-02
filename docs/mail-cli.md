@@ -1,17 +1,18 @@
 # Mail CLI
 
-`navigator mail setup|search|read|draft|file|parse|save` is a local Gmail workflow. Search and read use Gmail's read
-endpoints; draft creates or updates an unsent Gmail draft. The CLI has no message-send, reply-send, or forward
-operation. Filing records each message as a Project-scoped Communication. `file` refuses a thread that carries
+`navigator mail setup|login|search|read|draft|file|parse|save|attachments` is a local Gmail workflow. Search and read
+use Gmail's read endpoints; draft creates or updates an unsent Gmail draft. The CLI has no message-send, reply-send, or
+forward operation. Filing records each message as a Project-scoped Communication. `file` refuses a thread that carries
 attachments before it writes anything; `read` prints their names and marks them as not downloaded. `parse` files one
 message the same way — a Gmail web-URL message, a local .eml, or a local file through the document-upload lane — and
-`save` writes a message's .eml copy under the checkout's git-ignored `mail/` folder. Neither touches Gmail beyond reads.
+`save` writes a message's .eml copy under the checkout's git-ignored `mail/` folder. `attachments` writes a message's
+attachments into a directory. None of them touches Gmail beyond reads.
 
 The CLI reads the refresh token from the macOS Keychain item whose service is
 `com.neonlaw.navigator.gmail.refresh-token` and whose account is the configured Gmail address. It exchanges that token
-at Google's token endpoint using the configured OAuth client id. The macOS Security framework reads the token. This
-implementation does not enroll an account or provision the Keychain item. Deployment requires a signed-app/Keychain ACL
-threat model and a managed-host test.
+at Google's token endpoint using the configured OAuth client id, plus the client secret when one is stored. The macOS
+Security framework reads and writes both items. `navigator mail login` mints the token. Deployment requires a
+signed-app/Keychain ACL threat model and a managed-host test.
 
 ## Draft-only setup
 
@@ -28,18 +29,42 @@ the credential file's extension replaced by `.mail.json`. Nonblank `NAVIGATOR_GM
 `NAVIGATOR_GMAIL_CLIENT_ID` override the saved values independently.
 
 `navigator mail setup` checks the saved settings and environment overrides and prints the fix for each gap. It reports
-`ok` or `MISSING` for the account, client id, and Keychain refresh token, and fails until all three are present. Saved
-settings remain available even when the token check fails. Output contains fixed text only, never the account, client
-id, or token. To store the token, run the following with your configured Gmail address. The command prompts for the
-token so it stays out of shell history:
+`ok` or `MISSING` for the account, client id, and Keychain refresh token, and fails until all three are present. It
+reports the client secret as `ok` or `optional`; the secret never blocks readiness. Saved settings remain available even
+when the token check fails. Output contains fixed text only, never the account, client id, secret, or token. When the
+token is missing, it points to `navigator mail login`.
+
+## Authorize Gmail
+
+`navigator mail login` runs Google's installed-app OAuth flow and stores the refresh token:
 
 ```bash
-security add-generic-password -s com.neonlaw.navigator.gmail.refresh-token -a "<gmail-address>" -w
+navigator mail login
+navigator mail login --client-secret-file ~/Downloads/client_secret_<id>.json
 ```
 
-Authorize the refresh token for `gmail.readonly` and `gmail.compose` only. Gmail offers no narrower scope that creates
-drafts, and `gmail.compose` can send at Google's level; the guard is that this CLI has no send verb and calls no send
-endpoint (a test pins the endpoint list). The CLI never requests scopes itself; the token carries what you authorized.
+- **Settings.** It uses the account and client id saved by `navigator mail setup`, or their environment overrides.
+- **Client secret.** Google's Desktop-app clients require a client secret at the token endpoint. The CLI reads it from
+  the Keychain item whose service is `com.neonlaw.navigator.gmail.client-secret` and whose account is the client id.
+  `--client-secret-file` reads `installed.client_secret` from Google's downloaded client JSON, refuses a file for a
+  different client id, and stores the secret. With neither, the CLI prompts on the terminal with echo off and stores
+  what you type. The secret is never printed or logged.
+- **Browser.** A one-shot listener binds `127.0.0.1` on a random port as the redirect. The CLI opens the Google
+  consent page with `open` and prints the URL too. The request uses PKCE (S256), a random `state` the redirect must
+  echo, `access_type=offline`, `prompt=consent`, and `login_hint` set to the configured account. A `state` mismatch
+  refuses the code. The listener waits five minutes.
+- **Scopes.** The request names exactly `gmail.readonly` and `gmail.compose`. After the exchange the CLI checks the
+  granted scopes. A token missing either scope, or carrying any other, is revoked at Google and not stored. A token for
+  a different Gmail account than the configured one is also revoked.
+- **Storage.** The refresh token goes into the existing Keychain item, replacing any earlier token.
+
+Every later refresh checks the granted scopes again. A stored token carrying any other scope is deleted from the
+Keychain, and the command fails until `navigator mail login` runs again.
+
+Gmail offers no narrower scope that creates drafts, and `gmail.compose` can send at Google's level; the guard is that
+this CLI has no send verb and calls no send endpoint (a test pins the endpoint list). `inbox process --apply` archives
+through Gmail's modify endpoint. That endpoint needs `gmail.modify`, so a token from `navigator mail login` cannot
+archive.
 
 Search adds the current Project client's email to the Gmail query when `navigator.yaml` provides `client_dri`. This is a
 search convenience, not an authorization boundary. Filing compares the message participants with that contact and warns
@@ -116,3 +141,31 @@ navigator mail save "https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7"
 
 `mail/` is git-ignored — saved mail is a matter fact, never Git — and the Project gate refuses it. Saving is a read of
 Gmail and a write to disk; it never sends, and it does not archive or label the message in Gmail.
+
+## Save a message's attachments
+
+`navigator mail attachments <gmail-web-url-or-id> --dir <dir>` fetches the message with `format=raw` and writes each
+attachment's decoded bytes into `<dir>`, one file per attachment:
+
+```bash
+navigator mail attachments "https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7" --dir mail/18fa3bc2d4e5f6a7
+# Engagement Letter.pdf  48213 bytes  sha256:<64 hex>  written
+```
+
+- **Output.** One line per file: the name, the byte count, the sha256, and `written` or `already present`. The bytes go
+  only to disk, never to stdout.
+- **Filenames.** Each file keeps its attachment's filename, with surrounding whitespace trimmed. A name with a path
+  separator or a control character, or one that is empty or only dots, refuses the run before anything is written. Pass
+  `--only` to pick the other attachments. An unnamed part becomes `attachment-<n>.<ext>`, with the extension from its
+  MIME type. Two attachments with the same name and identical bytes produce one file. With different bytes, the later
+  one gets `-2`, `-3`, and so on before the extension.
+- **Never clobbers.** An existing file with identical bytes is left alone, so a re-run is idempotent. An existing file
+  with different bytes refuses the whole run before anything is written.
+- **`--only <glob>`.** Writes only filenames matching the glob. `*` matches any run of characters and `?` matches one.
+  Matching ignores ASCII case, so `--only '*.pdf'` matches `Letter.PDF`.
+- **Inline images.** Images marked inline, such as a signature logo or a pasted screenshot, are skipped unless you pass
+  `--include-inline`. Other inline parts, such as a PDF that Apple Mail marks inline, are written. A forwarded message
+  is written as one `.eml` file.
+
+Point `--dir` at a git-ignored folder such as `mail/`. Legal files never belong in Git. This verb uploads nothing. To
+file an attachment, use `navigator site document upload`.

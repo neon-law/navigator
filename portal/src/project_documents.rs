@@ -321,7 +321,7 @@ pub async fn drive_import(
                 .into_response();
         }
     };
-    drive_import_with(&state, project_id, &session_data, &drive, &form).await
+    drive_import_with(&state, project_id, &session_data, &drive, &form, None).await
 }
 
 /// Whether the deployment sets none of the Drive credential settings.
@@ -343,6 +343,7 @@ async fn drive_import_with(
     session: &SessionData,
     drive: &dyn cloud::DriveService,
     form: &DriveImportForm,
+    folders: Option<&store::postgres::PostgresDb>,
 ) -> Response {
     let Some(person_id) = session.person_id else {
         return StatusCode::NOT_FOUND.into_response();
@@ -371,25 +372,40 @@ async fn drive_import_with(
         }
     };
     let screen = ScannerScreen(state.attachment_scanner.as_ref());
-    match store::drive_import::import_project_files(
-        &state.surreal,
-        &state.storage,
-        drive,
-        &screen,
-        project_id,
-        person_id,
-        &store::drive_import::DriveImportArgs {
-            kind: &form.kind,
-            visibility,
-            description: form
-                .description
-                .as_deref()
-                .filter(|value| !value.trim().is_empty()),
-            dry_run: form.dry_run,
-        },
-    )
-    .await
-    {
+    let args = store::drive_import::DriveImportArgs {
+        kind: &form.kind,
+        visibility,
+        description: form
+            .description
+            .as_deref()
+            .filter(|value| !value.trim().is_empty()),
+        dry_run: form.dry_run,
+    };
+    let outcome = if let Some(pg) = folders {
+        store::drive_import::import_project_files_with_folders(
+            &state.surreal,
+            pg,
+            &state.storage,
+            drive,
+            &screen,
+            project_id,
+            person_id,
+            &args,
+        )
+        .await
+    } else {
+        store::drive_import::import_project_files(
+            &state.surreal,
+            &state.storage,
+            drive,
+            &screen,
+            project_id,
+            person_id,
+            &args,
+        )
+        .await
+    };
+    match outcome {
         Ok(report) => axum::Json(report).into_response(),
         Err(store::drive_import::DriveImportError::Unauthorized) => {
             StatusCode::NOT_FOUND.into_response()
@@ -1075,6 +1091,78 @@ mod tests {
     use store::surreal::test_support::mem;
     use store::test_support::seed_project_surreal;
 
+    async fn drive_database() -> Option<store::postgres::PostgresDb> {
+        use sqlx::postgres::{PgConnectOptions, PgSslMode};
+        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
+            assert_ne!(
+                std::env::var("NAV_REQUIRE_POSTGRES").as_deref(),
+                Ok("1"),
+                "PostgreSQL fixture required"
+            );
+            return None;
+        };
+        let options = PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(port.parse().unwrap())
+            .username("postgres")
+            .password("synthetic")
+            .ssl_mode(PgSslMode::Disable);
+        let admin = sqlx::PgPool::connect_with(options.clone().database(
+            &std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into()),
+        ))
+        .await
+        .unwrap();
+        let name = format!("portal_drive_{}", uuid::Uuid::now_v7().simple());
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+        let pg = store::postgres::PostgresDb::connect(options.database(&name))
+            .await
+            .unwrap();
+        pg.migrate_embedded(None).await.unwrap();
+        Some(pg)
+    }
+
+    async fn verified_drive_folders(
+        state: &AdminState,
+        pg: &store::postgres::PostgresDb,
+        drive: &cloud::FakeDrive,
+        project_id: uuid::Uuid,
+        folder_id: &str,
+        parent_id: &str,
+    ) {
+        // The minimal Source fixture omits these reference records. Cross-store
+        // folder projection needs their real Source images and foreign keys.
+        state.surreal.query("UPSERT $jurisdiction SET name='Synthetic Source',code='ZZ',jurisdiction_type='country'; UPSERT $kind SET name='Synthetic Source';")
+            .bind(("jurisdiction",store::surreal::record_id("jurisdiction",store::test_support::SEED_ENTITY_JURISDICTION_ID)))
+            .bind(("kind",store::surreal::record_id("entity_type",store::test_support::SEED_ENTITY_TYPE_ID)))
+            .await.unwrap().check().unwrap();
+        store::projects::set_drive_folder_id(&state.surreal, project_id, Some(folder_id))
+            .await
+            .unwrap();
+        let report = store::project_folder_reconcile::reconcile(
+            &state.surreal,
+            pg,
+            drive,
+            project_id,
+            &store::project_folder_reconcile::FolderProvisioningPolicy {
+                projects_parent_id: parent_id.into(),
+                trusted_organizers: std::collections::BTreeSet::new(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            report.outcome,
+            store::project_folder_reconcile::FolderOutcome::Complete
+        );
+        store::project_folder_reconcile::verify_for_import(&state.surreal, pg, drive, project_id)
+            .await
+            .unwrap();
+    }
+
     /// An [`AdminState`] wired against a fresh embedded engine, plus the one
     /// matter `file_one` files against.
     async fn fixtures(code: &str) -> (AdminState, uuid::Uuid) {
@@ -1107,9 +1195,20 @@ mod tests {
     #[tokio::test]
     async fn drive_import_files_into_storage_for_a_lawyer_and_hides_the_matter_otherwise() {
         use cloud::DriveService as _;
+        let Some(pg) = drive_database().await else {
+            return;
+        };
         let (state, project_id) = fixtures("documents-drive-import").await;
         let drive = cloud::FakeDrive::default();
-        let folder = drive.create_folder("documents-drive-import").await.unwrap();
+        let parent = drive.create_folder("synthetic-parent").await.unwrap();
+        let folder = drive
+            .ensure_child_folder_with_id(
+                &parent.id,
+                "documents-drive-import",
+                &drive.allocate_folder_id().await.unwrap(),
+            )
+            .await
+            .unwrap();
         store::projects::set_drive_folder_id(&state.surreal, project_id, Some(&folder.id))
             .await
             .unwrap();
@@ -1159,11 +1258,28 @@ mod tests {
             description: None,
             dry_run: false,
         };
-        let refused = drive_import_with(&state, project_id, &session(&client), &drive, &form).await;
+        let refused = drive_import_with(
+            &state,
+            project_id,
+            &session(&client),
+            &drive,
+            &form,
+            Some(&pg),
+        )
+        .await;
         assert_eq!(refused.status(), axum::http::StatusCode::NOT_FOUND);
         assert_eq!(drive.download_calls(), 0);
 
-        let response = drive_import_with(&state, project_id, &session(&owner), &drive, &form).await;
+        verified_drive_folders(&state, &pg, &drive, project_id, &folder.id, &parent.id).await;
+        let response = drive_import_with(
+            &state,
+            project_id,
+            &session(&owner),
+            &drive,
+            &form,
+            Some(&pg),
+        )
+        .await;
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -1261,11 +1377,12 @@ mod tests {
             &personless,
             &drive,
             &form(visibility::INTERNAL),
+            None,
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let response =
-            drive_import_with(&state, project_id, &session, &drive, &form("public")).await;
+            drive_import_with(&state, project_id, &session, &drive, &form("public"), None).await;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let response = drive_import_with(
             &state,
@@ -1273,12 +1390,13 @@ mod tests {
             &session,
             &drive,
             &form(visibility::CLIENT),
+            None,
         )
         .await;
         assert_eq!(
             response.status(),
-            StatusCode::CONFLICT,
-            "a matter without a Drive dropbox has nothing to import"
+            StatusCode::SERVICE_UNAVAILABLE,
+            "folder authority must be available and verified before import"
         );
         assert_eq!(drive.download_calls(), 0);
     }
@@ -1530,13 +1648,24 @@ mod tests {
         lawyer: crate::session::SessionData,
         drive: cloud::FakeDrive,
         folder_id: String,
+        parent_id: String,
+        pg: store::postgres::PostgresDb,
     }
 
-    async fn drive_fixture(code: &str) -> DriveFixture {
+    async fn drive_fixture(code: &str) -> Option<DriveFixture> {
         use cloud::DriveService as _;
+        let pg = drive_database().await?;
         let (state, project_id) = fixtures(code).await;
         let drive = cloud::FakeDrive::default();
-        let folder = drive.create_folder(code).await.unwrap();
+        let parent = drive.create_folder("synthetic-parent").await.unwrap();
+        let folder = drive
+            .ensure_child_folder_with_id(
+                &parent.id,
+                code,
+                &drive.allocate_folder_id().await.unwrap(),
+            )
+            .await
+            .unwrap();
         let lawyer = store::persons::create(
             &state.surreal,
             &store::persons::NewPerson::with_role(
@@ -1558,7 +1687,7 @@ mod tests {
         )
         .await
         .unwrap();
-        DriveFixture {
+        Some(DriveFixture {
             state,
             project_id,
             lawyer: crate::session::SessionData {
@@ -1567,18 +1696,22 @@ mod tests {
             },
             drive,
             folder_id: folder.id,
-        }
+            parent_id: parent.id,
+            pg,
+        })
     }
 
     impl DriveFixture {
         async fn link_folder(&self) {
-            store::projects::set_drive_folder_id(
-                &self.state.surreal,
+            verified_drive_folders(
+                &self.state,
+                &self.pg,
+                &self.drive,
                 self.project_id,
-                Some(&self.folder_id),
+                &self.folder_id,
+                &self.parent_id,
             )
-            .await
-            .unwrap();
+            .await;
         }
 
         fn add(&self, name: &str, bytes: &[u8]) {
@@ -1600,6 +1733,7 @@ mod tests {
                 &self.lawyer,
                 &self.drive,
                 form,
+                Some(&self.pg),
             )
             .await;
             let status = response.status();
@@ -1621,7 +1755,9 @@ mod tests {
 
     #[tokio::test]
     async fn drive_import_dry_run_answers_the_plan_without_filing() {
-        let fixture = drive_fixture("drive-import-dry-run").await;
+        let Some(fixture) = drive_fixture("drive-import-dry-run").await else {
+            return;
+        };
         fixture.link_folder().await;
         fixture.add("intake.pdf", b"intake");
         let form = DriveImportForm {
@@ -1642,7 +1778,9 @@ mod tests {
 
     #[tokio::test]
     async fn drive_import_refuses_a_personless_session_and_an_unknown_visibility() {
-        let fixture = drive_fixture("drive-import-refusals").await;
+        let Some(fixture) = drive_fixture("drive-import-refusals").await else {
+            return;
+        };
         fixture.link_folder().await;
         fixture.add("intake.pdf", b"intake");
         let personless = crate::session::SessionData {
@@ -1655,6 +1793,7 @@ mod tests {
             &personless,
             &fixture.drive,
             &internal_form(),
+            None,
         )
         .await;
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
@@ -1671,11 +1810,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drive_import_answers_conflict_without_a_live_ingest_folder() {
-        let fixture = drive_fixture("drive-import-folders").await;
+    async fn drive_import_stops_without_verified_folder_authority() {
+        let Some(fixture) = drive_fixture("drive-import-folders").await else {
+            return;
+        };
         let (status, body) = fixture.import(&internal_form()).await;
-        assert_eq!(status, axum::http::StatusCode::CONFLICT);
-        assert_eq!(body, "Project has no Drive ingest folder");
+        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body, "Drive import stopped; run it again");
 
         store::projects::set_drive_folder_id(
             &fixture.state.surreal,
@@ -1685,13 +1826,16 @@ mod tests {
         .await
         .unwrap();
         let (status, body) = fixture.import(&internal_form()).await;
-        assert_eq!(status, axum::http::StatusCode::CONFLICT);
-        assert!(body.contains("not a live folder"), "{body}");
+        assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body, "Drive import stopped; run it again");
+        assert_eq!(fixture.drive.download_calls(), 0);
     }
 
     #[tokio::test]
     async fn drive_import_refuses_an_oversized_batch_before_downloading() {
-        let fixture = drive_fixture("drive-import-bounds").await;
+        let Some(fixture) = drive_fixture("drive-import-bounds").await else {
+            return;
+        };
         fixture.link_folder().await;
         for index in 0..=store::drive_import::MAX_FILES {
             fixture.add(&format!("page-{index}.pdf"), b"page");
@@ -1704,7 +1848,9 @@ mod tests {
 
     #[tokio::test]
     async fn drive_import_stops_with_503_when_drive_or_the_screen_fails() {
-        let fixture = drive_fixture("drive-import-failures").await;
+        let Some(fixture) = drive_fixture("drive-import-failures").await else {
+            return;
+        };
         fixture.link_folder().await;
         fixture.add("intake.pdf", b"intake");
         fixture.drive.fail_downloads(1);
@@ -1729,7 +1875,9 @@ mod tests {
 
     #[tokio::test]
     async fn drive_import_reports_a_file_the_screen_flags_without_filing_it() {
-        let mut fixture = drive_fixture("drive-import-malware").await;
+        let Some(mut fixture) = drive_fixture("drive-import-malware").await else {
+            return;
+        };
         fixture.link_folder().await;
         fixture.add("flagged.pdf", b"synthetic eicar stand-in");
         fixture.state.attachment_scanner =
@@ -1760,7 +1908,9 @@ mod tests {
     #[tokio::test]
     async fn the_drive_import_door_hides_the_matter_and_reports_missing_configuration() {
         use axum::extract::{Extension, Path, State};
-        let fixture = drive_fixture("drive-import-door").await;
+        let Some(fixture) = drive_fixture("drive-import-door").await else {
+            return;
+        };
         let form = || axum::Form(internal_form());
         let code = store::projects::find_by_id(&fixture.state.surreal, fixture.project_id)
             .await

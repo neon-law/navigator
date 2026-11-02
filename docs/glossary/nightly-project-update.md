@@ -18,6 +18,12 @@ child is not yet implemented. The CronJob `nightly-project-update-trigger` runs 
 Etc/UTC`; it does not follow Pacific daylight saving time. Parent and children:
 [`nightly_project_update.rs`](../../workflows-service/src/nightly_project_update.rs).
 
+After journaling the roster, both the Restate parent and its opt-in DBOS twin reconcile the folder tree and separate
+[Client Submissions](client-submissions.md) root for every open Project, before Slack configuration admission or
+posting. A blocked provider or failed Project produces a bounded outcome and the pass continues. This nightly pass
+covers the whole open-Project roster. Startup also performs a bounded warmup of at most 100 Projects within 20 seconds.
+Closed and archived Projects retain the lifecycle behavior below.
+
 The diagrams show the full composition. Each open Project gets its own set of child DAGs.
 
 ```mermaid
@@ -25,9 +31,10 @@ flowchart TB
   Clock["Kubernetes CronJob<br/>55 5 * * * UTC"]
   Parent["Nightly Project Update<br/>parent DAG · key = UTC date"]
   Clock --> Parent
-  Parent --> PA["open Project A"]
-  Parent --> PB["open Project B"]
-  Parent --> PN["remaining open Projects<br/>each with its own child DAGs"]
+  Parent --> Folders["Converge folder trees<br/>every open Project"]
+  Folders --> PA["open Project A"]
+  Folders --> PB["open Project B"]
+  Folders --> PN["remaining open Projects<br/>each with its own child DAGs"]
   subgraph tagsA ["Project A child DAGs"]
     direction LR
     MA["membership"]
