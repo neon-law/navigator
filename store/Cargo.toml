@@ -29,6 +29,9 @@ async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
 cloud.workspace = true
+# `nef` parses CM/ECF notice MIME so the CLI's docket ingest and the
+# portal's inbox pipeline share one parser (LAW-171).
+mail-parser.workspace = true
 # `source_pages` locates a quote in a stored PDF asset and lifts the pages
 # it falls on, through `pdf::passage` (#893).
 pdf.workspace = true

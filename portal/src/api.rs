@@ -5871,13 +5871,15 @@ async fn mail_file_door(
 /// slug and the stamped [`store::documents::MailProvenance`] derive from,
 /// shared by both filing doors — a stored inbound hop (`mail_file_door`) and
 /// a raw `.eml` upload (`eml_upload_door`).
-struct MailAttachmentSource<'a> {
+/// The provenance a mail-lane filing stamps. Shared with the NEF pipeline
+/// (`nef_pipeline`), which files a notice's attachments the same way.
+pub(crate) struct MailAttachmentSource<'a> {
     /// Slug component. A UUID for a stored message; a sanitized `.eml`
     /// message reference for an upload.
-    message_id: &'a str,
-    sender: &'a str,
-    received_at: &'a str,
-    subject: &'a str,
+    pub(crate) message_id: &'a str,
+    pub(crate) sender: &'a str,
+    pub(crate) received_at: &'a str,
+    pub(crate) subject: &'a str,
 }
 
 /// File every parsed attachment as its own slugged revision
@@ -5886,7 +5888,7 @@ struct MailAttachmentSource<'a> {
 /// Each attachment is filed as its own independent write, so a failure here
 /// leaves every earlier attachment filed and no pointer or partial asset for
 /// the one that failed.
-async fn file_mail_attachments(
+pub(crate) async fn file_mail_attachments(
     state: &ApiState,
     project_id: Uuid,
     kind: &str,

@@ -113,6 +113,51 @@ fn message_text(bytes: &[u8]) -> (String, Vec<String>) {
     (String::from_utf8_lossy(bytes).into_owned(), Vec::new())
 }
 
+/// The docket-entry kind a notice's docket text names — the first
+/// alphabetic word, mapped to the closed [`store::cases::EntryKind`]
+/// spellings the docket rows store. Shared with the portal's inbox
+/// pipeline (LAW-171) so both lanes classify identically.
+#[must_use]
+pub fn entry_kind(docket_text: &str) -> &'static str {
+    let first = docket_text
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .find(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    match first.as_str() {
+        "motion" => "motion",
+        "opposition" | "response" => "opposition",
+        "reply" => "reply",
+        "order" => "order",
+        "notice" => "notice",
+        "stipulation" => "stipulation",
+        "subpoena" => "subpoena",
+        "complaint" | "answer" | "petition" | "counterclaim" => "pleading",
+        _ => "other",
+    }
+}
+
+/// The asset-lane document kind a notice's docket text suggests: an
+/// attachment described as an exhibit is an `exhibit`, a transcript entry is
+/// a `transcript`, and everything else files as a `pleading`. Shared with the
+/// portal's inbox pipeline (LAW-171) so both lanes classify identically.
+#[must_use]
+pub fn suggested_kind(docket_text: &str, attachment_description: Option<&str>) -> &'static str {
+    if let Some(description) = attachment_description {
+        if description.to_ascii_lowercase().contains("exhibit") {
+            return "exhibit";
+        }
+    }
+    if docket_text
+        .split_whitespace()
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("transcript"))
+    {
+        return "transcript";
+    }
+    "pleading"
+}
+
 /// Parse a notice already reduced to text. `links` are the HTML hrefs in
 /// document order; a plain-text notice carries its links inline instead.
 ///

@@ -140,14 +140,29 @@ pub(crate) async fn process(
     );
     let already_recorded = context.state.processed_at.is_some();
     let recorded_at = Utc::now();
-    store::inbox::mark_processed(
-        &state.surreal,
-        request.message,
-        decision.route.as_str(),
-        recorded_at,
-    )
-    .await
-    .map_err(map_inbox)?;
+    // LAW-171: a NEF-classified message on an attributed matter is not
+    // merely routed — the pipeline files the notice onto the matter. It
+    // runs before the recording, and only an outcome that finished its
+    // work records the processing time; a triage outcome (no matter, an
+    // unparseable notice, no case number) stays in the backlog.
+    let nef_outcome = if decision.route == crate::inbound_email::InboxRoute::Nef {
+        Some(crate::nef_pipeline::process_nef(&state, &context.row).await?)
+    } else {
+        None
+    };
+    let nef_recorded = nef_outcome
+        .as_ref()
+        .is_none_or(crate::nef_pipeline::NefOutcome::recorded);
+    if nef_recorded {
+        store::inbox::mark_processed(
+            &state.surreal,
+            request.message,
+            decision.route.as_str(),
+            recorded_at,
+        )
+        .await
+        .map_err(map_inbox)?;
+    }
     let slack_notice = match context.row.project_id {
         Some(project_id) => notify_inbox_routed(&state, project_id).await,
         None => SlackNotice::NoProject,
@@ -157,7 +172,7 @@ pub(crate) async fn process(
             context.row,
             store::inbox::ProcessState {
                 route: Some(decision.route.as_str().to_owned()),
-                processed_at: Some(recorded_at),
+                processed_at: nef_recorded.then_some(recorded_at),
             },
         ),
         route: decision.route.as_str(),
@@ -165,6 +180,7 @@ pub(crate) async fn process(
         reason: decision.reason,
         recorded_at,
         already_recorded,
+        nef: nef_outcome,
         slack_notice,
     })
     .into_response())
@@ -182,6 +198,9 @@ pub(crate) struct ProcessApplyView {
     pub recorded_at: chrono::DateTime<chrono::Utc>,
     /// Whether a previous run had already recorded this message.
     pub already_recorded: bool,
+    /// What the NEF pipeline filed, when the message classified as a
+    /// CM/ECF notice (LAW-171). `None` for every other route.
+    pub nef: Option<crate::nef_pipeline::NefOutcome>,
     /// The best-effort Slack notice outcome.
     pub slack_notice: SlackNotice,
 }

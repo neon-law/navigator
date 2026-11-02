@@ -10,6 +10,8 @@ pub mod case_timeline;
 pub mod claims_agent;
 pub mod entries;
 pub mod ingest;
-pub mod nef;
+// The NEF parser moved to `store::nef` (LAW-171) so the portal's inbox
+// pipeline parses notices with the same module the CLI ingests with.
+pub use store::nef;
 pub mod renumber;
 pub mod timeline_write;

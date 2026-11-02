@@ -10973,6 +10973,7 @@ dependencies = [
  "chrono",
  "cloud",
  "include_dir",
+ "mail-parser",
  "pdf",
  "proc-macro2",
  "project-scaffold",

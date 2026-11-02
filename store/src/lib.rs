@@ -144,6 +144,7 @@ pub mod matter_captions;
 pub mod matter_financials;
 pub mod matter_pages;
 pub(crate) mod matter_record_links;
+pub mod nef;
 pub mod notarizations;
 pub mod notation_clauses;
 pub mod notation_documents;
