@@ -14,4 +14,4 @@ disposition.
 
 The table is `inbox_triage`.
 
-Schema: [`inbox_triage`](../../store/src/schema/navigator.surql#L2628).
+Schema: [`inbox_triage`](../../store/postgres/schema.sql).

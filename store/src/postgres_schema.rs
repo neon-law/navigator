@@ -697,7 +697,10 @@ fn surreal_erd_type(surreal_type: &str) -> &'static str {
         "uuid"
     } else if surreal_type.contains("bool") {
         "boolean"
-    } else if surreal_type.contains("int") || surreal_type.contains("float") {
+    } else if surreal_type.contains("int")
+        || surreal_type.contains("float")
+        || matches!(surreal_type, "number" | "option<number>")
+    {
         "number"
     } else if surreal_type.contains("datetime") {
         "datetime"
@@ -716,6 +719,7 @@ fn erd_type(sql_type: &str) -> &'static str {
         "UUID" => "uuid",
         "BOOLEAN" => "boolean",
         "BIGINT" | "INTEGER" | "SMALLINT" => "int",
+        "DOUBLE" | "DOUBLE PRECISION" | "REAL" | "FLOAT" => "number",
         "TIMESTAMPTZ" | "TIMESTAMP" | "DATE" => "datetime",
         "JSONB" | "JSON" => "json",
         _ => "string",
@@ -1961,6 +1965,19 @@ mod tests {
             render_parity_manifest().expect("manifest serializes"),
             render_parity_manifest().expect("manifest serializes again")
         );
+    }
+
+    #[test]
+    fn confidence_fields_are_numeric_in_both_schema_diagrams() {
+        let source = super::render_surreal_source_erd();
+        let target = super::render_erd().unwrap();
+        for field in ["project_confidence", "privilege_confidence"] {
+            let label = format!("number {field}");
+            let source_numeric = source.contains(&label);
+            let target_numeric = target.contains(&label);
+            assert!(source_numeric && target_numeric,
+                "{field} must be numeric in both diagrams: source={source_numeric}, target={target_numeric}");
+        }
     }
 
     #[test]
