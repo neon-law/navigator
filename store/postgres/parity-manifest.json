@@ -205,6 +205,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "inbox_attachment_receipt",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "journal_entry_source",
       "missing_column": null,
       "missing_table": null,
@@ -1815,7 +1822,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 147,
+    "table_count": 148,
     "tables": {
       "address": {
         "columns": {
@@ -3008,6 +3015,29 @@
           "inbox_conversation",
           "person",
           "project"
+        ]
+      },
+      "inbox_attachment_receipt": {
+        "columns": {
+          "asset_id": "UUID",
+          "firm_id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "sha256": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "asset_id",
+            "asset"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "inbox_attachment_receipt",
+        "references": [
+          "asset",
+          "firm"
         ]
       },
       "inbox_conversation": {

@@ -92,24 +92,93 @@ async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
         std::env::set_var(name, value);
     }
     assert_public_native_lifecycle(&f).await;
+    assert_public_native_private_triage(&f).await;
+}
+
+async fn assert_public_native_private_triage(f: &Fixture) {
+    use crate::inbox_triage::{self, NewInboxTriage, PrivilegeLabel, TriageDisposition};
+    let mut input = inbound(
+        f.firm,
+        channel::X,
+        "synthetic-x-account",
+        "native-private-x",
+        "synthetic-x-sender",
+    );
+    input.brand_key = Some("neon");
+    input.interaction_type = Some("direct_message");
+    input.visibility = Some("private");
+    let saved = crate::inbox::ingest_inbound(&f.db, &input).await.unwrap();
+    let review = inbox_triage::record(
+        &f.db,
+        &NewInboxTriage {
+            message_id: saved.message_id,
+            firm_id: f.firm,
+            suggested_project_id: Some(f.project),
+            project_confidence: Some(1.0),
+            privilege: PrivilegeLabel::NotPrivileged,
+            privilege_confidence: Some(1.0),
+            rationale: Some("synthetic automation".into()),
+            model_id: Some("synthetic-model".into()),
+            prompt_version: "synthetic-prompt".into(),
+            raw_output: Some("synthetic output".into()),
+            disposition: TriageDisposition::Suggested,
+            labeled_example: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(review.privilege, PrivilegeLabel::Uncertain);
+    assert_eq!(review.disposition, TriageDisposition::NeedsHuman);
+    assert!(review.raw_output.is_none() && review.model_id.is_none());
+    assert!(inbox_triage::list_for_review(&f.db, f.owner)
+        .await
+        .unwrap()
+        .iter()
+        .any(|row| row.triage.id == review.id));
+    projects::add_participation(
+        &f.db,
+        f.project,
+        f.owner,
+        projects::participation_for_role(Role::Owner),
+    )
+    .await
+    .unwrap();
+    let assigned = inbox_triage::confirm_project(&f.db, f.owner, review.id, f.project)
+        .await
+        .unwrap();
+    assert_eq!(assigned.privilege, PrivilegeLabel::Uncertain);
+    assert_eq!(assigned.disposition, TriageDisposition::NeedsHuman);
+    let resolved = inbox_triage::resolve_privilege(
+        &f.db,
+        f.owner,
+        review.id,
+        PrivilegeLabel::Privileged,
+        "synthetic human review",
+    )
+    .await
+    .unwrap();
+    assert_eq!(resolved.privilege, PrivilegeLabel::Privileged);
+    assert_eq!(resolved.disposition, TriageDisposition::Confirmed);
+    assert!(!inbox_triage::list_for_review(&f.db, f.owner)
+        .await
+        .unwrap()
+        .iter()
+        .any(|row| row.triage.id == review.id));
 }
 
 async fn assert_public_native_lifecycle(f: &Fixture) {
     use crate::inbox;
     let account = format!("+{}", 15_550_100_000_u64);
     let sender = format!("+{}", 15_555_550_127_u64);
-    let saved = inbox::ingest_inbound(
-        &f.db,
-        &inbound(
-            f.firm,
-            channel::SMS,
-            &account,
-            "public-native-flow",
-            &sender,
-        ),
-    )
-    .await
-    .unwrap();
+    let mut input = inbound(
+        f.firm,
+        channel::SMS,
+        &account,
+        "public-native-flow",
+        &sender,
+    );
+    input.brand_key = Some("neon");
+    let saved = inbox::ingest_inbound(&f.db, &input).await.unwrap();
     assert_eq!(message_count(&f.pg).await, 1);
     assert_eq!(
         inbox::message_by_id(&f.db, saved.message_id)
@@ -140,6 +209,21 @@ async fn assert_public_native_lifecycle(f: &Fixture) {
     );
     let intake = inbox::list_intake(&f.db, f.owner).await.unwrap();
     assert_eq!(intake.len(), 1);
+    assert_eq!(
+        inbox::intake_brands(&f.db, f.owner).await.unwrap(),
+        ["neon"]
+    );
+    assert_eq!(
+        inbox::list_intake_in_brand(&f.db, f.owner, "neon")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(inbox::list_intake_in_brand(&f.db, f.owner, "another-brand")
+        .await
+        .unwrap()
+        .is_empty());
     let detail = inbox::intake_detail(&f.db, f.owner, saved.conversation_id)
         .await
         .unwrap();
@@ -201,6 +285,120 @@ async fn assert_public_native_project_actions(f: &Fixture, saved: &crate::inbox:
             .delivery_state,
         delivery::SUBMITTED
     );
+}
+
+#[tokio::test]
+async fn native_triage_assignment_respects_source_and_target_scope() {
+    let Some(f) = fixture().await else { return };
+    let saved = pg_inbox::ingest_inbound_on(
+        &f.pg,
+        &inbound(
+            f.firm,
+            channel::EMAIL,
+            "scope@example.com",
+            "native-review-scope",
+            "sender@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+    pg_inbox::assign_on(&f.pg, &f.db, f.owner, saved.conversation_id, f.project)
+        .await
+        .unwrap();
+    let target = seed_project(
+        &f.pg,
+        &f.db,
+        f.entity,
+        f.firm,
+        "review-target",
+        "Synthetic Review Project",
+    )
+    .await;
+    assert!(matches!(
+        pg_inbox::assign_for_triage_review_on(
+            &f.pg,
+            &f.db,
+            f.lawyer,
+            saved.conversation_id,
+            target
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    projects::add_participation(
+        &f.db,
+        target,
+        f.lawyer,
+        projects::participation_for_role(Role::Lawyer),
+    )
+    .await
+    .unwrap();
+    projects::designate_dri_in_surreal(&f.db, f.project, f.owner, projects::DriSide::Lawyer)
+        .await
+        .unwrap();
+    let source = projects::participation_for_person(&f.db, f.lawyer, f.project)
+        .await
+        .unwrap()
+        .unwrap();
+    projects::remove_participation(&f.db, source.id)
+        .await
+        .unwrap();
+    assert!(matches!(
+        pg_inbox::assign_for_triage_review_on(
+            &f.pg,
+            &f.db,
+            f.lawyer,
+            saved.conversation_id,
+            target
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert_eq!(
+        pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
+        Some(f.project)
+    );
+    let admin = native_review_admin(&f).await;
+    let assigned =
+        pg_inbox::assign_for_triage_review_on(&f.pg, &f.db, admin, saved.conversation_id, target)
+            .await
+            .unwrap();
+    assert_eq!(assigned.to_project_id, target);
+    assert!(matches!(
+        pg_inbox::assign_on(&f.pg, &f.db, admin, saved.conversation_id, target).await,
+        Err(InboxError::Denied)
+    ));
+    let detail = pg_inbox::intake_detail_on(&f.pg, &f.db, admin, saved.conversation_id)
+        .await
+        .unwrap();
+    assert!(!detail.bodies_visible && detail.messages.is_empty());
+}
+
+async fn native_review_admin(f: &Fixture) -> Uuid {
+    let admin = persons::create(
+        &f.db,
+        &NewPerson::with_role("synthetic reviewer", "reviewer@example.com", Role::Admin),
+    )
+    .await
+    .unwrap();
+    firms::add_membership(
+        &f.db,
+        &firms::NewPersonFirmRole {
+            person_id: admin.id,
+            firm_id: f.firm,
+            membership: firms::FirmMembership::Admin,
+            is_dri: false,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'synthetic reviewer','reviewer@example.com','admin')")
+        .bind(admin.id).execute(f.pg.pool()).await.unwrap();
+    admin.id
 }
 
 #[tokio::test]

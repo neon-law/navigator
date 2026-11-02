@@ -1302,8 +1302,8 @@ mod tests {
                 include_str!("../postgres/migrations/20261101110000_add_deadline_category.sql"),
             ),
             (
-                "20261101110000_linkedin_channel_and_raw_storage.sql",
-                include_str!("../postgres/migrations/20261101110000_linkedin_channel_and_raw_storage.sql"),
+                "20261102020000_linkedin_channel_and_raw_storage.sql",
+                include_str!("../postgres/migrations/20261102020000_linkedin_channel_and_raw_storage.sql"),
             ),
             (
                 "20261101130000_create_firm_forgejo_organization.sql",

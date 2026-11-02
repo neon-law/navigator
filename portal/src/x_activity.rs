@@ -261,6 +261,7 @@ async fn ingest_tweet(
             attachments: Vec::new(),
             project_id: None,
             occurred_at: &occurred.to_rfc3339(),
+            raw_storage_key: None,
         },
     )
     .await
@@ -315,6 +316,7 @@ async fn ingest_dm(
             attachments: Vec::new(),
             project_id: None,
             occurred_at: &occurred.to_rfc3339(),
+            raw_storage_key: None,
         },
     )
     .await

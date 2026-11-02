@@ -602,11 +602,54 @@ pub(crate) async fn assign_on(
     {
         return Err(InboxError::Denied);
     }
+    assign_write_on(pg, db, actor_id, &conversation, project_id).await
+}
+
+/// Apply the review queue's existing Firm and Project participation rules
+/// before writing its assignment to the selected Inbox store.
+pub(crate) async fn assign_for_triage_review_on(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+    project_id: Uuid,
+) -> Result<Assignment, InboxError> {
+    let actor = inbox::load_person(db, actor_id).await?;
+    let conversation = conversation_by_id_on(pg, conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    let project = crate::projects::find_by_id(db, project_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if project.firm_id != Some(conversation.firm_id) {
+        return Err(InboxError::CrossFirm);
+    }
+    if !inbox::triage_reviewer_may_assign(db, &actor, project_id).await? {
+        return Err(InboxError::Denied);
+    }
+    if matches!(actor.role, Role::Lawyer | Role::Clerk) {
+        if let Some(source_project) = conversation.project_id {
+            if !inbox::triage_reviewer_may_assign(db, &actor, source_project).await? {
+                return Err(InboxError::Denied);
+            }
+        }
+    }
+    assign_write_on(pg, db, actor_id, &conversation, project_id).await
+}
+
+async fn assign_write_on(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    actor_id: Uuid,
+    conversation: &crate::inbox::Conversation,
+    project_id: Uuid,
+) -> Result<Assignment, InboxError> {
+    let conversation_id = conversation.id;
     let from_project_id = conversation.project_id;
     if from_project_id == Some(project_id) {
         // A retry must finish any interrupted projection without recording a
         // second attribution. Authorization still runs before this branch.
-        project_all_messages_on(pg, db, &conversation).await?;
+        project_all_messages_on(pg, db, conversation).await?;
         let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {ASSIGNMENT_COLUMNS} FROM inbox_assignment \
              WHERE conversation_id = $1 AND to_project_id = $2 \
@@ -1496,14 +1539,7 @@ pub(crate) async fn intake_detail_on(
         mark_read_on(pg, conversation.id).await?;
     }
     let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
-    let contact = if conversation.channel == channel::SMS {
-        crate::persons::find_by_phone(db, &conversation.external_address)
-            .await?
-            .as_ref()
-            .map(ContactLink::of)
-    } else {
-        None
-    };
+    let contact = inbox::sender_identity(db, &conversation).await?;
     Ok(IntakeDetail {
         contact,
         projects: inbox::projects_in_firm(db, conversation.firm_id).await?,
@@ -1536,7 +1572,6 @@ async fn intake_rows(
     assigned: bool,
 ) -> Result<Vec<IntakeRow>, InboxError> {
     let can_send_default = matches!(role, Role::Lawyer | Role::Clerk);
-    let phones = inbox::phone_directory(db, &conversations).await?;
     let mut listed = Vec::with_capacity(conversations.len());
     for conversation in conversations {
         let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
@@ -1544,7 +1579,7 @@ async fn intake_rows(
         let (direction, has_attachments) =
             latest_direction_and_attachments_on(pg, conversation.id).await?;
         listed.push(IntakeRow {
-            contact: inbox::contact_for(&phones, &conversation),
+            contact: inbox::sender_identity(db, &conversation).await?,
             id: conversation.id,
             firm_id: conversation.firm_id,
             brand_key: conversation.brand_key.clone(),

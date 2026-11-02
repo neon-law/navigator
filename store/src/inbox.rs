@@ -1023,6 +1023,16 @@ pub(crate) async fn assign_for_triage_review(
     conversation_id: Uuid,
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::assign_for_triage_review_on(
+            &pg,
+            db,
+            actor_id,
+            conversation_id,
+            project_id,
+        ))
+        .await;
+    }
     let actor = load_person(db, actor_id).await?;
     let conversation = conversation_by_id(db, conversation_id)
         .await?
@@ -1406,7 +1416,7 @@ fn social_system(channel_name: &str) -> Option<external_identities::ExternalSyst
 /// # Errors
 ///
 /// Propagates any database error.
-async fn sender_identity(
+pub(crate) async fn sender_identity(
     db: &SurrealDb,
     conversation: &Conversation,
 ) -> Result<Option<ContactLink>, InboxError> {
@@ -1925,9 +1935,6 @@ pub async fn record_promotional_opt_out(
 ///
 /// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
 pub async fn list_intake(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<IntakeRow>, InboxError> {
-    if let Some(pg) = inbox_authority().await? {
-        return Box::pin(crate::postgres::inbox::list_intake_on(&pg, db, actor_id)).await;
-    }
     intake_rows(db, actor_id, None).await
 }
 
@@ -1955,6 +1962,14 @@ pub async fn list_intake_in_brand(
 ///
 /// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
 pub async fn intake_brands(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<String>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        let brands: BTreeSet<String> = crate::postgres::inbox::list_intake_on(&pg, db, actor_id)
+            .await?
+            .into_iter()
+            .filter_map(|row| row.brand_key)
+            .collect();
+        return Ok(brands.into_iter().collect());
+    }
     let actor = load_person(db, actor_id).await?;
     let brands: BTreeSet<String> = visible_conversations(db, &actor, None)
         .await?
@@ -2030,6 +2045,13 @@ async fn intake_rows(
     actor_id: Uuid,
     brand: Option<&str>,
 ) -> Result<Vec<IntakeRow>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        let rows = crate::postgres::inbox::list_intake_on(&pg, db, actor_id).await?;
+        return Ok(rows
+            .into_iter()
+            .filter(|row| brand.is_none_or(|brand| row.brand_key.as_deref() == Some(brand)))
+            .collect());
+    }
     let actor = load_person(db, actor_id).await?;
     let conversations = visible_conversations(db, &actor, brand).await?;
     let mut rows = Vec::with_capacity(conversations.len());
