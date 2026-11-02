@@ -211,8 +211,12 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
                 heading: Heading::Hidden,
                 csrf_token: Some(csrf.to_string()),
                 fields: vec![
-                    Field::select("Project", "project_id", override_choices, None).required(),
-                    Field::textarea(rationale_label, "rationale", "", 2).required(),
+                    Field::select("Project", "project_id", override_choices, None)
+                        .id(format!("triage-{}-override-project", row.triage_id))
+                        .required(),
+                    Field::textarea(rationale_label, "rationale", "", 2)
+                        .id(format!("triage-{}-override-reason", row.triage_id))
+                        .required(),
                 ],
             }
             FormCard {
@@ -231,8 +235,11 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
                         ],
                         None,
                     )
+                    .id(format!("triage-{}-resolve-privilege", row.triage_id))
                     .required(),
-                    Field::textarea("Reason", "rationale", "", 2).required(),
+                    Field::textarea("Reason", "rationale", "", 2)
+                        .id(format!("triage-{}-resolve-reason", row.triage_id))
+                        .required(),
                 ],
             }
             FormCard {
@@ -250,30 +257,30 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
 /// The queue body: a heading, the shared error flash, and one card list per
 /// awaiting row — empty-state prose when the queue is clear.
 pub fn triage_queue_body(page: &TriageQueuePage) -> Element {
-    if page.rows.is_empty() {
-        return rsx! {
-            main { id: "triage",
-                h1 { "{page.title}" }
-                if let Some(error) = page.error.as_ref() {
-                    p { class: "nav-error", "{error}" }
-                }
-                p { class: "nav-muted",
-                    "No messages are waiting for review. Triage sends uncertain or unassigned messages here."
-                }
-            }
-        };
-    }
     let rows = page
         .rows
         .iter()
         .map(|row| triage_row(row, &page.csrf_token));
     rsx! {
-        main { id: "triage",
+        document::Title { "{page.firm_name} | {page.title}" }
+        document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
+        document::Stylesheet { href: "{page.tokens_href}" }
+        crate::components::AppNavbar {
+            destinations: crate::app_chrome::app_destinations(page.role),
+            logo: page.logo.clone(),
+        }
+        main { id: "triage", class: "nav-theme",
             h1 { "{page.title}" }
             if let Some(error) = page.error.as_ref() {
                 p { class: "nav-error", "{error}" }
             }
-            ul { class: "triage-review", {rows} }
+            if page.rows.is_empty() {
+                p { class: "nav-muted",
+                    "No messages are waiting for review. Triage sends uncertain or unassigned messages here."
+                }
+            } else {
+                ul { class: "triage-review", {rows} }
+            }
         }
     }
 }
@@ -325,6 +332,7 @@ mod tests {
     #[test]
     fn an_awaiting_row_shows_its_context_suggestion_and_doors() {
         let html = dioxus_ssr::render_element(triage_queue_body(&page(vec![row()])));
+        crate::components::form::assert_forms_accessible(&html, "triage review");
         for expected in [
             "Marta Rivera",
             "neon",

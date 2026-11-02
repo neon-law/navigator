@@ -192,18 +192,9 @@ async fn selected_channel() -> Option<String> {
             .await
             .ok()
             .map(|axum::extract::Query(filter)| filter)?;
-    filter.channel.filter(|channel| {
-        matches!(
-            channel.as_str(),
-            store::inbox::channel::EMAIL
-                | store::inbox::channel::SMS
-                | store::inbox::channel::FACEBOOK
-                | store::inbox::channel::INSTAGRAM
-                | store::inbox::channel::THREADS
-                | store::inbox::channel::YOUTUBE
-                | store::inbox::channel::TIKTOK
-        )
-    })
+    filter
+        .channel
+        .filter(|channel| inbox_channels().contains(channel))
 }
 
 #[cfg(feature = "server")]
@@ -282,6 +273,7 @@ fn inbox_channels() -> Vec<String> {
         store::inbox::channel::THREADS.into(),
         store::inbox::channel::YOUTUBE.into(),
         store::inbox::channel::TIKTOK.into(),
+        store::inbox::channel::X.into(),
     ]
 }
 
@@ -1071,6 +1063,7 @@ mod tests {
                 "threads",
                 "youtube",
                 "tiktok",
+                "x",
             ]
             .into_iter()
             .map(str::to_string)
