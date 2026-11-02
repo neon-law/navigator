@@ -5405,4 +5405,2032 @@ mod tests {
             "scheduled"
         );
     }
+
+    // ---- Handler coverage: leads, people, avatars, entities, firms, matters ----
+
+    use axum::extract::{Extension as Ext, Path as P, State as S};
+    use axum::http::StatusCode;
+    use axum::response::Response;
+
+    fn location(response: &Response) -> String {
+        response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .map(|value| value.to_str().unwrap().to_string())
+            .unwrap_or_default()
+    }
+
+    async fn person_with_role(
+        db: &store::surreal::SurrealDb,
+        label: &str,
+        role: Role,
+    ) -> store::persons::Person {
+        store::persons::create(
+            db,
+            &store::persons::NewPerson::with_role(
+                label,
+                format!("{label}-{}@example.com", Uuid::now_v7()),
+                role,
+            ),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn session_with_role(db: &store::surreal::SurrealDb, role: Role) -> SessionData {
+        session_for(&person_with_role(db, "actor", role).await)
+    }
+
+    async fn record_lead(db: &store::surreal::SurrealDb, email: &str) -> store::leads::Lead {
+        store::leads::record(
+            db,
+            &store::leads::NewLead {
+                email: email.into(),
+                phone: Some("+1 702 555 0101".into()),
+                brand_key: "neon".into(),
+                source_path: "/contact".into(),
+                consent_version: "v1".into(),
+                consented_at: chrono::Utc::now(),
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn lead_status_refuses_non_admins_and_validates_the_status_word() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let lead = record_lead(&db, "status-lead@example.com").await;
+        let form = |status: &str| {
+            axum::Form(super::LeadStatusForm {
+                status: status.into(),
+            })
+        };
+
+        let anonymous =
+            super::admin_lead_status(S(state.clone()), None, P(lead.id), form("contacted")).await;
+        assert_eq!(anonymous.status(), StatusCode::FORBIDDEN);
+        let lawyer = session_with_role(&db, Role::Lawyer).await;
+        let refused = super::admin_lead_status(
+            S(state.clone()),
+            Some(Ext(lawyer)),
+            P(lead.id),
+            form("contacted"),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        let admin = session_with_role(&db, Role::Admin).await;
+        let invalid = super::admin_lead_status(
+            S(state.clone()),
+            Some(Ext(admin.clone())),
+            P(lead.id),
+            form("bogus"),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::SEE_OTHER);
+        assert!(location(&invalid).contains("error=Choose%20a%20listed%20status."));
+
+        let unknown = super::admin_lead_status(
+            S(state.clone()),
+            Some(Ext(admin.clone())),
+            P(Uuid::now_v7()),
+            form("contacted"),
+        )
+        .await;
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+
+        // `converted` without a linked Person is refused by the store.
+        let unlinked = super::admin_lead_status(
+            S(state.clone()),
+            Some(Ext(admin.clone())),
+            P(lead.id),
+            form("converted"),
+        )
+        .await;
+        assert!(location(&unlinked).contains("error=Could%20not%20update"));
+
+        let updated =
+            super::admin_lead_status(S(state), Some(Ext(admin)), P(lead.id), form("contacted"))
+                .await;
+        assert_eq!(
+            location(&updated),
+            format!("/app/admin/leads/{}?notice=Status%20updated.", lead.id)
+        );
+        assert_eq!(
+            store::leads::find(&db, lead.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "contacted"
+        );
+    }
+
+    #[tokio::test]
+    async fn lead_convert_and_link_attach_a_person_or_report_why_not() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let admin = session_with_role(&db, Role::Admin).await;
+
+        let lawyer = session_with_role(&db, Role::Lawyer).await;
+        for refused in [
+            super::admin_lead_convert(S(state.clone()), Some(Ext(lawyer.clone())), P(Uuid::nil()))
+                .await,
+            super::admin_lead_link(S(state.clone()), Some(Ext(lawyer)), P(Uuid::nil())).await,
+        ] {
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        }
+        for unknown in [
+            super::admin_lead_convert(
+                S(state.clone()),
+                Some(Ext(admin.clone())),
+                P(Uuid::now_v7()),
+            )
+            .await,
+            super::admin_lead_link(
+                S(state.clone()),
+                Some(Ext(admin.clone())),
+                P(Uuid::now_v7()),
+            )
+            .await,
+        ] {
+            assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+        }
+
+        // Convert mints a Person from the mailbox.
+        let converted_lead = record_lead(&db, "convert-lead@example.com").await;
+        let converted = super::admin_lead_convert(
+            S(state.clone()),
+            Some(Ext(admin.clone())),
+            P(converted_lead.id),
+        )
+        .await;
+        assert!(location(&converted).contains("notice=Created%20a%20Person"));
+        let row = store::leads::find(&db, converted_lead.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, "converted");
+        assert!(row.person_id.is_some());
+
+        // Link refuses until some Person holds the mailbox, then attaches it.
+        let link_lead = record_lead(&db, "link-lead@example.com").await;
+        let no_match =
+            super::admin_lead_link(S(state.clone()), Some(Ext(admin.clone())), P(link_lead.id))
+                .await;
+        assert!(location(&no_match).contains("error=No%20Person%20holds"));
+        let holder = store::persons::create(
+            &db,
+            &store::persons::NewPerson::new("Link Holder", "link-lead@example.com"),
+        )
+        .await
+        .unwrap();
+        let linked = super::admin_lead_link(S(state), Some(Ext(admin)), P(link_lead.id)).await;
+        assert!(location(&linked).contains("notice=Linked"));
+        let row = store::leads::find(&db, link_lead.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.person_id, Some(holder.id));
+        let holder = store::persons::find_by_id(&db, holder.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(holder.phone.as_deref(), Some("+1 702 555 0101"));
+    }
+
+    fn create_command(
+        name: &str,
+        email: &str,
+        role: &str,
+    ) -> crate::people_commands::CreatePersonCommand {
+        crate::people_commands::CreatePersonCommand {
+            name: name.into(),
+            email: email.into(),
+            role: role.into(),
+            given_name: None,
+            family_name: None,
+            middle_name: None,
+            notion_user_id: None,
+            firm_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_people_create_gates_role_and_redirects_each_outcome() {
+        let db = store::test_support::mem_surreal().await;
+        let lawyer = session_with_role(&db, Role::Lawyer).await;
+        let refused = super::admin_people_create(
+            S(db.clone()),
+            Some(Ext(lawyer)),
+            axum::Form(create_command("Nope", "nope@example.com", "client")),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        let admin = session_with_role(&db, Role::Admin).await;
+        let above = super::admin_people_create(
+            S(db.clone()),
+            Some(Ext(admin.clone())),
+            axum::Form(create_command("Too High", "too-high@example.com", "owner")),
+        )
+        .await;
+        assert!(location(&above).contains("above%20your%20own"));
+        assert!(
+            store::persons::find_by_email_ci(&db, "too-high@example.com")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let invalid = super::admin_people_create(
+            S(db.clone()),
+            Some(Ext(admin.clone())),
+            axum::Form(create_command("", "blank-name@example.com", "client")),
+        )
+        .await;
+        assert!(location(&invalid).starts_with("/app/admin/people/new?error="));
+
+        let created = super::admin_people_create(
+            S(db.clone()),
+            Some(Ext(admin)),
+            axum::Form(create_command(
+                "New Client",
+                "new-client@example.com",
+                "client",
+            )),
+        )
+        .await;
+        assert_eq!(location(&created), "/app/admin/people");
+        assert!(
+            store::persons::find_by_email_ci(&db, "new-client@example.com")
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_person_update_delete_and_welcome_redirect_with_their_outcome() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let admin = session_with_role(&db, Role::Admin).await;
+        let client = person_with_role(&db, "update-target", Role::Client).await;
+
+        let lawyer = session_with_role(&db, Role::Lawyer).await;
+        for refused in [
+            super::admin_person_update(
+                S(state.clone()),
+                Some(Ext(lawyer.clone())),
+                P(client.id),
+                axum::Form(crate::people_commands::UpdatePersonCommand::default()),
+            )
+            .await,
+            super::admin_person_delete(S(state.clone()), Some(Ext(lawyer.clone())), P(client.id))
+                .await,
+            super::admin_person_welcome(S(state.clone()), Some(Ext(lawyer)), P(client.id)).await,
+        ] {
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        }
+
+        let renamed = super::admin_person_update(
+            S(state.clone()),
+            Some(Ext(admin.clone())),
+            P(client.id),
+            axum::Form(crate::people_commands::UpdatePersonCommand {
+                name: Some("Renamed Client".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(
+            location(&renamed),
+            format!("/app/admin/people/{}", client.id)
+        );
+        assert_eq!(
+            store::persons::find_by_id(&db, client.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            "Renamed Client"
+        );
+        let blank = super::admin_person_update(
+            S(state.clone()),
+            Some(Ext(admin.clone())),
+            P(client.id),
+            axum::Form(crate::people_commands::UpdatePersonCommand {
+                name: Some("   ".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert!(location(&blank).starts_with(&format!("/app/admin/people/{}?error=", client.id)));
+
+        let sent =
+            super::admin_person_welcome(S(state.clone()), Some(Ext(admin.clone())), P(client.id))
+                .await;
+        assert_eq!(
+            location(&sent),
+            format!("/app/admin/people/{}?notice=welcome_sent", client.id)
+        );
+        let missing = Uuid::now_v7();
+        let failed =
+            super::admin_person_welcome(S(state.clone()), Some(Ext(admin.clone())), P(missing))
+                .await;
+        assert_eq!(
+            location(&failed),
+            format!("/app/admin/people/{missing}?notice=welcome_failed")
+        );
+
+        let deleted =
+            super::admin_person_delete(S(state.clone()), Some(Ext(admin.clone())), P(client.id))
+                .await;
+        assert_eq!(location(&deleted), "/app/admin/people");
+        assert!(store::persons::find_by_id(&db, client.id)
+            .await
+            .unwrap()
+            .is_none());
+        let gone = super::admin_person_delete(S(state), Some(Ext(admin)), P(client.id)).await;
+        assert!(location(&gone).starts_with("/app/admin/people?error="));
+    }
+
+    #[tokio::test]
+    async fn admin_avatar_download_redirects_urls_streams_keys_and_hides_the_missing() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let admin = session_with_role(&db, Role::Admin).await;
+        let target = person_with_role(&db, "avatar-target", Role::Client).await;
+
+        let refused =
+            super::admin_person_avatar_download(S(state.clone()), P(target.id), None).await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        let unknown = super::admin_person_avatar_download(
+            S(state.clone()),
+            P(Uuid::now_v7()),
+            Some(Ext(admin.clone())),
+        )
+        .await;
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+        let none = super::admin_person_avatar_download(
+            S(state.clone()),
+            P(target.id),
+            Some(Ext(admin.clone())),
+        )
+        .await;
+        assert_eq!(none.status(), StatusCode::NOT_FOUND);
+
+        store::persons::set_profile_image_url(&db, target.id, Some("/assets/a.png".into()))
+            .await
+            .unwrap();
+        let redirect = super::admin_person_avatar_download(
+            S(state.clone()),
+            P(target.id),
+            Some(Ext(admin.clone())),
+        )
+        .await;
+        assert_eq!(location(&redirect), "/assets/a.png");
+
+        let key = format!("people/{}/avatars/{}.png", target.id, target.id);
+        store::persons::set_profile_image_url(&db, target.id, Some(key.clone()))
+            .await
+            .unwrap();
+        let missing_object = super::admin_person_avatar_download(
+            S(state.clone()),
+            P(target.id),
+            Some(Ext(admin.clone())),
+        )
+        .await;
+        assert_eq!(missing_object.status(), StatusCode::NOT_FOUND);
+        state
+            .storage
+            .put(&key, b"png-bytes", "image/png")
+            .await
+            .unwrap();
+        let streamed =
+            super::admin_person_avatar_download(S(state.clone()), P(target.id), Some(Ext(admin)))
+                .await;
+        assert_eq!(streamed.status(), StatusCode::OK);
+        assert_eq!(
+            streamed.headers()[axum::http::header::CONTENT_TYPE],
+            "image/png"
+        );
+        assert_eq!(
+            streamed.headers()[axum::http::header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        let body = axum::body::to_bytes(streamed.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"png-bytes");
+        state.storage.delete(&key).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn current_viewer_avatar_falls_back_to_initials_from_the_session_person() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        assert_eq!(
+            super::current_viewer_avatar(S(state.clone()), None)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let unlinked = SessionData::fresh("nobody@example.com", Role::Lawyer);
+        assert_eq!(
+            super::current_viewer_avatar(S(state.clone()), Some(Ext(unlinked.clone())))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let mut orphan_session = unlinked;
+        orphan_session.person_id = Some(Uuid::now_v7());
+        assert_eq!(
+            super::current_viewer_avatar(S(state.clone()), Some(Ext(orphan_session)))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let viewer = person_with_role(&db, "Ada Lovelace", Role::Lawyer).await;
+        let initials =
+            super::current_viewer_avatar(S(state.clone()), Some(Ext(session_for(&viewer)))).await;
+        assert_eq!(initials.status(), StatusCode::OK);
+        assert_eq!(
+            initials.headers()[axum::http::header::CONTENT_TYPE],
+            "image/svg+xml; charset=utf-8"
+        );
+        let svg = axum::body::to_bytes(initials.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let svg = String::from_utf8(svg.to_vec()).unwrap();
+        assert!(svg.contains(">AL</text>"), "{svg}");
+
+        store::persons::set_profile_image_url(
+            &db,
+            viewer.id,
+            Some("https://cdn.example/a.png".into()),
+        )
+        .await
+        .unwrap();
+        let redirect =
+            super::current_viewer_avatar(S(state), Some(Ext(session_for(&viewer)))).await;
+        assert_eq!(location(&redirect), "https://cdn.example/a.png");
+    }
+
+    #[tokio::test]
+    async fn person_avatar_view_answers_not_found_outside_a_shared_matter() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let target = person_with_role(&db, "view-target", Role::Lawyer).await;
+        store::persons::set_profile_image_url(&db, target.id, Some("/assets/t.png".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            super::person_avatar_view(S(state.clone()), P(target.id), None)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            super::person_avatar_view(
+                S(state.clone()),
+                P(target.id),
+                Some(Ext(SessionData::fresh("x@example.com", Role::Client))),
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        let outsider = person_with_role(&db, "view-outsider", Role::Client).await;
+        assert_eq!(
+            super::person_avatar_view(
+                S(state.clone()),
+                P(Uuid::now_v7()),
+                Some(Ext(session_for(&outsider))),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            super::person_avatar_view(
+                S(state.clone()),
+                P(target.id),
+                Some(Ext(session_for(&outsider))),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let admin = session_with_role(&db, Role::Admin).await;
+        let visible = super::person_avatar_view(S(state), P(target.id), Some(Ext(admin))).await;
+        assert_eq!(location(&visible), "/assets/t.png");
+    }
+
+    #[tokio::test]
+    async fn avatar_clears_reset_the_row_for_admin_and_self_service_doors() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let admin = session_with_role(&db, Role::Admin).await;
+        let client = person_with_role(&db, "clear-client", Role::Client).await;
+        let lawyer = person_with_role(&db, "clear-lawyer", Role::Lawyer).await;
+        for person in [&client, &lawyer] {
+            store::persons::set_profile_image_url(&db, person.id, Some("/assets/x.png".into()))
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            super::admin_person_avatar_clear(S(state.clone()), P(client.id), None)
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            super::admin_person_avatar_clear(
+                S(state.clone()),
+                P(Uuid::now_v7()),
+                Some(Ext(admin.clone())),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        for person in [&client, &lawyer] {
+            let cleared = super::admin_person_avatar_clear(
+                S(state.clone()),
+                P(person.id),
+                Some(Ext(admin.clone())),
+            )
+            .await;
+            assert_eq!(
+                location(&cleared),
+                format!("/app/admin/people/{}", person.id)
+            );
+            assert!(store::persons::find_by_id(&db, person.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .profile_image_url
+                .is_none());
+        }
+
+        // Self-service: the session names the row; XHR gets 204, a form 303.
+        let headers = axum::http::HeaderMap::new();
+        assert_eq!(
+            super::profile_avatar_clear(S(state.clone()), None, headers.clone())
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            super::profile_avatar_clear(
+                S(state.clone()),
+                Some(Ext(SessionData::fresh("u@example.com", Role::Lawyer))),
+                headers.clone(),
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        let mut orphan_session = SessionData::fresh("s@example.com", Role::Lawyer);
+        orphan_session.person_id = Some(Uuid::now_v7());
+        assert_eq!(
+            super::profile_avatar_clear(
+                S(state.clone()),
+                Some(Ext(orphan_session)),
+                headers.clone()
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let form =
+            super::profile_avatar_clear(S(state.clone()), Some(Ext(session_for(&lawyer))), headers)
+                .await;
+        assert_eq!(location(&form), webapp::profile::PROFILE_PATH);
+        let mut xhr = axum::http::HeaderMap::new();
+        xhr.insert("x-requested-with", "XMLHttpRequest".parse().unwrap());
+        let inplace =
+            super::profile_avatar_clear(S(state), Some(Ext(session_for(&client))), xhr).await;
+        assert_eq!(inplace.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn matter_avatar_clear_requires_both_people_on_the_matter() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let (client, _, project) = seed_testimonial_matter(&db, "avatar-matter").await;
+        let admin = seed_participant(&db, &project, "admin", Role::Admin, true).await;
+        let outsider = seed_participant(&db, &project, "outsider", Role::Admin, false).await;
+        store::persons::set_profile_image_url(&db, client.id, Some("/assets/c.png".into()))
+            .await
+            .unwrap();
+
+        let lawyer = session_with_role(&db, Role::Lawyer).await;
+        assert_eq!(
+            super::admin_project_person_avatar_clear(
+                S(state.clone()),
+                P((project.code.clone(), client.id)),
+                Some(Ext(lawyer)),
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        for (session, person_id) in [
+            (session_for(&outsider), client.id),
+            (session_for(&admin), outsider.id),
+        ] {
+            let refused = super::admin_project_person_avatar_clear(
+                S(state.clone()),
+                P((project.code.clone(), person_id)),
+                Some(Ext(session)),
+            )
+            .await;
+            assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+        }
+        let cleared = super::admin_project_person_avatar_clear(
+            S(state),
+            P((project.code.clone(), client.id)),
+            Some(Ext(session_for(&admin))),
+        )
+        .await;
+        assert_eq!(
+            location(&cleared),
+            format!("/app/projects/{}", project.code)
+        );
+        assert!(store::persons::find_by_id(&db, client.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .profile_image_url
+            .is_none());
+    }
+
+    async fn entity_references(db: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
+        let entity_type = store::entity_types::create(db, &format!("Type {}", Uuid::now_v7()))
+            .await
+            .unwrap();
+        let jurisdiction = store::jurisdictions::create(
+            db,
+            &store::jurisdictions::NewJurisdiction::new(
+                "Test State",
+                format!("t{}", &Uuid::now_v7().simple().to_string()[24..]),
+                "state",
+            ),
+        )
+        .await
+        .unwrap();
+        (entity_type.id, jurisdiction.id)
+    }
+
+    #[tokio::test]
+    async fn entity_create_update_and_delete_redirect_or_refuse() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let (type_id, jur_id) = entity_references(&db).await;
+
+        let blank = super::entities_create(
+            S(state.clone()),
+            axum::Form(super::EntityInput {
+                name: "  ".into(),
+                entity_type_id: type_id,
+                jurisdiction_id: jur_id,
+            }),
+        )
+        .await;
+        assert_eq!(
+            location(&blank),
+            format!(
+                "{}?error=Name%20is%20required.",
+                crate::dioxus_app::LAWYER_ENTITY_NEW_PATH
+            )
+        );
+        let created = super::entities_create(
+            S(state.clone()),
+            axum::Form(super::EntityInput {
+                name: "Widget Holdings LLC".into(),
+                entity_type_id: type_id,
+                jurisdiction_id: jur_id,
+            }),
+        )
+        .await;
+        assert_eq!(location(&created), "/app/admin/entities");
+        let entity = store::entities::all(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name == "Widget Holdings LLC")
+            .expect("the entity was created");
+
+        let update = |name: &str, xero: &str| {
+            axum::Form(super::EntityUpdateInput {
+                name: name.into(),
+                entity_type_id: type_id,
+                jurisdiction_id: jur_id,
+                xero_id: xero.into(),
+            })
+        };
+        let missing =
+            super::entities_update(S(state.clone()), P(Uuid::now_v7()), update("X", "")).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let refused =
+            super::entities_update(S(state.clone()), P(entity.id), update(" ", "xero-1")).await;
+        let refused = location(&refused);
+        assert!(
+            refused.starts_with(&format!("/app/admin/entities/{}/edit?error=", entity.id))
+                && refused.contains(&format!("entity_type_id={type_id}"))
+                && refused.contains("xero_id=xero-1"),
+            "{refused}"
+        );
+        let renamed = super::entities_update(
+            S(state.clone()),
+            P(entity.id),
+            update("Widget Holdings II LLC", "xero-2"),
+        )
+        .await;
+        assert_eq!(location(&renamed), "/app/admin/entities");
+        let stored = store::entities::find_by_id(&db, entity.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.name, "Widget Holdings II LLC");
+        assert_eq!(stored.xero_id.as_deref(), Some("xero-2"));
+
+        assert_eq!(
+            super::entities_avatar_download(S(state.clone()), P(Uuid::now_v7()))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            super::entities_avatar_download(S(state.clone()), P(entity.id))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let deleted = super::entities_delete(S(state.clone()), P(entity.id)).await;
+        assert_eq!(location(&deleted), "/app/admin/entities");
+        assert!(store::entities::find_by_id(&db, entity.id)
+            .await
+            .unwrap()
+            .is_none());
+        let again = super::entities_delete(S(state), P(entity.id)).await;
+        assert_eq!(location(&again), "/app/admin/entities");
+    }
+
+    #[tokio::test]
+    async fn entities_csv_names_each_reference() {
+        let db = store::test_support::mem_surreal().await;
+        let (type_id, jur_id) = entity_references(&db).await;
+        let entity = store::entity_commands::create_entity(
+            &db,
+            super::DEFAULT_BOOTSTRAP_COMPANY,
+            &store::entity_commands::CreateEntityCommand {
+                name: "Csv Entity LLC".into(),
+                entity_type_id: type_id,
+                jurisdiction_id: jur_id,
+            },
+        )
+        .await
+        .unwrap();
+        let csv = super::entities_csv(S(db.clone())).await;
+        assert_eq!(csv.filename, "entities.csv");
+        assert_eq!(
+            csv.headers,
+            vec!["id", "name", "entity_type", "jurisdiction"]
+        );
+        let row = csv
+            .rows
+            .iter()
+            .find(|row| row[0] == entity.id.to_string())
+            .expect("the entity is exported");
+        assert_eq!(row[1], "Csv Entity LLC");
+        assert!(row[2].starts_with("Type "));
+        assert_eq!(row[3], "Test State");
+
+        let person = person_with_role(&db, "Csv Person", Role::Client).await;
+        let people = super::people_csv(S(db)).await;
+        assert_eq!(people.headers, vec!["id", "name", "email"]);
+        assert!(people.rows.iter().any(|row| row
+            == &vec![
+                person.id.to_string(),
+                person.name.clone(),
+                person.email.clone()
+            ]));
+    }
+
+    #[tokio::test]
+    async fn firms_create_validates_each_field_before_opening_the_firm() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let owner = session_with_role(&db, Role::Owner).await;
+        let entity_id = store::test_support::seed_entity(&db).await;
+        let firm_admin = person_with_role(&db, "firm-admin", Role::Admin).await;
+        let lawyer = person_with_role(&db, "firm-lawyer", Role::Lawyer).await;
+        let form = |name: &str, entity: Option<Uuid>, admin: Option<Uuid>| {
+            axum::Form(super::FirmCreateInput {
+                name: name.into(),
+                entity_id: entity,
+                admin_dri_person_id: admin,
+            })
+        };
+
+        let refused = super::firms_create(
+            S(state.clone()),
+            Some(Ext(session_for(&firm_admin))),
+            form("Acme", Some(entity_id), Some(firm_admin.id)),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+
+        let cases = [
+            (
+                form(" ", Some(entity_id), Some(firm_admin.id)),
+                "Name%20is%20required.",
+            ),
+            (
+                form("Acme Law", None, Some(firm_admin.id)),
+                "Pick%20an%20entity",
+            ),
+            (
+                form("Acme Law", Some(entity_id), None),
+                "Pick%20an%20Admin%20DRI",
+            ),
+            (
+                form("Acme Law", Some(entity_id), Some(lawyer.id)),
+                "must%20be%20a%20person%20whose%20role",
+            ),
+        ];
+        for (input, expected) in cases {
+            let response =
+                super::firms_create(S(state.clone()), Some(Ext(owner.clone())), input).await;
+            let to = location(&response);
+            assert!(to.starts_with("/app/owner/firms/new?error="), "{to}");
+            assert!(to.contains(expected), "{to}");
+        }
+
+        let created = super::firms_create(
+            S(state),
+            Some(Ext(owner)),
+            form("Acme Coverage Law", Some(entity_id), Some(firm_admin.id)),
+        )
+        .await;
+        let to = location(&created);
+        let id: Uuid = to
+            .strip_prefix("/app/admin/firms/")
+            .expect("success lands on the firm")
+            .parse()
+            .unwrap();
+        assert_eq!(
+            store::firms::find_by_id(&db, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            "Acme Coverage Law"
+        );
+    }
+
+    #[tokio::test]
+    async fn firm_inline_forms_create_the_record_or_echo_the_refusal() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let owner = session_with_role(&db, Role::Owner).await;
+        let admin = session_with_role(&db, Role::Admin).await;
+        let (type_id, jur_id) = entity_references(&db).await;
+        let entity_form = |name: &str, type_id: String, jur_id: String| {
+            axum::Form(super::FirmEntityInlineInput {
+                entity_name: name.into(),
+                entity_type_id: type_id,
+                jurisdiction_id: jur_id,
+            })
+        };
+
+        let refused = super::firms_new_entity_inline(
+            S(state.clone()),
+            Some(Ext(admin.clone())),
+            entity_form("X", type_id.to_string(), jur_id.to_string()),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+        let blank = super::firms_new_entity_inline(
+            S(state.clone()),
+            Some(Ext(owner.clone())),
+            entity_form(" ", type_id.to_string(), jur_id.to_string()),
+        )
+        .await;
+        assert!(location(&blank).contains("entity_error=Name%20is%20required."));
+        let unpicked = super::firms_new_entity_inline(
+            S(state.clone()),
+            Some(Ext(owner.clone())),
+            entity_form("Inline Firm LLC", "not-a-uuid".into(), jur_id.to_string()),
+        )
+        .await;
+        let to = location(&unpicked);
+        assert!(
+            to.contains("entity_error=Pick%20an%20entity%20type")
+                && to.contains("entity_name=Inline%20Firm%20LLC"),
+            "{to}"
+        );
+        let unknown_type = super::firms_new_entity_inline(
+            S(state.clone()),
+            Some(Ext(owner.clone())),
+            entity_form(
+                "Inline Firm LLC",
+                Uuid::now_v7().to_string(),
+                jur_id.to_string(),
+            ),
+        )
+        .await;
+        assert!(location(&unknown_type).contains("entity_error="));
+        let created = super::firms_new_entity_inline(
+            S(state.clone()),
+            Some(Ext(owner.clone())),
+            entity_form("Inline Firm LLC", type_id.to_string(), jur_id.to_string()),
+        )
+        .await;
+        assert!(location(&created).starts_with("/app/owner/firms/new?entity="));
+
+        let admin_form = |name: &str, email: &str| {
+            axum::Form(super::FirmAdminInlineInput {
+                admin_name: name.into(),
+                admin_email: email.into(),
+            })
+        };
+        let refused =
+            super::firms_new_admin_inline(S(state.clone()), None, admin_form("A", "a@example.com"))
+                .await;
+        assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+        let invalid = super::firms_new_admin_inline(
+            S(state.clone()),
+            Some(Ext(owner.clone())),
+            admin_form("Inline Admin", "not-an-email"),
+        )
+        .await;
+        let to = location(&invalid);
+        assert!(
+            to.contains("admin_error=") && to.contains("admin_email=not-an-email"),
+            "{to}"
+        );
+        let created = super::firms_new_admin_inline(
+            S(state),
+            Some(Ext(owner)),
+            admin_form("Inline Admin", "inline-admin@example.com"),
+        )
+        .await;
+        assert!(location(&created).starts_with("/app/owner/firms/new?admin="));
+        assert_eq!(
+            store::persons::find_by_email_ci(&db, "inline-admin@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .role,
+            Role::Admin
+        );
+    }
+
+    #[tokio::test]
+    async fn firms_update_edits_for_the_owner_and_hides_the_firm_from_others() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let (firm_admin, firm_admin_session) = seed_blog_admin(&db).await;
+        let firm_id = store::firms::memberships_for_person(&db, firm_admin.id)
+            .await
+            .unwrap()[0]
+            .firm_id;
+        let owner = session_with_role(&db, Role::Owner).await;
+        let form = |name: &str, status: &str, admin: Option<Uuid>| {
+            axum::Form(super::FirmUpdateInput {
+                name: name.into(),
+                status: status.into(),
+                entity_id: None,
+                admin_dri_person_id: admin,
+            })
+        };
+
+        let anonymous = super::firms_update(
+            S(state.clone()),
+            P(firm_id),
+            None,
+            form("N", "active", None),
+        )
+        .await;
+        assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
+        let lawyer = session_with_role(&db, Role::Lawyer).await;
+        let outside = super::firms_update(
+            S(state.clone()),
+            P(firm_id),
+            Some(Ext(lawyer)),
+            form("N", "active", None),
+        )
+        .await;
+        assert_eq!(outside.status(), StatusCode::NOT_FOUND);
+        let unknown = super::firms_update(
+            S(state.clone()),
+            P(Uuid::now_v7()),
+            Some(Ext(owner.clone())),
+            form("N", "active", None),
+        )
+        .await;
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+
+        // The firm's own Admin DRI edits it; naming the current DRI is a no-op.
+        let edited = super::firms_update(
+            S(state.clone()),
+            P(firm_id),
+            Some(Ext(firm_admin_session)),
+            form("Renamed Coverage Firm", "active", Some(firm_admin.id)),
+        )
+        .await;
+        assert_eq!(location(&edited), format!("/app/admin/firms/{firm_id}"));
+        assert_eq!(
+            store::firms::find_by_id(&db, firm_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            "Renamed Coverage Firm"
+        );
+
+        let bad_status = super::firms_update(
+            S(state.clone()),
+            P(firm_id),
+            Some(Ext(owner.clone())),
+            form("Renamed Coverage Firm", "bogus", None),
+        )
+        .await;
+        assert!(
+            location(&bad_status).starts_with(&format!("/app/admin/firms/{firm_id}/edit?error=")),
+            "{}",
+            location(&bad_status)
+        );
+        let stranger = person_with_role(&db, "stranger-admin", Role::Admin).await;
+        let cross_firm = super::firms_update(
+            S(state),
+            P(firm_id),
+            Some(Ext(owner)),
+            form("Renamed Coverage Firm", "active", Some(stranger.id)),
+        )
+        .await;
+        assert!(
+            location(&cross_firm).starts_with(&format!("/app/admin/firms/{firm_id}/edit?error=")),
+            "{}",
+            location(&cross_firm)
+        );
+    }
+
+    #[tokio::test]
+    async fn firms_move_brand_is_owner_only_and_confirms_before_moving() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        seed_blog_admin(&db).await;
+        let target_admin = person_with_role(&db, "target-admin", Role::Admin).await;
+        let target = store::firms::create(
+            &db,
+            &store::firms::NewFirm {
+                name: format!("Target Firm {}", target_admin.id),
+                status: "active".into(),
+                entity_id: store::test_support::seed_entity(&db).await,
+                admin_dri_person_id: target_admin.id,
+            },
+        )
+        .await
+        .unwrap();
+        let owner = session_with_role(&db, Role::Owner).await;
+        let form = |key: &str, firm: Option<Uuid>, confirm: bool| {
+            axum::Form(super::FirmMoveBrandInput {
+                brand_key: key.into(),
+                target_firm_id: firm,
+                confirm: confirm.then(|| "on".to_string()),
+            })
+        };
+
+        assert_eq!(
+            super::firms_move_brand(
+                S(state.clone()),
+                None,
+                form("blog-schedule", Some(target.id), true)
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            super::firms_move_brand(
+                S(state.clone()),
+                Some(Ext(session_for(&target_admin))),
+                form("blog-schedule", Some(target.id), true),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let cases = [
+            (
+                form("blog-schedule", Some(target.id), false),
+                "Confirm%20the%20move",
+            ),
+            (form("  ", Some(target.id), true), "Pick%20the%20brand"),
+            (form("blog-schedule", None, true), "Pick%20the%20firm"),
+            (
+                form("no-such-brand", Some(target.id), true),
+                "not%20registered",
+            ),
+        ];
+        for (input, expected) in cases {
+            let to = location(
+                &super::firms_move_brand(S(state.clone()), Some(Ext(owner.clone())), input).await,
+            );
+            assert!(to.starts_with("/app/owner/firms/move-brand?error="), "{to}");
+            assert!(to.contains(expected), "{to}");
+        }
+        let moved = super::firms_move_brand(
+            S(state),
+            Some(Ext(owner)),
+            form("blog-schedule", Some(target.id), true),
+        )
+        .await;
+        let to = location(&moved);
+        assert!(
+            to.starts_with("/app/owner/firms/move-brand?moved=blog-schedule&firm="),
+            "{to}"
+        );
+        assert_eq!(
+            store::firms::firm_id_for_brand_key(&db, "blog-schedule")
+                .await
+                .unwrap(),
+            Some(target.id)
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn firm_secret_and_summary_doors_refuse_malformed_requests() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let firm_id = Uuid::now_v7();
+        let admin = session_with_role(&db, Role::Admin).await;
+
+        let put = |kind: &str| {
+            axum::Form(super::FirmSecretPutInput {
+                kind: kind.into(),
+                value: "secret-value".into(),
+            })
+        };
+        assert_eq!(
+            super::firm_secrets_put(S(state.clone()), P(firm_id), None, put("bogus"))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let unknown_kind = super::firm_secrets_put(
+            S(state.clone()),
+            P(firm_id),
+            Some(Ext(admin.clone())),
+            put("bogus"),
+        )
+        .await;
+        let to = location(&unknown_kind);
+        assert_eq!(
+            to,
+            format!("/app/admin/firms/{firm_id}?secret_error=Unknown%20secret%20kind.")
+        );
+        assert!(!to.contains("secret-value"));
+        let revoke = |kind: &str| axum::Form(super::FirmSecretRevokeInput { kind: kind.into() });
+        assert_eq!(
+            super::firm_secrets_revoke(S(state.clone()), P(firm_id), None, revoke("bogus"))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            location(
+                &super::firm_secrets_revoke(
+                    S(state.clone()),
+                    P(firm_id),
+                    Some(Ext(admin.clone())),
+                    revoke("bogus"),
+                )
+                .await
+            ),
+            format!("/app/admin/firms/{firm_id}?secret_error=Unknown%20secret%20kind.")
+        );
+
+        let approval = |sender: &str, approval_id: &str| {
+            axum::Form(super::SummaryApprovalInput {
+                provider_account: "acct".into(),
+                project_sender: sender.into(),
+                approval_id: approval_id.into(),
+                _csrf: None,
+            })
+        };
+        let unlinked = SessionData::fresh("unlinked@example.com", Role::Admin);
+        for session in [None, Some(Ext(unlinked.clone()))] {
+            assert_eq!(
+                super::summary_approval_put(
+                    S(state.clone()),
+                    P(firm_id),
+                    session.clone(),
+                    approval("x:y", "")
+                )
+                .await
+                .status(),
+                StatusCode::NOT_FOUND
+            );
+            assert_eq!(
+                super::summary_approval_revoke(
+                    S(state.clone()),
+                    P(firm_id),
+                    session,
+                    approval("", "x")
+                )
+                .await
+                .status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        let no_colon = super::summary_approval_put(
+            S(state.clone()),
+            P(firm_id),
+            Some(Ext(admin.clone())),
+            approval("no-separator", ""),
+        )
+        .await;
+        assert!(location(&no_colon).contains("summary_error=Choose+a+current+Project+Client+DRI"));
+        assert_eq!(
+            super::summary_approval_put(
+                S(state.clone()),
+                P(firm_id),
+                Some(Ext(admin.clone())),
+                approval("not-a-uuid:a@example.com", ""),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            super::summary_approval_revoke(
+                S(state),
+                P(firm_id),
+                Some(Ext(admin)),
+                approval("", "not-a-uuid"),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn brands_create_requires_an_admin_dri_firm() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let form = |key: &str| {
+            axum::Form(super::BrandCreateInput {
+                name: "Coverage Brand".into(),
+                key: key.into(),
+                typeface: String::new(),
+                primary_color: "#112233".into(),
+            })
+        };
+        assert_eq!(
+            super::brands_create(S(state.clone()), None, form("cov"))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let lawyer = session_with_role(&db, Role::Lawyer).await;
+        assert_eq!(
+            super::brands_create(S(state.clone()), Some(Ext(lawyer)), form("cov"))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let unlinked = SessionData::fresh("unlinked@example.com", Role::Admin);
+        let to = location(
+            &super::brands_create(S(state.clone()), Some(Ext(unlinked)), form("cov")).await,
+        );
+        assert!(
+            to.contains("isn%27t%20linked") || to.contains("isn't%20linked"),
+            "{to}"
+        );
+        let no_firm = session_with_role(&db, Role::Admin).await;
+        let to = location(
+            &super::brands_create(S(state.clone()), Some(Ext(no_firm)), form("cov")).await,
+        );
+        assert!(
+            to.contains("not%20the%20Admin%20DRI") && to.contains("primary_color=%23112233"),
+            "{to}"
+        );
+
+        let (_, dri) = seed_blog_admin(&db).await;
+        let created = super::brands_create(S(state), Some(Ext(dri)), form("coverage-brand")).await;
+        assert_eq!(location(&created), "/app/admin/brands/coverage-brand/edit");
+        assert!(store::firms::firm_id_for_brand_key(&db, "coverage-brand")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    /// Open a matter the way the form does: a firm wearing the build's brand,
+    /// a lawyer attester, a client of record, and an entity.
+    async fn open_coverage_matter(
+        db: &store::surreal::SurrealDb,
+        code: &str,
+    ) -> (
+        store::persons::Person,
+        store::persons::Person,
+        store::projects::Project,
+    ) {
+        store::test_support::seed_firm_with_brand(db, views::brand::brand_key().as_str()).await;
+        let lawyer = person_with_role(db, "matter-lawyer", Role::Lawyer).await;
+        let client = person_with_role(db, "matter-client", Role::Client).await;
+        let project = store::projects::open_matter(
+            db,
+            &store::projects::OpenMatterCommand {
+                name: "Coverage Matter".into(),
+                code: code.into(),
+                client_id: client.id,
+                entity_id: store::test_support::seed_entity(db).await,
+                jurisdiction_id: None,
+                description: None,
+                brand: views::brand::brand_key().as_str().to_string(),
+                attestation: true,
+                acting_person_id: lawyer.id,
+                closed_at: None,
+            },
+        )
+        .await
+        .unwrap();
+        (lawyer, client, project)
+    }
+
+    #[tokio::test]
+    async fn projects_create_refuses_each_missing_pick_and_opens_a_matter() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        store::test_support::seed_firm_with_brand(&db, views::brand::brand_key().as_str()).await;
+        let lawyer = person_with_role(&db, "open-lawyer", Role::Lawyer).await;
+        let client = person_with_role(&db, "open-client", Role::Client).await;
+        let entity_id = store::test_support::seed_entity(&db).await;
+        let input = |client: Option<Uuid>, entity: Option<Uuid>, attest: bool| {
+            let mut input = blank_project_input("coverage-open");
+            input.client_dri_person_id = client;
+            input.entity_id = entity;
+            input.attestation = attest.then(|| "1".to_string());
+            input
+        };
+
+        let client_session = session_with_role(&db, Role::Client).await;
+        assert_eq!(
+            super::projects_create_lawyer_only(
+                S(state.clone()),
+                Some(Ext(client_session)),
+                axum::Form(input(Some(client.id), Some(entity_id), true)),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let mut nameless = input(Some(client.id), Some(entity_id), true);
+        nameless.name = " ".into();
+        let cases = [
+            (nameless, "Name%20is%20required."),
+            (input(None, Some(entity_id), true), "Pick%20the%20client"),
+            (
+                input(Some(Uuid::now_v7()), Some(entity_id), true),
+                "client%20was%20not%20found",
+            ),
+            (
+                input(Some(lawyer.id), Some(entity_id), true),
+                "must%20be%20an%20existing%20client",
+            ),
+            (input(Some(client.id), None, true), "Pick%20an%20entity"),
+            (
+                input(Some(client.id), Some(entity_id), false),
+                "Attest%20that",
+            ),
+        ];
+        for (form, expected) in cases {
+            let to = location(
+                &super::projects_create_lawyer_only(
+                    S(state.clone()),
+                    Some(Ext(session_for(&lawyer))),
+                    axum::Form(form),
+                )
+                .await,
+            );
+            assert!(to.starts_with("/app/projects/new?error="), "{to}");
+            assert!(to.contains(expected), "{to}");
+            assert!(!to.contains("attestation"), "{to}");
+        }
+        assert!(store::projects::find_by_code(&db, "coverage-open")
+            .await
+            .unwrap()
+            .is_none());
+
+        let opened = super::projects_create_lawyer_only(
+            S(state),
+            Some(Ext(session_for(&lawyer))),
+            axum::Form(input(Some(client.id), Some(entity_id), true)),
+        )
+        .await;
+        assert_eq!(location(&opened), "/app/projects/coverage-open");
+        assert!(store::projects::find_by_code(&db, "coverage-open")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn project_inline_forms_create_an_entity_or_a_client() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let lawyer = session_with_role(&db, Role::Lawyer).await;
+        let (type_id, jur_id) = entity_references(&db).await;
+        let entity_form = |name: &str, type_id: String| {
+            axum::Form(super::EntityInlineInput {
+                entity_name: name.into(),
+                entity_type_id: type_id,
+                jurisdiction_id: jur_id.to_string(),
+            })
+        };
+        assert_eq!(
+            super::projects_new_entity_inline(
+                S(state.clone()),
+                None,
+                entity_form("E", type_id.to_string())
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        for (form, expected) in [
+            (
+                entity_form("", type_id.to_string()),
+                "entity_error=Name%20is%20required.",
+            ),
+            (
+                entity_form("Inline Matter LLC", String::new()),
+                "entity_error=Pick%20an%20entity%20type",
+            ),
+            (
+                entity_form("Inline Matter LLC", Uuid::now_v7().to_string()),
+                "entity_error=",
+            ),
+        ] {
+            let to = location(
+                &super::projects_new_entity_inline(
+                    S(state.clone()),
+                    Some(Ext(lawyer.clone())),
+                    form,
+                )
+                .await,
+            );
+            assert!(
+                to.starts_with("/app/projects/new?") && to.contains(expected),
+                "{to}"
+            );
+        }
+        let created = super::projects_new_entity_inline(
+            S(state.clone()),
+            Some(Ext(lawyer.clone())),
+            entity_form("Inline Matter LLC", type_id.to_string()),
+        )
+        .await;
+        assert!(location(&created).starts_with("/app/projects/new?entity="));
+
+        let client_form = |name: &str, email: &str| {
+            axum::Form(super::ClientInlineInput {
+                client_name: name.into(),
+                client_email: email.into(),
+            })
+        };
+        assert_eq!(
+            super::projects_new_client_inline(
+                S(state.clone()),
+                None,
+                client_form("C", "c@example.com")
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let invalid = super::projects_new_client_inline(
+            S(state.clone()),
+            Some(Ext(lawyer.clone())),
+            client_form("Inline Client", "nope"),
+        )
+        .await;
+        let to = location(&invalid);
+        assert!(
+            to.contains("client_error=") && to.contains("client_name=Inline%20Client"),
+            "{to}"
+        );
+        let created = super::projects_new_client_inline(
+            S(state),
+            Some(Ext(lawyer)),
+            client_form("Inline Client", "inline-client@example.com"),
+        )
+        .await;
+        assert!(location(&created).starts_with("/app/projects/new?client="));
+        assert_eq!(
+            store::persons::find_by_email_ci(&db, "inline-client@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .role,
+            Role::Client
+        );
+    }
+
+    #[tokio::test]
+    async fn projects_update_and_delete_apply_only_for_the_lawyer_tier() {
+        let db = store::test_support::mem_surreal().await;
+        let (lawyer, _, project) = open_coverage_matter(&db, "coverage-edit").await;
+        let lawyer_session = session_for(&lawyer);
+        let client_session = session_with_role(&db, Role::Client).await;
+
+        let mut edit = blank_project_input("coverage-edit");
+        edit.name = "Coverage Matter Renamed".into();
+        edit.description = "Updated scope.".into();
+        edit.external_slack_channel_url = "https://example.slack.com/archives/C0123456".into();
+        assert_eq!(
+            super::projects_update_lawyer_only(
+                S(db.clone()),
+                Some(Ext(client_session.clone())),
+                P(project.code.clone()),
+                axum::Form(blank_project_input("coverage-edit")),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            super::projects_update_lawyer_only(
+                S(db.clone()),
+                Some(Ext(lawyer_session.clone())),
+                P("no-such-matter".into()),
+                axum::Form(blank_project_input("no-such-matter")),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let mut nameless = blank_project_input("coverage-edit");
+        nameless.name = String::new();
+        assert_eq!(
+            super::projects_update_lawyer_only(
+                S(db.clone()),
+                Some(Ext(lawyer_session.clone())),
+                P(project.code.clone()),
+                axum::Form(nameless),
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let saved = super::projects_update_lawyer_only(
+            S(db.clone()),
+            Some(Ext(lawyer_session.clone())),
+            P(project.code.clone()),
+            axum::Form(edit),
+        )
+        .await;
+        assert_eq!(location(&saved), "/app/projects");
+        let stored = store::projects::find_by_code(&db, &project.code)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.name, "Coverage Matter Renamed");
+        assert_eq!(stored.description.as_deref(), Some("Updated scope."));
+        assert!(
+            stored.external_slack_channel_url.is_none(),
+            "an unticked share toggle clears the shared channel"
+        );
+
+        // CSV export reads the lawyer's visible matters.
+        let csv = super::projects_csv(S(db.clone()), Some(Ext(lawyer_session.clone()))).await;
+        assert!(csv
+            .rows
+            .iter()
+            .any(|row| row[1] == project.code && row[2] == "Coverage Matter Renamed"));
+        let anonymous_csv = super::projects_csv(S(db.clone()), None).await;
+        assert!(anonymous_csv.rows.is_empty());
+
+        assert_eq!(
+            super::projects_delete_lawyer_only(
+                S(db.clone()),
+                Some(Ext(client_session)),
+                P(project.code.clone()),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            super::projects_delete_lawyer_only(
+                S(db.clone()),
+                Some(Ext(lawyer_session.clone())),
+                P("no-such-matter".into()),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let deleted = super::projects_delete_lawyer_only(
+            S(db.clone()),
+            Some(Ext(lawyer_session)),
+            P(project.code.clone()),
+        )
+        .await;
+        assert!(
+            location(&deleted).starts_with("/app/projects"),
+            "{}",
+            location(&deleted)
+        );
+    }
+
+    fn participation_form(
+        person_id: Option<Uuid>,
+        dri: Option<&str>,
+    ) -> axum::Form<super::ProjectParticipationInput> {
+        axum::Form(super::ProjectParticipationInput {
+            _csrf_token: None,
+            person_id,
+            dri: dri.map(str::to_string),
+        })
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn participation_create_update_and_delete_drive_the_ledger() {
+        let db = store::test_support::mem_surreal().await;
+        let (lawyer, _, project) = open_coverage_matter(&db, "coverage-people").await;
+        let admin = session_with_role(&db, Role::Admin).await;
+        let code = project.code.clone();
+        let participants = format!("/app/projects/{code}?tab=");
+
+        assert_eq!(
+            super::project_participation_create(
+                S(db.clone()),
+                P("no-such-matter".into()),
+                Some(Ext(admin.clone())),
+                participation_form(None, None),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            super::project_participation_create(
+                S(db.clone()),
+                P(code.clone()),
+                Some(Ext(session_for(&lawyer))),
+                participation_form(Some(lawyer.id), None),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let no_person = super::project_participation_create(
+            S(db.clone()),
+            P(code.clone()),
+            Some(Ext(admin.clone())),
+            participation_form(None, Some("none")),
+        )
+        .await;
+        assert_eq!(
+            location(&no_person),
+            format!("/app/projects/{code}/people/new?error=Choose%20a%20person%20to%20assign%20to%20this%20matter.&dri=none")
+        );
+        let unknown = super::project_participation_create(
+            S(db.clone()),
+            P(code.clone()),
+            Some(Ext(admin.clone())),
+            participation_form(Some(Uuid::now_v7()), None),
+        )
+        .await;
+        assert!(location(&unknown).contains("That%20person%20was%20not%20found."));
+        let duplicate = super::project_participation_create(
+            S(db.clone()),
+            P(code.clone()),
+            Some(Ext(admin.clone())),
+            participation_form(Some(lawyer.id), None),
+        )
+        .await;
+        assert!(location(&duplicate).contains("already%20assigned"));
+
+        let clerk = person_with_role(&db, "matter-clerk", Role::Clerk).await;
+        let added = super::project_participation_create(
+            S(db.clone()),
+            P(code.clone()),
+            Some(Ext(admin.clone())),
+            participation_form(Some(clerk.id), None),
+        )
+        .await;
+        assert!(
+            location(&added).starts_with(&participants),
+            "{}",
+            location(&added)
+        );
+        let clerk_row = store::projects::participation_for_person(&db, clerk.id, project.id)
+            .await
+            .unwrap()
+            .expect("the clerk now participates");
+
+        // Update: unknown row is a 404; a missing person is refused; the
+        // matter's lawyer cannot be re-pointed onto an existing participant.
+        assert_eq!(
+            super::project_participation_update(
+                S(db.clone()),
+                P((code.clone(), Uuid::now_v7())),
+                Some(Ext(admin.clone())),
+                participation_form(Some(clerk.id), None),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let no_person = super::project_participation_update(
+            S(db.clone()),
+            P((code.clone(), clerk_row.id)),
+            Some(Ext(admin.clone())),
+            participation_form(None, None),
+        )
+        .await;
+        assert!(location(&no_person).starts_with(&format!(
+            "/app/projects/{code}/people/{}/edit?error=",
+            clerk_row.id
+        )));
+        let unknown = super::project_participation_update(
+            S(db.clone()),
+            P((code.clone(), clerk_row.id)),
+            Some(Ext(admin.clone())),
+            participation_form(Some(Uuid::now_v7()), None),
+        )
+        .await;
+        assert!(location(&unknown).contains("That%20person%20was%20not%20found."));
+        let duplicate = super::project_participation_update(
+            S(db.clone()),
+            P((code.clone(), clerk_row.id)),
+            Some(Ext(admin.clone())),
+            participation_form(Some(lawyer.id), None),
+        )
+        .await;
+        assert!(
+            location(&duplicate).contains("already%20assigned"),
+            "{}",
+            location(&duplicate)
+        );
+        let kept = super::project_participation_update(
+            S(db.clone()),
+            P((code.clone(), clerk_row.id)),
+            Some(Ext(admin.clone())),
+            participation_form(Some(clerk.id), None),
+        )
+        .await;
+        assert!(
+            location(&kept).starts_with(&participants),
+            "{}",
+            location(&kept)
+        );
+
+        // Delete: the lawyer DRI's row is locked; the clerk's row goes.
+        let lawyer_row = store::projects::participation_for_person(&db, lawyer.id, project.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let locked = super::project_participation_delete(
+            S(db.clone()),
+            P((code.clone(), lawyer_row.id)),
+            Some(Ext(admin.clone())),
+        )
+        .await;
+        assert!(
+            location(&locked).starts_with("/app/projects?error="),
+            "{}",
+            location(&locked)
+        );
+        assert_eq!(
+            super::project_participation_delete(
+                S(db.clone()),
+                P((code.clone(), Uuid::now_v7())),
+                Some(Ext(admin.clone())),
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        let removed = super::project_participation_delete(
+            S(db.clone()),
+            P((code.clone(), clerk_row.id)),
+            Some(Ext(admin)),
+        )
+        .await;
+        assert!(location(&removed).starts_with(&participants));
+        assert!(
+            store::projects::participation_for_person(&db, clerk.id, project.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn matter_dri_controls_designate_and_refuse_the_last_lawyer() {
+        let db = store::test_support::mem_surreal().await;
+        let (lawyer, client, project) = open_coverage_matter(&db, "coverage-dri").await;
+        let code = project.code.clone();
+        let lawyer_session = session_for(&lawyer);
+        let lawyer_row = store::projects::participation_for_person(&db, lawyer.id, project.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let client_row = store::projects::participation_for_person(&db, client.id, project.id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let client_session = session_for(&client);
+        for refused in [
+            super::matter_dri_designate(
+                S(db.clone()),
+                Some(Ext(client_session.clone())),
+                P((code.clone(), client_row.id)),
+            )
+            .await,
+            super::matter_dri_remove(
+                S(db.clone()),
+                Some(Ext(client_session)),
+                P((code.clone(), client_row.id)),
+            )
+            .await,
+            super::matter_dri_designate(
+                S(db.clone()),
+                Some(Ext(lawyer_session.clone())),
+                P(("no-such-matter".into(), client_row.id)),
+            )
+            .await,
+            super::matter_dri_remove(
+                S(db.clone()),
+                Some(Ext(lawyer_session.clone())),
+                P((code.clone(), Uuid::now_v7())),
+            )
+            .await,
+        ] {
+            assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+        }
+
+        let last = super::matter_dri_remove(
+            S(db.clone()),
+            Some(Ext(lawyer_session.clone())),
+            P((code.clone(), lawyer_row.id)),
+        )
+        .await;
+        assert!(
+            location(&last).starts_with(&format!("/app/projects/{code}?error=")),
+            "{}",
+            location(&last)
+        );
+        assert!(
+            store::projects::participation_by_id(&db, lawyer_row.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_lawyer_dri
+        );
+
+        let removed = super::matter_dri_remove(
+            S(db.clone()),
+            Some(Ext(lawyer_session.clone())),
+            P((code.clone(), client_row.id)),
+        )
+        .await;
+        assert_eq!(location(&removed), format!("/app/projects/{code}"));
+        assert!(
+            !store::projects::participation_by_id(&db, client_row.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_client_dri
+        );
+        let designated = super::matter_dri_designate(
+            S(db.clone()),
+            Some(Ext(lawyer_session)),
+            P((code.clone(), client_row.id)),
+        )
+        .await;
+        assert_eq!(location(&designated), format!("/app/projects/{code}"));
+        assert!(
+            store::projects::participation_by_id(&db, client_row.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_client_dri
+        );
+    }
+
+    #[tokio::test]
+    async fn view_as_client_enters_a_read_only_client_session_and_stop_restores_it() {
+        let db = store::test_support::mem_surreal().await;
+        let state = blog_admin_state(db.clone()).await;
+        let (lawyer, client, project) = open_coverage_matter(&db, "coverage-preview").await;
+        let code = project.code.clone();
+
+        let refused = [
+            (None, code.clone()),
+            (Some(session_for(&client)), code.clone()),
+            (Some(session_for(&lawyer)), "no-such-matter".to_string()),
+            (
+                Some(session_with_role(&db, Role::Lawyer).await),
+                code.clone(),
+            ),
+        ];
+        for (session, code) in refused {
+            let cookies = tower_cookies::Cookies::default();
+            let response = super::project_view_as_client(
+                S(state.clone()),
+                session.map(Ext),
+                cookies.clone(),
+                P(code),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert!(cookies.list().is_empty());
+        }
+
+        let cookies = tower_cookies::Cookies::default();
+        let entered = super::project_view_as_client(
+            S(state.clone()),
+            Some(Ext(session_for(&lawyer))),
+            cookies.clone(),
+            P(code.clone()),
+        )
+        .await;
+        assert_eq!(location(&entered), format!("/app/projects/{code}"));
+        let cookie = cookies.list().into_iter().next().expect("a session cookie");
+        let effective = state
+            .sessions
+            .decode(cookie.value())
+            .expect("the cookie is a signed session");
+        assert_eq!(effective.role, Role::Client);
+        assert_eq!(effective.person_id, Some(client.id));
+        let view = effective.viewing_as_dri.clone().expect("a DRI view");
+        assert_eq!(view.actor_person_id, Some(lawyer.id));
+
+        // A nested preview is refused.
+        let nested = super::project_view_as_client(
+            S(state.clone()),
+            Some(Ext(effective.clone())),
+            tower_cookies::Cookies::default(),
+            P(code),
+        )
+        .await;
+        assert_eq!(nested.status(), StatusCode::NOT_FOUND);
+
+        assert_eq!(
+            super::stop_viewing_as_dri(S(state.clone()), None, tower_cookies::Cookies::default())
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let not_viewing = super::stop_viewing_as_dri(
+            S(state.clone()),
+            Some(Ext(session_for(&lawyer))),
+            tower_cookies::Cookies::default(),
+        )
+        .await;
+        assert_eq!(location(&not_viewing), "/app/team");
+
+        let cookies = tower_cookies::Cookies::default();
+        let stopped = super::stop_viewing_as_dri(
+            S(state.clone()),
+            Some(Ext(effective.clone())),
+            cookies.clone(),
+        )
+        .await;
+        assert_eq!(location(&stopped), "/app/team");
+        let restored = state.sessions.decode(cookies.list()[0].value()).unwrap();
+        assert_eq!(restored.role, Role::Lawyer);
+        assert_eq!(restored.person_id, Some(lawyer.id));
+        assert!(restored.viewing_as_dri.is_none());
+
+        // An actor whose row is gone comes back as a client-tier session.
+        let mut orphaned = effective;
+        if let Some(view) = orphaned.viewing_as_dri.as_mut() {
+            view.actor_person_id = Some(Uuid::now_v7());
+        }
+        let cookies = tower_cookies::Cookies::default();
+        super::stop_viewing_as_dri(S(state.clone()), Some(Ext(orphaned)), cookies.clone()).await;
+        let restored = state.sessions.decode(cookies.list()[0].value()).unwrap();
+        assert_eq!(restored.role, Role::Client);
+        assert!(restored.person_id.is_none());
+    }
 }
