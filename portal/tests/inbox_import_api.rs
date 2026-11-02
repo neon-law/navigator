@@ -1210,6 +1210,7 @@ async fn assert_fi_lifecycle(
         .unwrap();
     assert_eq!(fi_call.duration_seconds, Some(61));
     assert_eq!(fi_call.tenths, None);
+    assert_fi_reporting_pages(&app, admin).await;
     let report = store::communication_dashboard::for_brand(pg, &app.surreal, admin, "fi-http")
         .await
         .unwrap();
@@ -1528,4 +1529,75 @@ async fn assert_call_coordinators_do_not_starve_the_native_pool(
             .await
             .unwrap();
     assert_eq!(assignments, i64::try_from(CALLS).unwrap());
+}
+
+/// Exercise the SSR loaders through authenticated HTTP requests.
+async fn assert_fi_reporting_pages(fixture: &Fixture, admin: Uuid) {
+    let sessions = portal::SessionStore::new(portal::test_support::TEST_SESSION_KEY);
+    let router = portal::router(portal::test_support::app_state(fixture.surreal.clone()).await);
+    let lawyer = fixture.lawyer_session.person_id.unwrap();
+    for (role, actor, path, shows_report) in [
+        (
+            Role::Admin,
+            admin,
+            "/app/admin/communications?brand=fi-http",
+            true,
+        ),
+        (
+            Role::Admin,
+            admin,
+            "/app/admin/communications?brand=",
+            false,
+        ),
+        (Role::Lawyer, lawyer, "/app/inbox/calls", false),
+    ] {
+        let session = portal::SessionData {
+            person_id: Some(actor),
+            ..portal::SessionData::fresh("synthetic-report-reader", role)
+        };
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", sessions.encode(&session)),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            response.status().is_success(),
+            "the report route must admit its reader"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&bytes);
+        assert!(
+            html.contains("Parked calls"),
+            "the parked queue must render"
+        );
+        assert!(
+            html.contains("google_fi:"),
+            "the queue must include the imported call"
+        );
+        assert!(
+            html.contains("61"),
+            "the queue must retain the provider duration"
+        );
+        assert!(
+            html.contains("Not billed"),
+            "Fi history must remain unbilled"
+        );
+        assert_eq!(html.contains("Registered numbers"), shows_report);
+        assert_eq!(html.contains("communications-brand"), role == Role::Admin);
+        if shows_report {
+            assert!(html.contains("No registered numbers."));
+            assert!(html.contains("Billed tenths"));
+        }
+    }
 }
