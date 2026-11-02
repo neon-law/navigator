@@ -3574,4 +3574,367 @@ mod tests {
         assert_eq!(finish(Ok(())), ExitCode::SUCCESS);
         assert_eq!(finish(Err(anyhow!("boom"))), ExitCode::FAILURE);
     }
+
+    #[tokio::test]
+    async fn a_filed_message_posts_one_communication_with_its_time_and_source() {
+        use wiremock::matchers::{header as header_is, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/communications"
+            )))
+            .and(header_is("authorization", "Bearer navigator-token"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let base = server.uri();
+        let target = FileTarget {
+            base: &base,
+            navigator_token: "navigator-token",
+            project_id,
+            mailbox: "Lawyer@Example.test",
+        };
+        let mut message = synthetic_message(&[
+            ("From", "Client <client@example.test>"),
+            ("To", "lawyer@example.test"),
+            ("Subject", "Signing question"),
+        ]);
+        message.internal_date = Some("1760000000000".into());
+        file_message(&target, &message, "Can I sign electronically?")
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["direction"], "inbound");
+        assert_eq!(body["channel"], "email_inbound");
+        assert_eq!(body["counterparty"], "Client <client@example.test>");
+        assert_eq!(body["subject"], "Signing question");
+        assert_eq!(body["body"], "Can I sign electronically?");
+        assert_eq!(body["source_ref"], "gmail:lawyer@example.test:message-1");
+        assert!(body["at"].as_str().unwrap().starts_with("2025-10-09T"));
+
+        // A message without a timestamp is refused before anything is posted.
+        message.internal_date = None;
+        assert!(file_message(&target, &message, "body").await.is_err());
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn a_refused_communication_names_the_status_only() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("secret echo"))
+            .mount(&server)
+            .await;
+        let base = server.uri();
+        let target = FileTarget {
+            base: &base,
+            navigator_token: "navigator-token",
+            project_id: Uuid::nil(),
+            mailbox: "lawyer@example.test",
+        };
+        let error = post_communication(&target, &json!({}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("refused: 403"), "{error}");
+        assert!(!error.contains("secret echo"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn gmail_message_reads_and_errors_never_echo_provider_bodies() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/messages/18fa3bc2d4e5f6a7"))
+            .and(query_param("format", "full"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "18fa3bc2d4e5f6a7",
+                "internalDate": "1760000000000",
+                "payload": {"mimeType": "text/plain", "body": {"data": encoded(b"Hello")}}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/messages/18fa3bc2d4e5f6a7"))
+            .and(query_param("format", "raw"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"raw": encoded(b"Subject: x\r\n\r\nraw")})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/messages/denied000001"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("token=leaked"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/messages/garbled00001"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+        let client =
+            GmailClient::with_base_url("test-token".into(), Url::parse(&server.uri()).unwrap());
+        let message = client.message("18fa3bc2d4e5f6a7").await.unwrap();
+        assert_eq!(message.internal_date.as_deref(), Some("1760000000000"));
+        assert_eq!(
+            plain_text(message.payload.as_ref().unwrap()).as_deref(),
+            Some("Hello")
+        );
+        let raw = client.raw_message("18fa3bc2d4e5f6a7").await.unwrap();
+        assert_eq!(
+            decode_gmail_raw(raw.raw.as_deref().unwrap()).unwrap(),
+            b"Subject: x\r\n\r\nraw"
+        );
+        let denied = client.message("denied000001").await.unwrap_err();
+        assert_eq!(
+            denied.to_string(),
+            "Gmail API request failed: 403 Forbidden"
+        );
+        assert!(!format!("{denied:#}").contains("leaked"));
+        let garbled = client.message("garbled00001").await.unwrap_err();
+        assert!(
+            garbled.to_string().contains("parse Gmail API response"),
+            "{garbled}"
+        );
+
+        let production = GmailClient::new("token".into()).unwrap();
+        assert_eq!(
+            production
+                .url(Operation::ModifyMessage, Some("18fa3bc2d4e5f6a7"))
+                .unwrap()
+                .as_str(),
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/18fa3bc2d4e5f6a7/modify"
+        );
+    }
+
+    async fn draft_server(thread: serde_json::Value) -> wiremock::MockServer {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/profile"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"emailAddress": "lawyer@example.test"})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/threads/thread-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(thread))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/users/me/drafts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "draft-9"})))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn draft_request(
+        body_file: PathBuf,
+        to: &[&str],
+        subject: Option<&str>,
+        thread: Option<&str>,
+    ) -> DraftRequest {
+        DraftRequest {
+            to: to.iter().map(|value| (*value).to_string()).collect(),
+            cc: vec![],
+            bcc: vec![],
+            subject: subject.map(str::to_string),
+            body_file,
+            thread: thread.map(str::to_string),
+            draft_id: None,
+            attach: vec![],
+        }
+    }
+
+    async fn draft_with(
+        server: &wiremock::MockServer,
+        request: DraftRequest,
+    ) -> Result<SavedDraft> {
+        let base = Url::parse(&server.uri()).unwrap();
+        save_draft_command(request, || async move {
+            Ok(GmailClient::with_base_url("test-token".into(), base))
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_new_draft_needs_recipients_and_a_subject_and_saves_unsent() {
+        let directory = tempfile::tempdir().unwrap();
+        let body = directory.path().join("body.txt");
+        std::fs::write(&body, "Synthetic body").unwrap();
+        let server = draft_server(json!({"id": "thread-1", "messages": []})).await;
+
+        let error = draft_with(&server, draft_request(body.clone(), &[], Some("Hi"), None))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.to_string(), "pass --to or --thread");
+        let error = draft_with(
+            &server,
+            draft_request(body.clone(), &["c@example.test"], None, None),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(error.to_string(), "pass --subject or --thread");
+
+        let saved = draft_with(
+            &server,
+            draft_request(body, &["c@example.test"], Some("Hello"), None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved.id, "draft-9");
+        assert_eq!(saved.account, "lawyer@example.test");
+        assert_eq!(saved.attachments, 0);
+        let requests = server.received_requests().await.unwrap();
+        let draft = requests
+            .iter()
+            .find(|request| request.method.as_str() == "POST")
+            .unwrap();
+        let (json_body, raw) = decoded_draft(draft);
+        assert!(json_body["message"]["threadId"].is_null());
+        assert!(raw.starts_with("To: c@example.test\r\n"), "{raw}");
+        assert!(raw.contains("Subject: Hello"));
+        assert!(!raw.contains("In-Reply-To"));
+    }
+
+    #[tokio::test]
+    async fn a_reply_draft_defaults_to_the_latest_reply_to_and_subject() {
+        let directory = tempfile::tempdir().unwrap();
+        let body = directory.path().join("body.txt");
+        std::fs::write(&body, "Synthetic reply").unwrap();
+        let server = draft_server(json!({
+            "id": "thread-1",
+            "messages": [
+                {"id": "m-1", "payload": {"headers": [
+                    {"name": "From", "value": "Old <old@example.test>"},
+                    {"name": "Subject", "value": "Older"}
+                ]}},
+                {"id": "m-2", "payload": {"headers": [
+                    {"name": "From", "value": "Client <client@example.test>"},
+                    {"name": "Reply-To", "value": "assistant@example.test"},
+                    {"name": "Subject", "value": "Retainer"},
+                    {"name": "Message-ID", "value": "<m-2@example.test>"}
+                ]}}
+            ]
+        }))
+        .await;
+        let saved = draft_with(&server, draft_request(body, &[], None, Some("thread-1")))
+            .await
+            .unwrap();
+        assert_eq!(saved.id, "draft-9");
+        let requests = server.received_requests().await.unwrap();
+        let draft = requests
+            .iter()
+            .find(|request| request.method.as_str() == "POST")
+            .unwrap();
+        let (json_body, raw) = decoded_draft(draft);
+        assert_eq!(json_body["message"]["threadId"], "thread-1");
+        assert!(raw.starts_with("To: assistant@example.test\r\n"), "{raw}");
+        assert!(raw.contains("Subject: Re: Retainer"), "{raw}");
+        assert!(raw.contains("In-Reply-To: <m-2@example.test>"), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn a_reply_draft_without_messages_recipient_or_subject_is_refused_unsaved() {
+        let directory = tempfile::tempdir().unwrap();
+        let body = directory.path().join("body.txt");
+        std::fs::write(&body, "Synthetic reply").unwrap();
+        let cases = [
+            (
+                json!({"id": "thread-1", "messages": []}),
+                "thread has no messages",
+            ),
+            (
+                json!({"id": "thread-1", "messages": [{"id": "m-1", "payload": {"headers": [
+                    {"name": "Subject", "value": "No sender"}
+                ]}}]}),
+                "reply recipient is unavailable; pass --to",
+            ),
+            (
+                json!({"id": "thread-1", "messages": [{"id": "m-1", "payload": {"headers": [
+                    {"name": "From", "value": "client@example.test"}
+                ]}}]}),
+                "reply subject is unavailable; pass --subject",
+            ),
+        ];
+        for (thread, want) in cases {
+            let server = draft_server(thread).await;
+            let error = draft_with(
+                &server,
+                draft_request(body.clone(), &[], None, Some("thread-1")),
+            )
+            .await
+            .err()
+            .unwrap();
+            assert_eq!(error.to_string(), want);
+            assert!(!server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|request| request.method.as_str() == "POST"));
+        }
+    }
+
+    #[tokio::test]
+    async fn local_commands_refuse_unusable_inputs_before_any_network_call() {
+        let directory = tempfile::tempdir().unwrap();
+        let error = ingest_provider_message(&directory.path().join("absent.eml"), None, None, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().starts_with("read "), "{error}");
+
+        let eml = directory.path().join("2026.10.30_Question.eml");
+        std::fs::write(&eml, "Subject: x\r\n\r\nbody").unwrap();
+        let error = ingest_provider_message(&eml, None, None, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("pass --project"), "{error}");
+
+        let pdf = directory.path().join("letter.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4").unwrap();
+        for path in [&eml, &pdf] {
+            let error = parse_command(path.to_str().unwrap(), None, None, None)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("pass --project"), "{error}");
+        }
+        let error = parse_gmail_message("18fa3bc2d4e5f6a7", None, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("pass --project"), "{error}");
+
+        let error = archive("no id here").await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot resolve a Gmail message id"),
+            "{error}"
+        );
+        let error = save_message_command("18fa3bc2d4e5f6a7", None, Some("Question.eml"))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("YYYY.MM.DD_<name>.eml"),
+            "{error}"
+        );
+    }
 }
