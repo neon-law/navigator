@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 536 100" width="100%" height="100%" role="img" aria-labelledby="logo-title logo-description">
+  <title id="logo-title">Lex Tecnica</title>
+  <desc id="logo-description">The words Lex Tecnica in drawn capital letters, in dark gold.</desc>
+  <g fill="none" stroke="#91702F" stroke-width="7" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="2">
+    <path id="l" d="M10 20V80H44"/>
+    <path id="e1" d="M94 20H60V80H94M60 50H88"/>
+    <path id="x" d="M110 20L150 80M150 20L110 80"/>
+    <path id="t" d="M186 20H226M206 20V80"/>
+    <path id="e2" d="M276 20H242V80H276M242 50H270"/>
+    <path id="c1" d="M336.4 28.8A26 30 0 1 0 336.4 71.2"/>
+    <path id="n" d="M352 80V20L392 80V20"/>
+    <path id="i" d="M408 20V80"/>
+    <path id="c2" d="M468.4 28.8A26 30 0 1 0 468.4 71.2"/>
+    <path id="a" d="M484 80L505 20L526 80M492 58H518"/>
+  </g>
+</svg>

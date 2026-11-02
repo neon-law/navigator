@@ -176,10 +176,10 @@ fn declares_brand(body: &str, site_name: &str) -> bool {
 /// matches `public_host`'s own `staging.`-prefix convention — the same split
 /// `cli::devx::ship::additional_brand_bindings` reads.
 pub(crate) fn release_targets(public_host: &str) -> Vec<(BrandKey, &'static str)> {
-    let staging = public_host.starts_with("staging.");
+    let staging = views::brand::is_staging_host(public_host);
     views::brand::release_brand_hosts()
         .into_iter()
-        .filter(|(_, host)| host.starts_with("staging.") == staging)
+        .filter(|(_, host)| views::brand::is_staging_host(host) == staging)
         // A moved brand's hosts 301 to the brand it moved to; that brand's
         // own hosts carry the check.
         .filter(|(key, _)| key.moved_to().is_none())
@@ -268,7 +268,15 @@ pub(crate) fn check_apex_redirect<R: CommandRunner>(
     key: BrandKey,
     timeout_secs: u32,
 ) -> HostReport {
-    let apex = key.apex();
+    // A brand on a `neonlaw.com` subdomain has no naked domain to redirect.
+    let Some(apex) = key.apex() else {
+        return HostReport {
+            key,
+            name: key.canonical_host(),
+            verdict: Verdict::Ready,
+            detail: "no naked domain of its own".to_string(),
+        };
+    };
     let url = format!("https://{apex}/");
     let outcome = runner.run(
         "curl",
@@ -344,7 +352,7 @@ pub(crate) fn run_with<R: CommandRunner>(
         for key in views::brand::BrandKey::ALL
             .iter()
             .copied()
-            .filter(|k| k.is_live())
+            .filter(|k| k.is_live() && k.apex().is_some())
         {
             reports.push(check_apex_redirect(runner, key, timeout_secs));
         }
@@ -499,12 +507,14 @@ mod tests {
         // to be live, rather than asserting on which ones currently aren't.
         let full_registry: Vec<(BrandKey, &str)> = views::brand::release_brand_hosts()
             .into_iter()
-            .filter(|(key, host)| !host.starts_with("staging.") && key.moved_to().is_none())
+            .filter(|(key, host)| !views::brand::is_staging_host(host) && key.moved_to().is_none())
             .collect();
         assert_eq!(production, full_registry);
         assert!(production.contains(&(BrandKey::Daybridge, "www.daybridgedivorce.com")));
         let staging = release_targets("staging.navigator.example.invalid");
-        assert!(staging.iter().all(|(_, host)| host.starts_with("staging.")));
+        assert!(staging
+            .iter()
+            .all(|(_, host)| views::brand::is_staging_host(host)));
     }
 
     #[test]
@@ -746,18 +756,26 @@ mod tests {
 
         // Production: the same host checks, plus one apex check per brand.
         let host_count = served;
-        let live_count = views::brand::BrandKey::LIVE.len();
+        let live_count = views::brand::BrandKey::LIVE
+            .iter()
+            .filter(|key| key.apex().is_some())
+            .count();
         let mut outcomes: Vec<CommandOutcome> = (0..host_count)
             .map(|_| ok_headers_and_body(200, r#"content="x" property="og:site_name""#))
             .collect();
-        outcomes.extend(BrandKey::LIVE.iter().map(|key| CommandOutcome {
-            exit_code: Some(0),
-            stdout: format!(
-                "HTTP/1.1 301 Moved Permanently\r\nlocation: https://{}/\r\n\r\n",
-                key.canonical_host()
-            ),
-            stderr: String::new(),
-        }));
+        outcomes.extend(
+            BrandKey::LIVE
+                .iter()
+                .filter(|key| key.apex().is_some())
+                .map(|key| CommandOutcome {
+                    exit_code: Some(0),
+                    stdout: format!(
+                        "HTTP/1.1 301 Moved Permanently\r\nlocation: https://{}/\r\n\r\n",
+                        key.canonical_host()
+                    ),
+                    stderr: String::new(),
+                }),
+        );
         let mut production_runner = ScriptedRunner::new(outcomes);
         let production_cfg = ship_config_for("navigator.example.invalid");
         let production_reports = run_with(&mut production_runner, &production_cfg, 10);

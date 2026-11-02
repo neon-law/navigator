@@ -66,7 +66,7 @@ mod video_prepare;
 
 use cli::import;
 use devx::brand::BrandCmd;
-use devx::{DnsCmd, GcpCmd, RestateCmd, StagingAction, WorktreeEnvCmd};
+use devx::{DnsCmd, GcpCmd, HostCmd, RestateCmd, StagingAction, WorktreeEnvCmd};
 use projects::pinned_gate::GateMode;
 use projects::repository::is_project_repository;
 
@@ -3163,6 +3163,10 @@ enum OpsCmd {
     /// records are no-ops.
     #[command(subcommand)]
     Dns(DnsCmd),
+    /// Bring one registered brand host online for a deployment: DNS, the TLS
+    /// certificate check, and the per-host sign-in check.
+    #[command(subcommand)]
+    Host(HostCmd),
     /// Bounded per-host release-readiness check (ENG-808): for every host
     /// the release inventory (`views::brand::release_brand_hosts`) covers on
     /// the selected deployment's environment, perform a real TLS handshake

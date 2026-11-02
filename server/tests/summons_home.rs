@@ -112,7 +112,10 @@ async fn summons_apex_redirects_to_its_own_site() {
         .oneshot(
             Request::builder()
                 .uri("/")
-                .header("host", BrandKey::Summons.apex())
+                .header(
+                    "host",
+                    BrandKey::Summons.apex().expect("Summons owns its domain"),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )

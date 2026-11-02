@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 96" role="img" aria-labelledby="title">
+  <title id="title">IEP Defenders</title>
+  <style>
+    .word { fill: #5b21b6; font-family: "Source Sans 3", "Helvetica Neue", Arial, sans-serif; font-size: 56px; letter-spacing: -0.5px; }
+    .iep { font-weight: 700; }
+    .rest { font-weight: 500; }
+    .rule { fill: #5b21b6; }
+    @media (prefers-color-scheme: dark) {
+      .word, .rule { fill: #c4b5fd; }
+    }
+  </style>
+  <rect class="rule" x="8" y="18" width="6" height="60" rx="3"/>
+  <text class="word" x="30" y="67"><tspan class="iep">IEP</tspan><tspan class="rest" dx="14">Defenders</tspan></text>
+</svg>
