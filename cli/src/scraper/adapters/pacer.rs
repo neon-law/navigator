@@ -625,9 +625,10 @@ mod tests {
     fn a_charge_confirmation_page_is_recognized_by_its_marker() {
         let charges =
             billing_confirmation(CONFIRMATION.as_bytes()).expect("the confirmation is detected");
+        // The assert prints the operand on failure; no parsed content in the message.
         assert!(
             charges.contains("$0.20"),
-            "the charges are named: {charges}"
+            "the charge amount is present"
         );
         assert!(
             billing_confirmation(b"%PDF-1.7 the document bytes").is_none(),
