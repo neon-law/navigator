@@ -58,7 +58,7 @@ private instruments and clearance references outside this repository.
 | Notice | Notices delivered inside the extension package and each image | Release |
 | Asset | Ferris illustration and Plausible script provenance | Owner |
 | Asset | Brand logos, marks, and illustrations B1 through B29 | Owner/counsel |
-| Rights | Lex Tecnica, Ltd.'s brand material and the draft NOTICE exclusion | Owner/counsel |
+| Rights | Brand material of Lex Tecnica, Ltd. and the draft NOTICE exclusion | Owner/counsel |
 | Asset | Workshop screenshot B32 | Owner/counsel |
 | Asset | Embedded assets in the synthetic seed PDF B33 | Owner |
 | Asset | GORP Serif: proprietary; no binary tracked, operator licence required | Operator/counsel |
