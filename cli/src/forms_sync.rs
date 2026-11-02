@@ -97,33 +97,39 @@ fn workspace_root() -> anyhow::Result<PathBuf> {
 /// never land in the confidential lane (and vice versa).
 pub fn run_sync(bucket: Option<&str>) -> ExitCode {
     with_assets_storage("forms sync", bucket, |storage| async move {
-        let items = items_from_registry(&workspace_root()?)?;
-        let mut vendored = 0usize;
-        let mut verified = 0usize;
-        for item in &items {
-            match sync_one(storage.as_ref(), item).await? {
-                SyncOutcome::Vendored { pin_rewritten } => {
-                    vendored += 1;
-                    if pin_rewritten {
-                        println!(
-                            "  {}: uploaded working copy, pin rewritten at {} \
-                             (rebuild to bake the new pin into the binaries)",
-                            item.code,
-                            item.pin_file.display()
-                        );
-                    } else {
-                        println!("  {}: working copy in sync, pin unchanged", item.code);
-                    }
-                }
-                SyncOutcome::Verified => {
-                    verified += 1;
-                    println!("  {}: bucket object matches its pin", item.code);
+        sync_all(storage.as_ref(), &workspace_root()?).await
+    })
+}
+
+/// The body of `navigator forms sync`: sync every registry form resolved
+/// onto `root`, printing one line per form and a closing tally.
+async fn sync_all(storage: &dyn StorageService, root: &Path) -> anyhow::Result<()> {
+    let items = items_from_registry(root)?;
+    let mut vendored = 0usize;
+    let mut verified = 0usize;
+    for item in &items {
+        match sync_one(storage, item).await? {
+            SyncOutcome::Vendored { pin_rewritten } => {
+                vendored += 1;
+                if pin_rewritten {
+                    println!(
+                        "  {}: uploaded working copy, pin rewritten at {} \
+                         (rebuild to bake the new pin into the binaries)",
+                        item.code,
+                        item.pin_file.display()
+                    );
+                } else {
+                    println!("  {}: working copy in sync, pin unchanged", item.code);
                 }
             }
+            SyncOutcome::Verified => {
+                verified += 1;
+                println!("  {}: bucket object matches its pin", item.code);
+            }
         }
-        println!("navigator: forms sync: {vendored} vendored, {verified} verified");
-        Ok(())
-    })
+    }
+    println!("navigator: forms sync: {vendored} vendored, {verified} verified");
+    Ok(())
 }
 
 /// Entry point for `cli forms fields <code>`: pull the blank, verify
@@ -131,20 +137,25 @@ pub fn run_sync(bucket: Option<&str>) -> ExitCode {
 pub fn run_fields(code: &str, bucket: Option<&str>) -> ExitCode {
     let code = code.to_string();
     with_assets_storage("forms fields", bucket, |storage| async move {
-        let form = forms::get(&code)?
-            .ok_or_else(|| anyhow::anyhow!("`{code}` is not in the vendored forms registry"))?;
-        let blank = storage.get(form.object_path).await.map_err(|e| {
-            anyhow::anyhow!(
-                "pull `{}`: {e} — vendor the blank with `navigator forms sync`",
-                form.object_path
-            )
-        })?;
-        form.verify(&blank.bytes)?;
-        for name in pdf::field_names(&blank.bytes)? {
-            println!("{name}");
-        }
-        Ok(())
+        print_fields(storage.as_ref(), &code).await
     })
+}
+
+/// The body of `navigator forms fields`: pull, pin-verify, and print.
+async fn print_fields(storage: &dyn StorageService, code: &str) -> anyhow::Result<()> {
+    let form = forms::get(code)?
+        .ok_or_else(|| anyhow::anyhow!("`{code}` is not in the vendored forms registry"))?;
+    let blank = storage.get(form.object_path).await.map_err(|e| {
+        anyhow::anyhow!(
+            "pull `{}`: {e} — vendor the blank with `navigator forms sync`",
+            form.object_path
+        )
+    })?;
+    form.verify(&blank.bytes)?;
+    for name in pdf::field_names(&blank.bytes)? {
+        println!("{name}");
+    }
+    Ok(())
 }
 
 /// Entry point for `cli forms re-author <code>` (#256 item 1): pull the
@@ -160,54 +171,58 @@ pub fn run_fields(code: &str, bucket: Option<&str>) -> ExitCode {
 pub fn run_reauthor(code: &str, bucket: Option<&str>) -> ExitCode {
     let code = code.to_string();
     with_assets_storage("forms re-author", bucket, |storage| async move {
-        let root = workspace_root()?;
-        let form = forms::get(&code)?
-            .ok_or_else(|| anyhow::anyhow!("`{code}` is not in the vendored forms registry"))?;
-        let map = load_reauthor_map(&root, form.object_path)?;
-
-        let blank = storage.get(form.object_path).await.map_err(|e| {
-            anyhow::anyhow!(
-                "pull `{}`: {e} — vendor the blank with `navigator forms sync`",
-                form.object_path
-            )
-        })?;
-        // The pin file wins over the compiled-in pin, exactly like
-        // `sync`, so a re-vendor earlier in this checkout verifies
-        // without a rebuild.
-        let local_blank = root
-            .join("templates")
-            .join("notations")
-            .join(form.object_path);
-        let pin_file = local_blank.with_extension("sha256");
-        let pinned = std::fs::read_to_string(&pin_file).map_or_else(
-            |_| form.pinned_sha256().to_string(),
-            |s| s.trim().to_string(),
-        );
-        forms::verify_sha256(&pinned, &blank.bytes)?;
-
-        let states = questionnaire_states(&root, form.object_path)?;
-        let reauthored = reauthor_bytes(&map, &blank.bytes, &states)?;
-
-        if let Some(parent) = local_blank.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&local_blank, &reauthored)?;
-        let mut manifest = pdf::field_names(&reauthored)?;
-        manifest.sort();
-        let manifest_path = local_blank.with_extension("fields");
-        std::fs::write(&manifest_path, manifest.join("\n") + "\n")?;
-
-        println!(
-            "navigator: forms re-author: `{code}` re-authored ({} fields)",
-            manifest.len()
-        );
-        println!("  working copy: {}", local_blank.display());
-        println!("  manifest:     {}", manifest_path.display());
-        println!("  next: fill the working copy with sample answers and visually QA it,");
-        println!("        then `navigator forms sync` to vendor + re-pin, and delete the");
-        println!("        `.fields.toml` this transform consumed.");
-        Ok(())
+        reauthor(storage.as_ref(), &workspace_root()?, &code).await
     })
+}
+
+/// The body of `navigator forms re-author`, against the checkout at `root`.
+async fn reauthor(storage: &dyn StorageService, root: &Path, code: &str) -> anyhow::Result<()> {
+    let form = forms::get(code)?
+        .ok_or_else(|| anyhow::anyhow!("`{code}` is not in the vendored forms registry"))?;
+    let map = load_reauthor_map(root, form.object_path)?;
+
+    let blank = storage.get(form.object_path).await.map_err(|e| {
+        anyhow::anyhow!(
+            "pull `{}`: {e} — vendor the blank with `navigator forms sync`",
+            form.object_path
+        )
+    })?;
+    // The pin file wins over the compiled-in pin, exactly like
+    // `sync`, so a re-vendor earlier in this checkout verifies
+    // without a rebuild.
+    let local_blank = root
+        .join("templates")
+        .join("notations")
+        .join(form.object_path);
+    let pin_file = local_blank.with_extension("sha256");
+    let pinned = std::fs::read_to_string(&pin_file).map_or_else(
+        |_| form.pinned_sha256().to_string(),
+        |s| s.trim().to_string(),
+    );
+    forms::verify_sha256(&pinned, &blank.bytes)?;
+
+    let states = questionnaire_states(root, form.object_path)?;
+    let reauthored = reauthor_bytes(&map, &blank.bytes, &states)?;
+
+    if let Some(parent) = local_blank.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&local_blank, &reauthored)?;
+    let mut manifest = pdf::field_names(&reauthored)?;
+    manifest.sort();
+    let manifest_path = local_blank.with_extension("fields");
+    std::fs::write(&manifest_path, manifest.join("\n") + "\n")?;
+
+    println!(
+        "navigator: forms re-author: `{code}` re-authored ({} fields)",
+        manifest.len()
+    );
+    println!("  working copy: {}", local_blank.display());
+    println!("  manifest:     {}", manifest_path.display());
+    println!("  next: fill the working copy with sample answers and visually QA it,");
+    println!("        then `navigator forms sync` to vendor + re-pin, and delete the");
+    println!("        `.fields.toml` this transform consumed.");
+    Ok(())
 }
 
 /// Load the `<code>.fields.toml` map beside a form's blank — the
@@ -333,6 +348,17 @@ where
     F: FnOnce(Arc<dyn StorageService>) -> Fut,
     Fut: std::future::Future<Output = anyhow::Result<()>>,
 {
+    with_assets_storage_from(what, bucket, |key| std::env::var(key).ok(), run)
+}
+
+/// [`with_assets_storage`] over an injected env lookup — the process
+/// environment in production, a fixed map in tests.
+fn with_assets_storage_from<E, F, Fut>(what: &str, bucket: Option<&str>, env: E, run: F) -> ExitCode
+where
+    E: Fn(&str) -> Option<String>,
+    F: FnOnce(Arc<dyn StorageService>) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>>,
+{
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -341,7 +367,6 @@ where
         }
     };
     runtime.block_on(async move {
-        let env = |key: &str| std::env::var(key).ok();
         // A `--bucket` names an object-store bucket, but the `fs` backend
         // writes to a local root and ignores bucket names — so honoring the
         // flag against `fs` would silently write to `./var/storage` and
@@ -493,10 +518,12 @@ async fn sync_one(storage: &dyn StorageService, item: &SyncItem) -> anyhow::Resu
 #[cfg(test)]
 mod tests {
     use super::{
-        assets_lookup, bucket_without_object_store, load_reauthor_map, reauthor_bytes, sync_one,
-        SyncItem, SyncOutcome,
+        assets_lookup, bucket_without_object_store, items_from_registry, load_reauthor_map,
+        print_fields, questionnaire_states, reauthor, reauthor_bytes, sync_all, sync_one,
+        tracked_manifest, with_assets_storage_from, workspace_root, SyncItem, SyncOutcome,
     };
     use cloud::StorageService;
+    use std::process::ExitCode;
 
     fn with_static_xfa(blank: &[u8]) -> Vec<u8> {
         let mut doc = lopdf::Document::load_mem(blank).expect("fixture parses");
@@ -934,5 +961,314 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let err = load_reauthor_map(root.path(), "forms/nv/state/x.pdf").unwrap_err();
         assert!(err.to_string().contains("already re-authored"), "{err:#}");
+    }
+
+    /// The working-copy path of a registry form under `root`.
+    fn working_copy(root: &std::path::Path, object_path: &str) -> std::path::PathBuf {
+        root.join("templates").join("notations").join(object_path)
+    }
+
+    #[test]
+    fn registry_items_resolve_working_copies_and_pins_under_the_checkout() {
+        let root = std::path::Path::new("/checkout");
+        let items = items_from_registry(root).expect("registry loads");
+        let registry = forms::registry().expect("registry loads");
+        assert_eq!(items.len(), registry.len());
+        for (item, form) in items.iter().zip(&registry) {
+            assert_eq!(item.code, form.code);
+            assert_eq!(item.object_path, form.object_path);
+            assert_eq!(item.local_blank, working_copy(root, form.object_path));
+            assert_eq!(item.pin_file, item.local_blank.with_extension("sha256"));
+            assert_eq!(item.pinned, form.pinned_sha256());
+        }
+    }
+
+    #[test]
+    fn the_workspace_root_is_the_ancestor_carrying_the_forms_directory() {
+        // Tests run from inside the checkout, so the walk finds its root.
+        let root = workspace_root().expect("tests run inside the checkout");
+        assert!(root.join("templates/notations/forms").is_dir());
+    }
+
+    #[test]
+    fn questionnaire_states_drop_the_begin_and_end_sentinels() {
+        let root = tempfile::tempdir().unwrap();
+        let md = working_copy(root.path(), "forms/nv/state/x.md");
+        std::fs::create_dir_all(md.parent().unwrap()).unwrap();
+        std::fs::write(
+            &md,
+            "---\ntitle: X\nquestionnaire:\n  BEGIN: {}\n  entity__company: {}\n  \
+             people__managing_members: {}\n  END: {}\n---\nBody\n",
+        )
+        .unwrap();
+        let states = questionnaire_states(root.path(), "forms/nv/state/x.pdf").unwrap();
+        assert_eq!(states, ["entity__company", "people__managing_members"]);
+    }
+
+    #[test]
+    fn questionnaire_states_refuse_a_missing_or_frontmatterless_notation() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = questionnaire_states(root.path(), "forms/nv/state/x.pdf").unwrap_err();
+        assert!(missing.to_string().contains("read notation"), "{missing:#}");
+
+        let md = working_copy(root.path(), "forms/nv/state/x.md");
+        std::fs::create_dir_all(md.parent().unwrap()).unwrap();
+        std::fs::write(&md, "no frontmatter here\n").unwrap();
+        let bare = questionnaire_states(root.path(), "forms/nv/state/x.pdf").unwrap_err();
+        assert!(bare.to_string().contains("frontmatter block"), "{bare:#}");
+
+        std::fs::write(&md, "---\ntitle: X\n---\nBody\n").unwrap();
+        let unparsed = questionnaire_states(root.path(), "forms/nv/state/x.pdf").unwrap_err();
+        assert!(
+            unparsed.to_string().contains("parse frontmatter"),
+            "{unparsed:#}"
+        );
+    }
+
+    #[test]
+    fn a_form_without_a_sibling_manifest_falls_back_to_the_compiled_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let synthetic = item(dir.path(), None, "");
+        assert_eq!(
+            tracked_manifest(&synthetic),
+            None,
+            "an unregistered form has no compiled manifest"
+        );
+        std::fs::write(synthetic.local_blank.with_extension("fields"), "a\n\nb\n").unwrap();
+        assert_eq!(
+            tracked_manifest(&synthetic),
+            Some(vec!["a".to_string(), "b".to_string()]),
+            "the sibling file wins and blank lines are not names"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_all_vendors_every_working_copy_then_verifies_without_them() {
+        let storage = fs_storage("sync-all").await;
+        let root = tempfile::tempdir().unwrap();
+        let blank = pdf::blank_acroform(&["entity__company.name"]);
+        let items = items_from_registry(root.path()).unwrap();
+        for it in &items {
+            std::fs::create_dir_all(it.local_blank.parent().unwrap()).unwrap();
+            std::fs::write(&it.local_blank, &blank).unwrap();
+            std::fs::write(
+                it.local_blank.with_extension("fields"),
+                "entity__company.name\n",
+            )
+            .unwrap();
+        }
+
+        sync_all(&storage, root.path())
+            .await
+            .expect("first run vendors");
+        for it in &items {
+            assert!(
+                storage.exists(&it.object_path).await.unwrap(),
+                "{}",
+                it.code
+            );
+            assert_eq!(
+                std::fs::read_to_string(&it.pin_file).unwrap().trim(),
+                forms::sha256_hex(&blank)
+            );
+        }
+        // Idempotent with the working copies still present.
+        sync_all(&storage, root.path())
+            .await
+            .expect("second run is a no-op");
+
+        // Without the working copies every bucket object verifies against
+        // the pin file the first run wrote.
+        for it in &items {
+            std::fs::remove_file(&it.local_blank).unwrap();
+        }
+        sync_all(&storage, root.path())
+            .await
+            .expect("bucket objects verify against their rewritten pins");
+    }
+
+    #[tokio::test]
+    async fn sync_all_stops_at_the_first_form_whose_blank_is_missing() {
+        let storage = fs_storage("sync-all-missing").await;
+        let root = tempfile::tempdir().unwrap();
+        let err = sync_all(&storage, root.path()).await.unwrap_err();
+        assert!(err.to_string().contains("no working copy"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn fields_refuses_unknown_codes_missing_blanks_and_pin_mismatches() {
+        let storage = fs_storage("fields").await;
+        let unknown = print_fields(&storage, "zz__not_a_form").await.unwrap_err();
+        assert!(
+            unknown
+                .to_string()
+                .contains("not in the vendored forms registry"),
+            "{unknown:#}"
+        );
+
+        let form = forms::registry().unwrap().remove(0);
+        let missing = print_fields(&storage, form.code).await.unwrap_err();
+        assert!(
+            missing.to_string().contains("navigator forms sync"),
+            "{missing:#}"
+        );
+
+        storage
+            .put(form.object_path, b"not the pinned blank", "application/pdf")
+            .await
+            .unwrap();
+        assert!(print_fields(&storage, form.code).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reauthor_writes_the_working_copy_and_its_sorted_manifest() {
+        let storage = fs_storage("reauthor").await;
+        let root = tempfile::tempdir().unwrap();
+        let form = forms::registry().unwrap().remove(0);
+        let local_blank = working_copy(root.path(), form.object_path);
+        std::fs::create_dir_all(local_blank.parent().unwrap()).unwrap();
+
+        let blank = pdf::blank_acroform(&["1 Name of Entity", "City", "formation_1"]);
+        storage
+            .put(form.object_path, &blank, "application/pdf")
+            .await
+            .unwrap();
+        // A pin file in the checkout wins over the compiled-in pin.
+        std::fs::write(
+            local_blank.with_extension("sha256"),
+            format!("{}\n", forms::sha256_hex(&blank)),
+        )
+        .unwrap();
+        std::fs::write(
+            local_blank.with_extension("fields.toml"),
+            "form_code = \"x\"\n[[field]]\nname = \"formation_1\"\nliteral = \"NRS 86\"\n\
+             [[field]]\nname = \"1 Name of Entity\"\nquestion = \"entity__company.name\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            working_copy(root.path(), &form.object_path.replace(".pdf", ".md")),
+            "---\nquestionnaire:\n  BEGIN: {}\n  entity__company: {}\n  END: {}\n---\n",
+        )
+        .unwrap();
+
+        reauthor(&storage, root.path(), form.code)
+            .await
+            .expect("re-author succeeds");
+
+        let reauthored = std::fs::read(&local_blank).expect("working copy written");
+        let manifest = std::fs::read_to_string(local_blank.with_extension("fields")).unwrap();
+        let mut names = pdf::field_names(&reauthored).unwrap();
+        names.sort();
+        assert_eq!(manifest, names.join("\n") + "\n");
+        assert!(manifest.contains("entity__company.name"), "{manifest}");
+        assert!(manifest.contains("unmapped__City"), "{manifest}");
+    }
+
+    #[tokio::test]
+    async fn reauthor_refuses_unknown_codes_missing_maps_and_unpinned_blanks() {
+        let storage = fs_storage("reauthor-refusals").await;
+        let root = tempfile::tempdir().unwrap();
+        let unknown = reauthor(&storage, root.path(), "zz__not_a_form")
+            .await
+            .unwrap_err();
+        assert!(
+            unknown.to_string().contains("not in the vendored"),
+            "{unknown:#}"
+        );
+
+        let form = forms::registry().unwrap().remove(0);
+        let no_map = reauthor(&storage, root.path(), form.code)
+            .await
+            .unwrap_err();
+        assert!(
+            no_map.to_string().contains("already re-authored"),
+            "{no_map:#}"
+        );
+
+        let local_blank = working_copy(root.path(), form.object_path);
+        std::fs::create_dir_all(local_blank.parent().unwrap()).unwrap();
+        std::fs::write(
+            local_blank.with_extension("fields.toml"),
+            "form_code = \"x\"\n[[field]]\nname = \"f\"\nliteral = \"L\"\n",
+        )
+        .unwrap();
+        let no_blank = reauthor(&storage, root.path(), form.code)
+            .await
+            .unwrap_err();
+        assert!(
+            no_blank.to_string().contains("navigator forms sync"),
+            "{no_blank:#}"
+        );
+
+        storage
+            .put(form.object_path, b"not the pinned blank", "application/pdf")
+            .await
+            .unwrap();
+        assert!(reauthor(&storage, root.path(), form.code).await.is_err());
+        assert!(!local_blank.exists(), "a refused blank is never written");
+    }
+
+    fn lookup(vars: &[(&str, String)]) -> impl Fn(&str) -> Option<String> {
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), v.clone()))
+            .collect();
+        move |key: &str| vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn a_bucket_flag_against_the_fs_backend_never_opens_storage() {
+        let env = lookup(&[("NAVIGATOR_STORAGE_BACKEND", "fs".to_string())]);
+        let mut ran = false;
+        let code = with_assets_storage_from("forms sync", Some("named-bucket"), env, |_| {
+            ran = true;
+            async { Ok(()) }
+        });
+        assert_eq!(code, ExitCode::from(2));
+        assert!(!ran, "the contradiction is refused before any work runs");
+    }
+
+    #[test]
+    fn an_unset_storage_backend_is_refused_before_any_work_runs() {
+        let mut ran = false;
+        let code = with_assets_storage_from("forms sync", None, lookup(&[]), |_| {
+            ran = true;
+            async { Ok(()) }
+        });
+        assert_eq!(code, ExitCode::from(2));
+        assert!(!ran);
+    }
+
+    #[test]
+    fn the_fs_backend_runs_the_command_and_maps_its_result_to_an_exit_code() {
+        let root = tempfile::tempdir().unwrap();
+        let env = || {
+            lookup(&[
+                ("NAVIGATOR_STORAGE_BACKEND", "fs".to_string()),
+                (
+                    "NAVIGATOR_STORAGE_FS_ROOT",
+                    root.path().display().to_string(),
+                ),
+            ])
+        };
+        let ok = with_assets_storage_from("forms sync", None, env(), |storage| async move {
+            storage
+                .put("forms/probe.pdf", b"%PDF", "application/pdf")
+                .await?;
+            Ok(())
+        });
+        assert_eq!(ok, ExitCode::SUCCESS);
+        // A second command over the same lookup sees the object the first
+        // one wrote: both opened the same configured root.
+        let reread = with_assets_storage_from("forms sync", None, env(), |storage| async move {
+            anyhow::ensure!(storage.exists("forms/probe.pdf").await?, "object missing");
+            Ok(())
+        });
+        assert_eq!(reread, ExitCode::SUCCESS);
+
+        let failed = with_assets_storage_from("forms sync", None, env(), |_| async {
+            anyhow::bail!("synthetic failure")
+        });
+        assert_eq!(failed, ExitCode::from(2));
     }
 }
