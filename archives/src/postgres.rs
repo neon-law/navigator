@@ -96,6 +96,8 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "document_upload_session",
     "notation",
     "notation_event",
+    "notation_machine_state",
+    "notation_transition",
     "notation_clause",
     "attestation",
     "answer",

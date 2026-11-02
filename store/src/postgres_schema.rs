@@ -1285,8 +1285,16 @@ mod tests {
                 ),
             ),
             (
+                "20261101140000_create_notation_machine_state.sql",
+                include_str!("../postgres/migrations/20261101140000_create_notation_machine_state.sql"),
+            ),
+            (
                 "20261101170000_create_ssh_public_key.sql",
                 include_str!("../postgres/migrations/20261101170000_create_ssh_public_key.sql"),
+            ),
+            (
+                "20261101210000_create_notation_transition.sql",
+                include_str!("../postgres/migrations/20261101210000_create_notation_transition.sql"),
             ),
         ])
         .expect("timestamped migration assembles");
