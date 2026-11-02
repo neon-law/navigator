@@ -23,6 +23,37 @@ use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
 
+/// The wire shape for a Time Entry: flat lowercase words for `source` and
+/// `billing_status` (the store's `as_str`, the same convention as the
+/// project-costs API), with the status's evidence column alongside — never
+/// the store's internally-tagged serde enums.
+fn entry_view(row: &time_entries::TimeEntry) -> serde_json::Value {
+    let mut view = serde_json::json!({
+        "id": row.id,
+        "project_id": row.project_id,
+        "attorney_id": row.attorney_id,
+        "performed_on": row.performed_on,
+        "minutes": row.minutes,
+        "description": row.description,
+        "billable": row.billable,
+        "rate_cents_per_hour": row.rate_cents_per_hour,
+        "source": row.source.as_str(),
+        "billing_status": row.billing_status.as_str(),
+        "inserted_at": row.inserted_at,
+        "updated_at": row.updated_at,
+    });
+    match &row.billing_status {
+        time_entries::BillingStatus::Invoiced { xero_invoice_id } => {
+            view["xero_invoice_id"] = serde_json::json!(xero_invoice_id);
+        }
+        time_entries::BillingStatus::WrittenOff { reason } => {
+            view["written_off_reason"] = serde_json::json!(reason);
+        }
+        time_entries::BillingStatus::Unbilled => {}
+    }
+    view
+}
+
 fn refused(status: StatusCode) -> Response {
     (
         status,
@@ -232,7 +263,10 @@ pub(crate) async fn list_entries(
         Err(response) => return Ok(response),
     };
     match time_entries::list_for_project(&pg, project_id).await {
-        Ok(rows) => Ok(Json(serde_json::json!({"time_entries": rows})).into_response()),
+        Ok(rows) => Ok(Json(serde_json::json!({
+            "time_entries": rows.iter().map(entry_view).collect::<Vec<_>>()
+        }))
+        .into_response()),
         Err(e) => Ok(entry_error(&e, "list_entries", project_id, None)),
     }
 }
@@ -274,7 +308,7 @@ pub(crate) async fn create_entry(
         source: time_entries::TimeEntrySource::Manual,
     };
     match time_entries::create(&pg, project_id, actor_id, &entry).await {
-        Ok(row) => Ok((StatusCode::CREATED, Json(row)).into_response()),
+        Ok(row) => Ok((StatusCode::CREATED, Json(entry_view(&row))).into_response()),
         Err(e) => Ok(entry_error(&e, "create_entry", project_id, None)),
     }
 }
@@ -309,7 +343,7 @@ pub(crate) async fn mark_invoiced(
         return Err(ApiError::NotFound);
     }
     match time_entries::mark_invoiced(&pg, &[entry_id], actor_id, &input.xero_invoice_id).await {
-        Ok(mut rows) => Ok(Json(rows.remove(0)).into_response()),
+        Ok(mut rows) => Ok(Json(entry_view(&rows.remove(0))).into_response()),
         Err(e) => Ok(entry_error(&e, "mark_invoiced", project_id, Some(entry_id))),
     }
 }
@@ -343,7 +377,7 @@ pub(crate) async fn write_off(
         return Err(ApiError::NotFound);
     }
     match time_entries::write_off(&pg, entry_id, actor_id, &input.reason).await {
-        Ok(row) => Ok(Json(row).into_response()),
+        Ok(row) => Ok(Json(entry_view(&row)).into_response()),
         Err(e) => Ok(entry_error(&e, "write_off", project_id, Some(entry_id))),
     }
 }
@@ -461,7 +495,7 @@ pub(crate) async fn stop_timer(
         source: time_entries::TimeEntrySource::Timer,
     };
     match timers::stop_timer(&pg, timer.id, actor_id, entry).await {
-        Ok(captured) => Ok(Json(captured).into_response()),
+        Ok(captured) => Ok(Json(entry_view(&captured)).into_response()),
         Err(e) => Ok(timer_error(&e, "stop_timer", project_id)),
     }
 }
