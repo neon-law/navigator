@@ -778,6 +778,7 @@ mod tests {
             signature_provider: app.signature_provider,
             contract_reviewer: app.contract_reviewer,
             integration_providers: app.integration_providers,
+            billing_provider: app.billing_provider.clone(),
             canonical_base_url: None,
         };
         let actor = SessionData {

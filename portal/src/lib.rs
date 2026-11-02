@@ -104,6 +104,7 @@ pub(crate) mod lawyer_mailbox;
 pub(crate) mod matter_caption_api;
 pub(crate) mod module_records_api;
 pub(crate) mod pages_api;
+pub(crate) mod project_billing_api;
 pub(crate) mod project_costs_api;
 pub(crate) mod project_stage_forms;
 pub(crate) mod project_stages_api;
@@ -925,6 +926,7 @@ pub fn bootstrap_with_forgejo_oidc(
                 signature_provider: state.signature_provider.clone(),
                 contract_reviewer: state.contract_reviewer.clone(),
                 integration_providers: state.integration_providers.clone(),
+                billing_provider: state.billing_provider.clone(),
                 canonical_base_url: state.canonical_host.host().map(str::to_string),
             })
             .layer(axum::middleware::from_fn_with_state(

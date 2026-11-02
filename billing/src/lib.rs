@@ -389,6 +389,14 @@ impl BillingProvider for StubBillingProvider {
             matter_id,
             request: request.clone(),
         });
+        // The trait contract — the same `matter_id` never creates two
+        // invoices — holds under retries: every attempt is recorded, but a
+        // replay re-mints the first attempt's id, the way Xero honours the
+        // `Idempotency-Key` header for 24h.
+        let seq = calls
+            .iter()
+            .position(|call| call.matter_id == matter_id)
+            .map_or(seq, |first| first + 1);
         Ok(InvoiceId(format!("stub-invoice-{matter_id}-{seq}")))
     }
 
@@ -1435,6 +1443,25 @@ mod tests {
         assert_eq!(calls[0].matter_id, ID42);
         // The request threads through verbatim so the step can assert it.
         assert_eq!(calls[0].request, estate_invoice());
+    }
+
+    #[tokio::test]
+    async fn stub_create_invoice_is_idempotent_per_matter() {
+        let stub = StubBillingProvider::new();
+        let first = stub
+            .create_invoice(ID42, &estate_invoice())
+            .await
+            .expect("stub never errors");
+        let retry = stub.create_invoice(ID42, &estate_invoice()).await.unwrap();
+        let other = stub.create_invoice(ID1, &estate_invoice()).await.unwrap();
+
+        // A retry re-mints the first invoice's id — the same matter never
+        // creates two invoices — while a different matter does.
+        assert_eq!(retry, first, "a retry re-mints the same invoice id");
+        assert_ne!(other, first, "another matter gets its own invoice");
+
+        // Every attempt is still recorded, so a test can count retries.
+        assert_eq!(stub.calls().len(), 3);
     }
 
     #[tokio::test]

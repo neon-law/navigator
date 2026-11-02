@@ -376,6 +376,22 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Matter invoice generation: POST /app/api/projects/{id}/invoices — the
+# command that raises one Xero invoice across the billing provider seam from
+# the matter's unbilled work. Lawyer tier, the same gate the `LawyerSession`
+# extractor applies; the handler resolves `store::access::matter_viewer` and
+# answers 404 for a caller with no firm-side participation row, Owner and
+# Admin included.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "invoices"
+    count(input.path) == 5
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
 # Matter tasks: the Tasks tab's write surface. GET (list) and POST (create)
 # at /app/api/projects/{id}/tasks, and POST .../tasks/{task_id}/{assign,
 # transition}. Lawyer tier, the same gate the `LawyerSession` extractor
