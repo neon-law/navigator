@@ -335,8 +335,13 @@ async fn a_timer_runs_stops_and_captures_its_entry() {
     let timer_path = format!("/app/api/projects/{}/timer", fx.project_id);
 
     // Start: the durable row exists immediately.
-    let resp = post(&fx, &timer_path, Some(&fx.lawyer), json!({"note": "discovery"}))
-        .await;
+    let resp = post(
+        &fx,
+        &timer_path,
+        Some(&fx.lawyer),
+        json!({"note": "discovery"}),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::CREATED);
     let timer = body_json(resp).await;
     assert_eq!(
@@ -365,7 +370,10 @@ async fn a_timer_runs_stops_and_captures_its_entry() {
     assert_eq!(resp.status(), StatusCode::OK);
     let captured = body_json(resp).await;
     assert_eq!(captured["source"], "timer");
-    assert_eq!(captured["rate_cents_per_hour"], 25_000, "the rate is the firm default");
+    assert_eq!(
+        captured["rate_cents_per_hour"], 25_000,
+        "the rate is the firm default"
+    );
     assert!(
         captured["minutes"].as_i64().unwrap() >= 1,
         "a stop records at least one minute"
@@ -409,7 +417,11 @@ async fn a_second_open_timer_is_a_conflict() {
     let resp = post(&fx, &second, Some(&fx.lawyer), json!({})).await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
     let read = body_json(get(&fx, &first, Some(&fx.lawyer)).await);
-    assert_ne!(read["timer"], serde_json::Value::Null, "the first timer stands");
+    assert_ne!(
+        read["timer"],
+        serde_json::Value::Null,
+        "the first timer stands"
+    );
 }
 
 #[tokio::test]
@@ -424,7 +436,13 @@ async fn discard_records_nothing() {
     assert_eq!(resp.status(), StatusCode::CREATED);
     let timer = body_json(resp).await;
 
-    let resp = post(&fx, &format!("{timer_path}/discard"), Some(&fx.lawyer), json!({})).await;
+    let resp = post(
+        &fx,
+        &format!("{timer_path}/discard"),
+        Some(&fx.lawyer),
+        json!({}),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     let read = body_json(get(&fx, &timer_path, Some(&fx.lawyer)).await);
     assert_eq!(read["timer"], serde_json::Value::Null);
@@ -441,7 +459,11 @@ async fn discard_records_nothing() {
         .unwrap()
         .clone();
     assert!(entries.is_empty(), "a discarded timer never bills");
-    assert_ne!(timer["id"], serde_json::Value::Null, "the timer had existed");
+    assert_ne!(
+        timer["id"],
+        serde_json::Value::Null,
+        "the timer had existed"
+    );
 }
 
 #[tokio::test]
@@ -517,30 +539,57 @@ async fn billing_status_transitions_are_audited_and_terminal() {
 
     let invoiced = log_entry(&fx, fx.project_id, 60, true).await;
     assert_eq!(invoiced.status(), StatusCode::CREATED);
-    let entry_id: Uuid =
-        body_json(invoiced).await["id"].as_str().unwrap().parse().unwrap();
-    let invoice_path =
-        format!("/app/api/projects/{}/time-entries/{entry_id}/invoice", fx.project_id);
+    let entry_id: Uuid = body_json(invoiced).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let invoice_path = format!(
+        "/app/api/projects/{}/time-entries/{entry_id}/invoice",
+        fx.project_id
+    );
 
     // The entry flips to invoiced under the Xero invoice that carries it.
-    let resp = post(&fx, &invoice_path, Some(&fx.lawyer), json!({"xero_invoice_id": "INV-17"}))
-        .await;
+    let resp = post(
+        &fx,
+        &invoice_path,
+        Some(&fx.lawyer),
+        json!({"xero_invoice_id": "INV-17"}),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body_json(resp).await["billing_status"], "invoiced");
 
     // The replay of the same invoice is a no-op; a different invoice on the
     // same entry is a conflict — it would misstate which invoice billed it.
-    let resp = post(&fx, &invoice_path, Some(&fx.lawyer), json!({"xero_invoice_id": "INV-17"}))
-        .await;
-    assert_eq!(resp.status(), StatusCode::OK, "the same invoice replays as a no-op");
-    let resp = post(&fx, &invoice_path, Some(&fx.lawyer), json!({"xero_invoice_id": "INV-18"}))
-        .await;
+    let resp = post(
+        &fx,
+        &invoice_path,
+        Some(&fx.lawyer),
+        json!({"xero_invoice_id": "INV-17"}),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "the same invoice replays as a no-op"
+    );
+    let resp = post(
+        &fx,
+        &invoice_path,
+        Some(&fx.lawyer),
+        json!({"xero_invoice_id": "INV-18"}),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
 
     // A resolved entry never reopens: the write-off is refused.
     let resp = post(
         &fx,
-        &format!("/app/api/projects/{}/time-entries/{entry_id}/write-off", fx.project_id),
+        &format!(
+            "/app/api/projects/{}/time-entries/{entry_id}/write-off",
+            fx.project_id
+        ),
         Some(&fx.lawyer),
         json!({"reason": "Clerical error"}),
     )
@@ -549,10 +598,17 @@ async fn billing_status_transitions_are_audited_and_terminal() {
 
     // A fresh entry writes off cleanly, keeping its reason.
     let written = log_entry(&fx, fx.project_id, 15, true).await;
-    let written_id: Uuid = body_json(written).await["id"].as_str().unwrap().parse().unwrap();
+    let written_id: Uuid = body_json(written).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
     let resp = post(
         &fx,
-        &format!("/app/api/projects/{}/time-entries/{written_id}/write-off", fx.project_id),
+        &format!(
+            "/app/api/projects/{}/time-entries/{written_id}/write-off",
+            fx.project_id
+        ),
         Some(&fx.lawyer),
         json!({"reason": "Absorbed into the flat fee"}),
     )
@@ -571,7 +627,11 @@ async fn another_matters_time_is_hidden() {
 
     let resp = log_entry(&fx, fx.project_id, 60, true).await;
     assert_eq!(resp.status(), StatusCode::CREATED);
-    let entry_id: Uuid = body_json(resp).await["id"].as_str().unwrap().parse().unwrap();
+    let entry_id: Uuid = body_json(resp).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
 
     // The lawyer is on both matters, but the entry belongs to the first:
     // naming it under the second matter's URL is the non-disclosing 404.
@@ -626,44 +686,68 @@ async fn non_participants_are_hidden() {
     // A lawyer without a participation row: 404, the matter does not exist
     // for them — never a 403 naming it.
     assert_eq!(
-        post(&fx, &entries_path, Some(&fx.outsider), json!({
-            "attorney_id": fx.attorney_id,
-            "performed_on": "2026-11-01",
-            "minutes": 30,
-            "description": "Sneak",
-            "billable": true
-        }))
+        post(
+            &fx,
+            &entries_path,
+            Some(&fx.outsider),
+            json!({
+                "attorney_id": fx.attorney_id,
+                "performed_on": "2026-11-01",
+                "minutes": 30,
+                "description": "Sneak",
+                "billable": true
+            })
+        )
         .await
         .status(),
         StatusCode::NOT_FOUND
     );
-    assert_eq!(get(&fx, &entries_path, Some(&fx.outsider)).await.status(), StatusCode::NOT_FOUND);
     assert_eq!(
-        post(&fx, &timer_path, Some(&fx.outsider), json!({})).await.status(),
+        get(&fx, &entries_path, Some(&fx.outsider)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        post(&fx, &timer_path, Some(&fx.outsider), json!({}))
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
 
     // A client-side participant is not lawyer tier: route admission refuses
     // before the matter question is ever asked.
     assert_eq!(
-        post(&fx, &entries_path, Some(&fx.client), json!({
-            "attorney_id": fx.attorney_id,
-            "performed_on": "2026-11-01",
-            "minutes": 30,
-            "description": "Sneak",
-            "billable": true
-        }))
+        post(
+            &fx,
+            &entries_path,
+            Some(&fx.client),
+            json!({
+                "attorney_id": fx.attorney_id,
+                "performed_on": "2026-11-01",
+                "minutes": 30,
+                "description": "Sneak",
+                "billable": true
+            })
+        )
         .await
         .status(),
         StatusCode::FORBIDDEN
     );
-    assert_eq!(get(&fx, &entries_path, Some(&fx.client)).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        get(&fx, &entries_path, Some(&fx.client)).await.status(),
+        StatusCode::FORBIDDEN
+    );
 
     // A clerk is the same refusal.
-    assert_eq!(get(&fx, &timer_path, Some(&fx.clerk)).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        get(&fx, &timer_path, Some(&fx.clerk)).await.status(),
+        StatusCode::FORBIDDEN
+    );
 
     // No session at all: unauthorized.
-    assert_eq!(get(&fx, &entries_path, None).await.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        get(&fx, &entries_path, None).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
@@ -675,16 +759,32 @@ async fn the_flat_fee_door_round_trips() {
     let fee_path = format!("/app/api/projects/{}/flat-fee", fx.project_id);
 
     let read = body_json(get(&fx, &fee_path, Some(&fx.lawyer)).await);
-    assert_eq!(read["fee_cents"], serde_json::Value::Null, "no fee is set yet");
+    assert_eq!(
+        read["fee_cents"],
+        serde_json::Value::Null,
+        "no fee is set yet"
+    );
 
-    let resp = post(&fx, &fee_path, Some(&fx.lawyer), json!({"fee_cents": 150_000})).await;
+    let resp = post(
+        &fx,
+        &fee_path,
+        Some(&fx.lawyer),
+        json!({"fee_cents": 150_000}),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let read = body_json(get(&fx, &fee_path, Some(&fx.lawyer)).await);
     assert_eq!(read["fee_cents"], 150_000);
 
     // Replacing the figure is the whole edit surface; captured invoices are
     // unaffected.
-    let resp = post(&fx, &fee_path, Some(&fx.lawyer), json!({"fee_cents": 175_000})).await;
+    let resp = post(
+        &fx,
+        &fee_path,
+        Some(&fx.lawyer),
+        json!({"fee_cents": 175_000}),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let read = body_json(get(&fx, &fee_path, Some(&fx.lawyer)).await);
     assert_eq!(read["fee_cents"], 175_000);
@@ -713,7 +813,11 @@ async fn the_entry_list_is_newest_work_first() {
             }),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::CREATED, "the entry for {date} lands");
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "the entry for {date} lands"
+        );
     }
 
     // Newest work first, whatever order the rows were written in.
@@ -723,7 +827,11 @@ async fn the_entry_list_is_newest_work_first() {
         .clone();
     let dates: Vec<&str> = entries
         .iter()
-        .map(|entry| entry["performed_on"].as_str().expect("each row dates its work"))
+        .map(|entry| {
+            entry["performed_on"]
+                .as_str()
+                .expect("each row dates its work")
+        })
         .collect();
     assert_eq!(dates, vec!["2026-11-01", "2026-10-31", "2026-10-30"]);
 }

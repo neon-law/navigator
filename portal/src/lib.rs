@@ -105,11 +105,11 @@ pub(crate) mod module_records_api;
 pub(crate) mod pages_api;
 pub(crate) mod project_costs_api;
 pub(crate) mod project_tasks_api;
-pub(crate) mod time_tracking_api;
 pub(crate) mod recovery_archives_api;
 pub(crate) mod service_api;
 pub mod site_brand;
 pub(crate) mod source_imports_api;
+pub(crate) mod time_tracking_api;
 // The billing-provider seam moved to the `billing` crate so the
 // worker-side `billing-workflows` can share it. Re-exported here so
 // existing `portal::billing` / `portal::xero_auth` paths keep resolving.
