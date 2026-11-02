@@ -4256,7 +4256,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let sam = person(&db, "Sam Texter", "sam.texter@example.com", Role::Client).await;
+        let sam = person(
+            &db,
+            "synthetic contact",
+            "sam.texter@example.com",
+            Role::Client,
+        )
+        .await;
         link_contact_phone(
             &db,
             world.owner,
@@ -4332,7 +4338,7 @@ mod tests {
         let saved = ingest_inbound(&db, &incoming).await.unwrap();
         let sender = person(
             &db,
-            "Identity Sender",
+            "synthetic sender",
             "identity-sender@example.com",
             Role::Client,
         )

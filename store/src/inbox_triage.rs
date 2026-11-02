@@ -1921,7 +1921,7 @@ mod tests {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Scope Owner", Role::Owner).await;
-        let lawyer = person(&db, "Unassigned Reviewer", Role::Lawyer).await;
+        let lawyer = person(&db, "synthetic reviewer", Role::Lawyer).await;
         member(&db, lawyer, firm, FirmMembership::Lawyer).await;
         let project = seed_project(&db, firm, "Restricted Review Matter").await;
         let (row, message) =

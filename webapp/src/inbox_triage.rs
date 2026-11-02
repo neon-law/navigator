@@ -292,18 +292,18 @@ mod tests {
         TriageRowView {
             triage_id: "019a0000-0000-7000-8000-000000000001".into(),
             conversation_href: "/app/inbox/019a0000-0000-7000-8000-0000000000aa".into(),
-            sender: "Marta Rivera".into(),
+            sender: "synthetic sender".into(),
             channel: "email".into(),
             brand: "neon".into(),
             privilege: "uncertain".into(),
             privilege_confidence: None,
             disposition: "needs human".into(),
-            suggested_project: Some("Rivera Estate".into()),
+            suggested_project: Some("Synthetic Project".into()),
             project_confidence: Some("0.82".into()),
             rationale: Some("The sender references an ongoing trust.".into()),
             projects: vec![ProjectChoiceView {
                 id: "019a0000-0000-7000-8000-0000000000bb".into(),
-                name: "Rivera Estate".into(),
+                name: "Synthetic Project".into(),
             }],
             confirm_action: Some(
                 "/app/inbox/019a0000-0000-7000-8000-0000000000aa/triage/019a0000-0000-7000-8000-000000000001/confirm/019a0000-0000-7000-8000-0000000000bb"
@@ -333,10 +333,10 @@ mod tests {
         let html = dioxus_ssr::render_element(triage_queue_body(&page(vec![row()])));
         crate::components::form::assert_forms_accessible(&html, "triage review");
         for expected in [
-            "Marta Rivera",
+            "synthetic sender",
             "neon",
             "uncertain",
-            "Suggested project: Rivera Estate · confidence 0.82",
+            "Suggested project: Synthetic Project · confidence 0.82",
             "The sender references an ongoing trust.",
             "/triage/019a0000-0000-7000-8000-000000000001/confirm/019a0000-0000-7000-8000-0000000000bb",
             "/triage/019a0000-0000-7000-8000-000000000001/override",

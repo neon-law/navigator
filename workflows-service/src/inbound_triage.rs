@@ -2,8 +2,8 @@
 //!
 //! Social messages bypass hosted classification. Explicitly public posts are
 //! not privileged; private or unknown visibility waits for human review.
-//! Client email and SMS may consult
-//! Gemini Flash-Lite through the shared Vertex path; its verdict can only
+//! Client email and SMS may consult the configured classifier through the shared
+//! Vertex path. Its verdict can only
 //! flag a message privileged or leave it uncertain for a person — automation
 //! never labels client email not privileged. Every failure — a provider
 //! outage, a timeout, malformed output — still records an auditable row at
