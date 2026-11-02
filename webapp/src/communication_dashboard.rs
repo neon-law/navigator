@@ -135,7 +135,7 @@ pub fn communications_body(page: &CommunicationsPage) -> Element {
             if page.role.is_admin_tier() {
                 form { method:"get", action:BRAND_COMMUNICATIONS_PATH,
                     label { r#for:"communications-brand", "Brand" }
-                    select { id:"communications-brand", name:"brand", required:true,
+                    select { class: "nav-select", id:"communications-brand", name:"brand", required:true,
                         option { value:"", "Choose a Brand" }
                         for brand in &page.brands {
                             option {
@@ -145,7 +145,7 @@ pub fn communications_body(page: &CommunicationsPage) -> Element {
                             }
                         }
                     }
-                    button { r#type:"submit", "View communications" }
+                    button { class: "nav-btn nav-btn--primary", r#type:"submit", "View communications" }
                 }
             }
             if let Some(report)=&page.report {
