@@ -4951,31 +4951,54 @@ mod tests {
 
     #[tokio::test]
     async fn a_tiktok_publish_without_a_task_receipt_is_unknown_and_never_resent() {
-        let result = start_tiktok_case(
-            "tiktok-no-receipt",
-            |_| {},
-            |_, _| {},
-            vec![
-                ("settings", tiktok_public_settings()),
-                ("property", ResponseTemplate::new(200)),
-                (
-                    "/tiktok/business/video/publish/",
-                    json(serde_json::json!({"code": 0, "data": {"share_id": "  "}})),
-                ),
-            ],
-        )
-        .await;
-        assert!(matches!(&result.0, Step::Settled(outcome) if outcome.state == UNKNOWN));
-        assert_eq!(result.1.state, UNKNOWN);
-        assert!(result.1.provider_task_id.is_none());
-        assert_eq!(
-            result
-                .2
+        let fixture = Fixture::new("tiktok-no-receipt").await;
+        let server = MockServer::start().await;
+        let mut snapshot = post(true);
+        snapshot.tiktok_ai_generated = Some(false);
+        let id = tiktok_fixture(&fixture, &snapshot).await;
+        mount_tiktok_settings(&server, tiktok_public_settings()).await;
+        mount_tiktok_property(&server).await;
+        Mock::given(matchers::path("/tiktok/business/video/publish/"))
+            .respond_with(json(
+                serde_json::json!({"code": 0, "data": {"share_id": "  "}}),
+            ))
+            .mount(&server)
+            .await;
+        let publisher = fixture.publisher(&server, allowed());
+        let target = destination(SocialProvider::Tiktok);
+        let publish_count = || async {
+            server
+                .received_requests()
+                .await
+                .unwrap()
                 .iter()
                 .filter(|request| request.method == "POST")
-                .count(),
-            1
+                .count()
+        };
+
+        assert!(matches!(
+            publisher.prepare(id, &snapshot, &target).await.unwrap(),
+            Step::Continue(())
+        ));
+        let step = publisher
+            .start_tiktok(id, &snapshot, &target)
+            .await
+            .unwrap();
+        assert!(matches!(&step, Step::Settled(outcome) if outcome.state == UNKNOWN));
+        let publication = fixture.publication(id).await;
+        assert_eq!(publication.state, UNKNOWN);
+        assert!(publication.provider_task_id.is_none());
+        assert_eq!(publish_count().await, 1);
+
+        // A retry of the same Post re-enters through `prepare`, which must
+        // settle the uncertain publication as UNKNOWN rather than resend it.
+        let retried = publisher.prepare(id, &snapshot, &target).await.unwrap();
+        assert!(
+            matches!(&retried, Step::Settled(outcome) if outcome.state == UNKNOWN),
+            "a retry settles without publishing"
         );
+        assert_eq!(fixture.publication(id).await.state, UNKNOWN);
+        assert_eq!(publish_count().await, 1, "the retry sent no second publish");
     }
 
     async fn tiktok_task(fixture: &Fixture, task: &str) -> Uuid {
