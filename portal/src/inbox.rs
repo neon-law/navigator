@@ -60,6 +60,8 @@ pub(crate) async fn ingest_attachments(
     db: &store::surreal::SurrealDb,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
     email: &InboundEmail,
+    firm_id: Uuid,
+    project_id: Option<Uuid>,
 ) -> Result<Vec<store::inbox::IngestAttachment>, String> {
     let mut attachments = Vec::new();
     for attachment in &email.attachments {
@@ -68,14 +70,19 @@ pub(crate) async fn ingest_attachments(
         } else {
             attachment.content_type.trim()
         };
-        let asset_id = store::assets::ingest_content(db, storage, &attachment.bytes, content_type)
+        attachments.push(
+            store::inbox::ingest_attachment(
+                db,
+                storage,
+                firm_id,
+                project_id,
+                &attachment.filename,
+                content_type,
+                &attachment.bytes,
+            )
             .await
-            .map_err(|error| format!("attachment ingest failed: {error}"))?;
-        attachments.push(store::inbox::IngestAttachment {
-            asset_id,
-            filename: attachment.filename.clone(),
-            sha256: store::assets::sha256_hex(&attachment.bytes),
-        });
+            .map_err(|error| error.to_string())?,
+        );
     }
     Ok(attachments)
 }
@@ -158,7 +165,7 @@ async fn ingest_support_email_for_firm(
     }
     let provider_message_id = provider_message_id(email);
     let email_conversation_id = linked_email_conversation(db, email, &from).await?;
-    let attachments = ingest_attachments(db, storage, email).await?;
+    let attachments = ingest_attachments(db, storage, email, firm_id, None).await?;
     let account = std::env::var("NAVIGATOR_EMAIL_PROVIDER_ACCOUNT")
         .ok()
         .filter(|value| !value.trim().is_empty())

@@ -1327,6 +1327,11 @@ pub(crate) async fn set_attachment_asset_on(
     message_id: Uuid,
     asset_id: Uuid,
 ) -> Result<(), InboxError> {
+    let scoped:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM message m JOIN inbox_conversation c ON c.id=m.conversation_id JOIN asset a ON a.id=$2 LEFT JOIN project p ON p.id=a.project_id WHERE m.id=$1 AND ((c.project_id IS NOT NULL AND a.project_id=c.project_id AND p.firm_id=c.firm_id) OR (c.project_id IS NULL AND (p.firm_id=c.firm_id OR (a.project_id IS NULL AND EXISTS(SELECT 1 FROM inbox_attachment_receipt r WHERE r.asset_id=a.id AND r.firm_id=c.firm_id AND r.sha256=a.sha256_hex))))))")
+        .bind(message_id).bind(asset_id).fetch_one(&pg.0).await.map_err(db_error)?;
+    if !scoped {
+        return Err(InboxError::Denied);
+    }
     sqlx::query(
         "UPDATE message SET attachment_asset_id = $2, updated_at = now() \
          WHERE id = $1 AND attachment_asset_id IS NULL",
@@ -1869,6 +1874,12 @@ async fn link_message_assets_in(
     attachments: &[inbox::IngestAttachment],
 ) -> Result<(), InboxError> {
     for (position, attachment) in attachments.iter().enumerate() {
+        let scoped:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM message m JOIN inbox_conversation c ON c.id=m.conversation_id JOIN asset a ON a.id=$3 LEFT JOIN project p ON p.id=a.project_id WHERE m.id=$1 AND c.firm_id=$2 AND a.sha256_hex=$4 AND ((c.project_id IS NOT NULL AND a.project_id=c.project_id AND p.firm_id=c.firm_id) OR (c.project_id IS NULL AND (p.firm_id=c.firm_id OR (a.project_id IS NULL AND EXISTS(SELECT 1 FROM inbox_attachment_receipt r WHERE r.asset_id=a.id AND r.firm_id=c.firm_id AND r.sha256=a.sha256_hex))))))")
+            .bind(message_id).bind(firm_id).bind(attachment.asset_id).bind(&attachment.sha256)
+            .fetch_one(&mut *connection).await.map_err(db_error)?;
+        if !scoped {
+            return Err(InboxError::Denied);
+        }
         let position = i32::try_from(position)
             .map_err(|_| InboxError::Db("too many message attachments".into()))?;
         sqlx::query(
@@ -1998,4 +2009,33 @@ pub(crate) async fn unprocessed_inbox_on(
         })
         .collect::<Result<Vec<_>, sqlx::Error>>()
         .map_err(db_error)
+}
+
+/// Internal receipt projection. Only actual-byte ingestion or Source-authoritative
+/// historical relationship verification calls this; no external UUID grant door.
+pub(crate) async fn record_attachment_receipt_on(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+    asset_id: Uuid,
+    sha256: &str,
+) -> Result<(), InboxError> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM asset WHERE id=$1 AND project_id IS NULL AND sha256_hex=$2)",
+    )
+    .bind(asset_id)
+    .bind(sha256)
+    .fetch_one(&pg.0)
+    .await
+    .map_err(db_error)?;
+    if !exists {
+        return Err(InboxError::Denied);
+    }
+    sqlx::query("INSERT INTO inbox_attachment_receipt(firm_id,asset_id,sha256) VALUES ($1,$2,$3) ON CONFLICT(firm_id,asset_id) DO NOTHING")
+        .bind(firm_id).bind(asset_id).bind(sha256).execute(&pg.0).await.map_err(db_error)?;
+    let retained:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM inbox_attachment_receipt WHERE firm_id=$1 AND asset_id=$2 AND sha256=$3)")
+        .bind(firm_id).bind(asset_id).bind(sha256).fetch_one(&pg.0).await.map_err(db_error)?;
+    if !retained {
+        return Err(InboxError::Denied);
+    }
+    Ok(())
 }

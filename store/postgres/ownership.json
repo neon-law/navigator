@@ -309,6 +309,13 @@
     "scope": "firm",
     "through": "firm_id or Firm identity; referenced Projects must have the same Firm"
   },
+  "inbox_attachment_receipt": {
+    "migration_slice": "communications-storage",
+    "parity_scenario": "trusted clean bytes and Firm hash evidence; global byte dedup with separate Firm receipts; no bare-ID authority; guarded Source backfill",
+    "scope": "firm",
+    "target_only": true,
+    "through": "firm_id; issued by actual-byte ingest or canonical Source attachment relation while Source-authoritative"
+  },
   "inbox_conversation": {
     "migration_slice": "communications-storage",
     "parity_scenario": "same-Firm assignment; Project reassignment history; participation revocation; internal visibility",
@@ -548,10 +555,10 @@
     "through": "identity ownership and explicit Person/Entity links; no inferred participation"
   },
   "person_phone": {
-    "scope": "identity",
-    "through": "person_id record link to the Person the number belongs to; no inferred participation",
     "migration_slice": "identity-storage",
-    "parity_scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes"
+    "parity_scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes",
+    "scope": "identity",
+    "through": "person_id record link to the Person the number belongs to; no inferred participation"
   },
   "person_project_role": {
     "migration_slice": "tenancy-storage",

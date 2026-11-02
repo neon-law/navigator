@@ -4908,9 +4908,10 @@ async fn ingest_provider_message_door(
         .filter(|value| !value.is_empty())
         .unwrap_or("cli-ingest")
         .to_string();
-    let attachments = crate::inbox::ingest_attachments(&state.surreal, &state.storage, &email)
-        .await
-        .map_err(ApiError::Db)?;
+    let attachments =
+        crate::inbox::ingest_attachments(&state.surreal, &state.storage, &email, firm_id, Some(id))
+            .await
+            .map_err(ApiError::Db)?;
     let provider_message_id = email
         .message_id
         .clone()

@@ -3596,3 +3596,13 @@ CREATE INDEX notation_transition_notation ON notation_transition(notation_id);
 -- Retain the current Inbox channels while admitting X activity to the mirror.
 ALTER TABLE inbox_conversation DROP CONSTRAINT inbox_conversation_channel_check;
 ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'scraper', 'x'));
+-- Migration: 20261101190000_create_inbox_attachment_receipt.sql
+-- Trusted clean-byte receipt for an unassigned Firm Inbox attachment.
+-- A globally deduplicated bare Asset may be independently received by many Firms.
+CREATE TABLE inbox_attachment_receipt (
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    asset_id UUID NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (firm_id, asset_id)
+);

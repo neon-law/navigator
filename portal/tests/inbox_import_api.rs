@@ -633,9 +633,59 @@ async fn run_lifecycle() {
     let fixture = build_app(db, lawyer_id).await;
     let project_id = project.id;
     assert_email_lifecycle(&fixture, &pg, project_id).await;
+    assert_native_provider_attachment_ingest(&fixture, &pg, &project).await;
     assert_linkedin_lifecycle(&fixture).await;
     assert_interrupted_import_recovers_attachments(&fixture, project.firm_id.unwrap()).await;
     assert_extensionless_attachment_filing(&fixture).await;
+}
+
+async fn assert_native_provider_attachment_ingest(
+    fixture: &Fixture,
+    pg: &store::postgres::PostgresDb,
+    project: &store::projects::Project,
+) {
+    let raw = String::from_utf8(INBOUND_EML.to_vec()).unwrap().replace(
+        "notice-1@opposing.example",
+        "provider-attachment@opposing.example",
+    );
+    let path = format!("/app/api/projects/{}/inbox-ingest", project.id);
+    let payload = json!({
+        "raw": base64::engine::general_purpose::STANDARD.encode(raw.as_bytes()),
+        "provider_account": "trusted-provider@example.com",
+    });
+    let (status, first) = post_json_at(
+        &fixture.app,
+        Some(&fixture.lawyer_session),
+        &path,
+        payload.clone(),
+    )
+    .await;
+    assert_eq!(status, 201, "{first}");
+    let id = Uuid::parse_str(first["message_id"].as_str().unwrap()).unwrap();
+    let asset_projects: Vec<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT a.project_id FROM inbox_message_asset l JOIN asset a ON a.id=l.asset_id WHERE l.message_id=$1",
+    ).bind(id).fetch_all(pg.pool()).await.unwrap();
+    assert_eq!(
+        asset_projects,
+        vec![Some(project.id)],
+        "the actual provider route binds attachment bytes to the attributed Project"
+    );
+    let firm: Uuid = sqlx::query_scalar(
+        "SELECT c.firm_id FROM message m JOIN inbox_conversation c ON c.id=m.conversation_id WHERE m.id=$1",
+    ).bind(id).fetch_one(pg.pool()).await.unwrap();
+    assert_eq!(firm, project.firm_id.unwrap());
+    let (status, repeat) =
+        post_json_at(&fixture.app, Some(&fixture.lawyer_session), &path, payload).await;
+    assert_eq!(status, 201, "{repeat}");
+    assert_eq!(repeat["message_id"], first["message_id"]);
+    assert_eq!(repeat["deduped"], true);
+    let links: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM inbox_message_asset WHERE message_id=$1")
+            .bind(id)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(links, 1);
 }
 
 /// The email walk (AC3, AC4, AC6, AC7, AC8): first import attributed at

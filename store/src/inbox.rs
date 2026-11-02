@@ -566,6 +566,93 @@ pub fn next_action(
     "Review"
 }
 
+/// Ingest clean provider attachment bytes after the receiving Firm is resolved.
+/// A bare Asset UUID or supplied hash cannot mint Firm staging authority.
+pub async fn ingest_attachment(
+    db: &SurrealDb,
+    storage: &Arc<dyn cloud::StorageService>,
+    firm_id: Uuid,
+    project_id: Option<Uuid>,
+    filename: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> Result<IngestAttachment, InboxError> {
+    let pg = inbox_authority().await?;
+    ingest_attachment_on(
+        pg.as_ref(),
+        db,
+        storage,
+        firm_id,
+        project_id,
+        filename,
+        content_type,
+        bytes,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn ingest_attachment_on(
+    pg: Option<&crate::postgres::PostgresDb>,
+    db: &SurrealDb,
+    storage: &Arc<dyn cloud::StorageService>,
+    firm_id: Uuid,
+    project_id: Option<Uuid>,
+    filename: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> Result<IngestAttachment, InboxError> {
+    let sha256 = crate::assets::sha256_hex(bytes);
+    let asset_id = if let Some(project_id) = project_id {
+        let project = projects::find_by_id(db, project_id)
+            .await?
+            .ok_or(InboxError::NotFound)?;
+        if project.firm_id != Some(firm_id) {
+            return Err(InboxError::CrossFirm);
+        }
+        crate::documents::ingest_bytes(
+            db,
+            storage,
+            &crate::documents::IngestArgs {
+                project_id,
+                source: crate::documents::source::EMAIL,
+                filename,
+                kind: "unclassified",
+                content_type,
+                description: None,
+                secondary_storage_key: None,
+                visibility: "internal",
+            },
+            bytes,
+        )
+        .await
+        .map_err(|error| InboxError::Db(error.to_string()))?
+        .asset_id
+    } else {
+        crate::assets::ingest_content(db, storage, bytes, content_type)
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?
+    };
+    if let Some(pg) = pg {
+        // Required projections and receipt must succeed before native Message admission.
+        crate::postgres_mirror::mirror(db, pg, &MirrorKey::Firm(firm_id))
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?;
+        crate::postgres_mirror::mirror(db, pg, &MirrorKey::Asset(asset_id))
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?;
+        if project_id.is_none() {
+            crate::postgres::inbox::record_attachment_receipt_on(pg, firm_id, asset_id, &sha256)
+                .await?;
+        }
+    }
+    Ok(IngestAttachment {
+        asset_id,
+        filename: filename.into(),
+        sha256,
+    })
+}
+
 /// Ingest one provider delivery. A repeated webhook with the same Firm,
 /// channel, account, and provider message id returns the original row.
 ///
@@ -577,9 +664,18 @@ pub async fn ingest_inbound(
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
     if let Some(pg) = inbox_authority().await? {
+        for attachment in &inbound.attachments {
+            Box::pin(crate::postgres_mirror::mirror(
+                db,
+                &pg,
+                &MirrorKey::Asset(attachment.asset_id),
+            ))
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?;
+        }
         return Box::pin(crate::postgres::inbox::ingest_inbound_on(&pg, inbound)).await;
     }
-    ingest_inbound_surreal(db, inbound).await
+    Box::pin(ingest_inbound_surreal(db, inbound)).await
 }
 
 /// The direction-aware ingest entry for imported correspondence (LAW-238
@@ -756,6 +852,11 @@ pub async fn link_message_assets(
     attachments: &[IngestAttachment],
 ) -> Result<(), InboxError> {
     if let Some(pg) = inbox_authority().await? {
+        for attachment in attachments {
+            crate::postgres_mirror::mirror(db, &pg, &MirrorKey::Asset(attachment.asset_id))
+                .await
+                .map_err(|error| InboxError::Db(error.to_string()))?;
+        }
         return crate::postgres::inbox::link_message_assets_on(
             &pg,
             firm_id,

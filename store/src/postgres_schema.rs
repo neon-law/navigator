@@ -1335,6 +1335,7 @@ mod tests {
                 "20261101210000_create_notation_transition.sql",
                 include_str!("../postgres/migrations/20261101210000_create_notation_transition.sql"),
             ),
+            ("20261101190000_create_inbox_attachment_receipt.sql",include_str!("../postgres/migrations/20261101190000_create_inbox_attachment_receipt.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

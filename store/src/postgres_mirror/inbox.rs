@@ -215,6 +215,19 @@ fn parent(column: &str, id: Uuid) -> Option<MirrorKey> {
     })
 }
 
+// No Source row is deletion or overwrite evidence after native Inbox cutover.
+fn require_source_authority() -> Result<(), MirrorError> {
+    let setting = match std::env::var(crate::postgres::inbox::AUTHORITY_ENV) {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => return Err(MirrorError::InboxAuthority),
+    };
+    match crate::postgres::inbox::enabled_from(setting.as_deref()) {
+        Ok(false) => Ok(()),
+        Ok(true) | Err(_) => Err(MirrorError::InboxAuthority),
+    }
+}
+
 /// Match one source Inbox row in PostgreSQL. Missing mutable rows remove their
 /// projection; audit rows remain as drift for review.
 pub async fn mirror(
@@ -222,6 +235,7 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    require_source_authority()?;
     let table = table(key.table())?;
     let id = match key {
         MirrorKey::InboxConversation(id)
@@ -241,6 +255,44 @@ pub async fn mirror(
                 .and_then(|id| parent(column, id))
             {
                 Box::pin(super::mirror(surreal, pg, &parent)).await?;
+            }
+        }
+        if matches!(key, MirrorKey::InboxMessageAsset(_)) {
+            let message_id = row
+                .get("message_id")
+                .and_then(uuid_in)
+                .ok_or(MirrorError::Source)?;
+            let firm_id = row
+                .get("firm_id")
+                .and_then(uuid_in)
+                .ok_or(MirrorError::Source)?;
+            let asset_id = row
+                .get("asset_id")
+                .and_then(uuid_in)
+                .ok_or(MirrorError::Source)?;
+            let sha = row
+                .get("sha256")
+                .and_then(Value::as_str)
+                .ok_or(MirrorError::Source)?;
+            let message = crate::inbox::message_by_id(surreal, message_id)
+                .await
+                .map_err(|_| MirrorError::Source)?
+                .ok_or(MirrorError::Source)?;
+            let conversation = crate::inbox::conversation_by_id(surreal, message.conversation_id)
+                .await
+                .map_err(|_| MirrorError::Source)?
+                .ok_or(MirrorError::Source)?;
+            let asset = crate::assets::find_by_id(surreal, asset_id)
+                .await
+                .map_err(|_| MirrorError::Source)?
+                .ok_or(MirrorError::Source)?;
+            if conversation.firm_id != firm_id || asset.sha256_hex != sha {
+                return Err(MirrorError::Source);
+            }
+            if asset.project_id.is_none() {
+                crate::postgres::inbox::record_attachment_receipt_on(pg, firm_id, asset_id, sha)
+                    .await
+                    .map_err(|_| MirrorError::Source)?;
             }
         }
         let result = sqlx::query(sqlx::AssertSqlSafe(upsert_sql(table)))
@@ -287,6 +339,7 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
 /// Repair mutable projections and insert missing audit rows. Changed or extra
 /// audit rows remain drift; mutable target-only rows delete in reverse order.
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    require_source_authority()?;
     let report = parity(surreal, pg).await?;
     let mut deletes: Vec<&TableParity> = Vec::new();
     for table_report in &report.tables {

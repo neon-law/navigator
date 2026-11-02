@@ -121,7 +121,7 @@ async fn fixture() -> Option<Fixture> {
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO firm (id,name,slug,status,entity_id) VALUES ($1,'Practice','practice-firm','active',$2)",
+        "INSERT INTO firm (id,name,slug,status,entity_id) VALUES ($1,'Practice','practice','active',$2)",
     )
     .bind(firm)
     .bind(entity)
@@ -693,11 +693,12 @@ async fn attachment_slot_is_first_wins() {
     .unwrap();
     let seed_asset = |id: Uuid, sha: &str| {
         sqlx::query(
-            "INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex) \
-             VALUES ($1, 'projects/x/documents/' || $1::text, 'application/pdf', 3, $2)",
+            "INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex,project_id) \
+             VALUES ($1, 'projects/x/documents/' || $1::text, 'application/pdf', 3, $2,$3)",
         )
         .bind(id)
         .bind(sha)
+        .bind(fixture.project)
     };
     let first = Uuid::new_v4();
     let second = Uuid::new_v4();
@@ -871,8 +872,8 @@ async fn targeted_ingest_preserves_project_scope_and_all_attachments() {
     for index in 0..2 {
         let id = Uuid::now_v7();
         let sha = format!("{index:064x}");
-        sqlx::query("INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex) VALUES ($1, $2, 'application/pdf', 3, $3)")
-            .bind(id).bind(format!("synthetic/{id}")).bind(&sha).execute(fixture.pg.pool()).await.unwrap();
+        sqlx::query("INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex,project_id) VALUES ($1, $2, 'application/pdf', 3, $3,$4)")
+            .bind(id).bind(format!("synthetic/{id}")).bind(&sha).bind(fixture.project).execute(fixture.pg.pool()).await.unwrap();
         input.attachments.push(crate::inbox::IngestAttachment {
             asset_id: id,
             filename: format!("notice-{index}.pdf"),
@@ -1390,8 +1391,8 @@ async fn seed_native_attachment(
     message_id: Uuid,
 ) -> crate::inbox::IngestAttachment {
     let asset = Uuid::now_v7();
-    sqlx::query("INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex) VALUES ($1, 'synthetic/notice.pdf', 'application/pdf', 3, 'synthetic-digest')")
-        .bind(asset).execute(fixture.pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex,project_id) VALUES ($1, 'synthetic/notice.pdf', 'application/pdf', 3, 'synthetic-digest',$2)")
+        .bind(asset).bind(fixture.project).execute(fixture.pg.pool()).await.unwrap();
     pg_inbox::set_attachment_asset_on(&fixture.pg, message_id, asset)
         .await
         .unwrap();
@@ -1512,4 +1513,278 @@ async fn native_attachments_and_intake_details_follow_firm_and_project_scope() {
             .await,
         Err(InboxError::Denied)
     ));
+}
+
+#[tokio::test]
+async fn legacy_inbox_repair_cannot_replace_native_authority_or_guess_on_invalid_config() {
+    const CHILD: &str = "NAVIGATOR_TEST_INBOX_REPAIR_AUTHORITY_CHILD";
+    let Some(case) = std::env::var(CHILD).ok() else {
+        if crate::postgres_mirror::tests::test_postgres().is_none() {
+            return;
+        }
+        for case in ["1", "not-a-valid-authority"] {
+            let output=std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact",format!("{}::legacy_inbox_repair_cannot_replace_native_authority_or_guess_on_invalid_config",module_path!().split_once("::").unwrap().1).as_str(),"--nocapture"])
+                .env(CHILD,case).env(pg_inbox::AUTHORITY_ENV,"0").env_remove("NAVIGATOR_POSTGRES_MIRROR")
+                .output().unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "authority case {case}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    };
+    let Some(f) = fixture().await else {
+        return;
+    };
+    ensure_receipt_firm_entity(&f).await;
+    let source = crate::inbox::ingest_inbound(
+        &f.db,
+        &inbound(
+            f.firm,
+            channel::EMAIL,
+            "authority@example.com",
+            "authority-proof",
+            "sender@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+    // Use explicit legal values for nullable checked text fields. Surreal's
+    // option-string NONE projection otherwise reaches PostgreSQL's enum CHECK
+    // before this authority regression can exercise the intended boundary.
+    f.db.query("UPDATE $id SET visibility = 'private', route = 'other'")
+        .bind((
+            "id",
+            crate::surreal::record_id("message", source.message_id),
+        ))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    crate::postgres_mirror::mirror(
+        &f.db,
+        &f.pg,
+        &crate::postgres_mirror::MirrorKey::InboxMessage(source.message_id),
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE message SET body='native authoritative version',updated_at=now() WHERE id=$1",
+    )
+    .bind(source.message_id)
+    .execute(f.pg.pool())
+    .await
+    .unwrap();
+    std::env::set_var(pg_inbox::AUTHORITY_ENV, &case);
+    let repair = crate::postgres_mirror::mirror(
+        &f.db,
+        &f.pg,
+        &crate::postgres_mirror::MirrorKey::InboxMessage(source.message_id),
+    )
+    .await;
+    assert!(repair.is_err(),"a stale Source row cannot overwrite native Inbox or select authority on malformed configuration");
+    assert!(crate::postgres_mirror::inbox::reconcile(&f.db, &f.pg)
+        .await
+        .is_err());
+    let body: String = sqlx::query_scalar("SELECT body FROM message WHERE id=$1")
+        .bind(source.message_id)
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(body, "native authoritative version");
+}
+
+#[tokio::test]
+async fn bare_attachment_ids_and_metadata_are_not_firm_receipt_evidence() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let asset = Uuid::now_v7();
+    let sha = crate::assets::sha256_hex(b"synthetic bytes received elsewhere");
+    sqlx::query("INSERT INTO asset(id,storage_key,content_type,byte_size,sha256_hex,metadata) VALUES ($1,'synthetic/unclaimed','text/plain',1,$2,$3)")
+        .bind(asset).bind(&sha).bind(serde_json::json!({"firm_id":f.firm.to_string()})).execute(f.pg.pool()).await.unwrap();
+    let attachment = crate::inbox::IngestAttachment {
+        asset_id: asset,
+        filename: "supplied.txt".into(),
+        sha256: sha,
+    };
+    let mut input = inbound(
+        f.firm,
+        channel::EMAIL,
+        "receipt@example.com",
+        "unclaimed-proof",
+        "sender@example.com",
+    );
+    input.attachments = vec![attachment.clone()];
+    assert!(
+        matches!(
+            pg_inbox::ingest_inbound_on(&f.pg, &input).await,
+            Err(InboxError::Denied)
+        ),
+        "an arbitrary bare Asset ID and caller metadata must not grant attachment access"
+    );
+    assert_eq!(
+        message_count(&f.pg).await,
+        0,
+        "refusal rolls back Message, Conversation and links"
+    );
+    input.attachments.clear();
+    input.provider_message_id = "empty-message";
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    assert!(matches!(
+        pg_inbox::link_message_assets_on(
+            &f.pg,
+            f.firm,
+            saved.message_id,
+            std::slice::from_ref(&attachment)
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::set_attachment_asset_on(&f.pg, saved.message_id, asset).await,
+        Err(InboxError::Denied)
+    ));
+    assert!(pg_inbox::message_assets_on(&f.pg, f.firm, saved.message_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn trusted_clean_bytes_claims_are_firm_scoped_and_do_not_bypass_exact_project() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    ensure_receipt_firm_entity(&f).await;
+    let directory = tempfile::tempdir().unwrap();
+    let storage: Arc<dyn cloud::StorageService> =
+        Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
+    let first = crate::inbox::ingest_attachment_on(
+        Some(&f.pg),
+        &f.db,
+        &storage,
+        f.firm,
+        None,
+        "first.txt",
+        "text/plain",
+        b"shared synthetic bytes",
+    )
+    .await
+    .unwrap();
+    let repeat = crate::inbox::ingest_attachment_on(
+        Some(&f.pg),
+        &f.db,
+        &storage,
+        f.firm,
+        None,
+        "repeat.txt",
+        "text/plain",
+        b"shared synthetic bytes",
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.asset_id, repeat.asset_id);
+    let other = crate::firms::create(
+        &f.db,
+        &NewFirm {
+            name: "Second synthetic Firm".into(),
+            status: "active".into(),
+            entity_id: seed_entity(&f.db).await,
+            admin_dri_person_id: f.owner,
+        },
+    )
+    .await
+    .unwrap();
+    let entity = other.entity_id.unwrap();
+    sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) SELECT $1,'Second synthetic Source Firm',entity_type_id,jurisdiction_id FROM entity WHERE id=$2 ON CONFLICT(id) DO NOTHING").bind(entity).bind(f.entity).execute(f.pg.pool()).await.unwrap();
+    let independent = crate::inbox::ingest_attachment_on(
+        Some(&f.pg),
+        &f.db,
+        &storage,
+        other.id,
+        None,
+        "independent.txt",
+        "text/plain",
+        b"shared synthetic bytes",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        independent.asset_id, first.asset_id,
+        "global bytes dedup remains legitimate across Firms"
+    );
+    assert_independent_firm_receipts(&f, first.asset_id).await;
+    let mut input = inbound(
+        f.firm,
+        channel::EMAIL,
+        "receipt@example.com",
+        "received-proof",
+        "sender@example.com",
+    );
+    input.attachments = vec![first.clone()];
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    assert_eq!(
+        pg_inbox::message_assets_on(&f.pg, f.firm, saved.message_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    input.provider_message_id = "wrong-project-proof";
+    input.project_id = Some(f.project);
+    assert!(
+        matches!(
+            pg_inbox::ingest_inbound_on(&f.pg, &input).await,
+            Err(InboxError::Denied)
+        ),
+        "a staging receipt cannot authorize a bare Asset in an attributed Project"
+    );
+    assert_eq!(message_count(&f.pg).await, 1);
+    let wrong_hash = crate::inbox::IngestAttachment {
+        sha256: crate::assets::sha256_hex(b"other bytes"),
+        ..first
+    };
+    assert!(matches!(
+        pg_inbox::link_message_assets_on(&f.pg, f.firm, saved.message_id, &[wrong_hash]).await,
+        Err(InboxError::Denied)
+    ));
+}
+
+async fn assert_independent_firm_receipts(f: &Fixture, asset_id: Uuid) {
+    let firms: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM inbox_attachment_receipt WHERE asset_id=$1")
+            .bind(asset_id)
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        firms, 2,
+        "each Firm has an independent durable byte receipt"
+    );
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM inbox_attachment_receipt WHERE firm_id=$1 AND asset_id=$2",
+    )
+    .bind(f.firm)
+    .bind(asset_id)
+    .fetch_one(f.pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "retry preserves one durable Firm receipt");
+}
+
+async fn ensure_receipt_firm_entity(f: &Fixture) {
+    let entity = crate::firms::find_by_id(&f.db, f.firm)
+        .await
+        .unwrap()
+        .unwrap()
+        .entity_id
+        .unwrap();
+    sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) SELECT $1,'Synthetic Source Firm',entity_type_id,jurisdiction_id FROM entity WHERE id=$2 ON CONFLICT(id) DO NOTHING")
+        .bind(entity).bind(f.entity).execute(f.pg.pool()).await.unwrap();
 }
