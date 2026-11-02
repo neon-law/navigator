@@ -1,0 +1,2452 @@
+//! PostgreSQL Inbox slice tests (LAW-238 D0), in the established
+//! `store/src/postgres/*_tests.rs` pattern: a fresh schema per test from the
+//! compiled migrations, skipped silently when no local PostgreSQL is running.
+//!
+//! The mem-Surreal store remains the authorization and Communication-spine
+//! side of every test — that is the slice's contract. Postgres-authoritative
+//! ingest is exercised through the same entry points the dispatcher uses, so
+//! replay semantics (unique `inbox_ingress` key) and threading
+//! (`find_open_thread`'s partition key) are proven against the real SQL.
+
+use std::sync::Arc;
+
+use super::inbox as pg_inbox;
+use super::PostgresDb;
+use crate::firms::{self, NewFirm};
+use crate::inbox::{channel, delivery, direction, purpose, InboxError, IngestInbound};
+use crate::persons::{self, NewPerson, Role};
+use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::projects::{self, NewProject};
+use crate::surreal::SurrealDb;
+use crate::test_support::{mem_surreal, seed_entity};
+use uuid::Uuid;
+
+/// The `OutboundTransport` that fails the test if anything is dispatched.
+struct NoTransport;
+
+#[async_trait::async_trait]
+impl crate::inbox::OutboundTransport for NoTransport {
+    async fn deliver(
+        &self,
+        _envelope: &crate::inbox::OutboundEnvelope,
+    ) -> Result<crate::inbox::TransportOutcome, String> {
+        panic!("historical imports must never dispatch");
+    }
+}
+
+struct Fixture {
+    pg: PostgresDb,
+    db: SurrealDb,
+    firm: Uuid,
+    owner: Uuid,
+    lawyer: Uuid,
+    project: Uuid,
+    /// The synthetic Entity behind the seeded Firm — reference rows for
+    /// additional Projects a test creates.
+    entity: Uuid,
+}
+
+#[tokio::test]
+async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
+    const CHILD: &str = "NAVIGATOR_TEST_PUBLIC_INBOX_AUTHORITY_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        if crate::postgres_mirror::tests::test_postgres().is_none() {
+            return;
+        }
+        let name = format!(
+            "{}::native_authority_routes_the_public_inbox_lifecycle_to_postgres",
+            module_path!().split_once("::").unwrap().1
+        );
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--nocapture"])
+            .env(CHILD, "1")
+            .env(pg_inbox::AUTHORITY_ENV, "0")
+            .env_remove("NAVIGATOR_POSTGRES_MIRROR")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "isolated native lifecycle: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let Some(f) = fixture().await else { return };
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    for (name, value) in [
+        ("NAVIGATOR_POSTGRES_HOST", "127.0.0.1".to_string()),
+        (
+            "NAVIGATOR_POSTGRES_PORT",
+            std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").unwrap(),
+        ),
+        ("NAVIGATOR_POSTGRES_USER", "postgres".to_string()),
+        ("NAVIGATOR_POSTGRES_PASSWORD", "synthetic".to_string()),
+        ("NAVIGATOR_POSTGRES_SSLMODE", "disable".to_string()),
+        ("NAVIGATOR_POSTGRES_DATABASE", database),
+        (pg_inbox::AUTHORITY_ENV, "1".to_string()),
+    ] {
+        std::env::set_var(name, value);
+    }
+    assert_public_native_lifecycle(&f).await;
+    assert_public_native_private_triage(&f).await;
+}
+
+async fn assert_public_native_private_triage(f: &Fixture) {
+    use crate::inbox_triage::{self, NewInboxTriage, PrivilegeLabel, TriageDisposition};
+    let mut input = inbound(
+        f.firm,
+        channel::X,
+        "synthetic-x-account",
+        "native-private-x",
+        "synthetic-x-sender",
+    );
+    input.brand_key = Some("neon");
+    input.interaction_type = Some("direct_message");
+    input.visibility = Some("private");
+    let saved = crate::inbox::ingest_inbound(&f.db, &input).await.unwrap();
+    let review = inbox_triage::record(
+        &f.db,
+        &NewInboxTriage {
+            message_id: saved.message_id,
+            firm_id: f.firm,
+            suggested_project_id: Some(f.project),
+            project_confidence: Some(1.0),
+            privilege: PrivilegeLabel::NotPrivileged,
+            privilege_confidence: Some(1.0),
+            rationale: Some("synthetic automation".into()),
+            model_id: Some("synthetic-model".into()),
+            prompt_version: "synthetic-prompt".into(),
+            raw_output: Some("synthetic output".into()),
+            disposition: TriageDisposition::Suggested,
+            labeled_example: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(review.privilege, PrivilegeLabel::Uncertain);
+    assert_eq!(review.disposition, TriageDisposition::NeedsHuman);
+    assert!(review.raw_output.is_none() && review.model_id.is_none());
+    assert!(inbox_triage::list_for_review(&f.db, f.owner)
+        .await
+        .unwrap()
+        .iter()
+        .any(|row| row.triage.id == review.id));
+    projects::add_participation(
+        &f.db,
+        f.project,
+        f.owner,
+        projects::participation_for_role(Role::Owner),
+    )
+    .await
+    .unwrap();
+    let assigned = inbox_triage::confirm_project(&f.db, f.owner, review.id, f.project)
+        .await
+        .unwrap();
+    assert_eq!(assigned.privilege, PrivilegeLabel::Uncertain);
+    assert_eq!(assigned.disposition, TriageDisposition::NeedsHuman);
+    let resolved = inbox_triage::resolve_privilege(
+        &f.db,
+        f.owner,
+        review.id,
+        PrivilegeLabel::Privileged,
+        "synthetic human review",
+    )
+    .await
+    .unwrap();
+    assert_eq!(resolved.privilege, PrivilegeLabel::Privileged);
+    assert_eq!(resolved.disposition, TriageDisposition::Confirmed);
+    assert!(!inbox_triage::list_for_review(&f.db, f.owner)
+        .await
+        .unwrap()
+        .iter()
+        .any(|row| row.triage.id == review.id));
+}
+
+async fn assert_public_native_lifecycle(f: &Fixture) {
+    use crate::inbox;
+    let account = format!("+{}", 15_550_100_000_u64);
+    let sender = format!("+{}", 15_555_550_127_u64);
+    let mut input = inbound(
+        f.firm,
+        channel::SMS,
+        &account,
+        "public-native-flow",
+        &sender,
+    );
+    input.brand_key = Some("neon");
+    let saved = inbox::ingest_inbound(&f.db, &input).await.unwrap();
+    assert_eq!(message_count(&f.pg).await, 1);
+    assert_eq!(
+        inbox::message_by_id(&f.db, saved.message_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .body,
+        "Hello from outside."
+    );
+    assert_eq!(
+        inbox::conversation_by_id(&f.db, saved.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .channel,
+        channel::SMS
+    );
+    let mut source =
+        f.db.query("SELECT VALUE id FROM inbox_conversation")
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+    let source_ids: Vec<surrealdb::types::RecordId> = source.take(0).unwrap();
+    assert!(
+        source_ids.is_empty(),
+        "native reads must not depend on a Source conversation copy"
+    );
+    let intake = inbox::list_intake(&f.db, f.owner).await.unwrap();
+    assert_eq!(intake.len(), 1);
+    assert_eq!(
+        inbox::intake_brands(&f.db, f.owner).await.unwrap(),
+        ["neon"]
+    );
+    assert_eq!(
+        inbox::list_intake_in_brand(&f.db, f.owner, "neon")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(inbox::list_intake_in_brand(&f.db, f.owner, "another-brand")
+        .await
+        .unwrap()
+        .is_empty());
+    let detail = inbox::intake_detail(&f.db, f.owner, saved.conversation_id)
+        .await
+        .unwrap();
+    assert!(detail.can_sms_reply && detail.bodies_visible);
+    inbox::assign(&f.db, f.owner, saved.conversation_id, f.project)
+        .await
+        .unwrap();
+    assert_eq!(
+        inbox::assignments(&f.db, saved.conversation_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_public_native_project_actions(f, &saved).await;
+}
+
+async fn assert_public_native_project_actions(f: &Fixture, saved: &crate::inbox::IngestedInbound) {
+    use crate::inbox;
+    let note = inbox::post_note(
+        &f.db,
+        f.lawyer,
+        saved.conversation_id,
+        "synthetic internal note",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        inbox::message_by_id(&f.db, note)
+            .await
+            .unwrap()
+            .unwrap()
+            .direction,
+        direction::INTERNAL
+    );
+    let reply = inbox::queue_sms_reply(&f.db, f.lawyer, saved.conversation_id, "synthetic reply")
+        .await
+        .unwrap();
+    let thread = inbox::project_thread(&f.db, f.lawyer, f.project, saved.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(thread.messages.len(), 3);
+    assert_eq!(
+        inbox::list_project(&f.db, f.lawyer, f.project)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let report = inbox::dispatch_queued(&f.db, &CapturingTransport::default())
+        .await
+        .unwrap();
+    assert_eq!(report.submitted, 1);
+    assert_eq!(
+        inbox::message_by_id(&f.db, reply)
+            .await
+            .unwrap()
+            .unwrap()
+            .delivery_state,
+        delivery::SUBMITTED
+    );
+}
+
+#[tokio::test]
+async fn native_triage_assignment_respects_source_and_target_scope() {
+    let Some(f) = fixture().await else { return };
+    let saved = pg_inbox::ingest_inbound_on(
+        &f.pg,
+        &inbound(
+            f.firm,
+            channel::EMAIL,
+            "scope@example.com",
+            "native-review-scope",
+            "sender@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+    pg_inbox::assign_on(&f.pg, &f.db, f.owner, saved.conversation_id, f.project)
+        .await
+        .unwrap();
+    let target = seed_project(
+        &f.pg,
+        &f.db,
+        f.entity,
+        f.firm,
+        "review-target",
+        "Synthetic Review Project",
+    )
+    .await;
+    assert!(matches!(
+        pg_inbox::assign_for_triage_review_on(
+            &f.pg,
+            &f.db,
+            f.lawyer,
+            saved.conversation_id,
+            target
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    projects::add_participation(
+        &f.db,
+        target,
+        f.lawyer,
+        projects::participation_for_role(Role::Lawyer),
+    )
+    .await
+    .unwrap();
+    projects::designate_dri_in_surreal(&f.db, f.project, f.owner, projects::DriSide::Lawyer)
+        .await
+        .unwrap();
+    let source = projects::participation_for_person(&f.db, f.lawyer, f.project)
+        .await
+        .unwrap()
+        .unwrap();
+    projects::remove_participation(&f.db, source.id)
+        .await
+        .unwrap();
+    assert!(matches!(
+        pg_inbox::assign_for_triage_review_on(
+            &f.pg,
+            &f.db,
+            f.lawyer,
+            saved.conversation_id,
+            target
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert_eq!(
+        pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
+        Some(f.project)
+    );
+    let admin = native_review_admin(&f).await;
+    let assigned =
+        pg_inbox::assign_for_triage_review_on(&f.pg, &f.db, admin, saved.conversation_id, target)
+            .await
+            .unwrap();
+    assert_eq!(assigned.to_project_id, target);
+    assert!(matches!(
+        pg_inbox::assign_on(&f.pg, &f.db, admin, saved.conversation_id, target).await,
+        Err(InboxError::Denied)
+    ));
+    let detail = pg_inbox::intake_detail_on(&f.pg, &f.db, admin, saved.conversation_id)
+        .await
+        .unwrap();
+    assert!(!detail.bodies_visible && detail.messages.is_empty());
+}
+
+async fn native_review_admin(f: &Fixture) -> Uuid {
+    let admin = persons::create(
+        &f.db,
+        &NewPerson::with_role("synthetic reviewer", "reviewer@example.com", Role::Admin),
+    )
+    .await
+    .unwrap();
+    firms::add_membership(
+        &f.db,
+        &firms::NewPersonFirmRole {
+            person_id: admin.id,
+            firm_id: f.firm,
+            membership: firms::FirmMembership::Admin,
+            is_dri: false,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'synthetic reviewer','reviewer@example.com','admin')")
+        .bind(admin.id).execute(f.pg.pool()).await.unwrap();
+    admin.id
+}
+
+#[tokio::test]
+async fn native_contact_link_preserves_a_persons_existing_number() {
+    let Some(f) = fixture().await else { return };
+    let original = format!("+{}", 15_555_550_125_u64);
+    let incoming = format!("+{}", 15_555_550_126_u64);
+    let account = format!("+{}", 15_550_100_000_u64);
+    let contact = persons::create(
+        &f.db,
+        &NewPerson::with_role(
+            "synthetic contact",
+            "existing.contact@example.com",
+            Role::Client,
+        ),
+    )
+    .await
+    .unwrap();
+    persons::set_phone(&f.db, contact.id, Some(&original))
+        .await
+        .unwrap();
+    let sms = pg_inbox::ingest_inbound_on(
+        &f.pg,
+        &inbound(
+            f.firm,
+            channel::SMS,
+            &account,
+            "existing-contact-number",
+            &incoming,
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, sms.conversation_id, &contact.email)
+            .await,
+        Err(InboxError::Contact(_))
+    ));
+    let saved = persons::find_by_id(&f.db, contact.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.phone.as_deref(), Some(original.as_str()));
+    assert!(persons::find_by_phone(&f.db, &incoming)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn native_sms_requires_consent_and_reuses_the_private_thread() {
+    let Some(f) = fixture().await else { return };
+    let account = format!("+{}", 15_550_100_000_u64);
+    let recipient = format!("+{}", 15_555_550_123_u64);
+    let open = |actor, consent, body: &'static str| {
+        let account = account.clone();
+        let recipient = recipient.clone();
+        let f = &f;
+        async move {
+            pg_inbox::open_sms_conversation_on(
+                &f.pg, &f.db, actor, f.firm, None, &account, &recipient, body, consent,
+            )
+            .await
+        }
+    };
+    assert!(matches!(
+        open(f.owner, false, "hello").await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        open(f.lawyer, true, "hello").await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        open(f.owner, true, "  ").await,
+        Err(InboxError::Empty)
+    ));
+    assert_eq!(conversation_count(&f.pg).await, 0);
+    let (conversation, first) = open(f.owner, true, " first text ").await.unwrap();
+    let (again, second) = open(f.owner, true, "second text").await.unwrap();
+    assert_eq!(again, conversation);
+    assert_ne!(first, second);
+    let row = pg_inbox::conversation_by_id_on(&f.pg, conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.channel, channel::SMS);
+    assert_eq!(row.external_address, recipient);
+    assert!(row.matter_consent);
+    let reply = pg_inbox::queue_sms_reply_on(&f.pg, &f.db, f.owner, conversation, " reply ")
+        .await
+        .unwrap();
+    let message = pg_inbox::message_by_id_on(&f.pg, reply)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(message.body, "reply");
+    assert_eq!(message.delivery_state, delivery::QUEUED);
+    assert_eq!(message.direction, direction::OUTBOUND);
+    assert!(matches!(
+        pg_inbox::queue_sms_reply_on(&f.pg, &f.db, f.lawyer, conversation, "denied").await,
+        Err(InboxError::Denied)
+    ));
+    for body in [String::new(), "x".repeat(crate::inbox::SMS_BODY_LIMIT + 1)] {
+        assert!(matches!(
+            pg_inbox::queue_sms_reply_on(&f.pg, &f.db, f.owner, conversation, &body).await,
+            Err(InboxError::Empty)
+        ));
+    }
+    let detail = pg_inbox::intake_detail_on(&f.pg, &f.db, f.owner, conversation)
+        .await
+        .unwrap();
+    assert!(detail.can_sms_reply && detail.bodies_visible);
+    assert_eq!(detail.messages.len(), 3);
+    let listed = pg_inbox::list_intake_on(&f.pg, &f.db, f.owner)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, conversation);
+}
+
+#[tokio::test]
+async fn native_contact_link_is_idempotent_and_refuses_number_takeover() {
+    let Some(f) = fixture().await else { return };
+    let account = format!("+{}", 15_550_100_000_u64);
+    let number = format!("+{}", 15_555_550_124_u64);
+    let sms = pg_inbox::ingest_inbound_on(
+        &f.pg,
+        &inbound(f.firm, channel::SMS, &account, "contact-link", &number),
+    )
+    .await
+    .unwrap();
+    let email = "synthetic.contact@example.com";
+    let contact = persons::create(
+        &f.db,
+        &NewPerson::with_role("synthetic contact", email, Role::Client),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.lawyer, sms.conversation_id, email).await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::link_contact_phone_on(
+            &f.pg,
+            &f.db,
+            f.owner,
+            sms.conversation_id,
+            "missing@example.com"
+        )
+        .await,
+        Err(InboxError::Contact(_))
+    ));
+    let linked = pg_inbox::link_contact_phone_on(
+        &f.pg,
+        &f.db,
+        f.owner,
+        sms.conversation_id,
+        " SYNTHETIC.CONTACT@example.com ",
+    )
+    .await
+    .unwrap();
+    assert_eq!(linked.person_id, contact.id);
+    let again = pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, sms.conversation_id, email)
+        .await
+        .unwrap();
+    assert_eq!(again.person_id, contact.id);
+    let rival = persons::create(
+        &f.db,
+        &NewPerson::with_role("synthetic rival", "rival@example.com", Role::Client),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, sms.conversation_id, &rival.email)
+            .await,
+        Err(InboxError::Contact(_))
+    ));
+    assert_eq!(
+        persons::find_by_id(&f.db, contact.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .phone
+            .as_deref(),
+        Some(number.as_str())
+    );
+    let detail = pg_inbox::intake_detail_on(&f.pg, &f.db, f.owner, sms.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(detail.contact.unwrap().person_id, contact.id);
+    let email_thread = pg_inbox::ingest_inbound_on(
+        &f.pg,
+        &inbound(f.firm, channel::EMAIL, "mailbox", "email-not-sms", email),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::link_contact_phone_on(&f.pg, &f.db, f.owner, email_thread.conversation_id, email)
+            .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::queue_sms_reply_on(&f.pg, &f.db, f.owner, email_thread.conversation_id, "text")
+            .await,
+        Err(InboxError::Denied)
+    ));
+}
+
+// Builds the full cross-store world: PostgreSQL schema plus reference rows
+// and the mem-Surreal firm/project/participation graph.
+#[allow(clippy::too_many_lines)]
+async fn fixture() -> Option<Fixture> {
+    let (options, database) = fresh_schema().await?;
+    let pg = connect(&options, &database).await;
+    let db = mem_surreal().await;
+    let owner = persons::create(
+        &db,
+        &NewPerson::with_role("Owner", "owner@example.com", Role::Owner),
+    )
+    .await
+    .unwrap()
+    .id;
+    let lawyer = persons::create(
+        &db,
+        &NewPerson::with_role("Lawyer", "lawyer@example.com", Role::Lawyer),
+    )
+    .await
+    .unwrap()
+    .id;
+    let firm = firms::create(
+        &db,
+        &NewFirm {
+            name: "Practice".into(),
+            status: "active".into(),
+            entity_id: seed_entity(&db).await,
+            admin_dri_person_id: owner,
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let project = projects::create(
+        &db,
+        &NewProject {
+            code: "alpha-matter".into(),
+            name: "Alpha Matter".into(),
+            status: "open".into(),
+            entity_id: seed_entity(&db).await,
+            firm_id: Some(firm),
+            ..NewProject::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+
+    // Reference rows in PostgreSQL under the same ids so the Inbox foreign
+    // keys resolve (the projects_tests.rs pattern).
+    let jurisdiction = Uuid::new_v4();
+    let entity_type = Uuid::new_v4();
+    let entity = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO jurisdiction (id,name,code) VALUES ($1,'Synthetic Jurisdiction','TST')",
+    )
+    .bind(jurisdiction)
+    .execute(&pg.0)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO entity_type (id,name) VALUES ($1,'Synthetic Entity')")
+        .bind(entity_type)
+        .execute(&pg.0)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO entity (id,name,entity_type_id,jurisdiction_id) VALUES ($1,'Synthetic Entity',$2,$3)",
+    )
+    .bind(entity)
+    .bind(entity_type)
+    .bind(jurisdiction)
+    .execute(&pg.0)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO firm (id,name,slug,status,entity_id) VALUES ($1,'Practice','practice','active',$2)",
+    )
+    .bind(firm)
+    .bind(entity)
+    .execute(&pg.0)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO person (id,name,email,role) VALUES ($1,'Owner','owner@example.com','owner')",
+    )
+    .bind(owner)
+    .execute(&pg.0)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'Lawyer','lawyer@example.com','lawyer')")
+        .bind(lawyer)
+        .execute(&pg.0)
+        .await
+        .unwrap();
+    // The proven reply-authority combination from the Surreal fixture: a
+    // lawyer DRI on the matter — the designation itself is the lawyer's
+    // firm-side participation row.
+    projects::designate_dri_in_surreal(&db, project, lawyer, projects::DriSide::Lawyer)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO project (id,code,name,status,entity_id,firm_id) VALUES ($1,'alpha-matter','Alpha Matter','open',$2,$3)",
+    )
+    .bind(project)
+    .bind(entity)
+    .bind(firm)
+    .execute(&pg.0)
+    .await
+    .unwrap();
+
+    Some(Fixture {
+        pg,
+        db,
+        firm,
+        owner,
+        lawyer,
+        project,
+        entity,
+    })
+}
+
+/// A second Project mirrored into PostgreSQL under the fixture's Entity —
+/// re-attribution targets need a PG row or the conversation FK refuses.
+async fn seed_project(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    entity: Uuid,
+    firm: Uuid,
+    code: &str,
+    name: &str,
+) -> Uuid {
+    let project = projects::create(
+        db,
+        &NewProject {
+            code: code.into(),
+            name: name.into(),
+            status: "open".into(),
+            entity_id: entity,
+            firm_id: Some(firm),
+            ..NewProject::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    sqlx::query(
+        "INSERT INTO project (id,code,name,status,entity_id,firm_id) VALUES ($1,$2,$3,'open',$4,$5)",
+    )
+    .bind(project)
+    .bind(code)
+    .bind(name)
+    .bind(entity)
+    .bind(firm)
+    .execute(&pg.0)
+    .await
+    .unwrap();
+    project
+}
+fn inbound<'a>(
+    firm: Uuid,
+    channel_name: &'a str,
+    account: &'a str,
+    provider_message_id: &'a str,
+    address: &'a str,
+) -> IngestInbound<'a> {
+    IngestInbound {
+        firm_id: firm,
+        project_id: None,
+        brand_key: None,
+        interaction_type: None,
+        provider_post_id: None,
+        parent_provider_message_id: None,
+        visibility: None,
+        channel: channel_name,
+        provider_account: account,
+        provider_message_id,
+        provider_thread_ref: None,
+        external_address: address,
+        external_name: Some("Sender"),
+        subject: Some("Question"),
+        body: "Hello from outside.",
+        source_page: Some("mailbox"),
+        source_channel: Some(channel_name),
+        matter_consent: true,
+        promotional_opt_in: false,
+        email_conversation_id: None,
+        attachments: Vec::new(),
+        occurred_at: "2026-09-27T00:00:00Z",
+        raw_storage_key: None,
+    }
+}
+
+fn inbound_with<'a>(
+    base: &IngestInbound<'a>,
+    thread_ref: Option<&'a str>,
+    address: &'a str,
+    provider_message_id: &'a str,
+) -> IngestInbound<'a> {
+    IngestInbound {
+        provider_thread_ref: thread_ref,
+        external_address: address,
+        provider_message_id,
+        ..base.clone()
+    }
+}
+
+async fn message_count(pg: &PostgresDb) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT count(*) FROM message")
+        .fetch_one(&pg.0)
+        .await
+        .unwrap()
+}
+
+async fn conversation_count(pg: &PostgresDb) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT count(*) FROM inbox_conversation")
+        .fetch_one(&pg.0)
+        .await
+        .unwrap()
+}
+
+async fn ingress_count(pg: &PostgresDb) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT count(*) FROM inbox_ingress")
+        .fetch_one(&pg.0)
+        .await
+        .unwrap()
+}
+
+/// AC2: concurrent deliveries of the same provider id converge on one
+/// message; the losers report the winner's ids as deduped, and no orphan
+/// conversation or second ingress row survives.
+#[tokio::test]
+async fn concurrent_replays_dedup_race_safely() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let pg = Arc::new(fixture.pg);
+    let inbound = inbound(
+        fixture.firm,
+        channel::EMAIL,
+        "nick@neonlaw.com",
+        "msg-1",
+        "sender@example.com",
+    );
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let pg = pg.clone();
+        let inbound = inbound.clone();
+        tasks.spawn(async move {
+            pg_inbox::ingest_inbound_on(&pg, &inbound)
+                .await
+                .expect("ingest")
+        });
+    }
+    let mut results = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        results.push(result.unwrap());
+    }
+
+    let deduped = results.iter().filter(|ingested| ingested.deduped).count();
+    assert_eq!(deduped, 7, "exactly one delivery wins; others dedup");
+    let first = &results[0];
+    assert!(results
+        .iter()
+        .all(|ingested| ingested.message_id == first.message_id));
+    assert!(results
+        .iter()
+        .all(|ingested| ingested.conversation_id == first.conversation_id));
+    assert_eq!(message_count(&pg).await, 1);
+    assert_eq!(conversation_count(&pg).await, 1);
+    assert_eq!(ingress_count(&pg).await, 1);
+}
+
+/// AC2: threading follows the partition key exactly — the counterparty
+/// address and provider thread reference split conversations; nothing else
+/// does.
+#[tokio::test]
+async fn threading_partitions_by_the_surreal_key() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let base = inbound(
+        fixture.firm,
+        channel::EMAIL,
+        "nick@neonlaw.com",
+        "msg-1",
+        "sender@example.com",
+    );
+
+    let first = pg_inbox::ingest_inbound_on(&fixture.pg, &base)
+        .await
+        .unwrap();
+    let replay = pg_inbox::ingest_inbound_on(&fixture.pg, &base)
+        .await
+        .unwrap();
+    assert!(replay.deduped);
+    assert_eq!(replay.conversation_id, first.conversation_id);
+
+    // Same account and thread, different counterparty: a new conversation.
+    let other_party = inbound_with(&base, None, "someone-else@example.com", "msg-2");
+    let second = pg_inbox::ingest_inbound_on(&fixture.pg, &other_party)
+        .await
+        .unwrap();
+    assert!(!second.deduped);
+    assert_ne!(second.conversation_id, first.conversation_id);
+
+    // Same counterparty, different thread reference: a new conversation.
+    let other_thread = inbound_with(&base, Some("thread-9"), "sender@example.com", "msg-3");
+    let third = pg_inbox::ingest_inbound_on(&fixture.pg, &other_thread)
+        .await
+        .unwrap();
+    assert!(!third.deduped);
+    assert_ne!(third.conversation_id, first.conversation_id);
+
+    // Same counterparty and thread reference: threaded together.
+    let same_thread = inbound_with(&base, Some("thread-9"), "sender@example.com", "msg-4");
+    let fourth = pg_inbox::ingest_inbound_on(&fixture.pg, &same_thread)
+        .await
+        .unwrap();
+    assert_eq!(fourth.conversation_id, third.conversation_id);
+    assert_eq!(conversation_count(&fixture.pg).await, 3);
+    assert_eq!(message_count(&fixture.pg).await, 4);
+}
+
+/// Sequential replay of an imported payload is a no-op that reports the
+/// existing ids — LAW-238's idempotent import contract.
+#[tokio::test]
+async fn replay_reports_existing_ids_and_exits_clean() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let inbound = inbound(
+        fixture.firm,
+        channel::EMAIL,
+        "nick@neonlaw.com",
+        "msg-1",
+        "sender@example.com",
+    );
+    let first = pg_inbox::ingest_inbound_on(&fixture.pg, &inbound)
+        .await
+        .unwrap();
+    let second = pg_inbox::ingest_inbound_on(&fixture.pg, &inbound)
+        .await
+        .unwrap();
+    assert!(second.deduped);
+    assert_eq!(second.message_id, first.message_id);
+    assert_eq!(second.conversation_id, first.conversation_id);
+    assert_eq!(message_count(&fixture.pg).await, 1);
+}
+
+/// AC4 seed: a lawyer-sent import ingests as `outbound` with the author set,
+/// and historical outbound mail is never dispatched.
+#[tokio::test]
+async fn lawyer_sent_imports_ingest_outbound_with_author() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = pg_inbox::ingest_message_on(
+        &fixture.pg,
+        direction::OUTBOUND,
+        Some(fixture.owner),
+        &inbound(
+            fixture.firm,
+            channel::EMAIL,
+            "nick@neonlaw.com",
+            "sent-1",
+            "client@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+    let message = crate::postgres::inbox::message_by_id_on(&fixture.pg, ingested.message_id)
+        .await
+        .unwrap()
+        .expect("message row");
+    assert_eq!(message.direction, direction::OUTBOUND);
+    assert_eq!(message.author_person_id, Some(fixture.owner));
+    assert_eq!(message.delivery_state, delivery::RECEIVED);
+
+    // Dispatching the queue does not resend historical imports.
+    let report = crate::postgres::inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &NoTransport)
+        .await
+        .unwrap();
+    assert_eq!(report.submitted, 0);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.suppressed, 0);
+}
+
+/// AC7 seed: attribution projects each message as an email Communication with
+/// `source_ref = inbox:{message-id}`, re-attribution moves the rows, and a
+/// second projection is a dedup no-op.
+#[tokio::test]
+async fn attribution_projects_moves_and_dedups() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = pg_inbox::ingest_inbound_on(
+        &fixture.pg,
+        &inbound(
+            fixture.firm,
+            channel::EMAIL,
+            "nick@neonlaw.com",
+            "msg-1",
+            "sender@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+
+    let assignment = pg_inbox::assign_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+        fixture.project,
+    )
+    .await
+    .unwrap();
+    assert_eq!(assignment.to_project_id, fixture.project);
+
+    let communications = crate::communications::for_project(&fixture.db, fixture.project)
+        .await
+        .unwrap();
+    assert_eq!(communications.len(), 1, "one projected Communication");
+    assert_eq!(
+        communications[0].channel,
+        crate::communications::channel::EMAIL_INBOUND
+    );
+    assert_eq!(
+        communications[0].source_ref.as_deref(),
+        Some(format!("inbox:{}", ingested.message_id).as_str())
+    );
+
+    // Re-attribution moves the row; a repeated projection does not duplicate.
+    let other_project = seed_project(
+        &fixture.pg,
+        &fixture.db,
+        fixture.entity,
+        fixture.firm,
+        "beta-matter",
+        "Beta Matter",
+    )
+    .await;
+    pg_inbox::assign_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+        other_project,
+    )
+    .await
+    .unwrap();
+    let moved = crate::communications::for_project(&fixture.db, other_project)
+        .await
+        .unwrap();
+    assert_eq!(moved.len(), 1);
+    assert!(
+        crate::communications::for_project(&fixture.db, fixture.project)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// AC3 + AC5 seed: a token-less .eml walks the real adapter → ingest seam,
+/// replays deduped via the scoped digest, and leaves one row. The digest
+/// identity — not a native Message-ID — is what carries idempotency here.
+#[tokio::test]
+async fn email_import_survives_replay_without_a_message_id() {
+    use crate::inbox_import::{EmailAdapter, ImportSource as _};
+
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    // No Message-ID header: the digest fallback is the only identity.
+    let raw = b"From: Clerk <clerk@court.example>\r\n\
+                To: nick@neonlaw.com\r\n\
+                Subject: Re: discovery schedule\r\n\
+                Date: Tue, 28 Oct 2026 14:03:00 +0000\r\n\
+                \r\n\
+                The schedule is entered.";
+
+    let mut first = None::<crate::inbox::IngestedInbound>;
+    for _ in 0..2 {
+        let parsed = EmailAdapter
+            .parse("nick@neonlaw.com", raw)
+            .expect("token-less email parses");
+        assert_eq!(parsed.len(), 1);
+        let ingest = crate::inbox_import::import_message_to_ingest(
+            &parsed[0],
+            fixture.firm,
+            "nick@neonlaw.com",
+        );
+        let ingested = pg_inbox::ingest_message_on(&fixture.pg, direction::INBOUND, None, &ingest)
+            .await
+            .unwrap();
+        if let Some(first) = first {
+            assert!(ingested.deduped, "the replay dedups");
+            assert_eq!(ingested.message_id, first.message_id);
+            assert_eq!(ingested.conversation_id, first.conversation_id);
+        }
+        first = Some(ingested);
+    }
+    assert_eq!(message_count(&fixture.pg).await, 1);
+    assert_eq!(conversation_count(&fixture.pg).await, 1);
+}
+
+/// AC3 (CSV) + AC9 store half: a LinkedIn export threads into one
+/// Conversation per CONVERSATION ID, replaying the same export dedups every
+/// row, and the member's own row lands `outbound` with the author set.
+#[tokio::test]
+async fn linkedin_import_threads_one_conversation_per_export_thread() {
+    use crate::inbox_import::{ImportSource as _, LinkedInAdapter};
+
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let csv = "CONVERSATION ID,FROM,SENDER PROFILE URL,TO,DATE,SUBJECT,CONTENT\r\n\
+               conv-1,Jordan Cliente,https://linkedin.com/in/jordan,Me,2026-10-29 10:00:00 UTC,,Can we talk about the retainer?\r\n\
+               conv-1,Me,https://linkedin.com/in/me,Jordan Cliente,2026-10-29 11:00:00 UTC,,Of course - Tuesday works.\r\n\
+               conv-2,Payee Recruiter,https://linkedin.com/in/recruiter,Me,2026-10-28 09:30:00 UTC,,Role opening\r\n";
+    let mailbox = "https://linkedin.com/in/me";
+
+    let mut thread_conversation_id = None;
+    let mut replay_ids = None::<Vec<crate::inbox::IngestedInbound>>;
+    for _ in 0..2 {
+        let parsed = LinkedInAdapter
+            .parse(mailbox, csv.as_bytes())
+            .expect("export parses");
+        assert_eq!(parsed.len(), 3);
+        let mut pass = Vec::new();
+        for message in &parsed {
+            // The member's own rows are lawyer-sent; the door resolves the
+            // mailbox owner's Person for them.
+            let (direction_value, author) =
+                if message.direction == crate::inbox_import::Direction::Outbound {
+                    (direction::OUTBOUND, Some(fixture.owner))
+                } else {
+                    (direction::INBOUND, None)
+                };
+            let ingest =
+                crate::inbox_import::import_message_to_ingest(message, fixture.firm, mailbox);
+            let ingested =
+                pg_inbox::ingest_message_on(&fixture.pg, direction_value, author, &ingest)
+                    .await
+                    .unwrap();
+            pass.push(ingested);
+            // The conv-1 thread holds the pair this test projects later; the
+            // inbound member of the pair is the first row of the thread.
+            if message.provider_thread_ref.as_deref() == Some("conv-1")
+                && message.direction == crate::inbox_import::Direction::Inbound
+            {
+                thread_conversation_id = Some(ingested.conversation_id);
+            }
+        }
+        if let Some(first) = &replay_ids {
+            for (first, replayed) in first.iter().zip(&pass) {
+                assert!(replayed.deduped, "replayed export dedups");
+                assert_eq!(replayed.message_id, first.message_id);
+            }
+        }
+        replay_ids = Some(pass);
+    }
+    // Two CONVERSATION IDs → exactly two Conversations, three Messages.
+    assert_eq!(conversation_count(&fixture.pg).await, 2);
+    assert_eq!(message_count(&fixture.pg).await, 3);
+
+    // AC7 (linkedin): attributing the conv-1 thread projects a
+    // linkedin_inbound/linkedin_outbound Communication pair.
+    let thread = thread_conversation_id.expect("conv-1 thread ingested");
+    pg_inbox::assign_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        thread,
+        fixture.project,
+    )
+    .await
+    .unwrap();
+    let communications = crate::communications::for_project(&fixture.db, fixture.project)
+        .await
+        .unwrap();
+    assert_eq!(communications.len(), 2, "one Communication per message");
+    let mut channels = communications
+        .iter()
+        .map(|communication| communication.channel.as_str())
+        .collect::<Vec<_>>();
+    channels.sort_unstable();
+    assert_eq!(
+        channels,
+        vec![
+            crate::communications::channel::LINKEDIN_INBOUND,
+            crate::communications::channel::LINKEDIN_OUTBOUND,
+        ]
+    );
+}
+
+/// AC6 seed: the verbatim payload's object-storage key recorded on ingest
+/// survives the read path — bytes never live in a row, only the key.
+#[tokio::test]
+async fn raw_storage_key_persists_on_imported_messages() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let mut ingest = inbound(
+        fixture.firm,
+        channel::EMAIL,
+        "nick@neonlaw.com",
+        "msg-1",
+        "sender@example.com",
+    );
+    ingest.raw_storage_key = Some("mail/1761800000-notice.eml");
+    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &ingest)
+        .await
+        .unwrap();
+    let message = pg_inbox::message_by_id_on(&fixture.pg, ingested.message_id)
+        .await
+        .unwrap()
+        .expect("message row");
+    assert_eq!(
+        message.raw_storage_key.as_deref(),
+        Some("mail/1761800000-notice.eml")
+    );
+}
+
+/// AC8 store half: the attachment slot is first-wins — re-running the import
+/// never re-points the Message, and the remaining attachments of the same
+/// message resolve through MailProvenance, not this slot.
+#[tokio::test]
+async fn attachment_slot_is_first_wins() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = pg_inbox::ingest_inbound_on(
+        &fixture.pg,
+        &inbound(
+            fixture.firm,
+            channel::EMAIL,
+            "nick@neonlaw.com",
+            "msg-1",
+            "sender@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+    let seed_asset = |id: Uuid, sha: &str| {
+        sqlx::query(
+            "INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex,project_id) \
+             VALUES ($1, 'projects/x/documents/' || $1::text, 'application/pdf', 3, $2,$3)",
+        )
+        .bind(id)
+        .bind(sha)
+        .bind(fixture.project)
+    };
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    seed_asset(first, "aa")
+        .execute(fixture.pg.pool())
+        .await
+        .unwrap();
+    seed_asset(second, "bb")
+        .execute(fixture.pg.pool())
+        .await
+        .unwrap();
+    pg_inbox::set_attachment_asset_on(&fixture.pg, ingested.message_id, first)
+        .await
+        .unwrap();
+    pg_inbox::set_attachment_asset_on(&fixture.pg, ingested.message_id, second)
+        .await
+        .unwrap();
+    let message = pg_inbox::message_by_id_on(&fixture.pg, ingested.message_id)
+        .await
+        .unwrap()
+        .expect("message row");
+    assert_eq!(message.attachment_asset_id, Some(first));
+}
+
+/// Promotional opt-out suppresses the queued promotional send for that
+/// address.
+#[tokio::test]
+async fn promotional_opt_out_suppresses_queued_sends() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = pg_inbox::ingest_inbound_on(
+        &fixture.pg,
+        &inbound(
+            fixture.firm,
+            channel::EMAIL,
+            "nick@neonlaw.com",
+            "msg-1",
+            "sender@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+
+    // Replies require the conversation to sit on a Project the actor
+    // participates in — Owners may attribute, a participating Lawyer replies.
+    pg_inbox::assign_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+        fixture.project,
+    )
+    .await
+    .unwrap();
+    let message_id = pg_inbox::queue_reply_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.lawyer,
+        ingested.conversation_id,
+        "Join our webinar",
+        purpose::PROMOTIONAL,
+    )
+    .await
+    .unwrap();
+
+    let suppressed = pg_inbox::record_promotional_opt_out_on(
+        &fixture.pg,
+        fixture.firm,
+        channel::EMAIL,
+        "sender@example.com",
+    )
+    .await
+    .unwrap();
+    assert_eq!(suppressed, 1);
+    let message = crate::postgres::inbox::message_by_id_on(&fixture.pg, message_id)
+        .await
+        .unwrap()
+        .expect("message row");
+    assert_eq!(message.delivery_state, delivery::SUPPRESSED);
+}
+
+/// The Slack notice lifecycle: one reserve wins, the second loses, a recorded
+/// result never regresses, and reconciliation only surfaces unresolved rows.
+#[tokio::test]
+async fn alert_lifecycle_reserves_once_and_never_regresses() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = pg_inbox::ingest_inbound_on(
+        &fixture.pg,
+        &inbound(
+            fixture.firm,
+            channel::EMAIL,
+            "nick@neonlaw.com",
+            "msg-1",
+            "sender@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        pg_inbox::reserve_alert_on(&fixture.pg, ingested.message_id, "slack-channel")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !pg_inbox::reserve_alert_on(&fixture.pg, ingested.message_id, "slack-channel")
+            .await
+            .unwrap()
+    );
+
+    pg_inbox::record_alert_on(
+        &fixture.pg,
+        ingested.message_id,
+        "notified",
+        Some("2026-10-30T00:00:00Z"),
+    )
+    .await
+    .unwrap();
+    let receipt = pg_inbox::alert_receipt_on(&fixture.pg, ingested.message_id)
+        .await
+        .unwrap();
+    assert_eq!(receipt.state.as_deref(), Some("notified"));
+    assert_eq!(receipt.channel_id.as_deref(), Some("slack-channel"));
+
+    // Notified rows are never re-reconciled; a fresh ingest re-enters the queue.
+    assert!(pg_inbox::awaiting_alert_reconciliation_on(&fixture.pg, 10)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+/// An unsupported channel is refused before any row is written.
+#[tokio::test]
+async fn unsupported_channels_are_refused() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let error = pg_inbox::ingest_inbound_on(
+        &fixture.pg,
+        &inbound(
+            fixture.firm,
+            "carrier_pigeon",
+            "nick@neonlaw.com",
+            "msg-1",
+            "sender@example.com",
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, InboxError::Denied));
+    assert_eq!(message_count(&fixture.pg).await, 0);
+    assert_eq!(conversation_count(&fixture.pg).await, 0);
+}
+
+#[tokio::test]
+async fn targeted_ingest_preserves_project_scope_and_all_attachments() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let mut input = inbound(
+        fixture.firm,
+        channel::SCRAPER,
+        "court.example.test",
+        "scraper-seed",
+        "clerk@example.test",
+    );
+    input.project_id = Some(fixture.project);
+    for index in 0..2 {
+        let id = Uuid::now_v7();
+        let sha = format!("{index:064x}");
+        sqlx::query("INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex,project_id) VALUES ($1, $2, 'application/pdf', 3, $3,$4)")
+            .bind(id).bind(format!("synthetic/{id}")).bind(&sha).bind(fixture.project).execute(fixture.pg.pool()).await.unwrap();
+        input.attachments.push(crate::inbox::IngestAttachment {
+            asset_id: id,
+            filename: format!("notice-{index}.pdf"),
+            sha256: sha,
+        });
+    }
+    let first = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+        .await
+        .unwrap();
+    let conversation = pg_inbox::conversation_by_id_on(&fixture.pg, first.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let links: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inbox_message_asset WHERE message_id = $1")
+            .bind(first.message_id)
+            .fetch_one(fixture.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        (conversation.project_id, links),
+        (Some(fixture.project), 2),
+        "targeted ingest retains its Project and every provider attachment"
+    );
+    let replay = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+        .await
+        .unwrap();
+    assert_eq!(replay.message_id, first.message_id);
+    let links: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inbox_message_asset WHERE message_id = $1")
+            .bind(first.message_id)
+            .fetch_one(fixture.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(links, 2, "replay must not duplicate attachment links");
+    input.project_id = None;
+    input.provider_message_id = "unassigned-seed";
+    let unassigned = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+        .await
+        .unwrap();
+    assert_ne!(
+        unassigned.conversation_id, first.conversation_id,
+        "unassigned intake cannot join a matter-scoped thread"
+    );
+}
+
+async fn assigned_email(fixture: &Fixture, provider_id: &str) -> crate::inbox::IngestedInbound {
+    let input = inbound(
+        fixture.firm,
+        channel::EMAIL,
+        "inbox@example.com",
+        provider_id,
+        "sender@example.com",
+    );
+    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+        .await
+        .unwrap();
+    pg_inbox::assign_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+        fixture.project,
+    )
+    .await
+    .unwrap();
+    ingested
+}
+
+#[tokio::test]
+async fn native_email_relay_loses_authority_when_participation_is_removed() {
+    let Some(f) = fixture().await else { return };
+    let ingested = assigned_email(&f, "relay-authority").await;
+    let email_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO email_conversation (id,token,external_email,subject,status,firm_id,project_id,inserted_at,updated_at) \
+         VALUES ($1,$2,'sender@example.com','Synthetic thread','open',$3,$4,now(),now())",
+    ).bind(email_id).bind(email_id.to_string()).bind(f.firm).bind(f.project)
+        .execute(f.pg.pool()).await.unwrap();
+    sqlx::query("UPDATE inbox_conversation SET email_conversation_id=$2 WHERE id=$1")
+        .bind(ingested.conversation_id)
+        .bind(email_id)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    let clerk = persons::create(
+        &f.db,
+        &NewPerson::with_role("synthetic clerk", "clerk@example.com", Role::Clerk),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, clerk.id, email_id)
+            .await
+            .unwrap()
+    );
+    let participation = projects::add_participation(
+        &f.db,
+        f.project,
+        clerk.id,
+        projects::participation_for_role(Role::Clerk),
+    )
+    .await
+    .unwrap();
+    assert!(
+        pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, clerk.id, email_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, f.lawyer, email_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, f.owner, email_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, Uuid::now_v7(), email_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, f.lawyer, Uuid::now_v7())
+            .await
+            .unwrap()
+    );
+    projects::remove_participation(&f.db, participation.id)
+        .await
+        .unwrap();
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, clerk.id, email_id)
+            .await
+            .unwrap()
+    );
+}
+
+#[derive(Default)]
+struct CapturingTransport(std::sync::Mutex<Vec<crate::inbox::OutboundEnvelope>>);
+
+#[async_trait::async_trait]
+impl crate::inbox::OutboundTransport for CapturingTransport {
+    async fn deliver(
+        &self,
+        envelope: &crate::inbox::OutboundEnvelope,
+    ) -> Result<crate::inbox::TransportOutcome, String> {
+        self.0.lock().unwrap().push(envelope.clone());
+        match envelope.body.as_str() {
+            "unknown" => Ok(crate::inbox::TransportOutcome::Unknown),
+            "rejected" => Ok(crate::inbox::TransportOutcome::Rejected {
+                detail: "synthetic rejection".into(),
+            }),
+            "transport-error" => Err("synthetic transport failure".into()),
+            _ => Ok(crate::inbox::TransportOutcome::Submitted {
+                provider_ref: "synthetic-receipt".into(),
+            }),
+        }
+    }
+}
+
+async fn assert_native_receipts(fixture: &Fixture, message_id: Uuid) {
+    for (firm, channel_name, account) in [
+        (Uuid::now_v7(), channel::EMAIL, "inbox@example.com"),
+        (fixture.firm, channel::FACEBOOK, "inbox@example.com"),
+        (fixture.firm, channel::EMAIL, "other@example.com"),
+    ] {
+        assert_eq!(
+            pg_inbox::apply_delivery_on(
+                &fixture.pg,
+                &fixture.db,
+                firm,
+                channel_name,
+                account,
+                "synthetic-receipt",
+                delivery::DELIVERED
+            )
+            .await
+            .unwrap(),
+            None
+        );
+    }
+    assert_eq!(
+        pg_inbox::apply_delivery_on(
+            &fixture.pg,
+            &fixture.db,
+            fixture.firm,
+            channel::EMAIL,
+            "inbox@example.com",
+            "synthetic-receipt",
+            delivery::DELIVERED
+        )
+        .await
+        .unwrap(),
+        Some(message_id)
+    );
+    pg_inbox::apply_delivery_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.firm,
+        channel::EMAIL,
+        "inbox@example.com",
+        "synthetic-receipt",
+        delivery::SUBMITTED,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pg_inbox::message_by_id_on(&fixture.pg, message_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .delivery_state,
+        delivery::DELIVERED
+    );
+    assert_eq!(
+        pg_inbox::apply_delivery_on(
+            &fixture.pg,
+            &fixture.db,
+            fixture.firm,
+            channel::EMAIL,
+            "inbox@example.com",
+            "missing-receipt",
+            delivery::DELIVERED
+        )
+        .await
+        .unwrap(),
+        None
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM inbox_delivery_attempt")
+        .fetch_one(fixture.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 5, "four provider outcomes and one advancing receipt");
+}
+
+#[tokio::test]
+async fn native_dispatch_retains_each_outcome_and_never_resends_uncertain_messages() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = assigned_email(&fixture, "native-dispatch").await;
+    let note = pg_inbox::post_note_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.lawyer,
+        ingested.conversation_id,
+        " internal note ",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pg_inbox::message_by_id_on(&fixture.pg, note)
+            .await
+            .unwrap()
+            .unwrap()
+            .direction,
+        direction::INTERNAL
+    );
+    let mut ids = Vec::new();
+    for body in ["submitted", "unknown", "rejected", "transport-error"] {
+        ids.push(
+            pg_inbox::queue_reply_on(
+                &fixture.pg,
+                &fixture.db,
+                fixture.lawyer,
+                ingested.conversation_id,
+                body,
+                purpose::MATTER,
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let transport = CapturingTransport::default();
+    let report = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            report.submitted,
+            report.unknown,
+            report.failed,
+            report.suppressed
+        ),
+        (1, 1, 2, 0)
+    );
+    assert_eq!(transport.0.lock().unwrap().len(), 4);
+    for (id, expected) in ids.iter().zip([
+        delivery::SUBMITTED,
+        delivery::UNKNOWN,
+        delivery::FAILED,
+        delivery::FAILED,
+    ]) {
+        assert_eq!(
+            pg_inbox::message_by_id_on(&fixture.pg, *id)
+                .await
+                .unwrap()
+                .unwrap()
+                .delivery_state,
+            expected
+        );
+    }
+    let again = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+        .await
+        .unwrap();
+    assert_eq!(again, crate::inbox::DispatchReport::default());
+    assert_eq!(transport.0.lock().unwrap().len(), 4);
+    assert_native_receipts(&fixture, ids[0]).await;
+}
+
+#[tokio::test]
+async fn native_project_queries_preserve_scope_and_read_markers() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = assigned_email(&fixture, "native-thread").await;
+    let listed = pg_inbox::list_intake_on(&fixture.pg, &fixture.db, fixture.owner)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].unread);
+    let project =
+        pg_inbox::list_project_on(&fixture.pg, &fixture.db, fixture.lawyer, fixture.project)
+            .await
+            .unwrap();
+    assert_eq!(project[0].direction, direction::INBOUND);
+    let thread = pg_inbox::project_thread_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.lawyer,
+        fixture.project,
+        ingested.conversation_id,
+    )
+    .await
+    .unwrap();
+    assert!(thread.can_note && thread.can_send);
+    assert_eq!(thread.messages.len(), 1);
+    assert!(
+        !pg_inbox::conversation_by_id_on(&fixture.pg, ingested.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .unread
+    );
+    let assignments = pg_inbox::assignments_on(&fixture.pg, ingested.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].to_project_id, fixture.project);
+    let outsider = persons::create(
+        &fixture.db,
+        &NewPerson::with_role("Outside Lawyer", "outside@example.com", Role::Lawyer),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::list_project_on(&fixture.pg, &fixture.db, outsider.id, fixture.project).await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::project_thread_on(
+            &fixture.pg,
+            &fixture.db,
+            outsider.id,
+            fixture.project,
+            ingested.conversation_id
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::readable_attachment_on(
+            &fixture.pg,
+            &fixture.db,
+            outsider.id,
+            ingested.message_id
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::post_note_on(
+            &fixture.pg,
+            &fixture.db,
+            outsider.id,
+            ingested.conversation_id,
+            "private note"
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    let detail = pg_inbox::intake_detail_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !detail.bodies_visible,
+        "global intake admission does not grant matter participation"
+    );
+    assert!(detail.messages.is_empty());
+    assert!(!pg_inbox::clerk_may_relay_email_thread_on(
+        &fixture.pg,
+        &fixture.db,
+        outsider.id,
+        Uuid::now_v7()
+    )
+    .await
+    .unwrap());
+}
+
+#[tokio::test]
+async fn native_processing_and_acknowledgment_lifecycles_are_replay_safe() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = assigned_email(&fixture, "native-processing").await;
+    assert!(pg_inbox::process_state_on(&fixture.pg, Uuid::now_v7())
+        .await
+        .unwrap()
+        .is_none());
+    let initial = pg_inbox::process_state_on(&fixture.pg, ingested.message_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(initial.route.is_none() && initial.processed_at.is_none());
+    assert_eq!(
+        pg_inbox::unprocessed_inbox_on(&fixture.pg, Some(&[fixture.firm]))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        pg_inbox::unprocessed_inbox_on(&fixture.pg, Some(&[Uuid::now_v7()]))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let now = chrono::Utc::now();
+    pg_inbox::mark_processed_on(&fixture.pg, ingested.message_id, "other", now)
+        .await
+        .unwrap();
+    let processed = pg_inbox::process_state_on(&fixture.pg, ingested.message_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(processed.route.as_deref(), Some("other"));
+    assert_eq!(processed.processed_at, Some(now));
+    assert!(pg_inbox::unprocessed_inbox_on(&fixture.pg, None)
+        .await
+        .unwrap()
+        .is_empty());
+    let acknowledgment =
+        pg_inbox::reserve_acknowledgment_on(&fixture.pg, &ingested, "Synthetic acknowledgment")
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(pg_inbox::reserve_acknowledgment_on(
+        &fixture.pg,
+        &ingested,
+        "Synthetic acknowledgment"
+    )
+    .await
+    .unwrap()
+    .is_none());
+    pg_inbox::acknowledgment_submitted_on(
+        &fixture.pg,
+        acknowledgment,
+        Some("synthetic-ack".into()),
+    )
+    .await
+    .unwrap();
+    let message = pg_inbox::message_by_id_on(&fixture.pg, acknowledgment)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(message.delivery_state, delivery::SUBMITTED);
+    assert_eq!(message.provider_ref.as_deref(), Some("synthetic-ack"));
+}
+
+#[tokio::test]
+async fn native_social_replies_keep_private_threads_private_through_dispatch() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let mut input = inbound(
+        fixture.firm,
+        channel::FACEBOOK,
+        "synthetic-page",
+        "private-comment",
+        "synthetic-sender",
+    );
+    input.interaction_type = Some("comment");
+    input.provider_post_id = Some("synthetic-post");
+    input.visibility = Some("private");
+    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+        .await
+        .unwrap();
+    assert!(matches!(
+        pg_inbox::queue_social_reply_on(
+            &fixture.pg,
+            &fixture.db,
+            fixture.owner,
+            ingested.conversation_id,
+            "public reply",
+            "public"
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::queue_social_reply_on(
+            &fixture.pg,
+            &fixture.db,
+            fixture.owner,
+            ingested.conversation_id,
+            " ",
+            "private"
+        )
+        .await,
+        Err(InboxError::Empty)
+    ));
+    let reply = pg_inbox::queue_social_reply_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+        "private reply",
+        "private",
+    )
+    .await
+    .unwrap();
+    let transport = CapturingTransport::default();
+    let report = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+        .await
+        .unwrap();
+    assert_eq!(report.submitted, 1);
+    let sent = transport.0.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].visibility.as_deref(), Some("private"));
+    assert_eq!(
+        sent[0].reply_to_provider_message_id.as_deref(),
+        Some("private-comment")
+    );
+    drop(sent);
+    assert_eq!(
+        pg_inbox::message_by_id_on(&fixture.pg, reply)
+            .await
+            .unwrap()
+            .unwrap()
+            .delivery_state,
+        delivery::SUBMITTED
+    );
+    // Even a corrupted queued public reply is refused by the final send check.
+    let unsafe_reply = pg_inbox::queue_social_reply_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        ingested.conversation_id,
+        "unsafe reply",
+        "private",
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE message SET visibility = 'public' WHERE id = $1")
+        .bind(unsafe_reply)
+        .execute(fixture.pg.pool())
+        .await
+        .unwrap();
+    let refused = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+        .await
+        .unwrap();
+    assert_eq!(refused.suppressed, 1);
+    assert_eq!(transport.0.lock().unwrap().len(), 1);
+}
+
+async fn seed_native_attachment(
+    fixture: &Fixture,
+    message_id: Uuid,
+) -> crate::inbox::IngestAttachment {
+    let asset = Uuid::now_v7();
+    sqlx::query("INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex,project_id) VALUES ($1, 'synthetic/notice.pdf', 'application/pdf', 3, 'synthetic-digest',$2)")
+        .bind(asset).bind(fixture.project).execute(fixture.pg.pool()).await.unwrap();
+    pg_inbox::set_attachment_asset_on(&fixture.pg, message_id, asset)
+        .await
+        .unwrap();
+    let attachment = crate::inbox::IngestAttachment {
+        asset_id: asset,
+        filename: "notice.pdf".into(),
+        sha256: "synthetic-digest".into(),
+    };
+    for _ in 0..2 {
+        pg_inbox::link_message_assets_on(
+            &fixture.pg,
+            fixture.firm,
+            message_id,
+            std::slice::from_ref(&attachment),
+        )
+        .await
+        .unwrap();
+    }
+    attachment
+}
+
+#[tokio::test]
+async fn native_attachments_and_intake_details_follow_firm_and_project_scope() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = assigned_email(&fixture, "native-attachment-scope").await;
+    firms::add_membership(
+        &fixture.db,
+        &firms::NewPersonFirmRole {
+            person_id: fixture.lawyer,
+            firm_id: fixture.firm,
+            membership: firms::FirmMembership::Lawyer,
+            is_dri: false,
+        },
+    )
+    .await
+    .unwrap();
+    let attachment = seed_native_attachment(&fixture, ingested.message_id).await;
+    let asset = attachment.asset_id;
+    let attached = pg_inbox::message_assets_on(&fixture.pg, fixture.firm, ingested.message_id)
+        .await
+        .unwrap();
+    assert_eq!(attached.len(), 1);
+    assert_eq!(
+        (
+            attached[0].asset_id,
+            attached[0].filename.as_str(),
+            attached[0].position
+        ),
+        (asset, "notice.pdf", 0)
+    );
+    assert!(
+        pg_inbox::message_assets_on(&fixture.pg, Uuid::now_v7(), ingested.message_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        pg_inbox::link_message_assets_on(
+            &fixture.pg,
+            Uuid::now_v7(),
+            ingested.message_id,
+            &[attachment]
+        )
+        .await,
+        Err(InboxError::NotFound)
+    ));
+    assert_eq!(
+        pg_inbox::readable_attachment_on(
+            &fixture.pg,
+            &fixture.db,
+            fixture.lawyer,
+            ingested.message_id
+        )
+        .await
+        .unwrap(),
+        Some(asset)
+    );
+    let detail = pg_inbox::intake_detail_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.lawyer,
+        ingested.conversation_id,
+    )
+    .await
+    .unwrap();
+    assert!(detail.bodies_visible);
+    assert_eq!(detail.messages.len(), 1);
+    let listed = pg_inbox::list_intake_on(&fixture.pg, &fixture.db, fixture.lawyer)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].has_attachments);
+    assert!(!listed[0].unread);
+    let client = persons::create(
+        &fixture.db,
+        &NewPerson::new("Synthetic Client", "client@example.com"),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pg_inbox::list_intake_on(&fixture.pg, &fixture.db, client.id).await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::intake_detail_on(
+            &fixture.pg,
+            &fixture.db,
+            client.id,
+            ingested.conversation_id
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::readable_attachment_on(&fixture.pg, &fixture.db, client.id, ingested.message_id)
+            .await,
+        Err(InboxError::Denied)
+    ));
+}
+
+#[tokio::test]
+async fn legacy_inbox_repair_cannot_replace_native_authority_or_guess_on_invalid_config() {
+    const CHILD: &str = "NAVIGATOR_TEST_INBOX_REPAIR_AUTHORITY_CHILD";
+    let Some(case) = std::env::var(CHILD).ok() else {
+        if crate::postgres_mirror::tests::test_postgres().is_none() {
+            return;
+        }
+        for case in ["1", "not-a-valid-authority"] {
+            let output=std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact",format!("{}::legacy_inbox_repair_cannot_replace_native_authority_or_guess_on_invalid_config",module_path!().split_once("::").unwrap().1).as_str(),"--nocapture"])
+                .env(CHILD,case).env(pg_inbox::AUTHORITY_ENV,"0").env_remove("NAVIGATOR_POSTGRES_MIRROR")
+                .output().unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "authority case {case}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    };
+    let Some(f) = fixture().await else {
+        return;
+    };
+    ensure_receipt_firm_entity(&f).await;
+    let source = crate::inbox::ingest_inbound(
+        &f.db,
+        &inbound(
+            f.firm,
+            channel::EMAIL,
+            "authority@example.com",
+            "authority-proof",
+            "sender@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+    // Use explicit legal values for nullable checked text fields. Surreal's
+    // option-string NONE projection otherwise reaches PostgreSQL's enum CHECK
+    // before this authority regression can exercise the intended boundary.
+    f.db.query("UPDATE $id SET visibility = 'private', route = 'other'")
+        .bind((
+            "id",
+            crate::surreal::record_id("message", source.message_id),
+        ))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    crate::postgres_mirror::mirror(
+        &f.db,
+        &f.pg,
+        &crate::postgres_mirror::MirrorKey::InboxMessage(source.message_id),
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE message SET body='native authoritative version',updated_at=now() WHERE id=$1",
+    )
+    .bind(source.message_id)
+    .execute(f.pg.pool())
+    .await
+    .unwrap();
+    std::env::set_var(pg_inbox::AUTHORITY_ENV, &case);
+    let repair = crate::postgres_mirror::mirror(
+        &f.db,
+        &f.pg,
+        &crate::postgres_mirror::MirrorKey::InboxMessage(source.message_id),
+    )
+    .await;
+    assert!(repair.is_err(),"a stale Source row cannot overwrite native Inbox or select authority on malformed configuration");
+    assert!(crate::postgres_mirror::inbox::reconcile(&f.db, &f.pg)
+        .await
+        .is_err());
+    let body: String = sqlx::query_scalar("SELECT body FROM message WHERE id=$1")
+        .bind(source.message_id)
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(body, "native authoritative version");
+}
+
+#[tokio::test]
+async fn bare_attachment_ids_and_metadata_are_not_firm_receipt_evidence() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let asset = Uuid::now_v7();
+    let sha = crate::assets::sha256_hex(b"synthetic bytes received elsewhere");
+    sqlx::query("INSERT INTO asset(id,storage_key,content_type,byte_size,sha256_hex,metadata) VALUES ($1,'synthetic/unclaimed','text/plain',1,$2,$3)")
+        .bind(asset).bind(&sha).bind(serde_json::json!({"firm_id":f.firm.to_string()})).execute(f.pg.pool()).await.unwrap();
+    let attachment = crate::inbox::IngestAttachment {
+        asset_id: asset,
+        filename: "supplied.txt".into(),
+        sha256: sha,
+    };
+    let mut input = inbound(
+        f.firm,
+        channel::EMAIL,
+        "receipt@example.com",
+        "unclaimed-proof",
+        "sender@example.com",
+    );
+    input.attachments = vec![attachment.clone()];
+    assert!(
+        matches!(
+            pg_inbox::ingest_inbound_on(&f.pg, &input).await,
+            Err(InboxError::Denied)
+        ),
+        "an arbitrary bare Asset ID and caller metadata must not grant attachment access"
+    );
+    assert_eq!(
+        message_count(&f.pg).await,
+        0,
+        "refusal rolls back Message, Conversation and links"
+    );
+    input.attachments.clear();
+    input.provider_message_id = "empty-message";
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    assert!(matches!(
+        pg_inbox::link_message_assets_on(
+            &f.pg,
+            f.firm,
+            saved.message_id,
+            std::slice::from_ref(&attachment)
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(matches!(
+        pg_inbox::set_attachment_asset_on(&f.pg, saved.message_id, asset).await,
+        Err(InboxError::Denied)
+    ));
+    assert!(pg_inbox::message_assets_on(&f.pg, f.firm, saved.message_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn trusted_clean_bytes_claims_are_firm_scoped_and_do_not_bypass_exact_project() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    ensure_receipt_firm_entity(&f).await;
+    let directory = tempfile::tempdir().unwrap();
+    let storage: Arc<dyn cloud::StorageService> =
+        Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
+    let first = crate::inbox::ingest_attachment_on(
+        Some(&f.pg),
+        &f.db,
+        &storage,
+        f.firm,
+        None,
+        "first.txt",
+        "text/plain",
+        b"shared synthetic bytes",
+    )
+    .await
+    .unwrap();
+    let repeat = crate::inbox::ingest_attachment_on(
+        Some(&f.pg),
+        &f.db,
+        &storage,
+        f.firm,
+        None,
+        "repeat.txt",
+        "text/plain",
+        b"shared synthetic bytes",
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.asset_id, repeat.asset_id);
+    let other = crate::firms::create(
+        &f.db,
+        &NewFirm {
+            name: "Second synthetic Firm".into(),
+            status: "active".into(),
+            entity_id: seed_entity(&f.db).await,
+            admin_dri_person_id: f.owner,
+        },
+    )
+    .await
+    .unwrap();
+    let entity = other.entity_id.unwrap();
+    sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) SELECT $1,'Second synthetic Source Firm',entity_type_id,jurisdiction_id FROM entity WHERE id=$2 ON CONFLICT(id) DO NOTHING").bind(entity).bind(f.entity).execute(f.pg.pool()).await.unwrap();
+    let independent = crate::inbox::ingest_attachment_on(
+        Some(&f.pg),
+        &f.db,
+        &storage,
+        other.id,
+        None,
+        "independent.txt",
+        "text/plain",
+        b"shared synthetic bytes",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        independent.asset_id, first.asset_id,
+        "global bytes dedup remains legitimate across Firms"
+    );
+    assert_independent_firm_receipts(&f, first.asset_id).await;
+    let mut input = inbound(
+        f.firm,
+        channel::EMAIL,
+        "receipt@example.com",
+        "received-proof",
+        "sender@example.com",
+    );
+    input.attachments = vec![first.clone()];
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    assert_eq!(
+        pg_inbox::message_assets_on(&f.pg, f.firm, saved.message_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    input.provider_message_id = "wrong-project-proof";
+    input.project_id = Some(f.project);
+    assert!(
+        matches!(
+            pg_inbox::ingest_inbound_on(&f.pg, &input).await,
+            Err(InboxError::Denied)
+        ),
+        "a staging receipt cannot authorize a bare Asset in an attributed Project"
+    );
+    assert_eq!(message_count(&f.pg).await, 1);
+    let wrong_hash = crate::inbox::IngestAttachment {
+        sha256: crate::assets::sha256_hex(b"other bytes"),
+        ..first
+    };
+    assert!(matches!(
+        pg_inbox::link_message_assets_on(&f.pg, f.firm, saved.message_id, &[wrong_hash]).await,
+        Err(InboxError::Denied)
+    ));
+}
+
+async fn assert_independent_firm_receipts(f: &Fixture, asset_id: Uuid) {
+    let firms: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM inbox_attachment_receipt WHERE asset_id=$1")
+            .bind(asset_id)
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        firms, 2,
+        "each Firm has an independent durable byte receipt"
+    );
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM inbox_attachment_receipt WHERE firm_id=$1 AND asset_id=$2",
+    )
+    .bind(f.firm)
+    .bind(asset_id)
+    .fetch_one(f.pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "retry preserves one durable Firm receipt");
+}
+
+async fn ensure_receipt_firm_entity(f: &Fixture) {
+    let entity = crate::firms::find_by_id(&f.db, f.firm)
+        .await
+        .unwrap()
+        .unwrap()
+        .entity_id
+        .unwrap();
+    sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) SELECT $1,'Synthetic Source Firm',entity_type_id,jurisdiction_id FROM entity WHERE id=$2 ON CONFLICT(id) DO NOTHING")
+        .bind(entity).bind(f.entity).execute(f.pg.pool()).await.unwrap();
+}
+
+#[tokio::test]
+async fn native_relay_requires_a_current_person_eligible_role_and_native_thread() {
+    let Some(f) = fixture().await else { return };
+    let missing_thread = Uuid::now_v7();
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, Uuid::now_v7(), missing_thread)
+            .await
+            .unwrap(),
+        "a missing Person cannot obtain relay authority"
+    );
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, f.owner, missing_thread)
+            .await
+            .unwrap(),
+        "Owner role alone is not Lawyer or Clerk relay participation"
+    );
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, f.lawyer, missing_thread)
+            .await
+            .unwrap(),
+        "Project participation cannot manufacture a native email thread"
+    );
+    assert_eq!(
+        conversation_count(&f.pg).await,
+        0,
+        "denied reads cannot create a thread"
+    );
+}

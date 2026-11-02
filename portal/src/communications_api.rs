@@ -7,11 +7,11 @@
 //! write logs a call as an internal-note Communication with its structure,
 //! or an email with its source, counterparty role, and optional call confirmation or receipt relation.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use store::persons::Role;
 use uuid::Uuid;
 
@@ -99,17 +99,198 @@ fn validate_source_ref<'a>(
     }
 }
 
+/// The list door's optional filters (LAW-238 D3): `?direction=` narrows to
+/// one direction (`inbound`, `outbound`, or `internal`), and
+/// `?attachments=true` keeps only rows with a filed attachment. Both
+/// compose with each other and with the CLI's `--channel`; unknown
+/// direction values are a client error, not a silent empty list.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ListCommunicationsFilter {
+    /// Exact channel match — the filter the CLI's `--channel` has always
+    /// applied, now applied server-side so all three compose in one query.
+    channel: Option<String>,
+    direction: Option<String>,
+    attachments: Option<bool>,
+}
+
+/// One attachment on a Communication, as the list surfaces it (AC10): the
+/// asset the bytes live under, its filename, and its kind.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct AttachmentView {
+    pub asset_id: Uuid,
+    pub filename: Option<String>,
+    pub kind: Option<String>,
+}
+
+/// One row of the list response: the Communication plus its attachments —
+/// the row's own `asset_id`, and, for rows projected from the Inbox
+/// (`source_ref = "inbox:{message-id}"`), the provenance-linked set filed
+/// by the import (LAW-238 D1). A read-side join: no schema change.
+#[derive(Debug, Serialize)]
+pub(crate) struct CommunicationView {
+    #[serde(flatten)]
+    pub communication: store::communications::Communication,
+    pub attachments: Vec<AttachmentView>,
+}
+
+/// `inbox:{message-id}` → the message id; `None` for any other `source_ref`.
+fn inbox_message_id(source_ref: &str) -> Option<&str> {
+    source_ref
+        .strip_prefix("inbox:")
+        .filter(|id| Uuid::parse_str(id).is_ok())
+}
+
+/// An unknown direction is the caller's mistake — a 400, not a silent empty
+/// list. A row projected from the Inbox carries its message direction; a
+/// call row's `direction` is its visibility (`internal` unless shared), so
+/// `direction=internal` and `direction=outbound` partition the same log the
+/// client lens already partitions.
+fn validate_direction(direction: Option<&str>) -> Result<Option<&str>, ApiError> {
+    let Some(direction) = direction.map(str::trim).filter(|d| !d.is_empty()) else {
+        return Ok(None);
+    };
+    if matches!(
+        direction,
+        store::communications::direction::INBOUND
+            | store::communications::direction::OUTBOUND
+            | store::communications::direction::INTERNAL
+    ) {
+        Ok(Some(direction))
+    } else {
+        Err(ApiError::CommunicationInvalid(
+            "direction must be inbound, outbound, or internal".into(),
+        ))
+    }
+}
+
+/// The attachment set one row lists: the row's own asset first, then the
+/// provenance-linked assets the import filed (`mail/{message_id}/{index}`),
+/// deduped by asset id — the first attachment occupies both slots (AC8).
+fn attachment_views(
+    primary: Option<store::assets::Asset>,
+    filed: Vec<store::assets::Asset>,
+) -> Vec<AttachmentView> {
+    let mut attachments = Vec::new();
+    let mut seen = Vec::new();
+    for asset in primary.into_iter().chain(filed) {
+        if seen.contains(&asset.id) {
+            continue;
+        }
+        seen.push(asset.id);
+        attachments.push(AttachmentView {
+            asset_id: asset.id,
+            filename: asset.filename.clone(),
+            kind: asset.kind.clone(),
+        });
+    }
+    attachments
+}
+
 /// `GET /app/api/projects/{id}/communications`
 pub(crate) async fn list_communications(
     State(state): State<ApiState>,
     LawyerSession(session): LawyerSession,
     Path(id): Path<Uuid>,
+    Query(filter): Query<ListCommunicationsFilter>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
+    let direction = validate_direction(filter.direction.as_deref())?;
+    let attachments_only = filter.attachments.unwrap_or(false);
     let rows = store::communications::for_project(&state.surreal, id)
         .await
         .map_err(map_communication)?;
-    Ok(Json(rows).into_response())
+    let mut views = Vec::with_capacity(rows.len());
+    for row in &rows {
+        // The join, not the row shape, carries attachments: the row's own
+        // asset slot plus, for Inbox-projected rows, every provenance-linked
+        // asset the import filed (AC10).
+        let primary = match row.asset_id {
+            Some(asset_id) => store::assets::find_by_id(&state.surreal, asset_id)
+                .await
+                .map_err(ApiError::Asset)?,
+            None => None,
+        };
+        let filed = match row.source_ref.as_deref().and_then(inbox_message_id) {
+            Some(message_id) => {
+                store::assets::find_by_source_message_id(&state.surreal, id, message_id)
+                    .await
+                    .map_err(ApiError::Asset)?
+            }
+            None => Vec::new(),
+        };
+        views.push(CommunicationView {
+            communication: row.clone(),
+            attachments: attachment_views(primary, filed),
+        });
+    }
+    views.retain(|view| {
+        filter
+            .channel
+            .as_deref()
+            .is_none_or(|channel| view.communication.channel == channel.trim())
+            && direction.is_none_or(|direction| view.communication.direction == direction)
+            && (!attachments_only || !view.attachments.is_empty())
+    });
+    Ok(Json(views).into_response())
+}
+
+/// Download a linked Message attachment after resolving its Project thread.
+/// Bare Inbox assets have no document identity; their authority comes from
+/// this Message association, not from an invented Project document route.
+pub(crate) async fn download_message_attachment(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path((project_id, conversation_id, message_id, asset_id)): Path<(Uuid, Uuid, Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    let actor_id = session.person_id.ok_or(ApiError::NotFound)?;
+    let thread =
+        store::inbox::project_thread(&state.surreal, actor_id, project_id, conversation_id)
+            .await
+            .map_err(attachment_inbox_error)?;
+    let message = thread
+        .messages
+        .iter()
+        .find(|message| message.id == message_id)
+        .ok_or(ApiError::NotFound)?;
+    let links =
+        store::inbox::message_assets(&state.surreal, thread.conversation.firm_id, message_id)
+            .await
+            .map_err(attachment_inbox_error)?;
+    let linked = links.into_iter().find(|link| link.asset_id == asset_id);
+    if linked.is_none() && message.attachment_asset_id != Some(asset_id) {
+        return Err(ApiError::NotFound);
+    }
+    let asset = store::assets::find_by_id(&state.surreal, asset_id)
+        .await
+        .map_err(ApiError::Asset)?
+        .ok_or(ApiError::NotFound)?;
+    if asset.project_id.is_some_and(|id| id != project_id) {
+        return Err(ApiError::NotFound);
+    }
+    let filename = linked
+        .map(|link| link.filename)
+        .or_else(|| asset.filename.clone())
+        .unwrap_or_else(|| "attachment".into());
+    let bytes = match state.storage.get(&asset.storage_key).await {
+        Ok(object) => object.bytes,
+        Err(cloud::StorageError::NotFound(_)) => return Err(ApiError::NotFound),
+        Err(error) => return Err(ApiError::Db(error.to_string())),
+    };
+    Ok(crate::project_documents::attachment_bytes_response(
+        bytes,
+        &asset.content_type,
+        &filename,
+    ))
+}
+
+fn attachment_inbox_error(error: store::inbox::InboxError) -> ApiError {
+    match error {
+        store::inbox::InboxError::Denied
+        | store::inbox::InboxError::NotFound
+        | store::inbox::InboxError::CrossFirm => ApiError::NotFound,
+        error => ApiError::Db(error.to_string()),
+    }
 }
 
 /// A call or email names who it was with; a note has no counterparty.
@@ -303,8 +484,12 @@ pub(crate) async fn create_communication(
 
 #[cfg(test)]
 mod tests {
-    use super::{map_communication, validate_source_ref};
+    use super::{
+        attachment_views, inbox_message_id, map_communication, validate_direction,
+        validate_source_ref,
+    };
     use axum::{http::StatusCode, response::IntoResponse};
+    use uuid::Uuid;
 
     #[test]
     fn cross_project_source_reference_conflict_is_a_client_error() {
@@ -325,5 +510,82 @@ mod tests {
         assert!(validate_source_ref("email_inbound", Some(&"x".repeat(513))).is_err());
         assert!(validate_source_ref("call", Some("ref")).is_err());
         assert_eq!(validate_source_ref("call", None).unwrap(), None);
+    }
+
+    #[test]
+    fn direction_filter_accepts_only_the_three_directions() {
+        for direction in ["inbound", "outbound", "internal"] {
+            assert_eq!(
+                validate_direction(Some(direction)).unwrap(),
+                Some(direction)
+            );
+        }
+        assert_eq!(
+            validate_direction(Some(" inbound ")).unwrap(),
+            Some("inbound")
+        );
+        assert_eq!(validate_direction(None).unwrap(), None);
+        assert_eq!(validate_direction(Some("")).unwrap(), None);
+        // Unknown values are a client error, not a silent empty list.
+        assert!(validate_direction(Some("sent")).is_err());
+    }
+
+    #[test]
+    fn only_inbox_projections_carry_a_message_id() {
+        let id = Uuid::now_v7();
+        assert_eq!(
+            inbox_message_id(&format!("inbox:{id}")).map(str::to_string),
+            Some(id.to_string())
+        );
+        assert_eq!(inbox_message_id("gmail:synthetic/receipt"), None);
+        assert_eq!(inbox_message_id("inbox:not-a-uuid"), None);
+        assert_eq!(inbox_message_id("inbox:"), None);
+    }
+
+    #[test]
+    fn attachments_dedupe_the_first_slot_and_keep_list_order() {
+        let primary_id = Uuid::now_v7();
+        let filed_id = Uuid::now_v7();
+        let primary = store::assets::Asset {
+            id: primary_id,
+            filename: Some("exhibit-a.pdf".into()),
+            kind: Some("unclassified".into()),
+            ..asset_fixture()
+        };
+        let second = store::assets::Asset {
+            id: filed_id,
+            filename: Some("exhibit-b.pdf".into()),
+            kind: Some("unclassified".into()),
+            ..asset_fixture()
+        };
+        // The first attachment occupies both the row's asset slot and the
+        // provenance set (AC8) — it must list once.
+        let filed = vec![primary.clone(), second.clone()];
+        let attachments = attachment_views(Some(primary.clone()), filed);
+        assert_eq!(attachments.len(), 2);
+        assert_eq!(attachments[0].asset_id, primary_id);
+        assert_eq!(attachments[0].filename.as_deref(), Some("exhibit-a.pdf"));
+        assert_eq!(attachments[1].asset_id, filed_id);
+
+        // A row with no Inbox projection lists only its own asset.
+        assert_eq!(attachment_views(Some(primary.clone()), Vec::new()).len(), 1);
+        assert!(attachment_views(None, Vec::new()).is_empty());
+    }
+
+    fn asset_fixture() -> store::assets::Asset {
+        // Only the fields attachment_views reads are load-bearing; the
+        // struct is a plain record, so the rest holds neutral values.
+        serde_json::from_value(serde_json::json!({
+            "id": Uuid::now_v7(),
+            "storage_key": "assets/test",
+            "content_type": "application/pdf",
+            "byte_size": 1,
+            "sha256_hex": "abc",
+            "visibility": "internal",
+            "notarization": [],
+            "inserted_at": "2026-10-30T00:00:00Z",
+            "updated_at": "2026-10-30T00:00:00Z"
+        }))
+        .unwrap()
     }
 }

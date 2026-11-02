@@ -1302,6 +1302,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261101110000_add_deadline_category.sql"),
             ),
             (
+                "20261102020000_linkedin_channel_and_raw_storage.sql",
+                include_str!("../postgres/migrations/20261102020000_linkedin_channel_and_raw_storage.sql"),
+            ),
+            (
                 "20261101130000_create_firm_forgejo_organization.sql",
                 include_str!(
                     "../postgres/migrations/20261101130000_create_firm_forgejo_organization.sql"
@@ -1331,6 +1335,7 @@ mod tests {
                 "20261101210000_create_notation_transition.sql",
                 include_str!("../postgres/migrations/20261101210000_create_notation_transition.sql"),
             ),
+            ("20261101190000_create_inbox_attachment_receipt.sql",include_str!("../postgres/migrations/20261101190000_create_inbox_attachment_receipt.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

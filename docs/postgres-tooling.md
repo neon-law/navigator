@@ -149,7 +149,11 @@ configuration; authority cutover takes precedence over the source mirror. The mi
   writes. Parity compares the full transcript and audit rows. Reconciliation restores missing parents before children
   and repairs mutable rows; ingress, assignment, and delivery-attempt evidence remains insert-only, with any changed or
   extra target row reported as drift. Firm and Project references remain explicit, and internal notes keep their
-  recorded direction and visibility.
+  recorded direction and visibility. Setting `NAVIGATOR_POSTGRES_INBOX_AUTHORITY=1` routes Inbox reads, writes, and
+  alerts through PostgreSQL; historical file imports require this setting. Identity, tenancy, Document Assets, and the
+  Communication projection retain their existing store seams. Complete the source-backed catch-up before switching, then
+  retire SurrealDB-to-PostgreSQL reconciliation for these Inbox tables: their SurrealDB images stop advancing. Native
+  tests are recorded in `store/postgres/runtime-parity.json`; the flag alone does not establish rollout parity.
 - **Inbound email delivery:** `email_receipt`, `email_delivery`, and `email_delivery_attempt`. The receipt and Slack
   delivery writers mirror each successful write. Reconciliation restores parents before children; receipt deletion
   cascades through the delivery and attempt records.

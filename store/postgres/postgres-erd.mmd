@@ -630,6 +630,12 @@ erDiagram
         datetime inserted_at
         uuid to_project_id
     }
+    inbox_attachment_receipt {
+        uuid asset_id
+        uuid firm_id
+        datetime inserted_at
+        string sha256
+    }
     inbox_conversation {
         string brand_key
         string channel
@@ -901,6 +907,7 @@ erDiagram
         string provider_message_id
         string provider_ref
         string purpose
+        string raw_storage_key
         string route
         datetime updated_at
         string visibility
@@ -1798,6 +1805,8 @@ erDiagram
     inbox_conversation }o--|| inbox_assignment : references
     person }o--|| inbox_assignment : references
     project }o--|| inbox_assignment : references
+    asset }o--|| inbox_attachment_receipt : references
+    firm }o--|| inbox_attachment_receipt : references
     email_conversation }o--|| inbox_conversation : references
     firm }o--|| inbox_conversation : references
     project }o--|| inbox_conversation : references

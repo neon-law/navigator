@@ -46,6 +46,7 @@ async fn private_social_assignment_waits_for_human_privilege_review() {
             external_name: Some(&sender),
             subject: None,
             body: "Synthetic private message for local review.",
+            raw_storage_key: None,
             source_page: None,
             source_channel: None,
             matter_consent: false,

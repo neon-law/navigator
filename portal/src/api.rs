@@ -908,6 +908,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             )),
         ),
         (
+            "GET",
+            "/app/api/projects/{id}/inbox/{conversation_id}/messages/{message_id}/attachments/{asset_id}",
+            get(crate::communications_api::download_message_attachment),
+        ),
+        (
             "PATCH",
             "/app/api/projects/{id}/documents/{asset_id}",
             patch(update_document_door),
@@ -951,6 +956,15 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "POST",
             "/app/api/projects/{id}/mail/eml",
             post(eml_upload_door),
+        ),
+        (
+            "POST",
+            "/app/api/inbox/import",
+            // Carries base64 payloads up to the document upload ceiling, so
+            // its request cap is derived rather than applied globally.
+            post(crate::inbox_import_api::inbox_import_door).layer(DefaultBodyLimit::max(
+                store::documents::MAX_DOCUMENT_UPLOAD_REQUEST_BYTES,
+            )),
         ),
         (
             "PATCH",
@@ -4894,9 +4908,10 @@ async fn ingest_provider_message_door(
         .filter(|value| !value.is_empty())
         .unwrap_or("cli-ingest")
         .to_string();
-    let attachments = crate::inbox::ingest_attachments(&state.surreal, &state.storage, &email)
-        .await
-        .map_err(ApiError::Db)?;
+    let attachments =
+        crate::inbox::ingest_attachments(&state.surreal, &state.storage, &email, firm_id, Some(id))
+            .await
+            .map_err(ApiError::Db)?;
     let provider_message_id = email
         .message_id
         .clone()
@@ -4906,6 +4921,7 @@ async fn ingest_provider_message_door(
     let ingested = store::inbox::ingest_inbound(
         &state.surreal,
         &store::inbox::IngestInbound {
+            raw_storage_key: None,
             firm_id,
             project_id: Some(id),
             brand_key: None,

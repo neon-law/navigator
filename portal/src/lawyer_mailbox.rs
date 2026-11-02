@@ -139,10 +139,12 @@ async fn ingest_for_config(
         }
     }
     let provider_message_id = crate::inbox::provider_message_id(email);
-    let attachments = crate::inbox::ingest_attachments(db, storage, email).await?;
+    let attachments =
+        crate::inbox::ingest_attachments(db, storage, email, config.firm_id, None).await?;
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            raw_storage_key: None,
             project_id: None,
             firm_id: config.firm_id,
             brand_key: None,

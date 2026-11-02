@@ -70,6 +70,7 @@ mod tests {
         let incoming = inbox::ingest_inbound(
             &db,
             &IngestInbound {
+                raw_storage_key: None,
                 project_id: None,
                 firm_id: firm,
                 brand_key: Some("neon"),
@@ -128,6 +129,7 @@ mod tests {
         inbox::ingest_inbound(
             db,
             &IngestInbound {
+                raw_storage_key: None,
                 project_id: None,
                 firm_id,
                 brand_key: Some(brand),

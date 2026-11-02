@@ -2275,6 +2275,7 @@ async fn seed_inbox_walkthrough(db: &store::surreal::SurrealDb) -> store::inbox:
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            raw_storage_key: None,
             project_id: None,
             firm_id: firm,
             brand_key: Some("neon"),

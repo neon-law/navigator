@@ -7,6 +7,10 @@ use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
 
 pub mod people;
 
+/// PostgreSQL-authoritative Inbox slice (LAW-238 D0): ingest, dedup, threading,
+/// attribution, and the reads the renderers use, behind an opt-in cutover flag.
+pub mod inbox;
+
 /// PostgreSQL Project participation ledger, preparatory to application authority.
 pub mod participation;
 
@@ -21,6 +25,9 @@ mod tenancy_tests;
 
 #[cfg(test)]
 mod projects_tests;
+
+#[cfg(test)]
+mod inbox_tests;
 
 /// `store/postgres/migrations`, compiled in so the operator binary carries the
 /// exact SQL of its release.
