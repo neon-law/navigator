@@ -38,8 +38,9 @@ fn entry_error(
     entry_id: Option<Uuid>,
 ) -> Response {
     let status = match error {
-        time_entries::TimeEntryError::Invalid(_)
-        | time_entries::TimeEntryError::NotParticipant => StatusCode::UNPROCESSABLE_ENTITY,
+        time_entries::TimeEntryError::Invalid(_) | time_entries::TimeEntryError::NotParticipant => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
         time_entries::TimeEntryError::Conflict => StatusCode::CONFLICT,
         time_entries::TimeEntryError::NotFound => StatusCode::NOT_FOUND,
         time_entries::TimeEntryError::Postgres(_) => StatusCode::SERVICE_UNAVAILABLE,
@@ -58,11 +59,7 @@ fn entry_error(
     refused(status)
 }
 
-fn timer_error(
-    error: &timers::TimerError,
-    operation: &'static str,
-    project_id: Uuid,
-) -> Response {
+fn timer_error(error: &timers::TimerError, operation: &'static str, project_id: Uuid) -> Response {
     let status = match error {
         timers::TimerError::Invalid(_) | timers::TimerError::NotParticipant => {
             StatusCode::UNPROCESSABLE_ENTITY
@@ -126,7 +123,10 @@ async fn ensure_firm_side(
     }
 }
 
-async fn postgres(operation: &'static str, project_id: Option<Uuid>) -> Result<store::postgres::PostgresDb, Response> {
+async fn postgres(
+    operation: &'static str,
+    project_id: Option<Uuid>,
+) -> Result<store::postgres::PostgresDb, Response> {
     store::postgres::PostgresDb::from_env().await.map_err(|_| {
         tracing::warn!(
             event = "time_tracking_store_unavailable",
@@ -156,9 +156,10 @@ async fn prepared_store(
             &postgres_mirror::MirrorKey::Project(project_id),
         )
         .await?;
-        let participations = store::projects::participations_for_project(&state.surreal, project_id)
-            .await
-            .map_err(|_| postgres_mirror::MirrorError::Source)?;
+        let participations =
+            store::projects::participations_for_project(&state.surreal, project_id)
+                .await
+                .map_err(|_| postgres_mirror::MirrorError::Source)?;
         for role in participations {
             postgres_mirror::mirror(
                 &state.surreal,
@@ -209,8 +210,7 @@ async fn snapshot_rate(
     if !billable {
         return Ok(0);
     }
-    match attorney_rates::resolve_hourly_rate_cents(pg, attorney_id, project_id, performed_on)
-        .await
+    match attorney_rates::resolve_hourly_rate_cents(pg, attorney_id, project_id, performed_on).await
     {
         Ok(Some(rate_cents_per_hour)) => Ok(rate_cents_per_hour),
         Ok(None) => Err(refused(StatusCode::UNPROCESSABLE_ENTITY)),
@@ -252,9 +252,14 @@ pub(crate) async fn create_entry(
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
-    let rate_cents_per_hour = match
-        snapshot_rate(&pg, input.attorney_id, project_id, input.performed_on, input.billable)
-        .await
+    let rate_cents_per_hour = match snapshot_rate(
+        &pg,
+        input.attorney_id,
+        project_id,
+        input.performed_on,
+        input.billable,
+    )
+    .await
     {
         Ok(rate) => rate,
         Err(response) => return Ok(response),
@@ -498,7 +503,7 @@ pub(crate) struct RatesQuery {
 /// one attorney: firm defaults and matter overrides together, newest
 /// effective date first.
 pub(crate) async fn list_rates(
-    State(state): State<ApiState>,
+    State(_state): State<ApiState>,
     LawyerSession(_session): LawyerSession,
     Query(query): Query<RatesQuery>,
 ) -> Result<Response, ApiError> {
@@ -541,7 +546,7 @@ pub(crate) async fn create_rate(
     // constraint fault.
     let person_exists = store::persons::find_by_id(&state.surreal, input.person_id)
         .await
-        .map_err(ApiError::Db)?
+        .map_err(|e| ApiError::Db(e.to_string()))?
         .is_some();
     if !person_exists {
         return Err(ApiError::NotFound);
@@ -549,7 +554,7 @@ pub(crate) async fn create_rate(
     if let Some(project_id) = input.project_id {
         let project_exists = store::projects::find_by_id(&state.surreal, project_id)
             .await
-            .map_err(ApiError::Db)?
+            .map_err(|e| ApiError::Db(e.to_string()))?
             .is_some();
         if !project_exists {
             return Err(ApiError::NotFound);
