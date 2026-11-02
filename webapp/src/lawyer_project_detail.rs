@@ -152,16 +152,24 @@ fn matter_tab_strip(code: &str, active: MatterTab) -> Vec<Tab> {
 /// The summary strip under the tab bar: the handful of facts a matter opens
 /// with, derived from data the view already carries. A fact this matter does
 /// not have is left out rather than shown as a zero, and the strip itself is
-/// skipped when nothing renders in it. The tiles that need the work and
-/// billing models (tasks, correspondence, work in progress, outstanding
-/// balance) join as those models land.
+/// skipped when nothing renders in it. Tasks and correspondence tiles still
+/// wait on those models; the Work in Progress and Outstanding Balance tiles
+/// render from the projections the server fn derives through
+/// `store::matter_financials`.
 fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     let next_due = view.deadlines.first().map(|row| row.due.clone());
     let deadline_count = view.deadlines.len();
     let document_count = view.documents.len();
     let people_count = view.participations.len();
     let trust_held = view.trust.held.clone();
-    let has_facts = deadline_count > 0 || document_count > 0 || people_count > 0 || view.trust.any;
+    let wip = view.wip.clone();
+    let outstanding = view.outstanding.clone();
+    let has_facts = deadline_count > 0
+        || document_count > 0
+        || people_count > 0
+        || view.trust.any
+        || wip.is_some()
+        || outstanding.is_some();
 
     if !has_facts {
         return rsx! {};
@@ -193,6 +201,16 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
                 if view.trust.any {
                     FactCard { title: "Trust held".to_string(),
                         span { class: "lawyer-detail__fact-value", "{trust_held}" }
+                    }
+                }
+                if let Some(wip) = wip {
+                    FactCard { title: "Work in progress".to_string(),
+                        span { class: "lawyer-detail__fact-value", "{wip}" }
+                    }
+                }
+                if let Some(outstanding) = outstanding {
+                    FactCard { title: "Outstanding balance".to_string(),
+                        span { class: "lawyer-detail__fact-value", "{outstanding}" }
                     }
                 }
             }
@@ -237,6 +255,18 @@ pub struct LawyerDetailView {
     /// never renders here.
     #[serde(default)]
     pub trust: crate::portal_project_detail::TrustView,
+    /// The matter's Work in Progress — unbilled billable time at snapshot
+    /// rates plus unbilled confirmed costs, formatted server-side by
+    /// `store::matter_financials`. Absent when the projection is zero (a fact
+    /// the matter does not have is never shown as a zero) or when the
+    /// deployment has no PostgreSQL configured.
+    #[serde(default)]
+    pub wip: Option<String>,
+    /// The matter's Outstanding Balance — invoiced minus paid across the
+    /// matter's mirrored Xero invoices, formatted server-side. Same absence
+    /// rules as `wip`.
+    #[serde(default)]
+    pub outstanding: Option<String>,
     pub repository_url: Option<String>,
     pub participations: Vec<ParticipationRow>,
     #[serde(default)]
@@ -453,6 +483,29 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
             )
         });
 
+    // Per-matter financial projections — Work in Progress and Outstanding
+    // Balance, read-only over the time-entry, project-cost, and invoice-mirror
+    // stores. A deployment without PostgreSQL configured renders the
+    // workbench without the two billing tiles rather than failing the whole
+    // page; a read failure inside a configured deployment is a 500 like every
+    // other read here. A zero projection is left out like any other fact the
+    // matter does not have.
+    let financials = match store::postgres::PostgresDb::from_env().await {
+        Ok(pg) => Some(
+            store::matter_financials::for_project(&surreal, &pg, id)
+                .await
+                .map_err(server_error)?,
+        ),
+        Err(_) => None,
+    };
+    let (wip, outstanding) = financials.map_or((None, None), |financials| {
+        let wip = (financials.wip_cents != 0)
+            .then(|| crate::portal_project_detail::format_usd(financials.wip_cents));
+        let outstanding = (financials.outstanding_cents != 0)
+            .then(|| crate::portal_project_detail::format_usd(financials.outstanding_cents));
+        (wip, outstanding)
+    });
+
     // The two DRIs — a read failure is a 500, never a silently-blank DRI on an
     // accountability surface.
     let participation_rows = store::projects::participations_for_project(&surreal, id)
@@ -627,6 +680,8 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         },
         xero_invoice_url,
         trust,
+        wip,
+        outstanding,
         repository_url,
         participations,
         testimonial,
@@ -1118,5 +1173,30 @@ mod tests {
         assert!(!html.contains("Project people"), "{html}");
         assert!(html.contains("Trust held"), "{html}");
         assert!(html.contains("$5,000"), "{html}");
+    }
+
+    #[test]
+    fn fact_grid_renders_the_financial_projections() {
+        let view = LawyerDetailView {
+            wip: Some("$4,210".to_string()),
+            outstanding: Some("$1,850".to_string()),
+            ..Default::default()
+        };
+
+        let html = dioxus_ssr::render_element(matter_fact_grid(&view));
+        assert!(html.contains("lawyer-detail__summary"), "{html}");
+        assert!(html.contains("Work in progress"), "{html}");
+        assert!(html.contains("$4,210"), "{html}");
+        assert!(html.contains("Outstanding balance"), "{html}");
+        assert!(html.contains("$1,850"), "{html}");
+    }
+
+    #[test]
+    fn a_zero_or_absent_projection_leaves_no_tile() {
+        // Absent projections render nothing — the default view, like a
+        // deployment without PostgreSQL configured.
+        let html = dioxus_ssr::render_element(matter_fact_grid(&LawyerDetailView::default()));
+        assert!(!html.contains("Work in progress"), "{html}");
+        assert!(!html.contains("Outstanding balance"), "{html}");
     }
 }
