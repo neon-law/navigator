@@ -164,10 +164,10 @@ Forgejo Actions run or fleet-wide replay test.
 
 A Firm user registers an [SSH Public Key](glossary/ssh-public-key.md) once in Navigator: on `/app/profile`, or with
 `navigator site person ssh-key add ~/.ssh/id_ed25519.pub`. Navigator then makes it a key on their Forgejo account. The
-same verb's `list`, `remove <id>`, and `sync` subcommands read, revoke, and re-reconcile. Navigator reconciles a
-Person's account after each registration or revocation and after a Firm membership is removed. The operator sweep
-`navigator ops forgejo ssh-keys sync [--person <id-or-email>] [--dry-run]` reconciles every Person holding a key row.
-Only ed25519 and NIST ECDSA public keys are accepted, and a private key is refused, by the CLI before it is sent.
+same verb's `list`, `remove <id-or-fingerprint>`, and `sync` subcommands read, revoke, and re-reconcile. Navigator
+reconciles a Person's account after each registration or revocation and after a Firm membership is removed. The operator
+sweep `navigator ops forgejo ssh-keys sync [--person <id-or-email>] [--dry-run]` reconciles every Person holding a key
+row. Only ed25519 and NIST ECDSA public keys are accepted, and a private key is refused, by the CLI before it is sent.
 
 Reconciliation finds the Forgejo account whose email exactly matches the Person's. It adds every live key the account
 lacks, titled `navigator:<label>`. It removes every `navigator:`-titled key Navigator no longer holds. A Person without

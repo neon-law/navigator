@@ -2544,10 +2544,14 @@ enum SshKeyCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// Revoke a key by id; it is removed from Forgejo too.
+    /// Revoke a key by id or fingerprint; it is removed from Forgejo too.
     Remove {
-        /// The key id `list` prints.
-        id: uuid::Uuid,
+        /// The key id or `SHA256:` fingerprint `list` prints.
+        key: String,
+        /// Another Person's id, whose key you may revoke as their Firm's
+        /// administrator.
+        #[arg(long)]
+        person: Option<uuid::Uuid>,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -4962,8 +4966,8 @@ fn run() -> ExitCode {
                 SshKeyCmd::List { person, host } => {
                     runtime().block_on(ssh_keys::list(host.host, person))
                 }
-                SshKeyCmd::Remove { id, host } => {
-                    runtime().block_on(ssh_keys::remove(host.host, id))
+                SshKeyCmd::Remove { key, person, host } => {
+                    runtime().block_on(ssh_keys::remove(host.host, &key, person))
                 }
                 SshKeyCmd::Sync { host } => runtime().block_on(ssh_keys::sync(host.host)),
             },

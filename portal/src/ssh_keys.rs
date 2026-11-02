@@ -352,6 +352,181 @@ mod tests {
         );
     }
 
+    use axum::body::Body;
+    use axum::http::{header, Request};
+    use store::persons::{NewPerson, Role};
+    use tower::ServiceExt;
+
+    use crate::session::{now_unix_secs, SessionSource, SessionStore};
+
+    const ED25519: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+kywI2x0e1JcY7eJ50pKflZgKO0UKaS+cV8ssit45e";
+
+    fn session(person_id: Option<Uuid>, role: Role) -> SessionData {
+        SessionData {
+            sub: "synthetic-ssh-key-holder".into(),
+            email: None,
+            person_id,
+            exp: now_unix_secs() + 60,
+            role,
+            csrf_token: "synthetic-csrf".into(),
+            source: SessionSource::Cli,
+            provider: None,
+            viewing_as_dri: None,
+            scope: None,
+        }
+    }
+
+    fn bearer(person_id: Uuid, role: Role) -> String {
+        let token = SessionStore::new(crate::test_support::TEST_SESSION_KEY)
+            .encode(&session(Some(person_id), role));
+        format!("Bearer {token}")
+    }
+
+    async fn send(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        auth: &str,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, String) {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, auth);
+        let body = match body {
+            Some(json) => {
+                request = request.header(header::CONTENT_TYPE, "application/json");
+                Body::from(json.to_string())
+            }
+            None => Body::empty(),
+        };
+        let response = app
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn the_doors_refuse_before_any_store_write() {
+        let db = store::test_support::mem_surreal().await;
+        let lawyer = store::persons::create(
+            &db,
+            &NewPerson::with_role(
+                "Synthetic key holder",
+                "ssh-key-holder@example.com",
+                Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        let app = crate::router(crate::test_support::app_state(db).await);
+        let auth = bearer(lawyer.id, Role::Lawyer);
+
+        let (status, body) = send(
+            &app,
+            "POST",
+            "/app/api/ssh-keys",
+            &auth,
+            Some(serde_json::json!({
+                "public_key": "-----BEGIN OPENSSH PRIVATE KEY-----"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert!(body.contains("private_key"), "{body}");
+
+        let (status, body) = send(
+            &app,
+            "POST",
+            "/app/api/ssh-keys",
+            &auth,
+            Some(serde_json::json!({ "public_key": ED25519, "label": "laptop" })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "a Person outside every Firm: {body}"
+        );
+        assert!(body.contains("not_firm_member"), "{body}");
+
+        let other = format!("/app/api/ssh-keys?person={}", Uuid::now_v7());
+        let (status, _) = send(&app, "GET", &other, &auth, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "another Person's keys");
+
+        // The rest need PostgreSQL: without it they answer 503; with it,
+        // an empty listing, an unknown key, and a converged sync.
+        let (status, body) = send(&app, "GET", "/app/api/ssh-keys", &auth, None).await;
+        assert!(
+            matches!(status, StatusCode::OK | StatusCode::SERVICE_UNAVAILABLE),
+            "{status}: {body}"
+        );
+        let unknown = format!("/app/api/ssh-keys/{}", Uuid::now_v7());
+        let (status, body) = send(&app, "DELETE", &unknown, &auth, None).await;
+        assert!(
+            matches!(
+                status,
+                StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE
+            ),
+            "{status}: {body}"
+        );
+        let (status, body) = send(&app, "POST", "/app/api/ssh-keys/sync", &auth, None).await;
+        assert!(
+            matches!(status, StatusCode::OK | StatusCode::SERVICE_UNAVAILABLE),
+            "{status}: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_without_a_person_or_firm_is_refused_by_the_shared_paths() {
+        let db = store::test_support::mem_surreal().await;
+        let refused = add_for_session(&db, &session(None, Role::Lawyer), ED25519, None)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        let refused = add_for_session(
+            &db,
+            &session(Some(Uuid::now_v7()), Role::Lawyer),
+            "ssh-rsa AAAA",
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let refused = revoke_for_session(
+            &db,
+            &session(Some(Uuid::now_v7()), Role::Lawyer),
+            Uuid::now_v7(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            refused.status(),
+            StatusCode::NOT_FOUND | StatusCode::SERVICE_UNAVAILABLE
+        ));
+    }
+
+    #[test]
+    fn the_profile_redirect_names_only_a_fixed_code() {
+        let response = back_to_profile("ssh_key_error", flash_code(StatusCode::NOT_FOUND));
+        let location = response.headers()[header::LOCATION].to_str().unwrap();
+        assert!(
+            location.ends_with("?ssh_key_error=not_found#profile-ssh-keys"),
+            "{location}"
+        );
+        assert_eq!(flash_code(StatusCode::SERVICE_UNAVAILABLE), "unavailable");
+        assert_eq!(unavailable().status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(scoped().status(), StatusCode::FORBIDDEN);
+        let _ = routes();
+    }
+
     #[test]
     fn profile_flash_codes_name_the_refusal_class() {
         assert_eq!(flash_code(StatusCode::UNPROCESSABLE_ENTITY), "invalid");

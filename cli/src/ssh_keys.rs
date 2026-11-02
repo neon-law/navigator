@@ -115,7 +115,7 @@ async fn add_at(base: &str, token: &str, key: &str, label: Option<&str>) -> Resu
     Ok(())
 }
 
-async fn list_at(base: &str, token: &str, person: Option<uuid::Uuid>) -> Result<()> {
+async fn fetch_keys(base: &str, token: &str, person: Option<uuid::Uuid>) -> Result<Vec<Value>> {
     let mut request = reqwest::Client::new()
         .get(format!("{base}/app/api/ssh-keys"))
         .bearer_auth(token);
@@ -123,7 +123,11 @@ async fn list_at(base: &str, token: &str, person: Option<uuid::Uuid>) -> Result<
         request = request.query(&[("person", person.to_string())]);
     }
     let reply = send(request, "GET /app/api/ssh-keys").await?;
-    let listed = reply["keys"].as_array().cloned().unwrap_or_default();
+    Ok(reply["keys"].as_array().cloned().unwrap_or_default())
+}
+
+async fn list_at(base: &str, token: &str, person: Option<uuid::Uuid>) -> Result<()> {
+    let listed = fetch_keys(base, token, person).await?;
     if listed.is_empty() {
         println!("no SSH keys");
     }
@@ -133,7 +137,22 @@ async fn list_at(base: &str, token: &str, person: Option<uuid::Uuid>) -> Result<
     Ok(())
 }
 
-async fn remove_at(base: &str, token: &str, id: uuid::Uuid) -> Result<()> {
+/// Revoke the listed key whose id or fingerprint is `selector`. The request
+/// names the key by the id the server listed, never by the argument.
+async fn remove_at(
+    base: &str,
+    token: &str,
+    selector: &str,
+    person: Option<uuid::Uuid>,
+) -> Result<()> {
+    let listed = fetch_keys(base, token, person).await?;
+    let id = listed
+        .iter()
+        .find(|key| {
+            key["id"].as_str() == Some(selector) || key["fingerprint"].as_str() == Some(selector)
+        })
+        .and_then(|key| key["id"].as_str())
+        .ok_or_else(|| anyhow!("no listed SSH key has that id or fingerprint"))?;
     let reply = send(
         reqwest::Client::new()
             .delete(format!("{base}/app/api/ssh-keys/{id}"))
@@ -195,11 +214,11 @@ pub async fn list(host: Option<String>, person: Option<uuid::Uuid>) -> ExitCode 
 }
 
 /// `navigator site person ssh-key remove`.
-pub async fn remove(host: Option<String>, id: uuid::Uuid) -> ExitCode {
+pub async fn remove(host: Option<String>, key: &str, person: Option<uuid::Uuid>) -> ExitCode {
     finish(
         async {
             let (base, token) = crate::remote::resolve(host.as_deref())?;
-            remove_at(&base, &token, id).await
+            remove_at(&base, &token, key, person).await
         }
         .await,
     )
@@ -366,13 +385,20 @@ mod tests {
     #[tokio::test]
     async fn a_refusal_surfaces_the_doors_message() {
         let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/ssh-keys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "keys": [{"id": "00000000-0000-0000-0000-000000000000", "fingerprint": "SHA256:x"}]
+            })))
+            .mount(&server)
+            .await;
         Mock::given(method("DELETE"))
             .respond_with(ResponseTemplate::new(404).set_body_json(json!({
                 "error": "not_found", "message": "the SSH public key was not found"
             })))
             .mount(&server)
             .await;
-        let error = remove_at(&server.uri(), "synthetic-token", uuid::Uuid::nil())
+        let error = remove_at(&server.uri(), "synthetic-token", "SHA256:x", None)
             .await
             .unwrap_err();
         assert!(
@@ -381,6 +407,148 @@ mod tests {
                 .contains("the SSH public key was not found"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn remove_names_the_listed_key_by_the_servers_id() {
+        let server = MockServer::start().await;
+        let person = uuid::Uuid::nil();
+        Mock::given(method("GET"))
+            .and(path("/app/api/ssh-keys"))
+            .and(query_param("person", person.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "keys": [
+                    {"id": "k1", "fingerprint": "SHA256:one", "algorithm": "ssh-ed25519", "label": "a"},
+                    {"id": "k2", "fingerprint": "SHA256:two", "algorithm": "ssh-ed25519", "label": "b"},
+                ]
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/app/api/ssh-keys/k2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "key": {"fingerprint": "SHA256:two"},
+                "sync": {"status": "synced", "forgejo_login": "synthetic", "added": [], "removed": ["SHA256:two"], "drift": []},
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        remove_at(&server.uri(), "synthetic-token", "SHA256:two", Some(person))
+            .await
+            .unwrap();
+        remove_at(&server.uri(), "synthetic-token", "k2", Some(person))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn remove_refuses_a_key_the_listing_does_not_hold() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/ssh-keys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"keys": []})))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let error = remove_at(&server.uri(), "synthetic-token", "SHA256:absent", None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no listed SSH key"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn list_prints_each_key_and_sync_reports_the_outcome() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/ssh-keys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "keys": [{"id": "k1", "fingerprint": "SHA256:one", "algorithm": "ssh-ed25519", "label": "laptop"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/ssh-keys/sync"))
+            .and(header("authorization", "Bearer synthetic-token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"sync": {"status": "no_forgejo_account"}})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        list_at(&server.uri(), "synthetic-token", None)
+            .await
+            .unwrap();
+        sync_at(&server.uri(), "synthetic-token").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn add_with_an_explicit_label_and_a_non_json_refusal() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/ssh-keys"))
+            .and(body_json(json!({
+                "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+kywI2x0e1JcY7eJ50pKflZgKO0UKaS+cV8ssit45e",
+                "label": "work laptop",
+            })))
+            .respond_with(ResponseTemplate::new(502).set_body_string("\n  bad gateway\n"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = add_at(
+            &server.uri(),
+            "synthetic-token",
+            ED25519,
+            Some("work laptop"),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("bad gateway"), "{error}");
+    }
+
+    #[test]
+    fn a_key_file_is_read_and_a_missing_one_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("id_ed25519.pub");
+        std::fs::write(&file, ED25519).unwrap();
+        assert_eq!(read_key(&file).unwrap(), ED25519);
+        let missing = dir.path().join("absent.pub");
+        assert!(read_key(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("absent.pub"));
+    }
+
+    #[test]
+    fn the_sweep_names_its_settings_when_unconfigured() {
+        if std::env::var_os(cloud::forgejo_user_keys::NAVIGATOR_FORGEJO_KEY_SYNC_TOKEN_ENV)
+            .is_some()
+        {
+            return;
+        }
+        let error = sweep(None, true).unwrap_err().to_string();
+        assert!(
+            error.contains(cloud::forgejo_user_keys::NAVIGATOR_FORGEJO_KEY_SYNC_TOKEN_ENV),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn finish_maps_results_to_exit_codes() {
+        assert_eq!(finish(Ok(())), ExitCode::SUCCESS);
+        assert_eq!(finish(Err(anyhow!("synthetic failure"))), ExitCode::from(2));
+        assert_eq!(refusal_message(""), "(empty response)");
+        assert!(describe_sync(&json!({"status": "not_configured"})).contains("does not sync"));
+        assert!(describe_sync(&json!({
+            "status": "synced", "forgejo_login": "synthetic", "added": [], "removed": [], "drift": []
+        }))
+        .ends_with("0 added, 0 removed"));
     }
 
     #[test]
