@@ -631,6 +631,21 @@ async fn a_provider_refusal_marks_nothing() {
     store::projects::add_participation(&surreal, project_id, lawyer.id, "lawyer")
         .await
         .unwrap();
+    // Someone to bill: the composition resolves the billed party from the
+    // matter's client-side participation before the seam is crossed.
+    let client = store::persons::create(
+        &surreal,
+        &store::persons::NewPerson::with_role(
+            "Client",
+            format!("client-{}@example.com", Uuid::now_v7().simple()),
+            Role::Client,
+        ),
+    )
+    .await
+    .unwrap();
+    store::projects::add_participation(&surreal, project_id, client.id, "client")
+        .await
+        .unwrap();
     // Prepare the PostgreSQL side the way `prepared_store` does for the
     // app's own doors: this test seeds Postgres-native rows directly, so
     // the matter and its participations must already be mirrored.
