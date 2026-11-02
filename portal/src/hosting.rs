@@ -1226,16 +1226,25 @@ fn preflight(brand: &Site, rt: &HostRuntime) {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_ports, should_host_billing_canary, should_host_deadline_mirror,
-        should_host_dri_digest, should_host_general_nag, should_host_notation_reset,
-        should_host_project_recovery, should_host_retention_purge, should_host_source_imports,
+        bind_ports, should_host_billing_canary, should_host_billing_digest,
+        should_host_deadline_mirror, should_host_dri_digest, should_host_general_nag,
+        should_host_notation_reset, should_host_project_recovery, should_host_purchase_activation,
+        should_host_retention_purge, should_host_source_imports,
     };
 
     type Gate = fn(bool, &dyn Fn(&str) -> Option<String>) -> anyhow::Result<bool>;
 
     /// The schedules gated only by DBOS and their own flag.
-    fn recovery_gates() -> [(Gate, &'static str); 5] {
+    fn recovery_gates() -> [(Gate, &'static str); 7] {
         [
+            (
+                |host, lookup| should_host_billing_digest(host, lookup),
+                workflows::dbos_engine::billing_digest::ENABLED_ENV,
+            ),
+            (
+                |host, lookup| should_host_purchase_activation(host, lookup),
+                workflows::dbos_engine::purchase_activation::ENABLED_ENV,
+            ),
             (
                 |host, lookup| should_host_project_recovery(host, lookup),
                 workflows::dbos_engine::project_recovery::ENABLED_ENV,

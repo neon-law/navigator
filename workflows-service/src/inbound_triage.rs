@@ -843,4 +843,351 @@ mod tests {
         assert_eq!(providers.model, cloud::DEFAULT_GEMINI_TRIAGE_MODEL);
         assert_eq!(providers.location, cloud::DEFAULT_GEMINI_TRIAGE_LOCATION);
     }
+
+    fn inbound<'a>(
+        firm_id: uuid::Uuid,
+        channel: &'a str,
+        interaction_type: &'a str,
+        visibility: Option<&'a str>,
+        provider_message_id: &'a str,
+    ) -> store::inbox::IngestInbound<'a> {
+        store::inbox::IngestInbound {
+            firm_id,
+            brand_key: Some("neon"),
+            interaction_type: Some(interaction_type),
+            provider_post_id: None,
+            parent_provider_message_id: None,
+            visibility,
+            channel,
+            provider_account: "synthetic-account",
+            provider_message_id,
+            provider_thread_ref: None,
+            external_address: "sender@example.com",
+            external_name: None,
+            subject: Some("Synthetic subject"),
+            body: "Synthetic private text",
+            source_page: None,
+            source_channel: None,
+            matter_consent: false,
+            promotional_opt_in: false,
+            email_conversation_id: None,
+            attachments: Vec::new(),
+            project_id: None,
+            occurred_at: "2026-11-01T00:00:00Z",
+            raw_storage_key: None,
+        }
+    }
+
+    async fn seed_project(
+        db: &store::surreal::SurrealDb,
+        firm_id: Option<uuid::Uuid>,
+    ) -> uuid::Uuid {
+        store::projects::create(
+            db,
+            &store::projects::NewProject {
+                code: format!("triage-{}", uuid::Uuid::now_v7().simple()),
+                name: "Synthetic triage matter".into(),
+                status: "open".into(),
+                entity_id: store::test_support::seed_entity(db).await,
+                firm_id,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("seed the Project")
+        .id
+    }
+
+    #[test]
+    fn the_enabled_flag_accepts_only_booleans_and_blank_is_off() {
+        let lookup = |value: &'static str| {
+            move |key: &str| (key == super::TRIAGE_ENABLED_ENV).then(|| value.to_string())
+        };
+        assert!(!super::triage_enabled(&|_: &str| None).unwrap());
+        assert!(!super::triage_enabled(&lookup("   ")).unwrap());
+        assert!(!super::triage_enabled(&lookup("false")).unwrap());
+        assert!(!super::triage_enabled(&lookup("0")).unwrap());
+        assert!(super::triage_enabled(&lookup(" true ")).unwrap());
+        assert!(super::triage_enabled(&lookup("1")).unwrap());
+        let error = super::triage_enabled(&lookup("yes")).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "NAVIGATOR_TRIAGE_ENABLED must be a boolean"
+        );
+    }
+
+    #[test]
+    fn blank_values_are_absent_and_values_are_trimmed() {
+        assert_eq!(super::non_empty(None), None);
+        assert_eq!(super::non_empty(Some("  ".into())), None);
+        assert_eq!(
+            super::non_empty(Some(" model ".into())),
+            Some("model".into())
+        );
+    }
+
+    #[test]
+    fn a_pinned_model_and_location_override_the_defaults() {
+        let pinned = triage_env(&[
+            ("NAVIGATOR_TRIAGE_GEMINI_MODEL", "pinned-model"),
+            ("NAVIGATOR_TRIAGE_GEMINI_LOCATION", " us-central1 "),
+        ]);
+        let providers = TriageProviders::from_lookup(pinned)
+            .unwrap()
+            .expect("an enabled, complete lane builds its transports");
+        assert_eq!(providers.project_id, SYNTHETIC_PROJECT);
+        assert_eq!(providers.model, "pinned-model");
+        assert_eq!(providers.location, "us-central1");
+
+        let error = TriageProviders::from_lookup(triage_env(&[("NAVIGATOR_TRIAGE_ENABLED", "on")]))
+            .err()
+            .expect("a non-boolean flag is refused");
+        assert!(error.to_string().contains("must be a boolean"));
+    }
+
+    #[test]
+    fn a_rules_only_attempt_reports_the_rules_only_lane() {
+        let attempt = super::ClassifierAttempt {
+            output: None,
+            raw_output: Some("ignored".into()),
+            run_config: None,
+        };
+        assert_eq!(
+            attempt.lane(),
+            workflows::inbox_triage::ClassifierLane::rules_only()
+        );
+        let configured = super::ClassifierAttempt {
+            output: None,
+            raw_output: Some("audit".into()),
+            run_config: Some(config(&digest())),
+        };
+        let lane = configured.lane();
+        assert_eq!(lane.model_id.as_deref(), Some(TRIAGE_MODEL));
+        assert_eq!(lane.raw_output.as_deref(), Some("audit"));
+        assert_eq!(lane.prompt_version, config(&digest()).prompt_version);
+    }
+
+    #[test]
+    fn only_transient_vertex_failures_retry() {
+        use cloud::VertexError;
+        assert!(super::retryable(&VertexError::TransportRetryable));
+        assert!(super::retryable(&VertexError::Retryable {
+            status: None,
+            retry_after: None,
+        }));
+        assert!(!super::retryable(&VertexError::Configuration));
+        assert!(!super::retryable(&VertexError::InvalidModelOutput));
+    }
+
+    #[tokio::test]
+    async fn a_transient_provider_failure_retries_and_then_parses_the_verdict() {
+        let digest = digest();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(GEMINI_PATH))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(GEMINI_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": { "parts": [{ "text": verdict_json() }] },
+                    "finishReason": "STOP",
+                }],
+            })))
+            .mount(&server)
+            .await;
+        let attempt =
+            classify_message(&providers(&server.uri()), config(&digest), "prompt".into()).await;
+        assert!(
+            attempt.output.is_some_and(|output| output.privileged),
+            "the retry reached the verdict"
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_permanent_provider_failure_is_not_retried() {
+        let digest = digest();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(GEMINI_PATH))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&server)
+            .await;
+        let attempt =
+            classify_message(&providers(&server.uri()), config(&digest), "prompt".into()).await;
+        assert!(attempt.output.is_none());
+        assert!(attempt.raw_output.is_none());
+        assert_eq!(attempt.run_config, Some(config(&digest)));
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "a non-retryable failure decays at once"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_message_is_a_terminal_context_failure() {
+        let db = store::test_support::mem_surreal().await;
+        let error = super::triage_context(&db, uuid::Uuid::now_v7(), None)
+            .await
+            .expect_err("an unknown message has no context");
+        assert!(
+            format!("{error:?}").contains("inbound message not found"),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_message_that_is_not_inbound_has_no_triage_context() {
+        let db = store::test_support::mem_surreal().await;
+        let firm_id = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let saved = store::inbox::ingest_inbound(
+            &db,
+            &inbound(firm_id, "email", "message", None, "outbound-message"),
+        )
+        .await
+        .unwrap();
+        db.query("UPDATE $id SET direction = $direction")
+            .bind(("id", store::surreal::record_id("message", saved.message_id)))
+            .bind(("direction", store::inbox::direction::OUTBOUND))
+            .await
+            .unwrap();
+        assert!(super::triage_context(&db, saved.message_id, None)
+            .await
+            .unwrap()
+            .is_none());
+        let report = super::non_inbound_report(saved.message_id);
+        assert_eq!(report.message_id, saved.message_id);
+        assert_eq!(report.disposition, "skipped_non_inbound");
+        assert!(report.privilege.is_empty());
+    }
+
+    #[tokio::test]
+    async fn only_a_public_non_direct_social_message_is_public_social() {
+        let db = store::test_support::mem_surreal().await;
+        let firm_id = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let cases = [
+            ("comment", Some("public"), "public-comment", true),
+            ("comment", None, "unknown-comment", false),
+            ("direct_message", Some("public"), "public-dm", false),
+        ];
+        for (interaction, visibility, provider_id, expected) in cases {
+            let saved = store::inbox::ingest_inbound(
+                &db,
+                &inbound(firm_id, "x", interaction, visibility, provider_id),
+            )
+            .await
+            .unwrap();
+            let context = super::triage_context(&db, saved.message_id, None)
+                .await
+                .unwrap()
+                .expect("an inbound social message has a context");
+            assert_eq!(context.firm_id, firm_id);
+            assert_eq!(context.channel, "x");
+            assert_eq!(
+                context.public_social, expected,
+                "{interaction} with visibility {visibility:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_counts_only_for_a_project_in_the_message_firm() {
+        let db = store::test_support::mem_surreal().await;
+        let firm_id = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let other_admin = store::persons::create(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Other Firm Admin",
+                format!("other-admin-{}@example.com", uuid::Uuid::now_v7()),
+                store::persons::Role::Admin,
+            ),
+        )
+        .await
+        .unwrap();
+        let other_firm = store::firms::create(
+            &db,
+            &store::firms::NewFirm {
+                name: format!("Other Firm {}", uuid::Uuid::now_v7()),
+                status: "active".into(),
+                entity_id: store::test_support::seed_entity(&db).await,
+                admin_dri_person_id: other_admin.id,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let own = seed_project(&db, Some(firm_id)).await;
+        let foreign = seed_project(&db, Some(other_firm)).await;
+        let unowned = seed_project(&db, None).await;
+
+        assert_eq!(
+            super::validate_suggestion(&db, firm_id, None)
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            super::validate_suggestion(&db, firm_id, Some(own))
+                .await
+                .unwrap(),
+            Some(own)
+        );
+        for claim in [foreign, unowned, uuid::Uuid::now_v7()] {
+            assert_eq!(
+                super::validate_suggestion(&db, firm_id, Some(claim))
+                    .await
+                    .unwrap(),
+                None,
+                "a suggestion outside the Firm decays to none"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_report_mirrors_the_recorded_row() {
+        let db = store::test_support::mem_surreal().await;
+        let firm_id = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let saved = store::inbox::ingest_inbound(
+            &db,
+            &inbound(firm_id, "email", "message", None, "recorded-message"),
+        )
+        .await
+        .unwrap();
+        let context = super::triage_context(&db, saved.message_id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(context.classifier.is_none(), "no providers, no classifier");
+        let row = workflows::assemble_triage(
+            saved.message_id,
+            context.firm_id,
+            &context.channel,
+            context.public_social,
+            &workflows::inbox_triage::ClassifierLane::rules_only(),
+            None,
+            None,
+        );
+        let recorded = store::inbox_triage::record(&db, &row).await.unwrap();
+        let report = super::triage_report(saved.message_id, &recorded);
+        assert_eq!(report.message_id, saved.message_id);
+        assert_eq!(report.privilege, recorded.privilege.as_str());
+        assert_eq!(report.disposition, recorded.disposition.as_str());
+        assert_eq!(
+            report.privilege, "uncertain",
+            "automation never clears email"
+        );
+        assert_eq!(report.disposition, "needs_human");
+    }
+
+    #[tokio::test]
+    async fn the_service_is_rules_only_without_providers() {
+        let db = store::test_support::mem_surreal().await;
+        let service = super::InboundTriageService::new(db, None);
+        assert!(service.providers.is_none());
+    }
 }

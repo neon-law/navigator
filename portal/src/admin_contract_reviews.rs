@@ -1081,7 +1081,8 @@ async fn sync_notation_state(
 
 #[cfg(test)]
 mod tests {
-    use super::{assemble_memo_typst, typ_str, MemoInput};
+    use super::*;
+    use axum::http::header::LOCATION;
     use store::contract_reviews::Finding;
     use store::playbooks::SEVERITY_HIGH;
 
@@ -1149,5 +1150,932 @@ mod tests {
         });
         assert!(typ.contains("No deviations were flagged"));
         assert!(pdf::render(&typ).is_ok());
+    }
+
+    // --- pure helpers --------------------------------------------------------
+
+    #[test]
+    fn review_action_errors_name_the_gate_that_refused() {
+        assert_eq!(
+            ReviewActionError::NotFoundOrScoped.to_string(),
+            "contract review not found"
+        );
+        assert_eq!(
+            ReviewActionError::NotOpen.to_string(),
+            "contract review is not at the required gate"
+        );
+        assert_eq!(
+            ReviewActionError::FindingNotFound.to_string(),
+            "no such finding"
+        );
+        assert!(ReviewActionError::FindingsUnacted
+            .to_string()
+            .starts_with("every finding must be accepted or rejected"));
+        assert!(ReviewActionError::DocumentCommentsUnacted
+            .to_string()
+            .starts_with("every document comment must be accepted"));
+        assert_eq!(
+            ReviewActionError::Db("boom".into()).to_string(),
+            "database: boom"
+        );
+    }
+
+    #[test]
+    fn protected_kinds_maps_known_names_and_drops_the_rest() {
+        use store::notation_documents::ProtectedTokenKind;
+        let kinds = protected_kinds(&[
+            "number".into(),
+            "percentage".into(),
+            "currency".into(),
+            "date".into(),
+            "signature".into(),
+        ]);
+        assert_eq!(
+            kinds,
+            vec![
+                ProtectedTokenKind::Number,
+                ProtectedTokenKind::Percentage,
+                ProtectedTokenKind::Currency,
+                ProtectedTokenKind::Date,
+            ]
+        );
+        assert!(protected_kinds(&[]).is_empty());
+    }
+
+    #[test]
+    fn small_helpers_normalize_attorney_input() {
+        assert_eq!(non_empty("  keep  "), Some("keep".into()));
+        assert_eq!(non_empty("   "), None);
+        assert!(is_severity("HIGH"));
+        assert!(is_severity("medium"));
+        assert!(is_severity("Low"));
+        assert!(!is_severity("critical"));
+        assert_eq!(severity_label(SEVERITY_HIGH), "High severity");
+        assert_eq!(severity_label(SEVERITY_MEDIUM), "Medium severity");
+        assert_eq!(severity_label(SEVERITY_LOW), "Low severity");
+        assert_eq!(severity_label("custom"), "custom");
+        let id = Uuid::nil();
+        assert_eq!(
+            memo_storage_key(id),
+            format!("notations/{id}/review-memo.pdf")
+        );
+    }
+
+    #[test]
+    fn redirects_point_back_at_the_review_surface() {
+        let id = Uuid::now_v7();
+        let back = redirect_to(id);
+        assert_eq!(back.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            location(&back),
+            format!("/app/lawyer/contract-reviews/{id}")
+        );
+        let doc = document_redirect(id, "saved");
+        assert_eq!(
+            location(&doc),
+            format!("/app/lawyer/contract-reviews/{id}/document?error=saved")
+        );
+        assert_eq!(not_found().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn memo_omits_empty_redline_and_note_and_labels_severity() {
+        let f = Finding {
+            clause_ref: "§3 Term".into(),
+            deviation: "Auto-renews.".into(),
+            severity: SEVERITY_LOW.into(),
+            suggested_redline: Some(String::new()),
+            attorney_note: Some("Client accepts renewal.".into()),
+            accepted: true,
+        };
+        let refs = [&f];
+        let typ = assemble_memo_typst(&MemoInput {
+            playbook_name: "P",
+            risk_summary: "Minor.",
+            accepted_findings: &refs,
+        });
+        assert!(typ.contains("Low severity"));
+        assert!(!typ.contains("Suggested redline:"));
+        assert!(typ.contains("Attorney note:"));
+        assert!(typ.contains("Client accepts renewal."));
+    }
+
+    #[test]
+    fn changed_blocks_reports_only_edited_editable_blocks() {
+        let original = clause_document();
+        assert!(changed_blocks(&original, &original).is_empty());
+        let edited = original
+            .with_block_text("a1", "The fee is 200 dollars.")
+            .expect("paragraph a1 is editable");
+        let changes = changed_blocks(&edited, &original);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].anchor, "a1");
+        assert_eq!(changes[0].replacement_text, "The fee is 200 dollars.");
+        assert_eq!(changes[0].author, "Neon Law attorney");
+    }
+
+    // --- review commands against an embedded store -------------------------
+
+    const CLAUSE_MARKDOWN: &str = concat!(
+        "<!-- navigator-story kind=\"main_document\" part=\"/word/document.xml\" -->\n",
+        "<!-- navigator-block kind=\"paragraph\" anchor=\"a1\" -->\n",
+        "The fee is 100 dollars.\n",
+        "\n",
+        "<!-- navigator-block kind=\"paragraph\" anchor=\"a2\" -->\n",
+        "Either party may terminate.\n",
+    );
+
+    fn clause_document() -> word::CanonicalDocument {
+        word::CanonicalDocument::from_markdown(&word::TrustedNotationMarkdown::from_governed_store(
+            CLAUSE_MARKDOWN.to_string(),
+        ))
+    }
+
+    struct Fixture {
+        state: AdminState,
+        review_id: Uuid,
+        notation_id: Uuid,
+        project_id: Uuid,
+        admin_id: Uuid,
+    }
+
+    fn admin_state(app: crate::AppState) -> AdminState {
+        AdminState {
+            surreal: app.surreal,
+            workflow_runtime: app.workflow_runtime,
+            signature_provider: app.signature_provider,
+            retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
+            questionnaire_runtime: app.questionnaire_runtime,
+            storage: app.storage,
+            assets_storage: app.assets_storage,
+            forms_registry: app.forms_registry,
+            email: app.email,
+            billing_provider: app.billing_provider,
+            contract_reviewer: app.contract_reviewer,
+            bootstrap_owner_email: app.bootstrap_owner_email,
+            on_call_lawyer_email: app.on_call_lawyer_email,
+            bootstrap_company: crate::admin::bootstrap_company_from_env(),
+            sessions: app.sessions,
+            secure_cookies: false,
+            attachment_scanner: app.attachment_scanner,
+            runtime_kms: app.runtime_kms,
+        }
+    }
+
+    fn two_findings() -> Vec<Finding> {
+        vec![
+            Finding {
+                clause_ref: "§7.2 Liability".into(),
+                deviation: "Liability is uncapped.".into(),
+                severity: SEVERITY_HIGH.into(),
+                suggested_redline: None,
+                attorney_note: None,
+                accepted: false,
+            },
+            Finding {
+                clause_ref: "§3 Term".into(),
+                deviation: "Auto-renews for five years.".into(),
+                severity: SEVERITY_MEDIUM.into(),
+                suggested_redline: None,
+                attorney_note: None,
+                accepted: false,
+            },
+        ]
+    }
+
+    /// One analyzed review whose notation sits at `lawyer_review` on the
+    /// bundled contract-review workflow, plus an admin reviewer.
+    async fn fixture() -> Fixture {
+        let db = store::surreal::test_support::mem().await;
+        let notation_id = store::test_support::seed_notation(&db).await;
+        let project_id = store::notations::find_by_id(&db, notation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id;
+        let entity_id = store::test_support::seed_entity(&db).await;
+        let playbook_id = playbooks::create(
+            &db,
+            &playbooks::NewPlaybook {
+                entity_id,
+                name: "Vendor MSA",
+                positions: &[],
+            },
+        )
+        .await
+        .unwrap();
+        let review_id = contract_reviews::create(
+            &db,
+            &contract_reviews::NewContractReview {
+                notation_id,
+                playbook_id,
+                asset_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        contract_reviews::record_analysis(&db, review_id, "Two deviations.", &two_findings())
+            .await
+            .unwrap();
+        let admin_id = store::persons::create(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Synthetic Admin",
+                format!("reviewer-{}@example.com", Uuid::now_v7()),
+                Role::Admin,
+            ),
+        )
+        .await
+        .unwrap()
+        .id;
+        let state = admin_state(crate::test_support::app_state(db).await);
+
+        let yaml = workflows::catalog_spec_yaml(
+            crate::contract_review_walk::CONTRACT_REVIEW_TEMPLATE_CODE,
+        )
+        .expect("bundled contract-review spec");
+        let spec = workflows::workflow_spec_from_yaml(yaml).unwrap();
+        let runtime = state.workflow_runtime.as_ref();
+        StateMachineRuntime::start(runtime, MachineKind::Workflow, notation_id, &spec)
+            .await
+            .unwrap();
+        for condition in [
+            crate::contract_review_walk::CONTRACT_UPLOADED,
+            crate::contract_review_walk::INTAKE_FILED,
+            crate::contract_review_walk::ANALYSIS_READY,
+        ] {
+            StateMachineRuntime::signal(
+                runtime,
+                MachineKind::Workflow,
+                notation_id,
+                condition,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        store::notations::update_state(&state.surreal, notation_id, "lawyer_review")
+            .await
+            .unwrap();
+        Fixture {
+            state,
+            review_id,
+            notation_id,
+            project_id,
+            admin_id,
+        }
+    }
+
+    impl Fixture {
+        fn session(&self) -> Extension<SessionData> {
+            let mut session = SessionData::fresh("reviewer@example.com", Role::Admin);
+            session.person_id = Some(self.admin_id);
+            Extension(session)
+        }
+
+        async fn review(&self) -> ContractReview {
+            contract_reviews::by_id(&self.state.surreal, self.review_id)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+
+        async fn notation_state(&self) -> String {
+            store::notations::find_by_id(&self.state.surreal, self.notation_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state
+        }
+
+        async fn decide(&self, idx: usize, accept: bool) -> Result<(), ReviewActionError> {
+            save_review_finding(
+                &self.state.surreal,
+                self.review_id,
+                idx,
+                Some(self.admin_id),
+                Role::Admin,
+                accept,
+                "",
+                "",
+                "",
+            )
+            .await
+        }
+
+        async fn approve(&self) -> Result<(), ReviewActionError> {
+            approve_review(
+                &self.state.surreal,
+                &self.state.storage,
+                self.state.workflow_runtime.as_ref(),
+                self.review_id,
+                Some(self.admin_id),
+                Role::Admin,
+            )
+            .await
+        }
+
+        /// Import a governed Word source for the notation and return the
+        /// root version id.
+        async fn import_document(&self) -> Uuid {
+            let document = clause_document();
+            let manifest = serde_json::to_vec(&document.block_manifest()).unwrap();
+            let markdown = document.to_markdown();
+            let original_asset_id = store::assets::ingest_content(
+                &self.state.surreal,
+                &self.state.storage,
+                b"PK\x03\x04 synthetic docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            .await
+            .unwrap();
+            store::notation_documents::import_root(
+                &self.state.surreal,
+                &self.state.storage,
+                store::notation_documents::ImportRoot {
+                    project_id: self.project_id,
+                    notation_id: self.notation_id,
+                    original_asset_id,
+                    markdown: markdown.as_ref().as_bytes(),
+                    anchor_manifest: &manifest,
+                    parser_version: "word-protocol-1",
+                    schema_version: 1,
+                    authored_by_person_id: self.admin_id,
+                    recorded_at: "2026-11-02T10:00:00+00:00",
+                },
+            )
+            .await
+            .unwrap()
+            .into_model()
+            .id
+        }
+
+        async fn current_version_id(&self) -> Uuid {
+            store::notation_documents::current_version(
+                &self.state.surreal,
+                self.project_id,
+                self.notation_id,
+            )
+            .await
+            .unwrap()
+            .expect("a current version")
+            .id
+        }
+
+        async fn edit(&self, parent: &str, anchor: &str, text: &str, locked: &[&str]) -> Response {
+            save_document_edit_route(
+                State(self.state.clone()),
+                Path(self.review_id),
+                Some(self.session()),
+                Form(DocumentEditForm {
+                    expected_parent_version_id: parent.to_string(),
+                    anchor: anchor.to_string(),
+                    text: text.to_string(),
+                    locked_kinds: locked.iter().map(|k| (*k).to_string()).collect(),
+                }),
+            )
+            .await
+        }
+
+        async fn comment(&self, anchor: &str, body: &str) -> Response {
+            add_document_comment_route(
+                State(self.state.clone()),
+                Path(self.review_id),
+                Some(self.session()),
+                Form(DocumentCommentForm {
+                    anchor: anchor.to_string(),
+                    body: body.to_string(),
+                }),
+            )
+            .await
+        }
+
+        async fn decide_comment(&self, comment_id: Uuid, decision: &str) -> Response {
+            decide_document_comment_route(
+                State(self.state.clone()),
+                Path((self.review_id, comment_id)),
+                Some(self.session()),
+                Form(DocumentDecisionForm {
+                    decision: decision.to_string(),
+                }),
+            )
+            .await
+        }
+    }
+
+    fn location(response: &Response) -> &str {
+        response
+            .headers()
+            .get(LOCATION)
+            .expect("a redirect location")
+            .to_str()
+            .unwrap()
+    }
+
+    fn document_error(response: &Response) -> &str {
+        location(response)
+            .rsplit_once("error=")
+            .map(|(_, code)| code)
+            .expect("an error code")
+    }
+
+    fn finding_edit(decision: &str, severity: &str) -> FindingEdit {
+        FindingEdit {
+            decision: decision.to_string(),
+            severity: severity.to_string(),
+            suggested_redline: "  Cap at fees paid.  ".to_string(),
+            attorney_note: "   ".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_client_an_unassigned_lawyer_and_a_missing_review_all_read_as_not_found() {
+        let f = fixture().await;
+        let lawyer_id = store::persons::create(
+            &f.state.surreal,
+            &store::persons::NewPerson::with_role(
+                "Synthetic Lawyer",
+                format!("lawyer-{}@example.com", Uuid::now_v7()),
+                Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap()
+        .id;
+        for (review_id, person_id, role) in [
+            (f.review_id, Some(f.admin_id), Role::Client),
+            (f.review_id, Some(lawyer_id), Role::Lawyer),
+            (Uuid::now_v7(), Some(f.admin_id), Role::Admin),
+        ] {
+            let result =
+                save_review_summary(&f.state.surreal, review_id, person_id, role, "nothing").await;
+            assert!(
+                matches!(result, Err(ReviewActionError::NotFoundOrScoped)),
+                "{role:?}"
+            );
+        }
+        assert_eq!(
+            f.review().await.risk_summary.as_deref(),
+            Some("Two deviations.")
+        );
+    }
+
+    #[tokio::test]
+    async fn saving_a_finding_records_the_decision_and_normalizes_the_edit() {
+        let f = fixture().await;
+        save_review_finding(
+            &f.state.surreal,
+            f.review_id,
+            0,
+            Some(f.admin_id),
+            Role::Admin,
+            true,
+            "MEDIUM",
+            "  Cap at fees paid.  ",
+            "   ",
+        )
+        .await
+        .unwrap();
+        // An unknown severity keeps the machine-proposed one.
+        save_review_finding(
+            &f.state.surreal,
+            f.review_id,
+            1,
+            Some(f.admin_id),
+            Role::Admin,
+            false,
+            "critical",
+            "",
+            " Client accepts the renewal. ",
+        )
+        .await
+        .unwrap();
+
+        let findings = contract_reviews::findings_of(&f.review().await).unwrap();
+        assert!(findings[0].accepted);
+        assert_eq!(findings[0].severity, SEVERITY_MEDIUM);
+        assert_eq!(
+            findings[0].suggested_redline.as_deref(),
+            Some("Cap at fees paid.")
+        );
+        assert_eq!(findings[0].attorney_note, None);
+        assert!(!findings[1].accepted);
+        assert_eq!(findings[1].severity, SEVERITY_MEDIUM);
+        assert_eq!(
+            findings[1].attorney_note.as_deref(),
+            Some("Client accepts the renewal.")
+        );
+
+        let acted = contract_reviews::acted_finding_indices(&f.state.surreal, f.notation_id)
+            .await
+            .unwrap();
+        assert!(acted.contains(&0) && acted.contains(&1));
+
+        assert!(matches!(
+            f.decide(2, true).await,
+            Err(ReviewActionError::FindingNotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_summary_is_trimmed_before_it_is_stored() {
+        let f = fixture().await;
+        save_review_summary(
+            &f.state.surreal,
+            f.review_id,
+            Some(f.admin_id),
+            Role::Admin,
+            "  One material deviation.  ",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            f.review().await.risk_summary.as_deref(),
+            Some("One material deviation.")
+        );
+    }
+
+    #[tokio::test]
+    async fn approval_waits_for_every_finding_then_files_the_memo_and_ends() {
+        let f = fixture().await;
+        assert!(matches!(
+            f.approve().await,
+            Err(ReviewActionError::FindingsUnacted)
+        ));
+        f.decide(0, true).await.unwrap();
+        assert!(matches!(
+            f.approve().await,
+            Err(ReviewActionError::FindingsUnacted)
+        ));
+        f.decide(1, false).await.unwrap();
+
+        f.approve().await.unwrap();
+        assert_eq!(f.review().await.status, contract_reviews::STATUS_APPROVED);
+        assert_eq!(f.notation_state().await, "END");
+        // A second approval finds the gate closed.
+        assert!(matches!(f.approve().await, Err(ReviewActionError::NotOpen)));
+        // A closed review takes no more finding edits.
+        assert!(matches!(
+            f.decide(0, false).await,
+            Err(ReviewActionError::NotOpen)
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejection_ends_the_workflow_without_a_memo() {
+        let f = fixture().await;
+        reject_review(
+            &f.state.surreal,
+            f.state.workflow_runtime.as_ref(),
+            f.review_id,
+            Some(f.admin_id),
+            Role::Admin,
+        )
+        .await
+        .unwrap();
+        assert_eq!(f.review().await.status, contract_reviews::STATUS_REJECTED);
+        assert_eq!(f.notation_state().await, "END");
+        let again = reject_review(
+            &f.state.surreal,
+            f.state.workflow_runtime.as_ref(),
+            f.review_id,
+            Some(f.admin_id),
+            Role::Admin,
+        )
+        .await;
+        assert!(matches!(again, Err(ReviewActionError::NotOpen)));
+    }
+
+    #[tokio::test]
+    async fn the_form_routes_read_a_missing_session_or_review_as_not_found() {
+        let f = fixture().await;
+        let missing = Uuid::now_v7();
+
+        // No session: every lawyer form reads as not found.
+        let r = save_finding(
+            State(f.state.clone()),
+            Path((f.review_id, 0)),
+            None,
+            Form(finding_edit("accept", "high")),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+        let r = save_summary(
+            State(f.state.clone()),
+            Path(f.review_id),
+            None,
+            Form(SummaryEdit {
+                risk_summary: "x".into(),
+            }),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            approve(State(f.state.clone()), Path(f.review_id), None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            reject(State(f.state.clone()), Path(f.review_id), None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // Unknown review or finding: not found.
+        let r = save_finding(
+            State(f.state.clone()),
+            Path((missing, 0)),
+            Some(f.session()),
+            Form(finding_edit("accept", "high")),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+        let r = save_finding(
+            State(f.state.clone()),
+            Path((f.review_id, 9)),
+            Some(f.session()),
+            Form(finding_edit("accept", "high")),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+        let r = save_summary(
+            State(f.state.clone()),
+            Path(missing),
+            Some(f.session()),
+            Form(SummaryEdit {
+                risk_summary: "x".into(),
+            }),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            approve(State(f.state.clone()), Path(missing), Some(f.session()))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            reject(State(f.state.clone()), Path(missing), Some(f.session()))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn the_form_routes_redirect_back_after_each_save_and_once_closed() {
+        let f = fixture().await;
+
+        // Approving with an unacted finding redirects with the reason.
+        let r = approve(State(f.state.clone()), Path(f.review_id), Some(f.session())).await;
+        assert_eq!(r.status(), StatusCode::SEE_OTHER);
+        assert!(location(&r).contains("?error=Every%20finding"));
+
+        // Saves redirect back to the review.
+        let back = format!("/app/lawyer/contract-reviews/{}", f.review_id);
+        let r = save_finding(
+            State(f.state.clone()),
+            Path((f.review_id, 0)),
+            Some(f.session()),
+            Form(finding_edit("accept", "low")),
+        )
+        .await;
+        assert_eq!(location(&r), back);
+        assert_eq!(
+            contract_reviews::findings_of(&f.review().await).unwrap()[0].severity,
+            SEVERITY_LOW
+        );
+        let r = save_summary(
+            State(f.state.clone()),
+            Path(f.review_id),
+            Some(f.session()),
+            Form(SummaryEdit {
+                risk_summary: " Edited. ".into(),
+            }),
+        )
+        .await;
+        assert_eq!(location(&r), back);
+        assert_eq!(f.review().await.risk_summary.as_deref(), Some("Edited."));
+
+        // Reject, then every later form is a no-op redirect back.
+        let r = reject(State(f.state.clone()), Path(f.review_id), Some(f.session())).await;
+        assert_eq!(location(&r), back);
+        let r = reject(State(f.state.clone()), Path(f.review_id), Some(f.session())).await;
+        assert_eq!(location(&r), back);
+        let r = approve(State(f.state.clone()), Path(f.review_id), Some(f.session())).await;
+        assert_eq!(location(&r), back);
+        let r = save_finding(
+            State(f.state.clone()),
+            Path((f.review_id, 1)),
+            Some(f.session()),
+            Form(finding_edit("reject", "high")),
+        )
+        .await;
+        assert_eq!(location(&r), back);
+    }
+
+    #[tokio::test]
+    async fn the_approve_route_files_the_memo_once_every_finding_is_decided() {
+        let f = fixture().await;
+        f.decide(0, true).await.unwrap();
+        f.decide(1, true).await.unwrap();
+        let r = approve(State(f.state.clone()), Path(f.review_id), Some(f.session())).await;
+        assert_eq!(
+            location(&r),
+            format!("/app/lawyer/contract-reviews/{}", f.review_id)
+        );
+        assert_eq!(f.review().await.status, contract_reviews::STATUS_APPROVED);
+        assert_eq!(f.notation_state().await, "END");
+    }
+
+    #[tokio::test]
+    async fn document_routes_without_a_session_or_a_source_read_as_not_found() {
+        let f = fixture().await;
+        let parent = Uuid::now_v7().to_string();
+        let r = save_document_edit_route(
+            State(f.state.clone()),
+            Path(f.review_id),
+            None,
+            Form(DocumentEditForm {
+                expected_parent_version_id: parent.clone(),
+                anchor: "a1".into(),
+                text: "x".into(),
+                locked_kinds: Vec::new(),
+            }),
+        )
+        .await;
+        assert_eq!(document_error(&r), "not-found");
+        let r = add_document_comment_route(
+            State(f.state.clone()),
+            Path(f.review_id),
+            None,
+            Form(DocumentCommentForm {
+                anchor: "a1".into(),
+                body: "x".into(),
+            }),
+        )
+        .await;
+        assert_eq!(document_error(&r), "not-found");
+        let r = decide_document_comment_route(
+            State(f.state.clone()),
+            Path((f.review_id, Uuid::now_v7())),
+            None,
+            Form(DocumentDecisionForm {
+                decision: "accepted".into(),
+            }),
+        )
+        .await;
+        assert_eq!(document_error(&r), "not-found");
+
+        // A session but no imported Word source.
+        assert_eq!(
+            document_error(&f.edit(&parent, "a1", "x", &[]).await),
+            "not-found"
+        );
+        assert_eq!(
+            document_error(&f.edit("not-a-uuid", "a1", "x", &[]).await),
+            "conflict"
+        );
+        assert_eq!(
+            document_error(&f.comment("a1", "Look here.").await),
+            "not-found"
+        );
+        assert_eq!(
+            document_error(&f.decide_comment(Uuid::now_v7(), "accepted").await),
+            "decision"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_document_edit_appends_a_version_and_guards_locked_tokens() {
+        let f = fixture().await;
+        let root = f.import_document().await.to_string();
+
+        assert_eq!(
+            document_error(&f.edit(&Uuid::now_v7().to_string(), "a1", "x", &[]).await),
+            "conflict"
+        );
+        assert_eq!(
+            document_error(
+                &f.edit(&root, "a1", "The fee is 900 dollars.", &["number"])
+                    .await
+            ),
+            "protected"
+        );
+        assert_eq!(
+            document_error(&f.edit(&root, "missing-anchor", "x", &[]).await),
+            "unsupported"
+        );
+        assert_eq!(f.current_version_id().await.to_string(), root);
+
+        assert_eq!(
+            document_error(
+                &f.edit(
+                    &root,
+                    "a2",
+                    "Either party may terminate on notice.",
+                    &["number"]
+                )
+                .await
+            ),
+            "saved"
+        );
+        let child = f.current_version_id().await;
+        assert_ne!(child.to_string(), root);
+        let version = store::notation_documents::current_version(
+            &f.state.surreal,
+            f.project_id,
+            f.notation_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let markdown =
+            store::notation_documents::markdown_of(&f.state.surreal, &f.state.storage, &version)
+                .await
+                .unwrap();
+        assert!(markdown.contains("Either party may terminate on notice."));
+        // The root is no longer the parent a save may name.
+        assert_eq!(
+            document_error(&f.edit(&root, "a1", "x", &[]).await),
+            "conflict"
+        );
+    }
+
+    #[tokio::test]
+    async fn document_comments_must_be_decided_before_approval() {
+        let f = fixture().await;
+        f.import_document().await;
+        f.decide(0, true).await.unwrap();
+        f.decide(1, false).await.unwrap();
+
+        assert_eq!(
+            document_error(&f.comment("missing-anchor", "Look here.").await),
+            "unsupported"
+        );
+        assert_eq!(document_error(&f.comment("a1", "   ").await), "unsupported");
+        assert_eq!(
+            document_error(&f.comment("a1", "  Confirm the fee.  ").await),
+            "comment-added"
+        );
+
+        let version = f.current_version_id().await;
+        let comments = store::notation_documents::comments_for_version(
+            &f.state.surreal,
+            f.project_id,
+            f.notation_id,
+            version,
+        )
+        .await
+        .unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].body, "Confirm the fee.");
+        let comment_id = comments[0].id;
+
+        assert!(matches!(
+            f.approve().await,
+            Err(ReviewActionError::DocumentCommentsUnacted)
+        ));
+        let r = approve(State(f.state.clone()), Path(f.review_id), Some(f.session())).await;
+        assert!(location(&r).contains("?error=Every%20document%20comment"));
+
+        assert_eq!(
+            document_error(&f.decide_comment(comment_id, "maybe").await),
+            "decision"
+        );
+        assert_eq!(
+            document_error(&f.decide_comment(comment_id, "accepted").await),
+            "decided"
+        );
+        assert_eq!(
+            document_error(&f.decide_comment(comment_id, "rejected").await),
+            "decision"
+        );
+    }
+
+    #[tokio::test]
+    async fn document_routes_report_a_closed_review() {
+        let f = fixture().await;
+        let root = f.import_document().await.to_string();
+        reject_review(
+            &f.state.surreal,
+            f.state.workflow_runtime.as_ref(),
+            f.review_id,
+            Some(f.admin_id),
+            Role::Admin,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            document_error(&f.edit(&root, "a1", "x", &[]).await),
+            "closed"
+        );
+        assert_eq!(document_error(&f.comment("a1", "Late.").await), "closed");
+        assert_eq!(
+            document_error(&f.decide_comment(Uuid::now_v7(), "accepted").await),
+            "closed"
+        );
     }
 }

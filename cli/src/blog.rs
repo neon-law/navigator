@@ -586,4 +586,218 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("connected account"));
     }
+
+    #[test]
+    fn provider_links_keep_only_the_youtube_video_parameter() {
+        assert_eq!(
+            link_body(
+                "youtube",
+                "https://www.youtube.com/watch?t=42&v=abc_123&si=tracking#comments"
+            )
+            .unwrap(),
+            json!({"post_id":"abc_123","permalink":"https://www.youtube.com/watch?v=abc_123"})
+        );
+        assert_eq!(
+            link_body(
+                "youtube",
+                "https://www.youtube.com/shorts/short-1?feature=share"
+            )
+            .unwrap(),
+            json!({"post_id":"short-1","permalink":"https://www.youtube.com/shorts/short-1"})
+        );
+    }
+
+    #[test]
+    fn provider_links_take_the_last_path_segment_as_the_post_identifier() {
+        for (provider, permalink, post_id) in [
+            (
+                "x",
+                "https://x.com/example/status/1234567890?s=20",
+                "1234567890",
+            ),
+            (
+                "linkedin",
+                "https://www.linkedin.com/feed/update/urn:li:activity:42/",
+                "urn:li:activity:42",
+            ),
+            ("facebook", "https://www.facebook.com/reel/987/", "987"),
+            (
+                "threads",
+                "https://www.threads.com/@example/post/C0de",
+                "C0de",
+            ),
+            ("tiktok", "https://www.tiktok.com/@example/video/555", "555"),
+        ] {
+            let body = link_body(provider, permalink).unwrap();
+            assert_eq!(body["post_id"], post_id, "{provider}");
+            assert!(
+                !body["permalink"].as_str().unwrap().contains('?'),
+                "{provider} keeps no query string"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_links_refuse_unknown_providers_and_unparseable_urls() {
+        let unknown = link_body("myspace", "https://myspace.com/posts/1").unwrap_err();
+        assert!(unknown.to_string().contains("unknown social provider"));
+        let unparsed = link_body("x", "not a url").unwrap_err();
+        assert!(unparsed.to_string().contains("parse provider URL"));
+    }
+
+    #[test]
+    fn preflight_requires_a_provider_and_decodable_accounts() {
+        let none = preflight(
+            "https://publisher.example",
+            "vesta",
+            &[],
+            &preflight_status(),
+            chrono::Utc::now(),
+        )
+        .unwrap_err();
+        assert!(none.to_string().contains("at least one provider"));
+        let undecodable = preflight(
+            "https://publisher.example",
+            "vesta",
+            &["facebook".into()],
+            &json!({"accounts":"nope"}),
+            chrono::Utc::now(),
+        )
+        .unwrap_err();
+        assert!(undecodable.to_string().contains("decode Social Accounts"));
+    }
+
+    #[test]
+    fn preflight_blocks_published_posts_and_unconfigured_providers_but_not_future_schedules() {
+        let mut status = preflight_status();
+        status["accounts"] = json!([account("facebook")]);
+        status["post"] = json!({"status":"scheduled","publish_at":"2999-01-01T00:00:00Z"});
+        let (_, ready) = preflight(
+            "https://publisher.example",
+            "vesta",
+            &["facebook".into()],
+            &status,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        assert!(ready, "a schedule in the future is not yet public");
+
+        status["post"] = json!({"status":"published"});
+        let (value, ready) = preflight(
+            "https://publisher.example",
+            "vesta",
+            &["facebook".into()],
+            &status,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        assert!(!ready);
+        assert!(value["blockers"][0]
+            .as_str()
+            .unwrap()
+            .contains("already public"));
+
+        status["post"] = Value::Null;
+        status["connection_setup"]["facebook"] = json!(false);
+        let (value, ready) = preflight(
+            "https://publisher.example",
+            "vesta brand",
+            &["facebook".into()],
+            &status,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        assert!(!ready);
+        assert!(value["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("configure provider OAuth")));
+        assert_eq!(
+            value["setup_url"], "https://publisher.example/app/admin/brands/vesta+brand/edit",
+            "the Brand key is encoded into the setup path"
+        );
+    }
+
+    #[test]
+    fn path_segments_are_form_encoded() {
+        assert_eq!(segment("a b/c&d"), "a+b%2Fc%26d");
+        assert_eq!(segment("plain-slug"), "plain-slug");
+    }
+
+    #[test]
+    fn report_maps_results_to_exit_codes() {
+        assert_eq!(report(Ok(json!({"outcome":"queued"}))), ExitCode::SUCCESS);
+        assert_eq!(report(Err(anyhow::anyhow!("refused"))), ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn a_source_file_that_cannot_be_read_or_parsed_fails_before_any_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.yaml");
+        assert_eq!(run_publish(None, &missing).await, ExitCode::FAILURE);
+        let invalid = dir.path().join("invalid.yaml");
+        std::fs::write(&invalid, "brand: [unterminated").unwrap();
+        assert_eq!(run_record(None, &invalid).await, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_permalink_fails_before_any_request() {
+        assert_eq!(
+            run_link(
+                None,
+                "vesta",
+                "example",
+                "instagram",
+                "https://www.instagram.com/example/"
+            )
+            .await,
+            ExitCode::FAILURE
+        );
+    }
+
+    #[tokio::test]
+    async fn a_non_json_error_body_reports_its_first_line_truncated() {
+        let server = MockServer::start().await;
+        let long_line = "x".repeat(400);
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(502).set_body_string(format!("{long_line}\nsecond line")),
+            )
+            .mount(&server)
+            .await;
+        let error = send(
+            &server.uri(),
+            "test-session",
+            Method::GET,
+            "/app/api/blog/x/y",
+            None,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.starts_with("HTTP 502"), "{error}");
+        assert!(error.contains(&"x".repeat(300)), "{error}");
+        assert!(!error.contains(&"x".repeat(301)), "{error}");
+        assert!(!error.contains("second line"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_successful_non_json_body_is_a_decode_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html>ok</html>"))
+            .mount(&server)
+            .await;
+        let error = send(
+            &server.uri(),
+            "test-session",
+            Method::GET,
+            "/app/api/blog/x/y",
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("decode Navigator blog response"));
+    }
 }

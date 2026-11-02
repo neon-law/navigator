@@ -874,4 +874,184 @@ mod tests {
 
         assert!(dst.join("assets/fonts/gorp.woff2").is_file());
     }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// A local Project repository declaring `code`, with one Draft, committed
+    /// and tagged `v1`. Cloned over `file://` so no network is involved.
+    fn project_repository(code: &str) -> (tempfile::TempDir, String) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = temp.path().join("project");
+        std::fs::create_dir_all(repo.join(store::sample_project::DRAFTS_DIR)).expect("mkdir");
+        std::fs::write(
+            repo.join(store::sample_project::MANIFEST_FILE),
+            format!("project: {code}\n"),
+        )
+        .expect("manifest");
+        std::fs::write(
+            repo.join(store::sample_project::DRAFTS_DIR)
+                .join("engagement.md"),
+            b"---\ntitle: Engagement\n---\n",
+        )
+        .expect("draft");
+        git(&repo, &["init", "--initial-branch=main"]);
+        git(&repo, &["add", "."]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=Navigator Test",
+                "-c",
+                "user.email=dev@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+        git(&repo, &["tag", "v1"]);
+        let url = format!("file://{}", repo.display());
+        (temp, url)
+    }
+
+    #[test]
+    fn head_commit_reads_a_checkout_and_is_none_outside_one() {
+        let (temp, _url) = project_repository("sample-estate");
+        let commit = head_commit(&temp.path().join("project")).expect("a committed checkout");
+        assert_eq!(commit.len(), 40, "a full object id: {commit}");
+        assert!(commit.chars().all(|c| c.is_ascii_hexdigit()), "{commit}");
+
+        let plain = tempfile::tempdir().expect("tempdir");
+        assert_eq!(head_commit(plain.path()), None);
+    }
+
+    #[test]
+    fn a_cloned_repository_carries_its_manifest_code_and_commit() {
+        let (temp, url) = project_repository("sample-estate");
+        let expected = head_commit(&temp.path().join("project"));
+
+        let cloned = clone_repository(&url, Some("v1")).expect("a local clone");
+
+        assert_eq!(cloned.code, "sample-estate");
+        assert_eq!(cloned.manifest, "project: sample-estate\n");
+        assert_eq!(cloned.commit, expected);
+        assert!(cloned
+            .checkout
+            .join(store::sample_project::DRAFTS_DIR)
+            .join("engagement.md")
+            .is_file());
+        let checkout = cloned.checkout.clone();
+        drop(cloned);
+        assert!(
+            !checkout.exists(),
+            "dropping the clone removes its temporary tree"
+        );
+    }
+
+    #[test]
+    fn a_repository_that_will_not_clone_is_an_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let url = format!("file://{}", temp.path().join("absent").display());
+
+        let Err(error) = clone_repository(&url, None) else {
+            panic!("an absent repository cannot be cloned");
+        };
+
+        assert!(error.to_string().contains("`git clone"), "{error}");
+    }
+
+    #[test]
+    fn staging_one_matter_lands_its_source_under_its_own_code() {
+        let (_repo, url) = project_repository("sample-estate");
+        let workspace = tempfile::tempdir().expect("tempdir");
+
+        let copied = stage_one("sample-estate", &url, None, false, workspace.path())
+            .expect("the matter stages");
+
+        assert_eq!(copied, 3, "manifest, commit, and one Draft");
+        let stage = staged_for(workspace.path(), "sample-estate");
+        assert_eq!(
+            std::fs::read_to_string(stage.join(store::sample_project::MANIFEST_FILE))
+                .expect("manifest"),
+            "project: sample-estate\n"
+        );
+        assert!(stage.join("drafts/engagement.md").is_file());
+        let commit = std::fs::read_to_string(stage.join(store::sample_project::SOURCE_COMMIT_FILE))
+            .expect("commit");
+        assert_eq!(commit.trim().len(), 40, "{commit}");
+    }
+
+    #[test]
+    fn a_repository_declaring_another_matter_is_never_staged() {
+        let (_repo, url) = project_repository("sample-litigation");
+        let workspace = tempfile::tempdir().expect("tempdir");
+
+        let error = stage_one("sample-estate", &url, None, false, workspace.path())
+            .expect_err("one matter's source must not mount on another");
+
+        assert_eq!(
+            error.to_string(),
+            project_mismatch_message(&url, "sample-litigation", "sample-estate")
+        );
+        assert!(
+            !staged_for(workspace.path(), "sample-estate").exists(),
+            "a refused source leaves nothing staged"
+        );
+    }
+
+    /// A repository with no commit and no Drafts clears what an earlier stage
+    /// recorded for both, so boot never pins a Draft to a commit that is gone.
+    #[test]
+    fn a_source_without_a_commit_or_drafts_clears_the_stale_ones() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir_all(&checkout).expect("mkdir");
+        let stage = temp.path().join("stage");
+        std::fs::create_dir_all(stage.join(store::sample_project::DRAFTS_DIR)).expect("mkdir");
+        std::fs::write(stage.join("drafts/old.md"), b"old").expect("stale draft");
+        std::fs::write(
+            stage.join(store::sample_project::SOURCE_COMMIT_FILE),
+            b"deadbeef\n",
+        )
+        .expect("stale commit");
+        std::fs::write(stage.join(RETIRED_BUNDLE_DIR), b"a file, not a dir").expect("stale");
+
+        let built = ClonedProject {
+            temp: tempfile::tempdir().expect("tempdir"),
+            checkout,
+            manifest: "project: sample-estate\n".to_string(),
+            code: "sample-estate".to_string(),
+            commit: None,
+        };
+        let copied = stage_source(&built, &stage).expect("stage");
+
+        assert_eq!(copied, 1, "only the manifest");
+        assert!(!stage
+            .join(store::sample_project::SOURCE_COMMIT_FILE)
+            .exists());
+        assert!(!stage.join(store::sample_project::DRAFTS_DIR).exists());
+        assert!(!stage.join(RETIRED_BUNDLE_DIR).exists());
+        remove_if_present(&stage.join("never-there")).expect("an absent path is a no-op");
+    }
+
+    #[test]
+    fn resolving_with_an_explicit_repo_needs_no_store() {
+        assert_eq!(
+            resolve_repo("sample-estate", Some("file:///srv/mirror/estate.git"))
+                .expect("the flag wins"),
+            "file:///srv/mirror/estate.git"
+        );
+    }
 }

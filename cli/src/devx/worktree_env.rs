@@ -573,59 +573,72 @@ fn down(root: &Path, base_cfg: &KindConfig) -> Result<()> {
 }
 
 fn status(root: &Path, base_cfg: &KindConfig) {
+    print!("{}", status_report(root, base_cfg, &port_listening));
+}
+
+/// The `worktree-env status` report, built as a string so what it reports is
+/// unit-testable. `port_in_use` is injected so a test never reads host state.
+fn status_report(root: &Path, base_cfg: &KindConfig, port_in_use: &dyn Fn(u16) -> bool) -> String {
+    let mut out = String::new();
     match read_descriptor(root) {
-        None => println!("worktree-env: not set up (no .devx/worktree.json)"),
+        None => out.push_str("worktree-env: not set up (no .devx/worktree.json)\n"),
         Some(d) => {
-            println!(
+            let _ = writeln!(
+                out,
                 "worktree-env: slug={} mode={} runtime={}",
                 d.slug, d.mode, d.runtime
             );
             if let Some(db) = &d.db_name {
-                println!("  database: {db}");
+                let _ = writeln!(out, "  database: {db}");
             }
-            println!(
+            let _ = writeln!(
+                out,
                 "  web port {}: {}",
                 d.web_port,
-                yes_no(port_listening(d.web_port))
+                yes_no(port_in_use(d.web_port))
             );
             if let (Some(slot), Some(_db)) = (d.dev_slot(), &d.db_name) {
                 let cfg = worktree_kind_config(base_cfg, root, slot);
-                println!("  port slot: {slot}");
-                println!(
+                let _ = writeln!(out, "  port slot: {slot}");
+                let _ = writeln!(
+                    out,
                     "  delete-your-data web port {}: {}",
                     cfg.delete_your_data_web_port,
-                    yes_no(port_listening(cfg.delete_your_data_web_port))
+                    yes_no(port_in_use(cfg.delete_your_data_web_port))
                 );
                 match d.runtime {
                     Runtime::Kind => {
-                        println!("  KIND cluster: {}", cfg.cluster);
-                        println!(
+                        let _ = writeln!(out, "  KIND cluster: {}", cfg.cluster);
+                        let _ = writeln!(
+                            out,
                             "  Restate 127.0.0.1:{}: {}",
                             cfg.restate_ingress_port,
-                            yes_no(port_listening(cfg.restate_ingress_port))
+                            yes_no(port_in_use(cfg.restate_ingress_port))
                         );
-                        println!(
+                        let _ = writeln!(
+                            out,
                             "  Surreal 127.0.0.1:{}: {}",
                             cfg.surreal_port,
-                            yes_no(port_listening(cfg.surreal_port))
+                            yes_no(port_in_use(cfg.surreal_port))
                         );
                     }
                     // The native lane has no cluster to name, so its
                     // supervised processes are what there is to report:
                     // one line each, PID and port, live or not.
                     Runtime::Native => {
-                        println!("  host processes:");
+                        out.push_str("  host processes:\n");
                         for line in super::native::status_lines(root) {
-                            println!("{line}");
+                            let _ = writeln!(out, "{line}");
                         }
                         for line in super::native::deferred_lines() {
-                            println!("{line}");
+                            let _ = writeln!(out, "{line}");
                         }
                     }
                 }
             }
         }
     }
+    out
 }
 
 /// The isolated KIND dev tier for `root`, as `worktree-env up` gives it.
@@ -3061,5 +3074,538 @@ mod tests {
             "git {args:?} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    fn workspace_fixture() -> (tempfile::TempDir, PathBuf) {
+        let (temp, repo) = git_fixture_with_origin();
+        std::fs::write(repo.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::create_dir_all(repo.join("k8s")).unwrap();
+        (temp, repo.canonicalize().unwrap())
+    }
+
+    #[test]
+    fn status_reports_an_environment_that_was_never_set_up() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let report = status_report(temp.path(), &KindConfig::from_env(), &|_| {
+            panic!("no descriptor means no port is probed")
+        });
+
+        assert_eq!(
+            report,
+            "worktree-env: not set up (no .devx/worktree.json)\n"
+        );
+    }
+
+    #[test]
+    fn status_reports_the_kind_tier_coordinates_and_their_liveness() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = KindConfig::from_env();
+        let cfg = worktree_kind_config(&base, temp.path(), 7);
+        write_descriptor(
+            temp.path(),
+            &WorktreeEnv {
+                slug: "topic".into(),
+                mode: "dev".into(),
+                db_name: Some("navigator".into()),
+                web_port: cfg.web_port,
+                slot: Some(7),
+                runtime: Runtime::Kind,
+            },
+        )
+        .unwrap();
+        let live = cfg.restate_ingress_port;
+
+        let report = status_report(temp.path(), &base, &|port| port == live);
+
+        assert!(
+            report.contains("worktree-env: slug=topic mode=dev runtime=kind"),
+            "{report}"
+        );
+        assert!(report.contains("  database: navigator\n"), "{report}");
+        assert!(
+            report.contains(&format!("  web port {}: no\n", cfg.web_port)),
+            "{report}"
+        );
+        assert!(report.contains("  port slot: 7\n"), "{report}");
+        assert!(
+            report.contains(&format!(
+                "  delete-your-data web port {}: no\n",
+                cfg.delete_your_data_web_port
+            )),
+            "{report}"
+        );
+        assert!(
+            report.contains(&format!("  KIND cluster: {}\n", cfg.cluster)),
+            "{report}"
+        );
+        assert!(
+            report.contains(&format!("  Restate 127.0.0.1:{live}: yes\n")),
+            "{report}"
+        );
+        assert!(
+            report.contains(&format!("  Surreal 127.0.0.1:{}: no\n", cfg.surreal_port)),
+            "{report}"
+        );
+        assert!(!report.contains("host processes"), "{report}");
+    }
+
+    #[test]
+    fn status_for_the_native_tier_lists_host_processes_instead_of_a_cluster() {
+        let temp = tempfile::tempdir().unwrap();
+        write_descriptor(
+            temp.path(),
+            &WorktreeEnv {
+                slug: "native".into(),
+                mode: "dev".into(),
+                db_name: Some("navigator_native".into()),
+                web_port: WORKTREE_WEB_PORT_BASE + 3,
+                slot: Some(3),
+                runtime: Runtime::Native,
+            },
+        )
+        .unwrap();
+
+        let report = status_report(temp.path(), &KindConfig::from_env(), &|_| true);
+
+        assert!(report.contains("runtime=native"), "{report}");
+        assert!(
+            report.contains(&format!("  web port {}: yes\n", WORKTREE_WEB_PORT_BASE + 3)),
+            "{report}"
+        );
+        assert!(report.contains("  host processes:\n"), "{report}");
+        for line in super::super::native::deferred_lines() {
+            assert!(report.contains(&line), "missing `{line}` in {report}");
+        }
+        assert!(!report.contains("KIND cluster"), "{report}");
+    }
+
+    #[test]
+    fn status_for_a_demo_stack_reports_no_slot_or_database() {
+        let temp = tempfile::tempdir().unwrap();
+        write_descriptor(
+            temp.path(),
+            &WorktreeEnv {
+                slug: "demo".into(),
+                mode: "demo".into(),
+                db_name: None,
+                web_port: 8080,
+                slot: None,
+                runtime: Runtime::Kind,
+            },
+        )
+        .unwrap();
+
+        let report = status_report(temp.path(), &KindConfig::from_env(), &|_| false);
+
+        assert_eq!(
+            report,
+            "worktree-env: slug=demo mode=demo runtime=kind\n  web port 8080: no\n"
+        );
+    }
+
+    #[test]
+    fn dispatching_status_reads_the_supplied_worktree() {
+        let (_temp, repo) = workspace_fixture();
+
+        dispatch(
+            WorktreeEnvCmd::Status {
+                path: Some(repo.clone()),
+            },
+            &KindConfig::from_env(),
+        )
+        .expect("status never fails on a workspace without a descriptor");
+        assert!(read_descriptor(&repo).is_none());
+    }
+
+    #[test]
+    fn a_demo_with_a_mutable_tag_is_refused_before_any_cluster_work() {
+        let (_temp, repo) = workspace_fixture();
+
+        let error = dispatch(
+            WorktreeEnvCmd::Up {
+                path: Some(repo.clone()),
+                branch: None,
+                demo: true,
+                tag: Some("latest".into()),
+                no_deps: false,
+                runtime: Runtime::Kind,
+            },
+            &KindConfig::from_env(),
+        )
+        .expect_err("a mutable tag must be refused");
+
+        assert!(
+            format!("{error:#}").contains("--tag must be an immutable release tag"),
+            "{error:#}"
+        );
+        assert!(
+            read_descriptor(&repo).is_none(),
+            "a refused demo must not record a descriptor"
+        );
+    }
+
+    #[test]
+    fn the_slug_follows_the_branch_then_falls_back_to_the_directory() {
+        let (_temp, repo) = git_fixture_with_origin();
+        assert_eq!(slug_for(&repo).unwrap(), "main");
+
+        run_git(&repo, &["switch", "-c", "Feature/Big_Change"]);
+        assert_eq!(slug_for(&repo).unwrap(), "feature-big-change");
+
+        // A detached HEAD reads as `HEAD`, which names no topic.
+        run_git(&repo, &["switch", "--detach"]);
+        assert_eq!(git_branch(&repo).as_deref(), Some("HEAD"));
+        assert_eq!(slug_for(&repo).unwrap(), "repo");
+
+        let plain = tempfile::tempdir().unwrap();
+        let outside = plain.path().join("Not A Repo");
+        std::fs::create_dir(&outside).unwrap();
+        assert_eq!(git_branch(&outside), None);
+        assert_eq!(slug_for(&outside).unwrap(), "not-a-repo");
+
+        let error = slug_for(Path::new("/")).expect_err("the filesystem root has no name");
+        assert!(
+            error
+                .to_string()
+                .contains("could not derive a worktree slug"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_workspace_root_is_the_first_ancestor_with_cargo_and_k8s() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().join("workspace");
+        let nested = root.join("cli/src");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(root.join("k8s")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        // A crate manifest without `k8s/` beside it is not the workspace.
+        std::fs::write(root.join("cli/Cargo.toml"), "[package]\n").unwrap();
+
+        assert_eq!(worktree_root(Some(&nested)).unwrap(), root);
+        assert_eq!(worktree_root(Some(&root)).unwrap(), root);
+
+        let missing = worktree_root(Some(&temp.path().join("absent")))
+            .expect_err("a path that does not exist cannot be resolved");
+        assert!(
+            missing.to_string().contains("resolve worktree path"),
+            "{missing}"
+        );
+
+        let elsewhere = tempfile::tempdir().unwrap();
+        let error = worktree_root(Some(elsewhere.path()))
+            .expect_err("no ancestor carries the workspace markers");
+        assert!(
+            error
+                .to_string()
+                .contains("could not find the workspace root"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn git_helpers_name_the_checkout_that_is_not_a_repository() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let root = git_checkout_root(temp.path()).expect_err("not a Git checkout");
+        assert!(root.to_string().contains("is not a Git worktree"), "{root}");
+
+        let checked = git_checked(temp.path(), &["status"], "inspect the fixture")
+            .expect_err("git fails outside a repository");
+        assert!(
+            checked
+                .to_string()
+                .starts_with("inspect the fixture failed:"),
+            "{checked}"
+        );
+
+        let common = git_common_dir(temp.path()).expect_err("no shared Git directory");
+        assert!(
+            common.to_string().contains("--git-common-dir failed"),
+            "{common}"
+        );
+
+        let listing = git_worktree_listing(temp.path()).expect_err("no worktree listing");
+        assert!(
+            listing
+                .to_string()
+                .contains("git worktree list --porcelain failed"),
+            "{listing}"
+        );
+        assert!(primary_worktree(temp.path()).is_err());
+        assert!(!local_branch_exists(temp.path(), "main"));
+    }
+
+    #[test]
+    fn the_primary_checkout_is_not_a_linked_worktree_but_its_sibling_is() {
+        let (_temp, repo) = git_fixture_with_origin();
+        let linked = repo.parent().unwrap().join("linked");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+
+        assert_eq!(
+            primary_worktree(&linked).unwrap().canonicalize().unwrap(),
+            repo.canonicalize().unwrap()
+        );
+        assert!(!is_linked_worktree(&repo).unwrap());
+        assert!(is_linked_worktree(&linked).unwrap());
+        assert!(local_branch_exists(&repo, "main"));
+        assert!(!local_branch_exists(&repo, "no-such-branch"));
+    }
+
+    #[test]
+    fn a_supplied_worktree_switches_to_an_existing_local_branch() {
+        let (_temp, repo) = git_fixture_with_origin();
+        run_git(&repo, &["branch", "codex/existing", "origin/main"]);
+        let supplied = repo.parent().unwrap().join("supplied");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                supplied.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+
+        let selected = prepare_topic_checkout(&repo, Some(&supplied), "codex/existing").unwrap();
+
+        assert_eq!(git_branch(&selected).as_deref(), Some("codex/existing"));
+        assert_eq!(worktree_paths_for_repo(&repo).len(), 2);
+    }
+
+    #[test]
+    fn a_sibling_on_another_branch_is_refused_rather_than_reused() {
+        let (_temp, repo) = git_fixture_with_origin();
+        let target = repo.join(".worktrees").join(slugify("codex/topic"));
+        std::fs::create_dir_all(repo.join(".worktrees")).unwrap();
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "codex/other",
+                target.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+
+        let error = prepare_topic_checkout(&repo, None, "codex/topic")
+            .expect_err("the sibling directory belongs to another branch");
+
+        assert!(
+            error
+                .to_string()
+                .contains("already exists but is not checked out on `codex/topic`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn live_worktree_paths_list_every_checkout_still_on_disk() {
+        let (_temp, repo) = git_fixture_with_origin();
+        let linked = repo.parent().unwrap().join("linked");
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+
+        let live = live_worktree_paths(&repo).unwrap();
+        let canonical: BTreeSet<PathBuf> = live
+            .iter()
+            .map(|path| path.canonicalize().unwrap())
+            .collect();
+        assert_eq!(
+            canonical,
+            BTreeSet::from([repo.canonicalize().unwrap(), linked.canonicalize().unwrap()])
+        );
+
+        std::fs::remove_dir_all(&linked).unwrap();
+        let after = live_worktree_paths(&repo).unwrap();
+        assert!(
+            after.iter().all(|path| path.is_dir()),
+            "a deleted checkout Git still lists is not live: {after:?}"
+        );
+        assert!(after.iter().all(|path| !path.ends_with("linked")));
+    }
+
+    #[test]
+    fn port_listening_detects_a_bound_listener() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        assert!(port_listening(port));
+        assert_eq!(yes_no(port_listening(port)), "yes");
+        // Port 1 is privileged and unserved on a development host or runner.
+        assert!(!port_listening(1));
+        assert_eq!(yes_no(false), "no");
+    }
+
+    #[test]
+    fn the_readiness_gate_needs_every_member_listening() {
+        let listeners: Vec<std::net::TcpListener> = (0..10)
+            .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
+            .collect();
+        let ports: Vec<u16> = listeners
+            .iter()
+            .map(|listener| listener.local_addr().unwrap().port())
+            .collect();
+        let mut cfg = KindConfig::from_env();
+        cfg.ingress_http_port = ports[0];
+        cfg.ingress_https_port = ports[1];
+        cfg.restate_ingress_port = ports[2];
+        cfg.restate_admin_port = ports[3];
+        cfg.rauthy_port = ports[4];
+        cfg.seaweedfs_s3_port = ports[5];
+        cfg.openobserve_port = ports[6];
+        cfg.openobserve_otlp_port = ports[7];
+        cfg.clamav_port = ports[8];
+        cfg.surreal_port = ports[9];
+
+        assert!(worktree_deps_ready(&cfg));
+        ensure_worktree_deps_ready(&cfg).expect("every forwarded member answers");
+
+        cfg.surreal_port = 1;
+        assert!(
+            !worktree_deps_ready(&cfg),
+            "one silent member keeps the gate closed"
+        );
+    }
+
+    #[test]
+    fn a_slot_is_busy_when_any_of_its_ports_has_a_listener() {
+        let base = KindConfig::from_env();
+        let root = Path::new("/tmp/navigator/worktrees/listener");
+        let cfg = worktree_kind_config(&base, root, 12);
+
+        assert!(!worktree_slot_has_listener(&base, root, 12, &|_| false));
+        assert!(worktree_slot_has_listener(&base, root, 12, &|port| {
+            port == cfg.postgres_port
+        }));
+        assert!(worktree_slot_has_listener(&base, root, 12, &|port| {
+            port == super::super::native::worker_health_port(12)
+        }));
+        // A listener on another slot's port does not occupy this one.
+        assert!(!worktree_slot_has_listener(&base, root, 12, &|port| {
+            port == cfg.web_port + 1
+        }));
+    }
+
+    #[test]
+    fn the_retired_descriptor_files_are_removed_with_the_environment() {
+        let temp = tempfile::tempdir().unwrap();
+        write_worktree_env(temp.path(), "NAVIGATOR_WEB_PORT=20601\n").unwrap();
+        for leftover in ["kind-config.yaml", "kubeconfig", "port-forwards.log"] {
+            std::fs::write(temp.path().join(".devx").join(leftover), "x").unwrap();
+        }
+        write_descriptor(
+            temp.path(),
+            &WorktreeEnv {
+                slug: "gone".into(),
+                mode: "dev".into(),
+                db_name: Some("navigator".into()),
+                web_port: 20_601,
+                slot: Some(1),
+                runtime: Runtime::Kind,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(env_path(temp.path())).unwrap(),
+            "NAVIGATOR_WEB_PORT=20601\n"
+        );
+        assert!(!is_native(temp.path()));
+        let error = native_worker_coordinates(temp.path(), &KindConfig::from_env())
+            .expect_err("a KIND descriptor has no native coordinates");
+        assert!(
+            error
+                .to_string()
+                .contains("not using the native dependency tier"),
+            "{error}"
+        );
+
+        remove_worktree_state(temp.path());
+
+        assert!(read_descriptor(temp.path()).is_none());
+        for gone in [
+            "env",
+            "worktree.json",
+            "kind-config.yaml",
+            "kubeconfig",
+            "port-forwards.log",
+        ] {
+            assert!(
+                !temp.path().join(".devx").join(gone).exists(),
+                "{gone} should be removed"
+            );
+        }
+        let missing = native_worker_coordinates(temp.path(), &KindConfig::from_env())
+            .expect_err("no descriptor at all");
+        assert!(
+            missing.to_string().contains("descriptor is missing"),
+            "{missing}"
+        );
+    }
+
+    #[test]
+    fn a_native_descriptor_without_a_slot_has_no_reload_coordinates() {
+        let temp = tempfile::tempdir().unwrap();
+        write_descriptor(
+            temp.path(),
+            &WorktreeEnv {
+                slug: "native".into(),
+                mode: "dev".into(),
+                db_name: Some("navigator_native".into()),
+                web_port: 20_600,
+                slot: None,
+                runtime: Runtime::Native,
+            },
+        )
+        .unwrap();
+
+        let error = native_worker_coordinates(temp.path(), &KindConfig::from_env())
+            .expect_err("a slotless descriptor cannot locate its worker");
+        assert!(error.to_string().contains("has no port slot"), "{error}");
+    }
+
+    #[test]
+    fn the_sweep_report_spells_out_slots_and_ports() {
+        assert_eq!(describe_slots(&BTreeSet::new()), "no slot");
+        assert_eq!(describe_slots(&BTreeSet::from([4])), "slot 4");
+        assert_eq!(describe_slots(&BTreeSet::from([9, 4, 12])), "slots 4,9,12");
+        assert_eq!(describe_ports(&[]), "binds no port (interrupted setup)");
+        assert_eq!(describe_ports(&[20_404, 20_104]), "ports 20104 20404");
+        assert_eq!(
+            worktree_cluster_fingerprint("navigator", "navigator-0a1b2c3d"),
+            Some("0a1b2c3d")
+        );
+        assert_eq!(
+            worktree_cluster_fingerprint("navigator", "navigator-0A1B2C3D"),
+            None,
+            "a fingerprint is lower-case hex"
+        );
+        assert_eq!(
+            worktree_cluster_fingerprint("navigator", "navigator-abc"),
+            None
+        );
+        assert_eq!(worktree_cluster_fingerprint("navigator", "navigator"), None);
     }
 }
