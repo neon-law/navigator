@@ -145,10 +145,10 @@ const FIRM_NAV: &[NavLink] = &[
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
-/// Neon's header links its subscription home and separate business counsel page.
+/// Neon's header links its fee schedule and separate business counsel page;
+/// the logo carries the reader home to Nautilus.
 const NEON_NAV: &[NavLink] = &[
     NavLink::leaf("Services", "/services"),
-    NavLink::leaf("Nautilus", "/"),
     NavLink::leaf("Business", "/business"),
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
@@ -3019,17 +3019,15 @@ mod tests {
     }
 
     #[test]
-    fn the_firm_nav_links_services_nautilus_business_and_consultation() {
-        assert_eq!(FIRM_BRAND.nav.len(), 4);
+    fn the_firm_nav_links_services_business_and_consultation() {
+        assert_eq!(FIRM_BRAND.nav.len(), 3);
         assert_eq!(FIRM_BRAND.nav[0].label, "Services");
         assert_eq!(FIRM_BRAND.nav[0].href, "/services");
-        assert_eq!(FIRM_BRAND.nav[1].label, "Nautilus");
-        assert_eq!(FIRM_BRAND.nav[1].href, "/");
-        assert_eq!(FIRM_BRAND.nav[2].label, "Business");
-        assert_eq!(FIRM_BRAND.nav[2].href, "/business");
-        assert_eq!(FIRM_BRAND.nav[3].label, "Book Consultation");
+        assert_eq!(FIRM_BRAND.nav[1].label, "Business");
+        assert_eq!(FIRM_BRAND.nav[1].href, "/business");
+        assert_eq!(FIRM_BRAND.nav[2].label, "Book Consultation");
         assert_eq!(
-            FIRM_BRAND.nav[3].href,
+            FIRM_BRAND.nav[2].href,
             "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
         );
     }
