@@ -213,17 +213,14 @@ impl InboundTriageService {
     }
 }
 
-/// What the run needs from the persisted rows: the Firm, the channel, and
-/// the untrusted message payload. Journaled as metadata; the body never
-/// enters the Restate journal — the classify step reads it from this value
-/// in memory and the journal records only its digest and the verdict.
+/// The persisted Message's Firm and channel. Only this metadata enters the
+/// context checkpoint. The
+/// classifier step reads subject and body directly from the store; its
+/// checkpoint retains the provider's verdict and audit output.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct TriageContext {
     firm_id: Uuid,
     channel: String,
-    #[serde(default)]
-    subject: Option<String>,
-    body: String,
 }
 
 async fn triage_context(
@@ -249,8 +246,6 @@ async fn triage_context(
     Ok(Some(TriageContext {
         firm_id: conversation.firm_id,
         channel: conversation.channel,
-        subject: conversation.subject,
-        body: message.body,
     }))
 }
 
@@ -302,12 +297,16 @@ impl InboundTriageService {
         } else {
             Vec::new()
         };
-        let attempt = if classifier_ran {
-            let providers = self
-                .providers
-                .clone()
-                .expect("classifier_ran implies configured providers");
-            run_classifier_step(&ctx, &providers, &context, &menu).await?
+        let attempt = if let Some(providers) = self.providers.as_ref().filter(|_| classifier_ran) {
+            run_classifier_step(
+                &ctx,
+                providers,
+                self.surreal.clone(),
+                message_id,
+                &context,
+                &menu,
+            )
+            .await?
         } else {
             ClassifierAttempt {
                 output: None,
@@ -401,23 +400,40 @@ async fn load_firm_menu(
 async fn run_classifier_step(
     ctx: &WorkflowContext<'_>,
     providers: &TriageProviders,
+    surreal: SurrealDb,
+    message_id: Uuid,
     context: &TriageContext,
     menu: &[ProjectOption],
 ) -> Result<ClassifierAttempt, HandlerError> {
-    let digest = triage_input_digest(&context.channel, context.subject.as_deref(), &context.body);
-    let config = TriageRunConfig::new(&providers.model, &providers.location, digest)
-        .map_err(HandlerError::from)?;
-    let prompt = build_triage_prompt(
-        &context.channel,
-        context.subject.as_deref(),
-        &context.body,
-        config.max_input_chars,
-        menu,
-        &config,
-    );
     let providers = providers.clone();
+    let channel = context.channel.clone();
+    let menu = menu.to_vec();
     let attempt = ctx
-        .run(move || async move { Ok(Json(classify_message(&providers, config, prompt).await)) })
+        .run(move || async move {
+            // Only the attempt leaves this step. Raw input stays in the
+            // store and in this provider call, outside the context checkpoint.
+            let message = store::inbox::message_by_id(&surreal, message_id)
+                .await
+                .map_err(HandlerError::from)?
+                .ok_or_else(|| TerminalError::new("inbound message not found"))?;
+            let conversation = store::inbox::conversation_by_id(&surreal, message.conversation_id)
+                .await
+                .map_err(HandlerError::from)?
+                .ok_or_else(|| TerminalError::new("inbound conversation not found"))?;
+            let digest =
+                triage_input_digest(&channel, conversation.subject.as_deref(), &message.body);
+            let config = TriageRunConfig::new(&providers.model, &providers.location, digest)
+                .map_err(HandlerError::from)?;
+            let prompt = build_triage_prompt(
+                &channel,
+                conversation.subject.as_deref(),
+                &message.body,
+                config.max_input_chars,
+                &menu,
+                &config,
+            );
+            Ok::<_, HandlerError>(Json(classify_message(&providers, config, prompt).await))
+        })
         .name("classify-inbound-message")
         .await?
         .into_inner();
@@ -486,6 +502,23 @@ fn non_inbound_report(message_id: Uuid) -> InboundTriageReport {
 #[cfg(test)]
 mod tests {
     use super::{classify_message, TriageProviders};
+
+    #[test]
+    fn journaled_triage_context_excludes_message_payload() {
+        let context = super::TriageContext {
+            firm_id: uuid::Uuid::now_v7(),
+            channel: "email".into(),
+        };
+        let serialized = serde_json::to_value(context).unwrap();
+        assert!(
+            serialized.get("body").is_none(),
+            "the durable context must omit message content"
+        );
+        assert!(
+            serialized.get("subject").is_none(),
+            "the durable context must omit subject content"
+        );
+    }
     use cloud::StaticTokenSource;
     use std::sync::Arc;
     use wiremock::matchers::{header, method, path};
