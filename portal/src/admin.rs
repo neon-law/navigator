@@ -5854,7 +5854,7 @@ mod tests {
             StatusCode::NOT_FOUND
         );
 
-        let viewer = person_with_role(&db, "Ada Lovelace", Role::Lawyer).await;
+        let viewer = person_with_role(&db, "Ada Lumen", Role::Lawyer).await;
         let initials =
             super::current_viewer_avatar(S(state.clone()), Some(Ext(session_for(&viewer)))).await;
         assert_eq!(initials.status(), StatusCode::OK);
