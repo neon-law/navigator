@@ -187,6 +187,8 @@ pub struct TimelineItem {
     pub deadline: bool,
     /// A deadline's state chip: `Overdue`, `Due soon`, `Upcoming`.
     pub state: String,
+    /// A deadline's category, in plain words; empty on a docket entry.
+    pub category: String,
 }
 
 impl TimelineItem {

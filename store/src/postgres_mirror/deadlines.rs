@@ -27,6 +27,7 @@ pub(super) struct DeadlineImage {
     owner_person_id: Option<Uuid>,
     status: String,
     calendar_role: String,
+    category: Option<String>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
@@ -49,6 +50,7 @@ struct DeadlineSource {
     owner_person_id: Option<RecordId>,
     status: String,
     calendar_role: String,
+    category: Option<String>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
@@ -84,6 +86,7 @@ impl TryFrom<DeadlineSource> for DeadlineImage {
             owner_person_id: optional_uuid(row.owner_person_id.as_ref())?,
             status: row.status,
             calendar_role: row.calendar_role,
+            category: row.category,
             internal_lead_days: row.internal_lead_days,
             client_lead_days: row.client_lead_days,
             replay_key: row.replay_key,
@@ -94,7 +97,7 @@ impl TryFrom<DeadlineSource> for DeadlineImage {
     }
 }
 
-const SELECT: &str = "id, project_id, title, description, due_at, authority_kind, authority, source, source_document_id, owner_person_id, status, calendar_role, internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence";
+const SELECT: &str = "id, project_id, title, description, due_at, authority_kind, authority, source, source_document_id, owner_person_id, status, calendar_role, category, internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence";
 async fn source(surreal: &SurrealDb) -> Result<BTreeMap<MirrorKey, Columns>, MirrorError> {
     let rows: Vec<DeadlineSource> = surreal
         .query(format!("SELECT {SELECT} FROM project_deadlines"))
@@ -163,7 +166,7 @@ async fn ensure_parent(
     Ok(())
 }
 async fn target(pg: &PostgresDb) -> Result<BTreeMap<MirrorKey, Columns>, MirrorError> {
-    let rows = sqlx::query("SELECT id, project_id, title, description, due_at, authority_kind, authority, source, source_document_id, owner_person_id, status, calendar_role, internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence FROM project_deadlines")
+    let rows = sqlx::query("SELECT id, project_id, title, description, due_at, authority_kind, authority, source, source_document_id, owner_person_id, status, calendar_role, category, internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence FROM project_deadlines")
         .fetch_all(&pg.0)
         .await?;
     rows.into_iter()
@@ -190,6 +193,7 @@ fn from_row(row: &PgRow) -> Result<DeadlineImage, sqlx::Error> {
         owner_person_id: row.try_get("owner_person_id")?,
         status: row.try_get("status")?,
         calendar_role: row.try_get("calendar_role")?,
+        category: row.try_get("category")?,
         internal_lead_days: row.try_get("internal_lead_days")?,
         client_lead_days: row.try_get("client_lead_days")?,
         replay_key: row.try_get("replay_key")?,
@@ -199,9 +203,9 @@ fn from_row(row: &PgRow) -> Result<DeadlineImage, sqlx::Error> {
     })
 }
 async fn upsert(pg: &PostgresDb, row: &DeadlineImage) -> Result<Mirrored, MirrorError> {
-    let result = sqlx::query("INSERT INTO project_deadlines (id,project_id,title,due_at,authority_kind,authority,source,source_document_id,owner_person_id,status,calendar_role,internal_lead_days,client_lead_days,replay_key,inserted_at,updated_at,description,calendar_sequence) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT (id) DO UPDATE SET project_id=EXCLUDED.project_id,title=EXCLUDED.title,description=EXCLUDED.description,calendar_sequence=EXCLUDED.calendar_sequence,due_at=EXCLUDED.due_at,authority_kind=EXCLUDED.authority_kind,authority=EXCLUDED.authority,source=EXCLUDED.source,source_document_id=EXCLUDED.source_document_id,owner_person_id=EXCLUDED.owner_person_id,status=EXCLUDED.status,calendar_role=EXCLUDED.calendar_role,internal_lead_days=EXCLUDED.internal_lead_days,client_lead_days=EXCLUDED.client_lead_days,replay_key=EXCLUDED.replay_key,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (project_deadlines.project_id,project_deadlines.title,project_deadlines.due_at,project_deadlines.authority_kind,project_deadlines.authority,project_deadlines.source,project_deadlines.source_document_id,project_deadlines.owner_person_id,project_deadlines.status,project_deadlines.calendar_role,project_deadlines.internal_lead_days,project_deadlines.client_lead_days,project_deadlines.replay_key,project_deadlines.inserted_at,project_deadlines.updated_at,project_deadlines.description,project_deadlines.calendar_sequence) IS DISTINCT FROM (EXCLUDED.project_id,EXCLUDED.title,EXCLUDED.due_at,EXCLUDED.authority_kind,EXCLUDED.authority,EXCLUDED.source,EXCLUDED.source_document_id,EXCLUDED.owner_person_id,EXCLUDED.status,EXCLUDED.calendar_role,EXCLUDED.internal_lead_days,EXCLUDED.client_lead_days,EXCLUDED.replay_key,EXCLUDED.inserted_at,EXCLUDED.updated_at,EXCLUDED.description,EXCLUDED.calendar_sequence)")
+    let result = sqlx::query("INSERT INTO project_deadlines (id,project_id,title,due_at,authority_kind,authority,source,source_document_id,owner_person_id,status,calendar_role,category,internal_lead_days,client_lead_days,replay_key,inserted_at,updated_at,description,calendar_sequence) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT (id) DO UPDATE SET project_id=EXCLUDED.project_id,title=EXCLUDED.title,description=EXCLUDED.description,calendar_sequence=EXCLUDED.calendar_sequence,due_at=EXCLUDED.due_at,authority_kind=EXCLUDED.authority_kind,authority=EXCLUDED.authority,source=EXCLUDED.source,source_document_id=EXCLUDED.source_document_id,owner_person_id=EXCLUDED.owner_person_id,status=EXCLUDED.status,calendar_role=EXCLUDED.calendar_role,category=EXCLUDED.category,internal_lead_days=EXCLUDED.internal_lead_days,client_lead_days=EXCLUDED.client_lead_days,replay_key=EXCLUDED.replay_key,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (project_deadlines.project_id,project_deadlines.title,project_deadlines.due_at,project_deadlines.authority_kind,project_deadlines.authority,project_deadlines.source,project_deadlines.source_document_id,project_deadlines.owner_person_id,project_deadlines.status,project_deadlines.calendar_role,project_deadlines.category,project_deadlines.internal_lead_days,project_deadlines.client_lead_days,project_deadlines.replay_key,project_deadlines.inserted_at,project_deadlines.updated_at,project_deadlines.description,project_deadlines.calendar_sequence) IS DISTINCT FROM (EXCLUDED.project_id,EXCLUDED.title,EXCLUDED.due_at,EXCLUDED.authority_kind,EXCLUDED.authority,EXCLUDED.source,EXCLUDED.source_document_id,EXCLUDED.owner_person_id,EXCLUDED.status,EXCLUDED.calendar_role,EXCLUDED.category,EXCLUDED.internal_lead_days,EXCLUDED.client_lead_days,EXCLUDED.replay_key,EXCLUDED.inserted_at,EXCLUDED.updated_at,EXCLUDED.description,EXCLUDED.calendar_sequence)")
         .bind(row.id).bind(row.project_id).bind(&row.title).bind(row.due_at).bind(&row.authority_kind).bind(&row.authority).bind(&row.source)
-        .bind(row.source_document_id).bind(row.owner_person_id).bind(&row.status).bind(&row.calendar_role)
+        .bind(row.source_document_id).bind(row.owner_person_id).bind(&row.status).bind(&row.calendar_role).bind(&row.category)
         .bind(row.internal_lead_days).bind(row.client_lead_days).bind(&row.replay_key).bind(micros(row.inserted_at)).bind(micros(row.updated_at)).bind(&row.description).bind(row.calendar_sequence)
         .execute(&pg.0).await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))

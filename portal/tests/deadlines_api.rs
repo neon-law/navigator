@@ -105,6 +105,7 @@ fn body(authority: &str) -> Vec<u8> {
         "authority_kind": "statute",
         "authority": authority,
         "calendar_role": "firm",
+        "category": "court",
         "internal_lead_days": 14,
         "client_lead_days": 7
     }))

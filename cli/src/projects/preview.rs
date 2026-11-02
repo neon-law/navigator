@@ -195,6 +195,8 @@ struct LiveDeadline {
     #[serde(default)]
     calendar_role: String,
     #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
     internal_lead_days: Option<i64>,
     #[serde(default)]
     client_lead_days: Option<i64>,
@@ -223,6 +225,7 @@ impl From<LiveDeadline> for store::project_deadlines::Deadline {
             owner_person_id: row.owner_person_id,
             status: row.status,
             calendar_role: row.calendar_role,
+            category: row.category,
             internal_lead_days: row.internal_lead_days,
             client_lead_days: row.client_lead_days,
             replay_key: row.replay_key,
