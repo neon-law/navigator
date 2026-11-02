@@ -3293,20 +3293,34 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
     },
 ];
 
-/// The second firm's compiled brands: Lex wears only `iep-defenders`,
-/// whose row is firm-scoped to Lex from the moment it is first seeded.
-/// The key joins [`crate::firms::CLOSED_BRAND_KEYS`] for registry-ordered
-/// footer display and the website-URL backfill, but no practice-firm
-/// attachment — the brand belongs to Lex Tecnica, Ltd. alone. Its row copies
-/// the compiled presentation: `BrandKey::IepDefenders`
-/// `default_typeface` and `default_palette().light.primary`.
-const LEX_COMPILED_BRANDS: &[CompiledBrand] = &[CompiledBrand {
-    key: "iep-defenders",
-    website_url: "https://www.iepdefenders.com",
-    name: "IEP Defenders",
-    typeface: "source-sans-3",
-    primary_hex: "#5B21B6",
-}];
+/// The second firm's compiled brands: Lex wears `iep-defenders` and
+/// `lex-tecnica`, whose rows are firm-scoped to Lex from the moment they are
+/// first seeded. The keys join [`crate::firms::CLOSED_BRAND_KEYS`] for
+/// registry-ordered footer display and the website-URL backfill, but no
+/// practice-firm attachment — the brands belong to Lex Tecnica, Ltd. alone.
+/// Each row copies the compiled presentation: the key's `default_typeface`
+/// and `default_palette().light.primary`.
+///
+/// Their website URLs are the firm's own public sites rather than the
+/// `neonlaw.com` hosts they are served on: the URL is what approves an email
+/// domain for account admission ([`crate::brand_domains`]), separate from
+/// host routing.
+const LEX_COMPILED_BRANDS: &[CompiledBrand] = &[
+    CompiledBrand {
+        key: "iep-defenders",
+        website_url: "https://www.iepdefenders.com",
+        name: "IEP Defenders",
+        typeface: "source-sans-3",
+        primary_hex: "#5B21B6",
+    },
+    CompiledBrand {
+        key: "lex-tecnica",
+        website_url: "https://www.lextecnica.com",
+        name: "Lex Tecnica",
+        typeface: "eb-garamond",
+        primary_hex: "#7A5E27",
+    },
+];
 
 /// The website URL [`COMPILED_BRANDS`] seeds for `key`, if it names a
 /// compiled brand. Public for the same reason as [`compiled_brand_name`]: a
@@ -6972,7 +6986,10 @@ records:
         let lex_keys = crate::firms::brand_keys_for_firm(&surreal, lex.id)
             .await
             .unwrap();
-        assert_eq!(lex_keys, vec!["iep-defenders".to_string()]);
+        assert_eq!(
+            lex_keys,
+            vec!["iep-defenders".to_string(), "lex-tecnica".to_string()]
+        );
 
         // The Lex key resolves to the Lex firm and to nothing else.
         assert_eq!(

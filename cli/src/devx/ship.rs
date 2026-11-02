@@ -979,7 +979,7 @@ fn additional_brand_bindings(public_host: &str) -> Vec<AdditionalBrandBinding> {
     views::brand::release_brand_hosts()
         .into_iter()
         .filter(|(key, _)| *key != BrandKey::default())
-        .filter(|(_, host)| host.starts_with("staging.") == staging)
+        .filter(|(_, host)| views::brand::is_staging_host(host) == staging)
         .map(|(key, host)| AdditionalBrandBinding { key, host })
         .collect()
 }
@@ -1009,6 +1009,9 @@ const FIRM_CERTIFICATE_ONLY: &[BrandKey] = &[
     BrandKey::Abhaya,
     BrandKey::DeathAndDivorce,
     BrandKey::GuiebShook,
+    // Born on the Firm certificate: they never had one of their own.
+    BrandKey::LexTecnica,
+    BrandKey::IepDefenders,
 ];
 
 fn has_own_certificate(key: BrandKey) -> bool {
@@ -6794,11 +6797,11 @@ mod tests {
                 "{}'s production host gets an Ingress rule: {ingress}",
                 key.as_str(),
             );
-            let staging_host = format!("staging.{}", key.apex());
+            let staging_host = key.staging_host();
             assert!(
-                !cert_manifest.contains(&staging_host)
-                    && !brand_certs.contains(&staging_host)
-                    && !ingress.contains(&staging_host),
+                !cert_manifest.contains(staging_host)
+                    && !brand_certs.contains(staging_host)
+                    && !ingress.contains(staging_host),
                 "a production render must not carry {}'s staging sibling",
                 key.as_str(),
             );
@@ -7751,7 +7754,9 @@ mod tests {
             [
                 "navigator-web-abhaya",
                 "navigator-web-death-and-divorce",
-                "navigator-web-guieb-shook"
+                "navigator-web-guieb-shook",
+                "navigator-web-lex-tecnica",
+                "navigator-web-iep-defenders"
             ]
         );
         for name in &retired {
@@ -7945,7 +7950,8 @@ mod tests {
                 "www.aegiscriminaldefense.com",
                 "www.groundworkrealestatelaw.com",
                 "www.guiebandshook.com",
-                "www.iepdefenders.com",
+                "lex-tecnica.neonlaw.com",
+                "iep.neonlaw.com",
             ],
             "a production public host pulls in every other registered brand's production host — \
              ENG-808: the full registry, not only the launched ones"
@@ -7966,14 +7972,14 @@ mod tests {
                 "staging.aegiscriminaldefense.com",
                 "staging.groundworkrealestatelaw.com",
                 "staging.guiebandshook.com",
-                "staging.iepdefenders.com",
+                "staging-lex-tecnica.neonlaw.com",
+                "staging-iep.neonlaw.com",
             ],
             "a staging public host pulls in only the other brands' staging hosts"
         );
-        assert!(!views::brand::BrandKey::IepDefenders.is_live());
         assert!(
             views::brand::admitted_brand_key("www.iepdefenders.com").is_none(),
-            "release TLS readiness does not admit a held-out public route"
+            "IEP Defenders is served on neonlaw.com, never its own domain"
         );
     }
 
@@ -7993,14 +7999,16 @@ mod tests {
             if *key == views::brand::BrandKey::default() {
                 continue;
             }
+            let Some(apex) = key.apex() else {
+                continue;
+            };
             assert!(
-                !production.contains(&key.apex()),
-                "{} apex {} must not reach the load balancer: {production:?}",
+                !production.contains(&apex),
+                "{} apex {apex} must not reach the load balancer: {production:?}",
                 key.as_str(),
-                key.apex(),
             );
             assert!(
-                views::brand::registered_brand_key(key.apex()).is_none(),
+                views::brand::registered_brand_key(apex).is_none(),
                 "{}'s apex must redirect rather than serve",
                 key.as_str(),
             );
@@ -8008,7 +8016,7 @@ mod tests {
         assert!(
             !additional_brand_hosts("staging.navigator.example.invalid")
                 .iter()
-                .any(|host| !host.starts_with("staging.")),
+                .any(|host| !views::brand::is_staging_host(host)),
             "staging carries no apex"
         );
     }
@@ -8031,7 +8039,7 @@ mod tests {
                 continue;
             }
             for host in key.hosts() {
-                let public_host = if host.starts_with("staging.") {
+                let public_host = if views::brand::is_staging_host(host) {
                     "staging.navigator.example.invalid"
                 } else {
                     "navigator.example.invalid"
@@ -8076,7 +8084,7 @@ mod tests {
             // deployment never routes would be a live-brand regression.
             for (key, host) in views::brand::live_brand_hosts() {
                 if key == views::brand::BrandKey::default()
-                    || host.starts_with("staging.") != staging
+                    || views::brand::is_staging_host(host) != staging
                 {
                     continue;
                 }
@@ -8110,7 +8118,7 @@ mod tests {
     #[test]
     fn the_family_row_lists_only_admitted_brands() {
         let listed = webapp::firm_footer::compiled_family_brands(views::brand::BrandKey::default());
-        for key in views::brand::BrandKey::ALL {
+        for key in views::brand::BrandKey::GUIEB_SHOOK_FAMILY {
             let href = key.public_home_href();
             let present = listed.iter().any(|brand| brand.href == href);
             assert_eq!(
@@ -8145,7 +8153,7 @@ mod tests {
         for key in views::brand::BrandKey::ALL {
             if *key != views::brand::BrandKey::default() {
                 assert!(
-                    !cert_manifest.contains(&format!("staging.{}", key.apex())),
+                    !cert_manifest.contains(key.staging_host()),
                     "{}'s staging host must not share the default-brand certificate",
                     key.as_str(),
                 );
@@ -8158,7 +8166,7 @@ mod tests {
             if *key == views::brand::BrandKey::default() {
                 continue;
             }
-            let staging_host = format!("staging.{}", key.apex());
+            let staging_host = key.staging_host();
             assert!(
                 brand_certs.contains(&format!("- {staging_host}")),
                 "{}'s staging host gets its own certificate",
@@ -8237,16 +8245,16 @@ mod tests {
         let staging = firm_certificate_hosts("staging.neonlaw.com");
         for key in views::brand::BrandKey::ALL {
             let www = key.canonical_host();
-            let staging_host = format!("staging.{}", key.apex());
+            let staging_host = key.staging_host();
             assert!(
                 production.iter().any(|host| host == www),
                 "{www} is on the production Firm certificate"
             );
             assert!(
-                staging.contains(&staging_host),
+                staging.iter().any(|host| host == staging_host),
                 "{staging_host} is on the staging Firm certificate"
             );
-            assert!(!production.contains(&staging_host));
+            assert!(!production.iter().any(|host| host == staging_host));
             assert!(!staging.iter().any(|host| host == www));
         }
         assert!(
@@ -8475,7 +8483,9 @@ mod tests {
                         || domain.starts_with("navigator.")
                         || domain.starts_with("workflows.")
                         || domain.starts_with("forge.")
-                        || domain.starts_with("staging."),
+                        || views::brand::is_staging_host(domain)
+                        || views::brand::registered_brand_key(domain)
+                            .is_some_and(|key| key.apex().is_none()),
                     "managed certificates must not include an apex"
                 );
             }
@@ -8508,7 +8518,7 @@ mod tests {
                 key.as_str(),
             );
             assert!(
-                !hosts.contains(&key.apex()),
+                key.apex().is_none_or(|apex| !hosts.contains(&apex)),
                 "{}'s apex must not carry an Ingress rule",
                 key.as_str(),
             );

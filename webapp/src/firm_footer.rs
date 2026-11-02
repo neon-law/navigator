@@ -793,7 +793,7 @@ mod tests {
         // footer advertises. See `BrandKey::is_live`.
         assert_eq!(
             model.brands.len(),
-            views::brand::BrandKey::ALL
+            views::brand::BrandKey::GUIEB_SHOOK_FAMILY
                 .iter()
                 .filter(|key| key.is_live())
                 .count()
@@ -848,7 +848,12 @@ mod tests {
         let rows = compiled_family_brands(views::brand::BrandKey::Neon);
         let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
 
-        for key in views::brand::BrandKey::ALL {
+        // Lex Tecnica's brands are another firm's and never join this row.
+        for key in views::brand::BrandKey::LEX_TECNICA_FAMILY {
+            let label = compiled_footer_label(*key);
+            assert!(!labels.contains(&label.as_str()), "{label}: {labels:?}");
+        }
+        for key in views::brand::BrandKey::GUIEB_SHOOK_FAMILY {
             let label = compiled_footer_label(*key);
             if key.is_live() {
                 assert!(
@@ -899,7 +904,13 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn every_compiled_brand_seeds_its_registry_website_url() {
-        for key in views::brand::BrandKey::ALL {
+        // Lex Tecnica's brands seed the firm's own sites instead, which is
+        // what approves its people's `lextecnica.com` addresses.
+        assert_eq!(
+            store::seed::compiled_brand_website_url("lex-tecnica"),
+            Some("https://www.lextecnica.com")
+        );
+        for key in views::brand::BrandKey::GUIEB_SHOOK_FAMILY {
             assert_eq!(
                 store::seed::compiled_brand_website_url(key.as_str()),
                 Some(format!("https://{}", key.canonical_host()).as_str()),
@@ -939,9 +950,16 @@ mod tests {
             assert_eq!(model.brands[0].logo_href, "/synthetic-custom-logo.svg");
             let other = compiled_firm_footer_model(views::brand::BrandKey::IepDefenders, 2026);
             assert_eq!(other.legal_entity, "Lex Tecnica, Ltd.");
-            assert_eq!(other.brands.len(), 1);
-            assert!(other.brands[0].current);
-            assert_ne!(other.brands[0].label, "Synthetic Custom Practice");
+            // Lex Tecnica's own family: its two brands, IEP Defenders current.
+            assert_eq!(other.brands.len(), 2);
+            assert!(other
+                .brands
+                .iter()
+                .any(|brand| brand.current && brand.label == "IEP Defenders"));
+            assert!(other
+                .brands
+                .iter()
+                .all(|brand| brand.label != "Synthetic Custom Practice"));
         })
         .await;
         let other = compiled_firm_footer_model(views::brand::BrandKey::IepDefenders, 2026);

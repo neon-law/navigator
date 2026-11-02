@@ -41,6 +41,7 @@ mod forgejo;
 mod gcp;
 mod github_auto_merge;
 pub(crate) mod github_setup;
+mod host_setup;
 mod lifecycle;
 mod native;
 mod observability;
@@ -429,6 +430,45 @@ fn env_port(key: &str, default: u16) -> u16 {
         .ok()
         .and_then(|v| v.trim().parse::<u16>().ok())
         .unwrap_or(default)
+}
+
+/// `navigator ops host`: bring one registered brand host online.
+#[derive(Debug, Clone, clap::Subcommand)]
+pub enum HostCmd {
+    /// Point a registered brand host at a deployment and check it end to end:
+    /// its DNS `A` record (through `DNSimple`; preview unless `--apply`), its
+    /// TLS certificate (on the Firm `ManagedCertificate` `ops ship` renders
+    /// for every registered host), and its sign-in (the per-host handoff
+    /// through the deployment's one registered callback, so no identity
+    /// provider needs a new redirect URI). Exits nonzero until all three are
+    /// ready; safe to rerun.
+    Setup {
+        /// The host, as registered in `views::brand::BrandKey::hosts`, such as
+        /// `iep.neonlaw.com`.
+        #[arg(long)]
+        host: String,
+        /// Deployment directory under `deployments/`, such as `neon-law-prd`.
+        #[arg(long)]
+        deployment: String,
+        /// The directory CONTAINING `deployments/`. Defaults to
+        /// `NAVIGATOR_DEPLOYMENTS_DIR`, then to the discovered workspace root.
+        #[arg(long, value_name = "DIR")]
+        deployments_dir: Option<std::path::PathBuf>,
+        /// Read the deployment's configuration from this explicit GCP project
+        /// instead of a local tree. Requires ADC.
+        #[arg(long, conflicts_with = "deployments_dir")]
+        project_id: Option<String>,
+        /// The gateway IPv4 the `A` record points at. Defaults to the address
+        /// the deployment's own public host resolves to.
+        #[arg(long, env = "NAVIGATOR_GATEWAY_IP")]
+        gateway_ip: Option<String>,
+        /// Write the DNS record. Without it the record is previewed.
+        #[arg(long)]
+        apply: bool,
+        /// Per-check `curl` timeout, in seconds.
+        #[arg(long, default_value_t = 15)]
+        timeout_seconds: u32,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1236,6 +1276,25 @@ fn dispatch_with_dns_provider(
         crate::Command::Ops(crate::OpsCmd::EmailSummary(
             crate::EmailSummaryCmd::AuthorizeResend { receipt, actor },
         )) => email_summary_delivery::authorize_resend(receipt, actor),
+        crate::Command::Ops(crate::OpsCmd::Host(HostCmd::Setup {
+            host,
+            deployment,
+            deployments_dir,
+            project_id,
+            gateway_ip,
+            apply,
+            timeout_seconds,
+        })) => {
+            let loaded = if let Some(project) = project_id {
+                deployment_config::load(&project, &deployment)?
+            } else {
+                let root = deployments::root(deployments_dir.as_deref())?;
+                deployments::Deployment::load(&root, &deployment)?
+            };
+            let cfg = ship::ShipConfig::from_deployment(&loaded)
+                .with_context(|| format!("resolve ShipConfig for deployment {deployment}"))?;
+            host_setup::run(&cfg, &host, gateway_ip, apply, timeout_seconds)
+        }
         crate::Command::Ops(crate::OpsCmd::Dns(DnsCmd::Setup {
             domains,
             gateway_ip,

@@ -1013,6 +1013,9 @@ pub struct AuthState {
     /// `http://localhost` KIND loop so cookies still round-trip over
     /// plain HTTP in dev.
     pub secure_cookies: bool,
+    /// The deployment's host registry, which decides which brand hosts a
+    /// sign-in may be handed back to (see [`crate::host_handoff`]).
+    pub canonical_host: crate::canonical_host::CanonicalHost,
 }
 
 impl AuthState {
@@ -1109,7 +1112,10 @@ pub fn routes(state: AuthState) -> Router {
         // (Apple) delivers the code as a cross-site form submission rather
         // than a redirect. Both methods land on the same three phases.
         .route("/auth/callback", get(callback).post(callback_form))
-        .route("/auth/logout", get(logout).post(logout));
+        .route("/auth/logout", get(logout).post(logout))
+        // A brand host's half of per-host sign-in: it redeems the signed
+        // handoff the callback origin issued for it.
+        .route("/auth/handoff", get(crate::host_handoff::handoff));
 
     // Self-service password reset + email confirmation only exist where
     // an email/password door does — an OIDC-only deploy has no passwords
@@ -1185,6 +1191,14 @@ pub struct LoginQuery {
     /// [`login_notice`]); absent for a voluntary visit to `/auth/login`.
     #[serde(default)]
     pub notice: Option<String>,
+    /// The brand host this sign-in started on, when it did not start here.
+    /// Set by that host's redirect; see [`crate::host_handoff`].
+    #[serde(default)]
+    pub return_host: Option<String>,
+    /// The brand host's handoff nonce, matched against its own cookie when
+    /// the sign-in is handed back.
+    #[serde(default)]
+    pub handoff_nonce: Option<String>,
 }
 
 /// The neutral "no explicit destination" default. Empty rather than a concrete
@@ -1251,6 +1265,12 @@ async fn login(
     Query(q): Query<LoginQuery>,
 ) -> Response {
     let return_to = safe_return_to(&q.return_to);
+    crate::host_handoff::remember_return_host(
+        &s,
+        &cookies,
+        q.return_host.as_deref(),
+        q.handoff_nonce.as_deref(),
+    );
     // Hold the resolved notice so the borrowed `LoginNotice` it lends the
     // view outlives the render call.
     let notice = login_notice(q.notice.as_deref());
@@ -1320,6 +1340,12 @@ async fn start_provider_redirect(
     if s.provider_config(provider).is_none() {
         return (StatusCode::NOT_FOUND, "sign-in provider not configured").into_response();
     }
+    crate::host_handoff::remember_return_host(
+        &s,
+        &cookies,
+        q.return_host.as_deref(),
+        q.handoff_nonce.as_deref(),
+    );
     start_provider(&s, &cookies, provider, &q.return_to)
 }
 
@@ -2785,6 +2811,11 @@ async fn complete_sign_in(
             brand: views::brand::brand_key().as_str(),
             first_link,
         });
+    }
+    // A sign-in that started on a brand host goes back there for that host's
+    // own session.
+    if let Some(handoff) = crate::host_handoff::handoff_redirect(s, cookies, &session, &landing) {
+        return handoff;
     }
     Redirect::to(&landing).into_response()
 }

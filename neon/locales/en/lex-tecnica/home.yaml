@@ -1,0 +1,65 @@
+head_title: "{site_name} | Home"
+meta_description: >-
+  Lex Tecnica is a law firm for entrepreneurs, by entrepreneurs. Fractional
+  general counsel, business law, litigation, intellectual property, and
+  more. Attorney advertisement.
+og_description: >-
+  Lex Tecnica is a law firm for entrepreneurs, by entrepreneurs, offering
+  fractional general counsel and business, litigation, and intellectual
+  property work.
+heading: A law firm for entrepreneurs, by entrepreneurs.
+lead: >-
+  Lex Tecnica works as your general counsel. Our attorneys have run legal
+  teams inside businesses, and we bring that in-house view to your company,
+  your dispute, or your family's plans. You choose the attorney you work
+  with, and we confirm the scope and fees in writing before work begins.
+contact_label: Contact Us
+service:
+  heading: Start with what you need
+  body:
+    - - text: >-
+          Tell us what you are building or what has gone wrong, and the budget
+          you have in mind. We suggest attorneys whose experience fits, and
+          you can meet with up to three before you choose.
+    - - text: >-
+          A contact request does not create an attorney-client relationship.
+          Representation begins only under a signed engagement. Not all
+          attorneys are licensed in every jurisdiction.
+practices_heading: What we can help with
+practices:
+  - mark: helm
+    heading: Fractional general counsel
+    body: >-
+      Get ongoing counsel with an in-house mindset. We learn how your business
+      runs and help you decide before a legal issue becomes a business problem.
+    href: /services
+  - mark: handshake
+    heading: Business law and M&A
+    body: >-
+      Form the company, sign the contracts, raise capital, and prepare for a
+      sale or merger, with counsel who has advised companies through each stage.
+    href: /services
+  - mark: technology
+    heading: Cyber-tech law and data centers
+    body: >-
+      Ask about data centers, cloud agreements, AI, privacy, and cybersecurity
+      incidents, where technology, real estate, and regulation meet.
+    href: /services
+  - mark: gavel
+    heading: Litigation
+    body: >-
+      When negotiation fails, we represent businesses and individuals in civil
+      and intellectual property disputes, aiming to resolve them efficiently.
+    href: /services
+  - mark: scales
+    heading: Intellectual property
+    body: >-
+      Identify, protect, and enforce your ideas, inventions, creative work, and
+      brand with a plan built around where your business is going.
+    href: /services
+  - mark: scales
+    heading: Wealth management
+    body: >-
+      Put legal structures in place to protect what you have built and pass it
+      on according to your values.
+    href: /services

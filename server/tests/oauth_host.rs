@@ -1,4 +1,5 @@
-//! Browser sign-in must start on the origin that receives the callback.
+//! Browser sign-in uses the one registered callback origin, and a brand host
+//! gets the sign-in handed back for its own session.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -148,10 +149,13 @@ async fn callback_origin_wins_over_canonical_host_without_looping() {
         .oneshot(request("localhost:20430", "/auth/login"))
         .await
         .unwrap();
-    assert_eq!(
-        secondary.headers()["location"],
-        "http://localhost:20400/auth/login"
-    );
+    // A loopback brand listener detours with its handoff parameters.
+    assert!(secondary.headers()["location"]
+        .to_str()
+        .unwrap()
+        .starts_with(
+            "http://localhost:20400/auth/login?return_host=localhost%3A20430&handoff_nonce="
+        ));
     let primary = app
         .clone()
         .oneshot(request("localhost:20400", "/auth/login"))
@@ -299,9 +303,11 @@ async fn two_host_round_trip_keeps_state_pkce_and_safe_return_path() {
 }
 
 /// Run against the generated worktree environment and the browser harness.
-/// Distinct loopback names exercise actual host-only cookie isolation.
+/// Distinct loopback names exercise actual host-only cookie isolation: the
+/// sign-in passes through the primary callback and ends on the brand listener
+/// with that listener's own session.
 #[tokio::test]
-async fn browser_login_from_secondary_loopback_host_returns_to_primary() {
+async fn browser_login_from_secondary_loopback_host_is_handed_back() {
     use features::webdriver::{base_url, new_client_or_skip, require_harness, wait_for_path};
     use std::time::Duration;
 
@@ -318,25 +324,20 @@ async fn browser_login_from_secondary_loopback_host_returns_to_primary() {
     let primary = url::Url::parse(&base_url()).unwrap();
     assert_eq!(primary.host_str(), Some("localhost"));
     let secondary = format!("http://127.0.0.1:{port}");
+    let secondary_origin = url::Url::parse(&secondary).unwrap().origin();
     login_with_optional_capture(&browser, &secondary).await;
+    wait_for_path(&browser, "/app/projects", Duration::from_secs(20)).await;
     assert_eq!(
         browser.current_url().await.unwrap().origin(),
-        primary.origin()
+        secondary_origin
     );
     let cookies = browser.get_all_cookies().await.unwrap();
     assert!(cookies
         .iter()
         .any(|cookie| cookie.name() == "navigator_session"));
-    browser.goto(&secondary).await.unwrap();
-    assert!(browser
-        .get_all_cookies()
-        .await
-        .unwrap()
+    assert!(cookies
         .iter()
-        .all(|cookie| !matches!(
-            cookie.name(),
-            "navigator_session" | "navigator_pre_auth" | "navigator_login_csrf"
-        )));
+        .all(|cookie| cookie.name() != "navigator_handoff_nonce"));
     browser
         .goto(&format!("{secondary}/app/projects"))
         .await
@@ -344,13 +345,13 @@ async fn browser_login_from_secondary_loopback_host_returns_to_primary() {
     wait_for_path(&browser, "/app/projects", Duration::from_secs(20)).await;
     assert_eq!(
         browser.current_url().await.unwrap().origin(),
-        primary.origin()
+        secondary_origin
     );
     assert!(!browser
         .source()
         .await
         .unwrap()
-        .contains("missing pre-auth cookie"));
+        .contains("could not be completed"));
     browser.close().await.unwrap();
 }
 
@@ -470,5 +471,241 @@ async fn secondary_public_pages_and_health_probes_stay_on_their_host() {
             .await
             .unwrap();
         assert!(!response.status().is_redirection(), "{path}");
+    }
+}
+
+// --- Per-host sign-in -------------------------------------------------------
+
+const LOCAL_PRIMARY: &str = "localhost:4001";
+const LOCAL_BRAND: &str = "127.0.0.1:20430";
+
+async fn handoff_app() -> (axum::Router, wiremock::MockServer) {
+    let idp = wiremock::MockServer::start().await;
+    let surreal = store::test_support::mem_surreal().await;
+    store::persons::create(
+        &surreal,
+        &store::persons::NewPerson::with_role(
+            "Synthetic Person",
+            "person@example.com",
+            store::persons::Role::Client,
+        ),
+    )
+    .await
+    .unwrap();
+    let mut state = portal::test_support::app_state(surreal).await;
+    state.sessions = SessionStore::new("synthetic-host-test-signing-key");
+    state.oauth = Some(portal::test_support::oauth_config_with_verifier(
+        OAuthConfig::new(
+            "client",
+            "secret",
+            format!("http://{LOCAL_PRIMARY}/auth/callback"),
+            format!("{}/authorize", idp.uri()),
+            format!("{}/token", idp.uri()),
+        ),
+        "client",
+    ));
+    state.canonical_host = portal::canonical_host::CanonicalHost::new(None)
+        .with_local_ports([(20430, views::brand::BrandKey::DeleteYourData)].into());
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    (app, idp)
+}
+
+fn set_cookie<'a>(response: &'a axum::response::Response, name: &str) -> Option<&'a str> {
+    response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .find(|value| value.starts_with(&format!("{name}=")))
+        .and_then(|value| value.split(';').next())
+}
+
+fn with_cookies(mut req: Request<Body>, cookies: &[&str]) -> Request<Body> {
+    req.headers_mut()
+        .insert("cookie", cookies.join("; ").parse().unwrap());
+    req
+}
+
+async fn mount_token(idp: &wiremock::MockServer, nonce: &str) {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id_token": portal::test_support::sign_id_token(
+                "client", nonce, "synthetic-subject", "person@example.com", "Synthetic Person",
+            ),
+            "token_type": "Bearer",
+        })))
+        .mount(idp)
+        .await;
+}
+
+/// A brand host's sign-in uses the one registered callback and comes back to
+/// that host with its own session, bound to the browser that started it.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn brand_host_sign_in_is_handed_back_with_its_own_session() {
+    let (app, idp) = handoff_app().await;
+    let login_path = "/auth/login?return_to=%2Fapp%2Fprojects";
+
+    // 1. The brand host sets its nonce cookie and detours to the callback origin.
+    let brand_login = app
+        .clone()
+        .oneshot(request(LOCAL_BRAND, login_path))
+        .await
+        .unwrap();
+    assert_eq!(brand_login.status(), StatusCode::SEE_OTHER);
+    let nonce_cookie = set_cookie(&brand_login, portal::host_handoff::HANDOFF_NONCE_COOKIE)
+        .unwrap()
+        .to_owned();
+    let detour = url::Url::parse(brand_login.headers()["location"].to_str().unwrap()).unwrap();
+    assert_eq!(
+        detour.origin().ascii_serialization(),
+        format!("http://{LOCAL_PRIMARY}")
+    );
+    let params: std::collections::HashMap<_, _> = detour.query_pairs().into_owned().collect();
+    assert_eq!(params["return_to"], "/app/projects");
+    assert_eq!(params["return_host"], LOCAL_BRAND);
+    assert_eq!(
+        format!(
+            "{}={}",
+            portal::host_handoff::HANDOFF_NONCE_COOKIE,
+            params["handoff_nonce"]
+        ),
+        nonce_cookie
+    );
+
+    // 2. The callback origin starts the provider redirect and remembers the host.
+    let primary_login = app
+        .clone()
+        .oneshot(request(
+            LOCAL_PRIMARY,
+            &format!("{}?{}", detour.path(), detour.query().unwrap()),
+        ))
+        .await
+        .unwrap();
+    let pre = pre_auth(&primary_login);
+    let pre_cookie = set_cookie(&primary_login, "navigator_pre_auth")
+        .unwrap()
+        .to_owned();
+    let return_cookie = set_cookie(&primary_login, portal::host_handoff::RETURN_HOST_COOKIE)
+        .unwrap()
+        .to_owned();
+    mount_token(&idp, &pre.nonce).await;
+
+    // 3. The callback hands the verified sign-in back to the brand host.
+    let callback = app
+        .clone()
+        .oneshot(with_cookies(
+            request(
+                LOCAL_PRIMARY,
+                &format!("/auth/callback?code=code&state={}", pre.state),
+            ),
+            &[&pre_cookie, &return_cookie],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(callback.status(), StatusCode::SEE_OTHER);
+    let handoff = url::Url::parse(callback.headers()["location"].to_str().unwrap()).unwrap();
+    assert_eq!(
+        handoff.origin().ascii_serialization(),
+        format!("http://{LOCAL_BRAND}")
+    );
+    assert_eq!(handoff.path(), "/auth/handoff");
+    let handoff_path = format!("{}?{}", handoff.path(), handoff.query().unwrap());
+
+    // A captured handoff is refused in a browser without the brand host's nonce.
+    let stolen = app
+        .clone()
+        .oneshot(request(LOCAL_BRAND, &handoff_path))
+        .await
+        .unwrap();
+    assert_eq!(stolen.status(), StatusCode::BAD_REQUEST);
+    assert!(set_cookie(&stolen, "navigator_session").is_none());
+    // Nor is it redeemable on a different host.
+    let elsewhere = app
+        .clone()
+        .oneshot(with_cookies(
+            request(LOCAL_PRIMARY, &handoff_path),
+            &[&nonce_cookie],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(elsewhere.status(), StatusCode::BAD_REQUEST);
+
+    // 4. The brand host sets its own session and lands on the deep link.
+    let landed = app
+        .clone()
+        .oneshot(with_cookies(
+            request(LOCAL_BRAND, &handoff_path),
+            &[&nonce_cookie],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(landed.status(), StatusCode::SEE_OTHER);
+    assert_eq!(landed.headers()["location"], "/app/projects");
+    assert_eq!(landed.headers()["referrer-policy"], "no-referrer");
+    let session = set_cookie(&landed, "navigator_session").unwrap().to_owned();
+
+    // The brand host now serves its own `/app` rather than bouncing it.
+    let app_page = app
+        .oneshot(with_cookies(
+            request(LOCAL_BRAND, "/app/projects"),
+            &[&session],
+        ))
+        .await
+        .unwrap();
+    assert!(
+        !app_page
+            .headers()
+            .get("location")
+            .is_some_and(|location| location.to_str().unwrap().contains(LOCAL_PRIMARY)),
+        "a brand host keeps its own /app"
+    );
+}
+
+/// A `return_host` this deployment does not serve is ignored: the sign-in
+/// completes on the callback origin, never on the named host.
+#[tokio::test]
+async fn an_unserved_return_host_is_never_handed_a_sign_in() {
+    let (app, idp) = handoff_app().await;
+    for host in ["outside.example", "outside.example:20430", "localhost:9"] {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("return_host", host)
+            .append_pair("handoff_nonce", "0123456789abcdef0123456789abcdef")
+            .finish();
+        let login = app
+            .clone()
+            .oneshot(request(LOCAL_PRIMARY, &format!("/auth/login?{query}")))
+            .await
+            .unwrap();
+        assert!(
+            set_cookie(&login, portal::host_handoff::RETURN_HOST_COOKIE).is_none(),
+            "{host}"
+        );
+        let pre = pre_auth(&login);
+        let pre_cookie = set_cookie(&login, "navigator_pre_auth").unwrap().to_owned();
+        idp.reset().await;
+        mount_token(&idp, &pre.nonce).await;
+        let callback = app
+            .clone()
+            .oneshot(with_cookies(
+                request(
+                    LOCAL_PRIMARY,
+                    &format!("/auth/callback?code=code&state={}", pre.state),
+                ),
+                &[&pre_cookie],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(callback.status(), StatusCode::SEE_OTHER, "{host}");
+        assert!(
+            callback.headers()["location"]
+                .to_str()
+                .unwrap()
+                .starts_with('/'),
+            "{host}"
+        );
     }
 }
