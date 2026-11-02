@@ -2421,3 +2421,32 @@ async fn ensure_receipt_firm_entity(f: &Fixture) {
     sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) SELECT $1,'Synthetic Source Firm',entity_type_id,jurisdiction_id FROM entity WHERE id=$2 ON CONFLICT(id) DO NOTHING")
         .bind(entity).bind(f.entity).execute(f.pg.pool()).await.unwrap();
 }
+
+#[tokio::test]
+async fn native_relay_requires_a_current_person_eligible_role_and_native_thread() {
+    let Some(f) = fixture().await else { return };
+    let missing_thread = Uuid::now_v7();
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, Uuid::now_v7(), missing_thread)
+            .await
+            .unwrap(),
+        "a missing Person cannot obtain relay authority"
+    );
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, f.owner, missing_thread)
+            .await
+            .unwrap(),
+        "Owner role alone is not Lawyer or Clerk relay participation"
+    );
+    assert!(
+        !pg_inbox::clerk_may_relay_email_thread_on(&f.pg, &f.db, f.lawyer, missing_thread)
+            .await
+            .unwrap(),
+        "Project participation cannot manufacture a native email thread"
+    );
+    assert_eq!(
+        conversation_count(&f.pg).await,
+        0,
+        "denied reads cannot create a thread"
+    );
+}
