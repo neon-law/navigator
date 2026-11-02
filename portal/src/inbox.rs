@@ -390,6 +390,20 @@ pub async fn assign_post(
     }
 }
 
+async fn triage_path_matches(
+    db: &store::surreal::SurrealDb,
+    conversation_id: Uuid,
+    triage_id: Uuid,
+) -> bool {
+    let Ok(Some(triage)) = store::inbox_triage::find_by_id(db, triage_id).await else {
+        return false;
+    };
+    matches!(
+        store::inbox::message_by_id(db, triage.message_id).await,
+        Ok(Some(message)) if message.conversation_id == conversation_id
+    )
+}
+
 /// `POST /app/inbox/{conversation_id}/triage/{triage_id}/confirm/{project_id}`
 ///
 /// A person confirms the classifier's suggested Project. The store door
@@ -398,11 +412,14 @@ pub async fn assign_post(
 pub async fn triage_confirm_post(
     State(db): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
-    Path((_conversation_id, triage_id, project_id)): Path<(Uuid, Uuid, Uuid)>,
+    Path((conversation_id, triage_id, project_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Response {
     let Some(actor_id) = actor_id(session) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if !triage_path_matches(&db, conversation_id, triage_id).await {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     match store::inbox_triage::confirm_project(&db, actor_id, triage_id, project_id).await {
         Ok(_) => Redirect::to(TRIAGE_QUEUE).into_response(),
         Err(error) => redirect_error(TRIAGE_QUEUE, &error.to_string()),
@@ -424,12 +441,15 @@ pub struct TriageOverrideForm {
 pub async fn triage_override_post(
     State(db): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
-    Path((_conversation_id, triage_id)): Path<(Uuid, Uuid)>,
+    Path((conversation_id, triage_id)): Path<(Uuid, Uuid)>,
     axum::Form(form): axum::Form<TriageOverrideForm>,
 ) -> Response {
     let Some(actor_id) = actor_id(session) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if !triage_path_matches(&db, conversation_id, triage_id).await {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     match store::inbox_triage::override_project(
         &db,
         actor_id,
@@ -460,12 +480,15 @@ pub struct TriageResolveForm {
 pub async fn triage_resolve_post(
     State(db): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
-    Path((_conversation_id, triage_id)): Path<(Uuid, Uuid)>,
+    Path((conversation_id, triage_id)): Path<(Uuid, Uuid)>,
     axum::Form(form): axum::Form<TriageResolveForm>,
 ) -> Response {
     let Some(actor_id) = actor_id(session) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if !triage_path_matches(&db, conversation_id, triage_id).await {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let Some(requested) = store::inbox_triage::PrivilegeLabel::from_form(&form.privilege) else {
         return redirect_error(TRIAGE_QUEUE, "unknown privilege label");
     };
@@ -491,11 +514,14 @@ pub async fn triage_resolve_post(
 pub async fn triage_rerun_post(
     State(db): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
-    Path((_conversation_id, triage_id)): Path<(Uuid, Uuid)>,
+    Path((conversation_id, triage_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
     let Some(actor_id) = actor_id(session) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if !triage_path_matches(&db, conversation_id, triage_id).await {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     match store::inbox_triage::rerun(&db, actor_id, triage_id).await {
         Ok(_) => Redirect::to(TRIAGE_QUEUE).into_response(),
         Err(error) => redirect_error(TRIAGE_QUEUE, &error.to_string()),
@@ -1676,6 +1702,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn triage_actions_reject_a_mismatched_conversation_path() {
+        let db = store::test_support::mem_surreal().await;
+        let (owner, _, firm, project) = inbox_matter(&db).await;
+        let mut outcomes = Vec::new();
+        for action in ["confirm", "override", "resolve", "rerun"] {
+            let (triage_id, _) = triaged_email(&db, firm.id, action, Some(project.id)).await;
+            let original = store::inbox_triage::find_by_id(&db, triage_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let signed_in = Some(axum::Extension(session(&owner.email, owner.role, owner.id)));
+            let wrong = Uuid::now_v7();
+            let response = match action {
+                "confirm" => {
+                    triage_confirm_post(
+                        State(db.clone()),
+                        signed_in,
+                        Path((wrong, triage_id, project.id)),
+                    )
+                    .await
+                }
+                "override" => {
+                    triage_override_post(
+                        State(db.clone()),
+                        signed_in,
+                        Path((wrong, triage_id)),
+                        axum::Form(TriageOverrideForm {
+                            _csrf: None,
+                            project_id: project.id,
+                            rationale: "synthetic correction".into(),
+                        }),
+                    )
+                    .await
+                }
+                "resolve" => {
+                    triage_resolve_post(
+                        State(db.clone()),
+                        signed_in,
+                        Path((wrong, triage_id)),
+                        axum::Form(TriageResolveForm {
+                            _csrf: None,
+                            privilege: "privileged".into(),
+                            rationale: "synthetic review".into(),
+                        }),
+                    )
+                    .await
+                }
+                _ => {
+                    triage_rerun_post(State(db.clone()), signed_in, Path((wrong, triage_id))).await
+                }
+            };
+            let unchanged = store::inbox_triage::find_by_id(&db, triage_id)
+                .await
+                .unwrap()
+                .unwrap()
+                == original;
+            outcomes.push((action, response.status(), unchanged));
+        }
+        assert!(
+            outcomes
+                .iter()
+                .all(|(_, status, unchanged)| *status == StatusCode::NOT_FOUND && *unchanged),
+            "a mismatched path must never mutate a triage row: {outcomes:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn triage_doors_require_a_session() {
         let db = store::test_support::mem_surreal().await;
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
@@ -1982,6 +2075,14 @@ mod tests {
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
         let (triage_id, message) =
             triaged_email(&db, firm.id, "triage-rerun", Some(project.id)).await;
+        store::projects::add_participation(
+            &db,
+            project.id,
+            owner.id,
+            store::projects::participation_for_role(owner.role),
+        )
+        .await
+        .unwrap();
         let state = crate::test_support::app_state(db).await;
         let owner_session = Some(axum::Extension(session(
             &owner.email,

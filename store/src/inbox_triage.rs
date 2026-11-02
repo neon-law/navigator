@@ -210,6 +210,28 @@ impl TriageRow {
 /// Returns a database error, `NotFound` when the suggested Project does not
 /// exist, or `CrossFirm` when it belongs to another Firm.
 pub async fn record(db: &SurrealDb, triage: &NewInboxTriage) -> Result<InboxTriage, InboxError> {
+    let conversation = conversation_for_message(db, triage.message_id).await?;
+    if conversation.firm_id != triage.firm_id {
+        return Err(InboxError::CrossFirm);
+    }
+    let message = crate::inbox::message_by_id(db, triage.message_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    let mut triage = triage.clone();
+    if crate::inbox::is_social_channel(&conversation.channel)
+        && (message.visibility.as_deref() != Some("public")
+            || conversation.interaction_type == "direct_message")
+    {
+        triage.privilege = PrivilegeLabel::Uncertain;
+        triage.privilege_confidence = None;
+        triage.project_confidence = None;
+        triage.disposition = TriageDisposition::NeedsHuman;
+        triage.model_id = None;
+        triage.prompt_version = RULES_ONLY_PROMPT.into();
+        triage.raw_output = None;
+        triage.rationale = None;
+        triage.labeled_example = false;
+    }
     if let Some(project_id) = triage.suggested_project_id {
         let project = crate::projects::find_by_id(db, project_id)
             .await?
@@ -744,6 +766,14 @@ pub async fn resolve_privilege(
         return Err(InboxError::Denied);
     }
     let conversation = conversation_for_message(db, row.message_id).await?;
+    if let Some(project_id) = conversation.project_id {
+        if !crate::access::can_see_project(db, Some(actor.id), actor.role, project_id)
+            .await
+            .map_err(InboxError::Db)?
+        {
+            return Err(InboxError::Denied);
+        }
+    }
     let message = crate::inbox::message_by_id(db, row.message_id)
         .await?
         .ok_or(InboxError::NotFound)?;
@@ -813,6 +843,14 @@ pub async fn rerun(
         return Err(InboxError::Denied);
     }
     let conversation = conversation_for_message(db, row.message_id).await?;
+    if let Some(project_id) = conversation.project_id {
+        if !crate::access::can_see_project(db, Some(actor.id), actor.role, project_id)
+            .await
+            .map_err(InboxError::Db)?
+        {
+            return Err(InboxError::Denied);
+        }
+    }
     let message = crate::inbox::message_by_id(db, row.message_id)
         .await?
         .ok_or(InboxError::NotFound)?;
@@ -1230,11 +1268,16 @@ mod tests {
     /// Give the lawyer a firm-side participation row on the Project — the
     /// row `can_see_project` resolves for the participation check.
     async fn participate(db: &crate::surreal::SurrealDb, person_id: Uuid, project_id: Uuid) {
+        let role = crate::persons::find_by_id(db, person_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .role;
         crate::projects::add_participation(
             db,
             project_id,
             person_id,
-            crate::projects::participation_for_role(Role::Lawyer),
+            crate::projects::participation_for_role(role),
         )
         .await
         .unwrap();
@@ -1592,6 +1635,7 @@ mod tests {
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Private Review Owner", Role::Owner).await;
         let project = seed_project(&db, firm, "Private Review Matter").await;
+        participate(&db, owner, project.id).await;
         let inbound = inbound(&db, firm, "x", "private-review").await;
         db.query("UPDATE $message SET visibility = 'private'")
             .bind((
@@ -1642,6 +1686,7 @@ mod tests {
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Rerun Owner", Role::Owner).await;
         let project = seed_project(&db, firm, "Rerun Matter").await;
+        participate(&db, owner, project.id).await;
 
         // A confirmed email row reopens as Uncertain — the portal re-runs
         // the rule layer, and email without a classifier is uncertain.
@@ -1723,6 +1768,151 @@ mod tests {
                 TriageDisposition::NeedsHuman
             );
         }
+    }
+
+    #[tokio::test]
+    async fn automated_private_social_claims_cannot_bypass_the_store_rules() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let message = inbound(&db, firm, "x", "private-store-claim").await;
+        db.query("UPDATE $id SET visibility = 'private'")
+            .bind((
+                "id",
+                crate::surreal::record_id("message", message.message_id),
+            ))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let mut input = new_triage(
+            message.message_id,
+            firm,
+            None,
+            PrivilegeLabel::Privileged,
+            TriageDisposition::Confirmed,
+        );
+        input.model_id = Some("synthetic-model".into());
+        input.raw_output = Some("synthetic classifier artifact".into());
+        let row = record(&db, &input).await.unwrap();
+        assert_eq!(row.privilege, PrivilegeLabel::Uncertain);
+        assert_eq!(row.disposition, TriageDisposition::NeedsHuman);
+        assert!(row.model_id.is_none());
+        assert!(row.raw_output.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_triage_record_cannot_claim_another_messages_firm() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let other = crate::test_support::seed_firm_with_brand(&db, "lawyer-shook").await;
+        let message = inbound(&db, firm, "email", "foreign-record-claim").await;
+        let result = record(
+            &db,
+            &new_triage(
+                message.message_id,
+                other,
+                None,
+                PrivilegeLabel::Uncertain,
+                TriageDisposition::NeedsHuman,
+            ),
+        )
+        .await;
+        assert!(matches!(result, Err(InboxError::CrossFirm)));
+        assert!(find_for_message(&db, message.message_id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn target_participation_does_not_authorize_taking_another_matter_conversation() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let owner = person(&db, "Assignment Owner", Role::Owner).await;
+        let lawyer = person(&db, "Target Reviewer", Role::Lawyer).await;
+        let source = seed_project(&db, firm, "Unseen Source Matter").await;
+        let target = seed_project(&db, firm, "Visible Target Matter").await;
+        participate(&db, lawyer, target.id).await;
+        let (row, message) =
+            needs_human_with_suggestion(&db, firm, "unseen-reassignment", Some(target.id)).await;
+        crate::inbox::assign(&db, owner, message.conversation_id, source.id)
+            .await
+            .unwrap();
+        let original = find_by_id(&db, row).await.unwrap().unwrap();
+        let denied = override_project(&db, lawyer, row, target.id, "move into my matter").await;
+        assert!(
+            matches!(denied, Err(InboxError::Denied)),
+            "target participation cannot grant access to source content"
+        );
+        assert_eq!(find_by_id(&db, row).await.unwrap().unwrap(), original);
+        assert_eq!(
+            conversation_for_message(&db, message.message_id)
+                .await
+                .unwrap()
+                .project_id,
+            Some(source.id)
+        );
+        assert_eq!(
+            crate::inbox::assignments(&db, message.conversation_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        participate(&db, lawyer, source.id).await;
+        override_project(&db, lawyer, row, target.id, "reviewed both matters")
+            .await
+            .unwrap();
+        assert_eq!(
+            conversation_for_message(&db, message.message_id)
+                .await
+                .unwrap()
+                .project_id,
+            Some(target.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn firm_membership_does_not_authorize_review_of_an_unseen_assigned_matter() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let owner = person(&db, "Scope Owner", Role::Owner).await;
+        let lawyer = person(&db, "Unassigned Reviewer", Role::Lawyer).await;
+        member(&db, lawyer, firm, FirmMembership::Lawyer).await;
+        let project = seed_project(&db, firm, "Restricted Review Matter").await;
+        let (row, message) =
+            needs_human_with_suggestion(&db, firm, "unseen-review", Some(project.id)).await;
+        crate::inbox::assign(&db, owner, message.conversation_id, project.id)
+            .await
+            .unwrap();
+        let original = find_by_id(&db, row).await.unwrap().unwrap();
+        let denied = resolve_privilege(
+            &db,
+            lawyer,
+            row,
+            PrivilegeLabel::Privileged,
+            "not my matter",
+        )
+        .await;
+        assert!(matches!(denied, Err(InboxError::Denied)));
+        assert_eq!(find_by_id(&db, row).await.unwrap().unwrap(), original);
+        let denied = rerun(&db, lawyer, row).await;
+        assert!(matches!(denied, Err(InboxError::Denied)));
+        assert_eq!(find_by_id(&db, row).await.unwrap().unwrap(), original);
+        participate(&db, lawyer, project.id).await;
+        resolve_privilege(
+            &db,
+            lawyer,
+            row,
+            PrivilegeLabel::Privileged,
+            "reviewed my matter",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            rerun(&db, lawyer, row).await.unwrap().privilege,
+            PrivilegeLabel::Uncertain
+        );
     }
 
     #[tokio::test]

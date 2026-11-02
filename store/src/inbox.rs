@@ -819,6 +819,13 @@ pub(crate) async fn assign_for_triage_review(
     if !triage_reviewer_may_assign(db, &actor, project_id).await? {
         return Err(InboxError::Denied);
     }
+    if matches!(actor.role, Role::Lawyer | Role::Clerk) {
+        if let Some(source_project) = conversation.project_id {
+            if !triage_reviewer_may_assign(db, &actor, source_project).await? {
+                return Err(InboxError::Denied);
+            }
+        }
+    }
     assign_write(db, actor_id, &conversation, project_id).await
 }
 
