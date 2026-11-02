@@ -444,4 +444,187 @@ mod tests {
         let html = render(&view());
         crate::components::assert_forms_accessible(&html, "firm_edit");
     }
+
+    #[cfg(feature = "server")]
+    mod loader {
+        use crate::firm_edit::{get_firm_edit_form, FirmEditView};
+        use crate::inbox::server_fn_test_support::{call, request_parts, runtime, Viewer};
+        use crate::people::ViewerRole;
+        use dioxus::prelude::*;
+        use store::persons::{NewPerson, Role};
+
+        const ROUTE: &str = "/app/admin/firms/{id}/edit";
+
+        struct Practice {
+            surreal: store::surreal::SurrealDb,
+            owner: uuid::Uuid,
+            admin: uuid::Uuid,
+            outsider: uuid::Uuid,
+            firm: uuid::Uuid,
+        }
+
+        async fn person(
+            surreal: &store::surreal::SurrealDb,
+            label: &str,
+            role: Role,
+        ) -> uuid::Uuid {
+            store::persons::create(
+                surreal,
+                &NewPerson::with_role(
+                    format!("{label} Person"),
+                    format!("{label}-{}@example.com", uuid::Uuid::now_v7()),
+                    role,
+                ),
+            )
+            .await
+            .unwrap()
+            .id
+        }
+
+        /// One Firm whose Admin DRI is `admin`, plus an Owner and an Admin
+        /// with no membership on it.
+        async fn practice() -> Practice {
+            let surreal = store::test_support::mem_surreal().await;
+            let owner = person(&surreal, "owner", Role::Owner).await;
+            let admin = person(&surreal, "admin", Role::Admin).await;
+            let outsider = person(&surreal, "outsider", Role::Admin).await;
+            let firm = store::firms::create(
+                &surreal,
+                &store::firms::NewFirm {
+                    name: "Edit Loader Firm".into(),
+                    status: "active".into(),
+                    entity_id: store::test_support::seed_entity(&surreal).await,
+                    admin_dri_person_id: admin,
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+            Practice {
+                surreal,
+                owner,
+                admin,
+                outsider,
+                firm,
+            }
+        }
+
+        fn load(
+            rt: &tokio::runtime::Runtime,
+            practice: &Practice,
+            uri: &str,
+            viewer: &Viewer,
+        ) -> (Result<FirmEditView, ServerFnError>, axum::http::StatusCode) {
+            let parts = request_parts(rt, ROUTE, uri, viewer);
+            call(
+                rt,
+                parts,
+                |dom| dom.provide_root_context(practice.surreal.clone()),
+                get_firm_edit_form,
+            )
+        }
+
+        fn uri(firm: uuid::Uuid) -> String {
+            format!("/app/admin/firms/{firm}/edit")
+        }
+
+        #[test]
+        fn a_lawyer_is_forbidden() {
+            let rt = runtime();
+            let practice = rt.block_on(practice());
+            let (result, status) = load(
+                &rt,
+                &practice,
+                &uri(practice.firm),
+                &Viewer::new(ViewerRole::Lawyer, Some(practice.admin)),
+            );
+            assert!(result.is_err());
+            assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+        }
+
+        #[test]
+        fn an_admin_outside_the_firm_and_an_unknown_firm_read_not_found() {
+            let rt = runtime();
+            let practice = rt.block_on(practice());
+            let (view, status) = load(
+                &rt,
+                &practice,
+                &uri(practice.firm),
+                &Viewer::new(ViewerRole::Admin, Some(practice.outsider)),
+            );
+            let view = view.unwrap();
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+            assert!(!view.found);
+            assert_eq!(view.id, practice.firm.to_string(), "the id is the path's");
+            assert!(view.name.is_empty(), "nothing about the Firm leaks");
+
+            let missing = uuid::Uuid::now_v7();
+            let (view, status) = load(
+                &rt,
+                &practice,
+                &uri(missing),
+                &Viewer::new(ViewerRole::Owner, Some(practice.owner)),
+            );
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+            assert!(!view.unwrap().found);
+        }
+
+        #[test]
+        fn the_owner_edits_any_firm_and_picks_its_admin_dri() {
+            let rt = runtime();
+            let practice = rt.block_on(practice());
+            let (view, status) = load(
+                &rt,
+                &practice,
+                &format!("{}?error=Pick%20a%20DRI", uri(practice.firm)),
+                &Viewer::new(ViewerRole::Owner, Some(practice.owner)),
+            );
+            let view = view.unwrap();
+            assert_eq!(status, axum::http::StatusCode::OK);
+            assert!(view.found);
+            assert_eq!(view.name, "Edit Loader Firm");
+            assert_eq!(view.status, "active");
+            assert!(view.entity_id.is_some());
+            assert!(!view.entities.is_empty());
+            assert_eq!(view.error.as_deref(), Some("Pick a DRI"));
+            assert_eq!(view.csrf_token, "CSRF");
+            assert!(view.can_appoint_dri);
+            assert_eq!(
+                view.admin_dri_person_id,
+                Some(practice.admin.to_string()),
+                "the current DRI is preselected"
+            );
+            let html = dioxus_ssr::render_element(super::edit_form(&view));
+            assert!(
+                html.contains(&practice.owner.to_string()),
+                "an Owner is offered"
+            );
+            assert!(
+                html.contains(&practice.admin.to_string()),
+                "the admin member is offered"
+            );
+            assert!(
+                !html.contains(&practice.outsider.to_string()),
+                "an admin with no membership here is not offered: {html}"
+            );
+        }
+
+        #[test]
+        fn the_firms_own_admin_edits_it_without_the_dri_picker() {
+            let rt = runtime();
+            let practice = rt.block_on(practice());
+            let (view, status) = load(
+                &rt,
+                &practice,
+                &uri(practice.firm),
+                &Viewer::new(ViewerRole::Admin, Some(practice.admin)),
+            );
+            let view = view.unwrap();
+            assert_eq!(status, axum::http::StatusCode::OK);
+            assert!(view.found);
+            assert!(!view.can_appoint_dri);
+            assert!(view.dri_candidates.is_empty());
+            assert_eq!(view.admin_dri_person_id, None);
+        }
+    }
 }
