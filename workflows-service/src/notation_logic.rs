@@ -62,7 +62,8 @@ pub(crate) fn advance(
 /// Recover a back event that was appended before a worker crash but whose
 /// journaled side effect was not checkpointed. The runtime state still names
 /// `current`; the matching last event proves that the requested Back already
-/// took effect, so retries reuse its target instead of appending again.
+/// was requested, so retries reuse its target. Journal writes are at least once;
+/// an append from a state already left cannot alter the recovered path again.
 pub(crate) fn questionnaire_back_target(
     current: &StateName,
     events: &[(String, String, String, String)],
@@ -76,7 +77,10 @@ pub(crate) fn questionnaire_back_target(
         return None;
     }
     let mut path = vec![StateName::begin()];
-    for (_, to, condition, _) in events {
+    for (from, to, condition, _) in events {
+        if path.last().is_none_or(|state| state.as_str() != from) {
+            continue;
+        }
         if condition == "back" {
             if path.len() > 1 {
                 path.pop();

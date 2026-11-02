@@ -766,6 +766,26 @@ END: {}
     }
 
     #[test]
+    fn repeated_forward_journal_rows_do_not_add_a_back_step() {
+        let history = vec![
+            ("BEGIN".into(), "first".into(), "_".into(), "e1".into()),
+            (
+                "BEGIN".into(),
+                "first".into(),
+                "_".into(),
+                "e1-replay".into(),
+            ),
+            ("first".into(), "second".into(), "_".into(), "e2".into()),
+            ("second".into(), "first".into(), "back".into(), "e3".into()),
+        ];
+        assert_eq!(
+            questionnaire_back_target(&StateName::from("first"), &history),
+            Some(StateName::begin()),
+            "a replayed forward append cannot create another visited question"
+        );
+    }
+
+    #[test]
     fn next_state_advances_through_a_questionnaire_walk() {
         let spec = WorkflowSpec::from_yaml(SPEC).unwrap();
         let n = next_state(&spec, &StateName::begin(), "_").unwrap();
