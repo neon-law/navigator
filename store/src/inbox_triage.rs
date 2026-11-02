@@ -800,7 +800,12 @@ pub async fn resolve_privilege(
             privilege_confidence: None,
             suggested_project_id: row.suggested_project_id,
             project_confidence: row.project_confidence,
-            rationale: Some(format!("human review: {rationale}")),
+            rationale: Some(
+                match row.rationale.as_deref().filter(|_| row.labeled_example) {
+                    Some(previous) => format!("human review: {rationale}\n{previous}"),
+                    None => format!("human review: {rationale}"),
+                },
+            ),
             disposition: if crate::inbox::assignments(db, conversation.id)
                 .await?
                 .is_empty()
@@ -1678,6 +1683,29 @@ mod tests {
         let reopened = rerun(&db, owner, row.id).await.unwrap();
         assert_eq!(reopened.privilege, PrivilegeLabel::Uncertain);
         assert_eq!(reopened.disposition, TriageDisposition::NeedsHuman);
+        override_project(
+            &db,
+            owner,
+            row.id,
+            project.id,
+            "corrected attribution after review",
+        )
+        .await
+        .unwrap();
+        let settled = resolve_privilege(
+            &db,
+            owner,
+            row.id,
+            PrivilegeLabel::Privileged,
+            "confirmed private legal advice",
+        )
+        .await
+        .unwrap();
+        assert_eq!(settled.disposition, TriageDisposition::Overridden);
+        assert!(settled.labeled_example);
+        let audit = settled.rationale.unwrap();
+        assert!(audit.contains("corrected attribution after review"));
+        assert!(audit.contains("confirmed private legal advice"));
     }
 
     #[tokio::test]
