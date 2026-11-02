@@ -23,6 +23,7 @@ use views::brand::{is_staging_host, registered_brand_key, BrandKey};
 use super::brand_readiness::{self, CommandRunner, ProcessCommandRunner, Verdict};
 use super::dns;
 use super::ship::ShipConfig;
+use super::DnsSetupProvider;
 
 /// Where a host's `A` record lives: its DNS zone and the label inside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +144,29 @@ pub(crate) fn run(
     apply: bool,
     timeout_secs: u32,
 ) -> Result<()> {
+    let provider = dns::DnsimpleProvider::from_env()?;
+    run_with(
+        &provider,
+        &mut ProcessCommandRunner,
+        cfg,
+        host,
+        explicit_gateway_ip,
+        apply,
+        timeout_secs,
+    )
+}
+
+/// [`run`] with the DNS provider and the process runner injected, so the
+/// whole sequence is exercised without `DNSimple` or a network.
+fn run_with<R: CommandRunner>(
+    provider: &dyn DnsSetupProvider,
+    runner: &mut R,
+    cfg: &ShipConfig,
+    host: &str,
+    explicit_gateway_ip: Option<String>,
+    apply: bool,
+    timeout_secs: u32,
+) -> Result<()> {
     let plan = plan(host, &cfg.public_host)?;
     eprintln!(
         "{} → {} ({}), zone {} label {}",
@@ -165,16 +189,14 @@ pub(crate) fn run(
         .enable_all()
         .build()
         .context("build tokio runtime")?
-        .block_on(async {
-            let provider = dns::DnsimpleProvider::from_env()?;
-            super::dns_setup_zone(&provider, &plan.zone, &config, &desired, apply).await
-        })?;
+        .block_on(super::dns_setup_zone(
+            provider, &plan.zone, &config, &desired, apply,
+        ))?;
 
     // 2. Certificate and 3. sign-in, both read-only.
-    let mut runner = ProcessCommandRunner;
     let branding = plan.key.resolve_branding(&views::brand::DEFAULT_BRANDING);
     let tls = brand_readiness::check_host(
-        &mut runner,
+        runner,
         plan.key,
         plan.host,
         branding.firm.site_name,
@@ -226,8 +248,293 @@ pub(crate) fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{plan, sign_in_detours};
+    use std::sync::Mutex;
+
+    use super::super::brand_readiness::{CommandOutcome, CommandRunner};
+    use super::super::dns;
+    use super::super::ship::ShipConfig;
+    use super::{gateway_ip, plan, run_with, sign_in_detours};
     use views::brand::BrandKey;
+
+    /// A DNS zone holding `existing`, recording every write it is asked for.
+    #[derive(Default)]
+    struct FakeZone {
+        existing: Vec<dns::ExistingRecord>,
+        writes: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl dns::DnsProvider for FakeZone {
+        async fn list_records(
+            &self,
+            _zone: &str,
+        ) -> std::result::Result<Vec<dns::ExistingRecord>, dns::DnsError> {
+            Ok(self.existing.clone())
+        }
+
+        async fn create_record(
+            &self,
+            zone: &str,
+            record: &dns::DesiredRecord,
+        ) -> std::result::Result<u64, dns::DnsError> {
+            self.writes.lock().expect("writes lock").push(format!(
+                "create:{zone}:{}:{}:{}",
+                record.record_type.as_str(),
+                record.name,
+                record.content
+            ));
+            Ok(1)
+        }
+
+        async fn update_record(
+            &self,
+            zone: &str,
+            record_id: u64,
+            record: &dns::DesiredRecord,
+        ) -> std::result::Result<(), dns::DnsError> {
+            self.writes.lock().expect("writes lock").push(format!(
+                "update:{zone}:{record_id}:{}:{}",
+                record.name, record.content
+            ));
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl dns::CertificateProvider for FakeZone {
+        async fn latest_certificate(
+            &self,
+            _zone: &str,
+        ) -> std::result::Result<Option<dns::ApexCertificate>, dns::DnsError> {
+            unreachable!("host setup never reconciles an apex certificate")
+        }
+
+        async fn order_letsencrypt(
+            &self,
+            _zone: &str,
+            _auto_renew: bool,
+        ) -> std::result::Result<dns::ApexCertificate, dns::DnsError> {
+            unreachable!("host setup never orders an apex certificate")
+        }
+
+        async fn issue_letsencrypt(
+            &self,
+            _zone: &str,
+            _certificate_id: u64,
+        ) -> std::result::Result<dns::ApexCertificateState, dns::DnsError> {
+            unreachable!("host setup never issues an apex certificate")
+        }
+    }
+
+    /// Answers the TLS check, then the sign-in check, in that order.
+    struct Scripted {
+        outcomes: std::collections::VecDeque<CommandOutcome>,
+        urls: Vec<String>,
+    }
+
+    impl Scripted {
+        fn new(outcomes: Vec<CommandOutcome>) -> Self {
+            Self {
+                outcomes: outcomes.into(),
+                urls: Vec::new(),
+            }
+        }
+    }
+
+    impl CommandRunner for Scripted {
+        fn run(&mut self, program: &str, args: &[String]) -> CommandOutcome {
+            assert_eq!(program, "curl");
+            self.urls
+                .push(args.last().cloned().expect("curl is given a URL"));
+            self.outcomes
+                .pop_front()
+                .expect("more curl calls than this test scripted")
+        }
+    }
+
+    fn answered(stdout: &str) -> CommandOutcome {
+        CommandOutcome {
+            exit_code: Some(0),
+            stdout: stdout.to_owned(),
+            stderr: String::new(),
+        }
+    }
+
+    fn branded_home(site_name: &str) -> CommandOutcome {
+        answered(&format!(
+            "HTTP/2 200 \r\ncontent-type: text/html\r\n\r\n\
+             <meta property=\"og:site_name\" content=\"{site_name}\">"
+        ))
+    }
+
+    fn detour(host: &str) -> CommandOutcome {
+        answered(&format!(
+            "HTTP/2 303 \r\nlocation: https://www.neonlaw.com/auth/login?return_host={host}&handoff_nonce=n\r\n"
+        ))
+    }
+
+    fn deployment(public_host: &str) -> ShipConfig {
+        ShipConfig {
+            name: "test-deployment".into(),
+            environment: store::DeploymentEnvironment::Dev,
+            capabilities: store::deployment::DeploymentCapabilities::default(),
+            project_id: "test-project".into(),
+            location: "example-region".into(),
+            cluster: "navigator".into(),
+            registry: "ghcr.io/example/navigator".into(),
+            namespace: "navigator".into(),
+            web_image_name: "neon-server".into(),
+            public_host: public_host.to_string(),
+            asset_base_url: format!("https://{public_host}/assets"),
+            google_service_account_id: "navigator-web".into(),
+            primary_domain: "neonlaw.com".into(),
+            secret_name: "navigator-web-secrets".into(),
+            workflows_url: None,
+            context: "gke_test-project_example-region_navigator".into(),
+        }
+    }
+
+    #[test]
+    fn apply_writes_the_label_record_and_succeeds_once_tls_and_sign_in_are_ready() {
+        let zone = FakeZone::default();
+        let mut runner = Scripted::new(vec![
+            branded_home("IEP Defenders"),
+            detour("iep.neonlaw.com"),
+        ]);
+        run_with(
+            &zone,
+            &mut runner,
+            &deployment("www.neonlaw.com"),
+            "iep.neonlaw.com",
+            Some("192.0.2.10".into()),
+            true,
+            5,
+        )
+        .expect("a host whose TLS and sign-in both pass is ready");
+        assert_eq!(
+            *zone.writes.lock().unwrap(),
+            vec!["create:neonlaw.com:A:iep:192.0.2.10".to_owned()]
+        );
+        assert_eq!(
+            runner.urls,
+            vec![
+                "https://iep.neonlaw.com/".to_owned(),
+                "https://iep.neonlaw.com/auth/login".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn preview_writes_nothing_and_an_unissued_certificate_is_not_ready() {
+        let zone = FakeZone::default();
+        let mut runner = Scripted::new(vec![
+            CommandOutcome {
+                exit_code: Some(60),
+                stdout: String::new(),
+                stderr: "SSL: no alternative certificate subject name matches".into(),
+            },
+            detour("staging-iep.neonlaw.com"),
+        ]);
+        let err = run_with(
+            &zone,
+            &mut runner,
+            &deployment("staging.neonlaw.com"),
+            "staging-iep.neonlaw.com",
+            Some("192.0.2.20".into()),
+            false,
+            5,
+        )
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("staging-iep.neonlaw.com is not ready yet"));
+        assert!(
+            zone.writes.lock().unwrap().is_empty(),
+            "a preview never writes to the zone"
+        );
+    }
+
+    #[test]
+    fn a_sign_in_without_the_detour_is_not_ready_even_with_a_valid_certificate() {
+        let zone = FakeZone {
+            existing: vec![dns::ExistingRecord {
+                id: 9,
+                record_type: dns::RecordType::A,
+                name: "lex-tecnica".into(),
+                content: "192.0.2.30".into(),
+                priority: None,
+            }],
+            ..FakeZone::default()
+        };
+        let mut runner = Scripted::new(vec![
+            branded_home("Lex Tecnica"),
+            answered("HTTP/2 303 \r\nlocation: https://lex-tecnica.neonlaw.com/app\r\n"),
+        ]);
+        let err = run_with(
+            &zone,
+            &mut runner,
+            &deployment("www.neonlaw.com"),
+            "lex-tecnica.neonlaw.com",
+            Some("192.0.2.30".into()),
+            true,
+            5,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not ready yet"));
+        assert!(
+            zone.writes.lock().unwrap().is_empty(),
+            "a record already pointing at the gateway is left unchanged"
+        );
+    }
+
+    #[test]
+    fn a_refused_host_touches_neither_dns_nor_the_network() {
+        let zone = FakeZone::default();
+        let mut runner = Scripted::new(Vec::new());
+        let err = run_with(
+            &zone,
+            &mut runner,
+            &deployment("www.neonlaw.com"),
+            "staging-iep.neonlaw.com",
+            Some("192.0.2.40".into()),
+            true,
+            5,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("staging environment"));
+        assert!(zone.writes.lock().unwrap().is_empty());
+        assert!(runner.urls.is_empty());
+    }
+
+    #[test]
+    fn an_explicit_gateway_ip_wins_and_a_blank_one_falls_back_to_resolution() {
+        assert_eq!(
+            gateway_ip(Some("192.0.2.50".into()), "unused.invalid").unwrap(),
+            "192.0.2.50"
+        );
+        assert_eq!(
+            gateway_ip(Some("  ".into()), "127.0.0.1").unwrap(),
+            "127.0.0.1"
+        );
+        assert!(
+            gateway_ip(None, "::1").is_err(),
+            "an IPv6-only host has no IPv4 gateway"
+        );
+    }
+
+    #[test]
+    fn an_unparseable_or_missing_redirect_is_not_a_detour() {
+        let garbled = "HTTP/2 303 \r\nlocation: not a url\r\n";
+        assert!(sign_in_detours(garbled, "iep.neonlaw.com")
+            .unwrap_err()
+            .contains("unparseable redirect"));
+        let wrong_path =
+            "HTTP/2 303 \r\nlocation: https://www.neonlaw.com/app?return_host=iep.neonlaw.com\r\n";
+        assert!(sign_in_detours(wrong_path, "iep.neonlaw.com").is_err());
+        let found =
+            "HTTP/2 302 \r\nlocation: https://www.neonlaw.com/auth/login?return_host=iep.neonlaw.com\r\n";
+        assert!(sign_in_detours(found, "iep.neonlaw.com").is_err());
+    }
 
     #[test]
     fn a_neonlaw_subdomain_brand_gets_a_label_in_the_neonlaw_zone() {
@@ -255,6 +562,8 @@ mod tests {
         assert!(unknown.to_string().contains("not a registered brand host"));
         let crossed = plan("staging-iep.neonlaw.com", "www.neonlaw.com").unwrap_err();
         assert!(crossed.to_string().contains("staging environment"));
+        let reversed = plan("iep.neonlaw.com", "staging.neonlaw.com").unwrap_err();
+        assert!(reversed.to_string().contains("production environment"));
     }
 
     #[test]
