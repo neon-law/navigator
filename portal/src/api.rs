@@ -10907,4 +10907,2233 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         .await;
         assert!(result.is_err());
     }
+
+    /// Render one `ApiError` and return its status plus decoded JSON body.
+    async fn rendered(error: ApiError) -> (StatusCode, serde_json::Value) {
+        response_json(error.into_response()).await
+    }
+
+    async fn response_json(response: axum::response::Response) -> (StatusCode, serde_json::Value) {
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read the response body");
+        let json = if body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&body).expect("the response body is JSON")
+        };
+        (status, json)
+    }
+
+    /// Every caller-facing refusal on the command boundary keeps its status
+    /// and its machine-readable `error` code; every store fault is a bare
+    /// `500 internal` that never echoes the fault.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn every_api_error_variant_maps_to_its_status_and_error_code() {
+        use crate::contract_review_walk::ContractReviewError as Review;
+        use crate::expunge_request_route::RequestDeletionError as Deletion;
+        use crate::people_commands::PeopleCommandError as People;
+        use crate::project_notation::CreateProjectNotationError as Create;
+        use crate::retainer_walk::SendIntakeError as Intake;
+        use store::entity_commands::EntityCommandError as Entity;
+        use store::participation::{
+            AddParticipantError as Add, DriError, RemoveParticipantError as Remove,
+            UpdateParticipantError as Update,
+        };
+        use store::projects::{OpenMatterError as Open, ProjectCommandError as Project};
+        use store::template_source::TemplateSourceError as Source;
+        use workflows::NotationSessionError as Session;
+
+        let id = Uuid::nil();
+        let cases: Vec<(ApiError, StatusCode, &str)> = vec![
+            (
+                ApiError::Unauthenticated,
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+            ),
+            (ApiError::Forbidden, StatusCode::FORBIDDEN, "forbidden"),
+            (ApiError::NotFound, StatusCode::NOT_FOUND, "not_found"),
+            (
+                ApiError::Command(People::NotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::Entity(Entity::NotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::Project(Project::NotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::AddParticipant(Add::ProjectNotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::AddParticipant(Add::PersonNotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::UpdateParticipant(Update::NotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::UpdateParticipant(Update::PersonNotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::RemoveParticipant(Remove::NotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::Adversity(store::project_references::AdversityError::ProjectNotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::CreateNotation(Create::ProjectNotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::SendIntake(Intake::NotationNotFound(id)),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::ReviewComment(crate::review::ReviewCommentError::NotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::RequestDeletion(Deletion::NotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::Testimonial(store::testimonials::TestimonialError::NotFound),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::Testimonial(store::testimonials::TestimonialError::NotAuthorized),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::Testimonial(store::testimonials::TestimonialError::NotConsented),
+                StatusCode::CONFLICT,
+                "consent_required",
+            ),
+            (
+                ApiError::Testimonial(store::testimonials::TestimonialError::WriteReturnedNothing),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Project(Project::Referenced("participation".into())),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Project(Project::Db("down".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Project(Project::Invalid("bad")),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::OpenMatter(Open::AttestationRequired),
+                StatusCode::BAD_REQUEST,
+                "attestation_required",
+            ),
+            (
+                ApiError::OpenMatter(Open::BlockingConflict(vec!["adverse".into()])),
+                StatusCode::CONFLICT,
+                "conflict_blocked",
+            ),
+            (
+                ApiError::OpenMatter(Open::ClientNotAllowed),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::OpenMatter(Open::AttesterNotAllowed),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::OpenMatter(Open::NotFound("client")),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::OpenMatter(Open::Attestation(
+                    store::relationship_logs::RelationshipLogError::WriteReturnedNothing,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::OpenMatter(Open::Db("down".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::OpenMatter(Open::Invalid("bad")),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::AddParticipant(Add::Dri(DriError::NotPermitted)),
+                StatusCode::FORBIDDEN,
+                "forbidden",
+            ),
+            (
+                ApiError::UpdateParticipant(Update::Dri(DriError::ActorUnknown)),
+                StatusCode::FORBIDDEN,
+                "forbidden",
+            ),
+            (
+                ApiError::RemoveParticipant(Remove::Dri(DriError::NotPermitted)),
+                StatusCode::FORBIDDEN,
+                "forbidden",
+            ),
+            (
+                ApiError::AddParticipant(Add::Dri(DriError::TierMismatch)),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unprocessable",
+            ),
+            (
+                ApiError::UpdateParticipant(Update::Dri(DriError::LawyerDriRequired)),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unprocessable",
+            ),
+            (
+                ApiError::RemoveParticipant(Remove::Dri(DriError::LawyerDriRequired)),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unprocessable",
+            ),
+            (
+                ApiError::AddParticipant(Add::Duplicate),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::UpdateParticipant(Update::Duplicate),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::AddParticipant(Add::Db("down".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::UpdateParticipant(Update::DriLockout),
+                StatusCode::CONFLICT,
+                "dri_lockout",
+            ),
+            (
+                ApiError::RemoveParticipant(Remove::DriLockout),
+                StatusCode::CONFLICT,
+                "dri_lockout",
+            ),
+            (
+                ApiError::UpdateParticipant(Update::Db("down".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::RemoveParticipant(Remove::Db("down".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::CreateNotation(Create::EmptyInput),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::CreateNotation(Create::ClientEmailTaken),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::CreateNotation(Create::Session(Session::TemplateNotFound("nda".into()))),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                ApiError::CreateNotation(Create::Session(Session::EngagementMustBeFirst {
+                    code: "nda".into(),
+                    kind: "agreement".into(),
+                })),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "engagement_first",
+            ),
+            (
+                ApiError::CreateNotation(Create::Session(Session::TemplateSource(
+                    Source::Invalid {
+                        code: "nda".into(),
+                        violations: Vec::new(),
+                    },
+                ))),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "template_invalid",
+            ),
+            (
+                ApiError::CreateNotation(Create::Session(Session::Spec(
+                    workflows::WorkflowSpecError::MissingBegin,
+                ))),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "template_spec",
+            ),
+            (
+                ApiError::CreateNotation(Create::Session(Session::TemplateSource(
+                    Source::AmbiguousBlueprintDirectories,
+                ))),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "ambiguous_blueprint_directories",
+            ),
+            (
+                ApiError::CreateNotation(Create::Session(Session::TemplateSource(
+                    Source::InvalidLayout("stray".into()),
+                ))),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_layout",
+            ),
+            (
+                ApiError::CreateNotation(Create::Session(Session::TemplateSource(
+                    Source::NotUtf8("templates/nda.md".into()),
+                ))),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "template_not_utf8",
+            ),
+            (
+                ApiError::CreateNotation(Create::Session(Session::TemplateSource(
+                    Source::Composition("missing clause".into()),
+                ))),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "composition",
+            ),
+            (
+                ApiError::CreateNotation(Create::Session(Session::Db("down".into()))),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::CreateNotation(Create::RepoUnconfigured),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::CreateNotation(Create::Db("down".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::CreateNotation(Create::Person(
+                    store::persons::PersonError::WriteReturnedNothing,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::SendIntake(Intake::NoClient(id)),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::SendIntake(Intake::Db("down".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::SendIntake(Intake::Notation(store::notations::NotationError::NotFound(
+                    id,
+                ))),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::SendIntake(Intake::Person(
+                    store::persons::PersonError::WriteReturnedNothing,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::ContractReview(Review::NoPlaybook),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "no_playbook",
+            ),
+            (
+                ApiError::ContractReview(Review::TemplateMissing),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::RequestDeletion(Deletion::NoRequester),
+                StatusCode::FORBIDDEN,
+                "forbidden",
+            ),
+            (
+                ApiError::RequestDeletion(Deletion::Db("down".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::RequestDeletion(Deletion::Asset(
+                    store::assets::AssetError::WriteReturnedNothing,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::ReviewComment(crate::review::ReviewCommentError::Db("down".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::ReviewComment(crate::review::ReviewCommentError::Invalid("empty")),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::Command(People::Invalid("bad")),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::Entity(Entity::Invalid("bad")),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::Command(People::EmailConflict),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Command(People::ExternalIdentity),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Command(People::Blocked("no")),
+                StatusCode::CONFLICT,
+                "blocked",
+            ),
+            (
+                ApiError::Command(People::SendFailed),
+                StatusCode::BAD_GATEWAY,
+                "send_failed",
+            ),
+            (
+                ApiError::Command(People::Db(
+                    store::persons::PersonError::WriteReturnedNothing,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Command(People::FirmMembership("grant".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Command(People::Dependency("check".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Command(People::ParticipatesInProjects(2)),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Entity(Entity::Conflict),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Entity(Entity::FirmAnchorExists),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Entity(Entity::FirmAnchorImmutable),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Entity(Entity::FirmAnchorProtected),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Entity(Entity::Referenced("project".into())),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Entity(Entity::Entities(
+                    store::entities::EntityError::WriteReturnedNothing,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Entity(Entity::Jurisdictions(
+                    store::jurisdictions::JurisdictionError::WriteReturnedNothing,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Entity(Entity::EntityTypes(
+                    store::entity_types::EntityTypeError::WriteReturnedNothing,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Person(store::persons::PersonError::OidcSubjectTaken),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Person(store::persons::PersonError::WriteReturnedNothing),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Jurisdictions(store::jurisdictions::JurisdictionError::CodeTaken),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::Jurisdictions(
+                    store::jurisdictions::JurisdictionError::WriteReturnedNothing,
+                ),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::EntityTypes(store::entity_types::EntityTypeError::NameTaken),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                ApiError::EntityTypes(store::entity_types::EntityTypeError::WriteReturnedNothing),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Db("down".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Adversity(store::project_references::AdversityError::PartyNotReferenced),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_request",
+            ),
+            (
+                ApiError::Adversity(store::project_references::AdversityError::NoClientDri),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_request",
+            ),
+            (
+                ApiError::Adversity(store::project_references::AdversityError::Project(
+                    store::projects::ProjectStoreError::CodeTaken,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::DeadlineInvalid("d".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::EfilingInvalid("e".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::DocketInvalid("k".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::ServiceInvalid("s".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::CommunicationInvalid("c".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::PagesInvalid("p".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::MalformedBody("m".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            ),
+            (
+                ApiError::Notation(store::notations::NotationError::NotFound(id)),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Ingest(store::documents::IngestError::InvalidKind(
+                    "memo-ish".into(),
+                )),
+                StatusCode::BAD_REQUEST,
+                "invalid_kind",
+            ),
+            (
+                ApiError::Revision(store::assets::RevisionError::KindNotFilable(
+                    "memo-ish".into(),
+                )),
+                StatusCode::BAD_REQUEST,
+                "invalid_kind",
+            ),
+            (
+                ApiError::Ingest(store::documents::IngestError::WriteReturnedNothing),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Revision(store::assets::RevisionError::KindChanged {
+                    slug: "letter.pdf".into(),
+                    existing: "letter".into(),
+                    attempted: "memo".into(),
+                }),
+                StatusCode::BAD_REQUEST,
+                "kind_changed",
+            ),
+            (
+                ApiError::Revision(store::assets::RevisionError::InvalidTreeMetadata),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::Asset(store::assets::AssetError::WriteReturnedNothing),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::UploadSession(store::documents::UploadSessionError::InvalidKind(
+                    "x".into(),
+                )),
+                StatusCode::BAD_REQUEST,
+                "invalid_kind",
+            ),
+            (
+                ApiError::UploadSession(store::documents::UploadSessionError::BlankFilename),
+                StatusCode::BAD_REQUEST,
+                "filename_required",
+            ),
+            (
+                ApiError::UploadSession(store::documents::UploadSessionError::InvalidVisibility),
+                StatusCode::BAD_REQUEST,
+                "invalid_visibility",
+            ),
+            (
+                ApiError::UploadSession(store::documents::UploadSessionError::ShaFormat(
+                    "zz".into(),
+                )),
+                StatusCode::BAD_REQUEST,
+                "invalid_sha256",
+            ),
+            (
+                ApiError::UploadSession(store::documents::UploadSessionError::EmptyUpload {
+                    declared: 0,
+                }),
+                StatusCode::BAD_REQUEST,
+                "empty_upload",
+            ),
+            (
+                ApiError::UploadSession(store::documents::UploadSessionError::TooLarge {
+                    declared: 10,
+                    max: 1,
+                }),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "upload_too_large",
+            ),
+            (
+                ApiError::UploadSession(store::documents::UploadSessionError::NoSuchSession(id)),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                ApiError::PitchArtifactConflict,
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+        ];
+        for (error, status, code) in cases {
+            let label = format!("{error:?}");
+            let (got_status, body) = rendered(error).await;
+            assert_eq!(got_status, status, "{label}");
+            assert_eq!(body["error"], code, "{label}");
+            if got_status == StatusCode::INTERNAL_SERVER_ERROR {
+                assert!(
+                    !body.to_string().contains("down"),
+                    "{label}: a fault must not echo its detail"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn refusal_messages_carry_the_callers_detail() {
+        let (_, body) = rendered(ApiError::OpenMatter(
+            store::projects::OpenMatterError::BlockingConflict(vec!["Acme v. Client".into()]),
+        ))
+        .await;
+        assert_eq!(body["findings"][0], "Acme v. Client");
+
+        let (_, body) = rendered(ApiError::Project(
+            store::projects::ProjectCommandError::Referenced("2 notations".into()),
+        ))
+        .await;
+        assert!(body["message"].as_str().unwrap().contains("2 notations"));
+
+        let (_, body) = rendered(ApiError::Ingest(
+            store::documents::IngestError::InvalidKind("memo-ish".into()),
+        ))
+        .await;
+        let message = body["message"].as_str().unwrap();
+        assert!(message.contains("`memo-ish` is not a document kind"));
+        for kind in super::accepted_asset_kinds() {
+            assert!(message.contains(kind), "{kind} is listed");
+        }
+
+        let (_, body) = rendered(ApiError::CreateNotation(
+            crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::EngagementMustBeFirst {
+                    code: "nda".into(),
+                    kind: "agreement".into(),
+                },
+            ),
+        ))
+        .await;
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("`nda` is kind `agreement`"));
+
+        let (_, body) = rendered(ApiError::Command(
+            crate::people_commands::PeopleCommandError::Blocked("You cannot do that."),
+        ))
+        .await;
+        assert_eq!(body["message"], "You cannot do that.");
+
+        // An adversity store fault is the one 500 that names its cause.
+        let (_, body) = rendered(ApiError::Adversity(
+            store::project_references::AdversityError::Project(
+                store::projects::ProjectStoreError::CodeTaken,
+            ),
+        ))
+        .await;
+        assert_eq!(body["message"], "that project code is already in use");
+    }
+
+    #[tokio::test]
+    async fn the_notation_workflow_drive_errors_map_to_their_codes() {
+        use crate::retainer_walk::WorkflowDriveError as E;
+        let id = Uuid::nil();
+        let cases: Vec<(E, StatusCode, &str)> = vec![
+            (
+                E::DocumentNotReady(id),
+                StatusCode::CONFLICT,
+                "document_not_ready",
+            ),
+            (
+                E::ClausesRequired(id),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "clauses_required",
+            ),
+            (
+                E::Unfinished(vec!["[name]".into(), "[date]".into()]),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unfinished_document",
+            ),
+            (
+                E::UnresolvedSigner {
+                    role: "client".into(),
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unresolved_signer",
+            ),
+            (
+                E::Form {
+                    form_code: "ss-4".into(),
+                    reason: "pin mismatch".into(),
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "form_error",
+            ),
+            (
+                E::Db("down".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+            (
+                E::Spec("bad".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+        ];
+        for (error, status, code) in cases {
+            let label = format!("{error}");
+            let (got, body) = rendered(ApiError::from(error)).await;
+            assert_eq!(got, status, "{label}");
+            assert_eq!(body["error"], code, "{label}");
+        }
+        let (_, body) = rendered(ApiError::NotationWorkflow(E::Unfinished(vec![
+            "[name]".into(),
+            "[date]".into(),
+        ])))
+        .await;
+        assert!(body["message"].as_str().unwrap().contains("[name]; [date]"));
+        let (_, body) = rendered(ApiError::NotationWorkflow(E::UnresolvedSigner {
+            role: "guarantor".into(),
+        }))
+        .await;
+        assert!(body["message"].as_str().unwrap().contains("`guarantor`"));
+        let (_, body) = rendered(ApiError::NotationWorkflow(E::Form {
+            form_code: "ss-4".into(),
+            reason: "pin mismatch".into(),
+        }))
+        .await;
+        assert!(body["message"].as_str().unwrap().contains("`ss-4`"));
+    }
+
+    #[tokio::test]
+    async fn the_questionnaire_answer_errors_map_to_their_codes() {
+        use workflows::NotationSessionError as E;
+        let cases: Vec<(E, StatusCode, &str)> = vec![
+            (
+                E::NotationNotFound(Uuid::nil()),
+                StatusCode::NOT_FOUND,
+                "not_found",
+            ),
+            (
+                E::QuestionMismatch {
+                    expected: "entity".into(),
+                    got: "name".into(),
+                },
+                StatusCode::CONFLICT,
+                "question_mismatch",
+            ),
+            (E::AlreadyComplete, StatusCode::CONFLICT, "already_complete"),
+            (
+                E::QuestionNotClientFacing("fee".into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "question_not_answerable",
+            ),
+            (
+                E::QuestionNotFlagged("fee".into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "question_not_answerable",
+            ),
+            (
+                E::UndeclaredChoice {
+                    state: "tier".into(),
+                    declared: vec!["a".into(), "b".into()],
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "undeclared_choice",
+            ),
+            (
+                E::Db("down".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+            ),
+        ];
+        for (error, status, code) in cases {
+            let label = format!("{error}");
+            let (got, body) = rendered(ApiError::from(error)).await;
+            assert_eq!(got, status, "{label}");
+            assert_eq!(body["error"], code, "{label}");
+        }
+        let (_, body) = rendered(ApiError::AnswerNotation(E::QuestionMismatch {
+            expected: "entity".into(),
+            got: "name".into(),
+        }))
+        .await;
+        assert_eq!(body["expected"], "entity");
+        assert_eq!(body["got"], "name");
+        let (_, body) = rendered(ApiError::AnswerNotation(E::UndeclaredChoice {
+            state: "tier".into(),
+            declared: vec!["a".into(), "b".into()],
+        }))
+        .await;
+        assert_eq!(body["declared"], serde_json::json!(["a", "b"]));
+    }
+
+    #[tokio::test]
+    async fn from_impls_route_each_store_error_to_its_variant() {
+        assert!(matches!(
+            ApiError::from(store::testimonials::TestimonialError::NotFound),
+            ApiError::Testimonial(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::entities::EntityError::WriteReturnedNothing),
+            ApiError::Entity(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::jurisdictions::JurisdictionError::CodeTaken),
+            ApiError::Jurisdictions(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::entity_types::EntityTypeError::NameTaken),
+            ApiError::EntityTypes(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::participation::AddParticipantError::Duplicate),
+            ApiError::AddParticipant(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::participation::UpdateParticipantError::Duplicate),
+            ApiError::UpdateParticipant(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::participation::RemoveParticipantError::DriLockout),
+            ApiError::RemoveParticipant(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::project_references::AdversityError::NoClientDri),
+            ApiError::Adversity(_)
+        ));
+        assert!(matches!(
+            ApiError::from(crate::project_notation::CreateProjectNotationError::EmptyInput),
+            ApiError::CreateNotation(_)
+        ));
+        assert!(matches!(
+            ApiError::from(crate::retainer_walk::SendIntakeError::NoClient(Uuid::nil())),
+            ApiError::SendIntake(_)
+        ));
+        assert!(matches!(
+            ApiError::from(crate::review::ReviewCommentError::NotFound),
+            ApiError::ReviewComment(_)
+        ));
+        assert!(matches!(
+            ApiError::from(crate::expunge_request_route::RequestDeletionError::NoRequester),
+            ApiError::RequestDeletion(_)
+        ));
+        assert!(matches!(
+            ApiError::from(crate::contract_review_walk::ContractReviewError::NoPlaybook),
+            ApiError::ContractReview(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::projects::ProjectCommandError::NotFound),
+            ApiError::Project(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::projects::OpenMatterError::CodeConflict),
+            ApiError::OpenMatter(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::entity_commands::EntityCommandError::Conflict),
+            ApiError::Entity(_)
+        ));
+        assert!(matches!(ApiError::from("x".to_string()), ApiError::Db(_)));
+        assert!(matches!(
+            ApiError::from(store::notations::NotationError::WriteReturnedNothing),
+            ApiError::Notation(_)
+        ));
+        assert!(matches!(
+            ApiError::from(store::documents::IngestError::WriteReturnedNothing),
+            ApiError::Ingest(_)
+        ));
+        assert!(matches!(
+            ApiError::from(crate::people_commands::PeopleCommandError::SendFailed),
+            ApiError::Command(_)
+        ));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn document_error_helpers_answer_typed_refusals() {
+        use store::assets::{
+            AssetError, AssignSlugError, ReclassifyAcceptedKindError, ReclassifyKindError,
+            RepairStorageError, ReslugError,
+        };
+        let slug_error = || store::documents::DocumentSlugError::MissingOrMismatchedExtension {
+            filename: "letter.pdf".into(),
+            slug: "letter".into(),
+        };
+        let ok = |result: Result<axum::response::Response, ApiError>| {
+            result.expect("a typed refusal, not an ApiError")
+        };
+
+        let assign: Vec<(AssignSlugError, StatusCode, &str)> = vec![
+            (
+                AssignSlugError::AlreadySlugged,
+                StatusCode::CONFLICT,
+                "slug_present",
+            ),
+            (
+                AssignSlugError::ChainExists("a.pdf".into()),
+                StatusCode::CONFLICT,
+                "slug_taken",
+            ),
+            (
+                AssignSlugError::MissingFilename,
+                StatusCode::BAD_REQUEST,
+                "filename_required",
+            ),
+            (
+                AssignSlugError::InvalidSlug(slug_error()),
+                StatusCode::BAD_REQUEST,
+                "invalid_slug",
+            ),
+            (
+                AssignSlugError::InvalidKind("x".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid_kind",
+            ),
+        ];
+        for (error, status, code) in assign {
+            let (got, body) = response_json(ok(super::assign_slug_response(error))).await;
+            assert_eq!((got, body["error"].as_str().unwrap()), (status, code));
+        }
+        assert!(matches!(
+            super::assign_slug_response(AssignSlugError::NotOnProject),
+            Err(ApiError::NotFound)
+        ));
+        assert!(matches!(
+            super::assign_slug_response(AssignSlugError::Asset(AssetError::WriteReturnedNothing)),
+            Err(ApiError::Asset(_))
+        ));
+
+        let reclassify: Vec<(ReclassifyKindError, StatusCode, &str)> = vec![
+            (
+                ReclassifyKindError::KindAccepted("letter".into()),
+                StatusCode::CONFLICT,
+                "kind_accepted",
+            ),
+            (
+                ReclassifyKindError::ChainHasAcceptedKind("a.pdf".into()),
+                StatusCode::CONFLICT,
+                "kind_accepted",
+            ),
+            (
+                ReclassifyKindError::InvalidKind("x".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid_kind",
+            ),
+        ];
+        for (error, status, code) in reclassify {
+            let (got, body) = response_json(ok(super::reclassify_kind_response(error))).await;
+            assert_eq!((got, body["error"].as_str().unwrap()), (status, code));
+        }
+        assert!(matches!(
+            super::reclassify_kind_response(ReclassifyKindError::NotOnProject),
+            Err(ApiError::NotFound)
+        ));
+        assert!(matches!(
+            super::reclassify_kind_response(ReclassifyKindError::Asset(
+                AssetError::WriteReturnedNothing
+            )),
+            Err(ApiError::Asset(_))
+        ));
+
+        let accepted: Vec<(ReclassifyAcceptedKindError, StatusCode, &str)> = vec![
+            (
+                ReclassifyAcceptedKindError::KindNotAccepted("x".into()),
+                StatusCode::CONFLICT,
+                "kind_not_accepted",
+            ),
+            (
+                ReclassifyAcceptedKindError::KindUnchanged("letter".into()),
+                StatusCode::CONFLICT,
+                "kind_unchanged",
+            ),
+            (
+                ReclassifyAcceptedKindError::InvalidKind("x".into()),
+                StatusCode::BAD_REQUEST,
+                "invalid_kind",
+            ),
+        ];
+        for (error, status, code) in accepted {
+            let (got, body) =
+                response_json(ok(super::reclassify_accepted_kind_response(error))).await;
+            assert_eq!((got, body["error"].as_str().unwrap()), (status, code));
+        }
+        assert!(matches!(
+            super::reclassify_accepted_kind_response(ReclassifyAcceptedKindError::NotOnProject),
+            Err(ApiError::NotFound)
+        ));
+        assert!(matches!(
+            super::reclassify_accepted_kind_response(ReclassifyAcceptedKindError::Asset(
+                AssetError::WriteReturnedNothing
+            )),
+            Err(ApiError::Asset(_))
+        ));
+
+        let reslug: Vec<(ReslugError, StatusCode, &str)> = vec![
+            (ReslugError::NoSlug, StatusCode::BAD_REQUEST, "no_slug"),
+            (
+                ReslugError::MissingFilename,
+                StatusCode::BAD_REQUEST,
+                "filename_required",
+            ),
+            (
+                ReslugError::SlugUnchanged("a.pdf".into()),
+                StatusCode::CONFLICT,
+                "slug_unchanged",
+            ),
+            (
+                ReslugError::InvalidTarget(slug_error()),
+                StatusCode::BAD_REQUEST,
+                "invalid_slug",
+            ),
+            (
+                ReslugError::TargetOccupied("a.pdf".into()),
+                StatusCode::CONFLICT,
+                "slug_taken",
+            ),
+        ];
+        for (error, status, code) in reslug {
+            let (got, body) = response_json(ok(super::reslug_response(error))).await;
+            assert_eq!((got, body["error"].as_str().unwrap()), (status, code));
+        }
+        assert!(matches!(
+            super::reslug_response(ReslugError::NotOnProject),
+            Err(ApiError::NotFound)
+        ));
+        assert!(matches!(
+            super::reslug_response(ReslugError::Asset(AssetError::WriteReturnedNothing)),
+            Err(ApiError::Asset(_))
+        ));
+
+        let repair: Vec<(RepairStorageError, &str)> = vec![
+            (RepairStorageError::ObjectCorrupt, "object_corrupt"),
+            (RepairStorageError::NoSibling, "no_sibling"),
+            (RepairStorageError::DigestMismatch, "digest_mismatch"),
+        ];
+        for (error, code) in repair {
+            let (got, body) = response_json(ok(super::repair_storage_response(error))).await;
+            assert_eq!(
+                (got, body["error"].as_str().unwrap()),
+                (StatusCode::CONFLICT, code)
+            );
+        }
+        assert!(matches!(
+            super::repair_storage_response(RepairStorageError::NotOnProject),
+            Err(ApiError::NotFound)
+        ));
+        assert!(matches!(
+            super::repair_storage_response(RepairStorageError::Asset(
+                AssetError::WriteReturnedNothing
+            )),
+            Err(ApiError::Asset(_))
+        ));
+        assert!(matches!(
+            super::repair_storage_response(RepairStorageError::Project(
+                store::projects::ProjectStoreError::CodeTaken
+            )),
+            Err(ApiError::Db(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn review_actions_and_upload_helpers_answer_typed_bodies() {
+        use crate::admin_contract_reviews::ReviewActionError as E;
+        let id = Uuid::nil();
+        let response = super::review_action_response(Ok(()), id).unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        for error in [E::NotFoundOrScoped, E::FindingNotFound] {
+            assert!(matches!(
+                super::review_action_response(Err(error), id),
+                Err(ApiError::NotFound)
+            ));
+        }
+        for (error, status, code) in [
+            (E::NotOpen, StatusCode::CONFLICT, "not_open"),
+            (
+                E::FindingsUnacted,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "findings_unacted",
+            ),
+            (
+                E::DocumentCommentsUnacted,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "document_comments_unacted",
+            ),
+        ] {
+            let (got, body) =
+                response_json(super::review_action_response(Err(error), id).unwrap()).await;
+            assert_eq!((got, body["error"].as_str().unwrap()), (status, code));
+        }
+        assert!(matches!(
+            super::review_action_response(Err(E::Db("down".into())), id),
+            Err(ApiError::Db(_))
+        ));
+
+        let (status, body) =
+            response_json(super::upload_session_expired("2026-01-01T00:00:00Z")).await;
+        assert_eq!(status, StatusCode::GONE);
+        assert_eq!(body["error"], "upload_session_expired");
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("2026-01-01T00:00:00Z"));
+
+        let (status, body) = response_json(super::upload_sha_mismatch("aa", "bb")).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"], "sha_mismatch");
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("aa, not the declared bb"));
+
+        let (status, body) = response_json(super::conflict("c", "m")).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body, serde_json::json!({ "error": "c", "message": "m" }));
+
+        assert!(super::invalid_document_slug_response("letter.pdf", "letter.pdf").is_none());
+        let (status, body) =
+            response_json(super::invalid_document_slug_response("letter.pdf", "letter").unwrap())
+                .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_slug");
+    }
+
+    #[tokio::test]
+    async fn small_pure_helpers_hold_their_contracts() {
+        use crate::eml_filing::EmlParseError;
+        assert_eq!(
+            super::eml_parse_error_code(&EmlParseError::NotMime),
+            "not_mime"
+        );
+        assert_eq!(
+            super::eml_parse_error_code(&EmlParseError::NoDate),
+            "no_date"
+        );
+        assert_eq!(
+            super::eml_parse_error_code(&EmlParseError::BadDate),
+            "bad_date"
+        );
+        assert_eq!(
+            super::eml_parse_error_code(&EmlParseError::NoBody),
+            "no_body"
+        );
+
+        assert!(super::is_commit_sha("abcdef0"));
+        assert!(super::is_commit_sha(&"a".repeat(64)));
+        assert!(!super::is_commit_sha("abcdef"));
+        assert!(!super::is_commit_sha(&"a".repeat(65)));
+        assert!(!super::is_commit_sha("ABCDEF0"));
+        assert!(!super::is_commit_sha("abcdefg"));
+
+        assert_eq!(super::typst_string("a\"b\\c"), "#\"a\\\"b\\\\c\"");
+
+        let depth = |raw: Option<&str>| {
+            super::graph_depth(&super::GraphQuery {
+                depth: raw.map(str::to_string),
+            })
+        };
+        assert_eq!(depth(None).unwrap(), 2);
+        assert_eq!(depth(Some("3")).unwrap(), 3);
+        for (raw, code) in [
+            ("0", "depth_out_of_range"),
+            ("4", "depth_out_of_range"),
+            ("-1", "invalid_depth"),
+            ("two", "invalid_depth"),
+        ] {
+            let (status, body) = response_json(depth(Some(raw)).unwrap_err()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{raw}");
+            assert_eq!(body["error"], code, "{raw}");
+        }
+
+        assert!(matches!(
+            super::surface_error(store::project_surfaces::SurfaceError::NotFound),
+            ApiError::NotFound
+        ));
+        assert!(matches!(
+            super::surface_error(store::project_surfaces::SurfaceError::Command(
+                store::projects::ProjectCommandError::NotFound
+            )),
+            ApiError::Project(_)
+        ));
+        assert!(matches!(
+            super::surface_error(store::project_surfaces::SurfaceError::ForgejoUnavailable(
+                "root url".into()
+            )),
+            ApiError::ForgejoUnavailable(_)
+        ));
+        assert!(matches!(
+            super::surface_error(store::project_surfaces::SurfaceError::Db("down".into())),
+            ApiError::Db(_)
+        ));
+
+        let lawyer = crate::SessionData::fresh("l", store::persons::Role::Lawyer);
+        let admin = crate::SessionData::fresh("a", store::persons::Role::Admin);
+        assert!(!super::may_change_roles(&lawyer));
+        assert!(super::may_change_roles(&admin));
+    }
+
+    async fn router_api_state(db: store::surreal::SurrealDb) -> ApiState {
+        let app = crate::test_support::app_state(db).await;
+        ApiState {
+            surreal: app.surreal.clone(),
+            email: app.email.clone(),
+            canonical_base_url: None,
+            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
+            bootstrap_company: "Test Firm".to_string(),
+            questionnaire_runtime: app.questionnaire_runtime.clone(),
+            storage: app.storage.clone(),
+            workflow_runtime: app.workflow_runtime.clone(),
+            assets_storage: app.assets_storage.clone(),
+            forms_registry: app.forms_registry.clone(),
+            signature_provider: app.signature_provider.clone(),
+            contract_reviewer: app.contract_reviewer.clone(),
+            integration_providers: app.integration_providers.clone(),
+        }
+    }
+
+    /// Drive one request through the real `/app/api` router with `session`
+    /// injected the way the auth layers would.
+    async fn call(
+        state: &ApiState,
+        session: Option<&crate::SessionData>,
+        method: &str,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut router = routes().with_state(state.clone());
+        if let Some(session) = session {
+            router = router.layer(axum::Extension(session.clone()));
+        }
+        let mut request = axum::http::Request::builder().method(method).uri(path);
+        let body = match body {
+            Some(json) => {
+                request = request.header("content-type", "application/json");
+                axum::body::Body::from(json.to_string())
+            }
+            None => axum::body::Body::empty(),
+        };
+        let response = router
+            .oneshot(request.body(body).expect("build the request"))
+            .await
+            .expect("the router answers");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read the body");
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    /// One seeded matter (with a notation on it) plus a lawyer who does not
+    /// participate in it.
+    struct DoorFixture {
+        db: store::surreal::SurrealDb,
+        state: ApiState,
+        project: Uuid,
+        notation: Uuid,
+        lawyer: crate::SessionData,
+    }
+
+    async fn door_fixture() -> DoorFixture {
+        let db = store::surreal::test_support::mem().await;
+        let state = router_api_state(db.clone()).await;
+        let notation = store::test_support::seed_notation(&db).await;
+        let project = store::notations::find_by_id(&db, notation)
+            .await
+            .expect("read the seeded notation")
+            .expect("the seeded notation exists")
+            .project_id;
+        let outsider = store::persons::create(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Outside Lawyer",
+                "outside-lawyer@example.com",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .expect("seed the outside lawyer");
+        let lawyer = crate::SessionData {
+            person_id: Some(outsider.id),
+            ..crate::SessionData::fresh("outside-lawyer", store::persons::Role::Lawyer)
+        };
+        DoorFixture {
+            db,
+            state,
+            project,
+            notation,
+            lawyer,
+        }
+    }
+
+    /// A lawyer with no participation on a matter learns nothing about it:
+    /// every matter-scoped door answers the same bare `404` an unknown id
+    /// would, whether it reads or writes, and whatever valid body it sent.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn an_outside_lawyer_gets_a_non_disclosing_404_from_every_matter_door() {
+        let f = door_fixture().await;
+        let (p, n, r) = (f.project, f.notation, Uuid::now_v7());
+        let doors: Vec<(&str, String, Option<serde_json::Value>)> = vec![
+            ("GET", format!("/app/api/projects/{p}"), None),
+            ("GET", format!("/app/api/projects/{p}/status"), None),
+            ("GET", format!("/app/api/projects/{p}/participants"), None),
+            ("GET", format!("/app/api/projects/{p}/section-counts"), None),
+            ("GET", format!("/app/api/projects/{p}/notations"), None),
+            (
+                "GET",
+                format!("/app/api/projects/{p}/notation-inventory"),
+                None,
+            ),
+            ("GET", format!("/app/api/projects/{p}/finance"), None),
+            ("GET", format!("/app/api/projects/{p}/documents"), None),
+            (
+                "GET",
+                format!("/app/api/projects/{p}/documents/revisions?slug=a.pdf"),
+                None,
+            ),
+            (
+                "GET",
+                format!("/app/api/projects/{p}/documents/integrity"),
+                None,
+            ),
+            ("GET", format!("/app/api/projects/{p}/conversation"), None),
+            ("GET", format!("/app/api/project-surfaces/{p}"), None),
+            ("GET", format!("/app/api/notations/{n}"), None),
+            (
+                "GET",
+                format!("/app/api/notations/{n}/review-documents"),
+                None,
+            ),
+            ("GET", format!("/app/api/notations/{n}/answers"), None),
+            ("GET", format!("/app/api/playbooks/{r}"), None),
+            ("GET", format!("/app/api/contract-reviews/{r}"), None),
+            ("GET", format!("/app/api/graph/project/{p}"), None),
+            ("GET", format!("/app/api/graph/lawyer/{r}"), None),
+            ("GET", format!("/app/api/graph/firm/{r}"), None),
+            ("GET", format!("/app/api/entities/{r}"), None),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/testimonial"),
+                Some(serde_json::json!({ "quote": "Great.", "request_public": false })),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/documents/upload-session/status"),
+                Some(serde_json::json!({ "session_id": r })),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/documents/upload-session/complete"),
+                Some(serde_json::json!({ "session_id": r })),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/documents/upload-session"),
+                Some(serde_json::json!({
+                    "filename": "a.pdf",
+                    "declared_size": 4,
+                    "declared_sha256": "0".repeat(64),
+                })),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/close"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/finance/run"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/conversation/messages"),
+                Some(serde_json::json!({ "body": "hello" })),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/participants"),
+                Some(serde_json::json!({ "person_id": r })),
+            ),
+            (
+                "PATCH",
+                format!("/app/api/projects/{p}/participants/{r}"),
+                Some(serde_json::json!({ "person_id": r })),
+            ),
+            (
+                "DELETE",
+                format!("/app/api/projects/{p}/participants/{r}"),
+                None,
+            ),
+            (
+                "PUT",
+                format!("/app/api/projects/{p}/participants/{r}/dri"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "DELETE",
+                format!("/app/api/projects/{p}/participants/{r}/dri"),
+                None,
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/relationships/adverse"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/notations"),
+                Some(
+                    serde_json::json!({ "template_code": "nda", "client_email": "c@example.com" }),
+                ),
+            ),
+            (
+                "POST",
+                format!("/app/api/notations/{n}/answers"),
+                Some(serde_json::json!({ "question_code": "entity", "value": "x" })),
+            ),
+            (
+                "POST",
+                format!("/app/api/notations/{n}/request-changes"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/notations/{n}/reask"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/notations/{n}/transcript"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/notations/{n}/intake"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/notations/{n}/approval"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/notations/{n}/signature"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/notations/{n}/clauses"),
+                Some(serde_json::json!({ "body": "Fee: $1." })),
+            ),
+            (
+                "PATCH",
+                format!("/app/api/notations/{n}/clauses/{r}"),
+                Some(serde_json::json!({ "body": "Fee: $2." })),
+            ),
+            (
+                "DELETE",
+                format!("/app/api/notations/{n}/clauses/{r}"),
+                None,
+            ),
+            (
+                "POST",
+                format!("/app/api/notations/{n}/clauses/{r}/move"),
+                Some(serde_json::json!({ "direction": "up" })),
+            ),
+            (
+                "POST",
+                format!("/app/api/review-documents/{r}/comments"),
+                Some(serde_json::json!({
+                    "anchor_start": 0,
+                    "anchor_end": 1,
+                    "quoted_text": "a",
+                    "body": "b",
+                })),
+            ),
+            (
+                "POST",
+                format!("/app/api/documents/{r}/deletion-requests"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "PATCH",
+                format!("/app/api/projects/{p}/documents/{r}"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/documents/{r}/reclassify"),
+                Some(serde_json::json!({ "kind": "letter" })),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/documents/{r}/delete"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/documents/{r}/restore"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/documents/{r}/hold"),
+                Some(serde_json::json!({ "held": true })),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/mail/file"),
+                Some(serde_json::json!({ "message_id": r })),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/mail/eml"),
+                Some(serde_json::json!({ "raw_base64": "" })),
+            ),
+            (
+                "POST",
+                format!("/app/api/testimonials/{r}/publish"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/testimonials/{r}/unpublish"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "PUT",
+                format!("/app/api/playbooks/{r}"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/contract-reviews/{r}/findings/0"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/contract-reviews/{r}/summary"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/contract-reviews/{r}/approve"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/contract-reviews/{r}/reject"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/expunge-requests/{r}/deny"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "PATCH",
+                format!("/app/api/entities/{r}"),
+                Some(serde_json::json!({})),
+            ),
+            ("DELETE", format!("/app/api/entities/{r}"), None),
+        ];
+        // A door naming the fresh `r` answers 404 for the missing record even
+        // with no access check, so it proves only that an unknown record looks
+        // the same as one the lawyer may not see. The scoping itself is proven
+        // by the doors whose every id is seeded, and the control below.
+        // These reads name a record the fixture never seeds (a finance
+        // summary, an `a.pdf` document, a surfaces row), so they belong with
+        // the unknown-record doors too.
+        let unseeded_reads = [
+            format!("/app/api/projects/{p}/finance"),
+            format!("/app/api/projects/{p}/documents/revisions?slug=a.pdf"),
+            format!("/app/api/project-surfaces/{p}"),
+        ];
+        let r = r.to_string();
+        let (seeded, unseeded): (Vec<_>, Vec<_>) =
+            doors.into_iter().partition(|(_, path, body)| {
+                !unseeded_reads.contains(path)
+                    && !path.contains(&r)
+                    && !body.as_ref().is_some_and(|b| b.to_string().contains(&r))
+            });
+        for (method, path, body) in seeded.iter().chain(&unseeded) {
+            let (status, json) = call(&f.state, Some(&f.lawyer), method, path, body.clone()).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}: {json}");
+            assert_eq!(json["error"], "not_found", "{method} {path}");
+        }
+        // The control: once the same lawyer participates, every seeded read
+        // stops answering 404, so the refusals above came from the scoping.
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: p,
+                person_id: f.lawyer.person_id.unwrap(),
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .expect("add the lawyer to the matter");
+        let mut still_missing = Vec::new();
+        for (method, path, _) in seeded.iter().filter(|(method, ..)| *method == "GET") {
+            let (status, json) = call(&f.state, Some(&f.lawyer), method, path, None).await;
+            if status == StatusCode::NOT_FOUND {
+                still_missing.push(format!("{method} {path}: {json}"));
+            }
+        }
+        assert!(still_missing.is_empty(), "{still_missing:#?}");
+    }
+
+    /// Deployment-wide reads and Firm administration are Owner/Admin doors:
+    /// a lawyer is refused with `403` even though the route admits the tier.
+    #[tokio::test]
+    async fn admin_tier_doors_refuse_a_lawyer_with_403() {
+        let f = door_fixture().await;
+        let (p, r) = (f.project, Uuid::now_v7());
+        let doors: Vec<(&str, String, Option<serde_json::Value>)> = vec![
+            ("GET", "/app/api/project-repositories".into(), None),
+            ("GET", "/app/api/project-lifecycle".into(), None),
+            ("POST", format!("/app/api/project-surfaces/{p}"), None),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/documents/{r}/storage"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                "/app/api/documents/purge".into(),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "POST",
+                format!("/app/api/expunge-requests/{r}/authorize"),
+                Some(serde_json::json!({})),
+            ),
+            (
+                "PATCH",
+                "/app/api/brands/acme".into(),
+                Some(serde_json::json!({ "typeface": "inter", "primary_color": "#000000" })),
+            ),
+            ("GET", "/app/api/firms".into(), None),
+        ];
+        for (method, path, body) in doors {
+            let (status, json) = call(&f.state, Some(&f.lawyer), method, &path, body).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {json}");
+            assert_eq!(json["error"], "forbidden", "{method} {path}");
+        }
+    }
+
+    /// The extractors run before the body: no session is `401`, a client on
+    /// a lawyer door is `403`, even when the body would not parse.
+    #[tokio::test]
+    async fn the_session_extractors_refuse_before_the_body_is_read() {
+        let f = door_fixture().await;
+        let client = crate::SessionData::fresh("client", store::persons::Role::Client);
+        let p = f.project;
+        for (method, path) in [
+            ("POST", "/app/api/people".to_string()),
+            ("POST", "/app/api/projects".to_string()),
+            ("PATCH", format!("/app/api/projects/{p}")),
+            ("POST", format!("/app/api/projects/{p}/participants")),
+            ("POST", "/app/api/playbooks".to_string()),
+        ] {
+            let malformed = Some(serde_json::json!({ "unexpected": true }));
+            let (status, json) = call(&f.state, None, method, &path, malformed.clone()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
+            assert_eq!(json["error"], "unauthenticated");
+            let (status, json) = call(&f.state, Some(&client), method, &path, malformed).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
+            assert_eq!(json["error"], "forbidden");
+        }
+        let (status, _) = call(
+            &f.state,
+            None,
+            "GET",
+            &format!("/app/api/projects/{p}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let admin = crate::SessionData::fresh("admin", store::persons::Role::Admin);
+        let (status, _) = call(
+            &f.state,
+            Some(&client),
+            "PATCH",
+            "/app/api/brands/acme",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _) = call(&f.state, None, "PATCH", "/app/api/brands/acme", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        // An admin reaches the body, and a brand outside the caller's reach
+        // is a non-disclosing 404.
+        let (status, json) = call(
+            &f.state,
+            Some(&admin),
+            "PATCH",
+            "/app/api/brands/no-such-brand",
+            Some(serde_json::json!({ "typeface": "inter", "primary_color": "#000000" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+    }
+
+    /// A body that parses as JSON but misses a required field is a `400`
+    /// naming the field, and a url-encoded form reaches the same check.
+    #[tokio::test]
+    async fn json_or_form_reports_the_missing_field() {
+        use tower::ServiceExt;
+        let f = door_fixture().await;
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "POST",
+            "/app/api/people",
+            Some(serde_json::json!({ "email": "x@example.com" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json["error"], "invalid_request");
+        assert!(json["message"].as_str().unwrap().contains("name"));
+
+        let router = routes()
+            .with_state(f.state.clone())
+            .layer(axum::Extension(f.lawyer.clone()));
+        let response = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/app/api/people")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from("email=x%40example.com"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, json) = response_json(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json["error"], "invalid_request");
+    }
+
+    /// The people doors: create, read, update, delete, and the refusals a
+    /// lawyer meets on the way — a role above their own, a merge of one
+    /// record into itself, a scoped session, a welcome to nobody.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn the_people_doors_create_read_update_and_delete_a_person() {
+        let f = door_fixture().await;
+        let (status, created) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "POST",
+            "/app/api/people",
+            Some(serde_json::json!({
+                "name": "Dana Client",
+                "email": "dana@example.com",
+                "role": "admin",
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+        assert_eq!(
+            created["role"], "client",
+            "a lawyer cannot mint an admin; the role is coerced to client"
+        );
+        let id = created["id"].as_str().unwrap().to_string();
+
+        let (status, people) =
+            call(&f.state, Some(&f.lawyer), "GET", "/app/api/people", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(people
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|person| person["email"] == "dana@example.com"));
+
+        let (status, person) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/people/{id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(person["name"], "Dana Client");
+        let (status, _) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/people/{}", Uuid::now_v7()),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, updated) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "PATCH",
+            &format!("/app/api/people/{id}"),
+            Some(serde_json::json!({ "name": "Dana Q. Client" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{updated}");
+        assert_eq!(updated["name"], "Dana Q. Client");
+
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "PATCH",
+            &format!("/app/api/people/{}", Uuid::now_v7()),
+            Some(serde_json::json!({ "name": "Nobody" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "POST",
+            "/app/api/people",
+            Some(serde_json::json!({ "name": "Dup", "email": "dana@example.com" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "POST",
+            "/app/api/people/merge",
+            Some(serde_json::json!({ "keep": "dana@example.com", "drop": "dana@example.com" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert_eq!(json["error"], "same_person");
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "POST",
+            "/app/api/people/merge",
+            Some(serde_json::json!({ "keep": "dana@example.com", "drop": "ghost@example.com" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+        assert_eq!(json["error"], "not_found");
+
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "POST",
+            &format!("/app/api/people/{}/welcome", Uuid::now_v7()),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+
+        let (status, deleted) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "DELETE",
+            &format!("/app/api/people/{id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{deleted}");
+        assert!(store::persons::find_by_id(&f.db, id.parse().unwrap())
+            .await
+            .unwrap()
+            .is_none());
+        let (status, _) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "DELETE",
+            &format!("/app/api/people/{id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// An Owner may assign roles, but never one above their own rank — and a
+    /// lawyer-tier session can still only mint a client.
+    #[tokio::test]
+    async fn an_admin_cannot_create_a_person_above_their_own_rank() {
+        let f = door_fixture().await;
+        let admin = crate::SessionData::fresh("admin", store::persons::Role::Admin);
+        let (status, json) = call(
+            &f.state,
+            Some(&admin),
+            "POST",
+            "/app/api/people",
+            Some(serde_json::json!({ "name": "Owner Two", "email": "o2@example.com", "role": "owner" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["error"], "blocked");
+        let (status, json) = call(
+            &f.state,
+            Some(&admin),
+            "POST",
+            "/app/api/people",
+            Some(serde_json::json!({ "name": "New Lawyer", "email": "nl@example.com", "role": "lawyer" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{json}");
+        assert_eq!(json["role"], "lawyer");
+    }
+
+    #[tokio::test]
+    async fn a_scoped_session_cannot_merge_people() {
+        let f = door_fixture().await;
+        let scoped = crate::SessionData {
+            scope: Some(crate::session::SessionScope::Document(
+                crate::session::DocumentScope {
+                    project_id: f.project,
+                    project_code: "x".into(),
+                },
+            )),
+            ..f.lawyer.clone()
+        };
+        let (status, json) = call(
+            &f.state,
+            Some(&scoped),
+            "POST",
+            "/app/api/people/merge",
+            Some(serde_json::json!({ "keep": "a@example.com", "drop": "b@example.com" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
+        assert_eq!(json["error"], "scope_violation");
+    }
+
+    /// The reference-table lists and the caller-scoped lists answer `200`
+    /// with arrays; a lawyer on no matter sees no matter.
+    #[tokio::test]
+    async fn the_directory_reads_answer_scoped_arrays() {
+        let f = door_fixture().await;
+        for path in [
+            "/app/api/jurisdictions",
+            "/app/api/entity-types",
+            "/app/api/entities",
+            "/app/api/expunge-requests",
+            "/app/api/playbooks",
+        ] {
+            let (status, json) = call(&f.state, Some(&f.lawyer), "GET", path, None).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {json}");
+            assert!(json.is_array(), "{path}: {json}");
+        }
+        let (status, json) =
+            call(&f.state, Some(&f.lawyer), "GET", "/app/api/projects", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json, serde_json::json!([]));
+    }
+
+    /// A participating lawyer reads the matter they work on: the project,
+    /// its participants, its notations, and its documents.
+    #[tokio::test]
+    async fn a_participating_lawyer_reads_their_matter() {
+        let f = door_fixture().await;
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: f.project,
+                person_id: f.lawyer.person_id.unwrap(),
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .expect("add the lawyer to the matter");
+        let (p, n) = (f.project, f.notation);
+
+        let (status, json) =
+            call(&f.state, Some(&f.lawyer), "GET", "/app/api/projects", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json.as_array().unwrap().len(), 1, "{json}");
+        assert_eq!(json[0]["id"], p.to_string());
+
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/projects/{p}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["id"], p.to_string());
+
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/projects/{p}/participants"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert!(json
+            .to_string()
+            .contains(&f.lawyer.person_id.unwrap().to_string()));
+
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/projects/{p}/notations"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert!(json.to_string().contains(&n.to_string()));
+
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/notations/{n}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+
+        for path in [
+            format!("/app/api/projects/{p}/status"),
+            format!("/app/api/projects/{p}/section-counts"),
+            format!("/app/api/projects/{p}/notation-inventory"),
+            format!("/app/api/projects/{p}/documents"),
+            format!("/app/api/projects/{p}/conversation"),
+            format!("/app/api/notations/{n}/answers"),
+            format!("/app/api/notations/{n}/review-documents"),
+        ] {
+            let (status, json) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        }
+
+        // Adding the same person twice is a conflict, not a second row.
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "POST",
+            &format!("/app/api/projects/{p}/participants"),
+            Some(serde_json::json!({ "person_id": f.lawyer.person_id.unwrap() })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "POST",
+            &format!("/app/api/projects/{p}/participants"),
+            Some(serde_json::json!({ "person_id": Uuid::now_v7() })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+    }
+
+    #[tokio::test]
+    async fn the_doc_routes_serve_the_explorer_and_the_document() {
+        use tower::ServiceExt;
+        for path in ["/app/api", "/api"] {
+            let response = super::doc_routes()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let csp = response
+                .headers()
+                .get(axum::http::header::CONTENT_SECURITY_POLICY)
+                .expect("the explorer carries a CSP")
+                .to_str()
+                .unwrap();
+            assert!(csp.contains("script-src 'self'"));
+            assert!(csp.contains("frame-ancestors 'none'"));
+        }
+        let response = super::doc_routes()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/app/api/openapi.json")
+                    .header("host", "navigator.example.com")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, json) = response_json(response).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(json["paths"].is_object());
+    }
+
+    #[tokio::test]
+    async fn validate_template_reports_its_path_and_cleanliness() {
+        let f = door_fixture().await;
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "POST",
+            "/app/api/drafts/validate",
+            Some(serde_json::json!({ "contents": "Plain prose.\n", "markdown_only": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["path"], "template.md");
+        assert!(json["violations"].is_array());
+        assert_eq!(
+            json["clean"],
+            json["violations"].as_array().unwrap().iter().all(|v| {
+                rules::severity_for_code(v["code"].as_str().unwrap()) != rules::Severity::Error
+            })
+        );
+
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "POST",
+            "/app/api/templates/validate",
+            Some(serde_json::json!({ "contents": "no frontmatter", "path": "Bad Name.md" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["path"], "Bad Name.md");
+        assert_eq!(json["clean"], false, "{json}");
+    }
 }

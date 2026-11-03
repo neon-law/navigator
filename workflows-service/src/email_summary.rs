@@ -1425,4 +1425,303 @@ mod tests {
             SenderGate::Known
         );
     }
+
+    #[derive(Clone, Copy)]
+    enum SlackFailure {
+        Api,
+        Incomplete,
+    }
+
+    /// A Slack double whose receipted post always fails one way.
+    struct FailingSlack(SlackFailure);
+
+    #[async_trait]
+    impl workflows::SlackBot for FailingSlack {
+        async fn create_private_channel(
+            &self,
+            _name: &str,
+        ) -> Result<workflows::SlackChannel, workflows::SlackBotError> {
+            Err(workflows::SlackBotError::Api("unused".into()))
+        }
+
+        async fn post_message(
+            &self,
+            _channel_id: &str,
+            _text: &str,
+        ) -> Result<(), workflows::SlackBotError> {
+            Err(workflows::SlackBotError::Api("unused".into()))
+        }
+
+        async fn user_id_by_email(
+            &self,
+            _email: &str,
+        ) -> Result<Option<String>, workflows::SlackBotError> {
+            Ok(None)
+        }
+
+        async fn channel_member_ids(
+            &self,
+            _channel_id: &str,
+        ) -> Result<Vec<String>, workflows::SlackBotError> {
+            Ok(Vec::new())
+        }
+
+        async fn invite_to_channel(
+            &self,
+            _channel_id: &str,
+            _user_ids: &[String],
+        ) -> Result<(), workflows::SlackBotError> {
+            Ok(())
+        }
+
+        async fn post_message_with_receipt(
+            &self,
+            _channel_id: &str,
+            _text: &str,
+            _correlation_id: Option<&str>,
+        ) -> Result<workflows::SlackMessageReceipt, workflows::SlackBotError> {
+            Err(match self.0 {
+                SlackFailure::Api => workflows::SlackBotError::Api("channel_not_found".into()),
+                SlackFailure::Incomplete => workflows::SlackBotError::IncompleteResponse,
+            })
+        }
+    }
+
+    fn succeeded() -> ProviderDelivery {
+        ProviderDelivery::Succeeded {
+            model: "summary-model".into(),
+            result: workflows::EmailSummary {
+                summary: "Synthetic summary line".into(),
+                requested_actions: vec![],
+                sender_stated_dates: vec![],
+                missing_information: vec![],
+            },
+        }
+    }
+
+    fn target(
+        db: &store::surreal::SurrealDb,
+        slack: Arc<dyn workflows::SlackBot>,
+        bytes: Option<&[u8]>,
+        receipt: &EmailReceipt,
+        config_digest: &str,
+    ) -> super::DeliveryTarget {
+        super::DeliveryTarget {
+            surreal: db.clone(),
+            slack,
+            storage: Arc::new(MemoryStorage {
+                bytes: bytes.map(<[u8]>::to_vec),
+            }),
+            receipt: receipt.clone(),
+            config: config(SummaryProvider::Gemini, config_digest),
+            channel_id: "C-SYNTHETIC".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_posts_the_summary_once_and_threads_the_verified_body() {
+        let db = store::surreal::test_support::mem().await;
+        let slack = Arc::new(workflows::CapturingSlackBot::new());
+        let digest = intake_digest(ARCHIVE);
+        let receipt = receipt(&digest);
+        let state = target(&db, slack.clone(), Some(ARCHIVE), &receipt, &digest)
+            .deliver(succeeded())
+            .await
+            .unwrap();
+        assert_eq!(state, "confirmed");
+        let posted = slack.posted_messages();
+        assert_eq!(posted.len(), 1);
+        assert_eq!(posted[0].0, "C-SYNTHETIC");
+        assert!(posted[0].1.contains("Synthetic summary line"));
+        assert!(!posted[0].1.contains("A bounded summary body"));
+        let replies = slack.thread_replies();
+        assert_eq!(replies.len(), 1);
+        assert!(replies[0].1.contains("A bounded summary body"));
+
+        // A replayed delivery is already confirmed and posts nothing again.
+        let replay = target(&db, slack.clone(), Some(ARCHIVE), &receipt, &digest)
+            .deliver(succeeded())
+            .await
+            .unwrap();
+        assert_eq!(replay, "confirmed");
+        assert_eq!(slack.posted_messages().len(), 1);
+        assert_eq!(
+            store::email_deliveries::find(&db, receipt.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            store::email_deliveries::CONFIRMED
+        );
+    }
+
+    #[tokio::test]
+    async fn delivery_withholds_the_body_when_the_archive_no_longer_matches() {
+        let db = store::surreal::test_support::mem().await;
+        let slack = Arc::new(workflows::CapturingSlackBot::new());
+        let digest = intake_digest(ARCHIVE);
+        // The receipt admitted different bytes than the archive now holds.
+        let receipt = receipt(&"c".repeat(64));
+        let state = target(&db, slack.clone(), Some(ARCHIVE), &receipt, &digest)
+            .deliver(ProviderDelivery::Skipped {
+                reason: "synthetic skip".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(state, "confirmed");
+        assert_eq!(slack.posted_messages().len(), 1);
+        assert!(slack.posted_messages()[0].1.contains("synthetic skip"));
+        assert!(slack.thread_replies().is_empty());
+
+        // An unreadable archive is an error before anything is posted.
+        let missing = receipt_with_new_id(&receipt);
+        assert!(target(&db, slack.clone(), None, &missing, &digest)
+            .deliver(succeeded())
+            .await
+            .is_err());
+        assert_eq!(slack.posted_messages().len(), 1);
+    }
+
+    fn receipt_with_new_id(receipt: &EmailReceipt) -> EmailReceipt {
+        let mut next = receipt.clone();
+        next.id = Uuid::now_v7();
+        next
+    }
+
+    #[tokio::test]
+    async fn slack_failures_are_terminal_unless_the_outcome_is_unknown() {
+        let db = store::surreal::test_support::mem().await;
+        let digest = intake_digest(ARCHIVE);
+
+        let rejected = receipt(&digest);
+        let error = target(
+            &db,
+            Arc::new(FailingSlack(SlackFailure::Api)),
+            Some(ARCHIVE),
+            &rejected,
+            &digest,
+        )
+        .deliver(succeeded())
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{error:?}").contains("channel_not_found"),
+            "{error:?}"
+        );
+        assert_eq!(
+            store::email_deliveries::find(&db, rejected.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            store::email_deliveries::FAILED
+        );
+
+        let ambiguous = receipt(&digest);
+        let state = target(
+            &db,
+            Arc::new(FailingSlack(SlackFailure::Incomplete)),
+            Some(ARCHIVE),
+            &ambiguous,
+            &digest,
+        )
+        .deliver(succeeded())
+        .await
+        .unwrap();
+        assert_eq!(state, "unknown");
+        assert_eq!(
+            store::email_deliveries::find(&db, ambiguous.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            store::email_deliveries::UNKNOWN
+        );
+        // A replay of the unknown delivery stays unknown and never posts again.
+        let replay = target(
+            &db,
+            Arc::new(FailingSlack(SlackFailure::Api)),
+            Some(ARCHIVE),
+            &ambiguous,
+            &digest,
+        )
+        .deliver(succeeded())
+        .await
+        .unwrap();
+        assert_eq!(replay, "unknown");
+    }
+
+    #[tokio::test]
+    async fn the_sender_step_reports_the_gate_and_storage_errors() {
+        let db = store::surreal::test_support::mem().await;
+        let storage = Arc::new(MemoryStorage {
+            bytes: Some(ARCHIVE.to_vec()),
+        });
+        assert_eq!(
+            super::check_sender_step(storage, &db, &receipt("digest"), None)
+                .await
+                .unwrap(),
+            SenderGate::Unknown {
+                reason: "message is not assigned to a Project".into()
+            }
+        );
+        let missing = Arc::new(MemoryStorage { bytes: None });
+        assert!(
+            super::check_sender_step(missing, &db, &receipt("digest"), Some(Uuid::nil()))
+                .await
+                .is_err()
+        );
+        let mut unscoped = receipt("digest");
+        unscoped.firm_id = None;
+        let storage = Arc::new(MemoryStorage {
+            bytes: Some(ARCHIVE.to_vec()),
+        });
+        assert_eq!(
+            super::check_sender_step(storage, &db, &unscoped, Some(Uuid::nil()))
+                .await
+                .unwrap(),
+            SenderGate::Unknown {
+                reason: "sender identity is not approved for this provider account".into()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unapproved_sender_is_skipped_before_any_provider_request() {
+        let db = store::surreal::test_support::mem().await;
+        let digest = intake_digest(ARCHIVE);
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let _service = super::EmailSummaryService::new(
+            db.clone(),
+            Arc::new(MemoryStorage { bytes: None }),
+            Arc::new(workflows::CapturingSlackBot::new()),
+            Some(providers(&server.uri())),
+        );
+        let result = super::summarize_provider_authorized(
+            Arc::new(MemoryStorage {
+                bytes: Some(ARCHIVE.to_vec()),
+            }),
+            db,
+            Some(providers(&server.uri())),
+            SummaryProvider::Gemini,
+            receipt(&digest),
+            config(SummaryProvider::Gemini, &digest),
+            "synthetic-project".to_string(),
+            Some(Uuid::nil()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result,
+            ProviderDelivery::Skipped {
+                reason: "sender identity is not approved for this provider account".into()
+            }
+        );
+        server.verify().await;
+    }
 }
