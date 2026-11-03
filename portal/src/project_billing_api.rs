@@ -567,9 +567,12 @@ fn error(error: &InvoiceGenerationError, project_id: Uuid) -> Response {
         }
         InvoiceGenerationError::NoMatter => (StatusCode::NOT_FOUND, "no_matter"),
         InvoiceGenerationError::Time(time_entries::TimeEntryError::Conflict)
-        | InvoiceGenerationError::Cost(costs::ProjectCostError::Conflict) => {
-            (StatusCode::CONFLICT, "work_moved_under_another_invoice")
-        }
+        | InvoiceGenerationError::Cost(costs::ProjectCostError::Conflict)
+        | InvoiceGenerationError::Batch(
+            billing_batches::BillingBatchError::PendingExists
+            | billing_batches::BillingBatchError::Time(time_entries::TimeEntryError::Conflict)
+            | billing_batches::BillingBatchError::Cost(costs::ProjectCostError::Conflict),
+        ) => (StatusCode::CONFLICT, "work_moved_under_another_invoice"),
         InvoiceGenerationError::Billing(billing::BillingError::Provider(_)) => {
             // The provider refused: the caller retries the same command. The
             // failure names the upstream in the log, never in the response.
@@ -720,6 +723,35 @@ pub(crate) async fn generate(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn competing_batch_reservations_are_conflicts() {
+        use store::billing_batches::BillingBatchError;
+        let failures = [
+            BillingBatchError::PendingExists,
+            BillingBatchError::Time(store::time_entries::TimeEntryError::Conflict),
+            BillingBatchError::Cost(store::project_costs::ProjectCostError::Conflict),
+        ];
+        for failure in failures {
+            let response = super::error(
+                &super::InvoiceGenerationError::Batch(failure),
+                uuid::Uuid::nil(),
+            );
+            assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["reason"], "work_moved_under_another_invoice");
+        }
+        let outage = super::InvoiceGenerationError::Batch(BillingBatchError::Database(
+            sqlx::Error::PoolClosed,
+        ));
+        assert_eq!(
+            super::error(&outage, uuid::Uuid::nil()).status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
     use super::{create_window_open, CREATE_ATTEMPT_BUDGET};
     use chrono::{Duration, Utc};
 
