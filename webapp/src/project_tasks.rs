@@ -241,10 +241,9 @@ pub fn TasksTab(
                             for row in tasks.iter() {
                                 tr {
                                     td {
+                                        "{row.title}"
                                         if let Some(body) = row.body.as_ref() {
-                                            span { title: "{body}", "{row.title}" }
-                                        } else {
-                                            "{row.title}"
+                                            p { "{body}" }
                                         }
                                     }
                                     td { "{row.assignee.clone().unwrap_or_else(|| \"—\".to_string())}" }
@@ -475,6 +474,26 @@ mod tests {
         assert!(html.contains("Unassigned"), "{html}");
         // Every row action clears the CSRF guard.
         assert!(html.contains(r#"name="_csrf""#), "{html}");
+    }
+
+    #[test]
+    fn task_details_are_visible_without_hover_or_focus() {
+        let mut row = a_row("todo", None);
+        row.body = Some("Send the signed request to counsel.".to_string());
+        let html = dioxus_ssr::render_element(rsx! {
+            TasksTab {
+                code: "acme".to_string(),
+                csrf: "token".to_string(),
+                tasks: vec![row],
+                assignees: vec![],
+            }
+        });
+
+        assert!(
+            html.contains(">Send the signed request to counsel.</p>"),
+            "{html}"
+        );
+        assert!(!html.contains("title=\"Send the signed request"), "{html}");
     }
 
     #[test]
