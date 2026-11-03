@@ -3517,6 +3517,13 @@ async fn assert_fi_project_is_pinned_before_return(f: &Fixture, kind: &str, park
         count, 1,
         "same-target projection repair reuses the atomic attribution audit"
     );
+    assert_fi_history_has_no_author_or_billing(f, &saved).await;
+}
+
+async fn assert_fi_history_has_no_author_or_billing(
+    f: &Fixture,
+    saved: &crate::inbox::IngestedInbound,
+) {
     let message = pg_inbox::message_by_id_on(&f.pg, saved.message_id)
         .await
         .unwrap()
