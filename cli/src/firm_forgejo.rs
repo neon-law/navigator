@@ -69,6 +69,10 @@ async fn provision_at(base: &str, token: &str, slug: &str) -> Result<String> {
             firm.id
         ))
         .bearer_auth(token)
+        // The route takes no input, but a bodiless POST goes out without a
+        // `Content-Length`, which GKE's ingress refuses with 411 Length
+        // Required (ENG-1226). An empty JSON object states the length.
+        .json(&serde_json::json!({}))
         .send()
         .await
         .context("POST /app/api/firms/{id}/forgejo-organization")?;
@@ -123,7 +127,7 @@ pub async fn provision(host: Option<&str>, slug: &str) -> ExitCode {
 mod tests {
     use super::provision_at;
     use serde_json::json;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const FIRM: &str = "0192f0a0-0000-7000-8000-000000000001";
@@ -161,6 +165,31 @@ mod tests {
             report,
             "organization example-law-pc: created; firm-account added to its owners team"
         );
+    }
+
+    /// ENG-1226: GKE's ingress answers a bodiless POST (no `Content-Length`)
+    /// with 411 Length Required, so the write must carry an explicit body.
+    #[tokio::test]
+    async fn the_provisioning_post_carries_a_content_length() {
+        let server = MockServer::start().await;
+        directory(&server).await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/firms/{FIRM}/forgejo-organization")))
+            .and(header("content-length", "2"))
+            .and(header("content-type", "application/json"))
+            .and(body_json(json!({})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "firm_id": FIRM, "organization": "example-law-pc", "forgejo_id": 7,
+                "owner_login": "firm-account", "created": false, "made_private": false,
+                "owner_added": false, "provisioned_at": "2026-11-01T00:00:00Z",
+                "reconciled_at": "2026-11-01T00:00:00Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        provision_at(&server.uri(), "session", "example-law-pc")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
