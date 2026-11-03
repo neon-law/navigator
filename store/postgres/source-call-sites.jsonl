@@ -269,7 +269,7 @@
 {"file":"cli/src/lsp_source_export.rs","line":177,"function":"generate_root_manifest","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/lsp_source_export.rs","line":181,"function":"generate_root_manifest","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/lsp_source_export.rs","line":187,"function":"generate_root_manifest","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/mail.rs","line":298,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/mail.rs","line":306,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail/login.rs","line":408,"function":"prompt_hidden","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/main.rs","line":8097,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/notices.rs","line":500,"function":"identical_texts_collapse_into_one_entry","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
