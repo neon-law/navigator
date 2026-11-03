@@ -443,7 +443,14 @@ fn releases_build_and_attach_a_linux_cli_archive() {
 
     for required in [
         "release-cli-build-linux:",
-        "install -m 0755 target/release/navigator dist/navigator-linux/navigator",
+        // Static musl (ENG-1228): the Forgejo gate runs inside the Alpine
+        // `forgejo/runner` image, where a glibc binary cannot start.
+        "sudo apt-get install -y --no-install-recommends musl-tools",
+        "cargo build --locked --release --target x86_64-unknown-linux-musl -p cli --bin navigator",
+        "install -m 0755 target/x86_64-unknown-linux-musl/release/navigator dist/navigator-linux/navigator",
+        "name: prove the CLI runs in the pinned Forgejo runner image",
+        "ops github setup --help",
+        "grep -qF \"[default: ${TAG}]\"",
         "install -m 0644 LICENSE dist/navigator-linux/LICENSE",
         "-C dist/navigator-linux navigator LICENSE",
         "name: navigator-linux-cli",
