@@ -27,6 +27,13 @@ values = [
 ]
 
 [[paths]]
+reason = "Generated geographic coordinates and SVG paths for the public fixed 2000-01-01T12:00:00Z specimen; no personal birth inputs. Kernel provenance and generator are recorded in the fixtures."
+values = [
+  "webapp/src/assets/world-specimen-lines.json",
+  "webapp/src/assets/world-specimen-paths.json",
+]
+
+[[paths]]
 reason = "Copyright attributions the licences require."
 values = [
   "third-party-notices.txt",
