@@ -132,10 +132,26 @@ fn the_matching_release_does_not_run_an_unnecessary_cached_binary() {
     let fixture = Fixture::new("26.10.28", 17);
     let output = fixture
         .command()
+        .env("NAVIGATOR_PINNED_GATE_DELEGATED", "26.10.28")
         .args(["project", "gate", "--tracked-files"])
         .output()
         .unwrap();
     assert_ne!(output.status.code(), Some(17), "{output:?}");
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("refusing to delegate again"));
+    assert!(!fixture.record.exists());
+}
+
+#[test]
+fn a_delegated_child_cannot_delegate_to_a_changed_pin() {
+    let fixture = Fixture::new("26.10.24", 0);
+    let output = fixture
+        .command()
+        .env("NAVIGATOR_PINNED_GATE_DELEGATED", "26.10.23")
+        .args(["project", "gate", "--tracked-files"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("refusing to delegate again"));
     assert!(!fixture.record.exists());
 }
 
@@ -155,6 +171,36 @@ fn a_wrong_cached_release_blocks_instead_of_running_current_rules() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("does not report navigator 26.10.24"));
     assert!(!fixture.record.exists());
+    assert_eq!(
+        fs::read(fixture.repository.join("README.md")).unwrap(),
+        b"# Synthetic Project  \n"
+    );
+}
+
+#[test]
+fn a_cached_non_release_binary_stops_after_one_delegation() {
+    let pin = env!("CARGO_PKG_VERSION");
+    let fixture = Fixture::new(pin, 0);
+    // Bound the reproduction even when the delegation guard is absent.
+    fs::write(
+        &fixture.binary,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'navigator {pin}\\n'; exit 0; fi\nif [ -f \"$TEST_GATE_RECORD\" ]; then exit 92; fi\ntouch \"$TEST_GATE_RECORD\"\nexec \"$TEST_NAVIGATOR\" \"$@\"\n"
+        ),
+    )
+    .unwrap();
+    let output = fixture
+        .command()
+        .env_remove("NAVIGATOR_RELEASE_TAG")
+        .env("TEST_NAVIGATOR", assert_cmd::cargo::cargo_bin("navigator"))
+        .env("CI", "true")
+        .timeout(std::time::Duration::from_secs(15))
+        .args(["project", "gate", "--ci"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("refusing to delegate again"));
+    assert!(fixture.record.exists());
     assert_eq!(
         fs::read(fixture.repository.join("README.md")).unwrap(),
         b"# Synthetic Project  \n"

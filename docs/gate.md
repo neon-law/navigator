@@ -28,6 +28,9 @@ can use that cached executable offline. An unavailable release, invalid pin, or 
 before content changes. Remove the named cached executable and retry if its version is wrong. A repository without a pin
 continues to use the installed CLI's rules; `navigator validate` also uses the installed rules.
 
+Delegation is limited to one child. If that executable cannot confirm the pinned published release, it stops with an
+error before checking or fixing content. Remove the cached executable and retry so the CLI downloads the release.
+
 `--check` compares committed document pointers with the live record. The host and Project code come from
 `navigator.yaml`. It moves a legacy layout's pointers from `documents/` to `blobs/` (rule `Y014`), rewrites a drifted
 pointer, and writes a missing pointer under `blobs/`. It never writes to the live site. A missing or corrupt object
