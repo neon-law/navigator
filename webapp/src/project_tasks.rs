@@ -259,7 +259,7 @@ pub fn TasksTab(
                                                 method: "post",
                                                 action: "/app/projects/{code}/tasks/{row.id}/transition",
                                                 input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
-                                                input { r#type: "hidden", name: "state", value: "{next}" }
+                                                input { r#type: "hidden", name: "next_state", value: "{next}" }
                                                 button {
                                                     class: "nav-btn nav-btn--secondary matter-task-transition",
                                                     r#type: "submit",
@@ -452,6 +452,11 @@ mod tests {
         // One forward transition per open row, none for the done row.
         assert_eq!(html.matches("matter-task-transition").count(), 2, "{html}");
         assert!(html.contains("Complete"), "{html}");
+        assert!(
+            html.contains(r#"name="next_state" value="in_progress""#),
+            "{html}"
+        );
+        assert!(html.contains(r#"name="next_state" value="done""#), "{html}");
         // The assign control posts the row's own assign door, names its
         // assignee for the screen reader, and preselects the held assignee.
         // (The token boundary matters: `matter-task-assignee` also contains

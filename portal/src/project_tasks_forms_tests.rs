@@ -144,3 +144,20 @@ async fn cross_matter_actions() {
         1
     );
 }
+
+#[tokio::test]
+async fn transition_form_accepts_the_rendered_forward_action_fields() {
+    use axum::extract::FromRequest;
+    for state in ["in_progress", "done"] {
+        let request = axum::http::Request::builder()
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(axum::body::Body::from(format!(
+                "_csrf=synthetic&next_state={state}"
+            )))
+            .unwrap();
+        let Form(form) = Form::<TaskTransitionForm>::from_request(request, &())
+            .await
+            .unwrap();
+        assert_eq!(form.next_state, state);
+    }
+}
