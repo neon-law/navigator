@@ -165,12 +165,16 @@ pub struct InvoiceLine {
 /// [`BillingProvider::create_invoice`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvoiceRequest {
+    /// Resolved provider identity. Older journaled requests remain readable;
+    /// a new Xero write requires this value and never falls back to names.
+    #[serde(default)]
+    pub contact_id: Option<ContactId>,
+    /// Descriptive metadata; the provider debtor is selected only by `contact_id`.
     pub contact_name: String,
     pub contact_email: String,
     pub reference: String,
     pub line_items: Vec<InvoiceLine>,
-    /// When payment is due. Xero needs one to email an `AUTHORISED`
-    /// invoice to the contact; `None` leaves Xero's organisation default.
+    /// When payment is due. `None` omits `DueDate` from the provider request.
     #[serde(default)]
     pub due_date: Option<NaiveDate>,
 }
@@ -648,8 +652,21 @@ impl XeroBillingProvider {
     /// unit-testing the request shape without an HTTP round-trip. Type
     /// `ACCREC` (accounts-receivable, a sales invoice) and status
     /// `AUTHORISED` so the invoice is immediately billable.
-    #[must_use]
-    pub fn build_invoice_body(&self, request: &InvoiceRequest) -> serde_json::Value {
+    /// Line amounts are exclusive of tax; the configured account's tax
+    /// rate applies. Contact details are resolved separately so an invoice
+    /// cannot overwrite contact information or remove `ContactPersons`.
+    ///
+    /// # Errors
+    /// Returns a provider error when no resolved contact id is present.
+    pub fn build_invoice_body(
+        &self,
+        request: &InvoiceRequest,
+    ) -> Result<serde_json::Value, BillingError> {
+        let contact = request
+            .contact_id
+            .as_ref()
+            .filter(|id| !id.0.trim().is_empty())
+            .ok_or_else(|| BillingError::Provider("resolved invoice contact id missing".into()))?;
         let line_items: Vec<serde_json::Value> = request
             .line_items
             .iter()
@@ -665,17 +682,16 @@ impl XeroBillingProvider {
         let mut body = serde_json::json!({
             "Type": "ACCREC",
             "Status": "AUTHORISED",
+            "CurrencyCode": "USD",
+            "LineAmountTypes": "Exclusive",
             "Reference": request.reference,
-            "Contact": {
-                "Name": request.contact_name,
-                "EmailAddress": request.contact_email,
-            },
+            "Contact": { "ContactID": contact.0 },
             "LineItems": line_items,
         });
         if let Some(due) = request.due_date {
             body["DueDate"] = serde_json::Value::String(due.format("%Y-%m-%d").to_string());
         }
-        body
+        Ok(body)
     }
 
     /// Build the Xero `RepeatingInvoices` PUT body. Pure. `ApprovedForSending`
@@ -701,6 +717,8 @@ impl XeroBillingProvider {
             "RepeatingInvoices": [{
                 "Type": "ACCREC",
                 "Status": "AUTHORISED",
+                "CurrencyCode": "USD",
+                "LineAmountTypes": "Exclusive",
                 "Reference": request.reference,
                 "Contact": { "ContactID": request.contact_id },
                 "Schedule": {
@@ -1012,6 +1030,7 @@ impl BillingProvider for XeroBillingProvider {
         matter_id: Uuid,
         request: &InvoiceRequest,
     ) -> Result<InvoiceId, BillingError> {
+        let body = self.build_invoice_body(request)?;
         let url = format!("{}/Invoices", self.base_url.trim_end_matches('/'));
         let resp = self
             .http
@@ -1024,7 +1043,7 @@ impl BillingProvider for XeroBillingProvider {
             // Callers persist results and reconcile uncertainty after expiry;
             // the provider key alone is not durable replay protection.
             .header("Idempotency-Key", matter_id.to_string())
-            .json(&self.build_invoice_body(request))
+            .json(&body)
             .send()
             .await
             .map_err(|e| BillingError::Provider(e.to_string()))?;
@@ -1367,7 +1386,7 @@ mod tests {
     use crate::xero_auth::XeroClientCredentials;
     use chrono::{TimeZone, Utc};
     use uuid::Uuid;
-    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::matchers::{body_partial_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const ID1: Uuid = Uuid::from_u128(1);
@@ -1377,6 +1396,7 @@ mod tests {
     /// A flat-fee estate matter: one line, billed once.
     fn estate_invoice() -> InvoiceRequest {
         InvoiceRequest {
+            contact_id: Some(ContactId("contact-estate".into())),
             contact_name: "Libra".into(),
             contact_email: "libra@example.com".into(),
             reference: "NL-ESTATE-0001".into(),
@@ -1396,11 +1416,14 @@ mod tests {
         let mut request = estate_invoice();
         assert!(xero("http://x".into())
             .build_invoice_body(&request)
+            .unwrap()
             .get("DueDate")
             .is_none());
         request.due_date = chrono::NaiveDate::from_ymd_opt(2026, 11, 3);
         assert_eq!(
-            xero("http://x".into()).build_invoice_body(&request)["DueDate"],
+            xero("http://x".into())
+                .build_invoice_body(&request)
+                .unwrap()["DueDate"],
             "2026-11-03"
         );
     }
@@ -1450,6 +1473,8 @@ mod tests {
         assert_eq!(invoice["Schedule"]["Unit"], "MONTHLY");
         assert_eq!(invoice["Schedule"]["StartDate"], "2027-10-20");
         assert_eq!(invoice["Contact"]["ContactID"], "contact-1");
+        assert_eq!(invoice["CurrencyCode"], "USD");
+        assert_eq!(invoice["LineAmountTypes"], "Exclusive");
         assert_eq!(invoice["ApprovedForSending"], true);
         assert_eq!(
             provider
@@ -1544,18 +1569,48 @@ mod tests {
 
     #[test]
     fn invoice_body_is_accrec_authorised_with_decimal_amount() {
-        let body =
-            xero("https://api.xero.com/api.xro/2.0".into()).build_invoice_body(&estate_invoice());
+        let body = xero("https://api.xero.com/api.xro/2.0".into())
+            .build_invoice_body(&estate_invoice())
+            .unwrap();
         assert_eq!(body["Type"], "ACCREC");
         assert_eq!(body["Status"], "AUTHORISED");
         assert_eq!(body["Reference"], "NL-ESTATE-0001");
-        assert_eq!(body["Contact"]["Name"], "Libra");
+        assert_eq!(
+            body["Contact"],
+            serde_json::json!({"ContactID": "contact-estate"})
+        );
+        assert_eq!(body["CurrencyCode"], "USD");
+        assert_eq!(body["LineAmountTypes"], "Exclusive");
         let lines = body["LineItems"].as_array().unwrap();
         assert_eq!(lines.len(), 1);
         // Money is a decimal string rendered from cents — never a float.
         assert_eq!(lines[0]["UnitAmount"], "3333.00");
         assert_eq!(lines[0]["Quantity"], 1);
         assert_eq!(lines[0]["AccountCode"], "200");
+    }
+
+    #[tokio::test]
+    async fn missing_resolved_contact_remains_readable_but_cannot_write_an_invoice() {
+        let server = MockServer::start().await;
+        let mut legacy = serde_json::to_value(estate_invoice()).unwrap();
+        legacy.as_object_mut().unwrap().remove("contact_id");
+        let mut request: InvoiceRequest = serde_json::from_value(legacy).unwrap();
+        assert_eq!(request.contact_id, None);
+        let provider = xero(server.uri());
+        assert!(provider.create_invoice(ID42, &request).await.is_err());
+        request.contact_id = Some(ContactId("  ".into()));
+        assert!(provider.create_invoice(ID42, &request).await.is_err());
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn invoice_contact_metadata_cannot_change_a_resolved_debtor() {
+        let provider = xero("http://unused".into());
+        let mut request = estate_invoice();
+        let original = provider.build_invoice_body(&request).unwrap();
+        request.contact_name = "Synthetic renamed contact".into();
+        request.contact_email = "renamed@example.com".into();
+        assert_eq!(provider.build_invoice_body(&request).unwrap(), original);
     }
 
     #[tokio::test]
@@ -1566,6 +1621,10 @@ mod tests {
             .and(header("authorization", "Bearer TOKEN"))
             .and(header("xero-tenant-id", "tenant-guid"))
             .and(header("idempotency-key", ID42.to_string().as_str()))
+            .and(body_partial_json(serde_json::json!({
+                "CurrencyCode": "USD", "LineAmountTypes": "Exclusive",
+                "Contact": {"ContactID": "contact-estate"},
+            })))
             .and(header("accept", "application/json"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "Invoices": [ { "InvoiceID": "inv-789", "Status": "AUTHORISED" } ],

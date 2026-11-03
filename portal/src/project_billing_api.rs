@@ -313,12 +313,17 @@ pub(crate) async fn generate_invoice(
     // entry cannot be written off and a reserved cost cannot be resolved or
     // re-confirmed, so nothing the lawyer removed can slip into the batch
     // while Xero is deciding.
-    provider
+    let contact = provider
         .ensure_contact(&billing::ContactRequest {
             name: party.name.clone(),
             email: party.email.clone(),
         })
         .await?;
+    if contact.0.trim().is_empty() {
+        return Err(
+            billing::BillingError::Provider("resolved invoice contact id missing".into()).into(),
+        );
+    }
     let entry_ids = entries.iter().map(|entry| entry.id).collect::<Vec<_>>();
     let cost_ids = unbilled_costs
         .iter()
@@ -335,6 +340,7 @@ pub(crate) async fn generate_invoice(
             reference: matter_reference(&project.code),
             contact_name: party.name.clone(),
             contact_email: party.email.clone(),
+            xero_contact_id: contact.0,
             first_attempted_at: None,
             line_items: serde_json::to_value(&compose.line_items)?,
             total_cents: compose.total_cents,
@@ -368,12 +374,6 @@ async fn invoice_for_batch(
     {
         return Err(InvoiceGenerationError::ReconciliationRequired);
     }
-    provider
-        .ensure_contact(&billing::ContactRequest {
-            name: batch.contact_name.clone(),
-            email: batch.contact_email.clone(),
-        })
-        .await?;
     let attempted = billing_batches::start_attempt(pg, batch.id, Utc::now()).await?;
     if let Some(saved) = attempted.xero_invoice_id {
         return Ok(billing::InvoiceId(saved));
@@ -393,6 +393,7 @@ async fn invoice_for_batch(
         provider.create_invoice(
             batch.id,
             &InvoiceRequest {
+                contact_id: Some(billing::ContactId(batch.xero_contact_id.clone())),
                 contact_name: batch.contact_name.clone(),
                 contact_email: batch.contact_email.clone(),
                 reference: batch.reference.clone(),

@@ -42,6 +42,8 @@ pub struct MatterBillingBatch {
     /// Frozen debtor details keep retries independent of later participation edits.
     pub contact_name: String,
     pub contact_email: String,
+    /// Resolved once before reservation; retries keep this exact debtor identity.
+    pub xero_contact_id: String,
     /// The first create attempt under this immutable batch idempotency key.
     pub first_attempted_at: Option<chrono::DateTime<chrono::Utc>>,
     /// The frozen composed request: the exact line items the provider call
@@ -70,6 +72,7 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<MatterBillingBatch, sqlx::Err
         reference: row.try_get("reference")?,
         contact_name: row.try_get("contact_name")?,
         contact_email: row.try_get("contact_email")?,
+        xero_contact_id: row.try_get("xero_contact_id")?,
         first_attempted_at: row.try_get("first_attempted_at")?,
         line_items: row.try_get("line_items")?,
         total_cents: row.try_get("total_cents")?,
@@ -108,8 +111,8 @@ async fn insert_in_tx(
     batch: &MatterBillingBatch,
 ) -> Result<MatterBillingBatch, BillingBatchError> {
     let row = sqlx::query(
-        "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,xero_invoice_id,flat_fee_cents,actor_id,inserted_at,updated_at,contact_name,contact_email,first_attempted_at) \
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *",
+        "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,xero_invoice_id,flat_fee_cents,actor_id,inserted_at,updated_at,contact_name,contact_email,first_attempted_at,xero_contact_id) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *",
     )
     .bind(batch.id)
     .bind(batch.project_id)
@@ -128,6 +131,7 @@ async fn insert_in_tx(
     .bind(&batch.contact_name)
     .bind(&batch.contact_email)
     .bind(batch.first_attempted_at)
+    .bind(&batch.xero_contact_id)
     .fetch_one(&mut **tx)
     .await
     .map_err(|error| {

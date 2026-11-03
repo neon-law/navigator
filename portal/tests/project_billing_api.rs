@@ -41,6 +41,8 @@ struct FlakyProvider {
     inner: Arc<StubBillingProvider>,
     fail_next: Arc<Mutex<bool>>,
     create_calls: Arc<Mutex<Vec<Uuid>>>,
+    create_requests: Arc<Mutex<Vec<InvoiceRequest>>>,
+    contact_override: Arc<Mutex<Option<String>>>,
 }
 
 impl FlakyProvider {
@@ -56,7 +58,13 @@ impl FlakyProvider {
 #[async_trait::async_trait]
 impl BillingProvider for FlakyProvider {
     async fn ensure_contact(&self, request: &ContactRequest) -> Result<ContactId, BillingError> {
-        self.inner.ensure_contact(request).await
+        let resolved = self.inner.ensure_contact(request).await?;
+        Ok(self
+            .contact_override
+            .lock()
+            .unwrap()
+            .clone()
+            .map_or(resolved, ContactId))
     }
 
     async fn create_invoice(
@@ -65,6 +73,7 @@ impl BillingProvider for FlakyProvider {
         request: &InvoiceRequest,
     ) -> Result<InvoiceId, BillingError> {
         self.create_calls.lock().unwrap().push(matter_id);
+        self.create_requests.lock().unwrap().push(request.clone());
         let failing = {
             let mut next = self.fail_next.lock().unwrap();
             std::mem::take(&mut *next)
@@ -672,6 +681,8 @@ async fn run_refusal_and_retry() {
         .await
         .expect("the refused generation keeps its pending batch");
     assert_eq!(batch.total_cents, 20_000);
+    let contacts = fixture.provider.inner.contact_calls().len();
+    *fixture.provider.contact_override.lock().unwrap() = Some("synthetic-changed-contact".into());
 
     // A reserved entry cannot be written off while its batch is pending:
     // the work the provider will bill cannot be removed behind its back.
@@ -718,6 +729,7 @@ async fn run_refusal_and_retry() {
     // matter key.
     let keys = fixture.provider.create_keys();
     assert_eq!(keys, vec![batch.id, batch.id]);
+    assert_frozen_debtor_request(&fixture, &batch, contacts);
     assert_eq!(
         fixture.provider.inner.calls()[0].request.contact_email,
         batch.contact_email
@@ -760,6 +772,27 @@ async fn uncertain_invoices_require_reconciliation_and_a_consumed_fee_cannot_rac
         .unwrap();
     remove_isolated_database(&port, &database).await;
     assert!(status.success());
+}
+
+fn assert_frozen_debtor_request(
+    fixture: &Fixture,
+    batch: &store::billing_batches::MatterBillingBatch,
+    contacts: usize,
+) {
+    assert_eq!(
+        fixture.provider.inner.contact_calls().len(),
+        contacts,
+        "retry never resolves a new contact"
+    );
+    let requests = fixture.provider.create_requests.lock().unwrap().clone();
+    assert_eq!(
+        requests[0], requests[1],
+        "the same key carries the exact frozen request"
+    );
+    assert_eq!(
+        requests[0].contact_id.as_ref().unwrap().0,
+        batch.xero_contact_id
+    );
 }
 
 async fn run_recovery_safety() {
@@ -1180,6 +1213,16 @@ async fn run_noop() {
     )
     .unwrap();
     assert_eq!(body["reason"], json!("nothing_to_invoice"));
+    let unresolved = seed_entry(&fixture, 60, "Synthetic unresolved contact").await;
+    *fixture.provider.contact_override.lock().unwrap() = Some("  ".into());
+    assert_eq!(
+        generate(&fixture.app, &fixture).await.status(),
+        StatusCode::BAD_GATEWAY
+    );
+    assert_eq!(
+        time_entry_status(&fixture.pg, unresolved.id).await,
+        "unbilled"
+    );
     assert!(fixture.provider.create_keys().is_empty());
     assert!(pending_batch(&fixture.pg, fixture.project_id)
         .await

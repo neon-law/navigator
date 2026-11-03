@@ -10,8 +10,9 @@
 //!   other door does not earn it.
 //! - **Buy.** Every other Offering, and the consultation for everyone else,
 //!   is bought: [`buy`] records the Purchase durably, then raises an
-//!   `AUTHORISED` Xero invoice keyed on the Purchase id, so a retry never
-//!   raises a second one. Xero emails it and collects payment.
+//!   `AUTHORISED` Xero invoice keyed on the Purchase id. Once its identifier
+//!   is recorded, retries reuse that invoice. The Client pays through
+//!   Xero's online invoice page.
 //! - **Active.** [`activate_if_paid`] turns the Purchase on once Xero reports
 //!   the invoice `PAID`. A subscription's renewals are then handed to a Xero
 //!   repeating invoice that Xero raises and emails itself. The DBOS
@@ -19,9 +20,9 @@
 //!   also runs it for the viewer's own open invoices, so a Client who has
 //!   just paid sees the result on reload.
 //!
-//! Navigator raises no other invoice: lawyers bill matters in Xero. This is
-//! the one self-serve door, and it bills only what the Client chose to buy at
-//! the published price.
+//! Lawyers generate matter invoices through the Project invoice command.
+//! This module owns self-serve purchases and bills the Client's selected
+//! Offering at its published price.
 
 use std::sync::Arc;
 
@@ -131,6 +132,10 @@ pub enum BuyError {
 ///
 /// # Errors
 /// [`BuyError`] when the store or Xero refuses.
+///
+/// An interrupted open Purchase does not yet persist a first-attempt time.
+/// A crash after provider creation but before recording its id can outlive
+/// provider-key retention; durable recovery for that legacy path is separate.
 pub async fn buy(
     pg: &PostgresDb,
     billing: &dyn billing::BillingProvider,
@@ -152,6 +157,7 @@ pub async fn buy(
         .create_invoice(
             purchase.id,
             &billing::InvoiceRequest {
+                contact_id: Some(contact.clone()),
                 contact_name: person.name.clone(),
                 contact_email: person.email.clone(),
                 reference: reference(&purchase),
@@ -160,7 +166,7 @@ pub async fn buy(
             },
         )
         .await?;
-    // The payment page is a convenience: Xero emails the invoice either way.
+    // The online invoice page lets the Client view the issued invoice and pay.
     let url = match billing.online_invoice_url(&invoice.0).await {
         Ok(url) => url,
         Err(error) => {

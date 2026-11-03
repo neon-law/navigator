@@ -15,6 +15,7 @@ CREATE TABLE matter_billing_batch (
     reference TEXT NOT NULL CHECK (length(btrim(reference)) BETWEEN 1 AND 200),
     contact_name TEXT NOT NULL CHECK (length(btrim(contact_name)) > 0),
     contact_email TEXT NOT NULL CHECK (length(btrim(contact_email)) > 0),
+    xero_contact_id TEXT NOT NULL CHECK (length(btrim(xero_contact_id)) > 0),
     first_attempted_at TIMESTAMPTZ,
     line_items JSONB NOT NULL,
     total_cents BIGINT NOT NULL CHECK (total_cents > 0),
