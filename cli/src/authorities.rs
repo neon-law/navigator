@@ -295,7 +295,7 @@ pub async fn update(
 
 #[cfg(test)]
 mod tests {
-    use super::{create, first_line, update};
+    use super::{create, create_authority, first_line, update, NewAuthorityArgs};
     use crate::credentials::{self, Credentials, HostCredential};
     use std::process::ExitCode;
     use std::sync::LazyLock;
@@ -604,5 +604,59 @@ mod tests {
         .await;
 
         assert_eq!(exit_code, ExitCode::from(2));
+    }
+
+    /// The refusal's text is as small as its exit code: the message names
+    /// the status and the body's first line only, never the remaining lines
+    /// of the HTML error page.
+    #[tokio::test(flavor = "current_thread")]
+    async fn create_authority_names_the_status_and_only_the_first_line() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::logged_in(&server_uri);
+        Mock::given(method("POST"))
+            .and(path("/app/api/authorities"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string(
+                    "<html>\r\n  <body>lawyer tier required</body>\r\n</html>\r\n",
+                ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("opinion.pdf");
+        std::fs::write(&file, b"synthetic opinion bytes").unwrap();
+        let args = NewAuthorityArgs {
+            class: "case_law",
+            citation: "410 U.S. 113 (1973)",
+            title: "Roe v. Wade",
+            short_cite: None,
+            publisher: None,
+            issued_on: None,
+            canonical_url: None,
+            checked_on: None,
+            file: &file,
+            content_type: None,
+        };
+
+        let error = create_authority(Some(server_uri.as_str()), &args)
+            .await
+            .expect_err("a refused write surfaces as an error, not a parse");
+        let message = format!("{error:#}");
+
+        assert!(
+            message.contains("authority create failed: 500 Internal Server Error"),
+            "the message must name the refusing status, got: {message}"
+        );
+        assert!(
+            message.contains("<html>"),
+            "the message must carry the body's first line, got: {message}"
+        );
+        assert!(
+            !message.contains("lawyer tier required") && !message.contains("</body>"),
+            "the message must stop at the first line, got: {message}"
+        );
     }
 }
