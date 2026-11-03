@@ -150,6 +150,19 @@ pub(crate) async fn process(
     // unparseable notice, no case number) keeps the message in the backlog
     // through the recorded `nef_outcome`.
     let nef_outcome = if decision.route == crate::inbound_email::InboxRoute::Nef {
+        if let Some(project_id) = context.row.project_id {
+            let viewer = store::access::matter_viewer(
+                &state.surreal,
+                session.person_id,
+                session.role,
+                project_id,
+            )
+            .await
+            .map_err(ApiError::Db)?;
+            if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
+                return Err(ApiError::NotFound);
+            }
+        }
         let outcome = crate::nef_pipeline::process_nef(&state, &context.row).await?;
         let spelling = outcome.spelling();
         Some((outcome, spelling))

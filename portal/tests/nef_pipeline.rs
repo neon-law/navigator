@@ -82,7 +82,7 @@ async fn fixture() -> Fixture {
 }
 
 async fn seed_matter(db: &SurrealDb, firm_id: Uuid, code: &str) -> Uuid {
-    store::projects::create(
+    let project = store::projects::create(
         db,
         &store::projects::NewProject {
             code: code.into(),
@@ -93,8 +93,20 @@ async fn seed_matter(db: &SurrealDb, firm_id: Uuid, code: &str) -> Uuid {
         },
     )
     .await
-    .expect("seed the synthetic matter")
-    .id
+    .expect("seed the synthetic matter");
+    let lawyer = store::persons::find_by_email_ci(db, "synthetic-lawyer@example.com")
+        .await
+        .expect("read fixture lawyer")
+        .expect("fixture lawyer exists");
+    store::projects::add_participation(
+        db,
+        project.id,
+        lawyer.id,
+        store::projects::participation_for_role(lawyer.role),
+    )
+    .await
+    .expect("enroll fixture lawyer on matter");
+    project.id
 }
 
 /// Open an email conversation with one inbound hop whose raw `.eml` sits in
@@ -529,4 +541,49 @@ async fn a_notice_without_a_document_number_files_only_the_original() {
         docket.is_empty(),
         "a notice with no document number records nothing on the docket"
     );
+}
+
+#[tokio::test]
+async fn firm_membership_without_matter_participation_cannot_file_a_notice() {
+    let fixture = fixture().await;
+    let project_id = seed_matter(&fixture.surreal, fixture.firm_id, "syn-nef-auth").await;
+    let participation = store::projects::participation_for_person(
+        &fixture.surreal,
+        fixture.lawyer_session.person_id.unwrap(),
+        project_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    store::projects::remove_participation(&fixture.surreal, participation.id)
+        .await
+        .unwrap();
+    let raw = district_notice();
+    let message = seed_notice(
+        &fixture,
+        Some(project_id),
+        Some(("inbound/denied.eml", &raw)),
+        "This is an automatic email message from the CM/ECF system.",
+        Vec::new(),
+    )
+    .await;
+    let (status, _) = request(
+        &fixture.app,
+        "POST",
+        "/app/api/inbox/process",
+        Some(&fixture.lawyer_session),
+        Some(json!({"message": message, "apply": true})),
+    )
+    .await;
+    assert_eq!(status, 404);
+    assert!(store::cases::for_project(&fixture.surreal, project_id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(store::inbox::process_state(&fixture.surreal, message)
+        .await
+        .unwrap()
+        .unwrap()
+        .processed_at
+        .is_none());
 }
