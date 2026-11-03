@@ -1297,3 +1297,163 @@ fn render_failures_do_not_echo_cli_values() {
     assert!(!source.contains("navigator: read {}: {e}\", file.display()"));
     assert!(!source.contains("output extension must be `.{output_extension}`"));
 }
+
+// --- The Project's Brand frames the letterhead (LAW-265) -------------------
+
+/// A compiled Brand other than the default, chosen from the registry rather
+/// than named here, so the test follows the registry wherever it moves.
+fn other_brand() -> views::brand::BrandKey {
+    views::brand::BrandKey::ALL
+        .iter()
+        .copied()
+        .find(|key| *key != views::brand::BrandKey::Neon && key.apex().is_some())
+        .expect("the registry carries a Brand besides the default")
+}
+
+/// A letter template inside a Project whose `navigator.yaml` carries
+/// `project_fields` beneath `project:`.
+fn letter_in_project(work: &TempDir, project_fields: &str) -> std::path::PathBuf {
+    fs::write(
+        work.path().join("navigator.yaml"),
+        format!("version: v26.10.6\nproject:\n  name: acme\n{project_fields}"),
+    )
+    .unwrap();
+    write(work, "demand.md", VALID)
+}
+
+/// The first-page header of a Word letter rendered from `src`.
+fn word_letterhead(work: &TempDir, src: &std::path::Path) -> String {
+    let out = work.path().join("demand.docx");
+    let result = render_word(&[
+        "--preview".as_ref(),
+        src.as_os_str(),
+        "--out".as_ref(),
+        out.as_os_str(),
+    ]);
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    docx_part(&fs::read(&out).unwrap(), "word/header2.xml")
+}
+
+#[test]
+fn a_project_host_frames_the_letter_with_that_brands_letterhead() {
+    let key = other_brand();
+    let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+    let work = TempDir::new().unwrap();
+    let src = letter_in_project(&work, &format!("  host: {}\n", key.hosts()[1]));
+
+    let header = word_letterhead(&work, &src);
+
+    assert!(
+        header.contains(&branding.firm.site_name.to_uppercase()),
+        "the wordmark is the Brand's display name: {header}"
+    );
+    let apex = key.apex().unwrap();
+    assert!(
+        header.contains(&format!("contact@{apex}")),
+        "the letter reads contact@ the Brand's domain: {header}"
+    );
+    assert!(
+        header.contains(&branding.firm.legal_entity.replace('&', "&amp;")),
+        "the letterhead names the Firm: {header}"
+    );
+    assert!(
+        !header.contains("NEON LAW") && !header.contains("contact@neonlaw.com"),
+        "no default letterhead on another Brand's letter: {header}"
+    );
+}
+
+#[test]
+fn a_declared_project_brand_wins_over_the_host() {
+    let key = other_brand();
+    let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+    let neon_host = views::brand::BrandKey::Neon.hosts()[1];
+    let work = TempDir::new().unwrap();
+    let src = letter_in_project(
+        &work,
+        &format!(
+            "  host: {neon_host}\n  firm: 00000000-0000-0000-0000-000000000001\n  brand: {}\n",
+            key.as_str()
+        ),
+    );
+
+    let header = word_letterhead(&work, &src);
+
+    assert!(
+        header.contains(&branding.firm.site_name.to_uppercase()),
+        "project.brand picks the letterhead: {header}"
+    );
+}
+
+#[test]
+fn a_host_with_no_brand_is_refused_rather_than_framed_as_the_default() {
+    let work = TempDir::new().unwrap();
+    let src = letter_in_project(&work, "  host: navigator.example.test\n");
+    let out = work.path().join("demand.pdf");
+
+    let result = render_pdf(&[
+        "--preview".as_ref(),
+        src.as_os_str(),
+        "--out".as_ref(),
+        out.as_os_str(),
+    ]);
+
+    assert!(!result.status.success(), "an unknown host must not render");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("navigator.example.test"),
+        "the refusal names the host: {stderr}"
+    );
+    assert!(
+        !out.exists(),
+        "no letter is written on a guessed letterhead"
+    );
+}
+
+#[test]
+fn an_unknown_project_brand_is_refused() {
+    let work = TempDir::new().unwrap();
+    let src = letter_in_project(
+        &work,
+        "  host: navigator.example.test\n  firm: 00000000-0000-0000-0000-000000000001\n  brand: sample-brand\n",
+    );
+    let out = work.path().join("demand.docx");
+
+    let result = render_word(&[
+        "--preview".as_ref(),
+        src.as_os_str(),
+        "--out".as_ref(),
+        out.as_os_str(),
+    ]);
+
+    assert!(!result.status.success(), "an unknown brand must not render");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("sample-brand"), "names the brand: {stderr}");
+    assert!(!out.exists());
+}
+
+#[test]
+fn a_plain_document_in_a_project_needs_no_brand() {
+    let work = TempDir::new().unwrap();
+    fs::write(
+        work.path().join("navigator.yaml"),
+        "version: v26.10.6\nproject:\n  name: acme\n  host: navigator.example.test\n",
+    )
+    .unwrap();
+    let src = write(&work, "will.md", VALID_WILL_NO_OUTPUT);
+    let out = work.path().join("will.pdf");
+    let result = render_pdf(&[
+        "--preview".as_ref(),
+        src.as_os_str(),
+        "--out".as_ref(),
+        out.as_os_str(),
+    ]);
+    assert!(
+        result.status.success(),
+        "a frame with no letterhead reads no Brand: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
