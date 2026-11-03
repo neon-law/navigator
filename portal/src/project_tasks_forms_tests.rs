@@ -6,7 +6,7 @@ use store::persons::{NewPerson, Role};
 #[tokio::test]
 async fn native_task_actions_cannot_change_a_different_matter() {
     if std::env::var("NAV_TASK_FORM_CHILD").as_deref() == Ok("1") {
-        cross_matter_actions().await;
+        Box::pin(cross_matter_actions()).await;
         return;
     }
     let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
