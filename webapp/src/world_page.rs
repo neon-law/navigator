@@ -250,11 +250,11 @@ impl BirthEntry {
 fn resolve_person(position: usize, entry: &BirthEntry) -> PersonOutcome {
     use chrono::{Datelike, NaiveDate};
 
+    const MAX_PLACE_CHARS: usize = 256;
     let display_name = entry.display_name(position);
 
     // Bound edit-distance work before either country or city lookup. The
     // offline index compares an unknown place against many bundled names.
-    const MAX_PLACE_CHARS: usize = 256;
     for (label, value) in [
         ("Birth city", &entry.city),
         ("Birth country", &entry.country),

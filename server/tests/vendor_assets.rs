@@ -239,7 +239,7 @@ fn every_graph_renderer_asset_is_pinned() {
 /// in that directory ships from `maplibre-gl` and must be pinned.
 const MAPLIBRE_FIRST_PARTY: &[&str] = &["vesta-style.json"];
 
-/// The MapLibre exception admits exactly the pinned 6.16.0 dist — main
+/// The `MapLibre` exception admits exactly the pinned 6.16.0 dist — main
 /// bundle, its same-origin module worker, the stylesheet, the license — and
 /// waives only [`MAPLIBRE_FIRST_PARTY`]. A refresh that drops in the
 /// unreferenced `maplibre-gl-shared.mjs` stub or any other dist file without
