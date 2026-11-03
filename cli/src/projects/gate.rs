@@ -25,8 +25,24 @@ pub(crate) fn ci_flag_refusal(ci: bool, ci_env: Option<&str>) -> Option<&'static
     )
 }
 
+/// Refuse local repairs when declared ownership cannot be verified.
+pub(crate) async fn ownership_preflight(dir: &Path, ci: bool) -> ExitCode {
+    if ci || !super::repository::is_project_repository(dir) {
+        return ExitCode::SUCCESS;
+    }
+    match check_ownership_before_fixes(dir).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!(
+                "navigator: live Project ownership check is inconclusive or disagrees: {error:#}"
+            );
+            ExitCode::from(1)
+        }
+    }
+}
+
 /// Check declared ownership before a local gate may rewrite checkout files.
-pub(crate) async fn check_ownership_before_fixes(dir: &Path) -> Result<()> {
+async fn check_ownership_before_fixes(dir: &Path) -> Result<()> {
     let manifest = manifest::read(dir).ok_or_else(|| anyhow!("cannot parse navigator.yaml"))?;
     if manifest.firm.is_none() && manifest.brand.is_none() {
         return Ok(());

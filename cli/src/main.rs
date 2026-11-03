@@ -7428,13 +7428,9 @@ async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
         return run_document_check_gate(dir, ci, deep).await;
     }
 
-    if !ci && is_project_repository(dir) {
-        if let Err(error) = projects::gate::check_ownership_before_fixes(dir).await {
-            eprintln!(
-                "navigator: live Project ownership check is inconclusive or disagrees: {error:#}"
-            );
-            return ExitCode::from(1);
-        }
+    let ownership = projects::gate::ownership_preflight(dir, ci).await;
+    if ownership != ExitCode::SUCCESS {
+        return ownership;
     }
 
     eprintln!("navigator project gate: markdown content");
