@@ -16,7 +16,9 @@
 //! One test drives both modes because the bundle directory is a
 //! process-global environment variable; mutating it between assertions is
 //! safe under nextest's process-per-test isolation and race-free under any
-//! runner when only one test mutates it.
+//! runner when only one test mutates it. The router propagates the override
+//! to dioxus-server's `DIOXUS_PUBLIC_PATH` template knob, so this test
+//! cleans that variable up too.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -25,11 +27,14 @@ use tower::ServiceExt;
 
 /// A minimal, CDN-free bundle `index.html`: enough for `dioxus-server` to
 /// parse a template with the `main` mount point and render the component
-/// into it — the same fixture the `/dioxus-demo` mount test uses.
+/// into it — the same fixture the `/dioxus-demo` mount test uses. The
+/// `data-fixture` marker and the glue `<script>` reference are what the
+/// template-follows-the-override assertion keys off.
 const INDEX_HTML: &str = "<!DOCTYPE html>\n\
-<html lang=\"en\"><head><meta charset=\"UTF-8\" />\
-<title>Nautilus</title></head>\
-<body><div id=\"main\"></div></body></html>\n";
+<html lang=\"en\"><head><meta charset=\"UTF-8\" />\n\
+<title>Nautilus</title>\n\
+<script type=\"module\" src=\"/assets/nautilus-preview.js\"></script></head>\n\
+<body><div id=\"main\" data-fixture=\"nautilus-bundle\"></div></body></html>\n";
 
 /// The wasm-bindgen glue a real `dx` build of `nautilus-preview` ships,
 /// named for the crate the way `dx` names the webapp bundle's for `webapp`.
@@ -64,6 +69,7 @@ async fn get(router: axum::Router, uri: &str) -> axum::response::Response {
 async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bundle() {
     // ── Degraded mode: no staged bundle ──
     std::env::remove_var("NAUTILUS_DIOXUS_PUBLIC_PATH");
+    std::env::remove_var("DIOXUS_PUBLIC_PATH");
     let router = portal::dioxus_app::nautilus_preview_router();
 
     let response = get(router, portal::dioxus_app::NAUTILUS_PREVIEW_PATH).await;
@@ -80,6 +86,10 @@ async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bun
     assert!(
         html.contains(r#"data-mobile-nav="dyd""#),
         "the navigation hook the native shell taps must be in the SSR markup: {html}"
+    );
+    assert!(
+        html.contains("data-nautilus-preview-banner"),
+        "the degraded page itself must carry the local-render notice: {html}"
     );
 
     // Degraded means SSR-only: with no bundle mounted there is no wasm to
@@ -126,6 +136,19 @@ async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bun
         html.contains(r#"data-mobile-nav="dyd""#) && html.contains("Nautilus"),
         "the shell renders identically with a bundle staged: {html}"
     );
+    // The template — not just the assets — follows the override: the served
+    // document is the staged bundle's own index.html, carrying its root
+    // markup and loader reference. This is the contract that breaks when the
+    // router points only the assets mount at the override.
+    assert!(
+        html.contains(r#"data-fixture="nautilus-bundle""#)
+            && html.contains(r#"src="/assets/nautilus-preview.js""#),
+        "the staged bundle's own index.html is the served template: {html}"
+    );
+    assert!(
+        html.contains("data-nautilus-preview-banner"),
+        "the hydrated page itself must carry the local-render notice: {html}"
+    );
 
     // The staged bundle's wasm and glue are served at the paths its own
     // index.html references — what turns the SSR shell into a hydrated app.
@@ -143,4 +166,5 @@ async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bun
     );
 
     std::env::remove_var("NAUTILUS_DIOXUS_PUBLIC_PATH");
+    std::env::remove_var("DIOXUS_PUBLIC_PATH");
 }

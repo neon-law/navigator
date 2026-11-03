@@ -8,7 +8,7 @@
 //! exact composition the portal's hydration mechanics exist for. Shaped like
 //! the `navigator notation preview` offline lint: a provenance banner that
 //! never lets the render masquerade as the Project's portal, an honest
-//! degraded mode when no bundle is staged, and Ctrl-C to stop.
+//! degraded mode when no bundle is staged, and Ctrl-C or SIGTERM to stop.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
@@ -32,22 +32,15 @@ pub enum NautilusCmd {
     },
 }
 
-/// The environment variable `dioxus-server`'s `ServeConfig::new` reads for
-/// the client bundle's `index.html` template. Set from the staged Nautilus
-/// bundle before the router is built, so the served document carries that
-/// bundle's hydration bootstrap rather than some other bundle's.
-const PUBLIC_PATH_ENV: &str = "DIOXUS_PUBLIC_PATH";
-
 /// `navigator nautilus preview`: serve the mobile shell on one localhost
 /// listener until the process is interrupted. `port` `0` asks the OS for a
 /// free one, so several previews can run at once.
 pub async fn run(port: u16) -> Result<()> {
+    // Set before the router is built: the portal router resolves the staged
+    // bundle root from this variable for the assets mount and points
+    // dioxus-server's template knob at the same directory.
     let bundle = staged_bundle_dir();
     if let Some(dir) = &bundle {
-        // Safe on this edition, and set before the router is built because
-        // `ServeConfig::new` reads the index template exactly once, at
-        // construction.
-        std::env::set_var(PUBLIC_PATH_ENV, dir);
         std::env::set_var(STAGED_BUNDLE_ENV, dir);
     }
 
@@ -61,12 +54,10 @@ pub async fn run(port: u16) -> Result<()> {
         eprintln!("{line}");
     }
     eprintln!("==> http://{bound}/");
-    eprintln!("    Ctrl-C to stop.");
+    eprintln!("    Ctrl-C or SIGTERM to stop.");
 
     axum::serve(listener, router())
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(portal::hosting::shutdown_signal())
         .await
         .context("serving the Nautilus preview")?;
     Ok(())

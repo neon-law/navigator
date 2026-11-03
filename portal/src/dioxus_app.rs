@@ -190,6 +190,44 @@ fn nautilus_bundle_dir() -> Option<PathBuf> {
     dir.join("index.html").is_file().then_some(dir)
 }
 
+/// dioxus-server's only template knob: `ServeConfig::new` picks the served
+/// document's `index.html` out of this environment path, read once at
+/// construction. The preview's bundle override must reach it — a template
+/// from some other bundle would bootstrap the wrong wasm.
+const DIOXUS_PUBLIC_PATH_ENV: &str = "DIOXUS_PUBLIC_PATH";
+
+/// The Nautilus preview's browser-visible provenance notice. The terminal
+/// banner cannot reach a browser tab, and the served page itself must say it
+/// is a local render — with or without a staged bundle, and across the
+/// shell's client-side navigation, which is why the notice sits outside the
+/// hydrated root.
+const NAUTILUS_PREVIEW_BANNER: &str = "<div data-nautilus-preview-banner style=\"position:fixed;bottom:0;left:0;right:0;z-index:2147483647;padding:6px 12px;background:#101020;color:#e8e8f0;font:500 12px/1.4 sans-serif;text-align:center\">Nautilus preview — a local render, not the Project's portal.</div>";
+
+/// Layers the provenance notice onto the preview's HTML responses, outside
+/// [`dioxus_document_head`] so it marks the document after every other
+/// head-level rewrite.
+pub(crate) async fn preview_provenance_notice(req: Request, next: Next) -> Response {
+    let response = next.run(req).await;
+    let is_html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|content_type| content_type.starts_with("text/html"));
+    if !is_html {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    // A render that errors mid-stream or overruns the buffer is a real
+    // failure, not a page missing its notice: surface it as a 500.
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_RENDER_BYTES).await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let html = open_with_banner(&String::from_utf8_lossy(&bytes), NAUTILUS_PREVIEW_BANNER);
+    // The body length changed; drop any stale content-length so axum recomputes.
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, Body::from(html))
+}
+
 /// The Nautilus mobile-shell preview router — the hydration mechanics for
 /// `navigator nautilus preview`, owned here as for every other Dioxus page:
 /// a server-side render of [`webapp::mobile::MobileApp`] at
@@ -200,16 +238,29 @@ fn nautilus_bundle_dir() -> Option<PathBuf> {
 /// glue are served alongside it, layered on with the same
 /// [`bundle_assets_router`] shape the `/dioxus-demo` mount uses.
 pub fn nautilus_preview_router() -> Router {
+    // One bundle root drives both the hydration template and the assets:
+    // the documented override reaches dioxus-server's template knob here,
+    // at the router, so pointing `NAUTILUS_DIOXUS_PUBLIC_PATH` at a staged
+    // bundle is the whole contract — callers need not know dioxus-server's
+    // internals to serve a hydrated page.
+    let bundle = nautilus_bundle_dir();
+    if let Some(dir) = &bundle {
+        // Safe on this edition, and read once below at `ServeConfig::new`:
+        // one server process builds one preview router.
+        std::env::set_var(DIOXUS_PUBLIC_PATH_ENV, dir);
+    }
     let mut router = Router::<FullstackState>::new()
         .route(
             NAUTILUS_PREVIEW_PATH,
-            get(render_handler).layer(from_fn(dioxus_document_head)),
+            get(render_handler)
+                .layer(from_fn(dioxus_document_head))
+                .layer(from_fn(preview_provenance_notice)),
         )
         .with_state(FullstackState::new(
             ServeConfig::new(),
             webapp::mobile::MobileApp,
         ));
-    if let Some(dir) = nautilus_bundle_dir() {
+    if let Some(dir) = bundle {
         router = router.merge(bundle_assets_router(&dir));
     }
     router
