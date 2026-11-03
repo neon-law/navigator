@@ -803,11 +803,14 @@ async fn run_recovery_safety() {
     assert_eq!(reason["reason"], "invoice_reconciliation_required");
     assert_eq!(fixture.provider.create_keys(), vec![batch.id]);
 
+    // Model a first attachment just after UTC midnight; Xero's organisation
+    // can still report the previous calendar day as its invoice date.
     // Reconciliation found the real invoice. A mirrored but unsettled batch
     // contributes outstanding balance, never that same work to WIP as well.
     store::billing_batches::attach_invoice(&fixture.pg, batch.id, "synthetic-recovered")
         .await
         .unwrap();
+    simulate_attachment_after_utc_midnight(&fixture, batch.id).await;
     store::xero_invoices::upsert(
         &fixture.surreal,
         &store::xero_invoices::UpsertXeroInvoice {
@@ -868,6 +871,79 @@ async fn run_recovery_safety() {
     assert_voided_invoice_remains_reserved().await;
 }
 
+async fn simulate_attachment_after_utc_midnight(fixture: &Fixture, batch_id: Uuid) {
+    sqlx::query("UPDATE matter_billing_batch SET updated_at=$2 WHERE id=$1")
+        .bind(batch_id)
+        .bind(provider_date(22) + chrono::Duration::minutes(5))
+        .execute(fixture.pg.pool())
+        .await
+        .unwrap();
+}
+
+fn provider_date(day: u32) -> chrono::DateTime<chrono::Utc> {
+    NaiveDate::from_ymd_opt(2026, 10, day)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+}
+
+async fn assert_missing_provider_date_preserves_mirror(fixture: &Fixture) {
+    fixture.provider.inner.set_invoice_status(
+        "synthetic-recovered",
+        InvoiceStatus {
+            status: "AUTHORISED".into(),
+            amount_paid_cents: 20_000,
+            amount_cents: Some(90_000),
+            currency: Some("USD".into()),
+            issued_at: None,
+            due_at: None,
+        },
+    );
+    let before = mirror_rows(&fixture.surreal, fixture.project_id).await;
+    assert_eq!(
+        generate(&fixture.app, fixture).await.status(),
+        StatusCode::BAD_GATEWAY
+    );
+    let after = mirror_rows(&fixture.surreal, fixture.project_id).await;
+    assert_eq!(after[0].amount_cents, before[0].amount_cents);
+    assert_eq!(after[0].issued_at, before[0].issued_at);
+    assert_eq!(after[0].due_at, before[0].due_at);
+}
+
+async fn assert_earlier_provider_date_preserves_work(fixture: &Fixture) {
+    fixture.provider.inner.set_invoice_status(
+        "synthetic-recovered",
+        InvoiceStatus {
+            status: "AUTHORISED".into(),
+            amount_paid_cents: 20_000,
+            amount_cents: Some(90_000),
+            currency: Some("USD".into()),
+            issued_at: Some(provider_date(17)),
+            due_at: None,
+        },
+    );
+    let batch = pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        generate(&fixture.app, fixture).await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        time_entry_status(&fixture.pg, batch.entry_ids[0]).await,
+        "reserved"
+    );
+    assert_eq!(
+        cost_status(&fixture.pg, fixture.project_id, batch.cost_ids[0]).await,
+        "reserved"
+    );
+    assert_eq!(
+        mirror_rows(&fixture.surreal, fixture.project_id).await[0].issued_at,
+        provider_date(17)
+    );
+}
+
 async fn settle_with_corrected_provider_financials(fixture: &Fixture) {
     // A missing financial snapshot cannot silently restore the request total.
     assert_eq!(
@@ -878,6 +954,8 @@ async fn settle_with_corrected_provider_financials(fixture: &Fixture) {
         mirror_rows(&fixture.surreal, fixture.project_id).await[0].amount_cents,
         105_000
     );
+    assert_missing_provider_date_preserves_mirror(fixture).await;
+    assert_earlier_provider_date_preserves_work(fixture).await;
     // A currency correction is mirrored, but cannot consume USD work.
     fixture.provider.inner.set_invoice_status(
         "synthetic-recovered",
@@ -886,6 +964,8 @@ async fn settle_with_corrected_provider_financials(fixture: &Fixture) {
             amount_paid_cents: 20_000,
             amount_cents: Some(90_000),
             currency: Some("EUR".into()),
+            issued_at: Some(provider_date(20)),
+            due_at: Some(provider_date(31)),
         },
     );
     assert_eq!(
@@ -895,6 +975,8 @@ async fn settle_with_corrected_provider_financials(fixture: &Fixture) {
     let corrected = mirror_rows(&fixture.surreal, fixture.project_id).await;
     assert_eq!(corrected[0].amount_cents, 90_000);
     assert_eq!(corrected[0].currency, "EUR");
+    assert_eq!(corrected[0].issued_at, provider_date(20));
+    assert_eq!(corrected[0].due_at, Some(provider_date(31)));
     assert!(pending_batch(&fixture.pg, fixture.project_id)
         .await
         .is_some());
@@ -905,13 +987,20 @@ async fn settle_with_corrected_provider_financials(fixture: &Fixture) {
             amount_paid_cents: 20_000,
             amount_cents: Some(90_000),
             currency: Some("USD".into()),
+            issued_at: Some(provider_date(21)),
+            due_at: None,
         },
     );
-    settle_without_current_billed_party(fixture).await;
+    settle_without_current_billed_party(fixture, provider_date(21)).await;
     let corrected = mirror_rows(&fixture.surreal, fixture.project_id).await;
     assert_eq!(corrected[0].amount_cents, 90_000);
     assert_eq!(corrected[0].amount_paid_cents, 20_000);
     assert_eq!(corrected[0].currency, "USD");
+    assert_eq!(corrected[0].issued_at, provider_date(21));
+    assert_eq!(
+        corrected[0].due_at, None,
+        "cleared provider due date stays cleared"
+    );
     assert_eq!(
         store::matter_financials::outstanding_cents(&corrected),
         70_000
@@ -929,7 +1018,10 @@ async fn remove_client_participation(fixture: &Fixture) {
     }
 }
 
-async fn settle_without_current_billed_party(fixture: &Fixture) {
+async fn settle_without_current_billed_party(
+    fixture: &Fixture,
+    issued_at: chrono::DateTime<chrono::Utc>,
+) {
     remove_client_participation(fixture).await;
     let contacts = fixture.provider.inner.contact_calls().len();
     let before = pending_batch(&fixture.pg, fixture.project_id)
@@ -949,7 +1041,6 @@ async fn settle_without_current_billed_party(fixture: &Fixture) {
             .is_err(),
         "a saved provider invoice cannot be replaced"
     );
-    let issued_at = mirror_rows(&fixture.surreal, fixture.project_id).await[0].issued_at;
     assert_eq!(
         generate(&fixture.app, fixture).await.status(),
         StatusCode::OK
@@ -962,7 +1053,7 @@ async fn settle_without_current_billed_party(fixture: &Fixture) {
     assert_eq!(
         mirror_rows(&fixture.surreal, fixture.project_id).await[0].issued_at,
         issued_at,
-        "settlement does not move an existing invoice into the retry period"
+        "settlement mirrors the provider date instead of the UTC attachment or retry date"
     );
 }
 
@@ -1025,6 +1116,8 @@ async fn assert_voided_invoice_remains_reserved() {
             amount_paid_cents: 0,
             amount_cents: Some(batch.total_cents),
             currency: Some(batch.currency.clone()),
+            issued_at: Some(chrono::Utc::now()),
+            due_at: None,
         },
     );
     let retry = generate(&fixture.app, &fixture).await;

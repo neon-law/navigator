@@ -358,9 +358,9 @@ async fn invoice_for_batch(
     provider: &dyn billing::BillingProvider,
     batch: &billing_batches::MatterBillingBatch,
     line_items: &[InvoiceLine],
-) -> Result<(billing::InvoiceId, DateTime<Utc>), InvoiceGenerationError> {
+) -> Result<billing::InvoiceId, InvoiceGenerationError> {
     if let Some(saved) = &batch.xero_invoice_id {
-        return Ok((billing::InvoiceId(saved.clone()), batch.updated_at));
+        return Ok(billing::InvoiceId(saved.clone()));
     }
     if batch
         .first_attempted_at
@@ -376,7 +376,7 @@ async fn invoice_for_batch(
         .await?;
     let attempted = billing_batches::start_attempt(pg, batch.id, Utc::now()).await?;
     if let Some(saved) = attempted.xero_invoice_id {
-        return Ok((billing::InvoiceId(saved), attempted.updated_at));
+        return Ok(billing::InvoiceId(saved));
     }
     let first = attempted
         .first_attempted_at
@@ -403,8 +403,8 @@ async fn invoice_for_batch(
     )
     .await
     .map_err(|_| billing::BillingError::Provider("invoice creation timed out".into()))??;
-    let attached = billing_batches::attach_invoice(pg, batch.id, &invoice.0).await?;
-    Ok((invoice, attached.updated_at))
+    billing_batches::attach_invoice(pg, batch.id, &invoice.0).await?;
+    Ok(invoice)
 }
 
 /// Raise the invoice for a persisted batch — fresh or resumed — and settle
@@ -428,7 +428,7 @@ async fn raise_batch(
     // moment it returns, before any local flip, so a crash or refusal
     // mid-settle leaves the resume holding the exact invoice instead of
     // relying on the provider's own idempotency window.
-    let (invoice_id, issued_at) = invoice_for_batch(pg, provider, batch, &line_items).await?;
+    let invoice_id = invoice_for_batch(pg, provider, batch, &line_items).await?;
 
     let invoice_state = provider.get_invoice(&invoice_id.0).await?;
     let amount_cents = invoice_state.amount_cents.ok_or_else(|| {
@@ -441,15 +441,13 @@ async fn raise_batch(
         .ok_or_else(|| {
             billing::BillingError::Provider("invoice currency missing from provider read".into())
         })?;
-    let existing = xero_invoices::for_projects(surreal, &[project_id])
-        .await
-        .map_err(Box::new)?
-        .into_iter()
-        .find(|invoice| invoice.xero_invoice_id == invoice_id.0);
-    let issued_at = existing
-        .as_ref()
-        .map_or(issued_at, |invoice| invoice.issued_at);
-    let due_at = existing.and_then(|invoice| invoice.due_at);
+    // Xero's omitted Date defaults to the organisation's local date, not
+    // this process's UTC attachment time. Mirror the actual provider dates.
+    // https://developer.xero.com/documentation/api/accounting/invoices
+    let issued_at = invoice_state.issued_at.ok_or_else(|| {
+        billing::BillingError::Provider("invoice issued date missing or malformed".into())
+    })?;
+    let due_at = invoice_state.due_at;
     // Mirror first (the costs' link validates against it), then flip the
     // consumed work through its own audited transitions — reserved rows
     // included. A refusal anywhere below leaves the earlier local steps
@@ -485,6 +483,13 @@ async fn raise_batch(
     }
     if !matches!(invoice_state.status.as_str(), "AUTHORISED" | "PAID") {
         return Err(InvoiceGenerationError::InvoiceNotBillable);
+    }
+    // A provider date corrected to before a reserved cost must not consume
+    // time first and only then fail while linking that cost.
+    for cost_id in &batch.cost_ids {
+        if costs::find_by_id(pg, *cost_id).await?.occurred_on > issued_at.date_naive() {
+            return Err(InvoiceGenerationError::ReconciliationRequired);
+        }
     }
     if !batch.entry_ids.is_empty() {
         time_entries::mark_invoiced(pg, &batch.entry_ids, actor_id, &invoice_id.0, true).await?;

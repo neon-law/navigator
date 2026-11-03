@@ -62,11 +62,15 @@ pub struct InvoiceStatus {
     pub status: String,
     pub amount_paid_cents: i64,
     /// Optional for compatibility with previously journaled provider reads.
-    /// New financial settlement requires both fields from a fresh read.
+    /// New settlement requires amount, currency, and issued date from a fresh read.
     #[serde(default)]
     pub amount_cents: Option<i64>,
     #[serde(default)]
     pub currency: Option<String>,
+    #[serde(default)]
+    pub issued_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub due_at: Option<DateTime<Utc>>,
 }
 
 /// One accounts-receivable invoice as listed from the provider. Money is
@@ -419,6 +423,11 @@ impl BillingProvider for StubBillingProvider {
                         .sum(),
                 ),
                 currency: Some("USD".into()),
+                issued_at: Some(Utc::now()),
+                due_at: request
+                    .due_date
+                    .and_then(|date| date.and_hms_opt(0, 0, 0))
+                    .map(|date| date.and_utc()),
             });
         Ok(InvoiceId(invoice_id))
     }
@@ -435,6 +444,8 @@ impl BillingProvider for StubBillingProvider {
                 amount_paid_cents: 0,
                 amount_cents: None,
                 currency: None,
+                issued_at: None,
+                due_at: None,
             }))
     }
 
@@ -876,22 +887,28 @@ struct InvoiceSummary {
 }
 
 impl InvoiceSummary {
+    fn issued_at(&self) -> Option<DateTime<Utc>> {
+        self.date_string
+            .as_deref()
+            .and_then(parse_xero_datetime)
+            .or_else(|| self.date.as_deref().and_then(parse_xero_datetime))
+    }
+
+    fn due_at(&self) -> Option<DateTime<Utc>> {
+        self.due_date_string
+            .as_deref()
+            .and_then(parse_xero_datetime)
+            .or_else(|| self.due_date.as_deref().and_then(parse_xero_datetime))
+    }
+
     /// `None` when the payload has no invoice id or no parseable issued
     /// date — ingest cannot key or stamp a mirror row from that.
     fn into_receivable(self) -> Option<ReceivableInvoice> {
         if self.invoice_id.is_empty() {
             return None;
         }
-        let issued_at = self
-            .date_string
-            .as_deref()
-            .and_then(parse_xero_datetime)
-            .or_else(|| self.date.as_deref().and_then(parse_xero_datetime))?;
-        let due_at = self
-            .due_date_string
-            .as_deref()
-            .and_then(parse_xero_datetime)
-            .or_else(|| self.due_date.as_deref().and_then(parse_xero_datetime));
+        let issued_at = self.issued_at()?;
+        let due_at = self.due_at();
         Some(ReceivableInvoice {
             invoice_id: self.invoice_id,
             reference: self.reference.unwrap_or_default(),
@@ -1061,11 +1078,20 @@ impl BillingProvider for XeroBillingProvider {
             .into_iter()
             .next()
             .ok_or_else(|| BillingError::Provider("xero returned no invoice".to_string()))?;
+        let issued_at = inv.issued_at();
+        let due_at = inv.due_at();
+        if due_at.is_none() && (inv.due_date_string.is_some() || inv.due_date.is_some()) {
+            return Err(BillingError::Provider(
+                "invoice due date is malformed".into(),
+            ));
+        }
         Ok(InvoiceStatus {
             status: inv.status.unwrap_or_default(),
             amount_paid_cents: dollars_to_cents(inv.amount_paid.unwrap_or(0.0)),
             amount_cents: inv.total.map(dollars_to_cents),
             currency: inv.currency,
+            issued_at,
+            due_at,
         })
     }
 
@@ -1743,6 +1769,8 @@ mod tests {
                 amount_paid_cents: 333_300,
                 amount_cents: None,
                 currency: None,
+                issued_at: None,
+                due_at: None,
             },
         );
         let paid = stub.get_invoice("inv-1").await.unwrap();
@@ -1762,7 +1790,9 @@ mod tests {
                     "Status": "PAID",
                     "AmountPaid": 3333.00,
                     "Total": 5000.00,
-                    "CurrencyCode": "CAD"
+                    "CurrencyCode": "CAD",
+                    "DateString": "2026-10-21T00:00:00",
+                    "DueDateString": "2026-10-31T00:00:00"
                 }]
             })))
             .mount(&server)
@@ -1773,6 +1803,40 @@ mod tests {
         assert_eq!(got.amount_paid_cents, 333_300);
         assert_eq!(got.amount_cents, Some(500_000));
         assert_eq!(got.currency.as_deref(), Some("CAD"));
+        assert_eq!(got.issued_at, parse_xero_datetime("2026-10-21"));
+        assert_eq!(got.due_at, parse_xero_datetime("2026-10-31"));
+    }
+
+    #[tokio::test]
+    async fn xero_get_invoice_dates_accept_raw_ticks_and_fail_closed_on_bad_due_dates() {
+        let server = MockServer::start().await;
+        let issued = parse_xero_datetime("2026-10-21").unwrap();
+        for (id, date, due) in [
+            (
+                "raw",
+                format!("/Date({})/", issued.timestamp_millis()),
+                None,
+            ),
+            ("missing", "not-a-date".into(), None),
+            ("bad-due", "2026-10-21".into(), Some("not-a-date")),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/Invoices/{id}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "Invoices": [{ "InvoiceID": id, "Date": date, "DueDate": due }]
+                })))
+                .mount(&server)
+                .await;
+        }
+        let provider = xero(server.uri());
+        let raw = provider.get_invoice("raw").await.unwrap();
+        assert_eq!(raw.issued_at, Some(issued));
+        assert_eq!(raw.due_at, None, "cleared due date is authoritative");
+        assert_eq!(
+            provider.get_invoice("missing").await.unwrap().issued_at,
+            None
+        );
+        assert!(provider.get_invoice("bad-due").await.is_err());
     }
 
     #[test]
@@ -1783,6 +1847,8 @@ mod tests {
         .unwrap();
         assert_eq!(old.amount_cents, None);
         assert_eq!(old.currency, None);
+        assert_eq!(old.issued_at, None);
+        assert_eq!(old.due_at, None);
     }
 
     #[tokio::test]
