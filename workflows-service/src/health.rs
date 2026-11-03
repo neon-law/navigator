@@ -56,7 +56,11 @@ pub fn router_with_dbos_ingress(
     ingress: crate::dbos_ingress::WorkerIngress,
     dbos: Option<DbosReadiness>,
 ) -> Router {
+    // `/healthz` must survive the combination: both deployment manifests send
+    // the liveness probe here, and the production worker always combines the
+    // DBOS ingress, so a combined router without it restarts healthy workers.
     let router = Router::new()
+        .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .with_state(dbos.map(Arc::new));
     crate::dbos_ingress::add_routes(router, ingress)
@@ -94,8 +98,10 @@ async fn readyz(State(dbos): State<Option<Arc<DbosReadiness>>>) -> axum::respons
     };
     match tokio::time::timeout(READY_DB_TIMEOUT, system_database_ping(url)).await {
         Ok(Ok(())) => readiness_response(StatusCode::OK, "ok", "ok"),
-        Ok(Err(unreachable)) => {
-            tracing::error!(?unreachable, "readiness probe: system database unreachable");
+        Ok(Err(reason)) => {
+            // Staged, URL-free detail for the log only; the unsigned body
+            // stays `system-database-unreachable`.
+            tracing::error!(%reason, "readiness probe: system database unreachable");
             readiness_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "ok",
@@ -117,21 +123,79 @@ fn readiness_response(status: StatusCode, crypto: &str, dbos: &str) -> axum::res
     (status, Json(json!({ "crypto": crypto, "dbos": dbos }))).into_response()
 }
 
-/// Probe the executor's system database with one cheap connection. The error
-/// carries no detail on purpose: the route is unsigned, so nothing request-
-/// specific is ever echoed back.
-async fn system_database_ping(url: &str) -> Result<(), SystemDatabaseUnreachable> {
+/// Probe the executor's system database with one cheap connection: opening
+/// the pool's first connection IS the probe (the executor's own pools use
+/// the same `PgConnectOptions` plus its session settings; this one only
+/// answers "is the system database there"). The error classifies the failure
+/// stage for the log; the route is unsigned, so the response never echoes
+/// detail.
+async fn system_database_ping(url: &str) -> Result<(), SystemDatabasePingError> {
     let options: sqlx::postgres::PgConnectOptions =
-        url.parse().map_err(|_| SystemDatabaseUnreachable)?;
-    let db = store::postgres::PostgresDb::connect(options)
+        url.parse().map_err(|_| SystemDatabasePingError::Parse)?;
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(READY_DB_TIMEOUT)
+        .connect_with(options)
         .await
-        .map_err(|_| SystemDatabaseUnreachable)?;
-    db.ping().await.map_err(|_| SystemDatabaseUnreachable)
+        .map_err(|error| SystemDatabasePingError::Connect(classify_connect(&error)))?;
+    Ok(())
 }
 
-/// The system database probe failed; detail is logged, never echoed.
+/// Where the system-database probe failed, carrying only what is safe to
+/// log. Driver detail that may embed the connection URL (configuration
+/// errors) collapses to the variant name; no variant ever holds the URL or
+/// its credentials.
 #[derive(Debug)]
-struct SystemDatabaseUnreachable;
+enum SystemDatabasePingError {
+    /// The configured URL did not parse as connection options.
+    Parse,
+    /// The server was unreachable, refused the connection, or rejected the
+    /// login.
+    Connect(ConnectFailure),
+}
+
+impl std::fmt::Display for SystemDatabasePingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Parse => f.write_str("connection URL did not parse"),
+            Self::Connect(failure) => write!(f, "connect failed: {failure}"),
+        }
+    }
+}
+
+/// The connect-stage failure's safe detail.
+#[derive(Debug)]
+enum ConnectFailure {
+    /// Transport-level: connection refused, timeouts, DNS.
+    Io(String),
+    /// The PostgreSQL server answered with an error, e.g. a rejected login.
+    Database(String),
+    /// TLS negotiation failed.
+    Tls(String),
+    /// Pool/configuration failures, whose text may embed the connection
+    /// URL — logged as the variant name only.
+    Other(&'static str),
+}
+
+impl std::fmt::Display for ConnectFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(detail) => write!(f, "transport: {detail}"),
+            Self::Database(detail) => write!(f, "server rejected the connection: {detail}"),
+            Self::Tls(detail) => write!(f, "tls: {detail}"),
+            Self::Other(stage) => f.write_str(stage),
+        }
+    }
+}
+
+fn classify_connect(error: &sqlx::Error) -> ConnectFailure {
+    match error {
+        sqlx::Error::Io(io) => ConnectFailure::Io(io.to_string()),
+        sqlx::Error::Database(database) => ConnectFailure::Database(database.to_string()),
+        sqlx::Error::Tls(detail) => ConnectFailure::Tls(detail.to_string()),
+        _ => ConnectFailure::Other("connection failed (configuration or pool)"),
+    }
+}
 
 /// Resolve the probe's listen address from `WORKFLOWS_SERVICE_HEALTH_LISTEN`,
 /// defaulting to [`DEFAULT_HEALTH_LISTEN`].
@@ -252,5 +316,42 @@ mod tests {
             .await
             .expect("router responds");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn combined_router_keeps_liveness_signed_off() {
+        // The manifests pin the liveness probe to /healthz on the SAME
+        // listener the DBOS ingress and /readyz share; dropping it restarts
+        // healthy workers.
+        crate::request_identity::install_crypto_provider();
+        let healthz_request = Request::builder()
+            .method("GET")
+            .uri("/healthz")
+            .body(Body::empty())
+            .expect("unsigned liveness request builds");
+        let response = readiness_router(None)
+            .oneshot(healthz_request)
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn connect_failure_classification_never_echoes_the_url() {
+        // Configuration errors carry the raw connect options (and therefore
+        // the URL with its credentials); their classification must collapse
+        // to the variant name.
+        let leaking =
+            sqlx::Error::Configuration("postgres://user:secret@host/db".to_owned().into());
+        let classified = super::SystemDatabasePingError::Connect(super::classify_connect(&leaking));
+        let rendered = classified.to_string();
+        assert!(!rendered.contains("postgres://"), "{rendered}");
+        assert!(!rendered.contains("secret"), "{rendered}");
+        // A transport failure keeps its safe detail: operators can tell a
+        // refused connection from a rejected login.
+        let refused = super::SystemDatabasePingError::Connect(super::ConnectFailure::Io(
+            "Connection refused (os error 111)".to_owned(),
+        ));
+        assert!(refused.to_string().contains("Connection refused"));
     }
 }
