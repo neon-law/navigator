@@ -706,3 +706,123 @@ async fn support_intake_retains_the_original_without_threading_or_a_message_id()
         .unwrap();
     assert!(conversation.email_conversation_id.is_none());
 }
+
+#[tokio::test]
+async fn overlapping_applies_file_each_original_and_attachment_only_once() {
+    let fixture = fixture().await;
+    let project_id = seed_matter(&fixture.surreal, fixture.firm_id, "syn-nef-overlap").await;
+    let bytes = b"%PDF-1.4 synthetic attachment";
+    let asset =
+        store::assets::ingest_content(&fixture.surreal, &fixture.storage, bytes, "application/pdf")
+            .await
+            .unwrap();
+    let raw = district_notice();
+    let message = seed_notice(
+        &fixture,
+        Some(project_id),
+        Some(("inbound/overlap.eml", &raw)),
+        "This is an automatic email message from the CM/ECF system.",
+        vec![store::inbox::IngestAttachment {
+            asset_id: asset,
+            filename: "motion.pdf".into(),
+            sha256: store::assets::sha256_hex(bytes),
+        }],
+    )
+    .await;
+    let gate = Arc::new(tokio::sync::Barrier::new(8));
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let app = fixture.app.clone();
+        let session = fixture.lawyer_session.clone();
+        let gate = gate.clone();
+        tasks.spawn(async move {
+            gate.wait().await;
+            request(
+                &app,
+                "POST",
+                "/app/api/inbox/process",
+                Some(&session),
+                Some(json!({"message": message, "apply": true})),
+            )
+            .await
+        });
+    }
+    while let Some(result) = tasks.join_next().await {
+        let (status, body) = result.unwrap();
+        assert_eq!(status, 200, "overlapping apply succeeds: {body}");
+    }
+    let assets = store::assets::for_project(&fixture.surreal, project_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        assets.len(),
+        2,
+        "one original and one attachment, with no duplicate revisions"
+    );
+    let cases = store::cases::for_project(&fixture.surreal, project_id)
+        .await
+        .unwrap();
+    assert_eq!(cases.len(), 1);
+    assert_eq!(
+        store::cases::docket(&fixture.surreal, cases[0].id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn an_archived_mail_slot_refuses_changed_bytes() {
+    let fixture = fixture().await;
+    let project_id = seed_matter(&fixture.surreal, fixture.firm_id, "syn-nef-immutable").await;
+    let args = store::documents::IngestArgs {
+        project_id,
+        source: "email",
+        filename: "original.eml",
+        kind: "pleading",
+        content_type: "message/rfc822",
+        description: None,
+        secondary_storage_key: None,
+        visibility: "internal",
+    };
+    let identity = store::documents::DocumentIdentity {
+        slug: Some("mail/synthetic/original"),
+        ..Default::default()
+    };
+    let provenance = store::documents::MailProvenance {
+        message_id: "synthetic",
+        sender: "sender@example.com",
+        received_at: "2026-11-03T12:00:00Z",
+        subject: "Synthetic notice",
+    };
+    let first = store::documents::ingest_bytes_with_mail_provenance_once(
+        &fixture.surreal,
+        &fixture.storage,
+        &args,
+        &identity,
+        &provenance,
+        b"original bytes",
+    )
+    .await
+    .unwrap();
+    let error = store::documents::ingest_bytes_with_mail_provenance_once(
+        &fixture.surreal,
+        &fixture.storage,
+        &args,
+        &identity,
+        &provenance,
+        b"changed bytes",
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        store::documents::IngestError::IdempotencyConflict(_)
+    ));
+    let stored = store::assets::for_project(&fixture.surreal, project_id)
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].id, first.asset_id);
+}

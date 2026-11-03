@@ -241,6 +241,7 @@ async fn file_notice_documents(
             kind,
             store::documents::visibility::INTERNAL,
             &crate::api::MailAttachmentSource {
+                exactly_once: true,
                 message_id: &row.id.to_string(),
                 sender: &row.external_address,
                 received_at: &row.occurred_at,
@@ -287,7 +288,7 @@ async fn file_notice_documents(
             received_at: &row.occurred_at,
             subject: row.subject.as_deref().unwrap_or_default(),
         };
-        let filed = store::assets::file_revision_with_provenance(
+        let filed = store::documents::ingest_bytes_with_mail_provenance_once(
             &state.surreal,
             &state.storage,
             &args,
@@ -296,19 +297,16 @@ async fn file_notice_documents(
             bytes,
         )
         .await
-        .map_err(ApiError::Revision)?;
-        document_asset_id = document_asset_id.or(match filed {
-            store::assets::Filed::Revision(revision) => Some(revision.asset_id),
-            store::assets::Filed::Unchanged { asset_id } => Some(asset_id),
-        });
+        .map_err(|error| ApiError::Revision(store::assets::RevisionError::Ingest(error)))?;
+        document_asset_id = document_asset_id.or(Some(filed.asset_id));
         filed_documents += 1;
     }
 
     Ok((filed_documents, document_asset_id))
 }
 
-/// The message's raw RFC 822 source, when the inbox conversation's email
-/// lane stored one — the raw `.eml` of the thread's inbound hop.
+/// The current message's archived RFC 822 source, with a linked email-hop
+/// fallback for messages whose normalized row has no source key.
 async fn raw_source(
     state: &crate::api::ApiState,
     row: &store::inbox::UnprocessedRow,

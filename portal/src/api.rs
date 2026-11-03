@@ -5947,6 +5947,7 @@ async fn mail_file_door(
         kind,
         visibility,
         &MailAttachmentSource {
+            exactly_once: false,
             message_id: &input.message_id.to_string(),
             sender: &message.from_addr,
             received_at: &message.inserted_at.to_rfc3339(),
@@ -5975,6 +5976,8 @@ async fn mail_file_door(
 /// The provenance a mail-lane filing stamps. Shared with the NEF pipeline
 /// (`nef_pipeline`), which files a notice's attachments the same way.
 pub(crate) struct MailAttachmentSource<'a> {
+    /// Source-message artifacts retain one immutable row across overlapping applies.
+    pub(crate) exactly_once: bool,
     /// Slug component. A UUID for a stored message; a sanitized `.eml`
     /// message reference for an upload.
     pub(crate) message_id: &'a str,
@@ -5983,9 +5986,10 @@ pub(crate) struct MailAttachmentSource<'a> {
     pub(crate) subject: &'a str,
 }
 
-/// File every parsed attachment as its own slugged revision
+/// File every parsed attachment under its message-part slug
 /// (`mail/<message_id>/<index>`), stamping [`store::documents::MailProvenance`]
 /// onto each, and return one pointer per attachment in message-part order.
+/// Source-message callers can require one immutable row per slug.
 /// Each attachment is filed as its own independent write, so a failure here
 /// leaves every earlier attachment filed and no pointer or partial asset for
 /// the one that failed.
@@ -6028,16 +6032,29 @@ pub(crate) async fn file_mail_attachments(
             received_at: &received_at,
             subject: source.subject,
         };
-        store::assets::file_revision_with_provenance(
-            &state.surreal,
-            &state.storage,
-            &args,
-            &identity,
-            &provenance,
-            &attachment.bytes,
-        )
-        .await
-        .map_err(ApiError::Revision)?;
+        if source.exactly_once {
+            store::documents::ingest_bytes_with_mail_provenance_once(
+                &state.surreal,
+                &state.storage,
+                &args,
+                &identity,
+                &provenance,
+                &attachment.bytes,
+            )
+            .await
+            .map_err(|error| ApiError::Revision(store::assets::RevisionError::Ingest(error)))?;
+        } else {
+            store::assets::file_revision_with_provenance(
+                &state.surreal,
+                &state.storage,
+                &args,
+                &identity,
+                &provenance,
+                &attachment.bytes,
+            )
+            .await
+            .map_err(ApiError::Revision)?;
+        }
         filed.push(document_pointer(&state.surreal, project_id, &slug, kind).await?);
     }
     Ok(filed)
@@ -6257,6 +6274,7 @@ async fn file_parsed_eml(
             kind,
             visibility,
             &MailAttachmentSource {
+                exactly_once: false,
                 message_id: &message_id_slug,
                 sender: &parsed.from,
                 received_at: &parsed.at,
