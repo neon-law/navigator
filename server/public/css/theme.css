@@ -3316,6 +3316,20 @@ a.nav-link:hover {
   font-weight: 600;
 }
 
+/* The unread-correspondence tile's count is a link into the matter's own
+ * inbox: same value styling as its siblings, tokenized so it reads as one
+ * of the facts rather than as body-copy blue. */
+a.lawyer-detail__fact-value {
+  color: var(--nav-color-text);
+  text-decoration: none;
+}
+
+a.lawyer-detail__fact-value:hover,
+a.lawyer-detail__fact-value:focus-visible {
+  color: var(--nav-color-link-hover);
+  text-decoration: underline;
+}
+
 /* The Integrations section's buttons — Slack, Xero, and one per registered
  * application — wrap onto their own line with breathing room rather than
  * running together edge to edge. */

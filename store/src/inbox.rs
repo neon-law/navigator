@@ -2695,6 +2695,44 @@ pub async fn list_project(
     Ok(listed)
 }
 
+/// Unread conversations assigned to one Project — the matter dashboard's
+/// correspondence tile. A read-only projection over the conversations'
+/// existing `unread` flag, firm-wide as the Inbox itself keeps it (there is
+/// no per-participant read-state to derive a per-reader count from). No
+/// authorization here: every caller resolves its own reader's access before
+/// reaching this — the dashboard through the `matter_viewer` seam, the
+/// project inbox through [`list_project`].
+///
+/// # Errors
+///
+/// Propagates any database error.
+pub async fn unread_count_for_project(db: &SurrealDb, project_id: Uuid) -> Result<i64, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::unread_count_for_project_on(
+            &pg, project_id,
+        ))
+        .await;
+    }
+    let mut response = db
+        .query(format!(
+            "SELECT VALUE count() FROM {CONVERSATION} WHERE project_id = $project \
+             AND unread = true GROUP ALL"
+        ))
+        .bind(("project", record_id(projects::PROJECT_TABLE, project_id)))
+        .await?
+        .check()?;
+    // `count()` under `GROUP ALL` yields a `{ count: n }` object — and no
+    // row at all when nothing matches, which is a count of zero.
+    let counts: Vec<UnreadCountRow> = response.take(0)?;
+    Ok(counts.first().map_or(0, |row| row.count))
+}
+
+/// The one-field shape `SELECT VALUE count() ... GROUP ALL` returns.
+#[derive(SurrealValue)]
+struct UnreadCountRow {
+    count: i64,
+}
+
 /// Whether a participating Lawyer or Clerk may relay this email thread now.
 ///
 /// The check reads the person row and the current participation, so a
