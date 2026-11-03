@@ -1951,7 +1951,10 @@ mod tests {
                     .iter()
                     .map(|(key, value)| (key.to_string(), *value))
                     .collect(),
-                exceptions: exceptions.iter().map(std::string::ToString::to_string).collect(),
+                exceptions: exceptions
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
             }
             .reconciled()
         };
