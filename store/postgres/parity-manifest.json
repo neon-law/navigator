@@ -177,6 +177,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "brand_letterhead",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "brand_phone_number",
       "missing_column": null,
       "missing_table": null,
@@ -2159,6 +2166,23 @@
         "references": [
           "firm"
         ]
+      },
+      "brand_letterhead": {
+        "columns": {
+          "brand_id": "UUID",
+          "email": "TEXT",
+          "font_family": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "mark": "TEXT",
+          "phone": "TEXT",
+          "postal_address": "TEXT",
+          "site_url": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "wordmark": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "brand_letterhead",
+        "references": []
       },
       "brand_phone_number": {
         "columns": {

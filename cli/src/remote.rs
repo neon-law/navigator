@@ -690,7 +690,7 @@ async fn mint_ci_token(
         .json(&serde_json::json!({ "token": github_token }))
         .send()
         .await
-        .with_context(|| format!("POST {mint_path}"))?;
+        .map_err(|error| unreachable_host_error(base, mint_path, error))?;
     let minted_status = minted.status();
     let minted_body = minted.text().await.unwrap_or_default();
     if !minted_status.is_success() {
@@ -704,6 +704,51 @@ async fn mint_ci_token(
         )));
     }
     serde_json::from_str(&minted_body).with_context(|| format!("parse {mint_path} response"))
+}
+
+/// The error a mint reports when its request never reached Navigator. A host
+/// with no DNS record (a Brand host not yet published, say) is named as such,
+/// so the run says which `project.host` to fix rather than surfacing a raw
+/// resolver error; any other transport failure still names the host.
+fn unreachable_host_error(base: &str, mint_path: &str, error: reqwest::Error) -> anyhow::Error {
+    let host = base
+        .split_once("://")
+        .map_or(base, |(_, rest)| rest)
+        .trim_end_matches('/');
+    let message = if is_dns_failure(&error) {
+        format!(
+            "project.host `{host}` does not resolve: no DNS record answers for it, so \
+             POST {mint_path} never reached Navigator. Publish the host's DNS record, or set \
+             project.host to a host this deployment serves."
+        )
+    } else {
+        format!("POST {mint_path} could not reach project.host `{host}`")
+    };
+    anyhow::Error::new(error).context(message)
+}
+
+/// Whether a transport error is a name-resolution failure, judged by its
+/// source chain: reqwest reports a resolver failure as a connect error whose
+/// cause reads `dns error`, with the platform resolver's own words beneath.
+fn is_dns_failure(error: &reqwest::Error) -> bool {
+    let mut source: Option<&dyn std::error::Error> = Some(error);
+    while let Some(current) = source {
+        let text = current.to_string().to_ascii_lowercase();
+        if [
+            "dns error",
+            "failed to lookup address",
+            "nodename nor servname",
+            "name or service not known",
+            "no such host",
+        ]
+        .iter()
+        .any(|needle| text.contains(needle))
+        {
+            return true;
+        }
+        source = current.source();
+    }
+    false
 }
 
 /// The GitHub `::error::` workflow-command annotation `mint_ci_token` prints
@@ -6138,6 +6183,31 @@ mod tests {
             error.to_string().contains("GitHub Actions only"),
             "{error:#}"
         );
+    }
+
+    /// LAW-266: a `project.host` with no DNS record is named, not reported as
+    /// a raw resolver error. `.invalid` never resolves (RFC 2606).
+    #[tokio::test]
+    async fn a_mint_against_an_unresolvable_host_names_the_host() {
+        let client = reqwest::Client::new();
+        let error = super::mint_ci_token(
+            &client,
+            "https://unpublished-brand-host.invalid",
+            "/auth/ci/document-token",
+            "oidc",
+        )
+        .await
+        .expect_err("an .invalid host cannot resolve");
+        let message = error.to_string();
+        assert!(
+            message.contains("project.host `unpublished-brand-host.invalid` does not resolve"),
+            "{error:#}"
+        );
+        assert!(
+            message.contains("POST /auth/ci/document-token"),
+            "{error:#}"
+        );
+        assert_eq!(exit_code_for(&error), ExitCode::from(2));
     }
 
     #[test]

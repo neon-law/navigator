@@ -67,6 +67,13 @@
     "target_only": true,
     "through": "firm_id as resolved by the webhook spine at ingest; no Surreal source"
   },
+  "brand_letterhead": {
+    "migration_slice": "brand-letterheads",
+    "parity_scenario": "one row per Brand id; upsert replaces the admin-set lines; an unset line resolves from the Brand",
+    "scope": "firm",
+    "target_only": true,
+    "through": "brand_id -> brand.firm_id"
+  },
   "brand_phone_number": {
     "migration_slice": "brand-phone-numbers",
     "parity_scenario": "one row per Firm receiving number; idempotent re-registration and content-mismatch conflict; per-number credential reference",

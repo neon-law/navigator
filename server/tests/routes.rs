@@ -2385,6 +2385,26 @@ async fn owner_approves_a_brand_website_and_its_own_admin_attaches_it() {
     );
 }
 
+/// LAW-266: the Letterhead form is the Brand's own Firm Admin DRI's (or the
+/// Owner's) to post; another Firm's Admin gets the non-disclosing 404.
+#[tokio::test]
+async fn only_a_brands_own_admin_posts_its_letterhead() {
+    let (state, surreal) = state_with_engines().await;
+    let (admin_a, _) = brand_practice(&surreal, "Practice A", "practice-a-brand").await;
+    let (admin_b, _) = brand_practice(&surreal, "Practice B", "practice-b-brand").await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    let letterhead = "/app/admin/brands/practice-a-brand/letterhead";
+    let form = "&mark=wordmark&wordmark=Practice+A&phone=%2B1+555+010+0000";
+    assert_eq!(
+        post_form_as(&app, &admin_b, letterhead, form).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        post_form_as(&app, &admin_a, letterhead, form).await,
+        StatusCode::SEE_OTHER
+    );
+}
+
 #[tokio::test]
 async fn retired_app_brands_paths_are_not_mounted() {
     let (state, surreal) = state_with_engines().await;
