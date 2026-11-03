@@ -26,10 +26,10 @@ use crate::components::aster::{AsterArtwork, AsterPose};
 use crate::components::{PublicShell, SiteHeader, SiteNavLink, SocialMeta};
 use crate::public_chrome::{PublicChrome, PublicFooter};
 
-/// How many people one chart may carry: the primary person plus five
+/// How many people one chart may carry: the primary person plus four
 /// additional ones. Submissions beyond this are answered per person with a
 /// labeled notice rather than dropped silently.
-pub const MAX_PEOPLE: usize = 6;
+pub const MAX_PEOPLE: usize = 5;
 
 /// The resolved `/world` content — the portal router builds it from the
 /// mounted brand and injects it; the wasm-safe carrier across the
@@ -493,6 +493,13 @@ fn BirthFormSection(country_names: Vec<String>) -> Element {
                 "Find map coordinates for each birth place. Birth time is optional; \
                  unknown times use local noon and are labeled as reduced accuracy."
             }
+            p { "Start with one person. Add others as needed, up to five people total." }
+            p {
+                "Use the date, local clock time, city and country from a reliable birth record. \
+                 If the time is uncertain, leave it unknown; do not guess. \
+                 Confirm the returned coordinates match the birth place. For same-named cities \
+                 within a country, the resolver selects the most populous match."
+            }
             for (slot, person) in staged.iter().enumerate() {
                 div { class: "world-person", role: "group", "aria-label": "{person_label(slot)}",
                     h3 { "{person_label(slot)}" }
@@ -705,6 +712,128 @@ fn field_label(field: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn form_starts_with_one_person_and_explains_the_five_person_limit() {
+        assert_eq!(MAX_PEOPLE, 5);
+        let html = render(app);
+        assert_eq!(html.matches("class=\"world-person\"").count(), 1);
+        assert!(html.contains("up to five people total"));
+        assert!(!html.contains("aria-label=\"Person 2\""));
+    }
+
+    #[test]
+    fn accuracy_guidance_requires_a_record_and_coordinate_confirmation() {
+        let html = render(app);
+        for phrase in [
+            "reliable birth record",
+            "local clock time",
+            "Confirm the returned coordinates",
+            "most populous match",
+            "do not guess",
+        ] {
+            assert!(html.contains(phrase), "missing {phrase}");
+        }
+    }
+
+    #[cfg(feature = "server")]
+    fn valid_birth_entry() -> BirthEntry {
+        BirthEntry {
+            name: "Synthetic Explorer".to_string(),
+            date: "2000-01-01".to_string(),
+            time: Some("12:00".to_string()),
+            city: "London".to_string(),
+            country: "United Kingdom".to_string(),
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn server_accepts_five_people_and_rejects_the_sixth() {
+        let outcomes = resolve_birth_data(vec![valid_birth_entry(); 6])
+            .await
+            .expect("request resolves");
+        assert_eq!(outcomes.len(), 6);
+        assert!(outcomes[..5]
+            .iter()
+            .all(|outcome| matches!(outcome, PersonOutcome::Resolved { .. })));
+        let PersonOutcome::Unresolved(failure) = &outcomes[5] else {
+            panic!("sixth person must be refused");
+        };
+        assert_eq!(failure.field_label, "People");
+        assert_eq!(failure.message, "A chart carries up to 5 people.");
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn birth_resolution_preserves_known_time_and_labels_unknown_time() {
+        for (time, expected_reduced_accuracy) in [
+            (Some("12:00".to_string()), false),
+            (None, true),
+            (Some(" ".to_string()), true),
+        ] {
+            let entry = BirthEntry {
+                time,
+                ..valid_birth_entry()
+            };
+            let PersonOutcome::Resolved {
+                latitude,
+                longitude,
+                reduced_accuracy,
+                ..
+            } = resolve_person(0, &entry)
+            else {
+                panic!("bundled London must resolve");
+            };
+            assert!((latitude - 51.5085).abs() < 0.0001);
+            assert!((longitude - -0.1257).abs() < 0.0001);
+            assert_eq!(reduced_accuracy, expected_reduced_accuracy);
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn invalid_birth_inputs_are_not_replaced_with_guessed_values() {
+        for (date, time, city, country, field) in [
+            (
+                "2000-02-30",
+                "12:00",
+                "London",
+                "United Kingdom",
+                "Birth date",
+            ),
+            (
+                "2000-01-01",
+                "25:00",
+                "London",
+                "United Kingdom",
+                "Birth time",
+            ),
+            (
+                "2000-01-01",
+                "12:00",
+                "Londno",
+                "United Kingdom",
+                "Birth place",
+            ),
+            ("2000-01-01", "12:00", "London", "Atlantis", "Birth country"),
+        ] {
+            let entry = BirthEntry {
+                date: date.to_string(),
+                time: Some(time.to_string()),
+                city: city.to_string(),
+                country: country.to_string(),
+                ..valid_birth_entry()
+            };
+            let PersonOutcome::Unresolved(failure) = resolve_person(0, &entry) else {
+                panic!("invalid {field} must remain unresolved");
+            };
+            assert_eq!(failure.field_label, field);
+            if field == "Birth place" {
+                assert!(failure.suggestions.iter().any(|name| name == "London"));
+            }
+        }
+    }
 
     #[cfg(feature = "server")]
     #[test]

@@ -343,7 +343,7 @@ fn island_geojson(lines: &[AngularLine], provenance: &IslandProvenance) -> Resul
 
 /// One person's line set on the island: an id for layer naming, a label for
 /// controls, and the person's own `GeoJSON` source. The /world page will carry
-/// up to six (the visitor plus five others); the specimen page carries one.
+/// up to five (the visitor plus four others); the specimen page carries one.
 #[derive(Serialize)]
 struct IslandPersonPayload<'a> {
     id: &'a str,
