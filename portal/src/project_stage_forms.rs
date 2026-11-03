@@ -121,8 +121,24 @@ fn flash_for(error: &store::case_stages::CaseStageError) -> String {
         CaseStageError::ProjectHasNoFirm => {
             "This matter has no Firm yet, so no stage vocabulary applies.".to_string()
         }
-        CaseStageError::Invalid(_) | CaseStageError::Database(_) | CaseStageError::Postgres(_) => {
+        CaseStageError::Invalid("note") => {
+            "Keep the stage note within 500 bytes, or leave it empty.".to_string()
+        }
+        CaseStageError::Invalid(_) => {
+            "Check the stage fields and submit the form again.".to_string()
+        }
+        CaseStageError::Database(_) | CaseStageError::Postgres(_) => {
             "The stage record is unavailable right now — try again shortly.".to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn an_invalid_stage_note_explains_how_to_correct_the_input() {
+        let message = super::flash_for(&store::case_stages::CaseStageError::Invalid("note"));
+        assert!(message.contains("500 bytes"), "{message}");
+        assert!(!message.contains("unavailable"), "{message}");
     }
 }

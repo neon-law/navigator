@@ -297,7 +297,16 @@ fn flash_for(error: &store::tasks::ProjectTaskError) -> String {
             "That task cannot move there — reload the tab and use the action it now offers."
                 .to_string()
         }
-        ProjectTaskError::Invalid(_) | ProjectTaskError::Database(_) | ProjectTaskError::Postgres(_) => {
+        ProjectTaskError::Invalid("title") => {
+            "Give the task a title of at most 300 bytes.".to_string()
+        }
+        ProjectTaskError::Invalid("body") => {
+            "Keep task details within 2000 bytes, or leave them empty.".to_string()
+        }
+        ProjectTaskError::Invalid(_) => {
+            "Check the task fields and submit the form again.".to_string()
+        }
+        ProjectTaskError::Database(_) | ProjectTaskError::Postgres(_) => {
             "The task store is unavailable right now — try again shortly.".to_string()
         }
     }

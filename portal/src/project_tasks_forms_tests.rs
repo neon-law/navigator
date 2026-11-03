@@ -171,3 +171,12 @@ fn only_an_explicitly_empty_assignee_clears_an_assignment() {
     );
     assert!(parse_assignee("not-a-person-id").is_err());
 }
+
+#[test]
+fn invalid_task_fields_explain_how_to_correct_the_input() {
+    for (field, limit) in [("title", "300 bytes"), ("body", "2000 bytes")] {
+        let message = flash_for(&store::tasks::ProjectTaskError::Invalid(field));
+        assert!(message.contains(limit), "{message}");
+        assert!(!message.contains("unavailable"), "{message}");
+    }
+}
