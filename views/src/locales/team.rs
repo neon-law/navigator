@@ -14,7 +14,7 @@ pub struct TeamCopy {
     pub page_title: String,
     #[serde(default)]
     pub members: Vec<TeamMemberCopy>,
-    pub profile: TeamProfileCopy,
+    pub profiles: std::collections::BTreeMap<String, TeamProfileCopy>,
 }
 
 /// A directory entry that links to its own profile.
