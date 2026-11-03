@@ -44,7 +44,9 @@ pub(crate) mod github_setup;
 mod host_setup;
 mod lifecycle;
 mod native;
-mod nautilus;
+// `navigator nautilus preview` serves the bundle this module stages, so
+// its staging helper is crate-reachable.
+pub(crate) mod nautilus;
 mod observability;
 mod orchestrate;
 mod postgres_volume;

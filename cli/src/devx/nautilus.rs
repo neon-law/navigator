@@ -79,6 +79,25 @@ pub fn build(release: bool) -> Result<()> {
     Ok(())
 }
 
+/// The environment variable overriding where the staged Nautilus bundle is
+/// looked up — the same name the portal's nautilus router reads for the
+/// bundle-aware asset mount, so one override points both the preview server
+/// and the hydration mechanics at a bundle built anywhere.
+pub(crate) const STAGED_BUNDLE_ENV: &str = "NAUTILUS_DIOXUS_PUBLIC_PATH";
+
+/// The staged Nautilus web bundle, or `None` when nothing is staged. An
+/// explicit [`STAGED_BUNDLE_ENV`] wins, so a bundle built anywhere can be
+/// served; otherwise this is the staging home [`build`] fills in this
+/// checkout. A directory without an `index.html` is not a bundle — the
+/// preview's degraded mode is what that case is for, not a lookup error.
+pub(crate) fn staged_bundle_dir() -> Option<PathBuf> {
+    let dir = match std::env::var_os(STAGED_BUNDLE_ENV) {
+        Some(overridden) => PathBuf::from(overridden),
+        None => staging_dir(&workspace_root().ok()?),
+    };
+    dir.join("index.html").is_file().then_some(dir)
+}
+
 /// Where `dx` drops the `nautilus-preview` bundle: `<crate>/target/dx/<app
 /// name>/<profile>/web/public`, relative to the crate's own workspace root.
 fn bundle_dir(root: &Path, release: bool) -> PathBuf {
@@ -121,5 +140,18 @@ mod tests {
             staging_dir(Path::new("/checkout")),
             PathBuf::from("/checkout/server/public/nautilus")
         );
+    }
+
+    /// The override points at a bundle built anywhere: a directory with an
+    /// `index.html` is the staged bundle; a directory without one is the
+    /// degraded mode, not a lookup error.
+    #[test]
+    fn the_env_override_names_the_staged_bundle() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::env::set_var(super::STAGED_BUNDLE_ENV, dir.path());
+        assert_eq!(super::staged_bundle_dir(), None);
+        std::fs::write(dir.path().join("index.html"), "<html></html>").expect("fixture");
+        assert_eq!(super::staged_bundle_dir(), Some(dir.path().to_path_buf()));
+        std::env::remove_var(super::STAGED_BUNDLE_ENV);
     }
 }

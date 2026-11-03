@@ -39,6 +39,7 @@ mod mail;
 #[allow(dead_code)]
 mod lsp_source_export;
 mod mcp_bridge;
+mod nautilus_preview;
 mod notation_import;
 mod notation_kinds;
 mod notations_preview;
@@ -954,6 +955,12 @@ enum Command {
         /// into. Defaults to the platform's Downloads directory.
         #[arg(long)]
         dir: Option<PathBuf>,
+    },
+
+    /// The Nautilus mobile shell, served locally for a browser.
+    Nautilus {
+        #[command(subcommand)]
+        action: nautilus_preview::NautilusCmd,
     },
 
     // ─────────────── Operator ───────────────
@@ -5190,6 +5197,11 @@ fn run() -> ExitCode {
             },
         },
         Command::Lsp { dir } => lsp_download::run_download(cli_version(), dir),
+        Command::Nautilus { action } => match action {
+            nautilus_preview::NautilusCmd::Preview { port } => {
+                devx_result(runtime().block_on(nautilus_preview::run(port)))
+            }
+        },
         Command::Notation { action } => match action {
             NotationCmd::Preview {
                 file,
