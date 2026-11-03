@@ -196,3 +196,31 @@ fn unresolved_city_in_a_small_country_returns_suggestions() {
     assert_eq!(suggestions.len(), 1);
     assert_eq!(suggestions[0].name, "Gibraltar");
 }
+
+#[test]
+fn skipped_birth_time_returns_a_consistent_resolved_instant() {
+    use chrono::TimeZone;
+    let date = NaiveDate::from_ymd_opt(2007, 3, 11).expect("valid date");
+    let time = NaiveTime::from_hms_opt(2, 30, 0).expect("valid time");
+    let resolved =
+        geotime::resolve("New York City", "US", date, Some(time)).expect("city resolves");
+    let expected = chrono_tz::America::New_York
+        .with_ymd_and_hms(2007, 3, 11, 3, 0, 0)
+        .single()
+        .expect("valid clock after gap");
+    assert_eq!(resolved.local, expected.naive_local());
+    assert_eq!(
+        resolved
+            .local
+            .and_local_timezone(resolved.offset)
+            .single()
+            .expect("fixed offset")
+            .timestamp(),
+        expected.timestamp()
+    );
+    assert_eq!(
+        resolved.time,
+        TimeInput::Known(time),
+        "retain the entered time separately"
+    );
+}

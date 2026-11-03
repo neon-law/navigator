@@ -52,7 +52,8 @@ pub struct GeoTime {
     pub latitude: f64,
     pub longitude: f64,
     pub zone: chrono_tz::Tz,
-    /// Local wall-clock birth moment — the given time, or noon when unknown.
+    /// Resolved local wall-clock birth moment, using noon when unknown.
+    /// A skipped wall clock advances to a valid local time together with its offset.
     pub local: NaiveDateTime,
     /// The UTC offset actually in effect at `local`.
     pub offset: FixedOffset,
@@ -114,8 +115,7 @@ pub fn resolve(
             })?;
 
     let time = birth_time.map_or(TimeInput::UnknownNoon, TimeInput::Known);
-    let local = NaiveDateTime::new(date, time.naive_time());
-    let (offset, offset_basis) = offset::offset_for(found.zone, date, time.naive_time());
+    let (local, offset, offset_basis) = offset::offset_for(found.zone, date, time.naive_time());
 
     Ok(GeoTime {
         city: found.name,

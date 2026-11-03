@@ -34,15 +34,18 @@ fn mean_time_offset(zone: Tz) -> FixedOffset {
     zone.offset_from_utc_datetime(&probe.naive_utc()).fix()
 }
 
-/// The UTC offset in effect at `date` and local wall-clock `time`, plus the
-/// basis it was determined on.
+/// The resolved local wall clock, its UTC offset, and the offset's basis.
 ///
 /// A wall clock that repeats (DST fall-back) resolves to the earlier instant;
 /// a wall clock that never happens (a spring-forward gap — historically up to
 /// a whole day, e.g. Samoa's 2011 date-line change) steps forward in
 /// 30-minute increments until it does.
 #[must_use]
-pub fn offset_for(zone: Tz, date: NaiveDate, time: NaiveTime) -> (FixedOffset, OffsetBasis) {
+pub fn offset_for(
+    zone: Tz,
+    date: NaiveDate,
+    time: NaiveTime,
+) -> (NaiveDateTime, FixedOffset, OffsetBasis) {
     let naive = NaiveDateTime::new(date, time);
     let resolved = match zone.from_local_datetime(&naive) {
         LocalResult::Single(when) | LocalResult::Ambiguous(when, _) => when,
@@ -54,7 +57,7 @@ pub fn offset_for(zone: Tz, date: NaiveDate, time: NaiveTime) -> (FixedOffset, O
     } else {
         OffsetBasis::ZoneRule
     };
-    (offset, basis)
+    (resolved.naive_local(), offset, basis)
 }
 
 /// The first instant at or after a skipped wall clock that names a real
@@ -83,12 +86,13 @@ mod tests {
     fn detects_local_mean_time_before_standard_time() {
         let date = NaiveDate::from_ymd_opt(1880, 5, 5).expect("invariant: valid date");
         let time = NaiveTime::from_hms_opt(10, 30, 0).expect("invariant: valid time");
-        let (offset, basis) = offset_for(chrono_tz::America::New_York, date, time);
+        let (local, offset, basis) = offset_for(chrono_tz::America::New_York, date, time);
         // New York's LMT is UTC-4:56:02.
         assert_eq!(
             offset,
             FixedOffset::east_opt(-17_762).expect("invariant: valid offset")
         );
+        assert_eq!(local, NaiveDateTime::new(date, time));
         assert_eq!(basis, OffsetBasis::LocalMeanTime);
     }
 
@@ -98,10 +102,14 @@ mod tests {
         // clock at or after it is 03:00 EDT, UTC-4.
         let date = NaiveDate::from_ymd_opt(2007, 3, 11).expect("invariant: valid date");
         let time = NaiveTime::from_hms_opt(2, 30, 0).expect("invariant: valid time");
-        let (offset, basis) = offset_for(chrono_tz::America::New_York, date, time);
+        let (local, offset, basis) = offset_for(chrono_tz::America::New_York, date, time);
         assert_eq!(
             offset,
             FixedOffset::east_opt(-14_400).expect("invariant: valid offset")
+        );
+        assert_eq!(
+            local.time(),
+            NaiveTime::from_hms_opt(3, 0, 0).expect("valid time")
         );
         assert_eq!(basis, OffsetBasis::ZoneRule);
     }
