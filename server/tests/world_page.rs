@@ -89,11 +89,11 @@ async fn vesta_preview_serves_the_world_page() {
         "Calculated specimen chart",
         "astro-map-provenance",
         // The birth form: labeled rows, country options, staged people.
-        "Your chart",
+        "Birth details",
         "Primary person",
         "Select a country…",
         "Add another person",
-        "Draw the lines",
+        "Resolve birth details",
     ] {
         assert!(html.contains(expected), "missing {expected}");
     }
@@ -113,7 +113,7 @@ async fn page_on_preview(key: BrandKey, path: &str) -> Result<String, StatusCode
 async fn world_renders_on_a_launched_vesta_host() {
     let html = page("www.vestaestateplanning.com", "/world").await;
     assert!(html.contains("aster-artwork"), "{html}");
-    assert!(html.contains("Your chart"), "{html}");
+    assert!(html.contains("Birth details"), "{html}");
 }
 
 #[tokio::test]

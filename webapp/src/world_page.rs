@@ -40,6 +40,9 @@ pub struct WorldContent {
     /// portal-side to match the head.
     pub head_title: String,
     pub meta_description: String,
+    /// The published introduction, resolved from the mounted brand's catalog.
+    #[serde(default)]
+    pub intro: String,
     /// The page `<h1>`.
     pub page_title: String,
     /// The resolved URL of the canonical Aster board for the `AsterArtwork`
@@ -280,8 +283,8 @@ fn resolve_person(position: usize, entry: &BirthEntry) -> PersonOutcome {
             display_name,
             "Birth date",
             format!(
-                "The birth date falls outside the calculated range ({MIN_EPHEMERIS_YEAR}–\
-                 {MAX_EPHEMERIS_YEAR}), so the lines cannot be drawn for it."
+                "The birth date must fall within the supported range \
+                 ({MIN_EPHEMERIS_YEAR}–{MAX_EPHEMERIS_YEAR})."
             )
             .as_str(),
         );
@@ -411,9 +414,7 @@ pub fn WorldPage(chrome: PublicChrome, content: WorldContent) -> Element {
                     p { class: "world-page__eyebrow", "Places · Legacies · Lines" }
                     h1 { "{content.page_title}" }
                     p { class: "world-page__intro",
-                        "Look up the planetary lines that were overhead at a moment that \
-                         matters — a birth, a beginning, a place you are considering — and \
-                         read the sky the way a navigator reads a chart."
+                        "{content.intro}"
                     }
                     p { class: "world-page__privacy", role: "note",
                         "Birth details are calculated within your request, shown back to \
@@ -487,11 +488,10 @@ fn BirthFormSection(country_names: Vec<String>) -> Element {
     };
     rsx! {
         section { class: "world-page__form", "aria-label": "Birth details",
-            h2 { "Your chart" }
+            h2 { "Birth details" }
             p {
-                "Enter birth details to see how the sky stood for a person and a place. \
-                 Birth time is optional — when it is unknown, the chart is cast for noon \
-                 and labeled as reduced accuracy."
+                "Find map coordinates for each birth place. Birth time is optional; \
+                 unknown times use local noon and are labeled as reduced accuracy."
             }
             for (slot, person) in staged.iter().enumerate() {
                 div { class: "world-person", role: "group", "aria-label": "{person_label(slot)}",
@@ -598,11 +598,11 @@ fn BirthFormSection(country_names: Vec<String>) -> Element {
                         submitting.set(false);
                     });
                 },
-                if submitting() { "Calculating…" } else { "Draw the lines" }
+                if submitting() { "Resolving…" } else { "Resolve birth details" }
             }
             if failed() {
                 p { class: "nav-form-error", role: "alert",
-                    "The chart could not be calculated. Check the connection and try again."
+                    "Birth details could not be resolved. Check the connection and try again."
                 }
             }
             BirthResults { outcomes: outcomes() }
@@ -619,7 +619,7 @@ fn BirthResults(outcomes: Option<Vec<PersonOutcome>>) -> Element {
     };
     rsx! {
         div { class: "world-results", "aria-live": "polite",
-            h3 { "The chart" }
+            h3 { "Resolved birth details" }
             for outcome in outcomes {
                 match outcome {
                     PersonOutcome::Resolved { name, city, country, latitude, longitude, reduced_accuracy } => rsx! {
@@ -629,14 +629,12 @@ fn BirthResults(outcomes: Option<Vec<PersonOutcome>>) -> Element {
                                 "Birth place resolved: {city}, {country} ({latitude:.4}, {longitude:.4})."
                             }
                             if reduced_accuracy {
-                                p { "The birth time was unknown, so the chart is cast for noon \
-                                     local time — a reduced-accuracy reading."
+                                p { "The birth time was unknown, so these details use local \
+                                     noon — a reduced-accuracy result."
                                 }
                             }
                             p { class: "world-results__next",
-                                "The full line drawing for this chart arrives with the \
-                                 calculation pipeline; the specimen chart above shows the \
-                                 engine's output for a fixed instant."
+                                "The map above shows a calculated specimen for a fixed instant."
                             }
                         }
                     },
@@ -756,6 +754,7 @@ mod tests {
         WorldContent {
             head_title: "Vesta | World".to_string(),
             meta_description: "Calculated astrocartography.".to_string(),
+            intro: "Explore the calculated specimen map.".to_string(),
             page_title: "World".to_string(),
             aster_asset_href: "/public/img/vesta-aster/aster-canon-7d379560.png".to_string(),
             country_names: vec!["United States".to_string(), "Ireland".to_string()],
@@ -783,7 +782,9 @@ mod tests {
             html.contains("astro-map-design"),
             "specimen section: {html}"
         );
-        assert!(html.contains("Your chart"), "form heading: {html}");
+        assert!(html.contains("Birth details"), "form heading: {html}");
+        assert!(html.contains("Resolve birth details"), "action: {html}");
+        assert!(!html.contains("Draw the lines"), "action scope: {html}");
         assert!(html.contains("Primary person"), "form rows: {html}");
         assert!(
             html.contains("Select a country…"),

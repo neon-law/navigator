@@ -1555,18 +1555,7 @@ fn resolve_firm_contact_content(
 /// router-build time and carry no visitor data; the Aster board resolves
 /// through the `asset_url` seam, which the wasm client does not link.
 fn resolve_world_content(branding: &views::brand::Branding) -> webapp::world_page::WorldContent {
-    let firm_name = branding.firm.site_name;
-    webapp::world_page::WorldContent {
-        head_title: format!("{firm_name} | World"),
-        meta_description: format!(
-            "Explore {firm_name}'s calculated astrocartography: planetary lines over a \
-             world map, a specimen chart, and a birth chart cast for your moment — \
-             calculated within your request and discarded with it."
-        ),
-        page_title: "World".to_string(),
-        aster_asset_href: views::assets::asset_url(views::assets::ASTER_BOARD_KEY),
-        country_names: webapp::world_page::country_names(),
-    }
+    locales::world(branding)
 }
 
 /// Resolve the firm home page's static copy from the mounted `branding` — the
