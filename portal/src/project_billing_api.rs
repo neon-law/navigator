@@ -371,24 +371,23 @@ async fn raise_batch(
     // moment it returns, before any local flip, so a crash or refusal
     // mid-settle leaves the resume holding the exact invoice instead of
     // relying on the provider's own idempotency window.
-    let invoice_id = match &batch.xero_invoice_id {
-        Some(saved) => billing::InvoiceId(saved.clone()),
-        None => {
-            let invoice = provider
-                .create_invoice(
-                    batch.id,
-                    &InvoiceRequest {
-                        contact_name: party.name.clone(),
-                        contact_email: party.email.clone(),
-                        reference: batch.reference.clone(),
-                        line_items: line_items.clone(),
-                        due_date: None,
-                    },
-                )
-                .await?;
-            billing_batches::attach_invoice(pg, batch.id, &invoice.0).await?;
-            invoice
-        }
+    let invoice_id = if let Some(saved) = &batch.xero_invoice_id {
+        billing::InvoiceId(saved.clone())
+    } else {
+        let invoice = provider
+            .create_invoice(
+                batch.id,
+                &InvoiceRequest {
+                    contact_name: party.name.clone(),
+                    contact_email: party.email.clone(),
+                    reference: batch.reference.clone(),
+                    line_items: line_items.clone(),
+                    due_date: None,
+                },
+            )
+            .await?;
+        billing_batches::attach_invoice(pg, batch.id, &invoice.0).await?;
+        invoice
     };
 
     // Mirror first (the costs' link validates against it), then flip the
