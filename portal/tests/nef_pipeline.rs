@@ -448,6 +448,13 @@ async fn a_matterless_notice_stays_in_the_backlog() {
         rows.iter().any(|m| m["id"] == message.to_string()),
         "the unfiled notice stays in the triage backlog"
     );
+    let saved = rows
+        .iter()
+        .find(|row| row["id"] == message.to_string())
+        .unwrap();
+    assert_eq!(saved["recorded_route"], "nef");
+    assert_eq!(saved["recorded_nef_outcome"], "no_project");
+    assert_eq!(saved["recorded_at"], applied["result"]["recorded_at"]);
 }
 
 #[tokio::test]

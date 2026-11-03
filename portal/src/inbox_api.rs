@@ -92,19 +92,14 @@ pub(crate) async fn unprocessed(
     let rows = store::inbox::unprocessed_inbox(&state.surreal, actor_id)
         .await
         .map_err(map_inbox)?;
-    let views = rows
-        .into_iter()
-        .map(|row| {
-            view(
-                row,
-                store::inbox::ProcessState {
-                    route: None,
-                    processed_at: None,
-                    nef_outcome: None,
-                },
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut views = Vec::with_capacity(rows.len());
+    for row in rows {
+        let saved = store::inbox::process_state(&state.surreal, row.id)
+            .await
+            .map_err(map_inbox)?
+            .ok_or(ApiError::NotFound)?;
+        views.push(view(row, saved));
+    }
     Ok(Json(views).into_response())
 }
 
