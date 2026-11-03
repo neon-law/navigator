@@ -41,6 +41,16 @@ pub struct ContactPhone {
     pub label: String,
 }
 
+/// Replace this label's entry; keep every other label so a mobile write cannot
+/// drop a fax.
+fn replace_labeled_phone(phones: &mut Vec<ContactPhone>, label: &str, phone: &ContactPhone) {
+    phones.retain(|existing| existing.label != label);
+    phones.push(ContactPhone {
+        value: phone.value.clone(),
+        label: label.to_string(),
+    });
+}
+
 #[derive(Debug, Error)]
 pub enum ContactsError {
     #[error("missing required Contacts configuration: {0}")]
@@ -302,14 +312,7 @@ impl ContactsService for GoogleContacts {
             return Err(ContactsError::NoContact(email.to_string()));
         };
 
-        // Replace this label's entry, keep every other label's untouched:
-        // the write is scoped to what changed so the directory never
-        // loses a fax because a mobile moved.
-        phones.retain(|existing| existing.label != label);
-        phones.push(ContactPhone {
-            value: phone.value.clone(),
-            label: label.to_string(),
-        });
+        replace_labeled_phone(&mut phones, label, phone);
 
         let action = "updating the contact";
         let body = UpdateContactBody {
@@ -377,11 +380,7 @@ impl ContactsService for FakeContacts {
             .get_mut(&email.to_ascii_lowercase())
             .ok_or_else(|| ContactsError::NoContact(email.to_string()))?;
         entry.0 += 1;
-        entry.1.retain(|existing| existing.label != label);
-        entry.1.push(ContactPhone {
-            value: phone.value.clone(),
-            label: label.to_string(),
-        });
+        replace_labeled_phone(&mut entry.1, label, phone);
         Ok(())
     }
 }

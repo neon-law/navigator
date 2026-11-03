@@ -11,9 +11,7 @@ description: >
 Read [`docs/public-contributor-safety.md`](../../../docs/public-contributor-safety.md),
 [`docs/rust-programming.md`](../../../docs/rust-programming.md), and [`.agents/skills/rust/SKILL.md`](../rust/SKILL.md)
 first. Code is the source of truth. Comments, docs, tests, Presentations, and Workshops describe today. Git already
-holds rejected alternatives, so those do not belong in the file.
-
-One opportunistic pass over one file. Not a sweep, and not a substitute for
+holds rejected alternatives. One opportunistic pass over one file — not a sweep, and not a substitute for
 [`implement-issue`](../implement-issue/SKILL.md), [`review`](../review/SKILL.md), or
 [`author-docs`](../author-docs/SKILL.md). This file must not grow.
 
@@ -32,14 +30,14 @@ bindgen blobs, `OUT_DIR`).
 ## 2. Read the references that apply
 
 Keep clones out of the workspace. Reuse `/tmp/navigator-rust-library` (sparse `library/std`) and rust-lang/book when
-`.git` is there; otherwise clone them or fetch the chapter from <https://doc.rust-lang.org/>. Do not invent a
-standard-library API from memory. Read only what the file uses (Klabnik/Nichols). Search `library/std` for the same type
-before a local helper. Then the workspace Rust doc and skill, the Foundation learn catalog (Book, [Rust by
-Example](https://doc.rust-lang.org/rust-by-example/), std), [API
-Guidelines](https://rust-lang.github.io/api-guidelines/checklist.html) (C-CONV, C-GETTER, C-CTOR), [Style
+`.git` is there; otherwise clone them or fetch from <https://doc.rust-lang.org/>. Do not invent a standard-library API
+from memory. Read only what the file uses (Klabnik/Nichols). Search `library/std` for the same type before a local
+helper. Then the workspace Rust doc and skill, the Foundation learn catalog (Book, [Rust by
+Example](https://doc.rust-lang.org/rust-by-example/), std, rustc), [API
+Guidelines](https://rust-lang.github.io/api-guidelines/checklist.html) (C-CONV, C-GETTER, C-CTOR), the [Style
 Guide](https://doc.rust-lang.org/style-guide/), and Microsoft's [Pragmatic Rust
-Guidelines](https://microsoft.github.io/rust-guidelines/) (`M-UPSTREAM-GUIDELINES`, `M-STATIC-VERIFICATION`: rustc,
-clippy, and rustfmt review before prose does). A public item with no caller is unused.
+Guidelines](https://microsoft.github.io/rust-guidelines/) (`M-UPSTREAM-GUIDELINES`, `M-STATIC-VERIFICATION`,
+`M-REGULAR-FN`: rustc, clippy, and rustfmt review before prose). A public item with no caller is unused.
 
 ## 3. Compare similar patterns
 
@@ -66,9 +64,9 @@ No `unwrap` / `expect` / `panic!` outside `main()` and tests, no `unsafe`, Axum 
 
 Write one report at `/tmp/navigator-random-refactor/<file-stem>-<shortsha>.md`, including a zero-finding result. Keep
 citations. Do not copy client data, legal files, real contact details, production identifiers, or Linear titles. Then
-take exactly one of these actions. A behavior-preserving refactor is still a refactor: keep the covering test green.
+take exactly one action. Keep the covering test green.
 
-- **Zero findings, or findings that need an author or council decision:** stop. Hand the report back.
+- **Zero findings, or an author or council decision:** stop. Hand the report back.
 - **Clear, small, evidence-backed findings:** smallest present-tense change, covering test first, one file. Run
   `cargo fmt`, the focused test, clippy `-D warnings`, and `cargo run -p cli --quiet -- project gate`. Prefix `cargo
   test` and `cargo clippy` with `rtk`.
