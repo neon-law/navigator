@@ -64,6 +64,12 @@ spec:
                   name: navigator-forgejo-actions-oidc
                   key: workflow
                   optional: true
+            # The installation's Forgejo root URL, rendered by `ops ship` from
+            # the deployment's public `NAVIGATOR_FORGEJO_ROOT_URL` coordinate.
+            # Firm organization creation and Project repository provisioning
+            # call Forgejo's API here; without it both answer 503.
+            - name: NAVIGATOR_FORGEJO_ROOT_URL
+              value: YOUR_FORGEJO_ROOT_URL
             # GKE replaces the base environment list wholesale, so carry the
             # repo root explicitly. Its PD-backed volume remains part of
             # /app/readyz.

@@ -333,7 +333,13 @@ impl ForgejoOrganizations {
             }
         }
         checked(
-            request(&self.token, self.http.put(&member)).send().await,
+            // Forgejo reads no body here, but a bodiless PUT goes out
+            // without a `Content-Length` and is refused with 411 Length
+            // Required in front of the forge (ENG-1226).
+            request(&self.token, self.http.put(&member))
+                .header(reqwest::header::CONTENT_LENGTH, "0")
+                .send()
+                .await,
             "adding the owners team member",
         )?;
         tracing::info!("Forgejo organization owner added");
@@ -573,8 +579,11 @@ mod tests {
             )
             .mount(&server)
             .await;
+        // ENG-1226: a bodiless PUT with no `Content-Length` is answered 411
+        // Length Required in front of Forgejo, so the length must be stated.
         Mock::given(method("PUT"))
             .and(path("/api/v1/teams/4/members/firm-account"))
+            .and(header("content-length", "0"))
             .respond_with(ResponseTemplate::new(204))
             .expect(1)
             .mount(&server)

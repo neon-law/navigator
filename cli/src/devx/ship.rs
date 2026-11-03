@@ -222,6 +222,10 @@ where
     F: Fn(&str) -> Option<String>,
 {
     [
+        // The web pod's own copy of the root URL: Firm organization
+        // creation and Project repository provisioning call Forgejo's API
+        // at it, and refuse with 503 when it is absent (ENG-1229).
+        ("YOUR_FORGEJO_ROOT_URL", "NAVIGATOR_FORGEJO_ROOT_URL"),
         ("YOUR_FORGEJO_OIDC_NAME", "NAVIGATOR_FORGEJO_OIDC_NAME"),
         (
             "YOUR_FORGEJO_OIDC_DISCOVERY_URL",
@@ -7525,6 +7529,20 @@ mod tests {
             .find(|entry| entry["name"].as_str() == Some(name))?["value"]
             .as_str()
             .map(str::to_owned)
+    }
+
+    /// ENG-1229: the web pod creates Firm Forgejo organizations and
+    /// provisions Project repositories, and both refuse with 503 when
+    /// `NAVIGATOR_FORGEJO_ROOT_URL` is absent. The coordinate already gates
+    /// the release and names Forgejo's Ingress host, so it must reach `web`.
+    #[test]
+    fn web_env_carries_the_forgejo_root_url() {
+        let manifests = rendered_manifests(env_getter(FULL_ENV));
+        let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+        assert_eq!(
+            web_env_value(&web, cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV).as_deref(),
+            Some("https://forge.example.invalid/"),
+        );
     }
 
     fn renders_cronjob(manifests: &str, name: &str) -> bool {

@@ -1025,6 +1025,7 @@ fn forgejo_runner_help_names_explicit_isolation_and_recovery_controls() {
         "--runner-namespace <RUNNER_NAMESPACE>",
         "--egress-ip <EGRESS_IP>",
         "--dns-ip <DNS_IP>",
+        "[default: 169.254.20.10]",
         "--cleanup-registration <CLEANUP_REGISTRATION>",
         "--cleanup-job <CLEANUP_JOB>",
         "FORGEJO_TOKEN",
