@@ -965,25 +965,123 @@ fn source_reference(mailbox: &str, message_id: &str) -> String {
 }
 
 /// The Gmail message id a reference names: a Gmail web URL copied from the
-/// browser (`https://mail.google.com/mail/u/0/#inbox/<id>`, the legacy
-/// `?th=<id>` form included) or a bare Gmail message id. None when the
-/// reference is neither, so a misspelled file path falls through to the
-/// caller's file handling.
+/// browser (`https://mail.google.com/mail/u/0/#inbox/<id>`, any
+/// `#<label>/…/<id>` or `#search/<query>/<id>` form, and the legacy
+/// `?th=<id>` form included), a bare Gmail message id, or the browser's
+/// `FMfcgz…` web id, decoded to its hex id. None when the reference is
+/// none of these, so a misspelled file path falls through to the caller's
+/// file handling.
+///
+/// The browser's id names the conversation: for a one-message thread it is
+/// the message id, and for a longer one Gmail resolves it to the thread's
+/// first message — the same reading the legacy hex URLs always had.
 fn gmail_message_id(reference: &str) -> Option<String> {
-    if let Ok(url) = Url::parse(reference) {
-        if !url.host_str()?.ends_with("mail.google.com") {
-            return None;
-        }
-        if let Some((_, id)) = url.query_pairs().find(|(name, _)| name == "th") {
-            return Some(id.into_owned()).filter(|id| is_gmail_id(id));
-        }
-        let id = url
-            .fragment()?
-            .rsplit('/')
-            .find(|segment| !segment.is_empty())?;
-        return Some(id.to_string()).filter(|id| is_gmail_id(id));
+    let candidate = reference_id_segment(reference)?;
+    if let Some(GmailWebId::Decoded(id)) = gmail_web_id(&candidate) {
+        return Some(id);
     }
-    Some(reference.to_string()).filter(|id| is_gmail_id(id))
+    Some(candidate).filter(|id| is_gmail_id(id))
+}
+
+/// The id-shaped segment of a reference: the `th` query value or last
+/// fragment segment of a Gmail web URL, or the reference itself. None for
+/// a URL on another host or with no id segment.
+fn reference_id_segment(reference: &str) -> Option<String> {
+    let Ok(url) = Url::parse(reference) else {
+        return Some(reference.to_string());
+    };
+    if !url.host_str()?.ends_with("mail.google.com") {
+        return None;
+    }
+    if let Some((_, id)) = url.query_pairs().find(|(name, _)| name == "th") {
+        return Some(id.into_owned());
+    }
+    let fragment = url.fragment()?;
+    // `#inbox/<id>?projector=1` opens an attachment preview over the message.
+    let fragment = fragment.split_once('?').map_or(fragment, |(path, _)| path);
+    fragment
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .map(str::to_string)
+}
+
+/// What a browser web id (`FMfcgz…`) decodes to.
+#[derive(Debug, PartialEq, Eq)]
+enum GmailWebId {
+    /// A thread or message id in the API's hex form.
+    Decoded(String),
+    /// A well-formed web id that carries no API id (`thread-a:r…`, the form
+    /// Gmail uses for drafts and some sent mail).
+    Opaque,
+}
+
+/// Gmail's web ids re-encode `base64("<kind>:<decimal id>")` in a
+/// forty-consonant alphabet. Numeric kinds (`f:`, `thread-f:`, `msg-f:`)
+/// decode offline to the API's hex id. None when `token` is not a web id
+/// at all.
+fn gmail_web_id(token: &str) -> Option<GmailWebId> {
+    const WEB: &[u8] = b"BCDFGHJKLMNPQRSTVWXZbcdfghjklmnpqrstvwxz";
+    const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const STANDARD_ANY_PAD: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        base64::engine::GeneralPurposeConfig::new()
+            .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+    );
+    if !(16..=128).contains(&token.len()) {
+        return None;
+    }
+    // Base conversion, 40 to 64, over little-endian digit vectors.
+    let mut digits: Vec<u32> = Vec::new();
+    for byte in token.bytes() {
+        let mut carry = u32::try_from(WEB.iter().position(|&c| c == byte)?).ok()?;
+        for digit in &mut digits {
+            let value = *digit * 40 + carry;
+            *digit = value % 64;
+            carry = value / 64;
+        }
+        while carry > 0 {
+            digits.push(carry % 64);
+            carry /= 64;
+        }
+    }
+    let encoded: String = digits
+        .iter()
+        .rev()
+        .map(|&digit| char::from(BASE64[digit as usize]))
+        .collect();
+    let decoded = String::from_utf8(STANDARD_ANY_PAD.decode(encoded).ok()?).ok()?;
+    let (kind, value) = decoded.split_once(':')?;
+    if kind.is_empty() || !kind.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') {
+        return None;
+    }
+    match value.parse::<u64>() {
+        Ok(number) if kind.ends_with('f') => Some(GmailWebId::Decoded(format!("{number:x}"))),
+        _ => Some(GmailWebId::Opaque),
+    }
+}
+
+/// The error for a reference that names no message: a web id that cannot
+/// be decoded offline gets its own explanation, anything else `fallback`.
+fn unresolved_reference_or(reference: &str, fallback: &str) -> anyhow::Error {
+    if reference_id_segment(reference)
+        .and_then(|segment| gmail_web_id(&segment))
+        .is_some_and(|id| id == GmailWebId::Opaque)
+    {
+        return anyhow!(
+            "the reference carries a Gmail web id that names no API message id (Gmail uses \
+             this form for drafts and some sent mail): {reference}. Open the message, choose \
+             Show original, and pass its Message ID, or copy the URL from a conversation view"
+        );
+    }
+    anyhow!("{fallback}: {reference}")
+}
+
+/// [`unresolved_reference_or`] with the Gmail-only fallback message.
+fn unresolved_reference(reference: &str) -> anyhow::Error {
+    unresolved_reference_or(
+        reference,
+        "the reference is neither a Gmail web URL nor a Gmail message id",
+    )
 }
 
 /// Gmail message ids are base64url strings (commonly 16 characters) with
@@ -1478,8 +1576,12 @@ struct ArchivedMessage {}
 /// INBOX label. Never a trash delete, and never a send. This is the only
 /// Gmail write `inbox process` performs.
 pub async fn archive(reference: &str) -> Result<()> {
-    let id = gmail_message_id(reference)
-        .ok_or_else(|| anyhow!("cannot resolve a Gmail message id from the reference"))?;
+    let id = gmail_message_id(reference).ok_or_else(|| {
+        unresolved_reference_or(
+            reference,
+            "cannot resolve a Gmail message id from the reference",
+        )
+    })?;
     let client = client().await?;
     client.archive_message(&id).await
 }
@@ -1881,8 +1983,9 @@ async fn parse_command(
         return parse_local_file(reference, project, host, kind).await;
     }
     let message_id = gmail_message_id(reference).ok_or_else(|| {
-    anyhow!(
-            "the reference is neither an existing file, a Gmail web URL, nor a Gmail message id: {reference}"
+        unresolved_reference_or(
+            reference,
+            "the reference is neither an existing file, a Gmail web URL, nor a Gmail message id",
         )
     })?;
     parse_gmail_message(&message_id, project, host).await
@@ -2052,9 +2155,7 @@ async fn save_message_command(
     dir: Option<&Path>,
     name: Option<&str>,
 ) -> Result<()> {
-    let message_id = gmail_message_id(reference).ok_or_else(|| {
-        anyhow!("the reference is neither a Gmail web URL nor a Gmail message id: {reference}")
-    })?;
+    let message_id = gmail_message_id(reference).ok_or_else(|| unresolved_reference(reference))?;
     if let Some(name) = name {
         check_mail_save_name(name)?;
     }
@@ -2186,6 +2287,50 @@ mod tests {
             gmail_message_id("18fa3bc2d4e5f6a7").as_deref(),
             Some("18fa3bc2d4e5f6a7")
         );
+    }
+
+    #[test]
+    fn gmail_web_ids_in_browser_urls_decode_to_their_hex_id() {
+        // Synthetic web ids: base64("f:<decimal>") re-encoded in Gmail's
+        // forty-consonant alphabet, the `FMfcgz…` shape the browser shows.
+        for url in [
+            "https://mail.google.com/mail/u/0/#inbox/FMfcgzQcqbThLrGqQsnjtQPDxLcKcpDw",
+            "https://mail.google.com/mail/u/0/#all/FMfcgzQcqbThLrGqQsnjtQPDxLcKcpDw",
+            "https://mail.google.com/mail/u/1/#label/Court+Notices/FMfcgzQcqbThLrGqQsnjtQPDxLcKcpDw",
+            "https://mail.google.com/mail/u/0/#search/from%3Aecf/FMfcgzQcqbThLrGqQsnjtQPDxLcKcpDw",
+            "FMfcgzQcqbThLrGqQsnjtQPDxLcKcpDw",
+        ] {
+            assert_eq!(
+                gmail_message_id(url).as_deref(),
+                Some("19a24cff5a335f79"),
+                "{url}"
+            );
+        }
+        // `msg-f:` and `thread-f:` payloads decode the same way.
+        assert_eq!(
+            gmail_message_id(
+                "https://mail.google.com/mail/u/0/#inbox/CXKnWZngLGgsJngQCFjlMGBrHTdgzqmNNwWpWbB"
+            )
+            .as_deref(),
+            Some("19a24cff5a335f7a")
+        );
+        assert_eq!(
+            gmail_web_id("NHgvNZFVxQXXXjLLlrBqXjgFWLFMMggHDSCgTnzMCbV"),
+            Some(GmailWebId::Decoded("19a24cff5a335f7b".into()))
+        );
+    }
+
+    #[test]
+    fn gmail_web_ids_without_a_hex_id_are_named_in_the_error() {
+        // `thread-a:r…` web ids (drafts, some sent mail) carry no API id.
+        let url =
+            "https://mail.google.com/mail/u/0/#sent/hxTnWLsSgZFtzTnCPbnHcvHmljQSrDDfZXkDZLjbFLLzr";
+        assert_eq!(gmail_message_id(url), None);
+        let message = unresolved_reference(url).to_string();
+        assert!(message.contains("Gmail web id"), "{message}");
+        assert!(message.contains("Show original"), "{message}");
+        let plain = unresolved_reference("notes/draft-body.txt").to_string();
+        assert!(plain.contains("neither"), "{plain}");
     }
 
     #[test]

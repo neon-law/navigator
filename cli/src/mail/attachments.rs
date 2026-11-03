@@ -296,9 +296,8 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<super::GmailClient>>,
 {
-    let message_id = super::gmail_message_id(reference).ok_or_else(|| {
-        anyhow!("the reference is neither a Gmail web URL nor a Gmail message id: {reference}")
-    })?;
+    let message_id =
+        super::gmail_message_id(reference).ok_or_else(|| super::unresolved_reference(reference))?;
     let gmail = connect().await?;
     let raw_field = gmail.raw_message(&message_id).await?;
     let raw = super::decode_gmail_raw(
