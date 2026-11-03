@@ -174,6 +174,10 @@ pub struct InvoiceRequest {
     pub contact_email: String,
     pub reference: String,
     pub line_items: Vec<InvoiceLine>,
+    /// Explicit issue date when the caller freezes one; other callers keep
+    /// Xero's organisation-date convention by omitting it.
+    #[serde(default)]
+    pub issued_date: Option<NaiveDate>,
     /// When payment is due. `None` omits `DueDate` from the provider request.
     #[serde(default)]
     pub due_date: Option<NaiveDate>,
@@ -427,7 +431,12 @@ impl BillingProvider for StubBillingProvider {
                         .sum(),
                 ),
                 currency: Some("USD".into()),
-                issued_at: Some(Utc::now()),
+                issued_at: Some(
+                    request
+                        .issued_date
+                        .and_then(|date| date.and_hms_opt(0, 0, 0))
+                        .map_or_else(Utc::now, |date| date.and_utc()),
+                ),
                 due_at: request
                     .due_date
                     .and_then(|date| date.and_hms_opt(0, 0, 0))
@@ -688,6 +697,9 @@ impl XeroBillingProvider {
             "Contact": { "ContactID": contact.0 },
             "LineItems": line_items,
         });
+        if let Some(issued) = request.issued_date {
+            body["Date"] = serde_json::Value::String(issued.format("%Y-%m-%d").to_string());
+        }
         if let Some(due) = request.due_date {
             body["DueDate"] = serde_json::Value::String(due.format("%Y-%m-%d").to_string());
         }
@@ -1384,7 +1396,7 @@ mod tests {
         ReceivableInvoice, StubBillingProvider, XeroBillingProvider,
     };
     use crate::xero_auth::XeroClientCredentials;
-    use chrono::{TimeZone, Utc};
+    use chrono::{NaiveDate, TimeZone, Utc};
     use uuid::Uuid;
     use wiremock::matchers::{body_partial_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1407,6 +1419,7 @@ mod tests {
                 unit_amount_cents: 333_300,
                 account_code: "200".into(),
             }],
+            issued_date: None,
             due_date: None,
         }
     }
@@ -1594,8 +1607,10 @@ mod tests {
         let server = MockServer::start().await;
         let mut legacy = serde_json::to_value(estate_invoice()).unwrap();
         legacy.as_object_mut().unwrap().remove("contact_id");
+        legacy.as_object_mut().unwrap().remove("issued_date");
         let mut request: InvoiceRequest = serde_json::from_value(legacy).unwrap();
         assert_eq!(request.contact_id, None);
+        assert_eq!(request.issued_date, None);
         let provider = xero(server.uri());
         assert!(provider.create_invoice(ID42, &request).await.is_err());
         request.contact_id = Some(ContactId("  ".into()));
@@ -1616,6 +1631,9 @@ mod tests {
     #[tokio::test]
     async fn xero_posts_tenant_and_idempotency_headers_and_returns_invoice_id() {
         let server = MockServer::start().await;
+        let mut request = estate_invoice();
+        request.issued_date = NaiveDate::from_ymd_opt(2026, 10, 31);
+        request.due_date = NaiveDate::from_ymd_opt(2026, 11, 14);
         Mock::given(method("POST"))
             .and(path("/Invoices"))
             .and(header("authorization", "Bearer TOKEN"))
@@ -1623,6 +1641,7 @@ mod tests {
             .and(header("idempotency-key", ID42.to_string().as_str()))
             .and(body_partial_json(serde_json::json!({
                 "CurrencyCode": "USD", "LineAmountTypes": "Exclusive",
+                "Date": "2026-10-31", "DueDate": "2026-11-14",
                 "Contact": {"ContactID": "contact-estate"},
             })))
             .and(header("accept", "application/json"))
@@ -1634,7 +1653,7 @@ mod tests {
             .await;
 
         let id = xero(server.uri())
-            .create_invoice(ID42, &estate_invoice())
+            .create_invoice(ID42, &request)
             .await
             .expect("create succeeds");
         assert_eq!(id, InvoiceId("inv-789".into()));

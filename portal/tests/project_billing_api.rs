@@ -793,6 +793,15 @@ fn assert_frozen_debtor_request(
         requests[0].contact_id.as_ref().unwrap().0,
         batch.xero_contact_id
     );
+    assert_eq!(
+        requests[0].issued_date,
+        Some(batch.inserted_at.date_naive())
+    );
+    assert_eq!(requests[0].due_date, Some(batch.due_date));
+    assert_eq!(
+        batch.due_date,
+        batch.inserted_at.date_naive() + chrono::Days::new(14)
+    );
 }
 
 async fn run_recovery_safety() {
@@ -836,8 +845,8 @@ async fn run_recovery_safety() {
     assert_eq!(reason["reason"], "invoice_reconciliation_required");
     assert_eq!(fixture.provider.create_keys(), vec![batch.id]);
 
-    // Model a first attachment just after UTC midnight; Xero's organisation
-    // can still report the previous calendar day as its invoice date.
+    // Model a first attachment just after UTC midnight and a provider invoice
+    // whose date was corrected to a previous calendar day.
     // Reconciliation found the real invoice. A mirrored but unsettled batch
     // contributes outstanding balance, never that same work to WIP as well.
     store::billing_batches::attach_invoice(&fixture.pg, batch.id, "synthetic-recovered")

@@ -3565,6 +3565,7 @@
           "contact_name": "TEXT",
           "cost_ids": "UUID[]",
           "currency": "TEXT",
+          "due_date": "DATE",
           "entry_ids": "UUID[]",
           "first_attempted_at": "TIMESTAMPTZ",
           "flat_fee_cents": "BIGINT",
@@ -3576,6 +3577,7 @@
           "status": "TEXT",
           "total_cents": "BIGINT",
           "updated_at": "TIMESTAMPTZ",
+          "xero_contact_id": "TEXT",
           "xero_invoice_id": "TEXT"
         },
         "foreign_keys": [

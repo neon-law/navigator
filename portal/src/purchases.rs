@@ -162,6 +162,7 @@ pub async fn buy(
                 contact_email: person.email.clone(),
                 reference: reference(&purchase),
                 line_items: vec![line(&purchase)],
+                issued_date: None,
                 due_date: Some(now.date_naive() + TimeDelta::days(i64::from(DUE_DAYS))),
             },
         )

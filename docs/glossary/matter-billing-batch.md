@@ -12,6 +12,10 @@ identifier for its debtor. Reserved work cannot be written off or linked manuall
 resumes the same request and any saved [Xero Invoice](xero-invoice.md) identifier; later work creates a new batch after
 completion.
 
+Matter invoices use the batch's original UTC creation day as their explicit issue date. The due date is 14 calendar days
+later and is saved with the batch, so a retry after midnight or a later policy change cannot alter the request. Provider
+date corrections and cleared due dates are mirrored from a fresh read.
+
 Xero retains an idempotency key for six minutes from its first call. A batch records its first attempt time once;
 retries preserve that time and the same request. An uncertain attempt outside the safe retry window requires manual
 reconciliation before another provider create. See [Xero

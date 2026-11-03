@@ -262,6 +262,7 @@ async fn invoice_closed_overage(
                 unit_amount_cents: overage_cents,
                 account_code: purchase.account_code.clone(),
             }],
+            issued_date: None,
             due_date: None,
         };
         // Keep the deterministic request key. Recovery after provider-key

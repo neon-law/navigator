@@ -76,6 +76,28 @@ fn create_window_open(first_attempted_at: DateTime<Utc>, now: DateTime<Utc>) -> 
     (chrono::Duration::zero()..chrono::Duration::minutes(4)).contains(&age)
 }
 
+/// The matter invoice term: fourteen calendar days from its frozen issue date.
+fn matter_due_date(issued: NaiveDate) -> Result<NaiveDate, InvoiceGenerationError> {
+    issued
+        .checked_add_days(chrono::Days::new(14))
+        .ok_or_else(|| billing_batches::BillingBatchError::Invalid("invoice due date").into())
+}
+
+fn request_for_batch(
+    batch: &billing_batches::MatterBillingBatch,
+    line_items: &[InvoiceLine],
+) -> InvoiceRequest {
+    InvoiceRequest {
+        contact_id: Some(billing::ContactId(batch.xero_contact_id.clone())),
+        contact_name: batch.contact_name.clone(),
+        contact_email: batch.contact_email.clone(),
+        reference: batch.reference.clone(),
+        line_items: line_items.to_vec(),
+        issued_date: Some(batch.inserted_at.date_naive()),
+        due_date: Some(batch.due_date),
+    }
+}
+
 /// How a Xero `Reference` names the matter an invoice bills — the documented
 /// ingest convention (`store::xero_invoices::ProjectScopeRef`).
 fn matter_reference(code: &str) -> String {
@@ -313,6 +335,7 @@ pub(crate) async fn generate_invoice(
     // entry cannot be written off and a reserved cost cannot be resolved or
     // re-confirmed, so nothing the lawyer removed can slip into the batch
     // while Xero is deciding.
+    let due_date = matter_due_date(now.date_naive())?;
     let contact = provider
         .ensure_contact(&billing::ContactRequest {
             name: party.name.clone(),
@@ -341,6 +364,7 @@ pub(crate) async fn generate_invoice(
             contact_name: party.name.clone(),
             contact_email: party.email.clone(),
             xero_contact_id: contact.0,
+            due_date,
             first_attempted_at: None,
             line_items: serde_json::to_value(&compose.line_items)?,
             total_cents: compose.total_cents,
@@ -388,19 +412,10 @@ async fn invoice_for_batch(
         // reconciled manually. Never guess by matter reference or total.
         return Err(InvoiceGenerationError::ReconciliationRequired);
     }
+    let request = request_for_batch(batch, line_items);
     let invoice = tokio::time::timeout(
         CREATE_ATTEMPT_BUDGET,
-        provider.create_invoice(
-            batch.id,
-            &InvoiceRequest {
-                contact_id: Some(billing::ContactId(batch.xero_contact_id.clone())),
-                contact_name: batch.contact_name.clone(),
-                contact_email: batch.contact_email.clone(),
-                reference: batch.reference.clone(),
-                line_items: line_items.to_vec(),
-                due_date: None,
-            },
-        ),
+        provider.create_invoice(batch.id, &request),
     )
     .await
     .map_err(|_| billing::BillingError::Provider("invoice creation timed out".into()))??;
@@ -442,8 +457,8 @@ async fn raise_batch(
         .ok_or_else(|| {
             billing::BillingError::Provider("invoice currency missing from provider read".into())
         })?;
-    // Xero's omitted Date defaults to the organisation's local date, not
-    // this process's UTC attachment time. Mirror the actual provider dates.
+    // Provider dates can be corrected after creation. Mirror their current
+    // values; attachment and retry clocks never redate the receivables ledger.
     // https://developer.xero.com/documentation/api/accounting/invoices
     let issued_at = invoice_state.issued_at.ok_or_else(|| {
         billing::BillingError::Provider("invoice issued date missing or malformed".into())
@@ -719,6 +734,64 @@ mod tests {
             inserted,
             inserted - Duration::seconds(1)
         ));
+    }
+
+    #[test]
+    fn matter_term_is_fourteen_calendar_days_at_date_boundaries() {
+        for (issued, due) in [
+            ("2026-10-31", "2026-11-14"),
+            ("2026-12-25", "2027-01-08"),
+            ("2028-02-20", "2028-03-05"),
+        ] {
+            assert_eq!(
+                super::matter_due_date(issued.parse().unwrap()).unwrap(),
+                due.parse::<chrono::NaiveDate>().unwrap()
+            );
+        }
+        assert!(super::matter_due_date(chrono::NaiveDate::MAX).is_err());
+    }
+
+    #[test]
+    fn saved_batch_request_keeps_dates_across_midnight_and_retained_terms() {
+        let inserted = "2026-10-31T23:59:59Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap();
+        let retry_clock = inserted + chrono::Duration::seconds(2);
+        let batch = store::billing_batches::MatterBillingBatch {
+            id: uuid::Uuid::new_v4(),
+            project_id: uuid::Uuid::new_v4(),
+            status: "pending".into(),
+            reference: "Synthetic invoice".into(),
+            contact_name: "Synthetic client".into(),
+            contact_email: "client@example.com".into(),
+            xero_contact_id: "synthetic-resolved-contact".into(),
+            due_date: "2026-11-14".parse().unwrap(),
+            first_attempted_at: None,
+            line_items: serde_json::json!([]),
+            total_cents: 100,
+            currency: "USD".into(),
+            entry_ids: vec![],
+            cost_ids: vec![],
+            xero_invoice_id: None,
+            flat_fee_cents: Some(100),
+            actor_id: uuid::Uuid::new_v4(),
+            inserted_at: inserted,
+            updated_at: inserted,
+        };
+        let request = super::request_for_batch(&batch, &[]);
+        assert_eq!(request.issued_date, Some("2026-10-31".parse().unwrap()));
+        assert_ne!(request.issued_date, Some(retry_clock.date_naive()));
+        assert_eq!(request.due_date, Some("2026-11-14".parse().unwrap()));
+        // A retained batch can reflect an earlier term policy. Never
+        // recompute its saved deadline using a later default.
+        let retained = store::billing_batches::MatterBillingBatch {
+            due_date: "2026-11-20".parse().unwrap(),
+            ..batch
+        };
+        assert_eq!(
+            super::request_for_batch(&retained, &[]).due_date,
+            Some("2026-11-20".parse().unwrap())
+        );
     }
 
     async fn billing_person(
