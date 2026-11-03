@@ -249,6 +249,13 @@ async fn row_action_gate(
             Some("The task store is unavailable right now — try again shortly."),
         ));
     };
+    match store::tasks::find_by_id(&pg, task_id).await {
+        Ok(task) if task.project_id == project.id => {}
+        Ok(_) | Err(store::tasks::ProjectTaskError::NotFound) => {
+            return Err(not_found_response());
+        }
+        Err(error) => return Err(back_to_tasks(code, Some(&flash_for(&error)))),
+    }
     Ok(RowActionGate { person_id, pg })
 }
 
@@ -289,3 +296,7 @@ fn flash_for(error: &store::tasks::ProjectTaskError) -> String {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "project_tasks_forms_tests.rs"]
+mod tests;
