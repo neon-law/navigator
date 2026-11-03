@@ -1037,6 +1037,27 @@ pub async fn assign(
     assign_unbilled(db, actor_id, conversation_id, project_id).await
 }
 
+/// Require ordinary Inbox assignment rights using the authoritative Person and Project.
+/// Owner may assign; a Lawyer or Clerk needs target Project participation.
+/// The target Project must belong to the Conversation or import's resolved Firm.
+pub async fn require_assignment_authorization(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    firm_id: Uuid,
+    project_id: Uuid,
+) -> Result<(), InboxError> {
+    let project = projects::find_by_id(db, project_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if project.firm_id != Some(firm_id) {
+        return Err(InboxError::CrossFirm);
+    }
+    if !can_assign_project(db, actor_id, project_id).await? {
+        return Err(InboxError::Denied);
+    }
+    Ok(())
+}
+
 pub(crate) async fn assign_unbilled(
     db: &SurrealDb,
     actor_id: Uuid,
@@ -1053,19 +1074,10 @@ pub(crate) async fn assign_unbilled(
         ))
         .await;
     }
-    let can_assign = can_assign_project(db, actor_id, project_id).await?;
     let conversation = conversation_by_id(db, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
-    let project = projects::find_by_id(db, project_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if project.firm_id != Some(conversation.firm_id) {
-        return Err(InboxError::CrossFirm);
-    }
-    if !can_assign {
-        return Err(InboxError::Denied);
-    }
+    require_assignment_authorization(db, actor_id, conversation.firm_id, project_id).await?;
     assign_write(db, actor_id, &conversation, project_id).await
 }
 
@@ -4022,6 +4034,50 @@ mod tests {
         assert_eq!(audit.len(), 1);
         assert_eq!(audit[0].to_project_id, world.project);
         assert!(audit[0].from_project_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn ordinary_assignment_authorization_uses_source_roles_and_supervised_participation() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        for actor in [world.owner, world.lawyer, world.clerk] {
+            require_assignment_authorization(&db, actor, world.firm, world.project)
+                .await
+                .unwrap();
+        }
+        for actor in [world.admin, world.client, world.outsider] {
+            assert!(matches!(
+                require_assignment_authorization(&db, actor, world.firm, world.project).await,
+                Err(InboxError::Denied)
+            ));
+        }
+        assert!(matches!(
+            require_assignment_authorization(&db, world.owner, world.firm, world.foreign_project)
+                .await,
+            Err(InboxError::CrossFirm)
+        ));
+        assert!(firms::memberships_for_person(&db, world.outsider)
+            .await
+            .unwrap()
+            .is_empty());
+        projects::add_participation(
+            &db,
+            world.project,
+            world.outsider,
+            projects::participation_for_role(Role::Lawyer),
+        )
+        .await
+        .unwrap();
+        require_assignment_authorization(&db, world.outsider, world.firm, world.project)
+            .await
+            .unwrap();
+        projects::remove_participation(&db, world.clerk_participation)
+            .await
+            .unwrap();
+        assert!(matches!(
+            require_assignment_authorization(&db, world.clerk, world.firm, world.project).await,
+            Err(InboxError::Denied)
+        ));
     }
 
     #[tokio::test]

@@ -1140,6 +1140,116 @@ async fn post_fi_json(
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
+async fn assert_fi_assignment_authorization(
+    fixture: &Fixture,
+    pg: &store::postgres::PostgresDb,
+    project: &store::projects::Project,
+    admin: Uuid,
+) {
+    let outsider = ensure_person(
+        &fixture.surreal,
+        &NewPerson::with_role(
+            "Synthetic Outside Admin",
+            "outside-admin@example.com",
+            Role::Admin,
+        ),
+    )
+    .await;
+    let client = ensure_person(
+        &fixture.surreal,
+        &NewPerson::with_role("Synthetic Client", "fi-client@example.com", Role::Client),
+    )
+    .await;
+    let csv = "type,way,phone,at,length,id\nC,I,+15555550456,2026-10-29T18:00:00Z,61,authorization-call\nS,O,+15555550789,2026-10-29T18:01:00Z,,authorization-sms\n";
+    for (label, actor, session_role) in [
+        ("own Firm Admin", admin, Role::Admin),
+        ("foreign Firm Admin", outsider.id, Role::Admin),
+        ("stale Owner session for stored Admin", admin, Role::Owner),
+        (
+            "stale Owner session for stored Client",
+            client.id,
+            Role::Owner,
+        ),
+    ] {
+        let session = portal::SessionData {
+            person_id: Some(actor),
+            ..portal::SessionData::fresh("synthetic-fi-authorization", session_role)
+        };
+        let before = fi_counts(pg).await;
+        let audits: i64 = sqlx::query_scalar("SELECT count(*) FROM inbox_assignment")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+        let (status, body) = post_fi_json(
+            &fixture.app,
+            Some(&session),
+            fi_body(csv, &json!({"project":project.code,"dry_run":false})),
+        )
+        .await;
+        assert_eq!(
+            fi_counts(pg).await,
+            before,
+            "{label} must not persist history: {status} {body}"
+        );
+        let after_audits: i64 = sqlx::query_scalar("SELECT count(*) FROM inbox_assignment")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            after_audits, audits,
+            "{label} must not pin or audit an assignment"
+        );
+        assert_eq!(status, 403, "{label}: {body}");
+    }
+    assert_fi_unscoped_admin_preview(fixture, admin, csv).await;
+    let owner = ensure_person(
+        &fixture.surreal,
+        &NewPerson::with_role("Synthetic Fi Owner", "fi-owner@example.com", Role::Owner),
+    )
+    .await;
+    assert!(
+        store::firms::memberships_for_person(&fixture.surreal, owner.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let session = portal::SessionData {
+        person_id: Some(owner.id),
+        ..portal::SessionData::fresh("synthetic-fi-owner", Role::Owner)
+    };
+    let (status, body) = post_fi_json(
+        &fixture.app,
+        Some(&session),
+        fi_body(csv, &json!({"project":project.code,"dry_run":false})),
+    )
+    .await;
+    assert_eq!(status, 201, "Owner needs no Firm membership: {body}");
+    for row in body["imported"].as_array().unwrap() {
+        let id: Uuid = serde_json::from_value(row["conversation_id"].clone()).unwrap();
+        assert_eq!(
+            store::inbox::conversation_by_id(&fixture.surreal, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .project_id,
+            Some(project.id)
+        );
+    }
+}
+
+async fn assert_fi_unscoped_admin_preview(fixture: &Fixture, admin: Uuid, csv: &str) {
+    let session = portal::SessionData {
+        person_id: Some(admin),
+        ..portal::SessionData::fresh("synthetic-fi-admin-preview", Role::Admin)
+    };
+    let (status, body) = post_fi_json(&fixture.app, Some(&session), fi_body(csv, &json!({}))).await;
+    assert_eq!(
+        status, 200,
+        "membership-derived unscoped Admin preview: {body}"
+    );
+    assert_eq!(body["dry_run"], true);
+}
+
 async fn fi_counts(pg: &store::postgres::PostgresDb) -> Vec<i64> {
     sqlx::query_scalar("SELECT ARRAY[(SELECT count(*) FROM message),(SELECT count(*) FROM inbox_conversation),(SELECT count(*) FROM inbox_ingress),(SELECT count(*) FROM asset),(SELECT count(*) FROM billed_call)]")
         .fetch_one(pg.pool()).await.unwrap()
@@ -1445,6 +1555,10 @@ async fn assert_fi_lifecycle(
         "Fi SMS attribution creates no BilledCall rows"
     );
     assert_call_coordinators_do_not_starve_the_native_pool(&app, pg, actor, firm, project_id).await;
+    Box::pin(assert_fi_assignment_authorization(
+        &app, pg, &project, admin,
+    ))
+    .await;
 }
 
 async fn assert_fi_assignment_rights_before_writes(

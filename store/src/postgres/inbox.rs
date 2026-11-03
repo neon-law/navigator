@@ -760,20 +760,11 @@ pub(crate) async fn assign_on(
     conversation_id: Uuid,
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
-    let can_assign = inbox::can_assign_project(db, actor_id, project_id).await?;
     let _fi_guard = fi_assignment_guard_on(pg, conversation_id).await?;
     let conversation = conversation_by_id_on(pg, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
-    let project = crate::projects::find_by_id(db, project_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if project.firm_id != Some(conversation.firm_id) {
-        return Err(InboxError::CrossFirm);
-    }
-    if !can_assign {
-        return Err(InboxError::Denied);
-    }
+    inbox::require_assignment_authorization(db, actor_id, conversation.firm_id, project_id).await?;
     assign_write_on(pg, db, actor_id, &conversation, project_id).await
 }
 
