@@ -7012,12 +7012,9 @@ async fn api_projects_open_rejects_closed_at_without_status() {
 }
 
 #[tokio::test]
-async fn api_projects_open_records_the_resolved_brand_and_ignores_a_posted_one() {
-    // `brand` is written by the server from the request's resolved `Host:`
-    // header (per `views::brand::registered_brand_key`), never from client
-    // input: opening on the `delete-your-data` host stores that key, opening
-    // on the default host stores `neon`, and a caller that posts its own
-    // `brand` field is ignored either way — the server's resolved value wins.
+async fn api_projects_open_defaults_to_the_host_and_refuses_an_unpaired_brand() {
+    // Omitted ownership uses the resolved host; a posted brand without its
+    // authorized Firm is refused before any Project is created.
     let (state, surreal) = state_with_engines().await;
     store::seed::seed_canonical(&state.surreal, &state.storage)
         .await
@@ -7087,6 +7084,18 @@ async fn api_projects_open_records_the_resolved_brand_and_ignores_a_posted_one()
             )
             .await
             .unwrap();
+        if spoofed_brand.is_some() {
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{label}");
+            assert!(
+                store::projects::all(&surreal)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|project| project.code != code),
+                "refused ownership creates no Project"
+            );
+            continue;
+        }
         assert_eq!(resp.status(), StatusCode::CREATED, "{label}");
         let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
         assert_eq!(body["brand"], expected_brand, "{label}: response body");
