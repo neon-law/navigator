@@ -64,7 +64,14 @@ pub(crate) async fn log_project_visit(
 }
 
 fn is_project_page_route(route: &str) -> bool {
-    matches!(
+    route
+        .strip_prefix("/app/projects/{project_code}/")
+        .is_some_and(|segment| {
+            webapp::sections::page::MatterTab::ROUTED
+                .iter()
+                .any(|tab| tab.segment() == segment)
+        })
+        || matches!(
         route,
         "/app/projects/{project_code}"
             | "/app/projects/{project_code}/edit"
@@ -79,7 +86,7 @@ fn is_project_page_route(route: &str) -> bool {
     )
 }
 
-fn project_code_from_path(path: &str) -> Option<&str> {
+pub(crate) fn project_code_from_path(path: &str) -> Option<&str> {
     let mut segments = path.split('/').filter(|segment| !segment.is_empty());
     (segments.next() == Some("app") && segments.next() == Some("projects"))
         .then(|| segments.next())
@@ -93,6 +100,9 @@ mod tests {
     #[test]
     fn only_project_page_templates_are_visits() {
         assert!(is_project_page_route("/app/projects/{project_code}"));
+        assert!(is_project_page_route(
+            "/app/projects/{project_code}/participants"
+        ));
         assert!(is_project_page_route(
             "/app/projects/{project_code}/documents/{doc_id}"
         ));

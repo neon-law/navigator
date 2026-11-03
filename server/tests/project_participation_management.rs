@@ -229,7 +229,7 @@ fn assert_lands_on_participants(
             .headers()
             .get(axum::http::header::LOCATION)
             .and_then(|v| v.to_str().ok()),
-        Some(format!("/app/projects/{project_code}?tab=participants").as_str()),
+        Some(format!("/app/projects/{project_code}/participants").as_str()),
         "{what} must land back on the Participants tab of the matter it changed",
     );
 }
@@ -250,7 +250,7 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/app/projects/{}?tab=participants",
+                    "/app/projects/{}/participants",
                     fixture.project_code
                 ))
                 .header("cookie", &fixture.lawyer_cookie)
@@ -1168,7 +1168,7 @@ async fn the_matter_people_ledger_labels_the_accountability_marker() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/app/projects/{}?tab=participants",
+                    "/app/projects/{}/participants",
                     fixture.project_code
                 ))
                 .header("cookie", &fixture.lawyer_cookie)
@@ -1361,7 +1361,7 @@ async fn the_workbench_html_form_persists_a_lawyer_dri() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/app/projects/{}?tab=participants",
+                    "/app/projects/{}/participants",
                     fixture.project_code
                 ))
                 .header("cookie", &fixture.dri_cookie)
@@ -1540,7 +1540,7 @@ async fn a_lawyer_on_an_unassigned_matter_names_themselves_dri() {
 
     let html = workbench_html(
         &app,
-        format!("/app/projects/{}?tab=participants", project.code),
+        format!("/app/projects/{}/participants", project.code),
         &cookie,
     )
     .await;
@@ -1569,7 +1569,7 @@ async fn a_lawyer_on_an_unassigned_matter_names_themselves_dri() {
 
     let body = workbench_html(
         &app,
-        format!("/app/projects/{}?tab=participants", project.code),
+        format!("/app/projects/{}/participants", project.code),
         &cookie,
     )
     .await;

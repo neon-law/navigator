@@ -129,7 +129,7 @@ pub(crate) fn asset_kind_choices() -> Vec<(String, String)> {
         .collect()
 }
 
-/// The documents table: any `?error=` flash, then either the empty notice or
+/// The documents table: either the empty notice or
 /// the grouped table with its Visibility column — the operative revision's
 /// value in the row. Documents are grouped under the folders of a checkout's
 /// `documents/`, every matter folder listed even while empty. A chain with
@@ -138,9 +138,6 @@ pub(crate) fn asset_kind_choices() -> Vec<(String, String)> {
 pub(crate) fn documents_table(view: &LawyerDetailView) -> Element {
     let groups = document_groups(&view.document_folders, &view.documents);
     rsx! {
-        if let Some(error) = view.error.as_ref() {
-            p { class: "nav-form-error", role: "alert", "{error}" }
-        }
         if view.documents.is_empty() {
             p { class: "projects-empty", "No documents yet." }
         } else {
@@ -287,18 +284,9 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_document_table_shows_the_empty_state_and_error_flash() {
-        let view = LawyerDetailView {
-            error: Some("The document could not be updated.".to_string()),
-            ..LawyerDetailView::default()
-        };
-        let html = dioxus_ssr::render_element(documents_table(&view));
+    fn an_empty_document_table_shows_the_empty_state() {
+        let html = dioxus_ssr::render_element(documents_table(&LawyerDetailView::default()));
         assert!(html.contains("No documents yet."), "{html}");
-        assert!(
-            html.contains("The document could not be updated."),
-            "{html}"
-        );
-        assert!(html.contains(r#"role="alert""#), "{html}");
     }
 
     #[test]

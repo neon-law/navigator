@@ -20,7 +20,8 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Choice, Field, FormCard, Heading, Tab, Tabs};
+use crate::components::{Choice, Field, FormCard, Heading};
+use crate::sections::page::MatterTab;
 use crate::people::ViewerRole;
 use crate::portal_project_list::PersonId;
 
@@ -180,34 +181,9 @@ pub struct ClientTestimonialView {
     pub public_requested: bool,
 }
 
-/// Which panel the documents/testimonial tab region server-renders.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum MatterDetailTab {
-    #[default]
-    Documents,
-    Testimonial,
-}
-
 /// Consent copy aligned with the public homepage: the quote plus the chosen
 /// attribution, and nothing inferred from the stored Person record.
 const TESTIMONIAL_CONSENT: &str = "You can keep this testimonial private or request that the firm consider it for the public homepage. If the firm publishes it, the homepage shows the quote and the attribution you enter here. It does not show your stored name, title, or profile image. Leave attribution blank to publish the quote without a name. Public use requires your consent and the firm's approval.";
-
-#[cfg(feature = "server")]
-#[derive(Deserialize, Default)]
-struct ProjectDetailQuery {
-    #[serde(default)]
-    tab: Option<String>,
-}
-
-#[cfg(any(test, feature = "server"))]
-fn parse_matter_tab(raw: Option<&str>, can_edit_testimonial: bool) -> MatterDetailTab {
-    match raw.map(str::trim) {
-        Some(value) if can_edit_testimonial && value.eq_ignore_ascii_case("testimonial") => {
-            MatterDetailTab::Testimonial
-        }
-        _ => MatterDetailTab::Documents,
-    }
-}
 
 /// The rendered matter-detail view — every field wasm-safe (plain scalars; no
 /// `store`/`SeaORM`/`cloud` type crosses to the client build).
@@ -282,10 +258,13 @@ pub struct ProjectDetailView {
     pub testimonial: Option<ClientTestimonialView>,
     #[serde(default)]
     pub can_edit_testimonial: bool,
-    /// The selected documents/testimonial panel. Absent or unrecognised `?tab=`
-    /// values render Documents. Testimonial is only selectable for a client DRI.
+    /// The section the request path addresses: Overview, or Testimonial at
+    /// `/app/projects/{code}/testimonial` for the client DRI.
     #[serde(default)]
-    pub selected_tab: MatterDetailTab,
+    pub selected_tab: MatterTab,
+    /// The `?error=` flash a refused testimonial save redirects back with.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// A signer refused the envelope.
@@ -384,13 +363,6 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     let axum::extract::Path(code) =
         dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Path<String>, _>()
             .await?;
-    let query = dioxus_fullstack_core::FullstackContext::extract::<
-        axum::extract::Query<ProjectDetailQuery>,
-        _,
-    >()
-    .await
-    .map(|axum::extract::Query(query)| query)
-    .unwrap_or_default();
     let PersonId(person_id) =
         dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<PersonId>, _>()
             .await
@@ -458,6 +430,18 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
                         .contains(&row.participation.as_str())
             });
     let can_edit_testimonial = client_dri.is_some();
+    // The dispatcher already refused a section this reader does not have.
+    let selected_tab = crate::sections::page::request_tab()
+        .await
+        .unwrap_or_default();
+    // The testimonial save's `?error=` flash, rendered above its form.
+    let error = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::extract::Query<crate::lawyer_project_detail::MatterQuery>,
+        _,
+    >()
+    .await
+    .ok()
+    .and_then(|axum::extract::Query(query)| query.error);
     let testimonial = if can_edit_testimonial {
         store::testimonials::for_person_project(&surreal, person_id.unwrap_or_default(), id)
             .await
@@ -592,13 +576,13 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
         chrono::Utc::now(),
         true,
     );
-    let page_tabs = crate::sections::page::stored_page_tabs(
-        &surreal,
-        id,
-        &project.code,
-        crate::sections::PageLens::Client,
-    )
-    .await;
+    let viewer = if can_edit_testimonial {
+        store::access::MatterViewer::ClientDri
+    } else {
+        store::access::MatterViewer::Client
+    };
+    let page_tabs =
+        crate::sections::page::stored_page_tabs(&surreal, id, &project.code, viewer).await;
     Ok(ProjectDetailView {
         page_tabs,
         id: project.id.to_string(),
@@ -624,7 +608,8 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
         pending_intake,
         testimonial,
         can_edit_testimonial,
-        selected_tab: parse_matter_tab(query.tab.as_deref(), can_edit_testimonial),
+        selected_tab,
+        error,
     })
 }
 
@@ -1060,9 +1045,8 @@ fn shared_document_folders(paths: &[String]) -> Vec<(String, Vec<String>)> {
 pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
     let has_documents = !view.documents.is_empty();
     let has_review_docs = !view.review_docs.is_empty();
-    let show_testimonial_tab = view.can_edit_testimonial;
     let testimonial_selected =
-        show_testimonial_tab && view.selected_tab == MatterDetailTab::Testimonial;
+        view.can_edit_testimonial && view.selected_tab == MatterTab::Testimonial;
     let testimonial_fields = testimonial_fields(&view);
 
     rsx! {
@@ -1081,7 +1065,7 @@ pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
             h1 { "{view.name}" }
             crate::sections::page::CaseNav {
                 tabs: view.page_tabs.clone(),
-                current: format!("/app/projects/{}", view.code),
+                current: view.selected_tab.href(&view.code),
             }
             p { span { class: "status-chip", "{view.status}" } }
 
@@ -1215,25 +1199,10 @@ pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
                 }
             }
 
-            if show_testimonial_tab {
-                Tabs {
-                    aria_label: "Matter sections".to_string(),
-                    tabs: vec![
-                        Tab::new(
-                            "Documents",
-                            format!("/app/projects/{}?tab=documents", view.code),
-                            !testimonial_selected,
-                        ),
-                        Tab::new(
-                            "Testimonial",
-                            format!("/app/projects/{}?tab=testimonial", view.code),
-                            testimonial_selected,
-                        ),
-                    ],
-                }
-            }
-
             if testimonial_selected {
+                if let Some(error) = view.error.as_ref() {
+                    p { class: "nav-form-error", role: "alert", "{error}" }
+                }
                 FormCard {
                     title: "Share your experience".to_string(),
                     action: format!("/app/projects/{}/testimonial", view.code),
@@ -1397,7 +1366,7 @@ mod render_tests {
             name: "Sample Matter".into(),
             csrf_token: "csrf-token".into(),
             can_edit_testimonial: true,
-            selected_tab: MatterDetailTab::Testimonial,
+            selected_tab: MatterTab::Testimonial,
             testimonial: Some(ClientTestimonialView {
                 quote: "Saved quote.".into(),
                 attribution: "Chosen Label".into(),
@@ -1409,20 +1378,13 @@ mod render_tests {
     }
 
     #[test]
-    fn parse_matter_tab_defaults_and_requires_client_dri() {
-        assert_eq!(parse_matter_tab(None, true), MatterDetailTab::Documents);
-        assert_eq!(
-            parse_matter_tab(Some("unknown"), true),
-            MatterDetailTab::Documents
-        );
-        assert_eq!(
-            parse_matter_tab(Some("testimonial"), true),
-            MatterDetailTab::Testimonial
-        );
-        assert_eq!(
-            parse_matter_tab(Some("testimonial"), false),
-            MatterDetailTab::Documents
-        );
+    fn a_refused_testimonial_save_flashes_above_its_form() {
+        let html = render_page(ProjectDetailView {
+            error: Some("Your testimonial could not be saved.".into()),
+            ..saved_testimonial_view()
+        });
+        assert!(html.contains(r#"role="alert""#), "{html}");
+        assert!(html.contains("Your testimonial could not be saved."), "{html}");
     }
 
     #[test]
@@ -1457,7 +1419,7 @@ mod render_tests {
         let html = render_page(ProjectDetailView {
             code: "acme".into(),
             name: "Sample Matter".into(),
-            selected_tab: MatterDetailTab::Documents,
+            selected_tab: MatterTab::Overview,
             documents: vec![
                 "Work Product/memo.pdf".into(),
                 "onboarding/engagement.pdf".into(),
@@ -1481,36 +1443,32 @@ mod render_tests {
     }
 
     #[test]
-    fn documents_tab_is_the_default_panel() {
+    fn overview_shows_the_documents_panel() {
         let html = render_page(ProjectDetailView {
             code: "acme".into(),
             name: "Sample Matter".into(),
             can_edit_testimonial: true,
-            selected_tab: MatterDetailTab::Documents,
+            selected_tab: MatterTab::Overview,
             documents: vec!["retainer.pdf".into()],
             ..ProjectDetailView::default()
         });
         assert!(html.contains("Your documents"), "{html}");
         assert!(html.contains("retainer.pdf"), "{html}");
-        assert!(html.contains("nav-tabs"), "{html}");
-        assert!(html.contains("Testimonial"), "{html}");
         assert!(!html.contains("nav-form-card"), "{html}");
     }
 
     #[test]
-    fn a_client_without_testimonial_access_sees_no_testimonial_tab() {
+    fn a_client_without_testimonial_access_sees_no_testimonial_form() {
         let html = render_page(ProjectDetailView {
             code: "acme".into(),
             name: "Sample Matter".into(),
             can_edit_testimonial: false,
-            selected_tab: MatterDetailTab::Testimonial,
+            selected_tab: MatterTab::Testimonial,
             documents: vec!["retainer.pdf".into()],
             ..ProjectDetailView::default()
         });
         assert!(html.contains("Your documents"), "{html}");
         assert!(!html.contains("Share your experience"), "{html}");
-        assert!(!html.contains("nav-tabs"), "{html}");
-        assert!(!html.contains(">Testimonial<"), "{html}");
     }
 
     #[test]

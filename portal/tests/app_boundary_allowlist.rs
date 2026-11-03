@@ -130,6 +130,7 @@ fn dioxus_app_pages() -> Vec<String> {
     ]
     .iter()
     .map(|template| fill(template))
+    .chain(pages::project_tab_paths().map(|template| fill(&template)))
     .collect()
 }
 

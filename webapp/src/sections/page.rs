@@ -12,7 +12,8 @@
 //! The pages come from the Project's synced `matter_page` rows, never from
 //! git. The tab strip ([`CaseNav`]) is generated from the same rows: the show
 //! page is always the first tab, then each page that has a face for this
-//! reader, in declared order.
+//! reader, in declared order, then the reader's built-in [`MatterTab`]s. One
+//! strip serves the show page, its built-in sections, and every declared page.
 
 use std::collections::BTreeMap;
 
@@ -84,10 +85,7 @@ pub fn page_links(code: &str, pages: &[rules::pages::PageEntry], lens: PageLens)
 #[cfg(feature = "server")]
 #[must_use]
 pub fn page_tabs(code: &str, pages: &[rules::pages::PageEntry], lens: PageLens) -> Vec<PageTab> {
-    let mut tabs = vec![PageTab {
-        label: rules::pages::SHOW_PAGE_TITLE.to_string(),
-        href: format!("/app/projects/{code}"),
-    }];
+    let mut tabs = vec![MatterTab::Overview.page_tab(code)];
     tabs.extend(page_links(code, pages, lens));
     tabs
 }
@@ -104,64 +102,165 @@ pub fn lens_for_viewer(viewer: store::access::MatterViewer) -> PageLens {
     }
 }
 
-/// The lens `person_id` reads `project_id`'s pages through: the same
-/// participation answer the show page dispatches on. `None` when the person
-/// is not on the matter, which is a `404` for every tier.
-///
-/// # Errors
-///
-/// The store's message when the participation lookup fails.
-#[cfg(feature = "server")]
-pub async fn matter_page_lens(
-    surreal: &store::surreal::SurrealDb,
-    person_id: Option<uuid::Uuid>,
-    role: store::persons::Role,
-    project_id: uuid::Uuid,
-) -> Result<Option<PageLens>, String> {
-    Ok(
-        store::access::matter_viewer(surreal, person_id, role, project_id)
-            .await?
-            .map(lens_for_viewer),
-    )
+/// A built-in section of the matter show page. Each one is a real path —
+/// `/app/projects/{code}/{segment}` — never a query parameter, so the strip,
+/// the route table, and a bookmarked link all name the same thing. Overview is
+/// the show page itself and has no segment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MatterTab {
+    #[default]
+    Overview,
+    Communications,
+    Documents,
+    Billing,
+    Participants,
+    Testimonial,
 }
 
-/// The built-in Communications tab (LAW-238 D4): the Project's inbox route,
-/// which the shared Inbox renderers already serve project-scoped. `inbox` is
-/// a reserved slug the manifest cannot declare, so the tab is a built-in
-/// appended after the manifest pages — and only for the firm-side lenses the
-/// route admits; the route refuses Clients outright.
+impl MatterTab {
+    /// Every built-in with its own path, which the show-page mount routes.
+    pub const ROUTED: [Self; 5] = [
+        Self::Communications,
+        Self::Documents,
+        Self::Billing,
+        Self::Participants,
+        Self::Testimonial,
+    ];
+
+    /// The firm workbench's built-ins, in strip order after the declared
+    /// pages.
+    pub const WORKBENCH: [Self; 4] = [
+        Self::Communications,
+        Self::Documents,
+        Self::Billing,
+        Self::Participants,
+    ];
+
+    /// The path segment under `/app/projects/{code}`; empty for Overview.
+    #[must_use]
+    pub const fn segment(self) -> &'static str {
+        match self {
+            Self::Overview => "",
+            Self::Communications => "communications",
+            Self::Documents => "documents",
+            Self::Billing => "billing",
+            Self::Participants => "participants",
+            Self::Testimonial => "testimonial",
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            // `rules::pages::SHOW_PAGE_TITLE`, which `Y021` keeps a declared
+            // page from repeating; `rules` is server-only, so a test pins it.
+            Self::Overview => "Overview",
+            Self::Communications => "Communications",
+            Self::Documents => "Documents",
+            Self::Billing => "Billing",
+            Self::Participants => "Participants",
+            Self::Testimonial => "Testimonial",
+        }
+    }
+
+    /// This tab's address on matter `code`.
+    #[must_use]
+    pub fn href(self, code: &str) -> String {
+        match self {
+            Self::Overview => format!("/app/projects/{code}"),
+            tab => format!("/app/projects/{code}/{}", tab.segment()),
+        }
+    }
+
+    #[must_use]
+    pub fn page_tab(self, code: &str) -> PageTab {
+        PageTab {
+            label: self.label().to_string(),
+            href: self.href(code),
+        }
+    }
+
+    /// The tab a show-page request path addresses: `/app/projects/{code}` is
+    /// Overview and `/app/projects/{code}/{segment}` its built-in. `None` for
+    /// any other path, which the caller answers with a `404`.
+    #[must_use]
+    pub fn from_path(path: &str) -> Option<Self> {
+        let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+        if segments.next() != Some("app") || segments.next() != Some("projects") {
+            return None;
+        }
+        segments.next()?;
+        let tab = match segments.next() {
+            None => Self::Overview,
+            Some(segment) => Self::ROUTED
+                .into_iter()
+                .find(|tab| tab.segment() == segment)?,
+        };
+        segments.next().is_none().then_some(tab)
+    }
+}
+
+/// The section the current request's path addresses, for a server fn on the
+/// show-page mount. `None` when the path names no section.
+#[cfg(feature = "server")]
+pub async fn request_tab() -> Option<MatterTab> {
+    dioxus_fullstack_core::FullstackContext::extract::<axum::http::Uri, _>()
+        .await
+        .ok()
+        .and_then(|uri| MatterTab::from_path(uri.path()))
+}
+
+/// The built-in tabs `viewer` reads after the declared pages. The workbench
+/// sections are a lawyer's; a Clerk has no workbench, so their
+/// Communications tab is the Project inbox the route admits them to; only
+/// the client DRI writes the testimonial.
 #[cfg(feature = "server")]
 #[must_use]
-pub fn communications_tab(code: &str, lens: PageLens) -> Option<PageTab> {
-    (lens != PageLens::Client).then(|| PageTab {
-        label: "Communications".to_string(),
-        href: format!("/app/projects/{code}/inbox"),
-    })
+pub fn builtin_tabs(code: &str, viewer: store::access::MatterViewer) -> Vec<PageTab> {
+    use store::access::MatterViewer;
+    match viewer {
+        MatterViewer::Lawyer | MatterViewer::LawyerDri => MatterTab::WORKBENCH
+            .iter()
+            .map(|tab| tab.page_tab(code))
+            .collect(),
+        MatterViewer::Clerk => vec![PageTab {
+            label: MatterTab::Communications.label().to_string(),
+            href: format!("/app/projects/{code}/inbox"),
+        }],
+        MatterViewer::ClientDri => vec![MatterTab::Testimonial.page_tab(code)],
+        MatterViewer::Client => Vec::new(),
+    }
 }
 
-/// The page strip for the matter show page: [`page_tabs`] over the
-/// Project's stored pages — plus the built-in [`communications_tab`] —
-/// or nothing when it declares none. A read failure
-/// drops the strip rather than the show page.
+/// The one strip every matter surface renders: Overview, each declared page
+/// with a face for this reader, then the reader's built-ins.
+#[cfg(feature = "server")]
+#[must_use]
+pub fn matter_tabs(
+    code: &str,
+    pages: &[rules::pages::PageEntry],
+    viewer: store::access::MatterViewer,
+) -> Vec<PageTab> {
+    let mut tabs = page_tabs(code, pages, lens_for_viewer(viewer));
+    tabs.extend(builtin_tabs(code, viewer));
+    tabs
+}
+
+/// [`matter_tabs`] over the Project's stored pages. A read failure drops the
+/// declared pages rather than the show page.
 #[cfg(feature = "server")]
 pub async fn stored_page_tabs(
     surreal: &store::surreal::SurrealDb,
     project_id: uuid::Uuid,
     code: &str,
-    lens: PageLens,
+    viewer: store::access::MatterViewer,
 ) -> Vec<PageTab> {
-    let Ok(stored) = store::matter_pages::list_for_project(surreal, project_id).await else {
-        return Vec::new();
-    };
-    if stored.is_empty() {
-        return Vec::new();
-    }
-    let entries: Vec<rules::pages::PageEntry> = stored.into_iter().map(|page| page.entry).collect();
-    let mut tabs = page_tabs(code, &entries, lens);
-    if let Some(communications) = communications_tab(code, lens) {
-        tabs.push(communications);
-    }
-    tabs
+    let entries: Vec<rules::pages::PageEntry> =
+        store::matter_pages::list_for_project(surreal, project_id)
+            .await
+            .map(|stored| stored.into_iter().map(|page| page.entry).collect())
+            .unwrap_or_default();
+    matter_tabs(code, &entries, viewer)
 }
 
 /// The sections `slug` shows on `lens`, in declared order, or `None` when the
@@ -243,13 +342,14 @@ pub async fn get_matter_page() -> Result<MatterPageView, ServerFnError> {
     // The same participation answer the show page dispatches on. No row is a
     // 404 for every tier here: a declared page is matter content, which the
     // unassigned-admin participation page never discloses.
-    let Some(lens) = matter_page_lens(&surreal, person_id, store_role, project.id)
+    let Some(viewer) = store::access::matter_viewer(&surreal, person_id, store_role, project.id)
         .await
         .map_err(ServerFnError::new)?
     else {
         commit_not_found();
         return Ok(MatterPageView::not_found(role));
     };
+    let lens = lens_for_viewer(viewer);
     let stored = store::matter_pages::list_for_project(&surreal, project.id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -283,7 +383,7 @@ pub async fn get_matter_page() -> Result<MatterPageView, ServerFnError> {
     )
     .await?;
     Ok(MatterPageView {
-        tabs: page_tabs(&project.code, &entries, lens),
+        tabs: matter_tabs(&project.code, &entries, viewer),
         code: project.code,
         matter_name: project.name,
         slug,
@@ -824,6 +924,31 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_is_addressed_by_its_path_and_round_trips() {
+        use super::MatterTab;
+        assert_eq!(
+            MatterTab::from_path("/app/projects/m"),
+            Some(MatterTab::Overview)
+        );
+        assert_eq!(
+            MatterTab::from_path("/app/projects/m/"),
+            Some(MatterTab::Overview)
+        );
+        for tab in std::iter::once(MatterTab::Overview).chain(MatterTab::ROUTED) {
+            assert_eq!(MatterTab::from_path(&tab.href("m")), Some(tab), "{tab:?}");
+        }
+        // A declared page, a deeper path, and another surface are not tabs.
+        for path in [
+            "/app/projects/m/timeline",
+            "/app/projects/m/documents/abc",
+            "/app/projects",
+            "/app/inbox/m",
+        ] {
+            assert_eq!(MatterTab::from_path(path), None, "{path}");
+        }
+    }
+
+    #[test]
     fn a_not_found_view_renders_no_matter_content() {
         let mut missing = view();
         missing.title = String::new();
@@ -876,7 +1001,7 @@ mod tests {
                     lenses: timeline,
                 },
                 PageEntry {
-                    slug: "billing".into(),
+                    slug: "engagement".into(),
                     kind: "engagement_billing_records".into(),
                     title: "Billing".into(),
                     draft: None,
@@ -905,7 +1030,7 @@ mod tests {
             let mut pages = pages();
             pages
                 .iter_mut()
-                .find(|page| page.slug == "billing")
+                .find(|page| page.slug == "engagement")
                 .unwrap()
                 .lenses
                 .insert(
@@ -915,7 +1040,7 @@ mod tests {
                         .to_vec(),
                 );
             for lens in [PageLens::Client, PageLens::Lawyer] {
-                let (_, sections) = page_sections(&pages, "billing", lens).unwrap();
+                let (_, sections) = page_sections(&pages, "engagement", lens).unwrap();
                 let invoice = sections
                     .iter()
                     .position(|section| *section == Section::Invoice)
@@ -947,7 +1072,7 @@ mod tests {
 
         #[test]
         fn a_page_without_this_lens_and_an_unknown_slug_are_not_found() {
-            assert!(page_sections(&pages(), "billing", PageLens::Client).is_none());
+            assert!(page_sections(&pages(), "engagement", PageLens::Client).is_none());
             assert!(page_sections(&pages(), "nope", PageLens::Lawyer).is_none());
         }
 
@@ -964,20 +1089,62 @@ mod tests {
         }
 
         #[test]
-        fn the_communications_tab_links_the_project_inbox_for_firm_side_lenses() {
-            use super::super::communications_tab;
-            let lawyer =
-                communications_tab("m", PageLens::Lawyer).expect("lawyer lens has the tab");
-            assert_eq!(lawyer.label, "Communications");
-            assert_eq!(lawyer.href, "/app/projects/m/inbox");
-            assert!(
-                communications_tab("m", PageLens::Clerk).is_some(),
-                "clerks read the inbox too"
+        fn one_strip_leads_with_overview_then_pages_then_each_viewers_builtins() {
+            use super::super::matter_tabs;
+            use store::access::MatterViewer;
+            let hrefs = |viewer| -> Vec<String> {
+                matter_tabs("m", &pages(), viewer)
+                    .into_iter()
+                    .map(|tab| tab.href)
+                    .collect()
+            };
+            let workbench = [
+                "/app/projects/m",
+                "/app/projects/m/timeline",
+                "/app/projects/m/engagement",
+                "/app/projects/m/communications",
+                "/app/projects/m/documents",
+                "/app/projects/m/billing",
+                "/app/projects/m/participants",
+            ];
+            assert_eq!(hrefs(MatterViewer::Lawyer), workbench);
+            assert_eq!(hrefs(MatterViewer::LawyerDri), workbench);
+            // A Clerk has no workbench; their Communications is the inbox.
+            assert_eq!(
+                hrefs(MatterViewer::Clerk),
+                ["/app/projects/m", "/app/projects/m/inbox"]
             );
-            assert!(
-                communications_tab("m", PageLens::Client).is_none(),
-                "the Project inbox route refuses Clients"
+            assert_eq!(
+                hrefs(MatterViewer::ClientDri),
+                [
+                    "/app/projects/m",
+                    "/app/projects/m/timeline",
+                    "/app/projects/m/testimonial"
+                ]
             );
+            assert_eq!(
+                hrefs(MatterViewer::Client),
+                ["/app/projects/m", "/app/projects/m/timeline"]
+            );
+        }
+
+        #[test]
+        fn the_overview_tab_is_the_title_y021_reserves() {
+            assert_eq!(
+                super::super::MatterTab::Overview.label(),
+                rules::pages::SHOW_PAGE_TITLE
+            );
+        }
+
+        #[test]
+        fn every_routed_segment_is_a_slug_no_page_may_declare() {
+            for tab in super::super::MatterTab::ROUTED {
+                assert!(
+                    rules::pages::RESERVED_SLUGS.contains(&tab.segment()),
+                    "`{}` routes a built-in, so a page slug must not shadow it",
+                    tab.segment()
+                );
+            }
         }
     }
 }

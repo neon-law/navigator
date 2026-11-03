@@ -38,7 +38,9 @@ pub const SHOW_PAGE_TITLE: &str = "Overview";
 /// A page slug that matched one would be shadowed by that route, so `Y021`
 /// refuses it by name.
 pub const RESERVED_SLUGS: &[&str] = &[
+    "billing",
     "close",
+    "communications",
     "contract-review",
     "conversation",
     "documents",
@@ -47,6 +49,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "inbox",
     "intake",
     "notations",
+    "participants",
     "people",
     "portal",
     "review",

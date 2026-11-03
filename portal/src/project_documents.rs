@@ -232,9 +232,9 @@ async fn project_documents_path(
     project_id: uuid::Uuid,
 ) -> String {
     format!(
-        "{}?tab={}",
+        "{}/{}",
         crate::dioxus_app::project_show_path(surreal, project_id).await,
-        webapp::lawyer_project_detail::MatterTab::Documents.query_value()
+        webapp::sections::page::MatterTab::Documents.segment()
     )
 }
 
@@ -560,7 +560,7 @@ async fn file_revision_response(
             let message = format!(
                 "`{slug}` is already filed as `{existing}`; a `{attempted}` upload is a different document."
             );
-            let path = crate::dioxus_app::project_show_path(&state.surreal, project_id).await;
+            let path = project_documents_path(&state.surreal, project_id).await;
             Err(Redirect::to(&format!(
                 "{path}?error={}",
                 crate::admin::encode_query_value(&message)

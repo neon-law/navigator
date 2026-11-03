@@ -1510,29 +1510,35 @@ pub fn project_detail_router(
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
-    Router::<FullstackState>::new()
-        .route(
-            PROJECT_DETAIL_PATH,
-            get(render_handler)
-                .layer(from_fn(inject_viewer_role))
-                .layer(from_fn(inject_app_brand_mark))
-                .layer(from_fn(inject_person_id))
-                .layer(from_fn(inject_csrf_token))
-                .layer(from_fn(inject_dri_view))
-                .layer(from_fn_with_state(
-                    pending_intake_state,
-                    inject_pending_client_intake,
-                ))
-                .layer(from_fn_with_state(
-                    repository_surreal,
-                    inject_project_repository_pointer,
-                ))
-                .layer(from_fn_with_state(
-                    project_visit_surreal,
-                    crate::project_visit::log_project_visit,
-                ))
-                .layer(from_fn(dioxus_document_head)),
-        )
+    let show_page = move || {
+        get(render_handler)
+            .layer(from_fn(inject_viewer_role))
+            .layer(from_fn(inject_app_brand_mark))
+            .layer(from_fn(inject_person_id))
+            .layer(from_fn(inject_csrf_token))
+            .layer(from_fn(inject_dri_view))
+            .layer(from_fn_with_state(
+                pending_intake_state.clone(),
+                inject_pending_client_intake,
+            ))
+            .layer(from_fn_with_state(
+                repository_surreal.clone(),
+                inject_project_repository_pointer,
+            ))
+            .layer(from_fn_with_state(
+                project_visit_surreal.clone(),
+                crate::project_visit::log_project_visit,
+            ))
+            .layer(from_fn(dioxus_document_head))
+    };
+    // The show page and each built-in section, one path apiece. A literal
+    // segment wins over the declared-page parameter, and `Y021` reserves
+    // every one, so no page is shadowed.
+    let mut router = Router::<FullstackState>::new().route(PROJECT_DETAIL_PATH, show_page());
+    for path in project_tab_paths() {
+        router = router.route(&path, show_page());
+    }
+    router
         .with_state(FullstackState::new(
             cfg,
             webapp::matter_surface::ProjectDetail,
@@ -1544,12 +1550,20 @@ pub fn project_detail_router(
         .route_layer(from_fn_with_state(auth, crate::auth::require_auth))
 }
 
-/// Resolve the trailing project code of `/app/projects/{code}` to its internal id.
+/// Each built-in section's route under [`PROJECT_DETAIL_PATH`].
+pub fn project_tab_paths() -> impl Iterator<Item = String> {
+    webapp::sections::page::MatterTab::ROUTED
+        .into_iter()
+        .map(|tab| format!("{PROJECT_DETAIL_PATH}/{}", tab.segment()))
+}
+
+/// Resolve the project code of `/app/projects/{code}[/{section}]` to its
+/// internal id.
 async fn project_id_from_path(
     surreal: &store::surreal::SurrealDb,
     path: &str,
 ) -> Option<uuid::Uuid> {
-    let code = path.rsplit('/').next().filter(|seg| !seg.is_empty())?;
+    let code = crate::project_visit::project_code_from_path(path)?;
     store::projects::find_by_code(surreal, code)
         .await
         .ok()
@@ -5522,6 +5536,11 @@ mod tests {
             project_id_from_path(&surreal, &format!("/app/projects/{}", project.id)).await,
             None,
             "a row id in the show-page segment must name no Project"
+        );
+        // A built-in section's path names the same matter, never its segment.
+        assert_eq!(
+            project_id_from_path(&surreal, "/app/projects/libra-formation/testimonial").await,
+            Some(project.id),
         );
     }
 

@@ -66,8 +66,8 @@ mod tests {
                 Tabs {
                     aria_label: "Matter sections".to_string(),
                     tabs: vec![
-                        Tab::new("Documents", "/app/projects/acme?tab=documents", true),
-                        Tab::new("Testimonial", "/app/projects/acme?tab=testimonial", false),
+                        Tab::new("Documents", "/app/projects/acme/documents", true),
+                        Tab::new("Testimonial", "/app/projects/acme/testimonial", false),
                     ],
                 }
             }
@@ -76,11 +76,11 @@ mod tests {
         assert!(html.contains(r#"aria-label="Matter sections""#), "{html}");
         assert_eq!(html.matches("<a ").count(), 2, "{html}");
         assert!(
-            html.contains(r#"href="/app/projects/acme?tab=documents""#),
+            html.contains(r#"href="/app/projects/acme/documents""#),
             "{html}"
         );
         assert!(
-            html.contains(r#"href="/app/projects/acme?tab=testimonial""#),
+            html.contains(r#"href="/app/projects/acme/testimonial""#),
             "{html}"
         );
         assert!(html.contains("Documents"), "{html}");
@@ -95,7 +95,7 @@ mod tests {
             rsx! {
                 Tabs {
                     aria_label: "Matter sections".to_string(),
-                    tabs: vec![Tab::new("Documents", "/app/projects/acme?tab=documents", true)],
+                    tabs: vec![Tab::new("Documents", "/app/projects/acme/documents", true)],
                 }
             }
         }
