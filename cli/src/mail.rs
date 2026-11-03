@@ -88,10 +88,19 @@ pub enum MailAction {
         /// Read the client secret from Google's Desktop-app client JSON.
         ///
         /// Takes `installed.client_secret` from a `client_secret_*.json`,
-        /// stores it in the Keychain, and never prints it. Without this flag,
-        /// the stored secret is used, or prompted for when none is stored.
-        #[arg(long, value_name = "PATH")]
+        /// stores it in the Keychain, and never prints it. Otherwise saved GCP
+        /// settings select Secret Manager, or login uses Keychain/hidden input.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["client_secret_from_gcp", "project", "secret"])]
         client_secret_file: Option<PathBuf>,
+        /// Fetch the client secret using the signed-in gcloud account.
+        #[arg(long)]
+        client_secret_from_gcp: bool,
+        /// Secret Manager project. Overrides saved mail setup.
+        #[arg(long)]
+        project: Option<String>,
+        /// Secret Manager secret name. Overrides saved mail setup.
+        #[arg(long)]
+        secret: Option<String>,
     },
     /// Save Gmail account/client settings or check draft-only setup.
     Setup {
@@ -101,6 +110,12 @@ pub enum MailAction {
         /// Google OAuth client id. Saved with --account; never a client secret.
         #[arg(long, requires = "account")]
         client_id: Option<String>,
+        /// Save the Secret Manager project used by mail login.
+        #[arg(long)]
+        project: Option<String>,
+        /// Save the secret name; defaults to navigator-mail-oauth-client-secret.
+        #[arg(long, requires = "project")]
+        secret: Option<String>,
     },
     /// File every message in a Gmail thread as a matter Communication.
     File {
@@ -1110,6 +1125,8 @@ fn scoped_query(query: &str, project: Option<&str>) -> String {
 struct StoredSetup {
     account: Option<String>,
     client_id: Option<String>,
+    gcp_project: Option<String>,
+    gcp_secret: Option<String>,
 }
 
 fn setup_path() -> PathBuf {
@@ -1129,10 +1146,14 @@ fn store_setup(path: &Path, account: &str, client_id: &str) -> Result<()> {
         Some(account.trim().to_owned()),
         Some(client_id.trim().to_owned()),
     )?;
-    let settings = StoredSetup {
-        account: Some(account),
-        client_id: Some(client_id),
-    };
+    // An explicit account/client pair can repair a malformed setup file.
+    let mut settings = load_setup(path).unwrap_or_default();
+    settings.account = Some(account);
+    settings.client_id = Some(client_id);
+    write_setup(path, &settings)
+}
+
+fn write_setup(path: &Path, settings: &StoredSetup) -> Result<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -1141,7 +1162,7 @@ fn store_setup(path: &Path, account: &str, client_id: &str) -> Result<()> {
     // NamedTempFile is owner-only on Unix. Rename replaces a permissive destination atomically.
     let mut file =
         tempfile::NamedTempFile::new_in(parent).context("create private Gmail setup file")?;
-    serde_json::to_writer_pretty(file.as_file_mut(), &settings).context("write Gmail setup")?;
+    serde_json::to_writer_pretty(file.as_file_mut(), settings).context("write Gmail setup")?;
     file.persist(path)
         .map_err(|error| error.error)
         .context("save Gmail setup")?;
@@ -1160,6 +1181,8 @@ fn effective_setup(
         client_id: client_id
             .filter(|value| !value.trim().is_empty())
             .or(stored.client_id),
+        gcp_project: stored.gcp_project,
+        gcp_secret: stored.gcp_secret,
     }
 }
 
@@ -1246,7 +1269,7 @@ fn setup_report(
     }
     if keychain == KeychainState::Missing {
         text.push_str(
-            "\nAuthorize Gmail in the browser and store the refresh token (prompts once for the client secret):\n  navigator mail login\n",
+            "\nAuthorize Gmail in the browser and store the refresh token (uses the selected client secret source):\n  navigator mail login\n",
         );
     }
     text.push_str(
@@ -1262,9 +1285,21 @@ docs/mail-cli.md.\n",
     SetupReport { text, ready }
 }
 
-fn setup_command(account: Option<String>, client_id: Option<String>) -> Result<()> {
+fn setup_command(
+    account: Option<String>,
+    client_id: Option<String>,
+    project: Option<&str>,
+    secret: Option<&str>,
+) -> Result<()> {
+    let gcp = login::gcp_source(project, secret, false, &StoredSetup::default())?;
     if let (Some(account), Some(client_id)) = (account, client_id) {
         store_setup(&setup_path(), &account, &client_id)?;
+    }
+    if let Some(gcp) = gcp {
+        let mut settings = load_setup(&setup_path())?;
+        settings.gcp_project = Some(gcp.project);
+        settings.gcp_secret = Some(gcp.secret);
+        write_setup(&setup_path(), &settings)?;
     }
     let settings = effective_setup(
         std::env::var("NAVIGATOR_GMAIL_ACCOUNT").ok(),
@@ -1486,9 +1521,29 @@ async fn run_inner(action: MailAction) -> Result<()> {
             );
             Ok(())
         }
-        MailAction::Setup { account, client_id } => setup_command(account, client_id),
-        MailAction::Login { client_secret_file } => {
-            login::login_command(client_secret_file.as_deref()).await
+        MailAction::Setup {
+            account,
+            client_id,
+            project,
+            secret,
+        } => setup_command(account, client_id, project.as_deref(), secret.as_deref()),
+        MailAction::Login {
+            client_secret_file,
+            client_secret_from_gcp,
+            project,
+            secret,
+        } => {
+            let gcp = if client_secret_file.is_some() {
+                None
+            } else {
+                login::gcp_source(
+                    project.as_deref(),
+                    secret.as_deref(),
+                    client_secret_from_gcp,
+                    &load_setup(&setup_path())?,
+                )?
+            };
+            login::login_command(client_secret_file.as_deref(), gcp.as_ref()).await
         }
         MailAction::Attachments {
             reference,
@@ -3140,6 +3195,73 @@ mod tests {
     }
 
     #[test]
+    fn gcp_setup_survives_account_updates_and_old_settings_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mail.json");
+        let settings = StoredSetup {
+            gcp_project: Some("example-mail".into()),
+            gcp_secret: Some("shared-client".into()),
+            ..Default::default()
+        };
+        write_setup(&path, &settings).unwrap();
+        store_setup(&path, "lawyer@example.test", "test-client").unwrap();
+        let stored = load_setup(&path).unwrap();
+        assert_eq!(stored.gcp_project.as_deref(), Some("example-mail"));
+        assert_eq!(stored.gcp_secret.as_deref(), Some("shared-client"));
+        std::fs::write(
+            &path,
+            r#"{"account":"lawyer@example.test","client_id":"test-client"}"#,
+        )
+        .unwrap();
+        assert!(load_setup(&path).unwrap().gcp_project.is_none());
+    }
+
+    #[test]
+    fn mail_cli_parses_gcp_settings_and_refuses_competing_sources() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Mail {
+            #[command(subcommand)]
+            action: MailAction,
+        }
+        let parsed = Mail::try_parse_from([
+            "mail",
+            "login",
+            "--client-secret-from-gcp",
+            "--project",
+            "example-mail",
+            "--secret",
+            "shared-client",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.action,
+            MailAction::Login {
+                client_secret_from_gcp: true,
+                project: Some(_),
+                secret: Some(_),
+                ..
+            }
+        ));
+        for flag in ["--client-secret-from-gcp", "--project", "--secret"] {
+            let mut args = vec!["mail", "login", "--client-secret-file", "client.json", flag];
+            if flag != "--client-secret-from-gcp" {
+                args.push("example-mail");
+            }
+            assert!(Mail::try_parse_from(args).is_err());
+        }
+        assert!(Mail::try_parse_from([
+            "mail",
+            "setup",
+            "--project",
+            "example-mail",
+            "--secret",
+            "shared-client"
+        ])
+        .is_ok());
+    }
+
+    #[test]
     fn setup_flags_require_both_settings() {
         use clap::Parser;
         #[derive(Parser)]
@@ -3168,6 +3290,7 @@ mod tests {
         let stored = StoredSetup {
             account: Some("stored@example.test".into()),
             client_id: Some("stored-client".into()),
+            ..StoredSetup::default()
         };
         assert_eq!(
             resolve_setup(Some("override@example.test".into()), None, stored).unwrap(),
@@ -3180,6 +3303,7 @@ mod tests {
         let stored = StoredSetup {
             account: Some("stored@example.test".into()),
             client_id: Some("stored-client".into()),
+            ..StoredSetup::default()
         };
         assert_eq!(
             resolve_setup(Some(" ".into()), Some(String::new()), stored).unwrap(),
