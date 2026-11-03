@@ -626,3 +626,54 @@ async fn a_notice_missing_its_case_number_reports_the_specific_refusal() {
         .unwrap()
         .is_empty());
 }
+
+#[tokio::test]
+async fn a_later_notice_files_its_original_when_the_entry_is_already_recorded() {
+    let fixture = fixture().await;
+    let project_id = seed_matter(&fixture.surreal, fixture.firm_id, "syn-nef-existing").await;
+    let raw = district_notice();
+    let body = store::nef::parse_eml(&raw).unwrap();
+    let text = format!("Notice of Electronic Filing\nCase Number: {}\nDocument Number: 12\nDocket Text:\nMotion to dismiss.\n", body.case_no);
+    let first = seed_notice(&fixture, Some(project_id), None, &text, Vec::new()).await;
+    let (_, applied) = request(
+        &fixture.app,
+        "POST",
+        "/app/api/inbox/process",
+        Some(&fixture.lawyer_session),
+        Some(json!({"message": first, "apply": true})),
+    )
+    .await;
+    assert_eq!(applied["nef"]["filed_documents"], 0);
+    let later = seed_notice(
+        &fixture,
+        Some(project_id),
+        Some(("inbound/later.eml", &raw)),
+        &text,
+        Vec::new(),
+    )
+    .await;
+    let (status, applied) = request(
+        &fixture.app,
+        "POST",
+        "/app/api/inbox/process",
+        Some(&fixture.lawyer_session),
+        Some(json!({"message": later, "apply": true})),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(applied["nef"]["outcome"], "already_recorded");
+    let case =
+        store::cases::find_case_by_docket_number(&fixture.surreal, project_id, &body.case_no)
+            .await
+            .unwrap()
+            .unwrap();
+    let entries = store::cases::docket(&fixture.surreal, case.id)
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].document_asset_id.is_some());
+    let documents = store::assets::for_project(&fixture.surreal, project_id)
+        .await
+        .unwrap();
+    assert_eq!(documents.len(), 1, "the later message original is filed");
+}

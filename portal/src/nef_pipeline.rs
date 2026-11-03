@@ -34,8 +34,8 @@ pub(crate) enum NefOutcome {
         document_asset_id: Option<Uuid>,
     },
     /// The docket entry already existed — same case, same entry number —
-    /// so nothing new was written. The caller still records the processing
-    /// time; a re-run converges.
+    /// so its row was reused. This message's original and attachments are
+    /// still filed under their stable slugs; a re-run converges.
     AlreadyRecorded {
         case_id: Uuid,
         entry_id: Uuid,
@@ -142,8 +142,12 @@ pub(crate) async fn process_nef(
         .map_err(|error| case_error(&error))?,
     };
 
-    // Idempotency first: an entry already on the case under this number
-    // means a previous run filed this notice. Re-running files nothing.
+    let kind = store::nef::suggested_kind(&notice.docket_text, None);
+    let (filed_documents, document_asset_id) =
+        file_notice_documents(state, row, project_id, kind, raw.as_deref()).await?;
+
+    // Each message keeps its own original and attachments even when its
+    // docket entry already exists. Stable slugs make a replay converge.
     if let Some(doc_no) = notice.doc_no.as_deref() {
         let existing = store::cases::docket(&state.surreal, case.id)
             .await
@@ -151,6 +155,13 @@ pub(crate) async fn process_nef(
             .into_iter()
             .find(|entry| entry.entry_number == doc_no);
         if let Some(entry) = existing {
+            if entry.document_asset_id.is_none() {
+                if let Some(asset_id) = document_asset_id {
+                    store::cases::link_document(&state.surreal, entry.id, asset_id)
+                        .await
+                        .map_err(|error| case_error(&error))?;
+                }
+            }
             return Ok(NefOutcome::AlreadyRecorded {
                 case_id: case.id,
                 entry_id: entry.id,
@@ -158,10 +169,6 @@ pub(crate) async fn process_nef(
             });
         }
     }
-
-    let kind = store::nef::suggested_kind(&notice.docket_text, None);
-    let (filed_documents, document_asset_id) =
-        file_notice_documents(state, row, project_id, kind, raw.as_deref()).await?;
 
     // A notice with no document number names no ordinal — record nothing
     // on the docket rather than guess one. The filed original is the
