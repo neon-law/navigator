@@ -170,6 +170,105 @@ fn bundle_assets_router(dir: &std::path::Path) -> Router {
     router
 }
 
+/// The environment variable naming the staged Nautilus web-preview bundle —
+/// the `nautilus-preview` crate's client bundle that `navigator dev
+/// build-nautilus` stages at `server/public/nautilus` in a Navigator
+/// checkout. The override points a server running anywhere else (and every
+/// test) at a bundle built anywhere at all.
+const NAUTILUS_PUBLIC_PATH_ENV: &str = "NAUTILUS_DIOXUS_PUBLIC_PATH";
+
+/// The Nautilus mobile-shell preview's single path: the root of the dedicated
+/// `navigator nautilus preview` server, where the shell *is* the page. A
+/// deployment mounting this router picks its own admission path by nesting it.
+pub const NAUTILUS_PREVIEW_PATH: &str = "/";
+
+/// The staged Nautilus web bundle, or `None` when it is unset or has no
+/// `index.html` — the degraded, SSR-only mode the preview server reports
+/// honestly rather than an error to surface.
+fn nautilus_bundle_dir() -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os(NAUTILUS_PUBLIC_PATH_ENV)?);
+    dir.join("index.html").is_file().then_some(dir)
+}
+
+/// `ServeConfig::new` reads the staged bundle's document from this path.
+const DIOXUS_PUBLIC_PATH_ENV: &str = "DIOXUS_PUBLIC_PATH";
+
+/// The Nautilus preview's browser-visible provenance notice. The terminal
+/// banner cannot reach a browser tab, and the served page itself must say it
+/// is a local render — with or without a staged bundle, and across the
+/// shell's client-side navigation, which is why the notice sits outside the
+/// hydrated root.
+const NAUTILUS_PREVIEW_BANNER: &str = "<div data-nautilus-preview-banner style=\"position:fixed;bottom:0;left:0;right:0;z-index:2147483647;padding:6px 12px;background:#101020;color:#e8e8f0;font:500 12px/1.4 sans-serif;text-align:center\">Nautilus preview — a local render, not the Project's portal.</div>";
+
+/// Layers the provenance notice onto the preview's HTML responses, outside
+/// [`dioxus_document_head`] so it marks the document after every other
+/// head-level rewrite.
+pub(crate) async fn preview_provenance_notice(req: Request, next: Next) -> Response {
+    let response = next.run(req).await;
+    let is_html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|content_type| content_type.starts_with("text/html"));
+    if !is_html {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    // A render that errors mid-stream or overruns the buffer is a real
+    // failure, not a page missing its notice: surface it as a 500.
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_RENDER_BYTES).await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let html = open_with_banner(&String::from_utf8_lossy(&bytes), NAUTILUS_PREVIEW_BANNER);
+    // The body length changed; drop any stale content-length so axum recomputes.
+    parts.headers.remove(header::CONTENT_LENGTH);
+    Response::from_parts(parts, Body::from(html))
+}
+
+/// The Nautilus mobile-shell preview router — the hydration mechanics for
+/// `navigator nautilus preview`, owned here as for every other Dioxus page:
+/// a server-side render of [`webapp::mobile::MobileApp`] at
+/// [`NAUTILUS_PREVIEW_PATH`], the payload the wasm client binds to on load.
+///
+/// The SSR shell always mounts — a page with no staged bundle is the
+/// designed degraded mode, not a refusal — and a staged bundle's wasm and
+/// glue are served alongside it, layered on with the same
+/// [`bundle_assets_router`] shape the `/dioxus-demo` mount uses.
+pub fn nautilus_preview_router() -> Router {
+    // One bundle root drives both the hydration template and the assets:
+    // the documented override reaches dioxus-server's template knob here,
+    // at the router, so pointing `NAUTILUS_DIOXUS_PUBLIC_PATH` at a staged
+    // bundle is the whole contract — callers need not know dioxus-server's
+    // internals to serve a hydrated page.
+    let bundle = nautilus_bundle_dir();
+    let config = if let Some(dir) = &bundle {
+        // Safe on this edition, and read once below at `ServeConfig::new`:
+        // one server process builds one preview router.
+        std::env::set_var(DIOXUS_PUBLIC_PATH_ENV, dir);
+        ServeConfig::new()
+    } else {
+        // An exported webapp bundle must not supply another app's document
+        // or scripts to the preview's intentionally unhydrated shell.
+        // A device file cannot contain index.html on either supported host
+        // platform. An explicit path prevents Dioxus's executable-directory
+        // fallback from selecting another application's bundle as well.
+        std::env::set_var(DIOXUS_PUBLIC_PATH_ENV, "/dev/null");
+        ServeConfig::new()
+    };
+    let mut router = Router::<FullstackState>::new()
+        .route(
+            NAUTILUS_PREVIEW_PATH,
+            get(render_handler)
+                .layer(from_fn(dioxus_document_head))
+                .layer(from_fn(preview_provenance_notice)),
+        )
+        .with_state(FullstackState::new(config, webapp::mobile::MobileApp));
+    if let Some(dir) = bundle {
+        router = router.merge(bundle_assets_router(&dir));
+    }
+    router
+}
+
 /// Middleware for the rendered page. It owns the head-level concerns the
 /// SSR'd component tree cannot express itself:
 ///
@@ -1411,29 +1510,35 @@ pub fn project_detail_router(
             as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
     ]));
 
-    Router::<FullstackState>::new()
-        .route(
-            PROJECT_DETAIL_PATH,
-            get(render_handler)
-                .layer(from_fn(inject_viewer_role))
-                .layer(from_fn(inject_app_brand_mark))
-                .layer(from_fn(inject_person_id))
-                .layer(from_fn(inject_csrf_token))
-                .layer(from_fn(inject_dri_view))
-                .layer(from_fn_with_state(
-                    pending_intake_state,
-                    inject_pending_client_intake,
-                ))
-                .layer(from_fn_with_state(
-                    repository_surreal,
-                    inject_project_repository_pointer,
-                ))
-                .layer(from_fn_with_state(
-                    project_visit_surreal,
-                    crate::project_visit::log_project_visit,
-                ))
-                .layer(from_fn(dioxus_document_head)),
-        )
+    let show_page = move || {
+        get(render_handler)
+            .layer(from_fn(inject_viewer_role))
+            .layer(from_fn(inject_app_brand_mark))
+            .layer(from_fn(inject_person_id))
+            .layer(from_fn(inject_csrf_token))
+            .layer(from_fn(inject_dri_view))
+            .layer(from_fn_with_state(
+                pending_intake_state.clone(),
+                inject_pending_client_intake,
+            ))
+            .layer(from_fn_with_state(
+                repository_surreal.clone(),
+                inject_project_repository_pointer,
+            ))
+            .layer(from_fn_with_state(
+                project_visit_surreal.clone(),
+                crate::project_visit::log_project_visit,
+            ))
+            .layer(from_fn(dioxus_document_head))
+    };
+    // The show page and each built-in section, one path apiece. A literal
+    // segment wins over the declared-page parameter, and `Y021` reserves
+    // every one, so no page is shadowed.
+    let mut router = Router::<FullstackState>::new().route(PROJECT_DETAIL_PATH, show_page());
+    for path in project_tab_paths() {
+        router = router.route(&path, show_page());
+    }
+    router
         .with_state(FullstackState::new(
             cfg,
             webapp::matter_surface::ProjectDetail,
@@ -1445,12 +1550,20 @@ pub fn project_detail_router(
         .route_layer(from_fn_with_state(auth, crate::auth::require_auth))
 }
 
-/// Resolve the trailing project code of `/app/projects/{code}` to its internal id.
+/// Each built-in section's route under [`PROJECT_DETAIL_PATH`].
+pub fn project_tab_paths() -> impl Iterator<Item = String> {
+    webapp::sections::page::MatterTab::ROUTED
+        .into_iter()
+        .map(|tab| format!("{PROJECT_DETAIL_PATH}/{}", tab.segment()))
+}
+
+/// Resolve the project code of `/app/projects/{code}[/{section}]` to its
+/// internal id.
 async fn project_id_from_path(
     surreal: &store::surreal::SurrealDb,
     path: &str,
 ) -> Option<uuid::Uuid> {
-    let code = path.rsplit('/').next().filter(|seg| !seg.is_empty())?;
+    let code = crate::project_visit::project_code_from_path(path)?;
     store::projects::find_by_code(surreal, code)
         .await
         .ok()
@@ -5423,6 +5536,11 @@ mod tests {
             project_id_from_path(&surreal, &format!("/app/projects/{}", project.id)).await,
             None,
             "a row id in the show-page segment must name no Project"
+        );
+        // A built-in section's path names the same matter, never its segment.
+        assert_eq!(
+            project_id_from_path(&surreal, "/app/projects/libra-formation/testimonial").await,
+            Some(project.id),
         );
     }
 

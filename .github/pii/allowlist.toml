@@ -45,7 +45,7 @@ values = [
   "neonlaw.org",
   "shook.family",
   "lawyershook.com",
-  "guiebandshook.com",
+  "guiebshook.com",
   "cyberinjurylaw.com",
   "deleteyourdata.com",
   "deleteyourdebt.com",
@@ -104,6 +104,18 @@ values = ["+1 725 239 8413"]
 [[phones]]
 reason = "IEP Defenders' published voice line (iepdefenders.com/contact-us/)."
 values = ["+1 743 437 4357"]
+[[phones]]
+reason = "Synthetic E.164 validity fixtures in the store inbox tests (555-range and foreign-format shapes no person holds)."
+values = [
+  "+15551234567",
+  "+33123456789",
+  "+1555123",
+  "+1555123456789012345",
+  "15551234567",
+  "+05551234567",
+  "+1555-1234567",
+]
+
 
 [[phones]]
 reason = "Foreign-format fixtures: Ofcom drama numbers and the negative tests in cli/tests/no_client_data.rs."
@@ -124,6 +136,10 @@ values = [
 [[names]]
 reason = "The firm's principal, by name; public in the bar directories."
 values = ["Nick Shook", "Nicholas Shook", "Nicholas Richard Shook", "Lawyer Shook"]
+
+[[names]]
+reason = "A Neon Law team member, by name; published on the public /team page."
+values = ["Waleed Amer"]
 
 [[names]]
 reason = "Copyright and credit attributions: photographers, type designers, artists."
@@ -193,7 +209,8 @@ values = [
   # sample matters and docket fixtures
   "cornelius", "montgomery", "dermot", "odile", "cruller", "wendell", "prine",
   "quentin", "quill", "uma", "upton", "vera", "venue", "fern", "filer", "gus",
-  "gavel", "hana", "hearsay", "walt", "writ", "jon", "sison", "zzz", "person",
+  "gavel", "hana", "hearsay", "walt", "writ", "xena", "xerox", "jon", "sison", "zzz",
+  "person",
 ]
 
 [[non_name_words]]

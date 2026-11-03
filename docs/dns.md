@@ -58,17 +58,25 @@ is served by the redirect service, which sends both its apex and `www` host to t
 | `www.neonlaw.com` / `workflows.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
 | `staging.neonlaw.com` / `workflows-staging.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `staging.deleteyourdata.com` | the staging deployment | its `<prefix>-gateway-ip` |
-| `staging.lawyershook.com` | the staging deployment | its `<prefix>-gateway-ip` |
-| `staging.guiebandshook.com` | the staging deployment | its `<prefix>-gateway-ip` |
+| `staging.guiebshook.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `iep.neonlaw.com` / `lex-tecnica.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
 | `staging-iep.neonlaw.com` / `staging-lex-tecnica.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `neonlaw.org` / `www.neonlaw.org` | the redirect service | `https://www.neonlaw.com` (path-preserving 301) |
+| `lawyershook.com` | retired | no records |
 
 The `neonlaw.com` apex is not a deployment entry: it carries a `URL` record that 301s to `https://www.neonlaw.com`,
 which is a record inside the production zone. It is the Apex→www row of the record table below. It must not appear on a
 GKE `ManagedCertificate`: the name does not resolve to the load balancer, and a Google-managed certificate stays in
 `Provisioning` until every listed name validates. The `neonlaw.org` zone has its own host-dispatched redirect service so
 deep links survive the domain migration.
+
+A **moved brand** — a key whose `views::brand::BrandKey::moved_to` names the brand it moved to — is no longer served by
+the cluster. Lawyer Shook moved to Guieb & Shook, and the `lawyershook.com` zone is retired: it carries no web or mail
+records. The release inventory (`views::brand::release_brand_hosts()`) leaves a moved brand out, so none of its hosts
+reaches a `ManagedCertificate` or an Ingress rule in either environment, and every roll deletes its old
+`navigator-web-<key>` certificate. That matters because the brand hosts share one certificate, `navigator-firm`: Google
+issues it only once every listed name validates, and GKE recreates it whenever its domain list changes, so a name that
+no longer resolves to the load balancer would hold TLS off every brand on it.
 
 Lex Tecnica's two brands, Lex Tecnica and IEP Defenders, are served on `neonlaw.com` subdomains rather than domains of
 their own: `lex-tecnica` and `iep` in production, `staging-lex-tecnica` and `staging-iep` on staging. They have no apex
@@ -367,10 +375,10 @@ Workspace as usual.
 ## Grounding TLS in the release inventory
 
 A next release must carry every registered house brand's certificate, not only the launched ones.
-`views::brand::BrandKey::ALL` names nine compiled keys today; `views::brand::release_brand_hosts()` is those keys
+`views::brand::release_brand_hosts()` is the compiled keys of `views::brand::BrandKey::ALL`, less any moved brand,
 crossed with the hosts each one serves (`www.<domain>` and `staging.<domain>`) — the **release inventory**
 `cli::devx::ship` reads to render every brand's `ManagedCertificate` and Ingress rule, in both environments, whether or
-not that brand has launched.
+not that brand has launched. A moved brand is never on it.
 
 This is a deliberate split from `views::brand::BrandKey::LIVE`, the **launch gate** — the approved list that controls
 the request router's host admission, the crawler's `robots.txt`/sitemap base, the apex redirect, and the footer's "Our
@@ -381,6 +389,27 @@ that should already be valid, trusted, and serving the right SAN well before a l
 brand's host still serves a real, trusted certificate — it just answers `404` (`views::brand::held_out_host`) instead of
 the brand's page, never a TLS handshake failure. Each family keeps its own isolated `ManagedCertificate` regardless
 (ENG-768), so an unpointed or held-out name in `Provisioning` never holds another family's certificate hostage.
+
+### Changing shared certificate domains
+
+`ops ship` refuses to change an existing `navigator-firm` domain set. GKE recreates a managed certificate when its
+domains change, so removing a retired host can interrupt HTTPS for every retained host on that certificate. This
+preflight runs before the application apply. A new deployment with no shared certificate may provision one normally.
+
+The operator must stage a certificate transition separately in each environment, starting with staging:
+
+1. Create a replacement `ManagedCertificate` under a distinct name, listing every retained environment host.
+2. Attach it alongside the serving certificates in the existing Ingress annotation. Keep the serving certificates
+   and their domains unchanged, and remain within the target proxy's certificate limit.
+3. Wait for the replacement's `Active` status. Verify trusted HTTPS with SNI for every retained host; do not remove
+   working certificates or DNS records while the replacement is still provisioning.
+4. With replacement coverage serving, reconcile `navigator-firm` to the desired domain set. Wait for it to become
+   `Active` and verify trusted HTTPS at every retained host again.
+5. Rerun `ops ship`. Its rendered annotation retains `navigator-firm`; remove the temporary replacement only after
+   the final certificate and host checks pass. Retire the moved host's web records after that verification.
+
+Keep issuance and per-host verification receipts in the deployment's approved private records. A failed or pending
+transition leaves the serving certificates attached; rerun the checks before advancing.
 
 ### Verifying it — `navigator ops brand-readiness`
 
@@ -399,8 +428,8 @@ the host's ordinary trust store — **never `-k`/insecure** — and checks the a
 - a **live** brand must answer `200` with its own `og:site_name` (the same marker
   [`features/brand_routing.feature`](../features/tests/features/brand_routing.feature) already asserts on every route);
 - a **held-out** brand must answer `404` — a `200` there is a host-admission regression, not a pass;
-- on the production run only, every **live** brand's apex must redirect to its own canonical `www` host (apex checks
-  are skipped on staging, which carries no apex at all — see [The apex redirect is not done when the `URL` record
+- on the production run only, every **live, unmoved** brand's apex must redirect to its own canonical `www` host (apex
+  checks are skipped on staging, which carries no apex at all — see [The apex redirect is not done when the `URL` record
   lands](#the-apex-redirect-is-not-done-when-the-url-record-lands) above).
 
 It is bounded (one `curl` per host, `--max-time`-limited, no retry loop and no polling for a certificate to become

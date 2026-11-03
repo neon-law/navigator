@@ -902,9 +902,12 @@ jobs:
           # not find the profile data.
           #
           # The floor sits under what THIS command measures. Last published
-          # CI print before this raise: 92.44% line coverage (35732 missed of
-          # 472409) on 2026-11-03, from PR #358's workspace job. The 92.2 floor
-          # is the merge gate from this change onward.
+          # CI print before the 92.7 raise attempt: 92.44% line coverage
+          # (35732 missed of 472409) on 2026-11-03, from PR #358's workspace
+          # job. The latest published print — the increment that tried to move
+          # this floor to 92.7 and held instead — is 92.35% line coverage
+          # (36445 missed of 476610) on 2026-11-04, from PR #380's workspace
+          # job. The 92.2 floor is the merge gate from this change onward.
           #
           # Raising the floor means moving three constants together — here,
           # `docs/agent-workflows.md`, and `docs/oss-install.md` — so raise it

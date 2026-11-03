@@ -2762,6 +2762,38 @@ pub async fn list_project(
     Ok(listed)
 }
 
+/// Unread conversations assigned to one Project — the matter dashboard's
+/// correspondence tile. A read-only projection over the conversations'
+/// existing `unread` flag, firm-wide as the Inbox itself keeps it (there is
+/// no per-participant read-state to derive a per-reader count from). No
+/// authorization here: every caller resolves its own reader's access before
+/// reaching this — the dashboard through the `matter_viewer` seam, the
+/// project inbox through [`list_project`].
+///
+/// # Errors
+///
+/// Propagates any database error.
+pub async fn unread_count_for_project(db: &SurrealDb, project_id: Uuid) -> Result<i64, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::unread_count_for_project_on(
+            &pg, project_id,
+        ))
+        .await;
+    }
+    let mut response = db
+        .query(format!(
+            "SELECT VALUE count() FROM {CONVERSATION} WHERE project_id = $project \
+             AND unread = true GROUP ALL"
+        ))
+        .bind(("project", record_id(projects::PROJECT_TABLE, project_id)))
+        .await?
+        .check()?;
+    // `SELECT VALUE count()` yields bare numbers — one per GROUP ALL group,
+    // and no row at all when nothing matches, which is a count of zero.
+    let counts: Vec<i64> = response.take(0)?;
+    Ok(counts.first().copied().unwrap_or(0))
+}
+
 /// Whether a participating Lawyer or Clerk may relay this email thread now.
 ///
 /// The check reads the person row and the current participation, so a
@@ -6202,5 +6234,120 @@ mod tests {
                 state
             );
         }
+    }
+
+    /// An inbound message's acknowledgment receipt is its ID with the
+    /// sign bit flipped: always distinct from the inbound ID, and
+    /// involutive, so a reply to the receipt resolves to the original.
+    #[test]
+    fn acknowledgment_ids_are_involutive_and_distinct() {
+        let inbound = Uuid::now_v7();
+        let receipt = acknowledgment_id(inbound);
+        assert_ne!(inbound, receipt);
+        assert_eq!(acknowledgment_id(receipt), inbound);
+    }
+
+    #[test]
+    fn e164_requires_a_plus_an_eligible_length_and_no_leading_zero() {
+        assert!(is_e164("+15551234567"));
+        assert!(is_e164("+33123456789"));
+        // Too short, too long, missing `+`, a leading zero, non-digits.
+        assert!(!is_e164("+1555123"));
+        assert!(!is_e164("+1555123456789012345"));
+        assert!(!is_e164("15551234567"));
+        assert!(!is_e164("+05551234567"));
+        assert!(!is_e164("+1555-1234567"));
+        assert!(!is_e164(""));
+    }
+
+    #[test]
+    fn social_channels_exclude_the_direct_channels() {
+        for name in [
+            channel::FACEBOOK,
+            channel::INSTAGRAM,
+            channel::THREADS,
+            channel::YOUTUBE,
+            channel::TIKTOK,
+            channel::X,
+            channel::LINKEDIN,
+        ] {
+            assert!(is_social_channel(name), "{name}");
+        }
+        for name in [
+            channel::SMS,
+            channel::VOICE,
+            channel::EMAIL,
+            channel::SCRAPER,
+        ] {
+            assert!(!is_social_channel(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn processed_at_rejects_a_non_timestamp_with_the_stored_value_named() {
+        let parsed = parse_processed_at("2026-01-15T12:30:00Z").expect("rfc3339");
+        assert_eq!(parsed.to_rfc3339(), "2026-01-15T12:30:00+00:00");
+        let error = parse_processed_at("yesterday-ish").expect_err("invalid");
+        assert!(error.to_string().contains("yesterday-ish"), "{error}");
+    }
+
+    #[test]
+    fn terminal_delivery_states_stay_terminal_and_the_last_signal_wins() {
+        use super::delivery;
+        // A terminal state never regresses, whatever arrives later.
+        assert_eq!(
+            advance_delivery(delivery::FAILED, delivery::DELIVERED),
+            delivery::FAILED
+        );
+        assert_eq!(
+            advance_delivery(delivery::SUPPRESSED, delivery::SUBMITTED),
+            delivery::SUPPRESSED
+        );
+        // A non-terminal state adopts the incoming signal, unknown stays
+        // unknown while only a submit is known, and an unrecognized signal
+        // reads as unknown rather than inventing a state.
+        assert_eq!(
+            advance_delivery(delivery::SUBMITTED, "carrier-pigeon"),
+            delivery::UNKNOWN
+        );
+        assert_eq!(
+            advance_delivery(delivery::RECEIVED, delivery::FAILED),
+            delivery::FAILED
+        );
+    }
+
+    #[tokio::test]
+    async fn unread_count_for_project_counts_only_that_matters_unread_threads() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        // Two unread threads on the matter, one elsewhere, and the count
+        // read stays a bare-number decode (SELECT VALUE count()).
+        for thread in ["sms-a", "sms-b"] {
+            let ingested = ingest_inbound(
+                &db,
+                &inbound(
+                    world.firm,
+                    channel::SMS,
+                    "fixture-account",
+                    thread,
+                    "sms:fixture-sender",
+                ),
+            )
+            .await
+            .unwrap();
+            assign(&db, world.owner, ingested.conversation_id, world.project)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            unread_count_for_project(&db, world.project).await.unwrap(),
+            2
+        );
+        assert_eq!(
+            unread_count_for_project(&db, world.other_project)
+                .await
+                .unwrap(),
+            0
+        );
     }
 }

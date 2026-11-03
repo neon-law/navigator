@@ -6,7 +6,7 @@
 // The OpenAPI document in `openapi.rs` is one large `serde_json::json!`
 // literal; each documented path/schema nests it deeper, so the default 128
 // recursion limit cannot expand it. Raise the ceiling for the whole crate.
-#![recursion_limit = "512"]
+#![recursion_limit = "1024"]
 //! Neon Law Navigator web server library.
 //!
 //! Exposes [`bootstrap`] so a brand binary and the integration tests that
@@ -104,9 +104,12 @@ pub(crate) mod lawyer_mailbox;
 pub(crate) mod matter_caption_api;
 pub(crate) mod module_records_api;
 pub(crate) mod pages_api;
+pub(crate) mod project_billing_api;
 pub(crate) mod project_costs_api;
+pub(crate) mod project_stage_forms;
 pub(crate) mod project_stages_api;
 pub(crate) mod project_tasks_api;
+pub(crate) mod project_tasks_forms;
 pub(crate) mod recovery_archives_api;
 pub(crate) mod service_api;
 pub mod site_brand;
@@ -924,6 +927,7 @@ pub fn bootstrap_with_forgejo_oidc(
                 signature_provider: state.signature_provider.clone(),
                 contract_reviewer: state.contract_reviewer.clone(),
                 integration_providers: state.integration_providers.clone(),
+                billing_provider: state.billing_provider.clone(),
                 canonical_base_url: state.canonical_host.host().map(str::to_string),
             })
             .layer(axum::middleware::from_fn_with_state(

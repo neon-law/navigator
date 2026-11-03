@@ -1171,6 +1171,7 @@ mod tests {
         let project = crate::projects::open_matter(
             &db,
             &crate::projects::OpenMatterCommand {
+                firm_id: None,
                 name: "Synthetic Project".into(),
                 code: code.into(),
                 client_id: client.id,

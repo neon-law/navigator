@@ -78,8 +78,8 @@ A `ManagedCertificate` is authorized **by the load balancer**, not by DNS: Googl
 already resolves to the ingress address. That ordering is forced and it costs a TLS gap — while the certificate
 validates, the host answers `308` on port 80 and returns an empty TLS handshake on 443, so it is neither the old site
 nor the new one. A Google-managed certificate also reissues as a whole when `spec.domains` changes, so each hostname
-family (`NAVIGATOR_PUBLIC_HOST`, every other registered brand — launched or not, per the release inventory
-`views::brand::release_brand_hosts` names, and [`docs/dns.md`'s Grounding TLS in the release
+family (`NAVIGATOR_PUBLIC_HOST`, every other registered brand but a moved one — launched or not, per the release
+inventory `views::brand::release_brand_hosts` names, and [`docs/dns.md`'s Grounding TLS in the release
 inventory](dns.md#grounding-tls-in-the-release-inventory) explains — and the workflows host) has its own
 `ManagedCertificate` on the shared Ingress. Adding a name to one family does not retire another family's certificate. A
 held-out brand's certificate and Ingress rule exist the same as a launched one's; only the request router's host

@@ -46,7 +46,7 @@ cluster.
 | Deployment | Brand host |
 | --- | --- |
 | `<deployment>` | `staging.deleteyourdata.com` |
-| `<deployment>` | `staging.lawyershook.com` |
+| `<deployment>` | `staging.guiebshook.com` |
 | the production deployment | its configured brand hosts |
 
 Each row also serves a workflows host beside its public one: `workflows-<deployment>` for `<deployment>` and
@@ -69,9 +69,9 @@ deployment's `config.toml` as `NAVIGATOR_GATEWAY_IP`, and `gcloud compute addres
 
 `<deployment>` and `<deployment>` both resolve to that address and are served by this deployment's Ingress, each with
 its own `ManagedCertificate` Active, and every other registered brand host the same way — the release inventory covers
-all of them, launched or not; see [`dns.md`'s Grounding TLS in the release
-inventory](dns.md#grounding-tls-in-the-release-inventory). This deployment's Ingress serves the complete public route
-table at `<deployment>`; there is no separate marketing-site deployment or publishing tool.
+all of them, launched or not, except a moved brand, which the cluster no longer serves; see [`dns.md`'s Grounding TLS in
+the release inventory](dns.md#grounding-tls-in-the-release-inventory). This deployment's Ingress serves the complete
+public route table at `<deployment>`; there is no separate marketing-site deployment or publishing tool.
 
 Each deployment serves its own host, and the host says what the deployment is. `<deployment>` is production: the firm at
 the root, over real matters. Staging serves `<deployment>` over sample data, so a visitor never has to guess which one
@@ -169,7 +169,7 @@ See [DBOS durability](dbos-durability.md#several-replicas).
 brand this repository registers — the deployment config selects one allow-listed image name, and `navigator ops ship`
 pins all runtime images to one immutable release tag. There is no runtime *image* switch, but there is a runtime *host*
 switch: which house brand a request renders is resolved per request from its `Host:` header against the compiled
-registry (`views::brand::BrandKey`, see [`glossary/`](glossary/brand.md)), not from a deployment-level flag. A
+registry (`views::brand::BrandKey`, see [House Brand](glossary/house-brand.md)), not from a deployment-level flag. A
 misconfigured deployment cannot serve one entity's pages under another entity's tag, because the served-host list for
 each key is compiled in rather than read from config.
 

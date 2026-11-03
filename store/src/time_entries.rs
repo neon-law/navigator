@@ -64,8 +64,16 @@ impl TimeEntrySource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BillingStatus {
     Unbilled,
-    Invoiced { xero_invoice_id: String },
-    WrittenOff { reason: String },
+    /// Drawn into a pending billing batch: not yet invoiced, but no longer
+    /// free to write off — the batch's provider call bills it or the batch
+    /// releases it back here.
+    Reserved,
+    Invoiced {
+        xero_invoice_id: String,
+    },
+    WrittenOff {
+        reason: String,
+    },
 }
 
 impl BillingStatus {
@@ -73,6 +81,7 @@ impl BillingStatus {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Unbilled => "unbilled",
+            Self::Reserved => "reserved",
             Self::Invoiced { .. } => "invoiced",
             Self::WrittenOff { .. } => "written_off",
         }
@@ -144,6 +153,14 @@ fn parse_billing_status(
 ) -> Result<BillingStatus, TimeEntryError> {
     match status {
         "unbilled" => Ok(BillingStatus::Unbilled),
+        "reserved" => {
+            // Reserved rows carry no Xero id and no write-off reason — the
+            // status-evidence constraint holds the same line.
+            if xero_invoice_id.is_some() || written_off_reason.is_some() {
+                return Err(TimeEntryError::Invalid("billing status"));
+            }
+            Ok(BillingStatus::Reserved)
+        }
         "invoiced" => xero_invoice_id
             .map(|xero_invoice_id| BillingStatus::Invoiced { xero_invoice_id })
             .ok_or(TimeEntryError::Invalid("billing status")),
@@ -286,6 +303,7 @@ pub async fn mark_invoiced(
     entry_ids: &[Uuid],
     actor_id: Uuid,
     xero_invoice_id: &str,
+    allow_reserved: bool,
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     if entry_ids.is_empty() {
         return Err(TimeEntryError::Invalid("entries"));
@@ -311,6 +329,14 @@ pub async fn mark_invoiced(
         match &entry.billing_status {
             // Unbilled: nothing to check yet.
             BillingStatus::Unbilled => {}
+            // Reserved by the batch now completing: the mark closes it — but
+            // only the owning batch may close it. A manual link cannot pull
+            // a reserved entry out from under a pending invoice intent.
+            BillingStatus::Reserved => {
+                if !allow_reserved {
+                    return Err(TimeEntryError::Conflict);
+                }
+            }
             // Already invoiced under the same invoice id: the replay no-op.
             BillingStatus::Invoiced {
                 xero_invoice_id: id,
@@ -325,13 +351,18 @@ pub async fn mark_invoiced(
     }
     let markable = rows
         .iter()
-        .filter(|entry| entry.billing_status.as_str() == "unbilled")
+        .filter(|entry| {
+            matches!(
+                entry.billing_status,
+                BillingStatus::Unbilled | BillingStatus::Reserved
+            )
+        })
         .count();
     if markable > 0 {
         set_audit_context(&mut tx, actor_id, "invoiced").await?;
         sqlx::query(
             "UPDATE time_entry SET billing_status='invoiced',xero_invoice_id=$2,updated_at=$3 \
-             WHERE id = ANY($1) AND billing_status='unbilled'",
+             WHERE id = ANY($1) AND billing_status IN ('unbilled','reserved')",
         )
         .bind(entry_ids)
         .bind(xero_invoice_id)
@@ -376,8 +407,120 @@ pub async fn write_off(
     fetch(pg, id).await
 }
 
+/// Draw unbilled entries into a pending billing batch: Unbilled → Reserved,
+/// all-or-nothing. A reserved entry cannot be written off — the batch's
+/// provider call bills it, or the batch releases it back here.
+pub async fn reserve(
+    pg: &PostgresDb,
+    entry_ids: &[Uuid],
+    actor_id: Uuid,
+) -> Result<Vec<TimeEntry>, TimeEntryError> {
+    if entry_ids.is_empty() {
+        return Err(TimeEntryError::Invalid("entries"));
+    }
+    let mut tx = pg.0.begin().await?;
+    reserve_in_tx(&mut tx, entry_ids, actor_id).await?;
+    tx.commit().await?;
+    let mut entries = Vec::with_capacity(entry_ids.len());
+    for entry_id in entry_ids {
+        entries.push(fetch(pg, *entry_id).await?);
+    }
+    Ok(entries)
+}
+
+/// The reservation transition inside a caller's transaction — the billing
+/// batch reserves its rows and persists its intent atomically, so a crash
+/// between the two cannot strand reserved work without a batch to resume.
+pub(crate) async fn reserve_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    entry_ids: &[Uuid],
+    actor_id: Uuid,
+) -> Result<(), TimeEntryError> {
+    let before = sqlx::query(
+        "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         inserted_at,updated_at FROM time_entry WHERE id = ANY($1) \
+         ORDER BY performed_on, id FOR UPDATE",
+    )
+    .bind(entry_ids)
+    .fetch_all(&mut **tx)
+    .await?;
+    if before.len() != entry_ids.len() {
+        return Err(TimeEntryError::NotFound);
+    }
+    let rows = before.iter().map(from_row).collect::<Result<Vec<_>, _>>()?;
+    for entry in &rows {
+        // Reserved (already drawn by a live batch) or resolved work: the
+        // caller is composing a different batch than the one that took it.
+        if !matches!(entry.billing_status, BillingStatus::Unbilled) {
+            return Err(TimeEntryError::Conflict);
+        }
+    }
+    set_audit_context(&mut *tx, actor_id, "reserved").await?;
+    sqlx::query(
+        "UPDATE time_entry SET billing_status='reserved',updated_at=$2 \
+         WHERE id = ANY($1) AND billing_status='unbilled'",
+    )
+    .bind(entry_ids)
+    .bind(Utc::now())
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Release reserved entries back to Unbilled — a batch abandoned before the
+/// provider committed. Only Reserved rows move, so the release is safe to
+/// repeat; anything already invoiced or written off stays as it is.
+pub async fn unreserve(
+    pg: &PostgresDb,
+    entry_ids: &[Uuid],
+    actor_id: Uuid,
+) -> Result<Vec<TimeEntry>, TimeEntryError> {
+    if entry_ids.is_empty() {
+        return Err(TimeEntryError::Invalid("entries"));
+    }
+    let mut tx = pg.0.begin().await?;
+    set_audit_context(&mut tx, actor_id, "unreserved").await?;
+    sqlx::query(
+        "UPDATE time_entry SET billing_status='unbilled',updated_at=$2 \
+         WHERE id = ANY($1) AND billing_status='reserved'",
+    )
+    .bind(entry_ids)
+    .bind(Utc::now())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut entries = Vec::with_capacity(entry_ids.len());
+    for entry_id in entry_ids {
+        entries.push(fetch(pg, *entry_id).await?);
+    }
+    Ok(entries)
+}
+
 /// A Project's unbilled billable time — what an invoice would draw from,
 /// oldest work first.
+/// The matter's billable work in progress: unbilled entries plus entries
+/// drawn into a pending batch. Reserved work carries no invoice yet, so it
+/// stays part of the matter's WIP until an invoice holds it.
+pub async fn wip_billable(
+    pg: &PostgresDb,
+    project_id: Uuid,
+) -> Result<Vec<TimeEntry>, TimeEntryError> {
+    sqlx::query(
+        "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         inserted_at,updated_at FROM time_entry \
+         WHERE project_id=$1 AND billable AND billing_status IN ('unbilled','reserved') \
+         ORDER BY performed_on, id",
+    )
+    .bind(project_id)
+    .fetch_all(&pg.0)
+    .await?
+    .iter()
+    .map(from_row)
+    .collect()
+}
+
 pub async fn unbilled_billable(
     pg: &PostgresDb,
     project_id: Uuid,
@@ -729,7 +872,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            mark_invoiced(&pg, &[invoiced.id], actor, "inv-1")
+            mark_invoiced(&pg, &[invoiced.id], actor, "inv-1", false)
                 .await
                 .unwrap();
             write_off(&pg, written_off.id, actor, "Included in the flat fee")
@@ -761,7 +904,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let marked = mark_invoiced(&pg, &[first.id, second.id], actor, "inv-42")
+            let marked = mark_invoiced(&pg, &[first.id, second.id], actor, "inv-42", false)
                 .await
                 .unwrap();
             assert_eq!(marked.len(), 2);
@@ -776,7 +919,7 @@ mod tests {
 
             // A replay under the same invoice id changes nothing.
             let events_after_first_pass = list_events(&pg, first.id).await.unwrap().len();
-            let replayed = mark_invoiced(&pg, &[first.id, second.id], actor, "inv-42")
+            let replayed = mark_invoiced(&pg, &[first.id, second.id], actor, "inv-42", false)
                 .await
                 .unwrap();
             assert_eq!(replayed.len(), 2);
@@ -788,13 +931,13 @@ mod tests {
 
             // The same entries under a different invoice id are a conflict.
             assert!(matches!(
-                mark_invoiced(&pg, &[first.id], actor, "inv-43").await,
+                mark_invoiced(&pg, &[first.id], actor, "inv-43", false).await,
                 Err(TimeEntryError::Conflict)
             ));
 
             // An unknown entry id is not found.
             assert!(matches!(
-                mark_invoiced(&pg, &[Uuid::new_v4()], actor, "inv-44").await,
+                mark_invoiced(&pg, &[Uuid::new_v4()], actor, "inv-44", false).await,
                 Err(TimeEntryError::NotFound)
             ));
         }
@@ -826,7 +969,7 @@ mod tests {
                 Err(TimeEntryError::Invalid("entry is already resolved"))
             ));
             assert!(matches!(
-                mark_invoiced(&pg, &[created.id], actor, "inv-7").await,
+                mark_invoiced(&pg, &[created.id], actor, "inv-7", false).await,
                 Err(TimeEntryError::Invalid("entry is already resolved"))
             ));
         }
@@ -842,7 +985,7 @@ mod tests {
             let created = create(&pg, seed.project_id, actor, &entry(seed.attorney, 60, true))
                 .await
                 .unwrap();
-            mark_invoiced(&pg, &[created.id], actor, "inv-9")
+            mark_invoiced(&pg, &[created.id], actor, "inv-9", false)
                 .await
                 .unwrap();
 

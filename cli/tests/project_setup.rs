@@ -288,14 +288,14 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
     let checkout = TempDir::new().unwrap();
     fs::write(
         checkout.path().join("navigator.yaml"),
-        "version: \"26.9.26\"\nproject:\n  host: staging.neonlaw.com\n  name: acme\n",
+        "version: \"26.9.26\"\nproject:\n    host: staging.neonlaw.com\n    name: acme\n",
     )
     .unwrap();
     Mock::given(method("GET"))
         .and(path("/app/api/projects"))
         .and(header("authorization", "Bearer test-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            { "id": project_id, "code": "acme" }
+            { "id": project_id, "code": "acme", "firm_id":"00000000-0000-0000-0000-000000000001", "brand":"sample" }
         ])))
         .mount(&server)
         .await;
@@ -326,6 +326,8 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
     );
     let manifest = fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap();
     for value in [
+        "firm: 00000000-0000-0000-0000-000000000001",
+        "brand: sample",
         "lawyer@example.com",
         "client@example.com",
         "https://slack.com/archives/private",
@@ -333,6 +335,239 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
     ] {
         assert!(manifest.contains(value), "missing {value}: {manifest}");
     }
+    assert!(manifest.contains("\n    firm: "), "{manifest}");
+    assert!(manifest.contains("\n    brand: sample\n"), "{manifest}");
+    // A coordinate edit with current ownership must not claim an ownership edit,
+    // in either the actual change report or its dry-run preview.
+    for dry_run in [false, true] {
+        fs::write(
+            checkout.path().join("navigator.yaml"),
+            manifest.replace("lawyer@example.com", "previous-lawyer@example.com"),
+        )
+        .unwrap();
+        let mut cmd = command();
+        cmd.current_dir(checkout.path())
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+            .args(["project", "set", "--from-live", "--host", &host]);
+        if dry_run {
+            cmd.arg("--dry-run");
+        }
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = String::from_utf8_lossy(&output.stdout);
+        assert!(report.contains("lawyer_dri"), "{report}");
+        assert!(!report.contains("manifest Firm and brand"), "{report}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn project_set_from_live_refuses_ownership_drift_without_writes() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let login = TempDir::new().unwrap();
+    let credentials_path = credentials(&login, &host);
+    let checkout = TempDir::new().unwrap();
+    let project_id = Uuid::now_v7();
+    let firm = "00000000-0000-0000-0000-000000000001";
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id":project_id,"code":"acme","firm_id":firm,"brand":"sample"}
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/app/api/project-surfaces/{project_id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "code":"acme","repository_url":null,
+            "lawyer_dri":["lawyer@example.com"],"client_dri":["client@example.com"],
+            "private_slack_channel":"https://slack.example.test/private",
+            "private_notion_page":"https://notion.example.test/private"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("/app/api/projects/{project_id}")))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    for (declared_firm, brand) in [
+        (Some(firm), "other-brand"),
+        (Some("00000000-0000-0000-0000-000000000002"), "sample"),
+        (None, "sample"),
+    ] {
+        let firm_line = declared_firm.map_or_else(String::new, |id| format!("  firm: {id}\n"));
+        let original = format!("version: 26.9.26\nproject:\n  host: example.test\n  name: acme\n{firm_line}  brand: {brand}\n");
+        for dry_run in [false, true] {
+            fs::write(checkout.path().join("navigator.yaml"), &original).unwrap();
+            let mut cmd = command();
+            cmd.current_dir(checkout.path())
+                .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+                .args([
+                    "project",
+                    "set",
+                    "--from-live",
+                    "--host",
+                    &host,
+                    "--booking-url",
+                    "https://calendar.example.test/booking",
+                ]);
+            if dry_run {
+                cmd.arg("--dry-run");
+            }
+            let output = cmd.output().unwrap();
+            assert!(!output.status.success(), "ownership drift must be refused");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("Firm and brand differ"));
+            assert_eq!(
+                fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap(),
+                original
+            );
+        }
+    }
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.method == "GET"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn local_gate_refuses_ownership_drift_before_markdown_or_layout_fixes() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let login = TempDir::new().unwrap();
+    let credentials_path = credentials(&login, &host);
+    let checkout = TempDir::new().unwrap();
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id": Uuid::now_v7(), "code":"acme", "firm_id": Uuid::now_v7(), "brand":"sample"}
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let manifest = format!(
+        "version: {}\nproject:\n  host: {host}\n  name: acme\n  firm: {}\n  brand: other\n",
+        env!("CARGO_PKG_VERSION"),
+        Uuid::now_v7()
+    );
+    let readme = "# Example\n\nText with trailing whitespace.  \n";
+    let workflow = "name: automerge\n# needs canonical layout repair\n";
+    fs::create_dir(checkout.path().join(".git")).unwrap();
+    fs::create_dir_all(checkout.path().join(".github/workflows")).unwrap();
+    for (path, contents) in [
+        ("navigator.yaml", manifest.as_str()),
+        ("README.md", readme),
+        (".github/workflows/automerge.yml", workflow),
+    ] {
+        fs::write(checkout.path().join(path), contents).unwrap();
+    }
+    // Select the compiled release so this gate reaches the ownership check.
+    let output = command()
+        .current_dir(checkout.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+        .env("NAVIGATOR_RELEASE_TAG", env!("CARGO_PKG_VERSION"))
+        .args(["project", "gate"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "ownership drift must be refused");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Firm and brand differ"),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for (path, original) in [
+        ("navigator.yaml", manifest.as_str()),
+        ("README.md", readme),
+        (".github/workflows/automerge.yml", workflow),
+    ] {
+        assert_eq!(
+            fs::read_to_string(checkout.path().join(path)).unwrap(),
+            original,
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn project_commands_refuse_a_firm_uuid_instead_of_a_name() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let login = TempDir::new().unwrap();
+    let credentials_path = credentials(&login, &host);
+    let checkout = TempDir::new().unwrap();
+    let firm = "00000000-0000-0000-0000-000000000001";
+    Mock::given(method("GET"))
+        .and(path("/app/api/firms"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id":firm,"name":"Example Practice","brands":["sample"]}
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&server)
+        .await;
+    let original = "version: 26.9.26\nproject:\n  host: example.test\n  name: acme\n";
+    fs::write(checkout.path().join("navigator.yaml"), original).unwrap();
+    for arguments in [
+        vec!["project", "set", "--firm", firm, "--brand", "sample"],
+        vec![
+            "project",
+            "create",
+            "--name",
+            "Sample Matter",
+            "--code",
+            "acme",
+            "--client-email",
+            "client@example.com",
+            "--entity-name",
+            "Sample LLC",
+            "--attest",
+            "--firm",
+            firm,
+            "--brand",
+            "sample",
+        ],
+    ] {
+        command()
+            .current_dir(checkout.path())
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+            .args(arguments)
+            .args(["--host", &host])
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("no Firm with that name"));
+    }
+    let destination = checkout.path().join("scaffold");
+    command()
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+        .args([
+            "project", "scaffold", "--host", &host, "--firm", firm, "--brand", "sample", "--dir",
+        ])
+        .arg(&destination)
+        .write_stdin("Sample Matter\nacme\nSample Client\nclient@example.com\nSample LLC\nyes\n")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("no Firm with that name"));
+    assert_eq!(
+        fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap(),
+        original
+    );
+    assert!(!destination.exists());
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.method == "GET"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

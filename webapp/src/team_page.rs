@@ -44,7 +44,7 @@ pub struct TeamProfileContent {
 #[derive(Clone, Default)]
 pub struct InjectedTeamIndex(pub TeamIndexContent);
 
-/// Copy injected by the firm router for `/team/nick`.
+/// Copy injected by the firm router for an individual team profile.
 #[derive(Clone, Default)]
 pub struct InjectedTeamProfile(pub TeamProfileContent);
 
@@ -105,7 +105,7 @@ pub fn TeamIndexPage(chrome: PublicChrome, content: TeamIndexContent) -> Element
     }
 }
 
-/// The individual `/team/nick` page view.
+/// The individual team profile page view.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct TeamProfileView {
     pub chrome: PublicChrome,
@@ -121,7 +121,7 @@ pub async fn team_profile_view() -> Result<TeamProfileView, ServerFnError> {
     })
 }
 
-/// The `/team/nick` route entry.
+/// The individual team profile route entry.
 #[component]
 pub fn TeamProfileEntry() -> Element {
     let resource = use_server_future(team_profile_view)?;

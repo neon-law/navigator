@@ -348,14 +348,14 @@ pub async fn login_as_at(c: &Client, base_url: &str, email: &str, password: &str
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     scroll_and_js_click(c, "input[name='email']").await;
-    fill_login_field(c, "input[name='email']", email).await;
+    fill_text_field(c, "input[name='email']", email).await;
     submit_login_form(c).await;
     c.wait()
         .at_most(Duration::from_secs(10))
         .for_element(Locator::Css("input[name='password']"))
         .await
         .expect("password field after email submit");
-    fill_login_field(c, "input[name='password']", password).await;
+    fill_text_field(c, "input[name='password']", password).await;
     submit_login_form(c).await;
     wait_for_path(c, return_to, Duration::from_secs(20)).await;
 }
@@ -364,24 +364,23 @@ async fn submit_login_form(c: &Client) {
     scroll_and_js_click(c, "button[type='submit'], input[type='submit']").await;
 }
 
-/// Type `value` into the login field at `css`, confirming every character
+/// Type `value` into the text input or textarea at `css`, confirming every character
 /// landed before returning.
 ///
 /// `WebDriver`'s `send_keys` intermittently drops characters on a freshly
 /// rendered form — the same interactability race this suite already routes
-/// clicks around ([`scroll_and_js_click`]). A dropped keystroke in the
-/// email or password silently authenticates as the wrong account (or fails
-/// the login outright), which surfaces later as an unrelated content
-/// assertion. So clear the field, type, then read the value back through the
+/// clicks around ([`scroll_and_js_click`]). A dropped keystroke can leave a
+/// required field empty and prevent submission, surfacing as an unrelated
+/// content assertion. So clear the field, type, then read the value back through the
 /// native Get Element Property endpoint — not a page script — and retype until
 /// it matches. When native keys never land (Rauthy's hydrated Svelte input
 /// can swallow `send_keys` while still reporting an empty value), set the
-/// value from script so the login can still complete.
+/// value from script and dispatch the control's input and change events.
 ///
 /// # Panics
 ///
 /// Panics if the field never accepts its full value within 10 seconds.
-async fn fill_login_field(c: &Client, css: &str, value: &str) {
+pub async fn fill_text_field(c: &Client, css: &str, value: &str) {
     let started = std::time::Instant::now();
     loop {
         // A freshly rendered form can refuse any single interaction: the
@@ -389,32 +388,32 @@ async fn fill_login_field(c: &Client, css: &str, value: &str) {
         // hit the very interactability race this loop exists to ride out.
         // Treat a failed attempt as another poll (re-finding the element next
         // iteration) rather than a panic that aborts before the retry runs.
-        let landed = fill_login_field_once(c, css, value).await;
+        let landed = fill_text_field_once(c, css, value).await;
         if landed.as_deref() == Some(value) {
             return;
         }
         if started.elapsed() >= Duration::from_secs(2) {
-            let scripted = fill_login_field_from_script(c, css, value).await;
+            let scripted = fill_text_field_from_script(c, css, value).await;
             if scripted.as_deref() == Some(value) {
                 return;
             }
         }
         assert!(
             started.elapsed() <= Duration::from_secs(10),
-            "login field `{css}` never accepted its value (last saw {landed:?})",
+            "text field `{css}` never accepted its value (last saw {landed:?})",
         );
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
 }
 
-/// One clear-and-type attempt against the login field at `css`, returning the
+/// One clear-and-type attempt against the text control at `css`, returning the
 /// value that actually landed (read back through the native Get Element
 /// Property endpoint) or `None` when any interaction in the attempt failed.
 ///
-/// Returning `None` rather than panicking is what lets [`fill_login_field`]'s
+/// Returning `None` rather than panicking is what lets [`fill_text_field`]'s
 /// retry loop treat a transient find/interactability error as another poll,
 /// re-finding the element on the next iteration.
-async fn fill_login_field_once(c: &Client, css: &str, value: &str) -> Option<String> {
+async fn fill_text_field_once(c: &Client, css: &str, value: &str) -> Option<String> {
     let field = c.find(Locator::Css(css)).await.ok()?;
     // A stale or non-interactable field fails `clear` too, so bail on that
     // error rather than typing onto an element the race already rejected;
@@ -425,8 +424,8 @@ async fn fill_login_field_once(c: &Client, css: &str, value: &str) -> Option<Str
 }
 
 /// Last-resort fill when native `send_keys` never lands. Sets the control's
-/// value and fires `input`/`change` so Rauthy's bindings see it.
-async fn fill_login_field_from_script(c: &Client, css: &str, value: &str) -> Option<String> {
+/// value and fires `input`/`change` so the form's bindings see it.
+async fn fill_text_field_from_script(c: &Client, css: &str, value: &str) -> Option<String> {
     let set = c
         .execute(
             "const el = document.querySelector(arguments[0]); \

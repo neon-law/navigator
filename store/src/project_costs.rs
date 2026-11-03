@@ -338,6 +338,13 @@ pub async fn confirm_amount(
             "only an estimated cost can be confirmed",
         ));
     }
+    // A reserved cost's amount is frozen in its billing batch's line items;
+    // repricing it mid-batch would desynchronize the request from the rows.
+    if before.billing_status != "unbilled" {
+        return Err(ProjectCostError::Invalid(
+            "cost is drawn into a billing batch",
+        ));
+    }
     set_audit_context(&mut tx, actor_id, "amount_confirmed", None).await?;
     sqlx::query("UPDATE project_costs SET amount_cents=$2,amount_status='confirmed',updated_at=$3 WHERE id=$1")
         .bind(id).bind(amount_cents).bind(now).execute(&mut *tx).await?;
@@ -352,6 +359,7 @@ pub async fn link_invoice(
     id: Uuid,
     actor_id: Uuid,
     invoice_id: &str,
+    allow_reserved: bool,
 ) -> Result<ProjectCost, ProjectCostError> {
     let mut tx = pg.0.begin().await?;
     let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1 FOR UPDATE")
@@ -378,7 +386,26 @@ pub async fn link_invoice(
             "cost cannot be linked to an earlier invoice",
         ));
     }
-    if before.billing_status != "unbilled" {
+    if before.billing_status == "invoiced" {
+        // Linked under the same invoice: the replay no-op — a resumed batch
+        // re-links every cost it reserved, and the ones the first attempt
+        // got to must not refuse it.
+        if before.xero_invoice_id.as_deref() == Some(invoice_id) {
+            // A replay already holds the unchanged row. Release the
+            // transaction rather than acquiring a second pool connection.
+            tx.commit().await?;
+            return Ok(before);
+        }
+        return Err(ProjectCostError::Invalid("cost is already resolved"));
+    }
+    if before.billing_status == "reserved" && !allow_reserved {
+        // Reserved rows belong to their billing batch: a manual link must
+        // not pull work out from under a pending invoice intent.
+        return Err(ProjectCostError::Invalid(
+            "cost is reserved by a pending billing batch",
+        ));
+    }
+    if !matches!(before.billing_status.as_str(), "unbilled" | "reserved") {
         return Err(ProjectCostError::Invalid("cost is already resolved"));
     }
     let now = Utc::now();
@@ -414,6 +441,77 @@ pub async fn resolve(
         .await?;
     tx.commit().await?;
     fetch(pg, id).await
+}
+
+/// Draw unbilled confirmed costs into a pending billing batch: 'unbilled' →
+/// 'reserved', all-or-nothing. A reserved cost cannot be resolved or
+/// amount-confirmed — the batch's provider call bills it, or the batch
+/// releases it back.
+pub async fn reserve(
+    pg: &PostgresDb,
+    cost_ids: &[Uuid],
+    actor_id: Uuid,
+) -> Result<Vec<ProjectCost>, ProjectCostError> {
+    if cost_ids.is_empty() {
+        return Err(ProjectCostError::Invalid("costs"));
+    }
+    let mut tx = pg.0.begin().await?;
+    reserve_in_tx(&mut tx, cost_ids, actor_id).await?;
+    tx.commit().await?;
+    let mut costs = Vec::with_capacity(cost_ids.len());
+    for cost_id in cost_ids {
+        costs.push(fetch(pg, *cost_id).await?);
+    }
+    Ok(costs)
+}
+
+/// The reservation transition inside a caller's transaction — the billing
+/// batch reserves its costs and persists its intent atomically.
+pub(crate) async fn reserve_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    cost_ids: &[Uuid],
+    actor_id: Uuid,
+) -> Result<(), ProjectCostError> {
+    let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id = ANY($1) FOR UPDATE")
+        .bind(cost_ids).fetch_all(&mut **tx).await?;
+    if before.len() != cost_ids.len() {
+        return Err(ProjectCostError::NotFound);
+    }
+    let rows = before.iter().map(from_row).collect::<Result<Vec<_>, _>>()?;
+    for cost in &rows {
+        // Reserved (drawn by a live batch), invoiced, or resolved: the
+        // caller is composing a different batch than the one that took it.
+        if cost.billing_status != "unbilled" {
+            return Err(ProjectCostError::Conflict);
+        }
+    }
+    set_audit_context(&mut *tx, actor_id, "reserved", None).await?;
+    sqlx::query("UPDATE project_costs SET billing_status='reserved',updated_at=$2 WHERE id = ANY($1) AND billing_status='unbilled'")
+        .bind(cost_ids).bind(Utc::now()).execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Release reserved costs back to 'unbilled' — a batch abandoned before the
+/// provider committed. Only reserved rows move, so the release is safe to
+/// repeat; anything already invoiced or resolved stays as it is.
+pub async fn unreserve(
+    pg: &PostgresDb,
+    cost_ids: &[Uuid],
+    actor_id: Uuid,
+) -> Result<Vec<ProjectCost>, ProjectCostError> {
+    if cost_ids.is_empty() {
+        return Err(ProjectCostError::Invalid("costs"));
+    }
+    let mut tx = pg.0.begin().await?;
+    set_audit_context(&mut tx, actor_id, "unreserved", None).await?;
+    sqlx::query("UPDATE project_costs SET billing_status='unbilled',updated_at=$2 WHERE id = ANY($1) AND billing_status='reserved'")
+        .bind(cost_ids).bind(Utc::now()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    let mut costs = Vec::with_capacity(cost_ids.len());
+    for cost_id in cost_ids {
+        costs.push(fetch(pg, *cost_id).await?);
+    }
+    Ok(costs)
 }
 
 pub async fn list_for_project(

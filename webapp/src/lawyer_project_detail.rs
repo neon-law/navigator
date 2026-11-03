@@ -31,7 +31,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Empty, FactCard, FactGrid, Field, FormCard, Heading, Tab, Tabs};
+use crate::components::{Empty, FactCard, FactGrid, Field, FormCard, Heading};
 use crate::csrf::CsrfToken;
 use crate::lawyer_project_communications::{communications_tab, notes_tab, CommunicationRow};
 use crate::lawyer_project_documents::{documents_table, LawyerDocRow};
@@ -42,6 +42,8 @@ use crate::lawyer_project_participation::{
 };
 use crate::lawyer_project_testimonial::{admin_testimonial_card, AdminTestimonialView};
 use crate::people::ViewerRole;
+use crate::project_stages::{MatterStageView, StageChip, StageSection};
+use crate::project_tasks::{AssigneeChoice, TaskRow, TasksTab};
 
 #[cfg(feature = "server")]
 use crate::lawyer_project_documents::{
@@ -55,105 +57,21 @@ use crate::lawyer_project_participation::to_participation_rows;
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ProjectRepositoryPointer(pub Option<String>);
 
-/// The workbench's read query: the document-upload `?error=` flash and the
-/// dashboard's `?tab=` section selection.
+/// The workbench's read query: the `?error=` flash a refused write redirects
+/// back with.
 #[derive(Deserialize, Default)]
 pub struct MatterQuery {
     #[serde(default)]
     pub error: Option<String>,
-    #[serde(default)]
-    pub tab: Option<String>,
 }
 
-/// One section of the matter dashboard. Tab selection is URL state (`?tab=`),
-/// never client state: the strip is link-driven and each tab server-renders
-/// its panel from the same view struct.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MatterTab {
-    #[default]
-    Overview,
-    Tasks,
-    Correspondence,
-    Documents,
-    Billing,
-    Participants,
-}
-
-impl MatterTab {
-    /// An explicit, valid `?tab=` value wins; an unknown or absent value
-    /// falls back to Overview, except that the document-upload `?error=`
-    /// flash — which renders on the documents panel — opens Documents.
-    #[must_use]
-    pub fn from_query(raw: Option<&str>, has_error_flash: bool) -> Self {
-        match raw {
-            Some("tasks") => Self::Tasks,
-            Some("correspondence") => Self::Correspondence,
-            Some("documents") => Self::Documents,
-            Some("billing") => Self::Billing,
-            Some("participants") => Self::Participants,
-            Some("overview") => Self::Overview,
-            _ if has_error_flash => Self::Documents,
-            _ => Self::Overview,
-        }
-    }
-
-    /// The `?tab=` value this tab's link carries.
-    #[must_use]
-    pub fn query_value(self) -> &'static str {
-        match self {
-            Self::Overview => "overview",
-            Self::Tasks => "tasks",
-            Self::Correspondence => "correspondence",
-            Self::Documents => "documents",
-            Self::Billing => "billing",
-            Self::Participants => "participants",
-        }
-    }
-
-    /// The tab's label in the strip.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Overview => "Overview",
-            Self::Tasks => "Tasks",
-            Self::Correspondence => "Correspondence",
-            Self::Documents => "Documents",
-            Self::Billing => "Billing",
-            Self::Participants => "Participants",
-        }
-    }
-}
-
-/// The dashboard's sections in reading order.
-const MATTER_TABS: [MatterTab; 6] = [
-    MatterTab::Overview,
-    MatterTab::Tasks,
-    MatterTab::Correspondence,
-    MatterTab::Documents,
-    MatterTab::Billing,
-    MatterTab::Participants,
-];
-
-/// The tab strip: one link per section, the active one carrying
-/// `aria-current="page"` through the shared `Tabs` component.
-fn matter_tab_strip(code: &str, active: MatterTab) -> Vec<Tab> {
-    MATTER_TABS
-        .iter()
-        .map(|tab| {
-            Tab::new(
-                tab.label(),
-                format!("/app/projects/{code}?tab={}", tab.query_value()),
-                *tab == active,
-            )
-        })
-        .collect()
-}
+pub use crate::sections::page::MatterTab;
 
 /// The summary strip under the tab bar: the handful of facts a matter opens
 /// with, derived from data the view already carries. A fact this matter does
 /// not have is left out rather than shown as a zero, and the strip itself is
-/// skipped when nothing renders in it. Tasks and correspondence tiles still
-/// wait on those models; the Work in Progress and Outstanding Balance tiles
+/// skipped when nothing renders in it. The tasks tile renders from the task
+/// rows the view carries. The Work in Progress and Outstanding Balance tiles
 /// render from the projections the server fn derives through
 /// `store::matter_financials`.
 fn matter_fact_grid(view: &LawyerDetailView) -> Element {
@@ -161,12 +79,16 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     let deadline_count = view.deadlines.len();
     let document_count = view.documents.len();
     let people_count = view.participations.len();
+    let open_tasks = view.tasks.iter().filter(|row| row.state != "done").count();
     let trust_held = view.trust.held.clone();
     let wip = view.wip.clone();
     let outstanding = view.outstanding.clone();
+    let unread_inbox = view.unread_inbox;
     let has_facts = deadline_count > 0
         || document_count > 0
         || people_count > 0
+        || open_tasks > 0
+        || unread_inbox > 0
         || view.trust.any
         || wip.is_some()
         || outstanding.is_some();
@@ -178,6 +100,20 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     rsx! {
         section { class: "lawyer-detail__section lawyer-detail__summary",
             FactGrid {
+                if open_tasks > 0 {
+                    FactCard { title: "Open tasks".to_string(),
+                        span { class: "lawyer-detail__fact-value", "{open_tasks}" }
+                    }
+                }
+                if unread_inbox > 0 {
+                    FactCard { title: "Unread correspondence".to_string(),
+                        a {
+                            href: format!("/app/projects/{}/inbox", view.code),
+                            class: "lawyer-detail__fact-value lawyer-detail__fact-link",
+                            "{unread_inbox}",
+                        }
+                    }
+                }
                 if deadline_count > 0 {
                     FactCard { title: "Open deadlines".to_string(),
                         span { class: "lawyer-detail__fact-value", "{deadline_count}" }
@@ -218,11 +154,44 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     }
 }
 
+/// The Billing tab's position: Work in Progress, the Outstanding Balance, and
+/// the latest Xero invoice. "Nothing billed yet" is said only when it is true —
+/// a billing surface never reads empty over a balance the matter carries.
+fn billing_position(view: &LawyerDetailView) -> Element {
+    if view.wip.is_none() && view.outstanding.is_none() && view.xero_invoice_url.is_none() {
+        return rsx! {
+            section { class: "lawyer-detail__section",
+                Empty {
+                    title: "Nothing billed yet".to_string(),
+                    description: Some("Time, expenses, and invoices for this project will appear here.".to_string()),
+                }
+            }
+        };
+    }
+    rsx! {
+        section { class: "lawyer-detail__section",
+            h2 { "Billing" }
+            ul {
+                if let Some(wip) = view.wip.as_ref() {
+                    li { "Work in progress: {wip}" }
+                }
+                if let Some(outstanding) = view.outstanding.as_ref() {
+                    li { "Outstanding balance: {outstanding}" }
+                }
+                if let Some(url) = view.xero_invoice_url.as_ref() {
+                    li { a { class: "nav-link", href: "{url}", "Latest invoice in Xero" } }
+                }
+            }
+        }
+    }
+}
+
 /// The rendered lawyer workbench — every field wasm-safe (plain scalars; no
 /// `store`/`SeaORM`/`cloud`/`repos` type crosses to the client build).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct LawyerDetailView {
-    /// The matter's page strip from its synced `pages:`, lawyer lens.
+    /// The matter's one tab strip: Overview, its synced `pages:` through the
+    /// lawyer lens, then the workbench built-ins.
     pub page_tabs: Vec<crate::sections::page::PageTab>,
     pub id: String,
     pub code: String,
@@ -278,13 +247,13 @@ pub struct LawyerDetailView {
     pub document_folders: Vec<String>,
     #[serde(default)]
     pub notations: Vec<ProjectNotationRow>,
-    /// The document-upload form's `?error=` flash, set when a re-upload's
-    /// kind conflicts with the chain it would join.
+    /// The `?error=` flash a refused write redirects back with — a re-upload
+    /// whose kind conflicts with its chain, a DRI change, or an admin's
+    /// testimonial save.
     #[serde(default)]
     pub error: Option<String>,
-    /// The dashboard section this render shows, resolved server-side from
-    /// `?tab=` (the `?error=` flash opens Documents when no tab was asked
-    /// for). URL state, never client state.
+    /// The section this render shows, resolved server-side from the request
+    /// path (`/app/projects/{code}/{segment}`). URL state, never client state.
     #[serde(default)]
     pub active_tab: MatterTab,
     /// The upload form's Kind select, as `(value, label)` pairs — every
@@ -309,11 +278,34 @@ pub struct LawyerDetailView {
     /// rendered as a section on the Overview tab.
     #[serde(default)]
     pub notes: Vec<CommunicationRow>,
-    /// Every logged email and call on this matter, oldest first — the body
-    /// of the Correspondence tab. The logging is verified working for
+    /// Every logged email, text, and call on this matter, oldest first — the
+    /// body of the Communications tab. The logging is verified working for
     /// emails without a call (LAW-230); this is that log's surface.
     #[serde(default)]
     pub correspondence: Vec<CommunicationRow>,
+    /// Unread Inbox conversations assigned to this matter — the summary
+    /// grid's correspondence tile, deep-linking the existing per-project
+    /// inbox. Firm-wide as the Inbox keeps its read-state (there is no
+    /// per-participant read flag to derive a per-reader count from).
+    #[serde(default)]
+    pub unread_inbox: i64,
+    /// The matter's tasks — assignable work with a state and an assignee,
+    /// deliberately not the docket's deadlines. Empty when the deployment
+    /// has no PostgreSQL configured (the task store is PostgreSQL-native).
+    #[serde(default)]
+    pub tasks: Vec<TaskRow>,
+    /// The people a task on this matter can be assigned to, resolved
+    /// server-side to `(person id, display name)` — the matter's
+    /// participants, since the store refuses an assignee off the matter.
+    #[serde(default)]
+    pub task_assignees: Vec<AssigneeChoice>,
+    /// The matter's stage — where it sits in the Firm's workflow. Not a
+    /// lifecycle status (`project.status`) and not a court case's status
+    /// (`case.status`); the copy keeps the three apart. Empty when the
+    /// deployment has no PostgreSQL configured (the stage store is
+    /// PostgreSQL-native).
+    #[serde(default)]
+    pub stage: MatterStageView,
     pub role: ViewerRole,
     /// The deploy's brand mark for the navbar. `None` when the mounted brand
     /// configures none.
@@ -372,18 +364,17 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         crate::project_calendar::MATTER_COLUMNS,
     );
     let calendar_dir = crate::project_calendar::sort_dir(calendar_query.dir.as_deref());
-    // The document-upload form's `?error=` flash — set when the upload
-    // handler's redirect-on-refusal carries a message (a kind-changed
-    // revision refusal today).
-    let query =
+    // The `?error=` flash a refused write's redirect carries.
+    let error =
         dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<MatterQuery>, _>()
             .await
-            .map_or_else(|_| MatterQuery::default(), |axum::extract::Query(q)| q);
-    let error = query.error;
-    // The dashboard's active section is URL state resolved with the view: an
-    // explicit `?tab=` wins, and the upload error flash — which renders on
-    // the documents panel — opens Documents when no tab was asked for.
-    let active_tab = MatterTab::from_query(query.tab.as_deref(), error.is_some());
+            .map_or_else(|_| MatterQuery::default(), |axum::extract::Query(q)| q)
+            .error;
+    // The section is the request path's; the dispatcher already refused one
+    // the workbench does not have (`matter_surface::serves`).
+    let active_tab = crate::sections::page::request_tab()
+        .await
+        .unwrap_or_default();
     let role = dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<ViewerRole>, _>()
         .await
         .map(|axum::Extension(role)| role)
@@ -446,10 +437,9 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let viewer = store::access::matter_viewer(&surreal, person_id, store_role, id)
         .await
         .map_err(server_error)?;
-    let visible = viewer.is_some();
-    if !visible {
+    let Some(viewer) = viewer else {
         return Ok(not_found(id, role, logo, csrf_token));
-    }
+    };
     let entity = store::entities::find_by_id(&surreal, project.entity_id)
         .await
         .map_err(server_error)?;
@@ -489,14 +479,15 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // workbench without the two billing tiles rather than failing the whole
     // page; a read failure inside a configured deployment is a 500 like every
     // other read here. A zero projection is left out like any other fact the
-    // matter does not have.
-    let financials = match store::postgres::PostgresDb::from_env().await {
-        Ok(pg) => Some(
-            store::matter_financials::for_project(&surreal, &pg, id)
+    // matter does not have. The same handle feeds the task store below.
+    let pg = dashboard_postgres().await.map_err(server_error)?;
+    let financials = match pg.as_ref() {
+        Some(pg) => Some(
+            store::matter_financials::for_project(&surreal, pg, id)
                 .await
                 .map_err(server_error)?,
         ),
-        Err(_) => None,
+        None => None,
     };
     let (wip, outstanding) = financials.map_or((None, None), |financials| {
         let wip = (financials.wip_cents != 0)
@@ -506,11 +497,45 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         (wip, outstanding)
     });
 
+    // The Tasks tab's rows — assignable work, not the docket's deadlines. A
+    // deployment without PostgreSQL renders the workbench without them, the
+    // same absence rule as the financial projections; a read failure inside a
+    // configured deployment is a 500.
+    let tasks = match pg.as_ref() {
+        Some(pg) => crate::project_tasks::read_rows(&surreal, pg, id).await?,
+        None => Vec::new(),
+    };
+
+    // The stage surface's read — where the matter sits in the Firm's
+    // workflow. Same absence rule as the task rows: a deployment without
+    // PostgreSQL renders the workbench without a stage; a read failure
+    // inside a configured deployment is a 500.
+    let stage = match pg.as_ref() {
+        Some(pg) => crate::project_stages::read_stage(&surreal, pg, &project).await?,
+        None => MatterStageView::default(),
+    };
+
     // The two DRIs — a read failure is a 500, never a silently-blank DRI on an
     // accountability surface.
     let participation_rows = store::projects::participations_for_project(&surreal, id)
         .await
         .map_err(server_error)?;
+    // Who a task on this matter can name as assignee: the matter's own
+    // participants, resolved to display names, alphabetical. The store
+    // refuses an assignee off the matter, so the picker offers exactly the
+    // set the command would honour.
+    let task_assignees = {
+        let person_ids: Vec<uuid::Uuid> =
+            participation_rows.iter().map(|row| row.person_id).collect();
+        let mut people = store::persons::find_by_ids(&surreal, &person_ids)
+            .await
+            .map_err(server_error)?;
+        people.sort_by(|a, b| a.name.cmp(&b.name));
+        people
+            .into_iter()
+            .map(|person| (person.id.to_string(), person.name))
+            .collect()
+    };
     let lawyer_dri_ids: Vec<uuid::Uuid> = participation_rows
         .iter()
         .filter(|row| row.is_lawyer_dri)
@@ -618,7 +643,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let deadline_groups =
         crate::project_deadlines::deadline_groups(&stored_deadlines, chrono::Utc::now(), false);
 
-    // The Overview notes section and the Correspondence tab read the
+    // The Overview notes section and the Communications tab read the
     // firm-visible thread once; the projection splits notes from
     // correspondence so the render never matches channel discriminators.
     let thread = store::communications::for_project(&surreal, id)
@@ -638,14 +663,17 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let (notes, correspondence) =
         crate::lawyer_project_communications::communication_views(&thread, &authors);
 
+    // The summary grid's correspondence tile: unread Inbox conversations on
+    // this matter, a read-only count over the Inbox's own read-state. The
+    // reader's participation is already resolved by the `matter_viewer` seam
+    // above.
+    let unread_inbox = store::inbox::unread_count_for_project(&surreal, id)
+        .await
+        .map_err(server_error)?;
+
     let code_for_resources = project.code.clone();
-    let page_tabs = crate::sections::page::stored_page_tabs(
-        &surreal,
-        id,
-        &project.code,
-        crate::sections::PageLens::Lawyer,
-    )
-    .await;
+    let page_tabs =
+        crate::sections::page::stored_page_tabs(&surreal, id, &project.code, viewer).await;
     let (verified_drive_root, verified_submissions) =
         crate::project_resources::verified_drive_links(&surreal, person_id, role, id).await;
 
@@ -702,10 +730,25 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         past_deadlines: deadline_groups.past,
         notes,
         correspondence,
+        unread_inbox,
+        tasks,
+        task_assignees,
+        stage,
         role,
         logo,
         tokens_href,
     })
+}
+
+/// The optional workbench store: an absent deployment is distinct from a
+/// configured store that failed to open.
+#[cfg(feature = "server")]
+async fn dashboard_postgres(
+) -> Result<Option<store::postgres::PostgresDb>, store::postgres::PostgresError> {
+    if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_none() {
+        return Ok(None);
+    }
+    store::postgres::PostgresDb::from_env().await.map(Some)
 }
 
 /// Commit a `500` and wrap a query error — an unavailable workbench is a server
@@ -807,11 +850,12 @@ pub fn LawyerProjectDetail() -> Element {
                 h1 { "{view.name}" }
                 crate::sections::page::CaseNav {
                     tabs: view.page_tabs.clone(),
-                    current: format!("/app/projects/{}", view.code),
+                    current: view.active_tab.href(&view.code),
                 }
                 p { class: "nav-muted",
                     "Code: " code { "{view.code}" }
                     " · Status: {view.status}"
+                    StageChip { current: view.stage.current.as_ref().map(|row| row.label.clone()) }
                     " · Brand: {brand_disp}"
                     " · Entity: {entity_disp}"
                     if let Some(entity_id) = view.entity_id.as_ref() {
@@ -839,12 +883,11 @@ pub fn LawyerProjectDetail() -> Element {
                     input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
                     button { class: "nav-btn nav-btn--secondary", r#type: "submit", "View as Client" }
                 }
-            }
-
-            section { class: "lawyer-detail__section lawyer-detail__tabs",
-                Tabs {
-                    aria_label: "Project sections".to_string(),
-                    tabs: matter_tab_strip(&view.code, view.active_tab),
+                // The Tasks panel renders its own refusal beside its forms.
+                if view.active_tab != MatterTab::Tasks {
+                    if let Some(error) = view.error.as_ref() {
+                        p { class: "nav-form-error", role: "alert", "{error}" }
+                    }
                 }
             }
 
@@ -853,6 +896,13 @@ pub fn LawyerProjectDetail() -> Element {
             {
                 match view.active_tab {
                     MatterTab::Overview => rsx! {
+                        StageSection {
+                            code: view.code.clone(),
+                            csrf: csrf.clone(),
+                            stage: view.stage.clone(),
+                            error: view.error.clone(),
+                        }
+
                         crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
 
                         crate::project_deadlines::ProjectDeadlinesPanel {
@@ -924,35 +974,15 @@ pub fn LawyerProjectDetail() -> Element {
                         }
                     },
                     MatterTab::Tasks => rsx! {
-                        section { class: "lawyer-detail__section",
-                            Empty {
-                                title: "No tasks on this project yet".to_string(),
-                                description: Some("Assignable work — an owner, a due date, and a state — will appear here once it is tracked for this project. Court deadlines remain docket obligations and stay on Overview.".to_string()),
-                            }
+                        TasksTab {
+                            code: view.code.clone(),
+                            csrf: csrf.clone(),
+                            tasks: view.tasks.clone(),
+                            assignees: view.task_assignees.clone(),
+                            error: view.error.clone(),
                         }
                     },
-                    MatterTab::Correspondence => rsx! {
-                        if view.correspondence.is_empty() {
-                            section { class: "lawyer-detail__section",
-                                Empty {
-                                    title: "Correspondence lives in the project inbox".to_string(),
-                                    description: Some("No communications logged yet. Email logged on this project lands here with or without a call.".to_string()),
-                                    action: Some(rsx! {
-                                        a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/inbox", "Open the project inbox" }
-                                    }),
-                                }
-                            }
-                        } else {
-                            {communications_tab(&view)}
-                            section { class: "lawyer-detail__section",
-                                p { class: "nav-muted",
-                                    a { class: "nav-link", href: "/app/projects/{view.code}/inbox",
-                                        "New email, texts, and calls for this project are triaged in the project inbox."
-                                    }
-                                }
-                            }
-                        }
-                    },
+                    MatterTab::Communications => rsx! { {communications_tab(&view)} },
                     MatterTab::Documents => rsx! {
                         section { class: "lawyer-detail__section project-documents",
                             h2 { "Documents" }
@@ -1030,12 +1060,7 @@ pub fn LawyerProjectDetail() -> Element {
                                 }
                             }
                         }
-                        section { class: "lawyer-detail__section",
-                            Empty {
-                                title: "Nothing billed yet".to_string(),
-                                description: Some("Time, expenses, and invoices for this project will appear here.".to_string()),
-                            }
-                        }
+                        {billing_position(&view)}
                     },
                     MatterTab::Participants => rsx! {
                         ParticipationTable {
@@ -1047,6 +1072,8 @@ pub fn LawyerProjectDetail() -> Element {
                             may_govern_client_side,
                         }
                     },
+                    // The dispatcher 404s a client's testimonial path first.
+                    MatterTab::Testimonial => rsx! {},
                 }
             }
         }
@@ -1057,87 +1084,59 @@ pub fn LawyerProjectDetail() -> Element {
 mod tests {
     use super::*;
 
-    #[test]
-    fn from_query_reads_explicit_tabs_and_falls_back() {
-        assert_eq!(
-            MatterTab::from_query(Some("tasks"), false),
-            MatterTab::Tasks
-        );
-        assert_eq!(
-            MatterTab::from_query(Some("correspondence"), false),
-            MatterTab::Correspondence
-        );
-        assert_eq!(
-            MatterTab::from_query(Some("documents"), false),
-            MatterTab::Documents
-        );
-        assert_eq!(
-            MatterTab::from_query(Some("billing"), false),
-            MatterTab::Billing
-        );
-        assert_eq!(
-            MatterTab::from_query(Some("participants"), false),
-            MatterTab::Participants
-        );
-        assert_eq!(
-            MatterTab::from_query(Some("overview"), false),
-            MatterTab::Overview
-        );
-        // An unknown value and an absent one both fall back to Overview.
-        assert_eq!(
-            MatterTab::from_query(Some("nonsense"), false),
-            MatterTab::Overview
-        );
-        assert_eq!(MatterTab::from_query(None, false), MatterTab::Overview);
-        // The upload error flash opens Documents when no tab was asked for —
-        // but never overrides an explicit tab.
-        assert_eq!(MatterTab::from_query(None, true), MatterTab::Documents);
-        assert_eq!(
-            MatterTab::from_query(Some("billing"), true),
-            MatterTab::Billing
-        );
-    }
-
-    #[test]
-    fn query_value_round_trips_through_from_query() {
-        for tab in MATTER_TABS {
-            assert_eq!(
-                MatterTab::from_query(Some(tab.query_value()), false),
-                tab,
-                "{} round-trips",
-                tab.label()
-            );
-        }
-    }
-
-    #[test]
-    fn strip_builds_six_links_and_marks_the_active_tab() {
-        let tabs = matter_tab_strip("acme", MatterTab::Billing);
-        assert_eq!(tabs.len(), 6);
-        assert!(
-            tabs.iter()
-                .all(|tab| tab.href.contains("/app/projects/acme?tab=")),
-            "{tabs:?}"
-        );
-        assert_eq!(tabs.iter().filter(|tab| tab.selected).count(), 1);
-        assert_eq!(tabs[4].label, "Billing");
-        assert!(tabs[4].selected);
-        assert_eq!(tabs[4].href, "/app/projects/acme?tab=billing");
-    }
-
-    #[test]
-    fn strip_renders_one_anchor_per_section_with_aria_current() {
-        let html = dioxus_ssr::render_element(rsx! {
-            Tabs {
-                aria_label: "Project sections".to_string(),
-                tabs: matter_tab_strip("acme", MatterTab::Overview),
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn dashboard_postgres_distinguishes_absence_from_configured_failures() {
+        use store::postgres::PostgresError;
+        const CASE: &str = "NAV_DASHBOARD_POSTGRES_CASE";
+        if let Ok(case) = std::env::var(CASE) {
+            let result = super::dashboard_postgres().await;
+            match case.as_str() {
+                "absent" => assert!(matches!(result, Ok(None)), "{result:?}"),
+                "incomplete" => assert!(
+                    matches!(result, Err(PostgresError::Configuration)),
+                    "{result:?}"
+                ),
+                "unreachable" => assert!(
+                    matches!(result, Err(PostgresError::Connection)),
+                    "{result:?}"
+                ),
+                _ => panic!("unknown isolated dashboard PostgreSQL case"),
             }
-        });
-        assert!(html.contains(r#"aria-label="Project sections""#), "{html}");
-        assert_eq!(html.matches("<a ").count(), 6, "{html}");
-        assert_eq!(html.matches(r#"aria-current="page""#).count(), 1, "{html}");
-        assert!(html.contains("Correspondence"), "{html}");
-        assert!(html.contains("Participants"), "{html}");
+            return;
+        }
+        for case in ["absent", "incomplete", "unreachable"] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args([
+                "--exact",
+                "lawyer_project_detail::tests::dashboard_postgres_distinguishes_absence_from_configured_failures",
+                "--nocapture",
+            ]).env(CASE, case);
+            for key in [
+                "NAVIGATOR_POSTGRES_HOST",
+                "NAVIGATOR_POSTGRES_PORT",
+                "NAVIGATOR_POSTGRES_USER",
+                "NAVIGATOR_POSTGRES_PASSWORD",
+                "NAVIGATOR_POSTGRES_DATABASE",
+                "NAVIGATOR_POSTGRES_SSLMODE",
+                "NAVIGATOR_POSTGRES_ROOT_CERT",
+            ] {
+                command.env_remove(key);
+            }
+            if case != "absent" {
+                command.env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1");
+            }
+            if case == "unreachable" {
+                command
+                    .env("NAVIGATOR_POSTGRES_PORT", "1")
+                    .env("NAVIGATOR_POSTGRES_USER", "navigator")
+                    .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
+                    .env("NAVIGATOR_POSTGRES_DATABASE", "synthetic")
+                    .env("NAVIGATOR_POSTGRES_SSLMODE", "disable");
+            }
+            let status = command.status().unwrap();
+            assert!(status.success(), "dashboard PostgreSQL case {case} failed");
+        }
     }
 
     #[test]
@@ -1189,6 +1188,57 @@ mod tests {
         assert!(html.contains("$4,210"), "{html}");
         assert!(html.contains("Outstanding balance"), "{html}");
         assert!(html.contains("$1,850"), "{html}");
+    }
+
+    #[test]
+    fn billing_says_nothing_billed_only_when_nothing_is() {
+        let empty = dioxus_ssr::render_element(billing_position(&LawyerDetailView::default()));
+        assert!(empty.contains("Nothing billed yet"), "{empty}");
+
+        let view = LawyerDetailView {
+            wip: Some("$4,210".to_string()),
+            outstanding: Some("$1,850".to_string()),
+            ..Default::default()
+        };
+        let html = dioxus_ssr::render_element(billing_position(&view));
+        assert!(!html.contains("Nothing billed yet"), "{html}");
+        assert!(html.contains("Work in progress: $4,210"), "{html}");
+        assert!(html.contains("Outstanding balance: $1,850"), "{html}");
+    }
+
+    #[test]
+    fn fact_grid_renders_the_unread_correspondence_count_deep_linked() {
+        let view = LawyerDetailView {
+            code: "acme".to_string(),
+            unread_inbox: 2,
+            ..Default::default()
+        };
+
+        let html = dioxus_ssr::render_element(matter_fact_grid(&view));
+        assert!(html.contains("lawyer-detail__summary"), "{html}");
+        assert!(html.contains("Unread correspondence"), "{html}");
+        // The tile deep-links the matter's own inbox — the existing
+        // per-project surface, not a re-built one.
+        assert!(
+            html.contains(r#"href="/app/projects/acme/inbox""#),
+            "{html}"
+        );
+        assert!(html.contains(">2<"), "{html}");
+    }
+
+    #[test]
+    fn a_zero_unread_count_leaves_no_correspondence_tile() {
+        // Zero unread is a fact the matter does not have — no tile, like
+        // every other absent fact in the grid.
+        let view = LawyerDetailView {
+            code: "acme".to_string(),
+            unread_inbox: 0,
+            ..Default::default()
+        };
+
+        let html = dioxus_ssr::render_element(matter_fact_grid(&view));
+        assert!(!html.contains("Unread correspondence"), "{html}");
+        assert!(!html.contains("/app/projects/acme/inbox"), "{html}");
     }
 
     #[test]

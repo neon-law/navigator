@@ -1856,6 +1856,26 @@ pub(crate) async fn list_project_on(
     intake_rows(pg, db, actor.role, conversations, true).await
 }
 
+/// Unread conversations assigned to one Project — the matter dashboard's
+/// correspondence tile. A read-only count over the conversations' existing
+/// `unread` flag; the caller resolves its reader's access first (see
+/// [`crate::inbox::unread_count_for_project`]).
+pub(crate) async fn unread_count_for_project_on(
+    pg: &PostgresDb,
+    project_id: Uuid,
+) -> Result<i64, InboxError> {
+    use sqlx::Row;
+    let row = sqlx::query(sqlx::AssertSqlSafe(
+        "SELECT count(*) FROM inbox_conversation WHERE project_id = $1 AND unread".to_string(),
+    ))
+    .bind(project_id)
+    .fetch_one(&pg.0)
+    .await
+    .map_err(db_error)?;
+    // `count(*)` always returns exactly one row; a bigint decodes to i64.
+    row.try_get::<i64, _>(0).map_err(db_error)
+}
+
 pub(crate) async fn project_thread_on(
     pg: &PostgresDb,
     db: &SurrealDb,

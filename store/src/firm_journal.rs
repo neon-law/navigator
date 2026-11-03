@@ -1880,3 +1880,89 @@ pub async fn signals(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_decimal, quantity, Reconciliation, SourceReference, Unit};
+
+    fn reference() -> SourceReference {
+        SourceReference {
+            provider: "synthetic".into(),
+            scope: "USD".into(),
+            account: "acct".into(),
+            object_type: "payment".into(),
+            external_id: "ext-1".into(),
+            locator: None,
+        }
+    }
+
+    #[test]
+    fn quantity_accepts_only_canonical_bounded_integers() {
+        assert_eq!(quantity("123").unwrap(), 123);
+        assert_eq!(quantity("-45").unwrap(), -45);
+        assert_eq!(quantity("0").unwrap(), 0);
+        // i128's own bounds parse, but anything beyond them is refused.
+        assert_eq!(quantity(&i128::MAX.to_string()).unwrap(), i128::MAX);
+        assert!(quantity(&format!("1{}", "0".repeat(39))).is_err());
+        // A leading `+` or zero-padding is not the canonical spelling.
+        assert!(quantity("+1").is_err(), "the sign is not canonical");
+        assert!(quantity("007").is_err(), "the padding is not canonical");
+        // Non-integers never silently truncate.
+        assert!(quantity("1.5").is_err());
+        assert!(quantity("abc").is_err());
+        assert!(quantity("").is_err());
+    }
+
+    #[test]
+    fn parse_decimal_scales_to_the_requested_precision_exactly() {
+        // Whole units pad to the precision — never a float in sight.
+        assert_eq!(parse_decimal("12.34", 2).unwrap(), "1234");
+        assert_eq!(parse_decimal("12.3", 2).unwrap(), "1230");
+        assert_eq!(parse_decimal("12", 2).unwrap(), "1200");
+        assert_eq!(parse_decimal("0.00", 2).unwrap(), "0");
+        assert_eq!(parse_decimal("-1.5", 1).unwrap(), "-15");
+        // Three decimals for a 2-decimal unit is excess precision.
+        assert!(parse_decimal("1.234", 2).is_err());
+        // 38 decimals is the exact range; 39 is not.
+        assert!(parse_decimal("1.2", 38).is_ok());
+        assert!(parse_decimal("1.2", 39).is_err());
+        // Malformed syntax is refused, not defaulted.
+        assert!(parse_decimal("1.2.3", 2).is_err());
+        assert!(parse_decimal(".5", 2).is_err());
+        assert!(parse_decimal("1..", 2).is_err());
+        assert!(parse_decimal("", 2).is_err());
+        assert!(parse_decimal("1a.2", 2).is_err());
+        assert!(parse_decimal("1.2b", 2).is_err());
+    }
+
+    #[test]
+    fn reconciled_requires_checks_and_no_exceptions() {
+        let unit = Unit::Fiat {
+            currency: "USD".into(),
+            decimals: 2,
+        };
+        let reconciled = |checks: &[(&str, bool)], exceptions: &[&str]| {
+            Reconciliation {
+                source: reference(),
+                expected_quantity: "100".into(),
+                actual_quantity: Some("100".into()),
+                unit: unit.clone(),
+                checks: checks
+                    .iter()
+                    .map(|(key, value)| (key.to_string(), *value))
+                    .collect(),
+                exceptions: exceptions
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
+            }
+            .reconciled()
+        };
+        // No checks means nothing was verified, not success.
+        assert!(!reconciled(&[], &[]));
+        assert!(reconciled(&[("balanced", true), ("finality", true)], &[]));
+        assert!(!reconciled(&[("balanced", true), ("coverage", false)], &[]));
+        // An exception outweighs passing checks.
+        assert!(!reconciled(&[("balanced", true)], &["provider missing"]));
+    }
+}

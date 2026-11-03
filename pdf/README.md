@@ -90,16 +90,21 @@ delivered to and no client visits, so printing it on a letter points the reader 
 registered address stays in the website footer, where a registered address belongs — and a test asserts the letterhead
 never grows one back.
 
-Every line comes from `pdf::Letterhead` — `name`, `phone`, `email`, `web` — and the firm's identity is hard-coded once,
-in that struct's `Default`. A letter going out over a lawyer's signature says the same thing every time, so `navigator
-notation pdf`/`navigator notation word` take the default rather than assembling the identity per render. An empty field
-drops out cleanly: no dangling middot, and a line with nothing left in it is not emitted at all, so a deployment that
-publishes no phone still gets a correct letterhead.
+Every line comes from `pdf::Letterhead` — `name`, `entity`, `phone`, `email`, `web`, and whether the compiled mark heads
+the page. `navigator notation pdf`/`navigator notation word` build it from the Project's Brand (`cli::letterhead`,
+LAW-265): `project.brand` in the nearest `navigator.yaml` wins, else `project.host` is looked up in the compiled
+registry (`views::brand::registered_brand_key`, or a Brand's apex). The wordmark is the Brand's display name, the Firm's
+legal name sits small beneath it, the web line is the Brand's production host, the mailbox is always `contact@` that
+host's registrable domain, and the phone is the Brand's. Only the default Brand draws the compiled mark, which is its
+own. A key or host the registry does not know is a refusal naming it, never the default letterhead; a template outside
+any Project renders on `Letterhead::default()`, the default Brand's. An empty field drops out cleanly: no dangling
+middot, and a line with nothing left in it is not emitted at all, so a Brand that publishes no phone still gets a
+correct letterhead.
 
-Hard-coding the identity is not permission to let it fall behind the firm's. `cli/tests/letterhead_brand_parity.rs`
-holds all four fields against `views::brand::DEFAULT_BRANDING`, so the website and the letterhead cannot publish
-different contact details: the voice line moved once while the letterhead kept the retired one, and nothing failed
-because the two constants had no relationship to disagree about. That test is the relationship.
+The letterhead is built from source, not from a mounted brand bundle, so a re-render of a sent letter prints what was
+sent. That is not permission to let it fall behind the Brand's site. `cli/tests/letterhead_brand_parity.rs` holds every
+registered host's letterhead against its `views::brand::Branding`, and `Letterhead::default()` against the default
+Brand's, so the website and the letterhead cannot publish different contact details.
 
 ## Fonts
 

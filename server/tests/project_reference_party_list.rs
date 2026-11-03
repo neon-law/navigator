@@ -144,7 +144,7 @@ async fn the_matter_workbench_people_table_omits_a_referenced_person() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/app/projects/{}?tab=participants",
+                    "/app/projects/{}/participants",
                     fixture.project_code
                 ))
                 .header(

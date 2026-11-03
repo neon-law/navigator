@@ -905,12 +905,13 @@ fn canonical_document(base: &str) -> Value {
             "summary": "List Firms the caller may administer",
             "description":
               "Owner sees every Firm. Admin sees only Firms where their membership admits `manage_membership`. \
-               This directory lets the CLI resolve an operator-supplied Firm name without accepting a raw id on its command line.",
+               This directory lets the CLI resolve a Firm name and discover the brand keys each authorized Firm wears.",
             "responses": {
-              "200": { "description": "Visible Firm ids, names, and slugs", "content": { "application/json": {
-                "schema": { "type": "array", "items": { "type": "object", "required": ["id", "name", "slug"], "properties": {
+              "200": { "description": "Visible Firm ids, names, slugs, and brand keys", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "type": "object", "required": ["id", "name", "slug", "brands"], "properties": {
                   "id": { "type": "string", "format": "uuid" },
                   "name": { "type": "string" },
+                  "brands": { "type": "array", "items": { "type": "string" } },
                   "slug": { "type": "string", "description": "The Firm's immutable slug, which names its Forgejo organization." }
                 } } }
               } } },
@@ -2138,6 +2139,14 @@ fn canonical_document(base: &str) -> Value {
         },
         "/app/api/projects/{id}/costs/{cost_id}/events": {
           "get": { "summary": "Read a Project cost's audit history", "description": "Lawyer-only immutable before/after history.", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "cost_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Audit events, oldest first", "content": { "application/json": { "schema": { "type": "object" } } } }, "404": { "description": "No such cost or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } } }
+        },
+        "/app/api/projects/{id}/invoices": {
+          "post": {
+            "summary": "Generate the matter's invoice from unbilled work",
+            "description": "Composes the matter's unbilled billable time entries at their snapshotted rates and its unbilled confirmed Project costs into one invoice raised through the billing provider seam (Xero is the books), then mirrors it locally and marks the consumed entries and costs invoiced under the Xero id. When the matter carries an agreed flat fee, its remaining unbilled amount is one line covering the entries instead. Each persisted billing batch uses its own idempotency key and reserves its work before invoice creation. Retries resume the frozen batch and any saved provider invoice. Xero retains idempotency keys for six minutes. Creates stop four minutes after the persisted first attempt, with a 60-second request budget; expired uncertain attempts require manual reconciliation. A provider refusal leaves work reserved for retry, with no invoice mirror. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The raised invoice and the work consumed under it", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "409": { "description": "Nothing is unbilled on the matter, or unbilled work moved under a racing invoice" }, "422": { "description": "The matter names no client to bill, or an unbilled cost is in another currency" }, "502": { "description": "The billing provider refused or is unreachable; nothing was marked" }, "503": { "description": "PostgreSQL is unavailable" } }
+          }
         },
         "/app/api/projects/{id}/tasks": {
           "get": {
@@ -5086,6 +5095,10 @@ fn canonical_document(base: &str) -> Value {
             "type": "object",
             "required": ["name", "code", "client_id", "entity_id", "attestation"],
             "properties": {
+              "firm_id": { "type": "string", "format": "uuid",
+                           "description": "Optional explicit Firm. Supply together with brand. Owner or an Admin authorized to manage the target Firm may select it." },
+              "brand": { "type": "string",
+                         "description": "Optional brand key worn by firm_id. Omit both fields to use the request brand. A mismatched pair is refused before opening." },
               "name":         { "type": "string", "description": "The matter's display name." },
               "code":         { "type": "string",
                                 "description": "The matter's code, stored exactly as given — lowercase letters, digits, and single hyphens, starting and ending with a letter or digit, at most 80 characters. Required. A code is chosen once at matter-open and never changes; a code already in use by another matter is refused with 409." },

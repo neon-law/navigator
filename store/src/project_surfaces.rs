@@ -919,6 +919,7 @@ mod tests {
         projects::open_matter(
             surreal,
             &OpenMatterCommand {
+                firm_id: None,
                 name: "Acme matter".into(),
                 code: "acme".into(),
                 client_id: client.id,

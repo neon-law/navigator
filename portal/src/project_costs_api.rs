@@ -224,7 +224,16 @@ pub(crate) async fn link_invoice(
     }
     ensure_project_access(&state, session.person_id, session.role, project_id, true).await?;
     Ok(
-        match costs::link_invoice(&state.surreal, &pg, cost_id, actor_id, &input.invoice_id).await {
+        match costs::link_invoice(
+            &state.surreal,
+            &pg,
+            cost_id,
+            actor_id,
+            &input.invoice_id,
+            false,
+        )
+        .await
+        {
             Ok(row) => Json(row).into_response(),
             Err(e) => error(&e, "link_invoice", project_id, Some(cost_id)),
         },

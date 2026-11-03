@@ -129,7 +129,7 @@ async fn a_lawyer_records_service_and_the_document_history_lists_it() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}?tab=documents", f.code))
+                .uri(format!("/app/projects/{}/documents", f.code))
                 .header("cookie", &f.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -150,7 +150,7 @@ async fn a_lawyer_records_service_and_the_document_history_lists_it() {
 }
 
 #[tokio::test]
-async fn the_correspondence_tab_lists_logged_email_and_overview_carries_the_notes() {
+async fn the_communications_tab_lists_logged_email_and_overview_carries_the_notes() {
     let f = fixture().await;
 
     store::communications::log_note(
@@ -187,7 +187,7 @@ async fn the_correspondence_tab_lists_logged_email_and_overview_carries_the_note
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}?tab=correspondence", f.code))
+                .uri(format!("/app/projects/{}/communications", f.code))
                 .header("cookie", &f.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),

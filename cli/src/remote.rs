@@ -3827,6 +3827,7 @@ async fn resolve_entity_selection(
 /// `--closed`/`--closed-at` open the matter already closed (ENG-469) — both
 /// required together, refused alone.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub async fn projects_create(
     host: Option<&str>,
     name: &str,
@@ -3847,13 +3848,13 @@ pub async fn projects_create(
         jurisdiction,
         attest,
         closed_at,
+        None,
+        None,
     )
     .await
 }
 
-/// Open a Project and create the client contact when it is not already in the
-/// directory. Used by the interactive scaffold after its duplicate preflight
-/// and conflict attestation.
+/// Open with an explicit authorized Firm and brand, validated before creating contacts.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub async fn projects_create_named(
     host: Option<&str>,
@@ -3865,6 +3866,8 @@ pub async fn projects_create_named(
     jurisdiction: Option<&str>,
     attest: bool,
     closed_at: Option<chrono::DateTime<chrono::Utc>>,
+    firm: Option<&str>,
+    brand: Option<&str>,
 ) -> ExitCode {
     run(async {
         // Caller-correctable and independent of any connection: resolved
@@ -3888,6 +3891,12 @@ pub async fn projects_create_named(
 
         let (base, token) = resolve(host)?;
         let client = reqwest::Client::new();
+
+        let ownership = match (firm, brand) {
+            (Some(firm), Some(brand)) => Some((resolve_firm(&base, &token, firm, Some(brand)).await?, brand)),
+            (None, None) => None,
+            _ => anyhow::bail!("--firm and --brand must be supplied together"),
+        };
 
         let people_resp = client
             .get(format!("{base}/app/api/people"))
@@ -3956,6 +3965,10 @@ pub async fn projects_create_named(
             "entity_id": entity_id,
             "attestation": attest,
         });
+        if let Some((firm_id, brand)) = ownership {
+            payload["firm_id"] = serde_json::json!(firm_id);
+            payload["brand"] = serde_json::json!(brand);
+        }
         if let Some(jurisdiction_id) = jurisdiction_id {
             payload["jurisdiction_id"] = serde_json::json!(jurisdiction_id);
         }
@@ -4034,47 +4047,14 @@ pub async fn set_project_firm_brand(
     firm_name: &str,
     brand: &str,
 ) -> anyhow::Result<()> {
-    #[derive(serde::Deserialize)]
-    struct VisibleFirm {
-        id: uuid::Uuid,
-        name: String,
-    }
-
     let (base, token) = resolve(Some(host))?;
     let project_id =
         crate::projects::surfaces::resolve_project_id(&base, &token, project_code).await?;
-    let response = reqwest::Client::new()
-        .get(format!("{base}/app/api/firms"))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .context("GET /app/api/firms")?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow::anyhow!(
-            "list Firms failed: {status}: {}",
-            body.lines().next().unwrap_or_default().trim()
-        ));
-    }
-    let firms: Vec<VisibleFirm> =
-        serde_json::from_str(&body).context("parse GET /app/api/firms")?;
-    let needle = firm_name.trim();
-    let matches = firms
-        .into_iter()
-        .filter(|firm| firm.name.eq_ignore_ascii_case(needle))
-        .collect::<Vec<_>>();
-    let firm = match matches.as_slice() {
-        [firm] => firm,
-        [] => anyhow::bail!("no Firm with that name is visible to this caller"),
-        _ => anyhow::bail!(
-            "more than one visible Firm has that name; ask an administrator to disambiguate"
-        ),
-    };
+    let firm_id = resolve_firm(&base, &token, firm_name, Some(brand)).await?;
     let response = reqwest::Client::new()
         .patch(format!("{base}/app/api/projects/{project_id}"))
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "firm_id": firm.id, "brand": brand }))
+        .json(&serde_json::json!({ "firm_id": firm_id, "brand": brand }))
         .send()
         .await
         .context("PATCH /app/api/projects/{id}")?;
@@ -4087,6 +4067,68 @@ pub async fn set_project_firm_brand(
         ));
     }
     Ok(())
+}
+
+/// Resolve a Firm name only within the caller's authorized directory.
+pub(crate) async fn resolve_firm(
+    base: &str,
+    token: &str,
+    needle: &str,
+    brand: Option<&str>,
+) -> Result<uuid::Uuid> {
+    #[derive(serde::Deserialize)]
+    struct Firm {
+        id: uuid::Uuid,
+        name: String,
+        #[serde(default)]
+        brands: Vec<String>,
+    }
+    let response = reqwest::Client::new()
+        .get(format!("{base}/app/api/firms"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .context("GET /app/api/firms")?;
+    let response = response
+        .error_for_status()
+        .context("list authorized Firms")?;
+    let firms: Vec<Firm> = response.json().await.context("parse Firm directory")?;
+    let matches: Vec<_> = firms
+        .iter()
+        .filter(|firm| firm.name.eq_ignore_ascii_case(needle.trim()))
+        .collect();
+    let firm = match matches.as_slice() {
+        [firm] => firm,
+        [] => anyhow::bail!("no Firm with that name is visible to this caller"),
+        _ => anyhow::bail!(
+            "more than one visible Firm has that name; ask an administrator to disambiguate"
+        ),
+    };
+    if let Some(brand) = brand.filter(|brand| !firm.brands.iter().any(|key| key == brand)) {
+        // A brand key belongs to at most one Firm, so name which case this is
+        // rather than one undifferentiated refusal (LAW-255).
+        let worn = if firm.brands.is_empty() {
+            "no brand".to_string()
+        } else {
+            firm.brands.join(", ")
+        };
+        let wearer = firms
+            .iter()
+            .find(|other| other.brands.iter().any(|key| key == brand));
+        match wearer {
+            Some(other) => anyhow::bail!(
+                "brand `{brand}` is worn by a different Firm, `{}`; `{}` wears: {worn}",
+                other.name,
+                firm.name
+            ),
+            None => anyhow::bail!(
+                "no visible Firm wears brand `{brand}`: the key is unknown or belongs to a Firm \
+                 outside this caller's directory; `{}` wears: {worn}",
+                firm.name
+            ),
+        }
+    }
+    Ok(firm.id)
 }
 
 /// `PATCH /app/api/projects/{id}` with `fields`, for the coordinates
@@ -5690,6 +5732,77 @@ mod tests {
                 previous,
             }
         }
+    }
+
+    #[tokio::test]
+    async fn firm_resolution_checks_brand_and_authorized_directory() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/app/api/firms"))
+            .and(wiremock::matchers::header("authorization", "Bearer test-token"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id":"00000000-0000-0000-0000-000000000001", "name":"Example Practice", "brands":["sample"]}
+            ]))).mount(&server).await;
+        let id = super::resolve_firm(
+            &server.uri(),
+            "test-token",
+            "example practice",
+            Some("sample"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(id.to_string(), "00000000-0000-0000-0000-000000000001");
+        assert!(
+            super::resolve_firm(&server.uri(), "test-token", &id.to_string(), Some("sample"))
+                .await
+                .is_err()
+        );
+        assert!(super::resolve_firm(
+            &server.uri(),
+            "test-token",
+            "Example Practice",
+            Some("other")
+        )
+        .await
+        .is_err());
+        assert!(
+            super::resolve_firm(&server.uri(), "test-token", "hidden", Some("sample"))
+                .await
+                .is_err()
+        );
+    }
+
+    /// LAW-255: a refused brand names its case — a key another visible Firm
+    /// wears, or a key no visible Firm wears — and lists the selected Firm's
+    /// own keys.
+    #[tokio::test]
+    async fn firm_resolution_names_why_a_brand_is_refused() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/app/api/firms"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id":"00000000-0000-0000-0000-000000000001", "name":"Example Practice", "brands":["sample", "second"]},
+                {"id":"00000000-0000-0000-0000-000000000002", "name":"Other Practice", "brands":["elsewhere"]}
+            ]))).mount(&server).await;
+        let refusal = |brand: &'static str| {
+            let base = server.uri();
+            async move {
+                super::resolve_firm(&base, "test-token", "Example Practice", Some(brand))
+                    .await
+                    .unwrap_err()
+                    .to_string()
+            }
+        };
+        assert_eq!(
+            refusal("elsewhere").await,
+            "brand `elsewhere` is worn by a different Firm, `Other Practice`; \
+             `Example Practice` wears: sample, second"
+        );
+        assert_eq!(
+            refusal("no-such-brand").await,
+            "no visible Firm wears brand `no-such-brand`: the key is unknown or belongs to a Firm \
+             outside this caller's directory; `Example Practice` wears: sample, second"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -7871,6 +7984,8 @@ mod tests {
                 Some("Mars"),
                 true,
                 None,
+                None,
+                None,
             )
             .await,
             ExitCode::from(2)
@@ -7940,6 +8055,8 @@ mod tests {
                 None,
                 true,
                 None,
+                None,
+                None,
             )
             .await,
             ExitCode::SUCCESS
@@ -8000,6 +8117,79 @@ mod tests {
                 None,
                 true,
                 None,
+            )
+            .await,
+            ExitCode::SUCCESS
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn projects_create_sends_the_selected_firm_and_brand() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::new(&server_uri);
+        let client_id = Uuid::now_v7();
+        let entity_id = Uuid::now_v7();
+        let project_id = Uuid::now_v7();
+        let firm_id = Uuid::now_v7();
+        Mock::given(method("GET"))
+            .and(path("/app/api/firms"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": firm_id, "name":"Example Practice", "brands":["sample"]}
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/app/api/people"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": client_id, "email": "client@example.com", "name": "Acme Client", "role": "client"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/entities"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": entity_id, "name": "Acme LLC"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/projects"))
+            .and(body_json(serde_json::json!({
+                "name": "Acme Formation",
+                "code": "acme-formation",
+                "client_id": client_id,
+                "entity_id": entity_id,
+                "attestation": true,
+                "firm_id": firm_id,
+                "brand": "sample",
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": project_id,
+                "name": "Acme Formation",
+                "code": "acme-formation",
+                "status": "open",
+                "entity_id": entity_id,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            super::projects_create_named(
+                Some(&server_uri),
+                "Acme Formation",
+                "acme-formation",
+                "",
+                "client@example.com",
+                Some("Acme LLC"),
+                None,
+                true,
+                None,
+                Some("Example Practice"),
+                Some("sample"),
             )
             .await,
             ExitCode::SUCCESS

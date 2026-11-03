@@ -195,11 +195,10 @@ fn latest_purchase(
 /// gone is skipped and counted; the run continues, because one orphaned
 /// ledger row must not stop every other subscriber's invoice.
 ///
-/// Retry-safe two ways: the step's result is journaled (Restate replays it
-/// without re-executing), and the invoice key is deterministic —
-/// [`overage_invoice_key`] — so the `billing` contract's own promise ("the
-/// same `matter_id` never creates two invoices") holds even when the step
-/// itself died mid-flight and re-runs.
+/// A completed step is journaled. An interrupted step can execute again;
+/// its deterministic key only protects retries inside Xero's six-minute
+/// retention window. Durable per-overage invoice recovery remains separate
+/// from this matter-billing implementation.
 async fn invoice_closed_overage(
     billing: &mut dyn BillingProvider,
     pg: &PostgresDb,
@@ -238,8 +237,20 @@ async fn invoice_closed_overage(
             continue;
         };
 
+        let contact = match &purchase.xero_contact_id {
+            Some(id) => billing::ContactId(id.clone()),
+            None => {
+                billing
+                    .ensure_contact(&billing::ContactRequest {
+                        name: person.name.clone(),
+                        email: person.email.clone(),
+                    })
+                    .await?
+            }
+        };
         let key = overage_invoice_key(row.person_id, closed_period);
         let request = InvoiceRequest {
+            contact_id: Some(contact),
             contact_name: person.name.clone(),
             contact_email: person.email.clone(),
             reference: format!("Nautilus sandbox usage {closed_period}"),
@@ -251,11 +262,11 @@ async fn invoice_closed_overage(
                 unit_amount_cents: overage_cents,
                 account_code: purchase.account_code.clone(),
             }],
+            issued_date: None,
             due_date: None,
         };
-        // The key is deterministic, and `create_invoice` is idempotent on
-        // the matter id — the same overage retried after a mid-flight
-        // crash rebuilds the same key and the provider dedupes.
+        // Keep the deterministic request key. Recovery after provider-key
+        // expiry still needs durable per-overage invoice state.
         billing.create_invoice(key, &request).await?;
         report.overage_invoiced += 1;
     }

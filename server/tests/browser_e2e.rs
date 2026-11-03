@@ -2857,7 +2857,7 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
     // The ledger and its "Add person" button live on the Participants tab;
     // the workbench opens on Overview (#176).
     c.goto(&format!(
-        "{}/app/projects/{}?tab=participants",
+        "{}/app/projects/{}/participants",
         base_url(),
         project.code
     ))
@@ -3057,7 +3057,7 @@ async fn lawyer_uploads_several_documents_at_once_from_the_project_page() {
     // The upload form and the documents table live on the Documents tab; the
     // workbench opens on Overview (#176).
     c.goto(&format!(
-        "{}/app/projects/{project_code}?tab=documents",
+        "{}/app/projects/{project_code}/documents",
         base_url()
     ))
     .await

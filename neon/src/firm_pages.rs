@@ -1022,17 +1022,19 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
                 .collect(),
         },
     ));
-    routers.push(dioxus_app::team_profile_router(
-        "/team/nick",
-        webapp::team_page::TeamProfileContent {
-            head_title: format!("{} | {}", branding.firm.site_name, team.profile.name),
-            meta_description: team.profile.biography.clone(),
-            og_description: None,
-            name: team.profile.name,
-            biography: team.profile.biography,
-            linkedin_url: team.profile.linkedin_url,
-        },
-    ));
+    for (path, profile) in team.profiles {
+        routers.push(dioxus_app::team_profile_router(
+            &path,
+            webapp::team_page::TeamProfileContent {
+                head_title: format!("{} | {}", branding.firm.site_name, profile.name),
+                meta_description: profile.biography.clone(),
+                og_description: None,
+                name: profile.name,
+                biography: profile.biography,
+                linkedin_url: profile.linkedin_url,
+            },
+        ));
+    }
     let deployment_host = state.canonical_host.host();
     let home = resolve_firm_home_content(branding, deployment_host);
     // The home page (`/`): static copy plus the store's approved testimonials.

@@ -54,13 +54,23 @@ pub struct ContactId(pub String);
 
 /// An invoice's reconcilable state, read back from the provider. `status`
 /// is the provider's own status string (`AUTHORISED`, `PAID`, `VOIDED`,
-/// …); `amount_paid_cents` is minor units, parsed from the provider's
-/// decimal at the wire boundary and rounded to whole cents immediately so
+/// …). Total and paid amounts are minor units, parsed from the provider's
+/// decimals at the wire boundary and rounded to whole cents immediately so
 /// no float enters our money path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvoiceStatus {
     pub status: String,
     pub amount_paid_cents: i64,
+    /// Optional for compatibility with previously journaled provider reads.
+    /// New settlement requires amount, currency, and issued date from a fresh read.
+    #[serde(default)]
+    pub amount_cents: Option<i64>,
+    #[serde(default)]
+    pub currency: Option<String>,
+    #[serde(default)]
+    pub issued_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub due_at: Option<DateTime<Utc>>,
 }
 
 /// One accounts-receivable invoice as listed from the provider. Money is
@@ -155,12 +165,20 @@ pub struct InvoiceLine {
 /// [`BillingProvider::create_invoice`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvoiceRequest {
+    /// Resolved provider identity. Older journaled requests remain readable;
+    /// a new Xero write requires this value and never falls back to names.
+    #[serde(default)]
+    pub contact_id: Option<ContactId>,
+    /// Descriptive metadata; the provider debtor is selected only by `contact_id`.
     pub contact_name: String,
     pub contact_email: String,
     pub reference: String,
     pub line_items: Vec<InvoiceLine>,
-    /// When payment is due. Xero needs one to email an `AUTHORISED`
-    /// invoice to the contact; `None` leaves Xero's organisation default.
+    /// Explicit issue date when the caller freezes one; other callers keep
+    /// Xero's organisation-date convention by omitting it.
+    #[serde(default)]
+    pub issued_date: Option<NaiveDate>,
+    /// When payment is due. `None` omits `DueDate` from the provider request.
     #[serde(default)]
     pub due_date: Option<NaiveDate>,
 }
@@ -232,14 +250,21 @@ pub enum BillingError {
 
 #[async_trait]
 pub trait BillingProvider: Send + Sync {
+    /// Whether matter invoices may be issued by this provider. Providers
+    /// fail closed unless backed by billing or explicitly simulated matters.
+    fn invoices_available(&self) -> bool {
+        false
+    }
+
     /// Resolve the billed party to a provider contact id, creating the
     /// contact when it does not yet exist. Idempotent: a contact with the
     /// same email is returned, never duplicated.
     async fn ensure_contact(&self, request: &ContactRequest) -> Result<ContactId, BillingError>;
 
-    /// Raise an invoice for the given matter. Must be idempotent on retry
-    /// (Restate replays the closing step): the same `matter_id` never
-    /// creates two invoices.
+    /// Raise an invoice under a stable request key. Xero caches that key for
+    /// six minutes from its first call. Callers must persist the invoice id
+    /// and reconcile uncertain expired attempts instead of reusing the key.
+    /// See <https://developer.xero.com/documentation/guides/idempotent-requests/idempotency/>.
     async fn create_invoice(
         &self,
         matter_id: Uuid,
@@ -285,6 +310,7 @@ pub trait BillingProvider: Send + Sync {
 /// `stub-invoice-<matter_id>-<seq>` ids unique within the process.
 #[derive(Default)]
 pub struct StubBillingProvider {
+    simulated_matters: bool,
     calls: Mutex<Vec<BillingCall>>,
     contact_calls: Mutex<Vec<ContactRequest>>,
     /// Canned `get_invoice` responses, keyed on invoice id. Unset ids
@@ -305,6 +331,15 @@ impl StubBillingProvider {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Enable synthetic invoice generation only for explicitly simulated matters.
+    #[must_use]
+    pub fn for_simulated_matters() -> Self {
+        Self {
+            simulated_matters: true,
+            ..Self::default()
+        }
     }
 
     /// Pre-seed what `get_invoice` returns for an id, so a reconcile test
@@ -368,6 +403,10 @@ impl StubBillingProvider {
 
 #[async_trait]
 impl BillingProvider for StubBillingProvider {
+    fn invoices_available(&self) -> bool {
+        self.simulated_matters
+    }
+
     async fn ensure_contact(&self, request: &ContactRequest) -> Result<ContactId, BillingError> {
         self.contact_calls
             .lock()
@@ -389,7 +428,41 @@ impl BillingProvider for StubBillingProvider {
             matter_id,
             request: request.clone(),
         });
-        Ok(InvoiceId(format!("stub-invoice-{matter_id}-{seq}")))
+        // This test double retains a result per key and records every
+        // attempt. Production callers enforce Xero's six-minute window;
+        // the stub's lifetime does not model provider key expiry.
+        let seq = calls
+            .iter()
+            .position(|call| call.matter_id == matter_id)
+            .map_or(seq, |first| first + 1);
+        let invoice_id = format!("stub-invoice-{matter_id}-{seq}");
+        self.invoice_statuses
+            .lock()
+            .expect("stub provider lock")
+            .entry(invoice_id.clone())
+            .or_insert_with(|| InvoiceStatus {
+                status: "AUTHORISED".into(),
+                amount_paid_cents: 0,
+                amount_cents: Some(
+                    request
+                        .line_items
+                        .iter()
+                        .map(|line| i64::from(line.quantity) * line.unit_amount_cents)
+                        .sum(),
+                ),
+                currency: Some("USD".into()),
+                issued_at: Some(
+                    request
+                        .issued_date
+                        .and_then(|date| date.and_hms_opt(0, 0, 0))
+                        .map_or_else(Utc::now, |date| date.and_utc()),
+                ),
+                due_at: request
+                    .due_date
+                    .and_then(|date| date.and_hms_opt(0, 0, 0))
+                    .map(|date| date.and_utc()),
+            });
+        Ok(InvoiceId(invoice_id))
     }
 
     async fn get_invoice(&self, invoice_id: &str) -> Result<InvoiceStatus, BillingError> {
@@ -402,6 +475,10 @@ impl BillingProvider for StubBillingProvider {
             .unwrap_or(InvoiceStatus {
                 status: "AUTHORISED".into(),
                 amount_paid_cents: 0,
+                amount_cents: None,
+                currency: None,
+                issued_at: None,
+                due_at: None,
             }))
     }
 
@@ -604,8 +681,21 @@ impl XeroBillingProvider {
     /// unit-testing the request shape without an HTTP round-trip. Type
     /// `ACCREC` (accounts-receivable, a sales invoice) and status
     /// `AUTHORISED` so the invoice is immediately billable.
-    #[must_use]
-    pub fn build_invoice_body(&self, request: &InvoiceRequest) -> serde_json::Value {
+    /// Line amounts are exclusive of tax; the configured account's tax
+    /// rate applies. Contact details are resolved separately so an invoice
+    /// cannot overwrite contact information or remove `ContactPersons`.
+    ///
+    /// # Errors
+    /// Returns a provider error when no resolved contact id is present.
+    pub fn build_invoice_body(
+        &self,
+        request: &InvoiceRequest,
+    ) -> Result<serde_json::Value, BillingError> {
+        let contact = request
+            .contact_id
+            .as_ref()
+            .filter(|id| !id.0.trim().is_empty())
+            .ok_or_else(|| BillingError::Provider("resolved invoice contact id missing".into()))?;
         let line_items: Vec<serde_json::Value> = request
             .line_items
             .iter()
@@ -621,17 +711,19 @@ impl XeroBillingProvider {
         let mut body = serde_json::json!({
             "Type": "ACCREC",
             "Status": "AUTHORISED",
+            "CurrencyCode": "USD",
+            "LineAmountTypes": "Exclusive",
             "Reference": request.reference,
-            "Contact": {
-                "Name": request.contact_name,
-                "EmailAddress": request.contact_email,
-            },
+            "Contact": { "ContactID": contact.0 },
             "LineItems": line_items,
         });
+        if let Some(issued) = request.issued_date {
+            body["Date"] = serde_json::Value::String(issued.format("%Y-%m-%d").to_string());
+        }
         if let Some(due) = request.due_date {
             body["DueDate"] = serde_json::Value::String(due.format("%Y-%m-%d").to_string());
         }
-        body
+        Ok(body)
     }
 
     /// Build the Xero `RepeatingInvoices` PUT body. Pure. `ApprovedForSending`
@@ -657,6 +749,8 @@ impl XeroBillingProvider {
             "RepeatingInvoices": [{
                 "Type": "ACCREC",
                 "Status": "AUTHORISED",
+                "CurrencyCode": "USD",
+                "LineAmountTypes": "Exclusive",
                 "Reference": request.reference,
                 "Contact": { "ContactID": request.contact_id },
                 "Schedule": {
@@ -843,22 +937,28 @@ struct InvoiceSummary {
 }
 
 impl InvoiceSummary {
+    fn issued_at(&self) -> Option<DateTime<Utc>> {
+        self.date_string
+            .as_deref()
+            .and_then(parse_xero_datetime)
+            .or_else(|| self.date.as_deref().and_then(parse_xero_datetime))
+    }
+
+    fn due_at(&self) -> Option<DateTime<Utc>> {
+        self.due_date_string
+            .as_deref()
+            .and_then(parse_xero_datetime)
+            .or_else(|| self.due_date.as_deref().and_then(parse_xero_datetime))
+    }
+
     /// `None` when the payload has no invoice id or no parseable issued
     /// date — ingest cannot key or stamp a mirror row from that.
     fn into_receivable(self) -> Option<ReceivableInvoice> {
         if self.invoice_id.is_empty() {
             return None;
         }
-        let issued_at = self
-            .date_string
-            .as_deref()
-            .and_then(parse_xero_datetime)
-            .or_else(|| self.date.as_deref().and_then(parse_xero_datetime))?;
-        let due_at = self
-            .due_date_string
-            .as_deref()
-            .and_then(parse_xero_datetime)
-            .or_else(|| self.due_date.as_deref().and_then(parse_xero_datetime));
+        let issued_at = self.issued_at()?;
+        let due_at = self.due_at();
         Some(ReceivableInvoice {
             invoice_id: self.invoice_id,
             reference: self.reference.unwrap_or_default(),
@@ -915,6 +1015,10 @@ struct RepeatingInvoiceSummary {
 
 #[async_trait]
 impl BillingProvider for XeroBillingProvider {
+    fn invoices_available(&self) -> bool {
+        true
+    }
+
     async fn online_invoice_url(&self, invoice_id: &str) -> Result<Option<String>, BillingError> {
         let url = format!(
             "{}/Invoices/{}/OnlineInvoice",
@@ -962,6 +1066,7 @@ impl BillingProvider for XeroBillingProvider {
         matter_id: Uuid,
         request: &InvoiceRequest,
     ) -> Result<InvoiceId, BillingError> {
+        let body = self.build_invoice_body(request)?;
         let url = format!("{}/Invoices", self.base_url.trim_end_matches('/'));
         let resp = self
             .http
@@ -970,11 +1075,11 @@ impl BillingProvider for XeroBillingProvider {
             .header("Xero-Tenant-Id", &self.tenant_id)
             // The Accounting API returns XML unless asked for JSON.
             .header(reqwest::header::ACCEPT, "application/json")
-            // Idempotency at the provider boundary: the same matter never
-            // raises two invoices, even under a concurrent double-send or
-            // a Restate replay. Xero honours this key for 24h.
+            // Xero caches identical requests under this key for six minutes.
+            // Callers persist results and reconcile uncertainty after expiry;
+            // the provider key alone is not durable replay protection.
             .header("Idempotency-Key", matter_id.to_string())
-            .json(&self.build_invoice_body(request))
+            .json(&body)
             .send()
             .await
             .map_err(|e| BillingError::Provider(e.to_string()))?;
@@ -1028,9 +1133,20 @@ impl BillingProvider for XeroBillingProvider {
             .into_iter()
             .next()
             .ok_or_else(|| BillingError::Provider("xero returned no invoice".to_string()))?;
+        let issued_at = inv.issued_at();
+        let due_at = inv.due_at();
+        if due_at.is_none() && (inv.due_date_string.is_some() || inv.due_date.is_some()) {
+            return Err(BillingError::Provider(
+                "invoice due date is malformed".into(),
+            ));
+        }
         Ok(InvoiceStatus {
             status: inv.status.unwrap_or_default(),
             amount_paid_cents: dollars_to_cents(inv.amount_paid.unwrap_or(0.0)),
+            amount_cents: inv.total.map(dollars_to_cents),
+            currency: inv.currency,
+            issued_at,
+            due_at,
         })
     }
 
@@ -1304,9 +1420,9 @@ mod tests {
         ReceivableInvoice, StubBillingProvider, XeroBillingProvider,
     };
     use crate::xero_auth::XeroClientCredentials;
-    use chrono::{TimeZone, Utc};
+    use chrono::{NaiveDate, TimeZone, Utc};
     use uuid::Uuid;
-    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::matchers::{body_partial_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const ID1: Uuid = Uuid::from_u128(1);
@@ -1316,6 +1432,7 @@ mod tests {
     /// A flat-fee estate matter: one line, billed once.
     fn estate_invoice() -> InvoiceRequest {
         InvoiceRequest {
+            contact_id: Some(ContactId("contact-estate".into())),
             contact_name: "Libra".into(),
             contact_email: "libra@example.com".into(),
             reference: "NL-ESTATE-0001".into(),
@@ -1326,6 +1443,7 @@ mod tests {
                 unit_amount_cents: 333_300,
                 account_code: "200".into(),
             }],
+            issued_date: None,
             due_date: None,
         }
     }
@@ -1335,13 +1453,23 @@ mod tests {
         let mut request = estate_invoice();
         assert!(xero("http://x".into())
             .build_invoice_body(&request)
+            .unwrap()
             .get("DueDate")
             .is_none());
         request.due_date = chrono::NaiveDate::from_ymd_opt(2026, 11, 3);
         assert_eq!(
-            xero("http://x".into()).build_invoice_body(&request)["DueDate"],
+            xero("http://x".into())
+                .build_invoice_body(&request)
+                .unwrap()["DueDate"],
             "2026-11-03"
         );
+    }
+
+    #[test]
+    fn invoice_generation_requires_real_or_explicitly_simulated_billing() {
+        assert!(!StubBillingProvider::new().invoices_available());
+        assert!(StubBillingProvider::for_simulated_matters().invoices_available());
+        assert!(xero("http://synthetic.invalid".into()).invoices_available());
     }
 
     #[tokio::test]
@@ -1389,6 +1517,8 @@ mod tests {
         assert_eq!(invoice["Schedule"]["Unit"], "MONTHLY");
         assert_eq!(invoice["Schedule"]["StartDate"], "2027-10-20");
         assert_eq!(invoice["Contact"]["ContactID"], "contact-1");
+        assert_eq!(invoice["CurrencyCode"], "USD");
+        assert_eq!(invoice["LineAmountTypes"], "Exclusive");
         assert_eq!(invoice["ApprovedForSending"], true);
         assert_eq!(
             provider
@@ -1438,6 +1568,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stub_create_invoice_is_idempotent_per_matter() {
+        let stub = StubBillingProvider::new();
+        let first = stub
+            .create_invoice(ID42, &estate_invoice())
+            .await
+            .expect("stub never errors");
+        let retry = stub.create_invoice(ID42, &estate_invoice()).await.unwrap();
+        let other = stub.create_invoice(ID1, &estate_invoice()).await.unwrap();
+
+        // A retry re-mints the first invoice's id — the same matter never
+        // creates two invoices — while a different matter does.
+        assert_eq!(retry, first, "a retry re-mints the same invoice id");
+        assert_ne!(other, first, "another matter gets its own invoice");
+
+        // Every attempt is still recorded, so a test can count retries.
+        assert_eq!(stub.calls().len(), 3);
+    }
+
+    #[tokio::test]
     async fn stub_calls_snapshot_is_shareable_after_more_calls() {
         let stub = StubBillingProvider::new();
         stub.create_invoice(ID1, &estate_invoice()).await.unwrap();
@@ -1464,12 +1613,18 @@ mod tests {
 
     #[test]
     fn invoice_body_is_accrec_authorised_with_decimal_amount() {
-        let body =
-            xero("https://api.xero.com/api.xro/2.0".into()).build_invoice_body(&estate_invoice());
+        let body = xero("https://api.xero.com/api.xro/2.0".into())
+            .build_invoice_body(&estate_invoice())
+            .unwrap();
         assert_eq!(body["Type"], "ACCREC");
         assert_eq!(body["Status"], "AUTHORISED");
         assert_eq!(body["Reference"], "NL-ESTATE-0001");
-        assert_eq!(body["Contact"]["Name"], "Libra");
+        assert_eq!(
+            body["Contact"],
+            serde_json::json!({"ContactID": "contact-estate"})
+        );
+        assert_eq!(body["CurrencyCode"], "USD");
+        assert_eq!(body["LineAmountTypes"], "Exclusive");
         let lines = body["LineItems"].as_array().unwrap();
         assert_eq!(lines.len(), 1);
         // Money is a decimal string rendered from cents — never a float.
@@ -1479,13 +1634,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_resolved_contact_remains_readable_but_cannot_write_an_invoice() {
+        let server = MockServer::start().await;
+        let mut legacy = serde_json::to_value(estate_invoice()).unwrap();
+        legacy.as_object_mut().unwrap().remove("contact_id");
+        legacy.as_object_mut().unwrap().remove("issued_date");
+        let mut request: InvoiceRequest = serde_json::from_value(legacy).unwrap();
+        assert_eq!(request.contact_id, None);
+        assert_eq!(request.issued_date, None);
+        let provider = xero(server.uri());
+        assert!(provider.create_invoice(ID42, &request).await.is_err());
+        request.contact_id = Some(ContactId("  ".into()));
+        assert!(provider.create_invoice(ID42, &request).await.is_err());
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn invoice_contact_metadata_cannot_change_a_resolved_debtor() {
+        let provider = xero("http://unused".into());
+        let mut request = estate_invoice();
+        let original = provider.build_invoice_body(&request).unwrap();
+        request.contact_name = "Synthetic renamed contact".into();
+        request.contact_email = "renamed@example.com".into();
+        assert_eq!(provider.build_invoice_body(&request).unwrap(), original);
+    }
+
+    #[tokio::test]
     async fn xero_posts_tenant_and_idempotency_headers_and_returns_invoice_id() {
         let server = MockServer::start().await;
+        let mut request = estate_invoice();
+        request.issued_date = NaiveDate::from_ymd_opt(2026, 10, 31);
+        request.due_date = NaiveDate::from_ymd_opt(2026, 11, 14);
         Mock::given(method("POST"))
             .and(path("/Invoices"))
             .and(header("authorization", "Bearer TOKEN"))
             .and(header("xero-tenant-id", "tenant-guid"))
             .and(header("idempotency-key", ID42.to_string().as_str()))
+            .and(body_partial_json(serde_json::json!({
+                "CurrencyCode": "USD", "LineAmountTypes": "Exclusive",
+                "Date": "2026-10-31", "DueDate": "2026-11-14",
+                "Contact": {"ContactID": "contact-estate"},
+            })))
             .and(header("accept", "application/json"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "Invoices": [ { "InvoiceID": "inv-789", "Status": "AUTHORISED" } ],
@@ -1495,7 +1684,7 @@ mod tests {
             .await;
 
         let id = xero(server.uri())
-            .create_invoice(ID42, &estate_invoice())
+            .create_invoice(ID42, &request)
             .await
             .expect("create succeeds");
         assert_eq!(id, InvoiceId("inv-789".into()));
@@ -1687,6 +1876,10 @@ mod tests {
             InvoiceStatus {
                 status: "PAID".into(),
                 amount_paid_cents: 333_300,
+                amount_cents: None,
+                currency: None,
+                issued_at: None,
+                due_at: None,
             },
         );
         let paid = stub.get_invoice("inv-1").await.unwrap();
@@ -1704,7 +1897,11 @@ mod tests {
                 "Invoices": [{
                     "InvoiceID": "inv-42",
                     "Status": "PAID",
-                    "AmountPaid": 3333.00
+                    "AmountPaid": 3333.00,
+                    "Total": 5000.00,
+                    "CurrencyCode": "CAD",
+                    "DateString": "2026-10-21T00:00:00",
+                    "DueDateString": "2026-10-31T00:00:00"
                 }]
             })))
             .mount(&server)
@@ -1713,6 +1910,54 @@ mod tests {
         let got = xero(server.uri()).get_invoice("inv-42").await.unwrap();
         assert_eq!(got.status, "PAID");
         assert_eq!(got.amount_paid_cents, 333_300);
+        assert_eq!(got.amount_cents, Some(500_000));
+        assert_eq!(got.currency.as_deref(), Some("CAD"));
+        assert_eq!(got.issued_at, parse_xero_datetime("2026-10-21"));
+        assert_eq!(got.due_at, parse_xero_datetime("2026-10-31"));
+    }
+
+    #[tokio::test]
+    async fn xero_get_invoice_dates_accept_raw_ticks_and_fail_closed_on_bad_due_dates() {
+        let server = MockServer::start().await;
+        let issued = parse_xero_datetime("2026-10-21").unwrap();
+        for (id, date, due) in [
+            (
+                "raw",
+                format!("/Date({})/", issued.timestamp_millis()),
+                None,
+            ),
+            ("missing", "not-a-date".into(), None),
+            ("bad-due", "2026-10-21".into(), Some("not-a-date")),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/Invoices/{id}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "Invoices": [{ "InvoiceID": id, "Date": date, "DueDate": due }]
+                })))
+                .mount(&server)
+                .await;
+        }
+        let provider = xero(server.uri());
+        let raw = provider.get_invoice("raw").await.unwrap();
+        assert_eq!(raw.issued_at, Some(issued));
+        assert_eq!(raw.due_at, None, "cleared due date is authoritative");
+        assert_eq!(
+            provider.get_invoice("missing").await.unwrap().issued_at,
+            None
+        );
+        assert!(provider.get_invoice("bad-due").await.is_err());
+    }
+
+    #[test]
+    fn journaled_status_without_financials_remains_readable() {
+        let old: InvoiceStatus = serde_json::from_value(serde_json::json!({
+            "status": "PAID", "amount_paid_cents": 100,
+        }))
+        .unwrap();
+        assert_eq!(old.amount_cents, None);
+        assert_eq!(old.currency, None);
+        assert_eq!(old.issued_at, None);
+        assert_eq!(old.due_at, None);
     }
 
     #[tokio::test]

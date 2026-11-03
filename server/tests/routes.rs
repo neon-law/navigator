@@ -7012,12 +7012,9 @@ async fn api_projects_open_rejects_closed_at_without_status() {
 }
 
 #[tokio::test]
-async fn api_projects_open_records_the_resolved_brand_and_ignores_a_posted_one() {
-    // `brand` is written by the server from the request's resolved `Host:`
-    // header (per `views::brand::registered_brand_key`), never from client
-    // input: opening on the `delete-your-data` host stores that key, opening
-    // on the default host stores `neon`, and a caller that posts its own
-    // `brand` field is ignored either way — the server's resolved value wins.
+async fn api_projects_open_defaults_to_the_host_and_refuses_an_unpaired_brand() {
+    // Omitted ownership uses the resolved host; a posted brand without its
+    // authorized Firm is refused before any Project is created.
     let (state, surreal) = state_with_engines().await;
     store::seed::seed_canonical(&state.surreal, &state.storage)
         .await
@@ -7087,6 +7084,18 @@ async fn api_projects_open_records_the_resolved_brand_and_ignores_a_posted_one()
             )
             .await
             .unwrap();
+        if spoofed_brand.is_some() {
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{label}");
+            assert!(
+                store::projects::all(&surreal)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|project| project.code != code),
+                "refused ownership creates no Project"
+            );
+            continue;
+        }
         assert_eq!(resp.status(), StatusCode::CREATED, "{label}");
         let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
         assert_eq!(body["brand"], expected_brand, "{label}: response body");
@@ -7914,11 +7923,11 @@ async fn lawyer_shook_hosts_redirect_to_guieb_shook() {
     for (host, expected) in [
         (
             "www.lawyershook.com",
-            "https://www.guiebandshook.com/testimonials?ref=x",
+            "https://www.guiebshook.com/testimonials?ref=x",
         ),
         (
             "staging.lawyershook.com",
-            "https://staging.guiebandshook.com/testimonials?ref=x",
+            "https://staging.guiebshook.com/testimonials?ref=x",
         ),
     ] {
         let resp = app
@@ -9800,7 +9809,7 @@ async fn client_dri_matter_detail_tabs_select_the_server_rendered_panel() {
     let documents_body = body_string(documents).await;
     assert!(
         documents_body.contains("nav-tabs"),
-        "the DRI page renders the documents/testimonial tabs: {documents_body}"
+        "the DRI page renders the matter strip with its Testimonial tab: {documents_body}"
     );
     assert!(
         documents_body.contains("Your documents"),
@@ -9811,22 +9820,19 @@ async fn client_dri_matter_detail_tabs_select_the_server_rendered_panel() {
         "the unselected testimonial panel is not in the default body: {documents_body}"
     );
 
-    let unknown = get_with_cookie(
+    // A workbench section is not a client's page: the same 404 as a
+    // matter they cannot see.
+    let workbench_section = get_with_cookie(
         app.clone(),
-        &format!("/app/projects/{project_code}?tab=unknown"),
+        &format!("/app/projects/{project_code}/participants"),
         &cookie,
     )
     .await;
-    assert_eq!(unknown.status(), StatusCode::OK);
-    let unknown_body = body_string(unknown).await;
-    assert!(
-        unknown_body.contains("Your documents"),
-        "an unrecognised tab still renders documents: {unknown_body}"
-    );
+    assert_eq!(workbench_section.status(), StatusCode::NOT_FOUND);
 
     let testimonial = get_with_cookie(
         app,
-        &format!("/app/projects/{project_code}?tab=testimonial"),
+        &format!("/app/projects/{project_code}/testimonial"),
         &cookie,
     )
     .await;
@@ -11050,7 +11056,7 @@ async fn assert_unregistered_host_redirects(
 async fn host_brand_path_matrix_resolves_every_combination() {
     let default_host = "www.neonlaw.com";
     let delete_your_data_host = "staging.deleteyourdata.com";
-    let holding_host = "staging.guiebandshook.com";
+    let holding_host = "staging.guiebshook.com";
     let unknown_host = "unregistered.example";
     let state =
         empty_state_with_canonical_host(CanonicalHost::new(Some(default_host.into()))).await;
@@ -16804,10 +16810,7 @@ async fn project_documents_upload_writes_blob_and_document_with_description() {
         .unwrap_or("");
     // The Documents tab, where the table the upload just added to renders;
     // the workbench opens on Overview, which lists no documents (#176).
-    assert_eq!(
-        location,
-        format!("/app/projects/{project_code}?tab=documents")
-    );
+    assert_eq!(location, format!("/app/projects/{project_code}/documents"));
 
     // One document asset — carrying the byte pointer plus upload
     // provenance and the optional description from the form.
@@ -16890,7 +16893,7 @@ async fn project_documents_upload_files_one_document_per_file_in_a_batch() {
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     assert_eq!(
         resp.headers().get("location").and_then(|v| v.to_str().ok()),
-        Some(format!("/app/projects/{project_code}?tab=documents").as_str())
+        Some(format!("/app/projects/{project_code}/documents").as_str())
     );
 
     let mut docs = store::assets::list_all(&state.surreal).await.unwrap();
@@ -17481,7 +17484,7 @@ async fn project_detail_page_renders_documents_and_upload_form() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}?tab=documents"))
+                .uri(format!("/app/projects/{project_code}/documents"))
                 .header(
                     "cookie",
                     &admin_cookie_on_project(&surreal, project_id).await,
@@ -17847,7 +17850,7 @@ async fn project_detail_page_renders_empty_state_when_project_has_no_documents()
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}?tab=documents"))
+                .uri(format!("/app/projects/{project_code}/documents"))
                 .header(
                     "cookie",
                     &admin_cookie_on_project(&surreal, project_id).await,
@@ -18071,7 +18074,7 @@ async fn lawyer_project_documents_render_grouped_history_and_one_offs() {
     let body = body_string(
         get_with_cookie(
             app,
-            &format!("/app/projects/{project_code}?tab=documents"),
+            &format!("/app/projects/{project_code}/documents"),
             &cookie,
         )
         .await,

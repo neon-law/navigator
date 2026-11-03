@@ -302,15 +302,20 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     // `store::firm_secrets` without a Notion database id.
     let runtime_kms = crate::integrations::runtime_kms_from_env().await;
 
-    // Real Xero provider when the env is configured; otherwise the stub
-    // (KIND / local dev), so a fork boots and self-tests without a Xero
-    // custom connection. Mirrors the signature-provider wiring above.
+    // Real Xero provider when configured. Without credentials, invoice
+    // generation refuses unless the deployment declares simulated matters;
+    // a fork can still boot without fabricating invoices for real work.
+    let simulated_billing =
+        store::sample_matters(cfg.environment).context("resolve simulated billing environment")?;
     let billing_provider: std::sync::Arc<dyn crate::billing::BillingProvider> =
         crate::billing::XeroBillingProvider::from_env().map_or_else(
             || {
                 tracing::info!("billing provider: StubBillingProvider (XERO_* unset)");
-                std::sync::Arc::new(crate::billing::StubBillingProvider::new())
-                    as std::sync::Arc<dyn crate::billing::BillingProvider>
+                std::sync::Arc::new(if simulated_billing {
+                    crate::billing::StubBillingProvider::for_simulated_matters()
+                } else {
+                    crate::billing::StubBillingProvider::new()
+                }) as std::sync::Arc<dyn crate::billing::BillingProvider>
             },
             |xero| {
                 tracing::info!("billing provider: XeroBillingProvider");

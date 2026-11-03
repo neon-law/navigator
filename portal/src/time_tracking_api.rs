@@ -49,7 +49,9 @@ fn entry_view(row: &time_entries::TimeEntry) -> serde_json::Value {
         time_entries::BillingStatus::WrittenOff { reason } => {
             view["written_off_reason"] = serde_json::json!(reason);
         }
-        time_entries::BillingStatus::Unbilled => {}
+        // Unbilled: nothing extra to show. Reserved: drawn into a pending
+        // billing batch — nothing extra in the entry view until it settles.
+        time_entries::BillingStatus::Unbilled | time_entries::BillingStatus::Reserved => {}
     }
     view
 }
@@ -342,7 +344,9 @@ pub(crate) async fn mark_invoiced(
     if entry.project_id != project_id {
         return Err(ApiError::NotFound);
     }
-    match time_entries::mark_invoiced(&pg, &[entry_id], actor_id, &input.xero_invoice_id).await {
+    match time_entries::mark_invoiced(&pg, &[entry_id], actor_id, &input.xero_invoice_id, false)
+        .await
+    {
         Ok(mut rows) => Ok(Json(entry_view(&rows.remove(0))).into_response()),
         Err(e) => Ok(entry_error(&e, "mark_invoiced", project_id, Some(entry_id))),
     }

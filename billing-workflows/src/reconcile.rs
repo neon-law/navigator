@@ -686,6 +686,10 @@ mod tests {
             InvoiceStatus {
                 status: "PAID".into(),
                 amount_paid_cents: 333_300,
+                amount_cents: None,
+                currency: None,
+                issued_at: None,
+                due_at: None,
             },
         );
 
@@ -730,6 +734,10 @@ mod tests {
             InvoiceStatus {
                 status: "PAID".into(),
                 amount_paid_cents: 333_300,
+                amount_cents: None,
+                currency: None,
+                issued_at: None,
+                due_at: None,
             },
         );
         stub.set_invoice_status(
@@ -737,6 +745,10 @@ mod tests {
             InvoiceStatus {
                 status: "VOIDED".into(),
                 amount_paid_cents: 0,
+                amount_cents: None,
+                currency: None,
+                issued_at: None,
+                due_at: None,
             },
         );
 

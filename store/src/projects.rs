@@ -2774,6 +2774,14 @@ fn validate_resource_links(input: &UpdateProjectCommand) -> Result<(), ProjectCo
     Ok(())
 }
 
+/// Refusal for a Firm/brand pair whose key no `brand` row carries.
+const UNKNOWN_BRAND_KEY: &str = "No Brand has that key.";
+/// Refusal for a brand key that exists but no `firm_brand` row wears.
+const BRAND_WORN_BY_NO_FIRM: &str = "That brand is not worn by a Firm.";
+/// Refusal for a brand key a different Firm wears. A key belongs to at most
+/// one Firm (`firm_brand.brand_key` is unique), so the key implies its Firm.
+const BRAND_WORN_BY_ANOTHER_FIRM: &str = "That brand is worn by a different Firm.";
+
 async fn validate_firm_brand_update(
     surreal: &SurrealDb,
     input: &UpdateProjectCommand,
@@ -2785,15 +2793,25 @@ async fn validate_firm_brand_update(
             if brand.is_empty() {
                 return Err(ProjectCommandError::Invalid("Brand is required."));
             }
+            // Name which case refused the pair (LAW-255): a key no `brand`
+            // row carries, a key no Firm wears, or a key another Firm wears.
+            // `find_by_key` reads the same store `firm_id_for_brand_key`
+            // does, so the two checks agree under PostgreSQL tenancy too.
+            if crate::brands::find_by_key(surreal, brand)
+                .await
+                .map_err(|error| ProjectCommandError::Db(error.to_string()))?
+                .is_none()
+            {
+                return Err(ProjectCommandError::Invalid(UNKNOWN_BRAND_KEY));
+            }
             let wearing_firm = crate::firms::firm_id_for_brand_key(surreal, brand)
                 .await
                 .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-            if wearing_firm != Some(firm_id) {
-                return Err(ProjectCommandError::Invalid(
-                    "That Firm does not wear the selected brand.",
-                ));
+            match wearing_firm {
+                Some(wearer) if wearer == firm_id => Ok(Some((firm_id, brand.to_string()))),
+                Some(_) => Err(ProjectCommandError::Invalid(BRAND_WORN_BY_ANOTHER_FIRM)),
+                None => Err(ProjectCommandError::Invalid(BRAND_WORN_BY_NO_FIRM)),
             }
-            Ok(Some((firm_id, brand.to_string())))
         }
         _ => Err(ProjectCommandError::Invalid(
             "Firm and brand must be set together.",
@@ -3062,6 +3080,9 @@ pub async fn delete_project_with_surreal(
 /// itself stays free of session and HTTP types.
 #[derive(Debug)]
 pub struct OpenMatterCommand {
+    /// The authorized owning Firm, when the caller selected one explicitly.
+    /// The transaction refuses a brand that moved away from this Firm.
+    pub firm_id: Option<Uuid>,
     /// The matter's display name. Required.
     pub name: String,
     /// The matter's code, stored exactly as supplied (after normalizing case
@@ -3319,6 +3340,31 @@ async fn record_open_attestation(
     Ok(())
 }
 
+/// Resolve ownership without dropping an explicitly authorized Firm.
+async fn resolve_open_firm(
+    surreal: &SurrealDb,
+    input: &OpenMatterCommand,
+) -> Result<Uuid, OpenMatterError> {
+    // Validate every caller's selected brand against live rows. The API uses
+    // the request brand by default or an explicitly authorized Firm/brand pair.
+    if !crate::firms::brand_key_exists(surreal, &input.brand)
+        .await
+        .map_err(|error| OpenMatterError::Db(error.to_string()))?
+    {
+        return Err(OpenMatterError::NotFound("brand"));
+    }
+    let firm_id = crate::firms::firm_id_for_brand_key(surreal, &input.brand)
+        .await
+        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
+    let firm_id = firm_id.ok_or(OpenMatterError::Invalid(BRAND_WORN_BY_NO_FIRM))?;
+
+    if input.firm_id.is_some_and(|expected| expected != firm_id) {
+        return Err(OpenMatterError::Invalid(BRAND_WORN_BY_ANOTHER_FIRM));
+    }
+
+    Ok(firm_id)
+}
+
 pub async fn open_matter(
     surreal: &SurrealDb,
     input: &OpenMatterCommand,
@@ -3347,22 +3393,7 @@ pub async fn open_matter(
              it must start and end with a letter or digit.",
         ));
     }
-    // The server stamps `brand` from the resolved request host, never a
-    // client-submitted form field, but the command itself carries a plain
-    // `String` — validate it against live `brand` rows (ENG-587) rather than
-    // trusting every caller (CLI, JSON API) to have derived it correctly.
-    if !crate::firms::brand_key_exists(surreal, &input.brand)
-        .await
-        .map_err(|error| OpenMatterError::Db(error.to_string()))?
-    {
-        return Err(OpenMatterError::NotFound("brand"));
-    }
-    let firm_id = crate::firms::firm_id_for_brand_key(surreal, &input.brand)
-        .await
-        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
-    let firm_id = firm_id.ok_or(OpenMatterError::Invalid(
-        "That brand is not worn by a Firm.",
-    ))?;
+    let firm_id = resolve_open_firm(surreal, input).await?;
 
     // Validate every reference before opening. The project and both
     // participations commit in the explicit SurrealDB transaction below;
@@ -3392,7 +3423,9 @@ pub async fn open_matter(
                 r"BEGIN;
                  CREATE $project SET code = $code, name = $name, status = $status,
                     brand = $brand,
-                    firm_id = $firm_id,
+                    firm_id = IF (SELECT VALUE firm_id FROM firm_brand WHERE brand_key = $brand) = [$firm_id] {{
+                        $firm_id
+                    }} ELSE {{ THROW 'project_firm_brand_changed'; }},
                     entity_id = $entity_id, jurisdiction_id = $jurisdiction_id,
                     description = $description,
                     closed_at = $closed_at,
@@ -3423,6 +3456,8 @@ pub async fn open_matter(
     .await
     .map_err(|error| match error {
         ProjectStoreError::CodeTaken => OpenMatterError::CodeConflict,
+        other if other.to_string().contains("project_firm_brand_changed") =>
+            OpenMatterError::Invalid("Firm and brand changed while opening the matter; retry the request."),
         other => OpenMatterError::Db(other.to_string()),
     })?;
     let created: Option<ProjectRow> = response

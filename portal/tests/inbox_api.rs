@@ -71,6 +71,7 @@ async fn fixture_with_integrations(
         signature_provider: state.signature_provider.clone(),
         contract_reviewer: state.contract_reviewer.clone(),
         integration_providers: integrations,
+        billing_provider: state.billing_provider.clone(),
         canonical_base_url: None,
     };
     let session = portal::SessionData {

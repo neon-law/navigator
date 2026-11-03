@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use fantoccini::Locator;
 use features::webdriver::{
-    base_url, login_as_lawyer, new_client_or_skip, scroll_and_js_click, wait_for_text,
+    base_url, fill_text_field, login_as_lawyer, new_client_or_skip, scroll_and_js_click,
+    wait_for_text,
 };
 use store::inbox_triage::{NewInboxTriage, PrivilegeLabel, TriageDisposition, RULES_ONLY_PROMPT};
 
@@ -75,13 +76,12 @@ async fn assigned_voice_call_offers_notes_without_an_external_reply_form() {
         .await
         .unwrap()
         .is_empty());
-    browser
-        .find(Locator::Css("form[action$='/notes'] textarea[name='body']"))
-        .await
-        .expect("internal note form")
-        .send_keys("Synthetic browser call note.")
-        .await
-        .unwrap();
+    fill_text_field(
+        &browser,
+        "form[action$='/notes'] textarea[name='body']",
+        "Synthetic browser call note.",
+    )
+    .await;
     scroll_and_js_click(&browser, "form[action$='/notes'] button").await;
     wait_for_text(
         &browser,

@@ -5,6 +5,10 @@
 //! The lens is a fact about the person, never about the URL they typed — a path
 //! is chosen by the requester, so it can never be an authorization input.
 //!
+//! Each built-in section has its own path (`/app/projects/{code}/{segment}`,
+//! see [`MatterTab`]) on this one mount; [`serves`] answers which of them a
+//! rendering has, and any other is the same `404` as an invisible matter.
+//!
 //! The matter page has six renderings. Five are keyed on
 //! [`store::access::MatterViewer`] rather than on the tier alone, because the
 //! accountable participant on each side is a different reader from an ordinary
@@ -46,6 +50,7 @@
 use dioxus::prelude::*;
 
 use crate::people::ViewerRole;
+use crate::sections::page::MatterTab;
 
 /// The caller\'s relationship to the matter in the request path, in a
 /// wasm-safe shape. Mirrors `store::access::MatterViewer`; the store type does
@@ -116,7 +121,7 @@ pub async fn matter_viewer_kind() -> Result<MatterViewerKind, ServerFnError> {
     let viewer = store::access::matter_viewer(&surreal, person_id, store_role, project.id)
         .await
         .map_err(|e| ServerFnError::new(e.clone()))?;
-    Ok(match viewer {
+    let kind = match viewer {
         // `matter_viewer` itself carries no privileged short-circuit (ENG-81)
         // — this branch is the dispatcher's own, on top of that unchanged
         // answer: an Owner/Admin with no row gets the participation-only page
@@ -135,7 +140,31 @@ pub async fn matter_viewer_kind() -> Result<MatterViewerKind, ServerFnError> {
         Some(MatterViewer::Clerk) => MatterViewerKind::Clerk,
         Some(MatterViewer::Lawyer) => MatterViewerKind::Lawyer,
         Some(MatterViewer::LawyerDri) => MatterViewerKind::LawyerDri,
-    })
+    };
+    // Every built-in section shares this mount, so a section the reader's page
+    // does not have is the same `404` as a matter they cannot see.
+    let tab = crate::sections::page::request_tab().await;
+    if kind != MatterViewerKind::None && !tab.is_some_and(|tab| serves(kind, tab)) {
+        commit_not_found();
+        return Ok(MatterViewerKind::None);
+    }
+    Ok(kind)
+}
+
+/// Whether `kind`'s page has a section at `tab`'s path. Overview is every
+/// page; the workbench's sections are a lawyer's; the testimonial is the
+/// client DRI's; the unassigned-admin page is the participation ledger.
+#[must_use]
+pub fn serves(kind: MatterViewerKind, tab: MatterTab) -> bool {
+    match kind {
+        _ if tab == MatterTab::Overview => kind != MatterViewerKind::None,
+        MatterViewerKind::Lawyer | MatterViewerKind::LawyerDri => {
+            MatterTab::WORKBENCH.contains(&tab)
+        }
+        MatterViewerKind::ClientDri => tab == MatterTab::Testimonial,
+        MatterViewerKind::AdminUnassigned => tab == MatterTab::Participants,
+        MatterViewerKind::None | MatterViewerKind::Client | MatterViewerKind::Clerk => false,
+    }
 }
 
 /// Which of the three matter lists the caller reads.
@@ -226,5 +255,37 @@ pub fn ProjectDetail() -> Element {
                 }
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{serves, MatterTab, MatterViewerKind};
+
+    #[test]
+    fn each_rendering_serves_overview_and_only_its_own_sections() {
+        use MatterViewerKind as K;
+        let served = |kind| -> Vec<MatterTab> {
+            std::iter::once(MatterTab::Overview)
+                .chain(MatterTab::ROUTED)
+                .filter(|tab| serves(kind, *tab))
+                .collect()
+        };
+        let workbench: Vec<MatterTab> = std::iter::once(MatterTab::Overview)
+            .chain(MatterTab::WORKBENCH)
+            .collect();
+        assert_eq!(served(K::Lawyer), workbench);
+        assert_eq!(served(K::LawyerDri), workbench);
+        assert_eq!(
+            served(K::ClientDri),
+            [MatterTab::Overview, MatterTab::Testimonial]
+        );
+        assert_eq!(served(K::Client), [MatterTab::Overview]);
+        assert_eq!(served(K::Clerk), [MatterTab::Overview]);
+        assert_eq!(
+            served(K::AdminUnassigned),
+            [MatterTab::Overview, MatterTab::Participants]
+        );
+        assert!(served(K::None).is_empty());
     }
 }

@@ -252,7 +252,7 @@ pub async fn get_clerk_project() -> Result<ClerkProjectDetailView, ServerFnError
         &surreal,
         project.id,
         &project.code,
-        crate::sections::PageLens::Clerk,
+        store::access::MatterViewer::Clerk,
     )
     .await;
     Ok(ClerkProjectDetailView {

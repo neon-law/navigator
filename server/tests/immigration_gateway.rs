@@ -132,7 +132,7 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
     let app = app(state().await);
     for host in [
         "www.deleteyourdata.com",
-        "www.guiebandshook.com",
+        "www.guiebshook.com",
         "www.vestaestateplanning.com",
         "www.misericordialaw.com",
         "www.abhayaimmigration.com",
@@ -243,7 +243,7 @@ async fn every_practice_page_is_404_on_every_non_neon_brand_host() {
     for (path, _, _) in PRACTICE_PAGES {
         for host in [
             "www.deleteyourdata.com",
-            "www.guiebandshook.com",
+            "www.guiebshook.com",
             "www.vestaestateplanning.com",
             "www.misericordialaw.com",
             "www.abhayaimmigration.com",

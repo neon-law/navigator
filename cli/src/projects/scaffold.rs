@@ -105,6 +105,8 @@ fn validate(plan: &ScaffoldPlan) -> Result<()> {
 pub(crate) struct ScaffoldOptions {
     /// Ask the server to create or adopt the Project's source repository.
     pub provision_repository: bool,
+    pub firm: Option<String>,
+    pub brand: Option<String>,
     /// The client contact a resumed scaffold writes as the manifest's client
     /// DRI. Required only when `--resume` rebuilds the tree in an empty
     /// directory, where the original prompt answer is gone.
@@ -219,6 +221,8 @@ async fn run_inner(
             plan.jurisdiction.as_deref(),
             true,
             None,
+            options.firm.as_deref(),
+            options.brand.as_deref(),
         )
         .await;
         if opened != ExitCode::SUCCESS {
@@ -240,6 +244,7 @@ async fn run_inner(
             }
         }
     }
+    write_ownership(host, directory, &code).await?;
     println!(
         "Generated the canonical Project repository at {}",
         directory.display()
@@ -253,6 +258,26 @@ async fn run_inner(
         return Ok(provisioned);
     }
     Ok(crate::projects::source_import::run(host, &code, directory, None, false).await)
+}
+
+/// Record the opened row's actual ownership, including a resumed scaffold.
+async fn write_ownership(host: Option<&str>, directory: &Path, code: &str) -> Result<()> {
+    let (base, token) = crate::remote::resolve(host)?;
+    let project = super::surfaces::list_visible_projects(&base, &token)
+        .await?
+        .into_iter()
+        .find(|project| project.code == code)
+        .context("opened Project is missing from the visible directory")?;
+    let firm = project
+        .firm_id
+        .context("opened Project has no owning Firm")?;
+    let brand = project.brand.context("opened Project has no brand")?;
+    let path = directory.join(super::manifest::FILE);
+    let contents = std::fs::read_to_string(&path)?;
+    let contents = super::set::replace_project_key(&contents, "firm", &firm.to_string())?;
+    let contents = super::set::replace_project_key(&contents, "brand", &brand)?;
+    std::fs::write(&path, contents)?;
+    Ok(())
 }
 
 /// Write the canonical tree with `client_email` as the client DRI.
@@ -395,6 +420,8 @@ mod tests {
         assert!(manifest_names(root.path(), "sibling-matter"));
         assert!(!manifest_names(root.path(), "matter-one"));
         let options = ScaffoldOptions {
+            firm: None,
+            brand: None,
             provision_repository: false,
             client_email: None,
         };
@@ -571,6 +598,8 @@ mod tests {
             root.path(),
             Some("Not A Code"),
             ScaffoldOptions {
+                firm: None,
+                brand: None,
                 provision_repository: true,
                 client_email: None,
             },
@@ -593,6 +622,8 @@ mod tests {
                 root.path(),
                 Some("matter-one"),
                 ScaffoldOptions {
+                    firm: None,
+                    brand: None,
                     provision_repository: false,
                     client_email,
                 },
@@ -613,6 +644,8 @@ mod tests {
             root.path(),
             None,
             ScaffoldOptions {
+                firm: None,
+                brand: None,
                 provision_repository: false,
                 client_email: None,
             },
