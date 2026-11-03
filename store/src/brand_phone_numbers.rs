@@ -82,8 +82,10 @@ pub struct BrandPhoneNumber {
 impl BrandPhoneNumber {
     /// Content identity for the idempotent `put`: timestamps never differ.
     fn same_registration(&self, input: &NewBrandPhoneNumber) -> bool {
-        self.brand_key == input.brand_key
-            && self.twilio_account_sid == input.twilio_account_sid
+        // `put` persists trimmed values, so a retried request carrying the
+        // same key or SID with padding must compare against its trimmed form.
+        self.brand_key == input.brand_key.trim()
+            && self.twilio_account_sid == input.twilio_account_sid.trim()
             && self.auth_token_secret_ref == input.auth_token_secret_ref
             && self.channel_kinds == input.channel_kinds
     }
@@ -253,5 +255,27 @@ mod tests {
             validate(&no_account_sid).unwrap_err().to_string(),
             "invalid Brand phone number: twilio_account_sid"
         );
+    }
+
+    #[test]
+    fn a_padded_retry_matches_its_trimmed_registration() {
+        let stored = BrandPhoneNumber {
+            number_e164: "+15551234567".into(),
+            brand_key: "neon".into(),
+            twilio_account_sid: "AC7f5ab4c8de0123456789abcdef01234".into(),
+            auth_token_secret_ref: Uuid::from_u128(1),
+            channel_kinds: ChannelKinds::Both,
+            inserted_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        // `put` persists trimmed values; the retry comparison must meet them
+        // there, or the identical setup request reports a false Conflict.
+        let retry = registration("+15551234567", " neon ");
+        assert!(stored.same_registration(&retry));
+        let changed = NewBrandPhoneNumber {
+            brand_key: "other".into(),
+            ..retry
+        };
+        assert!(!stored.same_registration(&changed));
     }
 }
