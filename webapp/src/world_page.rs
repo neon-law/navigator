@@ -58,6 +58,7 @@ pub struct InjectedWorld(pub WorldContent);
 
 /// Country options for the world page, resolved from the offline index.
 #[cfg(feature = "server")]
+#[must_use]
 pub fn country_names() -> Vec<String> {
     geotime::countries()
         .iter()
