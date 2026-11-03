@@ -27,6 +27,10 @@ use store::project_surfaces::{ProjectHandles, ProjectSurfaces};
 pub(crate) struct VisibleProject {
     pub(crate) id: Uuid,
     pub(crate) code: String,
+    #[serde(default)]
+    pub(crate) firm_id: Option<Uuid>,
+    #[serde(default)]
+    pub(crate) brand: Option<String>,
 }
 
 /// The first line of a response body, for a one-line error.

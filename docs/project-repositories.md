@@ -104,11 +104,16 @@ private Slack and Notion URLs. Populate live values with `navigator project set 
 rejects missing, malformed, or placeholder values. Shared Slack/Notion and Xero handles are optional. `host` is a
 hostname; `name` is a Project code. An Owner or Admin with authority over the target Firm may also change live ownership
 with `navigator project set <code> --firm <firm-name> --brand <brand-key>`. Supply the pair together; the server checks
-the Firm wears that brand. This updates the live Project row and does not add Firm identity to the repository manifest.
-`no_live_row` requires a reason. `allowed_hosts`, `allowed_links`, and `allowed_prefixes` are maps of `entry: reason`,
-never lists; `allowed_links` keys are bare citation hosts linked with `rel="noreferrer"` to protect referrers. Comments
-in YAML are refused because pull requests and repository contracts record reasons; quoted scalar values may contain `#`
-as content.
+the Firm wears that brand. This updates the live row and records `project.firm` (the Firm UUID) and `project.brand` (the
+brand key) together in the manifest. `project set --from-live` also records this pair. When declared, the live gate
+refuses any mismatch with the Project's `firm_id` and `brand`. Declare both fields together; a Firm value must be a
+UUID. `GET /app/api/firms` lists each authorized Firm's `id`, `name`, `slug`, and `brands` (the keys it wears). `project
+create` and `project scaffold` accept paired `--firm <name-or-uuid> --brand <key>` flags, validating the selection
+before creating contacts or opening the matter. Omit both to use the deployment's default brand. Scaffold records the
+opened Project's actual Firm UUID and brand, including when resuming. `no_live_row` requires a reason. `allowed_hosts`,
+`allowed_links`, and `allowed_prefixes` are maps of `entry: reason`, never lists; `allowed_links` keys are bare citation
+hosts linked with `rel="noreferrer"` to protect referrers. Comments in YAML are refused because pull requests and
+repository contracts record reasons; quoted scalar values may contain `#` as content.
 
 ## Document staging and pointers
 

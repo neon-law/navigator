@@ -295,7 +295,7 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
         .and(path("/app/api/projects"))
         .and(header("authorization", "Bearer test-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            { "id": project_id, "code": "acme" }
+            { "id": project_id, "code": "acme", "firm_id":"00000000-0000-0000-0000-000000000001", "brand":"sample" }
         ])))
         .mount(&server)
         .await;
@@ -326,6 +326,8 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
     );
     let manifest = fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap();
     for value in [
+        "firm: 00000000-0000-0000-0000-000000000001",
+        "brand: sample",
         "lawyer@example.com",
         "client@example.com",
         "https://slack.com/archives/private",

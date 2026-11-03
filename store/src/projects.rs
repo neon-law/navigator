@@ -3347,10 +3347,8 @@ pub async fn open_matter(
              it must start and end with a letter or digit.",
         ));
     }
-    // The server stamps `brand` from the resolved request host, never a
-    // client-submitted form field, but the command itself carries a plain
-    // `String` — validate it against live `brand` rows (ENG-587) rather than
-    // trusting every caller (CLI, JSON API) to have derived it correctly.
+    // Validate every caller's selected brand against live rows. The API uses
+    // the request brand by default or an explicitly authorized Firm/brand pair.
     if !crate::firms::brand_key_exists(surreal, &input.brand)
         .await
         .map_err(|error| OpenMatterError::Db(error.to_string()))?

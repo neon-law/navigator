@@ -126,13 +126,21 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
             "pass --from-live, a coordinate flag, or --firm with --brand"
         ));
     }
-    let (updated, mut changed) = apply_manifest_values(
+    let (mut updated, mut changed) = apply_manifest_values(
         &parsed,
         &contents,
         values,
         clear_calendar,
         clear_drive_folder,
     )?;
+    let ownership = manifest_ownership(host, project, firm.zip(brand), from_live).await?;
+    if let Some((firm, brand)) = ownership {
+        updated = replace_project_key(&updated, "firm", &firm.to_string())?;
+        updated = replace_project_key(&updated, "brand", &brand)?;
+        if updated != contents {
+            changed.push("manifest Firm and brand".into());
+        }
+    }
     let findings = manifest::lint_contents(path, &updated);
     if let Some(finding) = findings.into_iter().find(|finding| !finding.warning) {
         return Err(anyhow!(
@@ -163,6 +171,34 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
         changed.push("coordinates already current".to_string());
     }
     Ok(changed)
+}
+
+async fn manifest_ownership(
+    host: &str,
+    project: &str,
+    explicit: Option<(&str, &str)>,
+    from_live: bool,
+) -> Result<Option<(uuid::Uuid, String)>> {
+    if let Some((firm, brand)) = explicit {
+        let (base, token) = remote::resolve(Some(host))?;
+        return Ok(Some((
+            remote::resolve_firm(&base, &token, firm, Some(brand)).await?,
+            brand.to_string(),
+        )));
+    }
+    if !from_live {
+        return Ok(None);
+    }
+    let (base, token) = remote::resolve(Some(host))?;
+    let row = surfaces::list_visible_projects(&base, &token)
+        .await?
+        .into_iter()
+        .find(|row| row.code == project)
+        .context("no live Project")?;
+    Ok(Some((
+        row.firm_id.context("live Project has no Firm")?,
+        row.brand.context("live Project has no brand")?,
+    )))
 }
 
 /// The navigator.yaml text and the names of the changed keys after the
@@ -287,7 +323,7 @@ fn live_patch(fields: LiveFields<'_>) -> Result<serde_json::Map<String, serde_js
 
 /// Replace or add a scalar in the nested `project:` map while retaining all
 /// unrelated YAML text and comments.
-fn replace_project_key(contents: &str, key: &str, value: &str) -> Result<String> {
+pub(crate) fn replace_project_key(contents: &str, key: &str, value: &str) -> Result<String> {
     let serialized = serde_yaml::to_string(value)?.trim().to_string();
     let mut lines: Vec<String> = contents.lines().map(str::to_string).collect();
     let project_line = lines

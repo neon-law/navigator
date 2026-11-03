@@ -311,11 +311,23 @@ async fn check_live_handles(dir: &Path, base: &str, token: &str) -> Result<()> {
         .as_deref()
         .ok_or_else(|| anyhow!("navigator.yaml has no project.name"))?;
     let projects = super::surfaces::list_visible_projects(base, token).await?;
-    let project_id = projects
+    let project = projects
         .into_iter()
         .find(|project| project.code == project_code)
-        .map(|project| project.id)
         .ok_or_else(|| anyhow!("no live row for the declared Project"))?;
+    let project_id = project.id;
+    if manifest.firm.is_some() || manifest.brand.is_some() {
+        let declared_firm = manifest
+            .firm
+            .as_deref()
+            .and_then(|id| uuid::Uuid::parse_str(id).ok());
+        if declared_firm.is_none()
+            || declared_firm != project.firm_id
+            || manifest.brand.as_deref() != project.brand.as_deref()
+        {
+            anyhow::bail!("navigator.yaml Firm and brand differ from the live Project");
+        }
+    }
     let live = super::surfaces::get_handles(base, token, project_id).await?;
     if super::docket::renumber::has_filings(dir)? {
         let client = remote::DocumentClient::with_credential(
@@ -827,6 +839,27 @@ mod tests {
         assert!(can_mint_ci_session_for(forgejo, "refs/heads/main", "push"));
     }
 
+    #[tokio::test]
+    async fn a_manifest_ownership_mismatch_refuses_before_reading_handles() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("navigator.yaml"),
+            "project:\n  host: example.test\n  name: sample\n  firm: 00000000-0000-0000-0000-000000000001\n  brand: sample-brand\n").unwrap();
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id":"00000000-0000-0000-0000-000000000002", "code":"sample",
+                 "firm_id":"00000000-0000-0000-0000-000000000001", "brand":"other"}
+            ])))
+            .mount(&server)
+            .await;
+        let error = check_live_handles(dir.path(), &server.uri(), "token")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Firm and brand differ"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn live_open_row_passes_through_oidc() {
         let _lock = ENV_LOCK.lock().await;
@@ -1145,6 +1178,7 @@ mod tests {
             concat!(
                 "version: 26.9.26\nproject:\n",
                 "  host: staging.neonlaw.com\n  name: acme\n",
+                "  firm: 00000000-0000-0000-0000-000000000001\n  brand: sample\n",
                 "  lawyer_dri: lawyer@example.com\n",
                 "  client_dri: client@example.com\n",
                 "  private_slack_channel: https://slack.example.com/private\n",
@@ -1156,7 +1190,7 @@ mod tests {
             .and(path("/app/api/projects"))
             .and(header_matcher("authorization", "Bearer local-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                { "id": project_id, "code": "acme" }
+                { "id": project_id, "code": "acme", "firm_id":project_id, "brand":"sample" }
             ])))
             .mount(&navigator)
             .await;
@@ -1506,6 +1540,9 @@ mod tests {
             .unwrap();
         let body = String::from_utf8(body.to_vec()).unwrap();
 
+        let visible: Vec<super::super::surfaces::VisibleProject> =
+            serde_json::from_str(&body).unwrap();
+        assert_eq!(visible[0].brand.as_deref(), Some("neon"));
         let matters: Vec<LiveMatter> =
             serde_json::from_str(&body).expect("the live door's own response must parse");
         let acme = matters

@@ -65,7 +65,7 @@ async fn mount_projects(server: &MockServer, project_id: Uuid) {
         .and(path("/app/api/projects"))
         .and(header("authorization", "Bearer test-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            { "id": project_id, "code": CODE }
+            { "id": project_id, "code": CODE, "firm_id":"00000000-0000-0000-0000-000000000001", "brand":"sample" }
         ])))
         .mount(server)
         .await;
@@ -352,6 +352,8 @@ fn prepare_scaffold(credentials: &Path, host: &str, dir: &Path) {
     );
     assert!(rebuilt.success, "{}", rebuilt.stderr);
     let manifest = fs::read_to_string(dir.join("navigator.yaml")).unwrap();
+    assert!(manifest.contains("firm: 00000000-0000-0000-0000-000000000001"));
+    assert!(manifest.contains("brand: sample"));
     assert!(
         manifest.contains("client_dri: client@example.com"),
         "{manifest}"

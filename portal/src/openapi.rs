@@ -905,12 +905,13 @@ fn canonical_document(base: &str) -> Value {
             "summary": "List Firms the caller may administer",
             "description":
               "Owner sees every Firm. Admin sees only Firms where their membership admits `manage_membership`. \
-               This directory lets the CLI resolve an operator-supplied Firm name without accepting a raw id on its command line.",
+               This directory lets the CLI resolve a Firm name or id and discover the brand keys each authorized Firm wears.",
             "responses": {
-              "200": { "description": "Visible Firm ids, names, and slugs", "content": { "application/json": {
-                "schema": { "type": "array", "items": { "type": "object", "required": ["id", "name", "slug"], "properties": {
+              "200": { "description": "Visible Firm ids, names, slugs, and brand keys", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "type": "object", "required": ["id", "name", "slug", "brands"], "properties": {
                   "id": { "type": "string", "format": "uuid" },
                   "name": { "type": "string" },
+                  "brands": { "type": "array", "items": { "type": "string" } },
                   "slug": { "type": "string", "description": "The Firm's immutable slug, which names its Forgejo organization." }
                 } } }
               } } },
@@ -5086,6 +5087,10 @@ fn canonical_document(base: &str) -> Value {
             "type": "object",
             "required": ["name", "code", "client_id", "entity_id", "attestation"],
             "properties": {
+              "firm_id": { "type": "string", "format": "uuid",
+                           "description": "Optional explicit Firm. Supply together with brand. Owner or an Admin authorized to manage the target Firm may select it." },
+              "brand": { "type": "string",
+                         "description": "Optional brand key worn by firm_id. Omit both fields to use the request brand. A mismatched pair is refused before opening." },
               "name":         { "type": "string", "description": "The matter's display name." },
               "code":         { "type": "string",
                                 "description": "The matter's code, stored exactly as given — lowercase letters, digits, and single hyphens, starting and ending with a letter or digit, at most 80 characters. Required. A code is chosen once at matter-open and never changes; a code already in use by another matter is refused with 409." },

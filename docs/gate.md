@@ -425,7 +425,7 @@ literally and the columns disappear.
 | `Y013` | Warning | Flat `host`/`project` shape should be replaced by the versioned nested shape. | No |
 | `Y014` | Error | Document pointers live under `blobs/`, never under the Git-ignored `documents/`. | Locally |
 | `Y015` | Error | A manifest `skills:` entry must carry non-empty `jurisdiction`, `practice_area`, `version`. | No |
-| `Y016` | Error | A nested manifest needs non-placeholder DRI emails, Slack/Notion URLs or `not provisioned`. | No |
+| `Y016` | Error | Valid DRIs and surface handles; declared Firm/brand pairs need a UUID and key. | No |
 | `Y017` | Error | Onboarding/offboarding templates cannot name Neon Law as the Firm's trade name or party. | No |
 | `Y018` | Error | California onboarding/offboarding templates cannot name an LLC as the law firm. | No |
 | `Y019` | Error | A `matter:` block and each pleading's `caption_title` and `footer_title` must be complete. | No |
