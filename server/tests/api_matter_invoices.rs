@@ -16,7 +16,7 @@
 //! contract is about how many times the seam is crossed, not only what the
 //! mirror shows. A dedicated failing provider covers the refusal path.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use axum::body::Body;
@@ -637,16 +637,19 @@ async fn a_matter_with_no_client_to_bill_is_refused() {
         .unwrap();
     mirror_matters(&surreal, &[project_id]).await;
     let base = portal::test_support::app_state(surreal.clone()).await;
+    // One shared stub: the app's provider IS the fixture's, so the
+    // create-call assertions below verify what the application did.
+    let provider = Arc::new(billing::StubBillingProvider::new());
     let state = AppState {
         sessions: SessionStore::new(KEY),
-        billing_provider: Arc::new(billing::StubBillingProvider::new()),
+        billing_provider: Arc::clone(&provider),
         storage,
         ..base
     };
     let fx = Fixture {
         app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
         surreal,
-        provider: Arc::new(billing::StubBillingProvider::new()),
+        provider,
         project_id,
         other_project_id: project_id,
         lawyer: bearer(lawyer.id, Role::Lawyer),
@@ -766,11 +769,16 @@ async fn a_provider_refusal_marks_nothing() {
     mirror_matters(&surreal, &[project_id]).await;
 
     // A provider that refuses at the raise: the seam is crossed, Xero
-    // (synthetically) rejects, and the retry must be safe.
+    // (synthetically) rejects, and the retry must be safe. The same
+    // instance is the app's provider — its raise counter is what the
+    // assertions below read, not a separate stub's log.
+    let raises = Arc::new(Mutex::new(0_usize));
     let base = portal::test_support::app_state(surreal.clone()).await;
     let state = AppState {
         sessions: SessionStore::new(KEY),
-        billing_provider: Arc::new(FailingProvider),
+        billing_provider: Arc::new(FailingProvider {
+            raises: Arc::clone(&raises),
+        }),
         storage,
         ..base
     };
@@ -792,6 +800,11 @@ async fn a_provider_refusal_marks_nothing() {
 
     let resp = generate(&fx, &fx.lawyer, project_id).await;
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        *raises.lock().unwrap(),
+        1,
+        "the refused raise crossed the app's provider exactly once"
+    );
     assert!(
         mirror_rows(&fx.surreal, project_id).await.is_empty(),
         "nothing is mirrored from a refused raise"
@@ -808,6 +821,19 @@ async fn a_provider_refusal_marks_nothing() {
     );
     let entry = store::time_entries::find_by_id(&pg, entry).await.unwrap();
     assert_eq!(entry.billing_status.as_str(), "unbilled");
+
+    // A retry crosses the seam again — the refusal is not sticky — and
+    // still marks nothing.
+    let retry = generate(&fx, &fx.lawyer, project_id).await;
+    assert_eq!(retry.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(*raises.lock().unwrap(), 2, "a retry crosses the seam again");
+    assert_eq!(
+        store::time_entries::unbilled_billable(&pg, project_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -857,12 +883,18 @@ async fn outsiders_and_clients_cannot_generate() {
 }
 
 /// A provider whose raise always refuses — the synthetic outage. The
-/// generation must surface it as 502 and mark nothing.
-struct FailingProvider;
+/// generation must surface it as 502 and mark nothing. The shared counter
+/// records the actual raise attempts (contact resolution and invoice
+/// creation are both raise-path calls) so the assertions reflect the
+/// provider the application actually used.
+struct FailingProvider {
+    raises: Arc<Mutex<usize>>,
+}
 
 #[async_trait]
 impl BillingProvider for FailingProvider {
     async fn ensure_contact(&self, _request: &ContactRequest) -> Result<ContactId, BillingError> {
+        *self.raises.lock().unwrap() += 1;
         Err(BillingError::Provider("synthetic outage".into()))
     }
 
@@ -871,6 +903,7 @@ impl BillingProvider for FailingProvider {
         _matter_id: Uuid,
         _request: &InvoiceRequest,
     ) -> Result<InvoiceId, BillingError> {
+        *self.raises.lock().unwrap() += 1;
         Err(BillingError::Provider("synthetic outage".into()))
     }
 
