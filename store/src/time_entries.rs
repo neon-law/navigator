@@ -64,8 +64,16 @@ impl TimeEntrySource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BillingStatus {
     Unbilled,
-    Invoiced { xero_invoice_id: String },
-    WrittenOff { reason: String },
+    /// Drawn into a pending billing batch: not yet invoiced, but no longer
+    /// free to write off — the batch's provider call bills it or the batch
+    /// releases it back here.
+    Reserved,
+    Invoiced {
+        xero_invoice_id: String,
+    },
+    WrittenOff {
+        reason: String,
+    },
 }
 
 impl BillingStatus {
@@ -73,6 +81,7 @@ impl BillingStatus {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Unbilled => "unbilled",
+            Self::Reserved => "reserved",
             Self::Invoiced { .. } => "invoiced",
             Self::WrittenOff { .. } => "written_off",
         }
@@ -144,6 +153,14 @@ fn parse_billing_status(
 ) -> Result<BillingStatus, TimeEntryError> {
     match status {
         "unbilled" => Ok(BillingStatus::Unbilled),
+        "reserved" => {
+            // Reserved rows carry no Xero id and no write-off reason — the
+            // status-evidence constraint holds the same line.
+            if xero_invoice_id.is_some() || written_off_reason.is_some() {
+                return Err(TimeEntryError::Invalid("billing status"));
+            }
+            Ok(BillingStatus::Reserved)
+        }
         "invoiced" => xero_invoice_id
             .map(|xero_invoice_id| BillingStatus::Invoiced { xero_invoice_id })
             .ok_or(TimeEntryError::Invalid("billing status")),
@@ -309,8 +326,9 @@ pub async fn mark_invoiced(
     let rows = before.iter().map(from_row).collect::<Result<Vec<_>, _>>()?;
     for entry in &rows {
         match &entry.billing_status {
-            // Unbilled: nothing to check yet.
-            BillingStatus::Unbilled => {}
+            // Unbilled: nothing to check yet. Reserved by the batch now
+            // completing: the reservation's whole point — the mark closes it.
+            BillingStatus::Unbilled | BillingStatus::Reserved => {}
             // Already invoiced under the same invoice id: the replay no-op.
             BillingStatus::Invoiced {
                 xero_invoice_id: id,
@@ -325,13 +343,18 @@ pub async fn mark_invoiced(
     }
     let markable = rows
         .iter()
-        .filter(|entry| entry.billing_status.as_str() == "unbilled")
+        .filter(|entry| {
+            matches!(
+                entry.billing_status,
+                BillingStatus::Unbilled | BillingStatus::Reserved
+            )
+        })
         .count();
     if markable > 0 {
         set_audit_context(&mut tx, actor_id, "invoiced").await?;
         sqlx::query(
             "UPDATE time_entry SET billing_status='invoiced',xero_invoice_id=$2,updated_at=$3 \
-             WHERE id = ANY($1) AND billing_status='unbilled'",
+             WHERE id = ANY($1) AND billing_status IN ('unbilled','reserved')",
         )
         .bind(entry_ids)
         .bind(xero_invoice_id)
@@ -374,6 +397,84 @@ pub async fn write_off(
     .await?;
     tx.commit().await?;
     fetch(pg, id).await
+}
+
+/// Draw unbilled entries into a pending billing batch: Unbilled → Reserved,
+/// all-or-nothing. A reserved entry cannot be written off — the batch's
+/// provider call bills it, or the batch releases it back here.
+pub async fn reserve(
+    pg: &PostgresDb,
+    entry_ids: &[Uuid],
+    actor_id: Uuid,
+) -> Result<Vec<TimeEntry>, TimeEntryError> {
+    if entry_ids.is_empty() {
+        return Err(TimeEntryError::Invalid("entries"));
+    }
+    let mut tx = pg.0.begin().await?;
+    let before = sqlx::query(
+        "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\\
+         inserted_at,updated_at FROM time_entry WHERE id = ANY($1) \\
+         ORDER BY performed_on, id FOR UPDATE",
+    )
+    .bind(entry_ids)
+    .fetch_all(&mut *tx)
+    .await?;
+    if before.len() != entry_ids.len() {
+        return Err(TimeEntryError::NotFound);
+    }
+    let rows = before.iter().map(from_row).collect::<Result<Vec<_>, _>>()?;
+    for entry in &rows {
+        // Reserved (already drawn by a live batch) or resolved work: the
+        // caller is composing a different batch than the one that took it.
+        if !matches!(entry.billing_status, BillingStatus::Unbilled) {
+            return Err(TimeEntryError::Conflict);
+        }
+    }
+    set_audit_context(&mut tx, actor_id, "reserved").await?;
+    sqlx::query(
+        "UPDATE time_entry SET billing_status='reserved',updated_at=$2 \\
+         WHERE id = ANY($1) AND billing_status='unbilled'",
+    )
+    .bind(entry_ids)
+    .bind(Utc::now())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut entries = Vec::with_capacity(entry_ids.len());
+    for entry_id in entry_ids {
+        entries.push(fetch(pg, *entry_id).await?);
+    }
+    Ok(entries)
+}
+
+/// Release reserved entries back to Unbilled — a batch abandoned before the
+/// provider committed. Only Reserved rows move, so the release is safe to
+/// repeat; anything already invoiced or written off stays as it is.
+pub async fn unreserve(
+    pg: &PostgresDb,
+    entry_ids: &[Uuid],
+    actor_id: Uuid,
+) -> Result<Vec<TimeEntry>, TimeEntryError> {
+    if entry_ids.is_empty() {
+        return Err(TimeEntryError::Invalid("entries"));
+    }
+    let mut tx = pg.0.begin().await?;
+    set_audit_context(&mut tx, actor_id, "unreserved").await?;
+    sqlx::query(
+        "UPDATE time_entry SET billing_status='unbilled',updated_at=$2 \\
+         WHERE id = ANY($1) AND billing_status='reserved'",
+    )
+    .bind(entry_ids)
+    .bind(Utc::now())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut entries = Vec::with_capacity(entry_ids.len());
+    for entry_id in entry_ids {
+        entries.push(fetch(pg, *entry_id).await?);
+    }
+    Ok(entries)
 }
 
 /// A Project's unbilled billable time — what an invoice would draw from,

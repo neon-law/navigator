@@ -82,6 +82,7 @@ pub mod attestations;
 pub mod attorney_rates;
 pub mod authorities;
 pub mod billed_calls;
+pub mod billing_batches;
 pub mod brand_domains;
 pub mod brand_phone_numbers;
 pub mod brands;
