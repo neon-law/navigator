@@ -288,7 +288,7 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
     let checkout = TempDir::new().unwrap();
     fs::write(
         checkout.path().join("navigator.yaml"),
-        "version: \"26.9.26\"\nproject:\n  host: staging.neonlaw.com\n  name: acme\n",
+        "version: \"26.9.26\"\nproject:\n    host: staging.neonlaw.com\n    name: acme\n",
     )
     .unwrap();
     Mock::given(method("GET"))
@@ -335,6 +335,8 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
     ] {
         assert!(manifest.contains(value), "missing {value}: {manifest}");
     }
+    assert!(manifest.contains("\n    firm: "), "{manifest}");
+    assert!(manifest.contains("\n    brand: sample\n"), "{manifest}");
     // A coordinate edit with current ownership must not claim an ownership edit,
     // in either the actual change report or its dry-run preview.
     for dry_run in [false, true] {

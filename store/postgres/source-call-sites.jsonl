@@ -342,9 +342,9 @@
 {"file":"cli/src/projects/set.rs","line":315,"function":"live_patch","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/set.rs","line":323,"function":"live_patch","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/set.rs","line":326,"function":"live_patch","operation":"insert","sql_operations":[],"tables":["jurisdiction"],"transaction":false}
-{"file":"cli/src/projects/set.rs","line":358,"function":"replace_project_key","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/set.rs","line":487,"function":"the_dry_run_plan_names_every_write_the_real_run_would_make","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/set.rs","line":491,"function":"the_dry_run_plan_names_every_write_the_real_run_would_make","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/set.rs","line":364,"function":"replace_project_key","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/set.rs","line":496,"function":"the_dry_run_plan_names_every_write_the_real_run_would_make","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/set.rs","line":500,"function":"the_dry_run_plan_names_every_write_the_real_run_would_make","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/setup.rs","line":141,"function":"setup_one","operation":"insert","sql_operations":[],"tables":["project"],"transaction":false}
 {"file":"cli/src/projects/setup.rs","line":155,"function":"setup_one","operation":"insert","sql_operations":[],"tables":["project"],"transaction":false}
 {"file":"cli/src/projects/setup.rs","line":169,"function":"setup_one","operation":"insert","sql_operations":[],"tables":["project"],"transaction":false}

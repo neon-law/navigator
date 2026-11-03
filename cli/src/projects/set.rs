@@ -355,7 +355,16 @@ pub(crate) fn replace_project_key(contents: &str, key: &str, value: &str) -> Res
         let indent = lines[index].len() - lines[index].trim_start().len();
         lines[index] = format!("{}{key}: {serialized}", " ".repeat(indent));
     } else {
-        lines.insert(project_line + 1, format!("  {key}: {serialized}"));
+        let indent = lines[project_line + 1..block_end]
+            .iter()
+            .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+            .map(|line| line.len() - line.trim_start().len())
+            .min()
+            .unwrap_or(2);
+        lines.insert(
+            project_line + 1,
+            format!("{}{key}: {serialized}", " ".repeat(indent)),
+        );
     }
     Ok(format!("{}\n", lines.join("\n")))
 }
