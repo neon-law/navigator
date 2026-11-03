@@ -594,3 +594,35 @@ async fn firm_membership_without_matter_participation_cannot_file_a_notice() {
         .processed_at
         .is_none());
 }
+
+#[tokio::test]
+async fn a_notice_missing_its_case_number_reports_the_specific_refusal() {
+    let fixture = fixture().await;
+    let project_id = seed_matter(&fixture.surreal, fixture.firm_id, "syn-nef-no-case").await;
+    let body =
+        "Notice of Electronic Filing\nDocument Number: 12\nDocket Text:\nMotion to dismiss.\n";
+    let raw = format!("Subject: Notice of Electronic Filing\r\n\r\n{body}");
+    for (raw, body) in [
+        (None, body),
+        (
+            Some(("inbound/no-case.eml", raw.as_bytes())),
+            "Truncated body",
+        ),
+    ] {
+        let message = seed_notice(&fixture, Some(project_id), raw, body, Vec::new()).await;
+        let (status, applied) = request(
+            &fixture.app,
+            "POST",
+            "/app/api/inbox/process",
+            Some(&fixture.lawyer_session),
+            Some(json!({"message": message, "apply": true})),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(applied["nef"]["outcome"], "no_case_number");
+    }
+    assert!(store::cases::for_project(&fixture.surreal, project_id)
+        .await
+        .unwrap()
+        .is_empty());
+}

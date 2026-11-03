@@ -92,12 +92,25 @@ pub(crate) async fn process_nef(
     // text-only notice, though nothing can then file the original's bytes.
     let raw = raw_source(state, row).await?;
 
-    let notice = raw
-        .as_deref()
-        .and_then(|bytes| store::nef::parse_eml(bytes).ok())
-        .or_else(|| store::nef::parse_text(&row.body, &[]).ok());
-    let Some(notice) = notice else {
-        return Ok(NefOutcome::NotANotice);
+    let notice = match raw.as_deref().map(store::nef::parse_eml) {
+        Some(Ok(notice)) => notice,
+        raw_result => match store::nef::parse_text(&row.body, &[]) {
+            Ok(notice) => notice,
+            Err(error) => {
+                return Ok(
+                    if matches!(error, store::nef::NefError::Missing("Case Number"))
+                        || matches!(
+                            raw_result,
+                            Some(Err(store::nef::NefError::Missing("Case Number")))
+                        )
+                    {
+                        NefOutcome::NoCaseNumber
+                    } else {
+                        NefOutcome::NotANotice
+                    },
+                );
+            }
+        },
     };
     let case_no = notice.case_no.trim().to_owned();
     if case_no.is_empty() {
