@@ -224,3 +224,16 @@ fn skipped_birth_time_returns_a_consistent_resolved_instant() {
         "retain the entered time separately"
     );
 }
+
+#[test]
+fn shipped_notice_carries_geodata_attribution_and_modification_notice() {
+    let notice = include_str!("../../NOTICE");
+    for required in [
+        "GeoNames",
+        "https://www.geonames.org/",
+        "https://creativecommons.org/licenses/by/4.0/",
+        "filters and reformats",
+    ] {
+        assert!(notice.contains(required), "shipped notice omits {required}");
+    }
+}
