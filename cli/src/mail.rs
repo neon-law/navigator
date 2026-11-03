@@ -449,8 +449,6 @@ struct MessageHeader {
 #[derive(Debug, Deserialize)]
 struct MessageBody {
     data: Option<String>,
-    #[serde(rename = "attachmentId")]
-    attachment_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -526,17 +524,26 @@ fn plain_text(part: &MessagePart) -> Option<String> {
     })
 }
 
+/// The names of the parts a lawyer would call attachments: a part with a
+/// non-empty filename, or one marked `Content-Disposition: attachment`.
+/// Gmail reports `filename: ""` on every body part and multipart container,
+/// so presence of the field alone means nothing.
 fn attachments(part: &MessagePart, output: &mut Vec<String>) {
-    let has_payload = part
-        .body
-        .as_ref()
-        .is_some_and(|body| body.attachment_id.is_some());
-    if has_payload || part.filename.is_some() {
-        output.push(
-            part.filename
-                .clone()
-                .unwrap_or_else(|| "(unnamed attachment)".into()),
-        );
+    let filename = part
+        .filename
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let disposition_attachment = part.headers.iter().flatten().any(|header| {
+        header.name.eq_ignore_ascii_case("Content-Disposition")
+            && header
+                .value
+                .trim_start()
+                .get(..10)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("attachment"))
+    });
+    if filename.is_some() || disposition_attachment {
+        output.push(filename.map_or_else(|| "(unnamed attachment)".into(), str::to_string));
     }
     if let Some(parts) = &part.parts {
         for child in parts {
@@ -2281,6 +2288,48 @@ mod tests {
     }
 
     #[test]
+    fn body_parts_with_empty_filenames_are_not_attachments() {
+        // Gmail's API reports `filename: ""` on every body part, the
+        // multipart container included.
+        let payload: MessagePart = serde_json::from_value(json!({
+            "mimeType": "multipart/alternative",
+            "filename": "",
+            "body": { "size": 0 },
+            "parts": [
+                { "mimeType": "text/plain", "filename": "",
+                  "headers": [{ "name": "Content-Type", "value": "text/plain; charset=UTF-8" }],
+                  "body": { "data": "SGVsbG8" } },
+                { "mimeType": "text/html", "filename": "",
+                  "body": { "data": "PHA-SGVsbG88L3A-" } }
+            ]
+        }))
+        .unwrap();
+        let mut names = Vec::new();
+        attachments(&payload, &mut names);
+        assert!(names.is_empty(), "{names:?}");
+    }
+
+    #[test]
+    fn named_or_disposition_attachment_parts_are_attachments() {
+        let payload: MessagePart = serde_json::from_value(json!({
+            "mimeType": "multipart/mixed",
+            "filename": "",
+            "parts": [
+                { "mimeType": "text/plain", "filename": "", "body": { "data": "SGVsbG8" } },
+                { "mimeType": "application/pdf", "filename": "order.pdf",
+                  "body": { "attachmentId": "att-1" } },
+                { "mimeType": "application/octet-stream", "filename": "",
+                  "headers": [{ "name": "Content-Disposition", "value": "attachment" }],
+                  "body": { "attachmentId": "att-2" } }
+            ]
+        }))
+        .unwrap();
+        let mut names = Vec::new();
+        attachments(&payload, &mut names);
+        assert_eq!(names, vec!["order.pdf", "(unnamed attachment)"]);
+    }
+
+    #[test]
     fn gmail_body_parts_decode_whether_or_not_they_carry_padding() {
         let padded = base64::engine::general_purpose::URL_SAFE.encode(b"Hello there");
         assert!(padded.ends_with('='));
@@ -2423,7 +2472,6 @@ mod tests {
             headers: None,
             body: Some(MessageBody {
                 data: Some(encode("Part one")),
-                attachment_id: None,
             }),
             parts: None,
             filename: None,
@@ -2433,7 +2481,6 @@ mod tests {
             headers: None,
             body: Some(MessageBody {
                 data: Some(encode("Part two")),
-                attachment_id: None,
             }),
             parts: None,
             filename: None,
@@ -2455,7 +2502,6 @@ mod tests {
             headers: None,
             body: Some(MessageBody {
                 data: Some(encode("<p>Hello &amp; goodbye</p>")),
-                attachment_id: None,
             }),
             parts: None,
             filename: None,
@@ -3425,7 +3471,6 @@ mod tests {
                 }]),
                 body: Some(MessageBody {
                     data: Some(body_data.into()),
-                    attachment_id: None,
                 }),
                 parts: None,
                 filename: None,
@@ -3459,10 +3504,7 @@ mod tests {
                 parts: Some(vec![MessagePart {
                     mime_type: Some("application/pdf".into()),
                     headers: None,
-                    body: Some(MessageBody {
-                        data: None,
-                        attachment_id: Some("att-1".into()),
-                    }),
+                    body: Some(MessageBody { data: None }),
                     parts: None,
                     filename: Some("contract.pdf".into()),
                 }]),
