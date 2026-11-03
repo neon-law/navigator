@@ -1,0 +1,5 @@
+# Untracked build output. Like nautilus-mobile/, the lockfile stays untracked:
+# this standalone workspace's renderer dependency set must not land in the
+# root Cargo.lock that the static musl images build from.
+/target
+/Cargo.lock
