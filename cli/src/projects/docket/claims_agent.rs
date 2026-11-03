@@ -380,8 +380,8 @@ pub fn is_block_page(bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::is_claims_agent_sender;
+    use super::*;
 
     #[test]
     fn vendor_senders_match_exactly_and_on_subdomains() {
@@ -406,7 +406,10 @@ mod tests {
 
     #[test]
     fn docket_entry_numbers_keep_their_printed_padding() {
-        assert_eq!(docket_entry_number("Docket No. 29 - Notice"), Some("29".into()));
+        assert_eq!(
+            docket_entry_number("Docket No. 29 - Notice"),
+            Some("29".into())
+        );
         assert_eq!(
             docket_entry_number("Dkt. No. 0029 - Certification"),
             Some("0029".into())
@@ -421,9 +424,15 @@ mod tests {
             link_title("Docket No. 29 - Notice of Chapter 11"),
             "Notice of Chapter 11"
         );
-        assert_eq!(link_title("  Notice of Chapter 11  "), "Notice of Chapter 11");
+        assert_eq!(
+            link_title("  Notice of Chapter 11  "),
+            "Notice of Chapter 11"
+        );
         // A `Docket` word with no number leaves the whole label alone.
-        assert_eq!(link_title("Docket information sheet"), "Docket information sheet");
+        assert_eq!(
+            link_title("Docket information sheet"),
+            "Docket information sheet"
+        );
     }
 
     #[test]
@@ -440,7 +449,10 @@ mod tests {
         // A lone date is never a case number.
         assert_eq!(case_number("filed on 2026-03-05 and nothing else"), None);
         // Without a marker, the bankruptcy shape is found in the text.
-        assert_eq!(case_number("the petition in 26-10042 was filed"), Some("26-10042".into()));
+        assert_eq!(
+            case_number("the petition in 26-10042 was filed"),
+            Some("26-10042".into())
+        );
     }
 
     #[test]

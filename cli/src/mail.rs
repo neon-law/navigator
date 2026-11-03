@@ -3945,10 +3945,7 @@ mod tests {
             Url::parse("https://gmail.googleapis.com/gmail/v1/").unwrap(),
         );
         assert_eq!(
-            client
-                .url(Operation::SearchThreads, None)
-                .unwrap()
-                .as_str(),
+            client.url(Operation::SearchThreads, None).unwrap().as_str(),
             "https://gmail.googleapis.com/gmail/v1/users/me/threads"
         );
         assert_eq!(
@@ -3986,20 +3983,20 @@ mod tests {
     async fn search_sends_the_bearer_token_and_parses_thread_summaries() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .and(wiremock::matchers::path(
-                "/users/me/threads",
-            ))
+            .and(wiremock::matchers::path("/users/me/threads"))
             .and(wiremock::matchers::header(
                 "authorization",
                 "Bearer token-from-test",
             ))
             .and(wiremock::matchers::query_param("q", "from:client"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "threads": [
-                    {"id": "th-1", "snippet": "retainer question"},
-                    {"id": "th-2"}
-                ]
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "threads": [
+                        {"id": "th-1", "snippet": "retainer question"},
+                        {"id": "th-2"}
+                    ]
+                })),
+            )
             .mount(&server)
             .await;
         let client = GmailClient::with_base_url(
@@ -4018,9 +4015,7 @@ mod tests {
     async fn an_empty_thread_list_parses_to_no_threads() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({}),
-            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
             .mount(&server)
             .await;
         let client = GmailClient::with_base_url("t".into(), Url::parse(&server.uri()).unwrap());
@@ -4070,13 +4065,17 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("GET"))
             .and(wiremock::matchers::path("/users/me/profile"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"emailAddress": "lawyer@neonlaw.test"}),
-            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"emailAddress": "lawyer@neonlaw.test"})),
+            )
             .mount(&server)
             .await;
         let client = GmailClient::with_base_url("t".into(), Url::parse(&server.uri()).unwrap());
-        assert_eq!(client.profile().await.unwrap().email_address, "lawyer@neonlaw.test");
+        assert_eq!(
+            client.profile().await.unwrap().email_address,
+            "lawyer@neonlaw.test"
+        );
     }
 
     #[tokio::test]
@@ -4133,9 +4132,7 @@ mod tests {
     async fn archive_removes_only_the_inbox_label() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path(
-                "/users/me/messages/m-1/modify",
-            ))
+            .and(wiremock::matchers::path("/users/me/messages/m-1/modify"))
             .respond_with(
                 wiremock::ResponseTemplate::new(200)
                     .set_body_json(serde_json::json!({"id": "m-1"})),

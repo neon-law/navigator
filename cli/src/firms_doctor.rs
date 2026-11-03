@@ -132,7 +132,10 @@ mod tests {
     fn multiple_dris_fail() {
         let report = vec![status(
             "Guieb & Shook",
-            Some(AdminDriProblem::Multiple(vec![Uuid::now_v7(), Uuid::now_v7()])),
+            Some(AdminDriProblem::Multiple(vec![
+                Uuid::now_v7(),
+                Uuid::now_v7(),
+            ])),
         )];
         assert_eq!(print_report(&report), ExitCode::FAILURE);
     }
