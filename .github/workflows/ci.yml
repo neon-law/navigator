@@ -902,8 +902,8 @@ jobs:
           # not find the profile data.
           #
           # The floor sits under what THIS command measures. Last published
-          # CI print before this raise: 91.62% line coverage (38545 missed of
-          # 459901) on 2026-11-03, from PR #353's workspace job. The 91.7 floor
+          # CI print before this raise: 92.44% line coverage (35732 missed of
+          # 472409) on 2026-11-03, from PR #358's workspace job. The 92.2 floor
           # is the merge gate from this change onward.
           #
           # Raising the floor means moving three constants together — here,
@@ -966,7 +966,7 @@ jobs:
           # capability shape, port polling — stay counted in
           # `scraper/session.rs` with their tests.
           cargo llvm-cov report \
-              --fail-under-lines 91.7 \
+              --fail-under-lines 92.2 \
               --ignore-filename-regex '(cli/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|cli/src/devx/forgejo/(cluster|oidc|smoke)|cli/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|cli/src/scraper/browser)\.rs$'
       - name: stop covered PostgreSQL fixture
         if: always()
