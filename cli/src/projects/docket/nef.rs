@@ -97,15 +97,22 @@ pub fn parse_eml(bytes: &[u8]) -> Result<Notice, NefError> {
     let (text, links) = message_text(bytes);
     let hrefs: Vec<String> = links.iter().map(|link| link.href.clone()).collect();
     let mut notice = parse_text(&text, &hrefs)?;
-    if notice.doc_no.is_none() {
+    if notice.doc_no.is_none() && !says_no_document_attached(&text) {
         // The notice links its document but its `Document Number:` line did
-        // not survive as text: the doc1 link's own label is the number.
+        // not survive as text: the doc1 link's own label is the number. A
+        // text-only entry keeps no number even when its docket text links an
+        // earlier order.
         notice.doc_no = links
             .iter()
             .find(|link| is_free_look(&link.href))
             .and_then(|link| docket_number(&link.label));
     }
     Ok(notice)
+}
+
+/// Whether the notice states its entry carries no document.
+fn says_no_document_attached(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("no document attached")
 }
 
 /// One HTML link: its `href` and the text it wraps, whitespace collapsed.
@@ -803,6 +810,18 @@ mod tests {
         assert_eq!(notice.doc_no, None);
         assert_eq!(notice.filer_attorney, None);
         assert_eq!(notice.docket_text, "MINUTE ORDER setting a hearing.");
+    }
+
+    #[test]
+    fn a_text_only_html_entry_does_not_take_an_earlier_orders_link() {
+        let html = "<p>Notice of Electronic Filing</p>\
+                    <table><tr><td>Case Number:</td><td>9:26-cv-00042-XYZ</td></tr>\
+                    <tr><td>Document Number:</td><td>No document attached</td></tr></table>\
+                    <p>Docket Text:<br>MINUTE ORDER regarding \
+                    <a href=\"https://ecf.example.com/doc1/1?magic_num=1\">12</a> Order.</p>";
+        let message =
+            format!("MIME-Version: 1.0\r\nContent-Type: text/html; charset=us-ascii\r\n\r\n{html}");
+        assert_eq!(parse_eml(message.as_bytes()).unwrap().doc_no, None);
     }
 
     #[test]

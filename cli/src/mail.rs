@@ -1077,8 +1077,9 @@ fn unresolved_reference_or(reference: &str, fallback: &str) -> anyhow::Error {
     {
         return anyhow!(
             "the reference carries a Gmail web id that names no API message id (Gmail uses \
-             this form for drafts and some sent mail): {reference}. Open the message, choose \
-             Show original, and pass its Message ID, or copy the URL from a conversation view"
+             this form for drafts and some sent mail): {reference}. Find its Gmail message id \
+             with `navigator mail search` and pass that, or copy the URL from a conversation \
+             view"
         );
     }
     anyhow!("{fallback}: {reference}")
@@ -2381,7 +2382,7 @@ mod tests {
         assert_eq!(gmail_message_id(url), None);
         let message = unresolved_reference(url).to_string();
         assert!(message.contains("Gmail web id"), "{message}");
-        assert!(message.contains("Show original"), "{message}");
+        assert!(message.contains("navigator mail search"), "{message}");
         let plain = unresolved_reference("notes/draft-body.txt").to_string();
         assert!(plain.contains("neither"), "{plain}");
     }
