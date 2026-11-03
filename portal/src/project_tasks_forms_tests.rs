@@ -161,3 +161,13 @@ async fn transition_form_accepts_the_rendered_forward_action_fields() {
         assert_eq!(form.next_state, state);
     }
 }
+
+#[test]
+fn only_an_explicitly_empty_assignee_clears_an_assignment() {
+    assert_eq!(parse_assignee(" ").unwrap(), None);
+    assert_eq!(
+        parse_assignee(&Uuid::nil().to_string()).unwrap(),
+        Some(Uuid::nil())
+    );
+    assert!(parse_assignee("not-a-person-id").is_err());
+}

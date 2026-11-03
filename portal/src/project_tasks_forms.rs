@@ -90,7 +90,9 @@ pub(crate) async fn create(
 
     let title = input.title.trim().to_string();
     let body = input.body.trim().to_string();
-    let assignee_id = parse_assignee(&input.assignee_id);
+    let Ok(assignee_id) = parse_assignee(&input.assignee_id) else {
+        return back_to_tasks(&code, Some("Choose a participant from the assignee list."));
+    };
     let due_on = parse_due_on(&input.due_on);
     if title.is_empty() {
         return back_to_tasks(&code, Some("Give the task a title."));
@@ -148,7 +150,9 @@ pub(crate) async fn assign(
         Ok(gate) => gate,
         Err(response) => return response,
     };
-    let assignee_id = parse_assignee(&input.assignee_id);
+    let Ok(assignee_id) = parse_assignee(&input.assignee_id) else {
+        return back_to_tasks(&code, Some("Choose a participant from the assignee list."));
+    };
     match store::tasks::assign(&gate.pg, task_id, gate.person_id, assignee_id).await {
         Ok(_) => back_to_tasks(&code, None),
         Err(e) => back_to_tasks(&code, Some(&flash_for(&e))),
@@ -261,11 +265,13 @@ async fn row_action_gate(
 
 /// An empty choice means "none"; anything else must parse as the UUID the
 /// store will check against the participation ledger.
-fn parse_assignee(raw: &str) -> Option<Uuid> {
+fn parse_assignee(raw: &str) -> Result<Option<Uuid>, uuid::Error> {
     let raw = raw.trim();
-    (!raw.is_empty())
-        .then(|| Uuid::parse_str(raw).ok())
-        .flatten()
+    if raw.is_empty() {
+        Ok(None)
+    } else {
+        Uuid::parse_str(raw).map(Some)
+    }
 }
 
 /// A due date arrives as the date input's `YYYY-MM-DD`; anything else is a
