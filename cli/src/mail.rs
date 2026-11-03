@@ -49,8 +49,16 @@ Attachments:
 
 #[derive(Subcommand)]
 pub enum MailAction {
-    /// Search Gmail threads, scoped to the current Project when possible.
-    Search { query: String },
+    /// Search Gmail threads, scoped to the current Project when possible:
+    /// mail from or to the client contact, or naming one of the manifest's
+    /// `dockets:` case numbers, so the court's notices on the matter appear.
+    Search {
+        query: String,
+        /// Search the whole mailbox, without the Project scope — for
+        /// counterparty or claims-agent mail that names neither.
+        #[arg(long)]
+        unscoped: bool,
+    },
     /// Read a Gmail thread as plain text.
     Read { thread: String },
     /// Create or update an unsent draft. Use --thread to draft a reply.
@@ -1227,11 +1235,47 @@ fn write_saved_mail(path: &Path, bytes: &[u8]) -> Result<SavedMail> {
     Ok(SavedMail::Written)
 }
 
-fn scoped_query(query: &str, project: Option<&str>) -> String {
-    let Some(email) = project.and_then(|_| client_contact_from_manifest()) else {
+/// What a Project-scoped `mail search` admits: the client contact's mail and
+/// any message naming one of the Project's case numbers — a court notice
+/// comes from the court, never the client, so the contact alone hid them.
+#[derive(Debug, Default)]
+struct SearchScope {
+    contact: Option<String>,
+    dockets: Vec<String>,
+}
+
+impl SearchScope {
+    /// The scope the Project checkout in the working directory declares.
+    fn from_manifest() -> Self {
+        let Some(manifest) = crate::projects::manifest::read(Path::new(".")) else {
+            return Self::default();
+        };
+        if manifest.project.is_none() {
+            return Self::default();
+        }
+        Self {
+            contact: client_contact_from_manifest(),
+            dockets: manifest.dockets,
+        }
+    }
+}
+
+fn scoped_query(query: &str, scope: &SearchScope) -> String {
+    let mut terms = Vec::new();
+    if let Some(email) = &scope.contact {
+        terms.push(format!("from:{email} OR to:{email}"));
+    }
+    for docket in &scope.dockets {
+        let docket = docket.replace('"', "");
+        let docket = docket.trim();
+        if !docket.is_empty() {
+            terms.push(format!("\"{docket}\""));
+        }
+    }
+    if terms.is_empty() {
         return query.to_owned();
-    };
-    format!("({query}) (from:{email} OR to:{email})")
+    }
+    format!("({query}) ({})", terms.join(" OR "))
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -1589,11 +1633,20 @@ pub async fn archive(reference: &str) -> Result<()> {
 #[allow(clippy::too_many_lines)] // one dispatch arm per verb; each arm delegates
 async fn run_inner(action: MailAction) -> Result<()> {
     match action {
-        MailAction::Search { query } => {
-            let project = crate::projects::manifest::read(Path::new("."))
-                .and_then(|manifest| manifest.project);
-            let query = scoped_query(&query, project.as_deref());
-            let threads = client().await?.search(&query).await?;
+        MailAction::Search { query, unscoped } => {
+            let scope = if unscoped {
+                SearchScope::default()
+            } else {
+                SearchScope::from_manifest()
+            };
+            let scoped = scoped_query(&query, &scope);
+            let threads = client().await?.search(&scoped).await?;
+            if threads.is_empty() && scoped != query {
+                eprintln!(
+                    "navigator mail: no threads matched within this Project's scope (its client \
+                     contact and dockets: case numbers); pass --unscoped to search the whole mailbox"
+                );
+            }
             for thread in threads {
                 println!("{}\t{}", thread.id, thread.snippet.unwrap_or_default());
             }
@@ -3820,7 +3873,55 @@ mod tests {
 
     #[test]
     fn a_scoped_query_only_scopes_when_the_manifest_names_a_contact() {
-        assert_eq!(scoped_query("retainer", None), "retainer");
+        assert_eq!(
+            scoped_query("retainer", &SearchScope::default()),
+            "retainer"
+        );
+        let client_only = SearchScope {
+            contact: Some("client@example.test".into()),
+            dockets: vec![],
+        };
+        assert_eq!(
+            scoped_query("retainer", &client_only),
+            "(retainer) (from:client@example.test OR to:client@example.test)"
+        );
+    }
+
+    #[test]
+    fn a_scoped_query_reaches_court_notices_naming_the_projects_case_numbers() {
+        let scope = SearchScope {
+            contact: Some("client@example.test".into()),
+            dockets: vec!["2:26-bk-10001".into(), "A-26-900001-C".into()],
+        };
+        assert_eq!(
+            scoped_query("from:uscourts.gov", &scope),
+            "(from:uscourts.gov) (from:client@example.test OR to:client@example.test \
+             OR \"2:26-bk-10001\" OR \"A-26-900001-C\")"
+        );
+        // Dockets alone still scope, and a stray quote cannot break the query.
+        let dockets_only = SearchScope {
+            contact: None,
+            dockets: vec!["26-\"10002\"".into(), "  ".into()],
+        };
+        assert_eq!(
+            scoped_query("notice", &dockets_only),
+            "(notice) (\"26-10002\")"
+        );
+    }
+
+    #[test]
+    fn mail_search_accepts_an_unscoped_flag() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Harness {
+            #[command(subcommand)]
+            action: MailAction,
+        }
+        let parsed = Harness::try_parse_from(["mail", "search", "--unscoped", "from:ecf"]).unwrap();
+        assert!(matches!(
+            parsed.action,
+            MailAction::Search { unscoped: true, ref query } if query == "from:ecf"
+        ));
     }
 
     #[tokio::test]
