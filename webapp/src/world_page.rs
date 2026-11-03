@@ -252,6 +252,22 @@ fn resolve_person(position: usize, entry: &BirthEntry) -> PersonOutcome {
 
     let display_name = entry.display_name(position);
 
+    // Bound edit-distance work before either country or city lookup. The
+    // offline index compares an unknown place against many bundled names.
+    const MAX_PLACE_CHARS: usize = 256;
+    for (label, value) in [
+        ("Birth city", &entry.city),
+        ("Birth country", &entry.country),
+    ] {
+        if value.chars().take(MAX_PLACE_CHARS + 1).count() > MAX_PLACE_CHARS {
+            return unresolved(
+                display_name,
+                label,
+                "Enter a place name with at most 256 characters.",
+            );
+        }
+    }
+
     let Some(date) = NaiveDate::parse_from_str(entry.date.trim(), "%Y-%m-%d").ok() else {
         return unresolved(
             display_name,
@@ -691,6 +707,31 @@ fn field_label(field: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn oversized_place_inputs_return_field_errors_before_suggestion_search() {
+        for (city, country, field) in [
+            ("x".repeat(100_000), "US".to_string(), "Birth city"),
+            ("Dublin".to_string(), "x".repeat(100_000), "Birth country"),
+        ] {
+            let entry = BirthEntry {
+                date: "1990-06-15".to_string(),
+                city,
+                country,
+                ..BirthEntry::default()
+            };
+            let PersonOutcome::Unresolved(failure) = resolve_person(0, &entry) else {
+                panic!("oversized input must fail validation");
+            };
+            assert_eq!(failure.field_label, field);
+            assert_eq!(
+                failure.message,
+                "Enter a place name with at most 256 characters."
+            );
+            assert!(failure.suggestions.is_empty());
+        }
+    }
 
     /// Server-render `app` the way the SSR port does.
     fn render(app: fn() -> Element) -> String {
