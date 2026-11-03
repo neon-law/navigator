@@ -719,3 +719,31 @@ pub async fn seed_restore_prerequisites(
         .and_then(surrealdb::IndexedResults::check)
         .expect("seed the client Entity row");
 }
+
+/// Ingest one Fi row, retrying the instance-wide import lock's `Busy`.
+///
+/// `fi_import::lock_on` try-locks `google_fi:import:v1` — an advisory key
+/// PostgreSQL scopes to the whole server, not the caller's database — and
+/// returns `Busy` rather than queueing, so competing coordinators release
+/// instead of exhausting the pool. Tests share one PostgreSQL instance with
+/// concurrently scheduled processes (nextest runs every test as its own
+/// process), including the fencing fixture that deliberately holds this key,
+/// so a bare unwrap turns legal contention into a failure. Bounded retries
+/// mirror the production contract — the API answers `Busy` with 503 and
+/// "retry the unchanged batch", assignments answer "retry assignment" — and
+/// leave every assertion exactly as strict.
+pub async fn ingest_fi_message_on(
+    pg: &crate::postgres::PostgresDb,
+    scope: &crate::fi_import::Scope,
+    row: &crate::fi_import::Row,
+) -> Result<crate::inbox::IngestedInbound, crate::fi_import::FiImportError> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        match crate::fi_import::ingest_on(pg, scope, row).await {
+            Err(crate::fi_import::FiImportError::Busy) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            result => return result,
+        }
+    }
+}
