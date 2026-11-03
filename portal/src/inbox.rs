@@ -23,28 +23,57 @@ const SMS_SIGNATURE: &str = "x-navigator-signature";
 /// Every triage action redirects back to the review queue.
 const TRIAGE_QUEUE: &str = "/app/inbox/triage";
 
-/// Start a message-keyed Restate workflow after the inbound Message has been
+/// Start a message-keyed durable alert after the inbound Message has been
 /// persisted. Repeated provider deliveries attach to the same Slack alert.
+/// The `InboundMessageAlert` switch chooses the worker's DBOS ingress; the
+/// Restate lane remains while it is off, and a deployment with neither
+/// configured is a no-op, as before.
 pub async fn start_inbound_message_alert(message_id: Uuid) -> Result<(), String> {
-    let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(());
-    };
-    let request = workflows::InboundMessageAlertRequest { message_id };
-    workflows::start_workflow(
-        &ingress,
-        std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
-        "InboundMessageAlert",
-        &message_id.to_string(),
-        "run",
-        &request,
-        true,
+    let target = workflows::trigger::service_target(
+        workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
+        std::env::var(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
     )
-    .await
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    let request = workflows::InboundMessageAlertRequest { message_id };
+    match &target {
+        workflows::trigger::ServiceTarget::Dbos { ingress, token } => {
+            workflows::trigger::start_dbos_inbound_message_alert(
+                ingress,
+                token,
+                &serde_json::json!({
+                    "workflow_id":
+                        workflows::trigger::inbound_message_alert_workflow_id(message_id),
+                    "request": request,
+                }),
+            )
+            .await
+            .map_err(|error| error.to_string())
+        }
+        workflows::trigger::ServiceTarget::Restate => {
+            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+            else {
+                return Ok(());
+            };
+            workflows::start_workflow(
+                &ingress,
+                std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
+                "InboundMessageAlert",
+                &message_id.to_string(),
+                "run",
+                &request,
+                true,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        }
+    }
 }
 
 /// Ingest a parsed inbound email's clean attachments as content-addressed

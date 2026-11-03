@@ -34,7 +34,7 @@ pub fn enabled(get: impl Fn(&str) -> Option<String>) -> Result<bool, &'static st
 /// duplicate deliveries deduplicated on either engine.
 #[must_use]
 pub fn workflow_id(message_id: uuid::Uuid) -> String {
-    format!("{WORKFLOW}:{message_id}")
+    workflows::trigger::inbound_message_alert_workflow_id(message_id)
 }
 
 #[derive(Debug, Clone, thiserror::Error, Serialize, Deserialize)]

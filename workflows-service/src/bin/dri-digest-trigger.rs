@@ -32,6 +32,20 @@ async fn main() -> Result<()> {
     // so the drop flushes any batched export before the process exits.
     let _telemetry = telemetry::init("navigator-dri-digest-trigger");
 
+    // The DBOS engine's standalone schedule owns this job when its switch
+    // is on: there is no worker ingress route to submit to, so the CronJob
+    // exits without submitting and the engine fires the workflow itself.
+    // With the switch off this binary drives the Restate submit.
+    if workflows::trigger::dbos_owns_schedule("NAVIGATOR_DBOS_DRI_DIGEST_ENABLED", |name| {
+        std::env::var(name).ok()
+    })
+    .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")?
+    {
+        tracing::info!("DBOS engine owns the DriDigest schedule; skipping the Restate submit");
+        println!("DBOS engine owns DriDigest; Restate submit skipped");
+        return Ok(());
+    }
+
     let ingress = std::env::var("RESTATE_INGRESS_URL")
         .context("RESTATE_INGRESS_URL must be set (the Restate ingress endpoint)")?;
     // Optional bearer — present only when targeting Restate Cloud.

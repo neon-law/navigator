@@ -63,14 +63,18 @@ pub enum LaneRequest {
 /// `(sha, run attempt)` per Project, exactly the Restate idempotency key.
 #[must_use]
 pub fn main_push_workflow_id(project_id: uuid::Uuid, event: &MainPushRequest) -> String {
-    format!("{WORKFLOW}:{}:{}", project_id.simple(), event.event_key())
+    workflows::trigger::project_slack_main_push_workflow_id(
+        project_id,
+        &event.short_sha,
+        event.run_attempt,
+    )
 }
 
 /// The DBOS workflow id of a Project's client-view lane. One stable id per
 /// Project: repeated views join the first run, so the notice posts once.
 #[must_use]
 pub fn client_view_workflow_id(project_id: uuid::Uuid) -> String {
-    format!("{WORKFLOW}:{}:{CLIENT_VIEW_LANE}", project_id.simple())
+    workflows::trigger::project_slack_client_view_workflow_id(project_id)
 }
 
 /// The lane key a registered workflow id names.

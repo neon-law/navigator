@@ -30,6 +30,7 @@ pub mod email;
 pub mod email_summary;
 pub mod email_summary_config;
 pub mod email_summary_delivery;
+pub mod flags;
 pub mod guardrail;
 pub mod heartbeat;
 pub mod inbox_triage;

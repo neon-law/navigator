@@ -19,6 +19,7 @@ use store::social_accounts::SocialProvider;
 use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::social_publish::{send_credential, SendCredential, TokenRefreshConfig};
+use workflows::trigger::ServiceTarget;
 use workflows::{SocialPublishReport, SocialPublishRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,34 +184,33 @@ impl SocialPublishReconcilerService {
             .name("load-scheduled-social-posts")
             .await?
             .into_inner();
-        let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        else {
-            return Err(TerminalError::new("Restate ingress is not configured").into());
-        };
-        let auth = std::env::var("RESTATE_AUTH_TOKEN").ok();
-        for (post_id, publish_at) in &scheduled {
-            let request = SocialPublishRequest {
-                post_id: *post_id,
-                publish_at: *publish_at,
+        let publisher_target =
+            resolve_service_target(workflows::trigger::SOCIAL_PUBLISHER_ENABLED_ENV)?;
+        let alert_target =
+            resolve_service_target(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV)?;
+        // The Restate broker configuration backs every branch still on
+        // Restate; once both switches have flipped, a tick no longer needs
+        // it. While either switch is off, a missing broker fails the tick
+        // exactly as before.
+        let restate = if publisher_target == ServiceTarget::Restate
+            || alert_target == ServiceTarget::Restate
+        {
+            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+            else {
+                return Err(TerminalError::new("Restate ingress is not configured").into());
             };
-            let key = format!("{post_id}:{}", publish_at.to_rfc3339());
-            let ingress = ingress.clone();
-            let auth = auth.clone();
+            Some((ingress, std::env::var("RESTATE_AUTH_TOKEN").ok()))
+        } else {
+            None
+        };
+        for (post_id, publish_at) in &scheduled {
+            let (post_id, publish_at) = (*post_id, *publish_at);
+            let target = publisher_target.clone();
+            let restate = restate.clone();
             ctx.run(move || async move {
-                workflows::start_workflow(
-                    &ingress,
-                    auth.as_deref(),
-                    "SocialPublisher",
-                    &key,
-                    "run",
-                    &request,
-                    true,
-                )
-                .await
-                .map(|_| ())
-                .map_err(|error| HandlerError::from(error.to_string()))
+                start_publisher_run(&target, restate.as_ref(), post_id, publish_at).await
             })
             .name("start-scheduled-social-publication")
             .await?;
@@ -228,22 +228,11 @@ impl SocialPublishReconcilerService {
             .into_inner();
         for message_id in &alerts {
             let message_id = *message_id;
-            let key = format!("{message_id}:{}", request.tick);
-            let ingress = ingress.clone();
-            let auth = auth.clone();
+            let tick = request.tick.clone();
+            let target = alert_target.clone();
+            let restate = restate.clone();
             ctx.run(move || async move {
-                workflows::start_workflow(
-                    &ingress,
-                    auth.as_deref(),
-                    "InboundMessageAlert",
-                    &key,
-                    "run",
-                    &workflows::InboundMessageAlertRequest { message_id },
-                    true,
-                )
-                .await
-                .map(|_| ())
-                .map_err(|error| HandlerError::from(error.to_string()))
+                start_notice_recovery(&target, restate.as_ref(), message_id, &tick).await
             })
             .name("recover-inbound-message-notice")
             .await?;
@@ -255,6 +244,113 @@ impl SocialPublishReconcilerService {
         Ok(Json(ReconcileReport {
             started: scheduled.len() + alerts.len(),
         }))
+    }
+}
+
+/// The reconciler's Restate fallback configuration, read once per tick: the
+/// broker URL plus its optional bearer.
+type RestateFallback = (String, Option<String>);
+
+/// Resolves one of the reconciler's ingress selections from the process
+/// environment: the service's DBOS switch chooses the worker's ingress
+/// (`NAVIGATOR_DBOS_INGRESS_URL` plus bearer) over the Restate broker while
+/// it is on.
+fn resolve_service_target(
+    flag: &'static str,
+) -> Result<workflows::trigger::ServiceTarget, HandlerError> {
+    workflows::trigger::service_target(
+        flag,
+        std::env::var(flag).ok().as_deref(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
+    )
+    .map_err(|error| HandlerError::from(error.to_string()))
+}
+
+/// Starts (or joins) one scheduled publisher run on the engine the
+/// `SocialPublisher` switch selects. Both branches key the run by the same
+/// `(post, scheduled time)` identity; the Restate branch keeps its
+/// `to_rfc3339` invocation key, the DBOS branch the shared constructor.
+async fn start_publisher_run(
+    target: &workflows::trigger::ServiceTarget,
+    restate: Option<&RestateFallback>,
+    post_id: Uuid,
+    publish_at: DateTime<Utc>,
+) -> Result<(), HandlerError> {
+    match target {
+        ServiceTarget::Dbos { ingress, token } => workflows::trigger::start_dbos_social_publisher(
+            ingress,
+            token,
+            &serde_json::json!({
+                "workflow_id":
+                    workflows::trigger::social_publisher_workflow_id(post_id, publish_at),
+                "request": workflows::SocialPublishRequest { post_id, publish_at },
+            }),
+        )
+        .await
+        .map_err(|error| HandlerError::from(error.to_string())),
+        ServiceTarget::Restate => {
+            let (ingress, auth) =
+                restate.ok_or_else(|| HandlerError::from("Restate ingress is not configured"))?;
+            workflows::start_workflow(
+                ingress,
+                auth.as_deref(),
+                "SocialPublisher",
+                &format!("{post_id}:{}", publish_at.to_rfc3339()),
+                "run",
+                &workflows::SocialPublishRequest {
+                    post_id,
+                    publish_at,
+                },
+                true,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| HandlerError::from(error.to_string()))
+        }
+    }
+}
+
+/// Starts one pending inbound notice's recovery on the engine the
+/// `InboundMessageAlert` switch selects. The Restate branch keeps the
+/// per-tick invocation key; the DBOS branch joins the alert's canonical
+/// per-message run.
+async fn start_notice_recovery(
+    target: &workflows::trigger::ServiceTarget,
+    restate: Option<&RestateFallback>,
+    message_id: Uuid,
+    tick: &str,
+) -> Result<(), HandlerError> {
+    match target {
+        ServiceTarget::Dbos { ingress, token } => {
+            workflows::trigger::start_dbos_inbound_message_alert(
+                ingress,
+                token,
+                &serde_json::json!({
+                    "workflow_id":
+                        workflows::trigger::inbound_message_alert_workflow_id(message_id),
+                    "request": workflows::InboundMessageAlertRequest { message_id },
+                }),
+            )
+            .await
+            .map_err(|error| HandlerError::from(error.to_string()))
+        }
+        ServiceTarget::Restate => {
+            let (ingress, auth) =
+                restate.ok_or_else(|| HandlerError::from("Restate ingress is not configured"))?;
+            workflows::start_workflow(
+                ingress,
+                auth.as_deref(),
+                "InboundMessageAlert",
+                &format!("{message_id}:{tick}"),
+                "run",
+                &workflows::InboundMessageAlertRequest { message_id },
+                true,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| HandlerError::from(error.to_string()))
+        }
     }
 }
 

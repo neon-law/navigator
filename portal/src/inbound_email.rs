@@ -912,25 +912,51 @@ fn summary_workflow_request(
 }
 
 /// Hand one archived receipt to the durable `EmailSummary` workflow, keyed
-/// by the receipt so a redelivered message reattaches to the same run.
+/// by the receipt so a redelivered message reattaches to the same run. The
+/// `EmailSummary` switch chooses the worker's DBOS ingress; the Restate
+/// ingress remains while it is off.
 pub(crate) async fn start_summary_workflow(
     config: &SummaryIntakeConfig,
     receipt: &store::email_receipts::EmailReceipt,
 ) -> Result<(), InboundError> {
     let request = summary_workflow_request(config, receipt)?;
-    let started = std::time::Instant::now();
-    let result = workflows::start_workflow(
-        &config.workflow_ingress,
-        std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
-        "EmailSummary",
-        &receipt.id.to_string(),
-        "run",
-        &request,
-        true,
+    let target = workflows::trigger::service_target(
+        workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV,
+        std::env::var(workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
     )
-    .await
-    .map(|_| ())
-    .map_err(|error| InboundError::WorkflowStart(error.to_string()));
+    .map_err(|error| InboundError::WorkflowStart(error.to_string()))?;
+    let started = std::time::Instant::now();
+    let result = match &target {
+        workflows::trigger::ServiceTarget::Dbos { ingress, token } => {
+            workflows::trigger::start_dbos_email_summary(
+                ingress,
+                token,
+                &serde_json::json!({
+                    "workflow_id":
+                        workflows::trigger::email_summary_workflow_id(receipt.id),
+                    "request": request,
+                }),
+            )
+            .await
+            .map_err(|error| InboundError::WorkflowStart(error.to_string()))
+        }
+        workflows::trigger::ServiceTarget::Restate => workflows::start_workflow(
+            &config.workflow_ingress,
+            std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
+            "EmailSummary",
+            &receipt.id.to_string(),
+            "run",
+            &request,
+            true,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| InboundError::WorkflowStart(error.to_string())),
+    };
     telemetry::record_email_stage(
         &receipt.id.to_string(),
         telemetry::EmailStage::Trigger,
