@@ -3566,6 +3566,7 @@
           "cost_ids": "UUID[]",
           "currency": "TEXT",
           "entry_ids": "UUID[]",
+          "first_attempted_at": "TIMESTAMPTZ",
           "flat_fee_cents": "BIGINT",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",

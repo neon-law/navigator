@@ -13,7 +13,7 @@
 //!
 //! **Xero is the books.** The only write across the provider boundary is
 //! `create_invoice` — idempotent on the caller-supplied key at the seam (Xero
-//! honours the `Idempotency-Key` for 24h). This command keys it on a **billing
+//! honours the `Idempotency-Key` for six minutes). This command keys it on a **billing
 //! batch**: the composed request and the row ids it consumes are persisted —
 //! and their rows reserved — BEFORE the provider call, so a retry resumes the
 //! same batch under the same key within the safe retry window. New work
@@ -65,14 +65,15 @@ const INVOICE_CURRENCY: &str = "USD";
 /// the services catalog copy and the sandbox-reset fixture bill against.
 const REVENUE_ACCOUNT_CODE: &str = "200";
 
-// The batch predates its first provider call. A 23-hour start cutoff and
-// a 60-second attempt budget leave at least 59 minutes before the provider's
-// 24-hour key retention expires, even after contact resolution takes time.
+// Xero retains keys for six minutes from the first call:
+// https://developer.xero.com/documentation/guides/idempotent-requests/idempotency/
+// Persist the first attempt before POST. A four-minute start cutoff plus a
+// 60-second attempt budget leaves at least one minute of transport margin.
 const CREATE_ATTEMPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
 
-fn create_window_open(inserted_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
-    let age = now.signed_duration_since(inserted_at);
-    (chrono::Duration::zero()..chrono::Duration::hours(23)).contains(&age)
+fn create_window_open(first_attempted_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    let age = now.signed_duration_since(first_attempted_at);
+    (chrono::Duration::zero()..chrono::Duration::minutes(4)).contains(&age)
 }
 
 /// How a Xero `Reference` names the matter an invoice bills — the documented
@@ -335,6 +336,7 @@ pub(crate) async fn generate_invoice(
             reference: matter_reference(&project.code),
             contact_name: party.name.clone(),
             contact_email: party.email.clone(),
+            first_attempted_at: None,
             line_items: serde_json::to_value(&compose.line_items)?,
             total_cents: compose.total_cents,
             currency: INVOICE_CURRENCY.to_string(),
@@ -350,6 +352,60 @@ pub(crate) async fn generate_invoice(
     )
     .await?;
     raise_batch(surreal, pg, provider, project_id, &batch, actor_id).await
+}
+
+async fn invoice_for_batch(
+    pg: &store::postgres::PostgresDb,
+    provider: &dyn billing::BillingProvider,
+    batch: &billing_batches::MatterBillingBatch,
+    line_items: &[InvoiceLine],
+) -> Result<(billing::InvoiceId, DateTime<Utc>), InvoiceGenerationError> {
+    if let Some(saved) = &batch.xero_invoice_id {
+        return Ok((billing::InvoiceId(saved.clone()), batch.updated_at));
+    }
+    if batch
+        .first_attempted_at
+        .is_some_and(|first| !create_window_open(first, Utc::now()))
+    {
+        return Err(InvoiceGenerationError::ReconciliationRequired);
+    }
+    provider
+        .ensure_contact(&billing::ContactRequest {
+            name: batch.contact_name.clone(),
+            email: batch.contact_email.clone(),
+        })
+        .await?;
+    let attempted = billing_batches::start_attempt(pg, batch.id, Utc::now()).await?;
+    if let Some(saved) = attempted.xero_invoice_id {
+        return Ok((billing::InvoiceId(saved), attempted.updated_at));
+    }
+    let first = attempted
+        .first_attempted_at
+        .ok_or(billing_batches::BillingBatchError::Invalid(
+            "first attempt timestamp",
+        ))?;
+    if !create_window_open(first, Utc::now()) {
+        // An uncertain result outside Xero's key-retention budget must be
+        // reconciled manually. Never guess by matter reference or total.
+        return Err(InvoiceGenerationError::ReconciliationRequired);
+    }
+    let invoice = tokio::time::timeout(
+        CREATE_ATTEMPT_BUDGET,
+        provider.create_invoice(
+            batch.id,
+            &InvoiceRequest {
+                contact_name: batch.contact_name.clone(),
+                contact_email: batch.contact_email.clone(),
+                reference: batch.reference.clone(),
+                line_items: line_items.to_vec(),
+                due_date: None,
+            },
+        ),
+    )
+    .await
+    .map_err(|_| billing::BillingError::Provider("invoice creation timed out".into()))??;
+    let attached = billing_batches::attach_invoice(pg, batch.id, &invoice.0).await?;
+    Ok((invoice, attached.updated_at))
 }
 
 /// Raise the invoice for a persisted batch — fresh or resumed — and settle
@@ -373,42 +429,7 @@ async fn raise_batch(
     // moment it returns, before any local flip, so a crash or refusal
     // mid-settle leaves the resume holding the exact invoice instead of
     // relying on the provider's own idempotency window.
-    let (invoice_id, issued_at) = if let Some(saved) = &batch.xero_invoice_id {
-        (billing::InvoiceId(saved.clone()), batch.updated_at)
-    } else {
-        if !create_window_open(batch.inserted_at, Utc::now()) {
-            return Err(InvoiceGenerationError::ReconciliationRequired);
-        }
-        provider
-            .ensure_contact(&billing::ContactRequest {
-                name: batch.contact_name.clone(),
-                email: batch.contact_email.clone(),
-            })
-            .await?;
-        // A lost response or failed attach can leave a real invoice without
-        // a saved id. Never create again after the provider's 24-hour key
-        // retention; an operator must reconcile that uncertain outcome.
-        if !create_window_open(batch.inserted_at, Utc::now()) {
-            return Err(InvoiceGenerationError::ReconciliationRequired);
-        }
-        let invoice = tokio::time::timeout(
-            CREATE_ATTEMPT_BUDGET,
-            provider.create_invoice(
-                batch.id,
-                &InvoiceRequest {
-                    contact_name: batch.contact_name.clone(),
-                    contact_email: batch.contact_email.clone(),
-                    reference: batch.reference.clone(),
-                    line_items: line_items.clone(),
-                    due_date: None,
-                },
-            ),
-        )
-        .await
-        .map_err(|_| billing::BillingError::Provider("invoice creation timed out".into()))??;
-        let attached = billing_batches::attach_invoice(pg, batch.id, &invoice.0).await?;
-        (invoice, attached.updated_at)
-    };
+    let (invoice_id, issued_at) = invoice_for_batch(pg, provider, batch, &line_items).await?;
 
     let invoice_state = provider.get_invoice(&invoice_id.0).await?;
     let existing = xero_invoices::for_projects(surreal, &[project_id])
@@ -666,13 +687,13 @@ mod tests {
     #[test]
     fn provider_attempt_budget_leaves_a_margin_before_key_expiry() {
         let inserted = Utc::now();
-        let last_safe_start = inserted + Duration::hours(23) - Duration::nanoseconds(1);
+        let last_safe_start = inserted + Duration::minutes(4) - Duration::nanoseconds(1);
         assert!(create_window_open(inserted, last_safe_start));
         let completion = last_safe_start + Duration::from_std(CREATE_ATTEMPT_BUDGET).unwrap();
-        assert!(completion <= inserted + Duration::hours(24) - Duration::minutes(59));
+        assert!(completion <= inserted + Duration::minutes(6) - Duration::minutes(1));
         assert!(!create_window_open(
             inserted,
-            inserted + Duration::hours(23)
+            inserted + Duration::minutes(4)
         ));
         assert!(!create_window_open(
             inserted,

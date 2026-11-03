@@ -226,7 +226,7 @@ async fn source_project(surreal: &store::surreal::SurrealDb) -> Uuid {
     let jurisdiction = store::jurisdictions::create(
         surreal,
         &store::jurisdictions::NewJurisdiction::new(
-            "Synthetic billing jurisdiction",
+            format!("Synthetic billing jurisdiction {}", Uuid::new_v4()),
             format!("BILL-{}", Uuid::new_v4()),
             "state",
         ),
@@ -784,9 +784,9 @@ async fn run_recovery_safety() {
     assert_eq!(financials.wip_cents, 20_000, "refused work stays visible");
     assert_eq!(financials.outstanding_cents, 0);
 
-    // Simulate a response lost beyond Xero's idempotency retention window.
+    // Simulate a response lost beyond Xero's six-minute retention window.
     sqlx::query(
-        "UPDATE matter_billing_batch SET inserted_at=now()-interval '25 hours' WHERE id=$1",
+        "UPDATE matter_billing_batch SET first_attempted_at=now()-interval '7 minutes' WHERE id=$1",
     )
     .bind(batch.id)
     .execute(fixture.pg.pool())
@@ -916,6 +916,43 @@ async fn settle_without_current_billed_party(fixture: &Fixture) {
     );
 }
 
+async fn assert_first_attempt_is_shared(fixture: &Fixture, batch_id: Uuid) {
+    // Model the durable intent before any POST (for example, a process
+    // stopped after reservation). No provider invoice exists in this fixture.
+    sqlx::query("UPDATE matter_billing_batch SET first_attempted_at=NULL WHERE id=$1")
+        .bind(batch_id)
+        .execute(fixture.pg.pool())
+        .await
+        .unwrap();
+    let now = chrono::Utc::now();
+    let (left, right) = tokio::join!(
+        store::billing_batches::start_attempt(&fixture.pg, batch_id, now),
+        store::billing_batches::start_attempt(
+            &fixture.pg,
+            batch_id,
+            now + chrono::Duration::microseconds(1)
+        ),
+    );
+    let first = left.unwrap().first_attempted_at;
+    assert!(first.is_some());
+    assert_eq!(
+        right.unwrap().first_attempted_at,
+        first,
+        "overlapping creates share one persisted first-attempt time"
+    );
+    let replay = store::billing_batches::start_attempt(
+        &fixture.pg,
+        batch_id,
+        now + chrono::Duration::minutes(7),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        replay.first_attempted_at, first,
+        "a retry cannot restart retention"
+    );
+}
+
 async fn assert_voided_invoice_remains_reserved() {
     let fixture = fixture().await;
     let entry = seed_entry(&fixture, 60, "Synthetic voided invoice recovery").await;
@@ -927,6 +964,7 @@ async fn assert_voided_invoice_remains_reserved() {
     let batch = pending_batch(&fixture.pg, fixture.project_id)
         .await
         .unwrap();
+    assert_first_attempt_is_shared(&fixture, batch.id).await;
     store::billing_batches::attach_invoice(&fixture.pg, batch.id, "synthetic-voided")
         .await
         .unwrap();

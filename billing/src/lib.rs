@@ -237,9 +237,10 @@ pub trait BillingProvider: Send + Sync {
     /// same email is returned, never duplicated.
     async fn ensure_contact(&self, request: &ContactRequest) -> Result<ContactId, BillingError>;
 
-    /// Raise an invoice for the given matter. Must be idempotent on retry
-    /// (Restate replays the closing step): the same `matter_id` never
-    /// creates two invoices.
+    /// Raise an invoice under a stable request key. Xero caches that key for
+    /// six minutes from its first call. Callers must persist the invoice id
+    /// and reconcile uncertain expired attempts instead of reusing the key.
+    /// See <https://developer.xero.com/documentation/guides/idempotent-requests/idempotency/>.
     async fn create_invoice(
         &self,
         matter_id: Uuid,
@@ -389,10 +390,9 @@ impl BillingProvider for StubBillingProvider {
             matter_id,
             request: request.clone(),
         });
-        // The trait contract — the same `matter_id` never creates two
-        // invoices — holds under retries: every attempt is recorded, but a
-        // replay re-mints the first attempt's id, the way Xero honours the
-        // `Idempotency-Key` header for 24h.
+        // This test double retains a result per key and records every
+        // attempt. Production callers enforce Xero's six-minute window;
+        // the stub's lifetime does not model provider key expiry.
         let seq = calls
             .iter()
             .position(|call| call.matter_id == matter_id)
@@ -978,9 +978,9 @@ impl BillingProvider for XeroBillingProvider {
             .header("Xero-Tenant-Id", &self.tenant_id)
             // The Accounting API returns XML unless asked for JSON.
             .header(reqwest::header::ACCEPT, "application/json")
-            // Idempotency at the provider boundary: the same matter never
-            // raises two invoices, even under a concurrent double-send or
-            // a Restate replay. Xero honours this key for 24h.
+            // Xero caches identical requests under this key for six minutes.
+            // Callers persist results and reconcile uncertainty after expiry;
+            // the provider key alone is not durable replay protection.
             .header("Idempotency-Key", matter_id.to_string())
             .json(&self.build_invoice_body(request))
             .send()
