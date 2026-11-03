@@ -446,6 +446,12 @@ mod tests {
             case_number("Case: 26-1073-KNS filed by the agent"),
             Some("26-1073-kns".into())
         );
+        // A marked `Case No.` wins over an earlier bare bankruptcy shape,
+        // so a whole-text fallback picking 25-12345 would fail this assert.
+        assert_eq!(
+            case_number("Related case 25-12345; Case No. 26-10042, Chapter 11"),
+            Some("26-10042".into())
+        );
         // A lone date is never a case number.
         assert_eq!(case_number("filed on 2026-03-05 and nothing else"), None);
         // Without a marker, the bankruptcy shape is found in the text.
@@ -481,7 +487,7 @@ mod tests {
             "Content-Type: text/plain; charset=utf-8\r\n",
             "\r\n",
             "Case No. 26-10042\r\n",
-            "https://ecf.nvb.uscourts.gov/doc1/abc123\r\n",
+            "https://case.kroll.com/Home-DownloadPDF?id1=abc123\r\n",
         );
         assert_eq!(parse(eml.as_bytes()), None);
     }
