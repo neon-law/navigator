@@ -148,3 +148,119 @@ async fn a_repeated_identical_put_returns_the_original_row_and_a_mismatch_confli
         "the same number with different lanes is a mismatch too"
     );
 }
+
+/// Hold both registrations at their table writes without relying on task timing.
+/// SHARE admits row reads but blocks either writer until both are observed.
+async fn concurrent_first_puts(
+    pg: &PostgresDb,
+    left: NewBrandPhoneNumber,
+    right: NewBrandPhoneNumber,
+) -> [Result<brand_phone_numbers::BrandPhoneNumber, brand_phone_numbers::BrandPhoneNumberError>; 2]
+{
+    use std::time::Duration;
+
+    let mut controller = pg.pool().begin().await.unwrap();
+    sqlx::query("LOCK TABLE brand_phone_number IN SHARE MODE")
+        .execute(&mut *controller)
+        .await
+        .unwrap();
+    let first_pg = pg.clone();
+    let second_pg = pg.clone();
+    let mut first = tokio::spawn(async move { brand_phone_numbers::put(&first_pg, &left).await });
+    let mut second =
+        tokio::spawn(async move { brand_phone_numbers::put(&second_pg, &right).await });
+    let waiting = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pg_catalog.pg_locks \
+                 WHERE database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()) \
+                 AND relation = 'brand_phone_number'::regclass \
+                 AND mode = 'RowExclusiveLock' AND NOT granted",
+            )
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+            if count == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    // Release the controller even if the synchronization assertion fails.
+    controller.commit().await.unwrap();
+    if waiting.is_err() {
+        first.abort();
+        second.abort();
+        let _ = tokio::join!(&mut first, &mut second);
+        panic!("both first registrations must wait at their table writes");
+    }
+    let completed = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(&mut first, &mut second)
+    })
+    .await;
+    let Ok((first_result, second_result)) = completed else {
+        first.abort();
+        second.abort();
+        let _ = tokio::join!(&mut first, &mut second);
+        panic!("both registrations must finish after the controller releases them");
+    };
+    [first_result.unwrap(), second_result.unwrap()]
+}
+
+#[tokio::test]
+async fn concurrent_identical_first_registrations_return_the_same_immutable_row() {
+    let Some(pg) = postgres().await else { return };
+    let input = registration("+15551230004", "neon", ChannelKinds::Both);
+    let [left, right] = concurrent_first_puts(&pg, input.clone(), input.clone()).await;
+    let Ok(left) = left else {
+        panic!("first identical registration must succeed");
+    };
+    let Ok(right) = right else {
+        panic!("overlapping identical registration must be an idempotent success");
+    };
+    assert!(left == right, "content and original timestamps must match");
+    let Ok(found) = brand_phone_numbers::find_by_number(&pg, &input.number_e164).await else {
+        panic!("the stored registration must remain readable");
+    };
+    assert!(
+        found.as_ref() == Some(&left),
+        "the stored registration must match"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM brand_phone_number")
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn concurrent_different_first_registrations_conflict_without_overwriting_the_winner() {
+    let Some(pg) = postgres().await else { return };
+    let left = registration("+15551230005", "neon", ChannelKinds::Both);
+    let right = registration("+15551230005", "anchor", ChannelKinds::Both);
+    let results = concurrent_first_puts(&pg, left.clone(), right.clone()).await;
+    let mut winner = None;
+    let mut conflicts = 0;
+    for result in results {
+        match result {
+            Ok(row) => assert!(winner.replace(row).is_none(), "only one registration wins"),
+            Err(brand_phone_numbers::BrandPhoneNumberError::Conflict) => conflicts += 1,
+            Err(
+                brand_phone_numbers::BrandPhoneNumberError::Invalid(_)
+                | brand_phone_numbers::BrandPhoneNumberError::Database(_)
+                | brand_phone_numbers::BrandPhoneNumberError::Postgres(_),
+            ) => panic!("a different registration must return a domain conflict"),
+        }
+    }
+    assert_eq!(conflicts, 1);
+    let winner = winner.unwrap();
+    assert!(winner.brand_key == left.brand_key || winner.brand_key == right.brand_key);
+    let Ok(found) = brand_phone_numbers::find_by_number(&pg, &left.number_e164).await else {
+        panic!("the winning registration must remain readable");
+    };
+    assert!(
+        found.as_ref() == Some(&winner),
+        "the losing registration cannot change the winning content or timestamps"
+    );
+}

@@ -144,28 +144,29 @@ pub async fn put(
 ) -> Result<BrandPhoneNumber, BrandPhoneNumberError> {
     validate(input)?;
     let mut tx = pg.0.begin().await?;
-    let existing =
-        sqlx::query("SELECT * FROM brand_phone_number WHERE number_e164 = $1 FOR UPDATE")
-            .bind(&input.number_e164)
-            .fetch_optional(&mut *tx)
-            .await?;
-    if let Some(row) = existing {
-        let registered = from_row(&row)?;
-        if registered.same_registration(input) {
-            tx.commit().await?;
-            return Ok(registered);
-        }
-        return Err(BrandPhoneNumberError::Conflict);
-    }
-    let row = sqlx::query("INSERT INTO brand_phone_number (number_e164, brand_key, twilio_account_sid, auth_token_secret_ref, channel_kinds) VALUES ($1, $2, $3, $4, $5) RETURNING *")
+    let inserted = sqlx::query("INSERT INTO brand_phone_number (number_e164, brand_key, twilio_account_sid, auth_token_secret_ref, channel_kinds) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (number_e164) DO NOTHING RETURNING *")
         .bind(&input.number_e164)
         .bind(input.brand_key.trim())
         .bind(input.twilio_account_sid.trim())
         .bind(input.auth_token_secret_ref)
         .bind(input.channel_kinds.as_str())
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-    let registered = from_row(&row)?;
+    let registered = if let Some(row) = inserted {
+        from_row(&row)?
+    } else {
+        // A conflicting insert waits for its owner to finish. This next
+        // statement reads and locks that committed registration before comparison.
+        let row = sqlx::query("SELECT * FROM brand_phone_number WHERE number_e164 = $1 FOR UPDATE")
+            .bind(&input.number_e164)
+            .fetch_one(&mut *tx)
+            .await?;
+        let registered = from_row(&row)?;
+        if !registered.same_registration(input) {
+            return Err(BrandPhoneNumberError::Conflict);
+        }
+        registered
+    };
     tx.commit().await?;
     Ok(registered)
 }
