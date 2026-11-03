@@ -92,25 +92,9 @@ pub(crate) async fn process_nef(
     // text-only notice, though nothing can then file the original's bytes.
     let raw = raw_source(state, row).await?;
 
-    let notice = match raw.as_deref().map(store::nef::parse_eml) {
-        Some(Ok(notice)) => notice,
-        raw_result => match store::nef::parse_text(&row.body, &[]) {
-            Ok(notice) => notice,
-            Err(error) => {
-                return Ok(
-                    if matches!(error, store::nef::NefError::Missing("Case Number"))
-                        || matches!(
-                            raw_result,
-                            Some(Err(store::nef::NefError::Missing("Case Number")))
-                        )
-                    {
-                        NefOutcome::NoCaseNumber
-                    } else {
-                        NefOutcome::NotANotice
-                    },
-                );
-            }
-        },
+    let notice = match parse_notice(raw.as_deref(), &row.body) {
+        Ok(notice) => notice,
+        Err(outcome) => return Ok(outcome),
     };
     let case_no = notice.case_no.trim().to_owned();
     if case_no.is_empty() {
@@ -121,26 +105,20 @@ pub(crate) async fn process_nef(
     // unrecorded case is opened from the notice's own masthead. Many
     // cases per matter is the point, so this is the same resolution the
     // CLI's ingest performs against its manifest's dockets.
-    let case = match store::cases::find_case_by_docket_number(&state.surreal, project_id, &case_no)
-        .await
-        .map_err(|error| case_error(&error))?
-    {
-        Some(case) => case,
-        None => store::cases::open_case(
-            &state.surreal,
-            &store::cases::NewCase {
-                project_id,
-                caption: notice.case_name.as_deref().unwrap_or(&case_no),
-                forum: Some(notice.court.trim()),
-                jurisdiction: None,
-                docket_number: Some(&case_no),
-                judge: None,
-                posture: "unknown",
-            },
-        )
-        .await
-        .map_err(|error| case_error(&error))?,
-    };
+    let case = store::cases::ensure_case(
+        &state.surreal,
+        &store::cases::NewCase {
+            project_id,
+            caption: notice.case_name.as_deref().unwrap_or(&case_no),
+            forum: Some(notice.court.trim()),
+            jurisdiction: None,
+            docket_number: Some(&case_no),
+            judge: None,
+            posture: "unknown",
+        },
+    )
+    .await
+    .map_err(|error| case_error(&error))?;
 
     let kind = store::nef::suggested_kind(&notice.docket_text, None);
     let (filed_documents, document_asset_id) =
@@ -190,7 +168,7 @@ pub(crate) async fn process_nef(
     let filed_or_served_on = notice
         .filed_at
         .map(|date| date.format("%Y-%m-%dT00:00:00Z").to_string());
-    let entry = store::cases::record_entry(
+    let entry = store::cases::ensure_entry(
         &state.surreal,
         &store::cases::NewDocketEntry {
             case_id: case.id,
@@ -215,6 +193,27 @@ pub(crate) async fn process_nef(
         filed_documents,
         document_asset_id,
     })
+}
+
+fn parse_notice(raw: Option<&[u8]>, body: &str) -> Result<store::nef::Notice, NefOutcome> {
+    match raw.map(store::nef::parse_eml) {
+        Some(Ok(notice)) => Ok(notice),
+        raw_result => match store::nef::parse_text(body, &[]) {
+            Ok(notice) => Ok(notice),
+            Err(error) => Err(
+                if matches!(error, store::nef::NefError::Missing("Case Number"))
+                    || matches!(
+                        raw_result,
+                        Some(Err(store::nef::NefError::Missing("Case Number")))
+                    )
+                {
+                    NefOutcome::NoCaseNumber
+                } else {
+                    NefOutcome::NotANotice
+                },
+            ),
+        },
+    }
 }
 
 /// File the notice's attachment assets and, when its raw source survived
