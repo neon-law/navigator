@@ -150,7 +150,7 @@ fn pages() -> serde_json::Value {
             }
         },
         {
-            "slug": "billing",
+            "slug": "engagement",
             "kind": "engagement_billing_records",
             "title": "Billing review",
             "lenses": {
@@ -230,7 +230,7 @@ async fn a_lawyer_sees_the_lawyer_lens_with_every_open_deadline() {
         "{html}"
     );
     assert!(
-        html.contains("href=\"/app/projects/sample-pages/billing\""),
+        html.contains("href=\"/app/projects/sample-pages/engagement\""),
         "{html}"
     );
 }
@@ -259,12 +259,12 @@ async fn a_client_sees_only_client_lens_sections_and_client_dates() {
         "a firm-only date must not reach a client's markup or hydration payload"
     );
     assert!(
-        !html.contains("/app/projects/sample-pages/billing"),
+        !html.contains("/app/projects/sample-pages/engagement"),
         "a page with no client face is not a client tab"
     );
     let (status, _) = get(
         &f,
-        &format!("/app/projects/{}/billing", f.code),
+        &format!("/app/projects/{}/engagement", f.code),
         &f.client_cookie,
     )
     .await;
@@ -360,12 +360,12 @@ async fn the_show_page_leads_a_tab_strip_generated_from_pages() {
         "{client}"
     );
     assert!(
-        !client.contains("href=\"/app/projects/sample-pages/billing\""),
+        !client.contains("href=\"/app/projects/sample-pages/engagement\""),
         "{client}"
     );
     let (_, lawyer) = get(&f, &show, &f.lawyer_cookie).await;
     assert!(
-        lawyer.contains("href=\"/app/projects/sample-pages/billing\""),
+        lawyer.contains("href=\"/app/projects/sample-pages/engagement\""),
         "{lawyer}"
     );
 }

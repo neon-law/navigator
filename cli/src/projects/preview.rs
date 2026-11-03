@@ -1086,7 +1086,7 @@ mod tests {
             "    lenses:",
             "      lawyer: [package_manifest, download_list, boundary_note, provenance_statement]",
             "      client: [package_manifest, download_list, boundary_note, provenance_statement]",
-            "  - slug: billing",
+            "  - slug: engagement",
             "    kind: engagement_billing_records",
             "    title: Billing",
             "    lenses:",
@@ -1423,7 +1423,7 @@ mod tests {
         for lens in ["lawyer", "client", "clerk"] {
             for route in [
                 "/app/projects/acme/timeline",
-                "/app/projects/acme/billing",
+                "/app/projects/acme/engagement",
                 "/app/projects/acme",
                 "/no/such/page",
             ] {
@@ -1517,7 +1517,7 @@ mod tests {
         let (_, clerk, _) = get(&app, "/app/projects/acme/timeline?lens=clerk").await;
         assert!(clerk.contains("Not found"), "no clerk face: {clerk}");
 
-        let (status, _, _) = get(&app, "/app/projects/acme/billing?lens=client").await;
+        let (status, _, _) = get(&app, "/app/projects/acme/engagement?lens=client").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_only_reads(&host).await;
     }
