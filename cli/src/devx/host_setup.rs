@@ -550,9 +550,9 @@ mod tests {
 
     #[test]
     fn a_brand_on_its_own_domain_uses_that_zone() {
-        let plan = plan("STAGING.guiebandshook.com.", "staging.neonlaw.com").unwrap();
+        let plan = plan("STAGING.guiebshook.com.", "staging.neonlaw.com").unwrap();
         assert_eq!(plan.key, BrandKey::GuiebShook);
-        assert_eq!(plan.zone, "guiebandshook.com");
+        assert_eq!(plan.zone, "guiebshook.com");
         assert_eq!(plan.label, "staging");
     }
 

@@ -46,7 +46,7 @@ Feature: Public routing on the firm's own host
       | staging.misericordialaw.com     | Misericordia Injury Law  | Misericordia Injury Law \| Home  | You were hurt. We are here to listen.  |
       | staging.abhayaimmigration.com   | Abhaya Immigration       | Abhaya Immigration \| Home       | Your next chapter, without fear.       |
       | staging.deleteyourdebt.com      | DeleteYourDebt.com       | DeleteYourDebt.com \| Home        | A next step beyond debt.                |
-      | staging.guiebandshook.com       | Guieb & Shook            | Guieb & Shook \| Home                       | written engagement before work begins   |
+      | staging.guiebshook.com       | Guieb & Shook            | Guieb & Shook \| Home                       | written engagement before work begins   |
       | staging-lex-tecnica.neonlaw.com | Lex Tecnica              | Lex Tecnica \| Home                         | A law firm for entrepreneurs, by entrepreneurs. |
       | staging-iep.neonlaw.com         | IEP Defenders            | IEP Defenders \| Home                       | Special education lawyers defending your child |
 

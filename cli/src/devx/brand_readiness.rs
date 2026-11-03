@@ -557,7 +557,7 @@ mod tests {
         conclude(
             &cfg,
             &[
-                report("staging.guiebandshook.com", Verdict::Ready),
+                report("staging.guiebshook.com", Verdict::Ready),
                 report("staging.daybridgedivorce.com", Verdict::Ready),
             ],
         )
@@ -566,7 +566,7 @@ mod tests {
         let err = conclude(
             &cfg,
             &[
-                report("staging.guiebandshook.com", Verdict::CertificateNotReady),
+                report("staging.guiebshook.com", Verdict::CertificateNotReady),
                 report("staging.daybridgedivorce.com", Verdict::Ready),
                 report("staging-iep.neonlaw.com", Verdict::Unreachable),
             ],
@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(
             err,
             "2 of 3 release-readiness checks failed for test-deployment: \
-             staging.guiebandshook.com (CertificateNotReady), staging-iep.neonlaw.com (Unreachable)"
+             staging.guiebshook.com (CertificateNotReady), staging-iep.neonlaw.com (Unreachable)"
         );
     }
 

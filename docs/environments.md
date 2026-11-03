@@ -46,7 +46,7 @@ cluster.
 | Deployment | Brand host |
 | --- | --- |
 | `<deployment>` | `staging.deleteyourdata.com` |
-| `<deployment>` | `staging.guiebandshook.com` |
+| `<deployment>` | `staging.guiebshook.com` |
 | the production deployment | its configured brand hosts |
 
 Each row also serves a workflows host beside its public one: `workflows-<deployment>` for `<deployment>` and

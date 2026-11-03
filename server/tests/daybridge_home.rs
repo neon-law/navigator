@@ -100,7 +100,7 @@ async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
             "{host} a launched practice brand must not cross-sell the family row: {footer}"
         );
         assert!(
-            footer.contains(r#"href="https://www.guiebandshook.com""#),
+            footer.contains(r#"href="https://www.guiebshook.com""#),
             "{host} the practice footer's copyright links the firm: {footer}"
         );
         assert!(

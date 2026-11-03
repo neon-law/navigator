@@ -343,7 +343,7 @@ mod tests {
             compiled_identity_allowed: true,
             brands,
             copyright_year: 2026,
-            firm_home_href: "https://www.guiebandshook.com".to_string(),
+            firm_home_href: "https://www.guiebshook.com".to_string(),
         }
     }
 
