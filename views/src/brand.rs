@@ -1312,8 +1312,8 @@ impl BrandKey {
     /// The brand this key's site moved to, if it moved: every served host
     /// 301s to the matching host of the brand named here.
     ///
-    /// A moved brand's domain no longer resolves to the cluster (its zone keeps
-    /// only mail records), so [`release_brand_hosts`] leaves its hosts off every
+    /// A moved brand's domain no longer resolves to the cluster (its zone is
+    /// retired), so [`release_brand_hosts`] leaves its hosts off every
     /// certificate and Ingress rule. The in-process 301 remains for any
     /// request that still reaches the router.
     #[must_use]
@@ -1814,11 +1814,11 @@ pub fn live_brand_apexes() -> Vec<(BrandKey, &'static str)> {
 /// launch gate.
 ///
 /// A key whose site has moved ([`BrandKey::moved_to`]) is left out. Its
-/// domain keeps only mail records and never resolves to the load balancer, so
-/// its hosts can never validate on a `ManagedCertificate`. Listing them on the
-/// one shared Firm certificate would let that one domain hold TLS off every live brand: Google issues a
-/// managed certificate only once every domain on it validates, and GKE
-/// recreates it whenever its domain list changes.
+/// domain is retired and never resolves to the load balancer, so its hosts can
+/// never validate on a `ManagedCertificate`. Listing them on the one shared
+/// Firm certificate would let that one domain hold TLS off every live brand:
+/// Google issues a managed certificate only once every domain on it
+/// validates, and GKE recreates it whenever its domain list changes.
 #[must_use]
 pub fn release_brand_hosts() -> Vec<(BrandKey, &'static str)> {
     BrandKey::ALL

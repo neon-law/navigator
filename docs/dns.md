@@ -62,7 +62,7 @@ is served by the redirect service, which sends both its apex and `www` host to t
 | `iep.neonlaw.com` / `lex-tecnica.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
 | `staging-iep.neonlaw.com` / `staging-lex-tecnica.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `neonlaw.org` / `www.neonlaw.org` | the redirect service | `https://www.neonlaw.com` (path-preserving 301) |
-| `lawyershook.com` | mail only (Google Workspace `MX` and `TXT`) | no web records |
+| `lawyershook.com` | retired | no records |
 
 The `neonlaw.com` apex is not a deployment entry: it carries a `URL` record that 301s to `https://www.neonlaw.com`,
 which is a record inside the production zone. It is the Apex→www row of the record table below. It must not appear on a
@@ -71,8 +71,8 @@ GKE `ManagedCertificate`: the name does not resolve to the load balancer, and a 
 deep links survive the domain migration.
 
 A **moved brand** — a key whose `views::brand::BrandKey::moved_to` names the brand it moved to — is no longer
-served by the cluster. Lawyer Shook moved to Guieb & Shook, and the `lawyershook.com` zone keeps only its mail
-records: the apex, `www`, and `staging` carry no `A` or `URL` record. The release inventory
+served by the cluster. Lawyer Shook moved to Guieb & Shook, and the `lawyershook.com` zone is retired: it carries
+no web or mail records. The release inventory
 (`views::brand::release_brand_hosts()`) leaves a moved brand out, so none of its hosts reaches a `ManagedCertificate`
 or an Ingress rule in either environment, and every roll deletes its old `navigator-web-<key>` certificate.
 That matters because the brand hosts share one certificate, `navigator-firm`: Google issues it only once every listed

@@ -8051,11 +8051,10 @@ mod tests {
     /// A moved brand's hosts reach no certificate and no Ingress rule, in
     /// either environment, and its old certificate is deleted on every roll.
     ///
-    /// Its domain keeps only mail records, so its hosts never resolve to the
-    /// load balancer. On the shared Firm certificate they would fail
-    /// validation, and Google issues a
-    /// managed certificate only once every domain on it validates — so one
-    /// retired domain could hold TLS off every live brand.
+    /// Its domain is retired, so its hosts never resolve to the load balancer.
+    /// On the shared Firm certificate they would fail validation, and Google
+    /// issues a managed certificate only once every domain on it validates —
+    /// so one retired domain could hold TLS off every live brand.
     #[test]
     fn a_moved_brand_stays_off_every_certificate_and_ingress_rule() {
         let moved: Vec<_> = views::brand::BrandKey::ALL
