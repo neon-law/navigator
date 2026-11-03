@@ -1040,7 +1040,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     // the route itself 404'd off Vesta by `reject_unpublished_firm_path`.
     // The country options resolve from the bundled GeoNames index at
     // router-build time; they carry no visitor data.
-    let world_copy = branded_map(branding, |resolved| {
+    let world_copy = branded_map(branding, "/world", |resolved| {
         webapp::world_page::InjectedWorld(resolve_world_content(resolved))
     });
     routers.push(with_branded(
