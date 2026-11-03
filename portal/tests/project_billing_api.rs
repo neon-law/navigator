@@ -518,6 +518,7 @@ async fn run_flat_fee() {
     assert_eq!(repeat.status(), StatusCode::CONFLICT);
     assert_eq!(fixture.provider.create_keys().len(), 1);
     assert_amended_fee_bills_only_the_balance(&fixture).await;
+    Box::pin(assert_later_costs_leave_covered_time_unbilled(&fixture)).await;
 }
 
 async fn assert_amended_fee_bills_only_the_balance(fixture: &Fixture) {
@@ -548,6 +549,66 @@ async fn assert_amended_fee_bills_only_the_balance(fixture: &Fixture) {
         StatusCode::CONFLICT
     );
     assert_eq!(fixture.provider.create_keys().len(), 2);
+}
+
+async fn assert_later_costs_leave_covered_time_unbilled(fixture: &Fixture) {
+    let entry = seed_entry(fixture, 30, "Synthetic covered review").await;
+    assert_eq!(
+        generate(&fixture.app, fixture).await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(fixture.provider.create_keys().len(), 2);
+    let cost_id = seed_confirmed_cost(fixture, 5_000).await;
+    fixture.provider.fail_next();
+    assert_eq!(
+        generate(&fixture.app, fixture).await.status(),
+        StatusCode::BAD_GATEWAY
+    );
+    let batch = pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .unwrap();
+    assert_eq!(batch.total_cents, 5_000);
+    assert_eq!(batch.flat_fee_cents, None);
+    assert!(batch.entry_ids.is_empty());
+    assert_eq!(batch.cost_ids, vec![cost_id]);
+    assert_eq!(time_entry_status(&fixture.pg, entry.id).await, "unbilled");
+    assert_eq!(
+        cost_status(&fixture.pg, fixture.project_id, cost_id).await,
+        "reserved"
+    );
+
+    let response = generate(&fixture.app, fixture).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let receipt: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(receipt["total_cents"], 5_000);
+    assert_eq!(receipt["consumed_time_entries"], 0);
+    assert_eq!(receipt["consumed_costs"], 1);
+    assert_eq!(receipt["flat_fee"], false);
+    assert_eq!(receipt["line_items"].as_array().unwrap().len(), 1);
+    assert_eq!(time_entry_status(&fixture.pg, entry.id).await, "unbilled");
+    assert_eq!(
+        cost_status(&fixture.pg, fixture.project_id, cost_id).await,
+        "invoiced"
+    );
+    assert_eq!(
+        store::billing_batches::flat_fee_billed_cents(&fixture.pg, fixture.project_id)
+            .await
+            .unwrap(),
+        750_000
+    );
+    let keys = fixture.provider.create_keys();
+    assert_eq!(keys.len(), 4);
+    assert_eq!(keys[2], keys[3]);
+    assert_eq!(
+        generate(&fixture.app, fixture).await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(fixture.provider.create_keys().len(), 4);
 }
 
 #[tokio::test]

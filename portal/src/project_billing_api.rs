@@ -312,11 +312,12 @@ pub(crate) async fn generate_invoice(
     }
     // Under a consumed fee agreement the matter's work is covered by the
     // fee: billing later time at hourly rates would charge the client twice
-    // for the same agreement. The firm amends the fee for additional work;
-    // generation refuses until then.
-    if fee_billed {
+    // for the same agreement. Later reimbursable costs remain billable
+    // independently; a cost-only batch leaves covered time unreserved.
+    if fee_billed && unbilled_costs.is_empty() {
         return Err(InvoiceGenerationError::FlatFeeAlreadyBilled);
     }
+    let entries = if fee_billed { Vec::new() } else { entries };
     // A cost dated after the invoice composes fine but would refuse at
     // link_invoice — after Xero already holds the invoice. The same rule
     // runs here, before anything is raised.
