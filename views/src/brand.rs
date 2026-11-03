@@ -1311,6 +1311,11 @@ impl BrandKey {
 
     /// The brand this key's site moved to, if it moved: every served host
     /// 301s to the matching host of the brand named here.
+    ///
+    /// A moved brand's domain no longer resolves to the cluster (its zone is
+    /// retired), so [`release_brand_hosts`] leaves its hosts off every
+    /// certificate and Ingress rule. The in-process 301 remains for any
+    /// request that still reaches the router.
     #[must_use]
     pub const fn moved_to(self) -> Option<Self> {
         match self {
@@ -1585,7 +1590,8 @@ impl BrandKey {
     /// requested by the same change that approves it. `cli::devx::ship` now
     /// derives certificates and Ingress rules from [`release_brand_hosts`],
     /// the full registry, so every key carries a valid, isolated certificate
-    /// family (ENG-768) in both environments regardless of `is_live()`.
+    /// family (ENG-768) in both environments regardless of `is_live()` —
+    /// every key but a moved one, whose domain no longer resolves to the cluster.
     ///
     /// It gates the footer and host admission; route publication is separate.
     #[must_use]
@@ -1762,6 +1768,11 @@ pub fn registered_brand_key(host: &str) -> Option<BrandKey> {
 // [`held_out_host`]'s `404` — never a TLS handshake failure — which is the
 // whole point of separating "the certificate exists" from "the practice may
 // be advertised."
+//
+// The one exception is a moved brand ([`BrandKey::moved_to`]). Its domain
+// no longer resolves to the cluster, so it is left out of [`release_brand_hosts`] and never
+// reaches a certificate or an Ingress rule; the in-process 301 in
+// `portal::canonical_host` stays only for a request that still arrives.
 
 /// Every (key, host) pair the launch gate admits, in registry order: the
 /// approved set crossed with the hosts each approved key serves.
@@ -1801,11 +1812,19 @@ pub fn live_brand_apexes() -> Vec<(BrandKey, &'static str)> {
 /// next release's certificate/Ingress render — with no second hostname list
 /// to keep in sync, the same property [`live_brand_hosts`] already gives the
 /// launch gate.
+///
+/// A key whose site has moved ([`BrandKey::moved_to`]) is left out. Its
+/// domain is retired and never resolves to the load balancer, so its hosts can
+/// never validate on a `ManagedCertificate`. Listing them on the one shared
+/// Firm certificate would let that one domain hold TLS off every live brand:
+/// Google issues a managed certificate only once every domain on it
+/// validates, and GKE recreates it whenever its domain list changes.
 #[must_use]
 pub fn release_brand_hosts() -> Vec<(BrandKey, &'static str)> {
     BrandKey::ALL
         .iter()
         .copied()
+        .filter(|key| key.moved_to().is_none())
         .flat_map(|key| key.hosts().iter().copied().map(move |host| (key, host)))
         .collect()
 }
@@ -3547,25 +3566,34 @@ mod tests {
     }
 
     /// [`super::release_brand_hosts`] is the TLS/Ingress release inventory:
-    /// every registered key crossed with its hosts, unfiltered by
-    /// `is_live()`. It must include [`super::live_brand_hosts`]
-    /// — every live host still gets a certificate — while also covering every
-    /// held-out brand's hosts, which `live_brand_hosts` deliberately omits.
+    /// every registered key that has not moved, crossed with its hosts,
+    /// unfiltered by `is_live()`. It must include every live, unmoved host of
+    /// [`super::live_brand_hosts`] — each still gets a certificate — while
+    /// also covering every held-out brand's hosts, which `live_brand_hosts`
+    /// deliberately omits.
     #[test]
     fn release_brand_hosts_is_the_full_registry_crossed_with_its_hosts() {
         let released = super::release_brand_hosts();
         let expected: Vec<(BrandKey, &str)> = BrandKey::ALL
             .iter()
             .copied()
+            .filter(|key| key.moved_to().is_none())
             .flat_map(|key| key.hosts().iter().copied().map(move |host| (key, host)))
             .collect();
         assert_eq!(released, expected);
+        let moved = BrandKey::ALL
+            .iter()
+            .filter(|key| key.moved_to().is_some())
+            .count();
         assert_eq!(
             released.len(),
-            BrandKey::ALL.len() * 2,
-            "every registered key serves exactly a production and a staging host"
+            (BrandKey::ALL.len() - moved) * 2,
+            "every released key serves exactly a production and a staging host"
         );
         for pair in super::live_brand_hosts() {
+            if pair.0.moved_to().is_some() {
+                continue;
+            }
             assert!(
                 released.contains(&pair),
                 "{pair:?} is live and must still be in the release inventory"
