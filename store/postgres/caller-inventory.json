@@ -483,6 +483,7 @@
       "store/src/surreal/test_support.rs",
       "store/src/synthetic_portfolio.rs",
       "store/src/templates.rs",
+      "store/src/test_support.rs",
       "telemetry/src/lib.rs",
       "views/src/brand.rs",
       "views/src/harvard_outline.rs",
