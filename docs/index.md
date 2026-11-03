@@ -112,6 +112,7 @@ cannot decay the way the old seven-line stub did.
 - [`claude-mcp-client.md`](claude-mcp-client.md) — Claude as a Navigator MCP client over MCP.
 - [`mail-cli.md`](mail-cli.md) — the draft-only Gmail CLI, its token contract, and its limits.
 - [`inbox-import-cli.md`](inbox-import-cli.md) — historical email and LinkedIn imports, replay, and attachment filing.
+- [`fi-import.md`](fi-import.md) — explicitly mapped Google Fi history previews, imports, and replay safety.
 
 ## Billing, trust, and e-signature
 

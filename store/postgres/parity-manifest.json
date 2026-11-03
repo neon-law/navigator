@@ -170,6 +170,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "billed_call",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "brand_phone_number",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "clause",
       "missing_column": null,
       "missing_table": null,
@@ -1822,7 +1836,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 148,
+    "table_count": 150,
     "tables": {
       "address": {
         "columns": {
@@ -2070,6 +2084,22 @@
         "name": "authority_use",
         "references": []
       },
+      "billed_call": {
+        "columns": {
+          "call_sid": "TEXT",
+          "call_started_at": "TIMESTAMPTZ",
+          "conversation_id": "UUID",
+          "duration_seconds": "BIGINT",
+          "firm_id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "tenths": "BIGINT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "billed_call",
+        "references": []
+      },
       "blog_video": {
         "columns": {
           "brand_key": "TEXT",
@@ -2121,6 +2151,20 @@
         "references": [
           "firm"
         ]
+      },
+      "brand_phone_number": {
+        "columns": {
+          "auth_token_secret_ref": "UUID",
+          "brand_key": "TEXT",
+          "channel_kinds": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "number_e164": "TEXT",
+          "twilio_account_sid": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "brand_phone_number",
+        "references": []
       },
       "cap_table_holding": {
         "columns": {

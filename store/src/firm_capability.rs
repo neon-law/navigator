@@ -83,6 +83,8 @@ pub enum FirmCapability {
     /// membership tier admits it — pointing the seat at a firm is the same
     /// ownership decision moving it is.
     AttachBrand,
+    /// Read a Firm's Brand call/SMS counts, billed tenths and receiving-number metadata.
+    ViewCommunications,
 }
 
 impl FirmCapability {
@@ -101,6 +103,7 @@ impl FirmCapability {
             | Self::ViewIntegrationSecretMetadata
             | Self::UseIntegrations
             | Self::ManageRecoveryArchives
+            | Self::ViewCommunications
             | Self::ManageBrand => membership == FirmMembership::Admin,
             Self::ManageBrandContent
             | Self::ManageSummaryApprovals
@@ -129,6 +132,7 @@ impl FirmCapability {
             Self::ManageRecoveryArchives => "manage_recovery_archives",
             Self::MoveBrand => "move_brand",
             Self::AttachBrand => "attach_brand",
+            Self::ViewCommunications => "view_communications",
         }
     }
 
@@ -269,6 +273,12 @@ async fn resolve_inner(
             (FirmCapabilityDecision::Forbidden, "owner_not_secret_writer")
         });
     }
+    if capability == FirmCapability::ViewCommunications && actor_role != Role::Admin {
+        return Ok((
+            FirmCapabilityDecision::Forbidden,
+            "communications_requires_admin",
+        ));
+    }
     if actor_role == Role::Client {
         return Ok((
             FirmCapabilityDecision::Forbidden,
@@ -326,6 +336,9 @@ pub async fn allowed_firm_ids(
             .into_iter()
             .map(|f| f.id)
             .collect());
+    }
+    if capability == FirmCapability::ViewCommunications && actor_role != Role::Admin {
+        return Ok(Vec::new());
     }
     if actor_role == Role::Client {
         return Ok(Vec::new());

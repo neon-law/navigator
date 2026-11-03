@@ -4894,21 +4894,39 @@ pub fn owner_inbox_router(
     surreal: store::surreal::SurrealDb,
 ) -> Router {
     csrf_page_router(
-        webapp::inbox::INBOX_PATH,
-        webapp::inbox::OwnerInbox,
+        webapp::communication_dashboard::PARKED_CALLS_PATH,
+        webapp::communication_dashboard::Communications,
         surreal.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
     )
     .merge(csrf_page_router(
-        OWNER_INBOX_PATH,
-        webapp::inbox::OwnerInbox,
-        surreal,
-        sessions,
-        policy,
-        auth,
+        webapp::communication_dashboard::BRAND_COMMUNICATIONS_PATH,
+        webapp::communication_dashboard::Communications,
+        surreal.clone(),
+        sessions.clone(),
+        policy.clone(),
+        auth.clone(),
     ))
+    .merge(
+        csrf_page_router(
+            webapp::inbox::INBOX_PATH,
+            webapp::inbox::OwnerInbox,
+            surreal.clone(),
+            sessions.clone(),
+            policy.clone(),
+            auth.clone(),
+        )
+        .merge(csrf_page_router(
+            OWNER_INBOX_PATH,
+            webapp::inbox::OwnerInbox,
+            surreal,
+            sessions,
+            policy,
+            auth,
+        )),
+    )
 }
 
 /// `/app/inbox/triage` — the human-review queue over `NeedsHuman` and
