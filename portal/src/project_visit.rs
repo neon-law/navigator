@@ -72,18 +72,18 @@ fn is_project_page_route(route: &str) -> bool {
                 .any(|tab| tab.segment() == segment)
         })
         || matches!(
-        route,
-        "/app/projects/{project_code}"
-            | "/app/projects/{project_code}/edit"
-            | "/app/projects/{project_code}/people/new"
-            | "/app/projects/{project_code}/people/{role_id}/edit"
-            | "/app/projects/{project_code}/notations/new"
-            | "/app/projects/{project_code}/documents/{doc_id}"
-            | "/app/projects/{project_code}/conversation"
-            | "/app/projects/{project_code}/intake/{notation_id}"
-            | "/app/projects/{project_code}/review/{doc_id}"
-            | "/app/projects/{project_code}/{page_slug}"
-    )
+            route,
+            "/app/projects/{project_code}"
+                | "/app/projects/{project_code}/edit"
+                | "/app/projects/{project_code}/people/new"
+                | "/app/projects/{project_code}/people/{role_id}/edit"
+                | "/app/projects/{project_code}/notations/new"
+                | "/app/projects/{project_code}/documents/{doc_id}"
+                | "/app/projects/{project_code}/conversation"
+                | "/app/projects/{project_code}/intake/{notation_id}"
+                | "/app/projects/{project_code}/review/{doc_id}"
+                | "/app/projects/{project_code}/{page_slug}"
+        )
 }
 
 pub(crate) fn project_code_from_path(path: &str) -> Option<&str> {

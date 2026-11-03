@@ -16801,10 +16801,7 @@ async fn project_documents_upload_writes_blob_and_document_with_description() {
         .unwrap_or("");
     // The Documents tab, where the table the upload just added to renders;
     // the workbench opens on Overview, which lists no documents (#176).
-    assert_eq!(
-        location,
-        format!("/app/projects/{project_code}/documents")
-    );
+    assert_eq!(location, format!("/app/projects/{project_code}/documents"));
 
     // One document asset — carrying the byte pointer plus upload
     // provenance and the optional description from the form.

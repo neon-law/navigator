@@ -7319,7 +7319,10 @@ mod tests {
             P((code.clone(), client_row.id)),
         )
         .await;
-        assert_eq!(location(&removed), format!("/app/projects/{code}/participants"));
+        assert_eq!(
+            location(&removed),
+            format!("/app/projects/{code}/participants")
+        );
         assert!(
             !store::projects::participation_by_id(&db, client_row.id)
                 .await
@@ -7333,7 +7336,10 @@ mod tests {
             P((code.clone(), client_row.id)),
         )
         .await;
-        assert_eq!(location(&designated), format!("/app/projects/{code}/participants"));
+        assert_eq!(
+            location(&designated),
+            format!("/app/projects/{code}/participants")
+        );
         assert!(
             store::projects::participation_by_id(&db, client_row.id)
                 .await

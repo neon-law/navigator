@@ -21,9 +21,9 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{Choice, Field, FormCard, Heading};
-use crate::sections::page::MatterTab;
 use crate::people::ViewerRole;
 use crate::portal_project_list::PersonId;
+use crate::sections::page::MatterTab;
 
 /// The pending client-intake notation resolved by the portal request layer.
 /// The resolver lives in `portal`, which owns the workflow dependency; this
@@ -1384,7 +1384,10 @@ mod render_tests {
             ..saved_testimonial_view()
         });
         assert!(html.contains(r#"role="alert""#), "{html}");
-        assert!(html.contains("Your testimonial could not be saved."), "{html}");
+        assert!(
+            html.contains("Your testimonial could not be saved."),
+            "{html}"
+        );
     }
 
     #[test]
