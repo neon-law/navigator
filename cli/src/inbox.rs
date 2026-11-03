@@ -266,30 +266,27 @@ fn print_plan(view: &ProcessView, apply: Option<&ProcessApplyView>) {
         view.computed_label, view.computed_route
     );
     println!("Because      {}", view.reason);
-    match apply {
-        Some(apply) => {
-            let note = if apply.already_recorded {
-                " (already recorded — overwritten with the same truth)"
-            } else {
-                ""
-            };
-            println!(
-                "Recorded     {} ({}){}",
-                apply.route_label, apply.route, note
-            );
-            println!("Recorded at  {}", apply.recorded_at);
-            println!("Slack notice {}", apply.slack_notice);
-            if let Some(filing) = &apply.nef {
-                println!("Filing       {}", filing.outcome);
-            }
+    if let Some(apply) = apply {
+        let note = if apply.already_recorded {
+            " (already recorded — overwritten with the same truth)"
+        } else {
+            ""
+        };
+        println!(
+            "Recorded     {} ({}){}",
+            apply.route_label, apply.route, note
+        );
+        println!("Recorded at  {}", apply.recorded_at);
+        println!("Slack notice {}", apply.slack_notice);
+        if let Some(filing) = &apply.nef {
+            println!("Filing       {}", filing.outcome);
         }
-        None => {
-            if let (Some(route), Some(recorded_at)) = (&view.recorded_route, &view.recorded_at) {
-                println!("Recorded     {route} at {recorded_at}");
-            }
-            if let Some(outcome) = &view.recorded_nef_outcome {
-                println!("Filing       {outcome}");
-            }
+    } else {
+        if let (Some(route), Some(recorded_at)) = (&view.recorded_route, &view.recorded_at) {
+            println!("Recorded     {route} at {recorded_at}");
+        }
+        if let Some(outcome) = &view.recorded_nef_outcome {
+            println!("Filing       {outcome}");
         }
     }
 }
