@@ -530,13 +530,37 @@ async fn a_flat_fee_bills_the_fee_and_consumes_the_entries() {
         "invoiced"
     );
 
-    // A repeat re-answers the same invoice: the seam is idempotent per
-    // matter, so the mirror still holds one row under the same id.
+    // A repeat is the no-op: the fee is consumed and nothing is unbilled —
+    // 409, and the seam was crossed exactly once, so the mirror still holds
+    // one row under the first invoice's id.
     let resp = generate(&fx, &fx.lawyer, fx.project_id).await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
     let again = body_json(resp).await;
-    assert_eq!(again["xero_invoice_id"], receipt["xero_invoice_id"]);
+    assert_eq!(again["reason"], "nothing_to_invoice");
     assert_eq!(mirror_rows(&fx.surreal, fx.project_id).await.len(), 1);
+}
+
+#[tokio::test]
+async fn hourly_billing_refuses_under_a_consumed_flat_fee() {
+    let Some(_) = invoice_store().await else {
+        return;
+    };
+    let fx = build_fixture().await;
+    let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+    store::attorney_rates::set_flat_fee(&pg, fx.project_id, 150_000)
+        .await
+        .unwrap();
+    seed_entry(&pg, fx.project_id, fx.lawyer_id, 90, true).await;
+    let resp = generate(&fx, &fx.lawyer, fx.project_id).await;
+    assert_eq!(resp.status(), StatusCode::OK, "the fee bills itself");
+
+    // Later work is covered by the fee agreement: billing it at hourly
+    // rates would charge the client twice for the same agreement.
+    seed_entry(&pg, fx.project_id, fx.lawyer_id, 30, true).await;
+    let resp = generate(&fx, &fx.lawyer, fx.project_id).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let again = body_json(resp).await;
+    assert_eq!(again["reason"], "flat_fee_already_billed");
 }
 
 #[tokio::test]
@@ -567,7 +591,7 @@ async fn already_invoiced_entries_are_skipped() {
     )
     .await
     .unwrap();
-    store::time_entries::mark_invoiced(&pg, &[already], fx.lawyer_id, &earlier)
+    store::time_entries::mark_invoiced(&pg, &[already], fx.lawyer_id, &earlier, false)
         .await
         .unwrap();
 
@@ -797,13 +821,16 @@ async fn a_provider_refusal_marks_nothing() {
     };
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
     let entry = seed_entry(&pg, project_id, lawyer.id, 90, true).await;
+    // A confirmed cost rides along: the refusal leaves it exactly where it
+    // was, too.
+    seed_cost(&fx.surreal, &pg, project_id, lawyer.id, 1_250, true).await;
 
     let resp = generate(&fx, &fx.lawyer, project_id).await;
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(
         *raises.lock().unwrap(),
         1,
-        "the refused raise crossed the app's provider exactly once"
+        "the refused invoice creation crossed the app's provider exactly once"
     );
     assert!(
         mirror_rows(&fx.surreal, project_id).await.is_empty(),
@@ -882,11 +909,10 @@ async fn outsiders_and_clients_cannot_generate() {
     );
 }
 
-/// A provider whose raise always refuses — the synthetic outage. The
-/// generation must surface it as 502 and mark nothing. The shared counter
-/// records the actual raise attempts (contact resolution and invoice
-/// creation are both raise-path calls) so the assertions reflect the
-/// provider the application actually used.
+/// A provider whose invoice creation always refuses — the synthetic outage
+/// at the Xero write. The generation must surface it as 502 and mark
+/// nothing. The shared counter records the actual `create_invoice` calls so
+/// the assertions reflect the provider the application actually used.
 struct FailingProvider {
     raises: Arc<Mutex<usize>>,
 }
@@ -894,8 +920,7 @@ struct FailingProvider {
 #[async_trait]
 impl BillingProvider for FailingProvider {
     async fn ensure_contact(&self, _request: &ContactRequest) -> Result<ContactId, BillingError> {
-        *self.raises.lock().unwrap() += 1;
-        Err(BillingError::Provider("synthetic outage".into()))
+        Ok(ContactId(format!("contact-{}", Uuid::now_v7().simple())))
     }
 
     async fn create_invoice(
