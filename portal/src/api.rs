@@ -2922,6 +2922,7 @@ async fn open_project(
     }
     let brand = selected_project_brand(&state, &session, input.firm_id, input.brand).await?;
     let command = store::projects::OpenMatterCommand {
+        firm_id: input.firm_id,
         name: input.name,
         code: input.code,
         client_id: input.client_id,

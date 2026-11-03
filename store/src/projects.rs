@@ -3062,6 +3062,9 @@ pub async fn delete_project_with_surreal(
 /// itself stays free of session and HTTP types.
 #[derive(Debug)]
 pub struct OpenMatterCommand {
+    /// The authorized owning Firm, when the caller selected one explicitly.
+    /// The transaction refuses a brand that moved away from this Firm.
+    pub firm_id: Option<Uuid>,
     /// The matter's display name. Required.
     pub name: String,
     /// The matter's code, stored exactly as supplied (after normalizing case
@@ -3319,6 +3322,35 @@ async fn record_open_attestation(
     Ok(())
 }
 
+/// Resolve ownership without dropping an explicitly authorized Firm.
+async fn resolve_open_firm(
+    surreal: &SurrealDb,
+    input: &OpenMatterCommand,
+) -> Result<Uuid, OpenMatterError> {
+    // Validate every caller's selected brand against live rows. The API uses
+    // the request brand by default or an explicitly authorized Firm/brand pair.
+    if !crate::firms::brand_key_exists(surreal, &input.brand)
+        .await
+        .map_err(|error| OpenMatterError::Db(error.to_string()))?
+    {
+        return Err(OpenMatterError::NotFound("brand"));
+    }
+    let firm_id = crate::firms::firm_id_for_brand_key(surreal, &input.brand)
+        .await
+        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
+    let firm_id = firm_id.ok_or(OpenMatterError::Invalid(
+        "That brand is not worn by a Firm.",
+    ))?;
+
+    if input.firm_id.is_some_and(|expected| expected != firm_id) {
+        return Err(OpenMatterError::Invalid(
+            "That Firm does not wear the selected brand.",
+        ));
+    }
+
+    Ok(firm_id)
+}
+
 pub async fn open_matter(
     surreal: &SurrealDb,
     input: &OpenMatterCommand,
@@ -3347,20 +3379,7 @@ pub async fn open_matter(
              it must start and end with a letter or digit.",
         ));
     }
-    // Validate every caller's selected brand against live rows. The API uses
-    // the request brand by default or an explicitly authorized Firm/brand pair.
-    if !crate::firms::brand_key_exists(surreal, &input.brand)
-        .await
-        .map_err(|error| OpenMatterError::Db(error.to_string()))?
-    {
-        return Err(OpenMatterError::NotFound("brand"));
-    }
-    let firm_id = crate::firms::firm_id_for_brand_key(surreal, &input.brand)
-        .await
-        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
-    let firm_id = firm_id.ok_or(OpenMatterError::Invalid(
-        "That brand is not worn by a Firm.",
-    ))?;
+    let firm_id = resolve_open_firm(surreal, input).await?;
 
     // Validate every reference before opening. The project and both
     // participations commit in the explicit SurrealDB transaction below;
@@ -3390,7 +3409,9 @@ pub async fn open_matter(
                 r"BEGIN;
                  CREATE $project SET code = $code, name = $name, status = $status,
                     brand = $brand,
-                    firm_id = $firm_id,
+                    firm_id = IF (SELECT VALUE firm_id FROM firm_brand WHERE brand_key = $brand) = [$firm_id] {{
+                        $firm_id
+                    }} ELSE {{ THROW 'project_firm_brand_changed'; }},
                     entity_id = $entity_id, jurisdiction_id = $jurisdiction_id,
                     description = $description,
                     closed_at = $closed_at,
@@ -3421,6 +3442,8 @@ pub async fn open_matter(
     .await
     .map_err(|error| match error {
         ProjectStoreError::CodeTaken => OpenMatterError::CodeConflict,
+        other if other.to_string().contains("project_firm_brand_changed") =>
+            OpenMatterError::Invalid("Firm and brand changed while opening the matter; retry the request."),
         other => OpenMatterError::Db(other.to_string()),
     })?;
     let created: Option<ProjectRow> = response
