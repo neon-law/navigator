@@ -566,6 +566,7 @@ pub(crate) async fn fi_import_door(
         .await
         .map_err(|_| ApiError::Db("native Inbox authority is required for Fi imports".into()))?;
     let scope = fi_import::Scope {
+        actor,
         firm,
         brand: brand.key.clone(),
         account,

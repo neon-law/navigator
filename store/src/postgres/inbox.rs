@@ -378,6 +378,168 @@ pub(crate) async fn ingest_message_on(
     })
 }
 
+/// Fi imports reserve destination and immutable history in the caller's transaction.
+pub(crate) async fn ingest_fi_message_in(
+    connection: &mut sqlx::PgConnection,
+    scope: &crate::fi_import::Scope,
+    row: &crate::fi_import::Row,
+) -> Result<IngestedInbound, crate::fi_import::FiImportError> {
+    use crate::fi_import::FiImportError as Error;
+    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT DISTINCT message_id FROM inbox_ingress WHERE firm_id=$1 AND provider_account=$2 AND provider_message_id=$3")
+        .bind(scope.firm).bind(&scope.account).bind(&row.provider_message_id)
+        .fetch_all(&mut *connection).await.map_err(|_|Error::Storage)?;
+    if ids.len() > 1 {
+        return Err(Error::Conflict);
+    }
+    let existing = ids.first().copied();
+    let inbound = row.ingest(scope.firm, &scope.brand, &scope.account);
+    let conversation_id = if let Some(id) = existing {
+        sqlx::query_scalar("SELECT conversation_id FROM message WHERE id=$1")
+            .bind(id)
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(|_| Error::Storage)?
+    } else {
+        match find_open_thread_on(&mut *connection, &inbound)
+            .await
+            .map_err(|_| Error::Storage)?
+        {
+            Some(conversation) => conversation.id,
+            None => {
+                create_conversation_on(&mut *connection, &inbound)
+                    .await
+                    .map_err(|_| Error::Storage)?
+                    .id
+            }
+        }
+    };
+    let acquired: bool =
+        sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1,168))")
+            .bind(conversation_id.to_string())
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(|_| Error::Storage)?;
+    if !acquired {
+        return Err(Error::Busy);
+    }
+    let saved = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {CONVERSATION_COLUMNS} FROM inbox_conversation WHERE id=$1 FOR UPDATE"
+    )))
+    .bind(conversation_id)
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|_| Error::Storage)?;
+    let conversation = conversation(&saved).map_err(|_| Error::Storage)?;
+    if conversation.firm_id != scope.firm
+        || conversation.brand_key.as_deref() != Some(scope.brand.as_str())
+        || conversation.provider_account != scope.account
+        || conversation.channel != inbound.channel
+        || scope.project.is_some_and(|project| {
+            conversation
+                .project_id
+                .is_some_and(|actual| actual != project)
+        })
+    {
+        return Err(Error::Conflict);
+    }
+    if let Some(id) = existing {
+        let saved = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {MESSAGE_COLUMNS} FROM message WHERE id=$1"
+        )))
+        .bind(id)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|_| Error::Storage)?;
+        let message = message(&saved).map_err(|_| Error::Storage)?;
+        if !crate::fi_import::matches_facts(scope, row, &message, &conversation)? {
+            return Err(Error::Conflict);
+        }
+    }
+    pin_fi_project_in(connection, scope, &conversation).await?;
+    let message_id = if let Some(id) = existing {
+        id
+    } else {
+        insert_fi_history_in(
+            connection,
+            &inbound,
+            row.metadata.direction.as_str(),
+            conversation_id,
+        )
+        .await?
+    };
+    sqlx::query("UPDATE inbox_conversation SET unread=true,updated_at=now() WHERE id=$1")
+        .bind(conversation_id)
+        .execute(&mut *connection)
+        .await
+        .map_err(|_| Error::Storage)?;
+    Ok(IngestedInbound {
+        conversation_id,
+        message_id,
+        deduped: existing.is_some(),
+    })
+}
+
+async fn pin_fi_project_in(
+    connection: &mut sqlx::PgConnection,
+    scope: &crate::fi_import::Scope,
+    conversation: &crate::inbox::Conversation,
+) -> Result<(), crate::fi_import::FiImportError> {
+    use crate::fi_import::FiImportError as Error;
+    let Some(project) = scope.project else {
+        return Ok(());
+    };
+    let valid: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM project WHERE id=$1 AND firm_id=$2)")
+            .bind(project)
+            .bind(scope.firm)
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(|_| Error::Storage)?;
+    if !valid {
+        return Err(Error::Conflict);
+    }
+    if conversation.project_id.is_none() {
+        sqlx::query("UPDATE inbox_conversation SET project_id=$2,unread=true,updated_at=now() WHERE id=$1 AND project_id IS NULL")
+            .bind(conversation.id).bind(project).execute(&mut *connection).await.map_err(|_|Error::Storage)?;
+        sqlx::query("INSERT INTO inbox_assignment(id,conversation_id,firm_id,from_project_id,to_project_id,actor_person_id,inserted_at) VALUES($1,$2,$3,NULL,$4,$5,now())")
+            .bind(Uuid::now_v7()).bind(conversation.id).bind(scope.firm).bind(project).bind(scope.actor)
+            .execute(&mut *connection).await.map_err(|_|Error::Storage)?;
+    }
+    Ok(())
+}
+
+async fn insert_fi_history_in(
+    connection: &mut sqlx::PgConnection,
+    inbound: &IngestInbound<'_>,
+    direction_value: &str,
+    conversation_id: Uuid,
+) -> Result<Uuid, crate::fi_import::FiImportError> {
+    use crate::fi_import::FiImportError as Error;
+    let id = insert_message(
+        &mut *connection,
+        &MessageInsert {
+            conversation_id,
+            direction: direction_value,
+            body: inbound.body,
+            author_person_id: None,
+            provider_message_id: Some(inbound.provider_message_id),
+            provider_ref: None,
+            delivery_state: delivery::RECEIVED,
+            purpose: purpose::MATTER,
+            visibility: inbound.visibility,
+            attachment_asset_id: None,
+            raw_storage_key: None,
+            occurred_at: inbound.occurred_at,
+        },
+    )
+    .await
+    .map_err(|_| Error::Storage)?;
+    sqlx::query("INSERT INTO inbox_ingress(id,firm_id,channel,provider_account,provider_message_id,message_id,inserted_at) VALUES($1,$2,$3,$4,$5,$6,now())")
+        .bind(Uuid::now_v7()).bind(inbound.firm_id).bind(inbound.channel).bind(inbound.provider_account)
+        .bind(inbound.provider_message_id).bind(id).execute(&mut *connection).await.map_err(|_|Error::Storage)?;
+    Ok(id)
+}
+
 async fn deduped_ingest(pg: &PostgresDb, message_id: Uuid) -> Result<IngestedInbound, InboxError> {
     let existing = message_by_id_on(pg, message_id)
         .await?

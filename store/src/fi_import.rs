@@ -540,6 +540,7 @@ pub fn parse(mapping: &Mapping, number: &str, bytes: &[u8]) -> Result<Vec<Row>, 
 /// Scope resolved by the authenticated import door, never by CSV columns.
 #[derive(Clone, Debug)]
 pub struct Scope {
+    pub actor: Uuid,
     pub firm: Uuid,
     pub brand: String,
     pub account: String,
@@ -601,6 +602,15 @@ async fn matches_existing(
         .await
         .map_err(|_| FiImportError::Storage)?
         .ok_or(FiImportError::Storage)?;
+    matches_facts(scope, row, &message, &conversation)
+}
+
+pub(crate) fn matches_facts(
+    scope: &Scope,
+    row: &Row,
+    message: &inbox::Message,
+    conversation: &inbox::Conversation,
+) -> Result<bool, FiImportError> {
     let expected = row.ingest(scope.firm, &scope.brand, &scope.account);
     let original_time =
         DateTime::parse_from_rfc3339(&message.occurred_at).map_err(|_| FiImportError::Storage)?;
@@ -674,8 +684,7 @@ pub(crate) async fn lock_on(
     Ok(guard)
 }
 
-/// Native transactional ingress uniqueness chooses one immutable winner.
-/// Assignment cannot change the destination between preflight and verification.
+/// Commit immutable history and its requested initial attribution atomically.
 pub async fn ingest_on(
     pg: &crate::postgres::PostgresDb,
     scope: &Scope,
@@ -688,21 +697,8 @@ pub async fn ingest_on(
     if account(number)? != scope.account || !canonical(row) {
         return Err(FiImportError::Mapping("canonical Fi metadata required"));
     }
-    let guard = lock_on(pg).await?;
-    if preview_on(pg, scope, row).await? == Existing::Conflict {
-        return Err(FiImportError::Conflict);
-    }
-    let saved = crate::postgres::inbox::ingest_message_on(
-        pg,
-        row.metadata.direction.as_str(),
-        None,
-        &row.ingest(scope.firm, &scope.brand, &scope.account),
-    )
-    .await
-    .map_err(|_| FiImportError::Storage)?;
-    if !matches_existing(pg, scope, row, saved.message_id).await? {
-        return Err(FiImportError::Conflict);
-    }
+    let mut guard = lock_on(pg).await?;
+    let saved = crate::postgres::inbox::ingest_fi_message_in(&mut guard, scope, row).await?;
     guard.commit().await.map_err(|_| FiImportError::Storage)?;
     Ok(saved)
 }
