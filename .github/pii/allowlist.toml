@@ -104,6 +104,18 @@ values = ["+1 725 239 8413"]
 [[phones]]
 reason = "IEP Defenders' published voice line (iepdefenders.com/contact-us/)."
 values = ["+1 743 437 4357"]
+[[phones]]
+reason = "Synthetic E.164 validity fixtures in the store inbox tests (555-range and foreign-format shapes no person holds)."
+values = [
+  "+15551234567",
+  "+33123456789",
+  "+1555123",
+  "+1555123456789012345",
+  "15551234567",
+  "+05551234567",
+  "+1555-1234567",
+]
+
 
 [[phones]]
 reason = "Foreign-format fixtures: Ofcom drama numbers and the negative tests in cli/tests/no_client_data.rs."
