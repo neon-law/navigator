@@ -1312,8 +1312,8 @@ impl BrandKey {
     /// The brand this key's site moved to, if it moved: every served host
     /// 301s to the matching host of the brand named here.
     ///
-    /// A moved brand redirects at DNS (a `DNSimple` `URL` record), not in the
-    /// cluster, so [`release_brand_hosts`] leaves its hosts off every
+    /// A moved brand's domain no longer resolves to the cluster (its zone keeps
+    /// only mail records), so [`release_brand_hosts`] leaves its hosts off every
     /// certificate and Ingress rule. The in-process 301 remains for any
     /// request that still reaches the router.
     #[must_use]
@@ -1591,7 +1591,7 @@ impl BrandKey {
     /// derives certificates and Ingress rules from [`release_brand_hosts`],
     /// the full registry, so every key carries a valid, isolated certificate
     /// family (ENG-768) in both environments regardless of `is_live()` —
-    /// every key but a moved one, whose domain redirects at DNS.
+    /// every key but a moved one, whose domain no longer resolves to the cluster.
     ///
     /// It gates the footer and host admission; route publication is separate.
     #[must_use]
@@ -1770,7 +1770,7 @@ pub fn registered_brand_key(host: &str) -> Option<BrandKey> {
 // be advertised."
 //
 // The one exception is a moved brand ([`BrandKey::moved_to`]). Its domain
-// redirects at DNS, so it is left out of [`release_brand_hosts`] and never
+// no longer resolves to the cluster, so it is left out of [`release_brand_hosts`] and never
 // reaches a certificate or an Ingress rule; the in-process 301 in
 // `portal::canonical_host` stays only for a request that still arrives.
 
@@ -1814,10 +1814,9 @@ pub fn live_brand_apexes() -> Vec<(BrandKey, &'static str)> {
 /// launch gate.
 ///
 /// A key whose site has moved ([`BrandKey::moved_to`]) is left out. Its
-/// domain redirects at DNS (a `DNSimple` `URL` record) and never resolves to the
-/// load balancer, so its hosts can never validate on a `ManagedCertificate`.
-/// Listing them on the one shared Firm certificate would let a redirect-only
-/// domain whose zone lapses hold TLS off every live brand: Google issues a
+/// domain keeps only mail records and never resolves to the load balancer, so
+/// its hosts can never validate on a `ManagedCertificate`. Listing them on the
+/// one shared Firm certificate would let that one domain hold TLS off every live brand: Google issues a
 /// managed certificate only once every domain on it validates, and GKE
 /// recreates it whenever its domain list changes.
 #[must_use]

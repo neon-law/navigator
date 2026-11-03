@@ -62,7 +62,7 @@ is served by the redirect service, which sends both its apex and `www` host to t
 | `iep.neonlaw.com` / `lex-tecnica.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
 | `staging-iep.neonlaw.com` / `staging-lex-tecnica.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `neonlaw.org` / `www.neonlaw.org` | the redirect service | `https://www.neonlaw.com` (path-preserving 301) |
-| `lawyershook.com` / `www.lawyershook.com` | DNSimple `URL` records | `https://www.guiebandshook.com` (301) |
+| `lawyershook.com` | mail only (Google Workspace `MX` and `TXT`) | no web records |
 
 The `neonlaw.com` apex is not a deployment entry: it carries a `URL` record that 301s to `https://www.neonlaw.com`,
 which is a record inside the production zone. It is the Apex→www row of the record table below. It must not appear on a
@@ -70,15 +70,14 @@ GKE `ManagedCertificate`: the name does not resolve to the load balancer, and a 
 `Provisioning` until every listed name validates. The `neonlaw.org` zone has its own host-dispatched redirect service so
 deep links survive the domain migration.
 
-A **moved brand** — a key whose `views::brand::BrandKey::moved_to` names the brand it moved to — redirects at DNS, not
-in the cluster. Lawyer Shook moved to Guieb & Shook: `lawyershook.com` and `www.lawyershook.com` each carry a DNSimple
-`URL` record that 301s to `https://www.guiebandshook.com`, and `staging.lawyershook.com` needs no record. The release
-inventory (`views::brand::release_brand_hosts()`) leaves a moved brand out, so none of its hosts reaches a
-`ManagedCertificate` or an Ingress rule in either environment, and every roll deletes its old `navigator-web-<key>`
-certificate. That matters because the brand hosts share one certificate, `navigator-firm`: Google issues it only once
-every listed name validates, and GKE recreates it whenever its domain list changes, so a redirect-only name whose zone
-lapsed would hold TLS off every brand on it. The `URL` records need the same HTTPS setup as an apex redirect — see [The
-apex redirect is not done when the `URL` record lands](#the-apex-redirect-is-not-done-when-the-url-record-lands).
+A **moved brand** — a key whose `views::brand::BrandKey::moved_to` names the brand it moved to — is no longer
+served by the cluster. Lawyer Shook moved to Guieb & Shook, and the `lawyershook.com` zone keeps only its mail
+records: the apex, `www`, and `staging` carry no `A` or `URL` record. The release inventory
+(`views::brand::release_brand_hosts()`) leaves a moved brand out, so none of its hosts reaches a `ManagedCertificate`
+or an Ingress rule in either environment, and every roll deletes its old `navigator-web-<key>` certificate.
+That matters because the brand hosts share one certificate, `navigator-firm`: Google issues it only once every listed
+name validates, and GKE recreates it whenever its domain list changes, so a name that no longer resolves to the load
+balancer would hold TLS off every brand on it.
 
 Lex Tecnica's two brands, Lex Tecnica and IEP Defenders, are served on `neonlaw.com` subdomains rather than domains of
 their own: `lex-tecnica` and `iep` in production, `staging-lex-tecnica` and `staging-iep` on staging. They have no apex
@@ -380,7 +379,7 @@ A next release must carry every registered house brand's certificate, not only t
 `views::brand::release_brand_hosts()` is the compiled keys of `views::brand::BrandKey::ALL`, less any moved brand,
 crossed with the hosts each one serves (`www.<domain>` and `staging.<domain>`) — the **release inventory**
 `cli::devx::ship` reads to render every brand's `ManagedCertificate` and Ingress rule, in both environments, whether or
-not that brand has launched. A moved brand redirects at DNS and is never on it.
+not that brand has launched. A moved brand is never on it.
 
 This is a deliberate split from `views::brand::BrandKey::LIVE`, the **launch gate** — the approved list that controls
 the request router's host admission, the crawler's `robots.txt`/sitemap base, the apex redirect, and the footer's "Our

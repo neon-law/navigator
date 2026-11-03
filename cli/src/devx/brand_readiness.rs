@@ -180,7 +180,8 @@ pub(crate) fn release_targets(public_host: &str) -> Vec<(BrandKey, &'static str)
     views::brand::release_brand_hosts()
         .into_iter()
         // A moved brand is already out of the release inventory: its domain
-        // redirects at DNS, and the brand it moved to carries the check.
+        // no longer resolves to the cluster, and the brand it moved to carries
+        // the check.
         .filter(|(_, host)| views::brand::is_staging_host(host) == staging)
         .collect()
 }

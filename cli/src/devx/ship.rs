@@ -972,7 +972,7 @@ fn additional_brand_bindings(public_host: &str) -> Vec<AdditionalBrandBinding> {
     // note in `views::brand` and `the_render_covers_the_full_registry_while_the_router_stays_live_gated`.
     //
     // `release_brand_hosts` also leaves out every moved brand
-    // (`BrandKey::moved_to`): its domain redirects at DNS, so its hosts would
+    // (`BrandKey::moved_to`): its domain no longer resolves to the cluster, so its hosts would
     // never validate and must not sit on the shared Firm certificate.
     //
     // `release_brand_hosts` mixes production and staging names for the same
@@ -1031,7 +1031,7 @@ fn has_own_certificate(key: BrandKey) -> bool {
 ///
 /// A moved brand ([`BrandKey::moved_to`]) is retired the same way: it is out
 /// of the release inventory, so no render produces its certificate either,
-/// and its domain now redirects at DNS rather than reaching the cluster.
+/// and its domain no longer resolves to the cluster.
 fn retired_brand_certificates() -> Vec<String> {
     FIRM_CERTIFICATE_ONLY
         .iter()
@@ -8051,11 +8051,11 @@ mod tests {
     /// A moved brand's hosts reach no certificate and no Ingress rule, in
     /// either environment, and its old certificate is deleted on every roll.
     ///
-    /// Its domain redirects at DNS (a `DNSimple` `URL` record), so its hosts never
-    /// resolve to the load balancer. On the shared Firm certificate they would
-    /// fail validation the moment its zone lapsed, and Google issues a
+    /// Its domain keeps only mail records, so its hosts never resolve to the
+    /// load balancer. On the shared Firm certificate they would fail
+    /// validation, and Google issues a
     /// managed certificate only once every domain on it validates — so one
-    /// redirect-only domain could hold TLS off every live brand.
+    /// retired domain could hold TLS off every live brand.
     #[test]
     fn a_moved_brand_stays_off_every_certificate_and_ingress_rule() {
         let moved: Vec<_> = views::brand::BrandKey::ALL
@@ -8151,8 +8151,9 @@ mod tests {
             // brand other than the default, has a certificate and an
             // Ingress rule. A host the process answers for but the
             // deployment never routes would be a live-brand regression. A
-            // moved brand is the exception: its domain redirects at DNS, so
-            // the router's 301 only answers a request that still arrives.
+            // moved brand is the exception: its domain no longer resolves to
+            // the cluster, so the router's 301 only answers a request that
+            // still arrives.
             for (key, host) in views::brand::live_brand_hosts() {
                 if key == views::brand::BrandKey::default()
                     || key.moved_to().is_some()
@@ -8265,7 +8266,7 @@ mod tests {
 
     /// Every registered key the release inventory covers: all of
     /// [`views::brand::BrandKey::ALL`] but a moved brand, whose domain
-    /// redirects at DNS and so never reaches a certificate or Ingress rule.
+    /// no longer resolves to the cluster and so never reaches a certificate or Ingress rule.
     fn released_keys() -> impl Iterator<Item = &'static views::brand::BrandKey> {
         views::brand::BrandKey::ALL
             .iter()
