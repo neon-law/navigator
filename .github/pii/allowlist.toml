@@ -27,13 +27,6 @@ values = [
 ]
 
 [[paths]]
-reason = "Generated court registry data and its generator: only published form titles, court addresses, and fee schedules appear here — no personal contact data. (Presidio false-positives: the Latin phrase 'in forma pauperis' as a PERSON, street names, and dollar amounts in fee notes as PHONE_NUMBER.)"
-values = [
-  "store/seeds/Court.yaml",
-  "gen_court.py",
-]
-
-[[paths]]
 reason = "Copyright attributions the licences require."
 values = [
   "third-party-notices.txt",
@@ -231,6 +224,10 @@ values = [
 [[names]]
 reason = "Synthetic names used only by the PII scanner's recognizer canary and regression fixtures."
 values = ["John Smith", "Zelda Quillstone", "Fixture Person"]
+
+[[non_name_words]]
+reason = "Latin legal term of art in published court form titles (in forma pauperis fee-waiver applications) and a San Francisco street name in the court seeds' provenance comments — published court reference data, not people."
+values = ["pauperis", "forma", "mcallister"]
 
 [[names]]
 reason = "Corporate party in the published Nevada case citation used by the synthetic litigation fixture."
