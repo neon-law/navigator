@@ -295,7 +295,7 @@ pub async fn update(
 
 #[cfg(test)]
 mod tests {
-    use super::{create, update};
+    use super::{create, first_line, update};
     use crate::credentials::{self, Credentials, HostCredential};
     use std::process::ExitCode;
     use std::sync::LazyLock;
@@ -548,5 +548,61 @@ mod tests {
         .await;
 
         assert_eq!(exit_code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn first_line_takes_the_first_non_blank_line_and_falls_back_to_a_marker() {
+        assert_eq!(
+            first_line("\n  <html>Internal Server Error</html>  \n</body>\n"),
+            "<html>Internal Server Error</html>",
+            "the first non-blank line, trimmed, is the whole context"
+        );
+        assert_eq!(
+            first_line("   \n\t\n"),
+            "(empty response body)",
+            "a blank body must not render as whitespace"
+        );
+        assert_eq!(first_line(""), "(empty response body)");
+    }
+
+    /// A server-side refusal reaches the caller as the command's failure
+    /// exit with the response's first line as the only context — an HTML
+    /// error page is one line of evidence, never a wall.
+    #[tokio::test(flavor = "current_thread")]
+    async fn create_reports_a_refused_write_through_the_first_line_seam() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::logged_in(&server_uri);
+        Mock::given(method("POST"))
+            .and(path("/app/api/authorities"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string(
+                    "<html>\r\n  <body>lawyer tier required</body>\r\n</html>\r\n",
+                ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("opinion.pdf");
+        std::fs::write(&file, b"synthetic opinion bytes").unwrap();
+
+        let exit_code = create(
+            Some(server_uri.as_str()),
+            "case_law",
+            "410 U.S. 113 (1973)",
+            "Roe v. Wade",
+            None,
+            None,
+            None,
+            None,
+            None,
+            &file,
+            None,
+        )
+        .await;
+
+        assert_eq!(exit_code, ExitCode::from(2));
     }
 }
