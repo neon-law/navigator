@@ -137,6 +137,9 @@ impl Index {
                 (*distance, std::cmp::Reverse(*population))
             });
         }
+        ranked[..limit].sort_unstable_by_key(|(distance, population, _)| {
+            (*distance, std::cmp::Reverse(*population))
+        });
         ranked
             .into_iter()
             .take(limit)
@@ -167,6 +170,7 @@ impl Index {
         if limit < ranked.len() {
             ranked.select_nth_unstable_by_key(limit, |(distance, _)| *distance);
         }
+        ranked[..limit].sort_unstable_by_key(|(distance, country)| (*distance, country.name));
         ranked
             .into_iter()
             .take(limit)
@@ -263,6 +267,55 @@ fn parse_bundled() -> Index {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggestions_rank_distance_then_city_population() {
+        let sample = global().cities[0];
+        let rows = [
+            ("Pariss", 100),
+            ("Paris", 1),
+            ("Parix", 1_000),
+            ("Paritz", 10),
+        ];
+        let index = Index {
+            cities: rows
+                .iter()
+                .map(|&(name, population)| City {
+                    name,
+                    ascii_name: name,
+                    population,
+                    ..sample
+                })
+                .collect(),
+            by_key: Vec::new(),
+            countries: rows
+                .iter()
+                .map(|&(name, _)| Country {
+                    name,
+                    iso2: "XX",
+                    iso3: "XXX",
+                })
+                .collect(),
+        };
+        for limit in [3, 4] {
+            let cities = index.closest_cities("paris", None, limit);
+            assert_eq!(
+                cities
+                    .iter()
+                    .take(3)
+                    .map(|city| city.name)
+                    .collect::<Vec<_>>(),
+                ["Paris", "Parix", "Pariss"]
+            );
+        }
+        for limit in [2, 4] {
+            let countries = index.closest_countries("paris", limit);
+            assert_eq!(countries[0].name, "Paris");
+            assert!(countries
+                .windows(2)
+                .all(|pair| pair[0].distance <= pair[1].distance));
+        }
+    }
 
     #[test]
     fn suggestions_accept_empty_and_short_indexes_and_zero_limits() {
