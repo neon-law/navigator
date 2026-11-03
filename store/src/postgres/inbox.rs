@@ -458,11 +458,13 @@ pub(crate) async fn ingest_fi_message_in(
         )
         .await?
     };
-    sqlx::query("UPDATE inbox_conversation SET unread=true,updated_at=now() WHERE id=$1")
-        .bind(conversation_id)
-        .execute(&mut *connection)
-        .await
-        .map_err(|_| Error::Storage)?;
+    if existing.is_none() {
+        sqlx::query("UPDATE inbox_conversation SET unread=true,updated_at=now() WHERE id=$1")
+            .bind(conversation_id)
+            .execute(&mut *connection)
+            .await
+            .map_err(|_| Error::Storage)?;
+    }
     Ok(IngestedInbound {
         conversation_id,
         message_id,

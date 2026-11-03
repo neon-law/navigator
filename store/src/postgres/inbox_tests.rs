@@ -2979,6 +2979,77 @@ async fn raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the
 }
 
 #[tokio::test]
+async fn identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it() {
+    let Some(f) = fixture().await else { return };
+    for kind in ["C", "S"] {
+        let mut scope = fi_scope(&f).await;
+        let duration = if kind == "C" { "61" } else { "" };
+        let rows = fi_rows(&format!("{kind},I,+15555550456,2026-10-30T18:00:00Z,{duration},read-{kind}-one\n{kind},I,+15555550456,2026-10-30T18:01:00Z,{duration},read-{kind}-two"));
+        let saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+            .await
+            .unwrap();
+        for project in [None, Some(f.project)] {
+            scope.project = project;
+            if project.is_some() {
+                crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+                    .await
+                    .unwrap();
+                let assigned = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(assigned.unread, "new Project attribution requires review");
+                assert_eq!(assigned.project_id, project);
+            }
+            sqlx::query("UPDATE inbox_conversation SET unread=false,updated_at=now() WHERE id=$1")
+                .bind(saved.conversation_id)
+                .execute(f.pg.pool())
+                .await
+                .unwrap();
+            let before = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let replay = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+                .await
+                .unwrap();
+            assert!(replay.deduped);
+            assert_eq!(replay.message_id, saved.message_id);
+            if let Some(project) = project {
+                pg_inbox::assign_on(&f.pg, &f.db, f.owner, saved.conversation_id, project)
+                    .await
+                    .unwrap();
+            }
+            let after = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                !after.unread,
+                "identical replay must preserve reviewed history"
+            );
+            assert_eq!(
+                after.updated_at, before.updated_at,
+                "identical replay must preserve Inbox ordering"
+            );
+        }
+        let new_event = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+            .await
+            .unwrap();
+        assert!(!new_event.deduped);
+        assert_eq!(new_event.conversation_id, saved.conversation_id);
+        let changed = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            changed.unread,
+            "a new event must reopen its thread for review"
+        );
+    }
+}
+
+#[tokio::test]
 async fn fi_import_lock_prevents_assignment_until_destination_verification_finishes() {
     let Some(f) = fixture().await else { return };
     let mut scope = fi_scope(&f).await;
