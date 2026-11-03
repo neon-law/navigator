@@ -517,7 +517,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // page; a read failure inside a configured deployment is a 500 like every
     // other read here. A zero projection is left out like any other fact the
     // matter does not have. The same handle feeds the task store below.
-    let pg = store::postgres::PostgresDb::from_env().await.ok();
+    let pg = dashboard_postgres().await.map_err(server_error)?;
     let financials = match pg.as_ref() {
         Some(pg) => Some(
             store::matter_financials::for_project(&surreal, pg, id)
@@ -771,6 +771,17 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         logo,
         tokens_href,
     })
+}
+
+/// The optional workbench store: an absent deployment is distinct from a
+/// configured store that failed to open.
+#[cfg(feature = "server")]
+async fn dashboard_postgres(
+) -> Result<Option<store::postgres::PostgresDb>, store::postgres::PostgresError> {
+    if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_none() {
+        return Ok(None);
+    }
+    store::postgres::PostgresDb::from_env().await.map(Some)
 }
 
 /// Commit a `500` and wrap a query error — an unavailable workbench is a server
@@ -1130,6 +1141,61 @@ pub fn LawyerProjectDetail() -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn dashboard_postgres_distinguishes_absence_from_configured_failures() {
+        use store::postgres::PostgresError;
+        const CASE: &str = "NAV_DASHBOARD_POSTGRES_CASE";
+        if let Ok(case) = std::env::var(CASE) {
+            let result = super::dashboard_postgres().await;
+            match case.as_str() {
+                "absent" => assert!(matches!(result, Ok(None)), "{result:?}"),
+                "incomplete" => assert!(
+                    matches!(result, Err(PostgresError::Configuration)),
+                    "{result:?}"
+                ),
+                "unreachable" => assert!(
+                    matches!(result, Err(PostgresError::Connection)),
+                    "{result:?}"
+                ),
+                _ => panic!("unknown isolated dashboard PostgreSQL case"),
+            }
+            return;
+        }
+        for case in ["absent", "incomplete", "unreachable"] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args([
+                "--exact",
+                "lawyer_project_detail::tests::dashboard_postgres_distinguishes_absence_from_configured_failures",
+                "--nocapture",
+            ]).env(CASE, case);
+            for key in [
+                "NAVIGATOR_POSTGRES_HOST",
+                "NAVIGATOR_POSTGRES_PORT",
+                "NAVIGATOR_POSTGRES_USER",
+                "NAVIGATOR_POSTGRES_PASSWORD",
+                "NAVIGATOR_POSTGRES_DATABASE",
+                "NAVIGATOR_POSTGRES_SSLMODE",
+                "NAVIGATOR_POSTGRES_ROOT_CERT",
+            ] {
+                command.env_remove(key);
+            }
+            if case != "absent" {
+                command.env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1");
+            }
+            if case == "unreachable" {
+                command
+                    .env("NAVIGATOR_POSTGRES_PORT", "1")
+                    .env("NAVIGATOR_POSTGRES_USER", "navigator")
+                    .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
+                    .env("NAVIGATOR_POSTGRES_DATABASE", "synthetic")
+                    .env("NAVIGATOR_POSTGRES_SSLMODE", "disable");
+            }
+            let status = command.status().unwrap();
+            assert!(status.success(), "dashboard PostgreSQL case {case} failed");
+        }
+    }
 
     #[test]
     fn from_query_reads_explicit_tabs_and_falls_back() {
