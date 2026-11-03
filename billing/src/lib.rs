@@ -54,13 +54,19 @@ pub struct ContactId(pub String);
 
 /// An invoice's reconcilable state, read back from the provider. `status`
 /// is the provider's own status string (`AUTHORISED`, `PAID`, `VOIDED`,
-/// …); `amount_paid_cents` is minor units, parsed from the provider's
-/// decimal at the wire boundary and rounded to whole cents immediately so
+/// …). Total and paid amounts are minor units, parsed from the provider's
+/// decimals at the wire boundary and rounded to whole cents immediately so
 /// no float enters our money path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvoiceStatus {
     pub status: String,
     pub amount_paid_cents: i64,
+    /// Optional for compatibility with previously journaled provider reads.
+    /// New financial settlement requires both fields from a fresh read.
+    #[serde(default)]
+    pub amount_cents: Option<i64>,
+    #[serde(default)]
+    pub currency: Option<String>,
 }
 
 /// One accounts-receivable invoice as listed from the provider. Money is
@@ -397,7 +403,24 @@ impl BillingProvider for StubBillingProvider {
             .iter()
             .position(|call| call.matter_id == matter_id)
             .map_or(seq, |first| first + 1);
-        Ok(InvoiceId(format!("stub-invoice-{matter_id}-{seq}")))
+        let invoice_id = format!("stub-invoice-{matter_id}-{seq}");
+        self.invoice_statuses
+            .lock()
+            .expect("stub provider lock")
+            .entry(invoice_id.clone())
+            .or_insert_with(|| InvoiceStatus {
+                status: "AUTHORISED".into(),
+                amount_paid_cents: 0,
+                amount_cents: Some(
+                    request
+                        .line_items
+                        .iter()
+                        .map(|line| i64::from(line.quantity) * line.unit_amount_cents)
+                        .sum(),
+                ),
+                currency: Some("USD".into()),
+            });
+        Ok(InvoiceId(invoice_id))
     }
 
     async fn get_invoice(&self, invoice_id: &str) -> Result<InvoiceStatus, BillingError> {
@@ -410,6 +433,8 @@ impl BillingProvider for StubBillingProvider {
             .unwrap_or(InvoiceStatus {
                 status: "AUTHORISED".into(),
                 amount_paid_cents: 0,
+                amount_cents: None,
+                currency: None,
             }))
     }
 
@@ -1039,6 +1064,8 @@ impl BillingProvider for XeroBillingProvider {
         Ok(InvoiceStatus {
             status: inv.status.unwrap_or_default(),
             amount_paid_cents: dollars_to_cents(inv.amount_paid.unwrap_or(0.0)),
+            amount_cents: inv.total.map(dollars_to_cents),
+            currency: inv.currency,
         })
     }
 
@@ -1714,6 +1741,8 @@ mod tests {
             InvoiceStatus {
                 status: "PAID".into(),
                 amount_paid_cents: 333_300,
+                amount_cents: None,
+                currency: None,
             },
         );
         let paid = stub.get_invoice("inv-1").await.unwrap();
@@ -1731,7 +1760,9 @@ mod tests {
                 "Invoices": [{
                     "InvoiceID": "inv-42",
                     "Status": "PAID",
-                    "AmountPaid": 3333.00
+                    "AmountPaid": 3333.00,
+                    "Total": 5000.00,
+                    "CurrencyCode": "CAD"
                 }]
             })))
             .mount(&server)
@@ -1740,6 +1771,18 @@ mod tests {
         let got = xero(server.uri()).get_invoice("inv-42").await.unwrap();
         assert_eq!(got.status, "PAID");
         assert_eq!(got.amount_paid_cents, 333_300);
+        assert_eq!(got.amount_cents, Some(500_000));
+        assert_eq!(got.currency.as_deref(), Some("CAD"));
+    }
+
+    #[test]
+    fn journaled_status_without_financials_remains_readable() {
+        let old: InvoiceStatus = serde_json::from_value(serde_json::json!({
+            "status": "PAID", "amount_paid_cents": 100,
+        }))
+        .unwrap();
+        assert_eq!(old.amount_cents, None);
+        assert_eq!(old.currency, None);
     }
 
     #[tokio::test]

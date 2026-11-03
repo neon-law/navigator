@@ -833,7 +833,7 @@ async fn run_recovery_safety() {
             .unwrap();
     assert_eq!(financials.wip_cents, 0);
     assert_eq!(financials.outstanding_cents, 105_000);
-    settle_without_current_billed_party(&fixture).await;
+    settle_with_corrected_provider_financials(&fixture).await;
     assert_eq!(
         fixture.provider.create_keys(),
         vec![batch.id],
@@ -866,6 +866,56 @@ async fn run_recovery_safety() {
         .await
         .is_none());
     assert_voided_invoice_remains_reserved().await;
+}
+
+async fn settle_with_corrected_provider_financials(fixture: &Fixture) {
+    // A missing financial snapshot cannot silently restore the request total.
+    assert_eq!(
+        generate(&fixture.app, fixture).await.status(),
+        StatusCode::BAD_GATEWAY
+    );
+    assert_eq!(
+        mirror_rows(&fixture.surreal, fixture.project_id).await[0].amount_cents,
+        105_000
+    );
+    // A currency correction is mirrored, but cannot consume USD work.
+    fixture.provider.inner.set_invoice_status(
+        "synthetic-recovered",
+        InvoiceStatus {
+            status: "AUTHORISED".into(),
+            amount_paid_cents: 20_000,
+            amount_cents: Some(90_000),
+            currency: Some("EUR".into()),
+        },
+    );
+    assert_eq!(
+        generate(&fixture.app, fixture).await.status(),
+        StatusCode::CONFLICT
+    );
+    let corrected = mirror_rows(&fixture.surreal, fixture.project_id).await;
+    assert_eq!(corrected[0].amount_cents, 90_000);
+    assert_eq!(corrected[0].currency, "EUR");
+    assert!(pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .is_some());
+    fixture.provider.inner.set_invoice_status(
+        "synthetic-recovered",
+        InvoiceStatus {
+            status: "AUTHORISED".into(),
+            amount_paid_cents: 20_000,
+            amount_cents: Some(90_000),
+            currency: Some("USD".into()),
+        },
+    );
+    settle_without_current_billed_party(fixture).await;
+    let corrected = mirror_rows(&fixture.surreal, fixture.project_id).await;
+    assert_eq!(corrected[0].amount_cents, 90_000);
+    assert_eq!(corrected[0].amount_paid_cents, 20_000);
+    assert_eq!(corrected[0].currency, "USD");
+    assert_eq!(
+        store::matter_financials::outstanding_cents(&corrected),
+        70_000
+    );
 }
 
 async fn remove_client_participation(fixture: &Fixture) {
@@ -973,6 +1023,8 @@ async fn assert_voided_invoice_remains_reserved() {
         InvoiceStatus {
             status: "VOIDED".into(),
             amount_paid_cents: 0,
+            amount_cents: Some(batch.total_cents),
+            currency: Some(batch.currency.clone()),
         },
     );
     let retry = generate(&fixture.app, &fixture).await;

@@ -735,6 +735,8 @@ mod tests {
             billing::InvoiceStatus {
                 status: "PAID".into(),
                 amount_paid_cents: 29_000,
+                amount_cents: None,
+                currency: None,
             },
         );
         assert!(activate_if_paid(&pg, &stub, &purchase, now).await.unwrap());
@@ -774,6 +776,8 @@ mod tests {
             billing::InvoiceStatus {
                 status: "PAID".into(),
                 amount_paid_cents: 10_000,
+                amount_cents: None,
+                currency: None,
             },
         );
         assert!(activate_if_paid(&pg, &stub, &purchase, Utc::now())

@@ -432,6 +432,16 @@ async fn raise_batch(
     let (invoice_id, issued_at) = invoice_for_batch(pg, provider, batch, &line_items).await?;
 
     let invoice_state = provider.get_invoice(&invoice_id.0).await?;
+    let amount_cents = invoice_state.amount_cents.ok_or_else(|| {
+        billing::BillingError::Provider("invoice total missing from provider read".into())
+    })?;
+    let currency = invoice_state
+        .currency
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            billing::BillingError::Provider("invoice currency missing from provider read".into())
+        })?;
     let existing = xero_invoices::for_projects(surreal, &[project_id])
         .await
         .map_err(Box::new)?
@@ -453,8 +463,8 @@ async fn raise_batch(
             xero_invoice_id: invoice_id.0.clone(),
             reference: batch.reference.clone(),
             status: invoice_state.status.clone(),
-            amount_cents: batch.total_cents,
-            currency: batch.currency.clone(),
+            amount_cents,
+            currency: currency.clone(),
             issued_at,
             due_at,
         },
@@ -469,6 +479,11 @@ async fn raise_batch(
     )
     .await
     .map_err(Box::new)?;
+    if currency != &batch.currency {
+        // Mirror the provider truth, but do not consume work denominated in
+        // another currency. A corrected invoice needs manual reconciliation.
+        return Err(InvoiceGenerationError::ReconciliationRequired);
+    }
     if !matches!(invoice_state.status.as_str(), "AUTHORISED" | "PAID") {
         return Err(InvoiceGenerationError::InvoiceNotBillable);
     }
@@ -483,8 +498,8 @@ async fn raise_batch(
     Ok(InvoiceReceipt {
         xero_invoice_id: invoice_id.0,
         reference: batch.reference.clone(),
-        currency: batch.currency.clone(),
-        total_cents: batch.total_cents,
+        currency: currency.clone(),
+        total_cents: amount_cents,
         line_items,
         consumed_time_entries: batch.entry_ids.len(),
         consumed_costs: batch.cost_ids.len(),
