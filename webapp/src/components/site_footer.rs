@@ -330,6 +330,9 @@ pub fn SiteFooterLegal(
     /// cannot claim this repository's affiliations.
     #[props(default)]
     memberships: Vec<FooterMembership>,
+    /// Firm-verified public membership badge, resolved by the server.
+    #[props(default)]
+    membership_badge_href: String,
     /// The registered word mark the site trades under, spelled the way the
     /// register spells it, and the registration that proves it. Renders one
     /// notice under the copyright line — the site's two ownership facts read
@@ -784,10 +787,10 @@ pub fn SiteFooterLegal(
                                 stars: github_stars,
                             }
                         }
-                        if copyright_holder == "Guieb & Shook PC" {
+                        if !membership_badge_href.is_empty() {
                             img {
                                 class: "site-footer__gvc-badge",
-                                src: views::assets::bucket_asset_url(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY),
+                                src: membership_badge_href,
                                 alt: "Proud member of Greater Vancouver Chamber",
                                 width: "1500",
                                 height: "1050",

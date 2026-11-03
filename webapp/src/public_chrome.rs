@@ -199,6 +199,9 @@ pub struct PublicChrome {
     /// Empty renders none.
     #[serde(default)]
     pub memberships: Vec<ChromeMembership>,
+    /// Resolved membership badge for the verified operating Firm.
+    #[serde(default)]
+    pub membership_badge_href: String,
     /// The request Brand's public profiles and the shared `YouTube` channel,
     /// under the wordmark. Empty when a mounted bundle renamed the firm. See
     /// `views::brand::firm_social`.
@@ -243,6 +246,7 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
             // the bottom of every page.
             copyright_holder: chrome.legal_entity.clone(),
             disclosure: chrome.disclosure.clone(),
+            membership_badge_href: chrome.membership_badge_href.clone(),
             attribution: if practice_footer { String::new() } else { chrome.attribution.clone() },
             copyright_href: if practice_footer { chrome.firm_home_href.clone() } else { String::new() },
             disclaimer: chrome.disclaimer.clone(),
@@ -451,6 +455,11 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         firm_home_href: FIRM_BRAND.home_href.to_string(),
         legal_entity: FIRM_BRAND.legal_entity.to_string(),
         disclosure: footer_disclosure(),
+        membership_badge_href: if FIRM_BRAND.legal_entity == "Guieb & Shook PC" {
+            views::assets::asset_url(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY)
+        } else {
+            String::new()
+        },
         attribution: firm_attribution(brand),
         disclaimer: views::brand::firm_disclaimer().to_string(),
         trademark: trademark.to_string(),
@@ -594,6 +603,7 @@ pub fn apply_resolved_firm_footer(
         chrome.offices.clear();
         chrome.attorneys.clear();
         chrome.memberships.clear();
+        chrome.membership_badge_href.clear();
         chrome.social.clear();
         chrome.attribution = format!("A practice of {}", model.legal_entity);
     }
@@ -686,6 +696,9 @@ mod tests {
             firm_logo_href: "/public/logo.svg".to_string(),
             firm_home_href: "/".to_string(),
             legal_entity: "Guieb & Shook PC".to_string(),
+            membership_badge_href: views::assets::asset_url(
+                views::assets::GUIEB_SHOOK_GVC_BADGE_KEY,
+            ),
             attribution: "A practice of Guieb & Shook PC".to_string(),
             disclaimer: "This is an attorney advertisement.".to_string(),
             // The real registration, as `chrome_for` resolves it from the firm
@@ -1358,6 +1371,11 @@ mod tests {
             chrome.attorneys.is_empty()
                 && chrome.memberships.is_empty()
                 && chrome.firm_email.is_empty()
+        );
+        let html = render_chrome(chrome);
+        assert!(
+            !html.contains(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY),
+            "{html}"
         );
     }
     #[test]
