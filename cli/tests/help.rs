@@ -361,6 +361,7 @@ fn dev_help_lists_local_loop_members() {
         command_names(&output),
         vec![
             "browser-e2e",
+            "build-nautilus",
             "build-webapp",
             "deploy",
             "down",

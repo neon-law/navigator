@@ -44,6 +44,7 @@ pub(crate) mod github_setup;
 mod host_setup;
 mod lifecycle;
 mod native;
+mod nautilus;
 mod observability;
 mod orchestrate;
 mod postgres_volume;
@@ -894,6 +895,7 @@ fn dispatch_with_dns_provider(
         crate::Command::Dev(crate::DevCmd::Serve) => serve::run(),
         crate::Command::Quickstart => quickstart::run(&cfg),
         crate::Command::Dev(crate::DevCmd::BuildWebapp { release }) => webapp::build(release),
+        crate::Command::Dev(crate::DevCmd::BuildNautilus { release }) => nautilus::build(release),
         crate::Command::Dev(crate::DevCmd::Staging(action)) => staging::dispatch_kind(action, &cfg),
         crate::Command::Dev(crate::DevCmd::Kind(crate::KindCmd::Up)) => kind_up_only(&cfg),
         crate::Command::Dev(crate::DevCmd::Kind(crate::KindCmd::Down)) => kind_down_only(&cfg),

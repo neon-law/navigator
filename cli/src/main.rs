@@ -2808,6 +2808,18 @@ enum DevCmd {
         #[arg(long)]
         release: bool,
     },
+    /// Build the Nautilus web preview bundle: drive `dx` to compile the
+    /// `nautilus-preview` crate (its own workspace, with its own Dioxus.toml)
+    /// to `wasm32-unknown-unknown` and stage it under
+    /// `server/public/nautilus`, where `web` serves it same-origin for the
+    /// Nautilus mobile-shell preview. A build artifact — gitignored, never
+    /// committed.
+    BuildNautilus {
+        /// Build with optimizations (the deploy default). Omit for a faster
+        /// debug build during local iteration.
+        #[arg(long)]
+        release: bool,
+    },
     /// Guarded create/reset/status/down lifecycle for the local KIND staging boundary.
     #[command(subcommand)]
     Staging(StagingAction),
