@@ -3674,6 +3674,8 @@ CREATE TABLE matter_billing_batch (
     project_id UUID NOT NULL REFERENCES project(id),
     status TEXT NOT NULL CHECK (status IN ('pending', 'completed')),
     reference TEXT NOT NULL CHECK (length(btrim(reference)) BETWEEN 1 AND 200),
+    contact_name TEXT NOT NULL CHECK (length(btrim(contact_name)) > 0),
+    contact_email TEXT NOT NULL CHECK (length(btrim(contact_email)) > 0),
     line_items JSONB NOT NULL,
     total_cents BIGINT NOT NULL CHECK (total_cents > 0),
     currency TEXT NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),

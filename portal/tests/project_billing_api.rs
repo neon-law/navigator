@@ -685,9 +685,11 @@ async fn run_refusal_and_retry() {
         &fixture.lawyer,
     )
     .await;
-    assert_eq!(write_off.status(), StatusCode::CONFLICT);
+    assert_eq!(write_off.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(time_entry_status(&fixture.pg, entry.id).await, "reserved");
 
+    // The batch's debtor remains fixed even after participation changes.
+    remove_client_participation(&fixture).await;
     // The retry resumes the same batch: same key, same request — the seam
     // re-mints the first attempt's invoice and exactly one mirror row lands.
     let retry = generate(&fixture.app, &fixture).await;
@@ -716,6 +718,10 @@ async fn run_refusal_and_retry() {
     // matter key.
     let keys = fixture.provider.create_keys();
     assert_eq!(keys, vec![batch.id, batch.id]);
+    assert_eq!(
+        fixture.provider.inner.calls()[0].request.contact_email,
+        batch.contact_email
+    );
     // The audited transitions tell the whole story: reserved on the failed
     // attempt, invoiced on the retry — nothing was ever unbilled again.
     assert_eq!(
@@ -811,7 +817,11 @@ async fn run_recovery_safety() {
             status: "AUTHORISED".into(),
             amount_cents: batch.total_cents,
             currency: "USD".into(),
-            issued_at: chrono::Utc::now(),
+            issued_at: NaiveDate::from_ymd_opt(2026, 10, 21)
+                .unwrap()
+                .and_hms_opt(12, 0, 0)
+                .unwrap()
+                .and_utc(),
             due_at: None,
         },
     )
@@ -823,10 +833,7 @@ async fn run_recovery_safety() {
             .unwrap();
     assert_eq!(financials.wip_cents, 0);
     assert_eq!(financials.outstanding_cents, 105_000);
-    assert_eq!(
-        generate(&fixture.app, &fixture).await.status(),
-        StatusCode::OK
-    );
+    settle_without_current_billed_party(&fixture).await;
     assert_eq!(
         fixture.provider.create_keys(),
         vec![batch.id],
@@ -859,6 +866,54 @@ async fn run_recovery_safety() {
         .await
         .is_none());
     assert_voided_invoice_remains_reserved().await;
+}
+
+async fn remove_client_participation(fixture: &Fixture) {
+    let rows = store::projects::participations_for_project(&fixture.surreal, fixture.project_id)
+        .await
+        .unwrap();
+    for row in rows.into_iter().filter(|row| row.participation == "client") {
+        store::projects::remove_participation(&fixture.surreal, row.id)
+            .await
+            .unwrap();
+    }
+}
+
+async fn settle_without_current_billed_party(fixture: &Fixture) {
+    remove_client_participation(fixture).await;
+    let contacts = fixture.provider.inner.contact_calls().len();
+    let before = pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .unwrap();
+    let invoice_id = before.xero_invoice_id.as_deref().unwrap();
+    let repeated = store::billing_batches::attach_invoice(&fixture.pg, before.id, invoice_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        repeated.updated_at, before.updated_at,
+        "re-attach preserves issue time"
+    );
+    assert!(
+        store::billing_batches::attach_invoice(&fixture.pg, before.id, "different-invoice")
+            .await
+            .is_err(),
+        "a saved provider invoice cannot be replaced"
+    );
+    let issued_at = mirror_rows(&fixture.surreal, fixture.project_id).await[0].issued_at;
+    assert_eq!(
+        generate(&fixture.app, fixture).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        fixture.provider.inner.contact_calls().len(),
+        contacts,
+        "saved invoice settlement needs no contact request"
+    );
+    assert_eq!(
+        mirror_rows(&fixture.surreal, fixture.project_id).await[0].issued_at,
+        issued_at,
+        "settlement does not move an existing invoice into the retry period"
+    );
 }
 
 async fn assert_voided_invoice_remains_reserved() {

@@ -3561,6 +3561,8 @@
       "matter_billing_batch": {
         "columns": {
           "actor_id": "UUID",
+          "contact_email": "TEXT",
+          "contact_name": "TEXT",
           "cost_ids": "UUID[]",
           "currency": "TEXT",
           "entry_ids": "UUID[]",

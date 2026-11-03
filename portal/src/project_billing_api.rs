@@ -65,6 +65,16 @@ const INVOICE_CURRENCY: &str = "USD";
 /// the services catalog copy and the sandbox-reset fixture bill against.
 const REVENUE_ACCOUNT_CODE: &str = "200";
 
+// The batch predates its first provider call. A 23-hour start cutoff and
+// a 60-second attempt budget leave at least 59 minutes before the provider's
+// 24-hour key retention expires, even after contact resolution takes time.
+const CREATE_ATTEMPT_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn create_window_open(inserted_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    let age = now.signed_duration_since(inserted_at);
+    (chrono::Duration::zero()..chrono::Duration::hours(23)).contains(&age)
+}
+
 /// How a Xero `Reference` names the matter an invoice bills — the documented
 /// ingest convention (`store::xero_invoices::ProjectScopeRef`).
 fn matter_reference(code: &str) -> String {
@@ -225,9 +235,9 @@ pub(crate) enum InvoiceGenerationError {
 /// Generate the matter's invoice: compose the unbilled work, persist the
 /// billing batch with its rows reserved, raise one invoice through the
 /// provider seam keyed on the batch id, mirror it locally, and flip the
-/// consumed entries and costs to invoiced under the Xero id. `now` prices
-/// the mirror's issued date; the caller's authorization seam governs who may
-/// call.
+/// consumed entries and costs to invoiced under the Xero id. `now` is the
+/// reservation timestamp and cost-date cutoff; the caller's authorization
+/// seam governs who may call.
 ///
 /// # Errors
 ///
@@ -256,7 +266,7 @@ pub(crate) async fn generate_invoice(
     // new work logged meanwhile composes the NEXT batch, it never slips into
     // this one.
     if let Some(batch) = billing_batches::pending_for_project(pg, project_id).await? {
-        return raise_batch(surreal, pg, provider, project_id, &batch, actor_id, now).await;
+        return raise_batch(surreal, pg, provider, project_id, &batch, actor_id).await;
     }
 
     let entries = time_entries::unbilled_billable(pg, project_id).await?;
@@ -323,6 +333,8 @@ pub(crate) async fn generate_invoice(
             project_id,
             status: "pending".to_string(),
             reference: matter_reference(&project.code),
+            contact_name: party.name.clone(),
+            contact_email: party.email.clone(),
             line_items: serde_json::to_value(&compose.line_items)?,
             total_cents: compose.total_cents,
             currency: INVOICE_CURRENCY.to_string(),
@@ -337,14 +349,14 @@ pub(crate) async fn generate_invoice(
         agreed_fee_cents.map(|_| billed_fee_cents),
     )
     .await?;
-    raise_batch(surreal, pg, provider, project_id, &batch, actor_id, now).await
+    raise_batch(surreal, pg, provider, project_id, &batch, actor_id).await
 }
 
 /// Raise the invoice for a persisted batch — fresh or resumed — and settle
 /// it: mirror, mark, link, complete. The provider call is keyed on the
 /// batch's own id within a bounded retry window; a saved invoice id resumes
-/// local settlement without another create call. The billed party derives
-/// from the current matter; the amounts stay frozen.
+/// local settlement without another create or contact call. The debtor and
+/// the amounts stay frozen in the batch.
 async fn raise_batch(
     surreal: &store::surreal::SurrealDb,
     pg: &store::postgres::PostgresDb,
@@ -352,17 +364,7 @@ async fn raise_batch(
     project_id: Uuid,
     batch: &billing_batches::MatterBillingBatch,
     actor_id: Uuid,
-    now: DateTime<Utc>,
 ) -> Result<InvoiceReceipt, InvoiceGenerationError> {
-    let Some(party) = billed_party(surreal, project_id).await? else {
-        return Err(InvoiceGenerationError::NoBilledParty);
-    };
-    provider
-        .ensure_contact(&billing::ContactRequest {
-            name: party.name.clone(),
-            email: party.email.clone(),
-        })
-        .await?;
     // The frozen request comes off the batch, never off the live pool: the
     // retry presents exactly what the first attempt presented.
     let line_items: Vec<InvoiceLine> = serde_json::from_value(batch.line_items.clone())?;
@@ -371,32 +373,53 @@ async fn raise_batch(
     // moment it returns, before any local flip, so a crash or refusal
     // mid-settle leaves the resume holding the exact invoice instead of
     // relying on the provider's own idempotency window.
-    let invoice_id = if let Some(saved) = &batch.xero_invoice_id {
-        billing::InvoiceId(saved.clone())
+    let (invoice_id, issued_at) = if let Some(saved) = &batch.xero_invoice_id {
+        (billing::InvoiceId(saved.clone()), batch.updated_at)
     } else {
+        if !create_window_open(batch.inserted_at, Utc::now()) {
+            return Err(InvoiceGenerationError::ReconciliationRequired);
+        }
+        provider
+            .ensure_contact(&billing::ContactRequest {
+                name: batch.contact_name.clone(),
+                email: batch.contact_email.clone(),
+            })
+            .await?;
         // A lost response or failed attach can leave a real invoice without
         // a saved id. Never create again after the provider's 24-hour key
         // retention; an operator must reconcile that uncertain outcome.
-        if now.signed_duration_since(batch.inserted_at) >= chrono::Duration::hours(23) {
+        if !create_window_open(batch.inserted_at, Utc::now()) {
             return Err(InvoiceGenerationError::ReconciliationRequired);
         }
-        let invoice = provider
-            .create_invoice(
+        let invoice = tokio::time::timeout(
+            CREATE_ATTEMPT_BUDGET,
+            provider.create_invoice(
                 batch.id,
                 &InvoiceRequest {
-                    contact_name: party.name.clone(),
-                    contact_email: party.email.clone(),
+                    contact_name: batch.contact_name.clone(),
+                    contact_email: batch.contact_email.clone(),
                     reference: batch.reference.clone(),
                     line_items: line_items.clone(),
                     due_date: None,
                 },
-            )
-            .await?;
-        billing_batches::attach_invoice(pg, batch.id, &invoice.0).await?;
-        invoice
+            ),
+        )
+        .await
+        .map_err(|_| billing::BillingError::Provider("invoice creation timed out".into()))??;
+        let attached = billing_batches::attach_invoice(pg, batch.id, &invoice.0).await?;
+        (invoice, attached.updated_at)
     };
 
     let invoice_state = provider.get_invoice(&invoice_id.0).await?;
+    let existing = xero_invoices::for_projects(surreal, &[project_id])
+        .await
+        .map_err(Box::new)?
+        .into_iter()
+        .find(|invoice| invoice.xero_invoice_id == invoice_id.0);
+    let issued_at = existing
+        .as_ref()
+        .map_or(issued_at, |invoice| invoice.issued_at);
+    let due_at = existing.and_then(|invoice| invoice.due_at);
     // Mirror first (the costs' link validates against it), then flip the
     // consumed work through its own audited transitions — reserved rows
     // included. A refusal anywhere below leaves the earlier local steps
@@ -411,8 +434,8 @@ async fn raise_batch(
             status: invoice_state.status.clone(),
             amount_cents: batch.total_cents,
             currency: batch.currency.clone(),
-            issued_at: now,
-            due_at: None,
+            issued_at,
+            due_at,
         },
     )
     .await
@@ -632,5 +655,28 @@ pub(crate) async fn generate(
     {
         Ok(receipt) => Ok(Json(receipt).into_response()),
         Err(e) => Ok(error(&e, project_id)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{create_window_open, CREATE_ATTEMPT_BUDGET};
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn provider_attempt_budget_leaves_a_margin_before_key_expiry() {
+        let inserted = Utc::now();
+        let last_safe_start = inserted + Duration::hours(23) - Duration::nanoseconds(1);
+        assert!(create_window_open(inserted, last_safe_start));
+        let completion = last_safe_start + Duration::from_std(CREATE_ATTEMPT_BUDGET).unwrap();
+        assert!(completion <= inserted + Duration::hours(24) - Duration::minutes(59));
+        assert!(!create_window_open(
+            inserted,
+            inserted + Duration::hours(23)
+        ));
+        assert!(!create_window_open(
+            inserted,
+            inserted - Duration::seconds(1)
+        ));
     }
 }

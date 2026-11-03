@@ -39,6 +39,9 @@ pub struct MatterBillingBatch {
     pub status: String,
     /// The human-facing matter reference shown on the invoice.
     pub reference: String,
+    /// Frozen debtor details keep retries independent of later participation edits.
+    pub contact_name: String,
+    pub contact_email: String,
     /// The frozen composed request: the exact line items the provider call
     /// carries, so a resume presents the same request under the same key.
     pub line_items: serde_json::Value,
@@ -63,6 +66,8 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<MatterBillingBatch, sqlx::Err
         project_id: row.try_get("project_id")?,
         status: row.try_get("status")?,
         reference: row.try_get("reference")?,
+        contact_name: row.try_get("contact_name")?,
+        contact_email: row.try_get("contact_email")?,
         line_items: row.try_get("line_items")?,
         total_cents: row.try_get("total_cents")?,
         currency: row.try_get("currency")?,
@@ -100,8 +105,8 @@ async fn insert_in_tx(
     batch: &MatterBillingBatch,
 ) -> Result<MatterBillingBatch, BillingBatchError> {
     let row = sqlx::query(
-        "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,xero_invoice_id,flat_fee_cents,actor_id,inserted_at,updated_at) \
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *",
+        "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,xero_invoice_id,flat_fee_cents,actor_id,inserted_at,updated_at,contact_name,contact_email) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *",
     )
     .bind(batch.id)
     .bind(batch.project_id)
@@ -117,6 +122,8 @@ async fn insert_in_tx(
     .bind(batch.actor_id)
     .bind(batch.inserted_at)
     .bind(batch.updated_at)
+    .bind(&batch.contact_name)
+    .bind(&batch.contact_email)
     .fetch_one(&mut **tx)
     .await
     .map_err(|error| {
@@ -139,8 +146,9 @@ pub async fn attach_invoice(
     xero_invoice_id: &str,
 ) -> Result<MatterBillingBatch, BillingBatchError> {
     let row = sqlx::query(
-        "UPDATE matter_billing_batch SET xero_invoice_id=$2,updated_at=$3 \
-         WHERE id=$1 RETURNING *",
+        "UPDATE matter_billing_batch SET xero_invoice_id=$2, \
+         updated_at=CASE WHEN xero_invoice_id IS NULL THEN $3 ELSE updated_at END \
+         WHERE id=$1 AND (xero_invoice_id IS NULL OR xero_invoice_id=$2) RETURNING *",
     )
     .bind(id)
     .bind(xero_invoice_id)

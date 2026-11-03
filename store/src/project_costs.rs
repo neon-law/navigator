@@ -391,7 +391,10 @@ pub async fn link_invoice(
         // re-links every cost it reserved, and the ones the first attempt
         // got to must not refuse it.
         if before.xero_invoice_id.as_deref() == Some(invoice_id) {
-            return fetch(pg, id).await;
+            // A replay already holds the unchanged row. Release the
+            // transaction rather than acquiring a second pool connection.
+            tx.commit().await?;
+            return Ok(before);
         }
         return Err(ProjectCostError::Invalid("cost is already resolved"));
     }
