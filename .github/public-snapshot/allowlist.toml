@@ -153,14 +153,3 @@ class = "email"
 match = '''clerk@notuscourts\.gov'''
 paths = ["portal/src/inbound_email.rs"]
 reason = "A lookalike court domain the inbox classifier must refuse; the mailbox is invented."
-
-# PR #335 explicitly stages the release client for local /world verification.
-[[allow]]
-class = "build"
-paths = ["server/public/dioxus/assets/webapp_bg-dxh3c1f8e144f414b74.wasm"]
-reason = "Explicitly requested release wasm client, built from repository source by navigator dev build-webapp --release; contains no request or birth data."
-
-[[allow]]
-class = "binary"
-paths = ["server/public/dioxus/assets/webapp_bg-dxh3c1f8e144f414b74.wasm"]
-reason = "Release wasm client inspected as a WebAssembly module with only the target_features custom section and no debug metadata; contains no runtime birth data."
