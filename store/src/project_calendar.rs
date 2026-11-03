@@ -269,6 +269,7 @@ mod tests {
         projects::open_matter(
             surreal,
             &OpenMatterCommand {
+                firm_id: None,
                 name: "Synthetic matter".into(),
                 code: "matter-one".into(),
                 client_id: client.id,

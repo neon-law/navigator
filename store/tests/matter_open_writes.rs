@@ -80,6 +80,7 @@ async fn opening_a_matter_writes_the_project_two_participations_and_the_attestat
     let project = projects::open_matter(
         &surreal,
         &OpenMatterCommand {
+            firm_id: None,
             name: "LLC Formation".into(),
             code: "llc-formation".into(),
             client_id,
@@ -151,6 +152,7 @@ async fn opening_a_matter_round_trips_its_jurisdiction() {
     let project = projects::open_matter(
         &surreal,
         &OpenMatterCommand {
+            firm_id: None,
             name: "California Matter".into(),
             code: "california-matter".into(),
             client_id,
@@ -183,6 +185,7 @@ async fn opening_a_matter_records_the_firm_that_wears_its_brand() {
     let worn = projects::open_matter(
         &surreal,
         &OpenMatterCommand {
+            firm_id: None,
             name: "Worn Brand Matter".into(),
             code: "worn-brand-matter".into(),
             client_id,
@@ -202,6 +205,7 @@ async fn opening_a_matter_records_the_firm_that_wears_its_brand() {
     let bare = projects::open_matter(
         &surreal,
         &OpenMatterCommand {
+            firm_id: None,
             name: "Unworn Brand Matter".into(),
             code: "unworn-brand-matter".into(),
             client_id,
@@ -236,6 +240,7 @@ async fn open_matter_with_closed_at_opens_already_closed() {
     let project = projects::open_matter(
         &surreal,
         &OpenMatterCommand {
+            firm_id: None,
             name: "Already Closed".into(),
             code: "already-closed".into(),
             client_id,
@@ -266,6 +271,7 @@ async fn open_matter_refuses_a_future_closed_at() {
     let error = projects::open_matter(
         &surreal,
         &OpenMatterCommand {
+            firm_id: None,
             name: "Future Close".into(),
             code: "future-close".into(),
             client_id,
@@ -291,4 +297,54 @@ async fn open_matter_refuses_a_future_closed_at() {
             .is_none(),
         "a refused open must not write a row"
     );
+}
+
+#[tokio::test]
+async fn a_brand_move_after_firm_authorization_cannot_open_under_another_firm() {
+    let db = mem_surreal().await;
+    let (client_id, acting_person_id, entity_id) = references(&db).await;
+    let authorized = store::firms::firm_id_for_brand_key(&db, "neon")
+        .await
+        .unwrap()
+        .unwrap();
+    let admin = store::firms::memberships_for_firm(&db, authorized)
+        .await
+        .unwrap()[0]
+        .person_id;
+    let target = store::firms::create(
+        &db,
+        &store::firms::NewFirm {
+            name: "Sample Destination Practice".into(),
+            status: "active".into(),
+            entity_id: seed_entity(&db).await,
+            admin_dri_person_id: admin,
+        },
+    )
+    .await
+    .unwrap();
+    store::firms::move_brand(&db, Role::Owner, None, "neon", target.id)
+        .await
+        .unwrap();
+    let result = projects::open_matter(
+        &db,
+        &OpenMatterCommand {
+            firm_id: Some(authorized),
+            name: "Sample Matter".into(),
+            code: "authorized-firm".into(),
+            client_id,
+            entity_id,
+            jurisdiction_id: None,
+            description: None,
+            brand: "neon".into(),
+            attestation: true,
+            acting_person_id,
+            closed_at: None,
+        },
+    )
+    .await;
+    assert!(matches!(result, Err(projects::OpenMatterError::Invalid(_))));
+    assert!(projects::find_by_code(&db, "authorized-firm")
+        .await
+        .unwrap()
+        .is_none());
 }

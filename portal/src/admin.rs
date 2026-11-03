@@ -3813,6 +3813,7 @@ async fn projects_create_lawyer_only(
     match store::projects::open_matter(
         &state.surreal,
         &store::projects::OpenMatterCommand {
+            firm_id: None,
             name: input.name.clone(),
             code: input.code.clone(),
             client_id: client.id,
@@ -6759,6 +6760,7 @@ mod tests {
         let project = store::projects::open_matter(
             db,
             &store::projects::OpenMatterCommand {
+                firm_id: None,
                 name: "Coverage Matter".into(),
                 code: code.into(),
                 client_id: client.id,

@@ -410,7 +410,7 @@ minutes ([`portal/src/session.rs`](../portal/src/session.rs)).
 
 The document session carries an explicit [`DocumentScope`](../portal/src/session.rs):
 
-- `GET /app/api/projects` returns only the minted Project, and only `id`, `code`, `status`, and `repository_url`.
+- `GET /app/api/projects` lists the Project's `id`, `code`, `status`, `repository_url`, `firm_id`, and `brand`.
 - `GET /app/api/projects/{id}/documents/revisions?slug=` is allowed only for that exact Project id and returns revision
   metadata.
 - `GET /app/api/projects/{id}/documents/integrity` is allowed for that same Project id and returns each asset's storage

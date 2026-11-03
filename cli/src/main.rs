@@ -254,6 +254,42 @@ mod help_tests {
     use super::*;
 
     #[test]
+    fn project_creation_requires_firm_and_brand_together() {
+        for base in [
+            vec![
+                "navigator",
+                "project",
+                "create",
+                "--name",
+                "Sample",
+                "--code",
+                "sample",
+                "--client-email",
+                "client@example.com",
+                "--entity-name",
+                "Sample LLC",
+                "--attest",
+            ],
+            vec!["navigator", "project", "scaffold"],
+        ] {
+            assert!(Cli::try_parse_from(
+                base.iter().copied().chain(["--firm", "Example Practice"])
+            )
+            .is_err());
+            assert!(
+                Cli::try_parse_from(base.iter().copied().chain(["--brand", "sample"])).is_err()
+            );
+            assert!(Cli::try_parse_from(base.iter().copied().chain([
+                "--firm",
+                "Example Practice",
+                "--brand",
+                "sample"
+            ]))
+            .is_ok());
+        }
+    }
+
+    #[test]
     fn ship_cloud_selection_is_explicit_and_excludes_a_local_directory() {
         let args = [
             "navigator",
@@ -1225,6 +1261,12 @@ enum ProjectsCmd {
         /// for it to have preceded.
         #[arg(long, requires = "closed")]
         closed_at: Option<chrono::DateTime<chrono::Utc>>,
+        /// Owning Firm name. Requires --brand.
+        #[arg(long, requires = "brand")]
+        firm: Option<String>,
+        /// Brand key worn by the Firm. Requires --firm.
+        #[arg(long, requires = "firm")]
+        brand: Option<String>,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -1276,6 +1318,12 @@ enum ProjectsCmd {
         /// `--resume` rebuilds the tree in an empty directory.
         #[arg(long, value_name = "EMAIL", requires = "resume")]
         client_email: Option<String>,
+        /// Owning Firm name. Requires --brand.
+        #[arg(long, requires = "brand", conflicts_with = "resume")]
+        firm: Option<String>,
+        /// Brand key worn by the Firm. Requires --firm.
+        #[arg(long, requires = "firm", conflicts_with = "resume")]
+        brand: Option<String>,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -6082,17 +6130,22 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             attest,
             closed,
             closed_at,
+            firm,
+            brand,
             host,
         } => {
-            remote::projects_create(
+            remote::projects_create_named(
                 host.host.as_deref(),
                 &name,
                 &code,
+                "",
                 &client_email,
                 entity_name.as_deref(),
                 jurisdiction.as_deref(),
                 attest,
                 closed.then_some(closed_at).flatten(),
+                firm.as_deref(),
+                brand.as_deref(),
             )
             .await
         }
@@ -6121,6 +6174,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             dir,
             resume,
             no_repository,
+            firm,
+            brand,
             client_email,
             host,
         } => {
@@ -6131,6 +6186,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 projects::scaffold::ScaffoldOptions {
                     provision_repository: !no_repository,
                     client_email,
+                    firm,
+                    brand,
                 },
             )
             .await
@@ -7369,6 +7426,11 @@ async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
 
     if check {
         return run_document_check_gate(dir, ci, deep).await;
+    }
+
+    let ownership = projects::gate::ownership_preflight(dir, ci).await;
+    if ownership != ExitCode::SUCCESS {
+        return ownership;
     }
 
     eprintln!("navigator project gate: markdown content");
