@@ -170,6 +170,51 @@ fn bundle_assets_router(dir: &std::path::Path) -> Router {
     router
 }
 
+/// The environment variable naming the staged Nautilus web-preview bundle —
+/// the `nautilus-preview` crate's client bundle that `navigator dev
+/// build-nautilus` stages at `server/public/nautilus` in a Navigator
+/// checkout. The override points a server running anywhere else (and every
+/// test) at a bundle built anywhere at all.
+const NAUTILUS_PUBLIC_PATH_ENV: &str = "NAUTILUS_DIOXUS_PUBLIC_PATH";
+
+/// The Nautilus mobile-shell preview's single path: the root of the dedicated
+/// `navigator nautilus preview` server, where the shell *is* the page. A
+/// deployment mounting this router picks its own admission path by nesting it.
+pub const NAUTILUS_PREVIEW_PATH: &str = "/";
+
+/// The staged Nautilus web bundle, or `None` when it is unset or has no
+/// `index.html` — the degraded, SSR-only mode the preview server reports
+/// honestly rather than an error to surface.
+fn nautilus_bundle_dir() -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os(NAUTILUS_PUBLIC_PATH_ENV)?);
+    dir.join("index.html").is_file().then_some(dir)
+}
+
+/// The Nautilus mobile-shell preview router — the hydration mechanics for
+/// `navigator nautilus preview`, owned here as for every other Dioxus page:
+/// a server-side render of [`webapp::mobile::MobileApp`] at
+/// [`NAUTILUS_PREVIEW_PATH`], the payload the wasm client binds to on load.
+///
+/// The SSR shell always mounts — a page with no staged bundle is the
+/// designed degraded mode, not a refusal — and a staged bundle's wasm and
+/// glue are served alongside it, layered on with the same
+/// [`bundle_assets_router`] shape the `/dioxus-demo` mount uses.
+pub fn nautilus_preview_router() -> Router {
+    let mut router = Router::<FullstackState>::new()
+        .route(
+            NAUTILUS_PREVIEW_PATH,
+            get(render_handler).layer(from_fn(dioxus_document_head)),
+        )
+        .with_state(FullstackState::new(
+            ServeConfig::new(),
+            webapp::mobile::MobileApp,
+        ));
+    if let Some(dir) = nautilus_bundle_dir() {
+        router = router.merge(bundle_assets_router(&dir));
+    }
+    router
+}
+
 /// Middleware for the rendered page. It owns the head-level concerns the
 /// SSR'd component tree cannot express itself:
 ///
