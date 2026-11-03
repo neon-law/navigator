@@ -160,17 +160,16 @@ async fn billed_party(
     project_id: Uuid,
 ) -> Result<Option<store::persons::Person>, InvoiceGenerationError> {
     let participations = projects::participations_for_project(surreal, project_id).await?;
-    let client_side = participations
+    // Access scopes include legacy counterparties; only a matter's actual
+    // client participation is a debtor. DRI flags never promote another side.
+    let clients = participations
         .into_iter()
-        .filter(|row| {
-            projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str())
-                || row.is_client_dri
-        })
+        .filter(|row| row.participation == "client")
         .collect::<Vec<_>>();
-    let party = client_side
+    let party = clients
         .iter()
         .find(|row| row.is_client_dri)
-        .or_else(|| client_side.first());
+        .or_else(|| clients.first());
     match party {
         Some(row) => Ok(store::persons::find_by_id(surreal, row.person_id).await?),
         None => Ok(None),
@@ -714,5 +713,59 @@ mod tests {
             inserted,
             inserted - Duration::seconds(1)
         ));
+    }
+
+    async fn billing_person(
+        db: &store::surreal::SurrealDb,
+        role: store::persons::Role,
+    ) -> uuid::Uuid {
+        store::persons::create(
+            db,
+            &store::persons::NewPerson::with_role(
+                "Synthetic billing selection",
+                format!("billing-selection-{}@example.com", uuid::Uuid::new_v4()),
+                role,
+            ),
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn billed_party_requires_client_participation_even_for_a_dri() {
+        use store::test_support::seed_legacy_participation;
+        let db = store::surreal::test_support::mem().await;
+        let project = uuid::Uuid::new_v4();
+        let adverse = billing_person(&db, store::persons::Role::Client).await;
+        seed_legacy_participation(&db, project, adverse, "counterparty").await;
+        assert!(super::billed_party(&db, project).await.unwrap().is_none());
+        let lawyer = billing_person(&db, store::persons::Role::Lawyer).await;
+        seed_legacy_participation(&db, project, lawyer, "lawyer").await;
+        db.query("UPDATE person_project_role SET is_client_dri=true WHERE person_id=$person")
+            .bind(("person", store::surreal::record_id("person", lawyer)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert!(super::billed_party(&db, project).await.unwrap().is_none());
+        let client = billing_person(&db, store::persons::Role::Client).await;
+        seed_legacy_participation(&db, project, client, "client").await;
+        assert_eq!(
+            super::billed_party(&db, project).await.unwrap().unwrap().id,
+            client
+        );
+        let client_dri = billing_person(&db, store::persons::Role::Client).await;
+        seed_legacy_participation(&db, project, client_dri, "client").await;
+        db.query("UPDATE person_project_role SET is_client_dri=true WHERE person_id=$person")
+            .bind(("person", store::surreal::record_id("person", client_dri)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert_eq!(
+            super::billed_party(&db, project).await.unwrap().unwrap().id,
+            client_dri
+        );
     }
 }

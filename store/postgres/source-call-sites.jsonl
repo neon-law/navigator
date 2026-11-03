@@ -723,6 +723,10 @@
 {"file":"portal/src/people_list_answer.rs","line":27,"function":"assemble","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/policy.rs","line":202,"function":"require_policy","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/policy.rs","line":223,"function":"require_policy","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/project_billing_api.rs","line":745,"function":"billed_party_requires_client_participation_even_for_a_dri","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
+{"file":"portal/src/project_billing_api.rs","line":745,"function":"billed_party_requires_client_participation_even_for_a_dri","operation":"query","sql_operations":["UPDATE"],"tables":["person_project_role"],"transaction":false}
+{"file":"portal/src/project_billing_api.rs","line":760,"function":"billed_party_requires_client_participation_even_for_a_dri","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
+{"file":"portal/src/project_billing_api.rs","line":760,"function":"billed_party_requires_client_participation_even_for_a_dri","operation":"query","sql_operations":["UPDATE"],"tables":["person_project_role"],"transaction":false}
 {"file":"portal/src/project_documents.rs","line":910,"function":"download","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/project_documents.rs","line":1067,"function":"attachment_bytes_response","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/project_documents.rs","line":1139,"function":"drive_database","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
