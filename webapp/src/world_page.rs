@@ -368,8 +368,8 @@ fn unresolved(display_name: String, field_label: &str, message: &str) -> PersonO
 #[cfg(any(feature = "server", test))]
 fn format_unresolved_city(city: &str, country: &str) -> String {
     format!(
-        "We could not find {city} in {country}. Check the spelling, or pick a nearby \
-         city from the suggestions — the lines move little within a region."
+        "We could not find {city} in {country}. Confirm the birth city and country. \
+         Suggestions are possible spelling matches, not confirmed birth places."
     )
 }
 
@@ -712,6 +712,15 @@ fn field_label(field: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn city_suggestions_require_confirmation_without_claiming_accuracy() {
+        let message = format_unresolved_city("Londno", "United Kingdom");
+        assert!(message.contains("Londno in United Kingdom"));
+        assert!(message.contains("Confirm the birth city and country"));
+        assert!(!message.contains("nearby"));
+        assert!(!message.contains("lines move little"));
+    }
 
     #[test]
     fn form_starts_with_one_person_and_explains_the_five_person_limit() {
