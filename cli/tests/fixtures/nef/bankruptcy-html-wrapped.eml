@@ -1,0 +1,76 @@
+From: ecf-noreply@example.com
+To: docketing@example.com
+Subject: 26-10077-QQQ Objection to Claim
+Date: Mon, 9 Mar 2026 14:20:00 -0700
+Message-ID: <synthetic-bankruptcy-html-wrapped@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="nef-boundary-2"
+
+--nef-boundary-2
+Content-Type: text/plain; charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+
+U.S. Bankruptcy Court
+
+District of Elsewhere
+
+Notice of Electronic Filing
+
+The plain-text part omits the document link.
+
+--nef-boundary-2
+Content-Type: text/html; charset="us-ascii"
+Content-Transfer-Encoding: quoted-printable
+
+<html><body>
+<p><strong>U.S. Bankruptcy Court</strong></p>
+<p><strong>District of Elsewhere</strong></p>
+<p><strong>Notice of Electronic Filing</strong></p>
+<div>The following transaction was received from Quill, Quentin entered on=
+ 3/9/2026 at 2:20 PM PDT and filed on 3/9/2026</div>
+<table border=3D"0" cellspacing=3D"0">
+<tr>
+<td><strong>Case Name:</strong></td>
+<td>Widget Works LLC</td>
+</tr>
+<tr>
+<td><strong>Case Number:</strong></td>
+<td><A HREF=3Dhttps://ecf.example.com/cgi-bin/DktRpt.pl?99>26-10077-QQQ</A=
+></td>
+</tr>
+<tr>
+<td><strong>Document Number:</strong></td>
+<td><A HREF=3D'https://ecf.example.com/doc1/0310077?caseid=3D99&amp;de_seq=
+_num=3D410&amp;magic_num=3D5150'>
+57
+</A></td>
+</tr>
+</table>
+<p><strong>Docket Text:</strong><br>
+Objection to Claim No. 12 of Acme Lending Co. Filed by Harbor Recovery Fun=
+d. (Quill, Quentin)</p>
+<p><strong>The following document(s) are associated with this transaction=
+:</strong></p>
+<p><strong>Document description:</strong>Main Document<br>
+<strong>Original filename:</strong>C:\fakepath\objection-claim-12.pdf<br>
+</p>
+<p><strong>26-10077-QQQ Notice will be electronically mailed to:</strong><=
+br>
+Quentin Quill on behalf of Creditor Harbor Recovery Fund quentin.quill@exa=
+mple.com, claims@example.com Uma Upton on behalf of U.S. Trustee U.S. Trus=
+tee uma.upton@example.com Vera Venue on behalf of Debtor Widget Works LLC =
+vera.venue@example.com</p>
+<p><strong>26-10077-QQQ Notice will be delivered by other means to:</stron=
+g><br>
+<br>
+Walt Writ<br>
+100 Example Avenue<br>
+Springfield, ZZ 00000<br>
+<br>
+Xena Xerox<br>
+Suite 2, 200 Sample Street<br>
+Shelbyville, ZZ 00001<br>
+</p>
+</body></html>
+
+--nef-boundary-2--
