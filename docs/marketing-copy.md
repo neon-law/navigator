@@ -106,9 +106,9 @@ Lawyer Shook's `/` combines the firm notice and client sign-in written in Rust
 the shared footer treatment used by Neon Law and Vesta, including the link to Guieb & Shook PC and the common closing
 line.
 
-Neon's `team.yaml` lists Nick Shook and Waleed Amer, each linked to a short individual profile with a LinkedIn link.
-The `profiles` map keys each biography by its public route. Profiles do not repeat the directory heading or copy a
-full service biography.
+Neon's `team.yaml` lists Nick Shook and Waleed Amer, each linked to a short individual profile with a LinkedIn link. The
+`profiles` map keys each biography by its public route. Profiles do not repeat the directory heading or copy a full
+service biography.
 
 Vesta's `home.yaml` leads with support in life and death and welcomes the person's values and spiritual beliefs. It
 explains that Nevada Asset Protection Trust planning may fit after reviewing the person's circumstances and applicable
