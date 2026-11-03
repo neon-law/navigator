@@ -120,6 +120,9 @@ pub const ABHAYA_COMMUNITY_PHOTO_KEY: &str = "img/abhaya/stadium-community.jpg";
 /// `home.yaml` and resolved through the asset lane like every other brand's.
 pub const GUIEB_SHOOK_HOME_PHOTO_KEY: &str = "img/guieb-shook/courthouse-columns.jpg";
 
+/// User-supplied Greater Vancouver Chamber membership badge for the Firm footer.
+pub const GUIEB_SHOOK_GVC_BADGE_KEY: &str = "img/guieb-shook/proud-member-gvc.png";
+
 /// Stable object key for the replaceable firm home presentation.
 pub const HOME_PRESENTATION_KEY: &str = "img/neon-home/neon-home-presentation.mp4";
 

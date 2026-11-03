@@ -133,7 +133,11 @@ pub fn owner_home_body(view: &OwnerHomeView) -> Element {
                 p { class: "page-subtitle",
                     "Every practice on this deployment, and the house brands each one wears."
                 }
-                p { a { class: "nav-btn nav-btn--primary", href: "/app/owner/firms/new", "New firm" } }
+                p {
+                    a { class: "nav-btn nav-btn--primary", href: "/app/owner/firms/new", "New firm" }
+                    " "
+                    a { class: "nav-btn", href: "/app/owner/firms/move-brand", "Move brand" }
+                }
                 p { a { class: "nav-btn", href: "/app/owner/inbox", "Inbox" } }
                 p { a { class: "nav-btn", href: "/app/owner/keys", "Social app keys" } }
             }
@@ -198,6 +202,10 @@ mod tests {
         let html = render(Vec::new());
         assert!(html.contains(r#"href="/app/owner/firms/new""#), "{html}");
         assert!(html.contains("New firm"), "{html}");
+        assert!(
+            html.contains(r#"href="/app/owner/firms/move-brand""#),
+            "{html}"
+        );
         assert!(html.contains(r#"href="/app/owner/inbox""#), "{html}");
     }
 }

@@ -5974,3 +5974,11 @@ a.nav-steps__step:focus-visible {
   color: var(--nav-color-danger, #c1121f);
 }
 
+
+.site-footer__gvc-badge {
+  display: block;
+  width: 240px;
+  max-width: 100%;
+  height: auto;
+  margin: 1.5rem auto 0;
+}
