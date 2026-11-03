@@ -3192,3 +3192,141 @@ async fn assert_native_live_sms_review_moves(f: &Fixture, admin: Uuid, other: Uu
         Some(other)
     );
 }
+
+async fn voice_reply_fixture() -> Option<(Fixture, Uuid, Uuid)> {
+    let f = fixture().await?;
+    let clerk = persons::create(
+        &f.db,
+        &NewPerson::with_role("Voice Clerk", "voice-clerk@example.com", Role::Clerk),
+    )
+    .await
+    .unwrap()
+    .id;
+    projects::add_participation(
+        &f.db,
+        f.project,
+        clerk,
+        projects::participation_for_role(Role::Clerk),
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO person(id,name,email,role) VALUES($1,'Voice Clerk','voice-clerk@example.com','clerk')").bind(clerk).execute(f.pg.pool()).await.unwrap();
+    let mut input = inbound(
+        f.firm,
+        channel::VOICE,
+        "+12025550100",
+        "CAvoice-reply-guard",
+        "+12025550101",
+    );
+    input.project_id = Some(f.project);
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    Some((f, clerk, saved.conversation_id))
+}
+
+#[tokio::test]
+async fn native_voice_threads_allow_internal_notes_without_offering_replies() {
+    let Some((f, clerk, conversation)) = voice_reply_fixture().await else {
+        return;
+    };
+    for actor in [f.lawyer, clerk] {
+        let view = pg_inbox::project_thread_on(&f.pg, &f.db, actor, f.project, conversation)
+            .await
+            .unwrap();
+        assert!(view.can_note, "participating firm people may note a call");
+        assert!(!view.can_send, "VOICE has no outbound reply transport");
+        assert_eq!(view.next_action, "Leave an internal note");
+        let rows = pg_inbox::list_project_on(&f.pg, &f.db, actor, f.project)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.id == conversation)
+                .unwrap()
+                .next_action,
+            "Leave an internal note"
+        );
+        let note = pg_inbox::post_note_on(
+            &f.pg,
+            &f.db,
+            actor,
+            conversation,
+            "Synthetic call follow-up",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            pg_inbox::message_by_id_on(&f.pg, note)
+                .await
+                .unwrap()
+                .unwrap()
+                .direction,
+            direction::INTERNAL
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_voice_reply_refusal_creates_no_pending_outbound_message() {
+    let Some((f, clerk, conversation)) = voice_reply_fixture().await else {
+        return;
+    };
+    for actor in [f.lawyer, clerk] {
+        assert!(
+            matches!(
+                pg_inbox::queue_reply_on(
+                    &f.pg,
+                    &f.db,
+                    actor,
+                    conversation,
+                    "Synthetic reply",
+                    purpose::MATTER
+                )
+                .await,
+                Err(InboxError::Denied)
+            ),
+            "VOICE replies must be refused before queue creation"
+        );
+    }
+    let outbound: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM message WHERE conversation_id=$1 AND direction='outbound'",
+    )
+    .bind(conversation)
+    .fetch_one(f.pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        outbound, 0,
+        "refused call replies leave no pending outbound Messages"
+    );
+}
+
+#[tokio::test]
+async fn native_existing_voice_outbound_rows_never_reach_the_transport() {
+    let Some((f, _, conversation)) = voice_reply_fixture().await else {
+        return;
+    };
+    let mut ids = Vec::new();
+    for state in [delivery::FAILED, delivery::QUEUED] {
+        let id = Uuid::now_v7();
+        sqlx::query("INSERT INTO message(id,conversation_id,direction,body,author_person_id,delivery_state,purpose,occurred_at,inserted_at,updated_at) VALUES($1,$2,'outbound','Synthetic prior reply',$3,$4,'matter','2026-11-02T00:00:00Z',now(),now())")
+            .bind(id).bind(conversation).bind(f.lawyer).bind(state).execute(f.pg.pool()).await.unwrap();
+        ids.push(id);
+    }
+    let report = pg_inbox::dispatch_queued_on(&f.pg, &f.db, &NoTransport)
+        .await
+        .unwrap();
+    assert_eq!(report.suppressed, 1);
+    for (id, state) in ids
+        .into_iter()
+        .zip([delivery::FAILED, delivery::SUPPRESSED])
+    {
+        assert_eq!(
+            pg_inbox::message_by_id_on(&f.pg, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .delivery_state,
+            state
+        );
+    }
+}

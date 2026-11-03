@@ -541,6 +541,11 @@ impl AssignmentRow {
     }
 }
 
+pub(crate) fn allows_external_reply(conversation: &Conversation) -> bool {
+    conversation.channel != channel::VOICE
+        && !crate::fi_import::is_account(&conversation.provider_account)
+}
+
 /// The label the inbox shows for what the viewer should do next.
 #[must_use]
 pub fn next_action(
@@ -1376,7 +1381,7 @@ pub async fn queue_reply(
     let conversation = conversation_by_id(db, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
-    if crate::fi_import::is_account(&conversation.provider_account) {
+    if !allows_external_reply(&conversation) {
         return Err(InboxError::Denied);
     }
     let Some(project_id) = conversation.project_id else {
@@ -1805,7 +1810,7 @@ async fn dispatch_queued_surreal(
             continue;
         }
         let allowed = queued_author_still_authorized(db, &conversation, &message).await?;
-        if !allowed || crate::fi_import::is_account(&conversation.provider_account) {
+        if !allowed || !allows_external_reply(&conversation) {
             set_delivery(db, message.id, delivery::SUPPRESSED, None).await?;
             journal_attempt(
                 db,
@@ -1815,6 +1820,8 @@ async fn dispatch_queued_surreal(
                 Some(
                     if crate::fi_import::is_account(&conversation.provider_account) {
                         "import source is read-only"
+                    } else if conversation.channel == channel::VOICE {
+                        "voice replies are unsupported"
                     } else {
                         "participation revoked"
                     },
@@ -2576,8 +2583,8 @@ pub async fn project_thread(
         return Err(InboxError::NotFound);
     }
     let can_note = matches!(actor.role, Role::Lawyer | Role::Clerk);
-    let can_send = matches!(actor.role, Role::Lawyer | Role::Clerk)
-        && !crate::fi_import::is_account(&conversation.provider_account);
+    let can_send =
+        matches!(actor.role, Role::Lawyer | Role::Clerk) && allows_external_reply(&conversation);
     let delivery_state = latest_outbound_state(db, conversation.id).await?;
     let messages = messages_for(db, conversation.id).await?;
     mark_read(db, conversation.id).await?;
@@ -2646,7 +2653,7 @@ pub async fn list_project(
                 actor.role,
                 true,
                 &delivery_state,
-                can_send && !crate::fi_import::is_account(&conversation.provider_account),
+                can_send && allows_external_reply(&conversation),
             )
             .to_string(),
             delivery: delivery_state,
@@ -5916,5 +5923,141 @@ mod tests {
             process_context(&db, world.owner, Uuid::now_v7()).await,
             Err(InboxError::NotFound)
         ));
+    }
+    #[tokio::test]
+    async fn voice_threads_allow_internal_notes_without_offering_replies() {
+        let db = mem_surreal().await;
+        let w = world(&db).await;
+        let mut input = inbound(
+            w.firm,
+            channel::VOICE,
+            "+12025550100",
+            "CAvoice-view-guard",
+            "+12025550101",
+        );
+        input.project_id = Some(w.project);
+        let saved = ingest_inbound(&db, &input).await.unwrap();
+        for actor in [w.lawyer, w.clerk] {
+            let view = project_thread(&db, actor, w.project, saved.conversation_id)
+                .await
+                .unwrap();
+            assert!(view.can_note, "participating firm people may note a call");
+            assert!(!view.can_send, "VOICE has no outbound reply transport");
+            assert_eq!(view.next_action, "Leave an internal note");
+            let rows = list_project(&db, actor, w.project).await.unwrap();
+            assert_eq!(
+                rows.iter()
+                    .find(|r| r.id == saved.conversation_id)
+                    .unwrap()
+                    .next_action,
+                "Leave an internal note"
+            );
+            let note = post_note(
+                &db,
+                actor,
+                saved.conversation_id,
+                "Synthetic call follow-up",
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                message_by_id(&db, note).await.unwrap().unwrap().direction,
+                direction::INTERNAL
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn voice_reply_refusal_creates_no_pending_outbound_message() {
+        let db = mem_surreal().await;
+        let w = world(&db).await;
+        let mut input = inbound(
+            w.firm,
+            channel::VOICE,
+            "+12025550100",
+            "CAvoice-queue-guard",
+            "+12025550101",
+        );
+        input.project_id = Some(w.project);
+        let saved = ingest_inbound(&db, &input).await.unwrap();
+        for actor in [w.lawyer, w.clerk] {
+            assert!(
+                matches!(
+                    queue_reply(
+                        &db,
+                        actor,
+                        saved.conversation_id,
+                        "Synthetic reply",
+                        purpose::MATTER
+                    )
+                    .await,
+                    Err(InboxError::Denied)
+                ),
+                "VOICE replies must be refused before queue creation"
+            );
+        }
+        assert!(
+            messages_for(&db, saved.conversation_id)
+                .await
+                .unwrap()
+                .iter()
+                .all(|m| m.direction != direction::OUTBOUND),
+            "refused call replies leave no pending outbound Messages"
+        );
+    }
+    #[tokio::test]
+    async fn existing_voice_outbound_rows_never_reach_the_transport() {
+        let db = mem_surreal().await;
+        let w = world(&db).await;
+        let mut input = inbound(
+            w.firm,
+            channel::VOICE,
+            "+12025550100",
+            "CAvoice-pending-guard",
+            "+12025550101",
+        );
+        input.project_id = Some(w.project);
+        let saved = ingest_inbound(&db, &input).await.unwrap();
+        let mut ids = Vec::new();
+        for state in [delivery::FAILED, delivery::QUEUED] {
+            ids.push(
+                create_message(
+                    &db,
+                    saved.conversation_id,
+                    direction::OUTBOUND,
+                    "Synthetic prior reply",
+                    Some(w.lawyer),
+                    None,
+                    None,
+                    state,
+                    purpose::MATTER,
+                    None,
+                    None,
+                    "2026-11-02T00:00:00Z",
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        let transport = RecordingTransport::new(TransportOutcome::Unknown);
+        let report = dispatch_queued(&db, &transport).await.unwrap();
+        assert_eq!(report.suppressed, 1);
+        assert!(
+            transport.calls().is_empty(),
+            "unsupported call replies never reach a provider"
+        );
+        for (id, state) in ids
+            .into_iter()
+            .zip([delivery::FAILED, delivery::SUPPRESSED])
+        {
+            assert_eq!(
+                message_by_id(&db, id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .delivery_state,
+                state
+            );
+        }
     }
 }

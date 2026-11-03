@@ -810,7 +810,7 @@ pub(crate) async fn queue_reply_on(
     let conversation = conversation_by_id_on(pg, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
-    if crate::fi_import::is_account(&conversation.provider_account) {
+    if !inbox::allows_external_reply(&conversation) {
         return Err(InboxError::Denied);
     }
     let Some(project_id) = conversation.project_id else {
@@ -1103,7 +1103,7 @@ pub(crate) async fn dispatch_queued_on(
             }
             None => false,
         };
-        if !allowed || crate::fi_import::is_account(&conversation.provider_account) {
+        if !allowed || !inbox::allows_external_reply(&conversation) {
             set_delivery_on(pg, message.id, delivery::SUPPRESSED, None).await?;
             journal_attempt_on(
                 pg,
@@ -1113,6 +1113,8 @@ pub(crate) async fn dispatch_queued_on(
                 Some(
                     if crate::fi_import::is_account(&conversation.provider_account) {
                         "import source is read-only"
+                    } else if conversation.channel == channel::VOICE {
+                        "voice replies are unsupported"
                     } else {
                         "participation revoked"
                     },
@@ -1604,7 +1606,7 @@ async fn intake_rows(
                 role,
                 assigned || conversation.project_id.is_some(),
                 &delivery_state,
-                can_send_default && !crate::fi_import::is_account(&conversation.provider_account),
+                can_send_default && inbox::allows_external_reply(&conversation),
             )
             .to_string(),
             delivery: delivery_state,
@@ -1690,7 +1692,7 @@ pub(crate) async fn project_thread_on(
     }
     let can_note = matches!(actor.role, Role::Lawyer | Role::Clerk);
     let can_send = matches!(actor.role, Role::Lawyer | Role::Clerk)
-        && !crate::fi_import::is_account(&conversation.provider_account);
+        && inbox::allows_external_reply(&conversation);
     let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
     let messages = messages_for_on(pg, conversation.id).await?;
     mark_read_on(pg, conversation.id).await?;
