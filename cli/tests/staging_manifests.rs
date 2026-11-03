@@ -492,7 +492,8 @@ fn workflows_service_resources_rollout_and_probes_are_rendered() {
     let worker = container(deployment, "worker");
     assert_eq!(
         worker["readinessProbe"]["httpGet"]["path"].as_str(),
-        Some("/healthz")
+        Some("/readyz"),
+        "readiness renders the DBOS-aware endpoint; liveness stays on /healthz"
     );
     assert_eq!(
         worker["readinessProbe"]["httpGet"]["port"].as_u64(),
