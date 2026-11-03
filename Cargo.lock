@@ -4246,7 +4246,7 @@ dependencies = [
 
 [[package]]
 name = "ephemeris"
-version = "26.10.30"
+version = "26.11.3"
 dependencies = [
  "hifitime",
  "serde",
@@ -4970,7 +4970,7 @@ dependencies = [
 
 [[package]]
 name = "geotime"
-version = "26.10.30"
+version = "26.11.3"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -8270,15 +8270,6 @@ dependencies = [
 
 [[package]]
 name = "phf"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
-dependencies = [
- "phf_shared 0.12.1",
-]
-
-[[package]]
-name = "phf"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
@@ -8354,15 +8345,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "phf_shared"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
-dependencies = [
- "siphasher",
 ]
 
 [[package]]

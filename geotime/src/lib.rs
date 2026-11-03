@@ -147,7 +147,11 @@ mod tests {
     #[test]
     fn lists_every_bundled_country() {
         let countries = countries();
-        assert!(countries.len() > 200, "index bundles {countries} countries");
+        assert!(
+            countries.len() > 200,
+            "index bundles {} countries",
+            countries.len()
+        );
         assert!(countries
             .iter()
             .any(|country| country.iso2 == "US" && country.name == "United States"));
