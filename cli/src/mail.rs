@@ -49,8 +49,16 @@ Attachments:
 
 #[derive(Subcommand)]
 pub enum MailAction {
-    /// Search Gmail threads, scoped to the current Project when possible.
-    Search { query: String },
+    /// Search Gmail threads, scoped to the current Project when possible:
+    /// mail from or to the client contact, or naming one of the manifest's
+    /// `dockets:` case numbers, so the court's notices on the matter appear.
+    Search {
+        query: String,
+        /// Search the whole mailbox, without the Project scope — for
+        /// counterparty or claims-agent mail that names neither.
+        #[arg(long)]
+        unscoped: bool,
+    },
     /// Read a Gmail thread as plain text.
     Read { thread: String },
     /// Create or update an unsent draft. Use --thread to draft a reply.
@@ -449,8 +457,6 @@ struct MessageHeader {
 #[derive(Debug, Deserialize)]
 struct MessageBody {
     data: Option<String>,
-    #[serde(rename = "attachmentId")]
-    attachment_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -481,11 +487,17 @@ fn header<'a>(message: &'a GmailMessage, name: &str) -> Option<&'a str> {
         .map(|header| header.value.as_str())
 }
 
+/// URL-safe base64 that accepts Gmail's payloads with or without `=`
+/// padding: the API omits it on some messages and keeps it on others.
+const GMAIL_BASE64URL: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::URL_SAFE,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+);
+
 fn decoded_body(part: &MessagePart) -> Option<String> {
     let data = part.body.as_ref()?.data.as_deref()?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(data)
-        .ok()?;
+    let bytes = GMAIL_BASE64URL.decode(data.trim()).ok()?;
     String::from_utf8(bytes).ok()
 }
 
@@ -520,17 +532,26 @@ fn plain_text(part: &MessagePart) -> Option<String> {
     })
 }
 
+/// The names of the parts a lawyer would call attachments: a part with a
+/// non-empty filename, or one marked `Content-Disposition: attachment`.
+/// Gmail reports `filename: ""` on every body part and multipart container,
+/// so presence of the field alone means nothing.
 fn attachments(part: &MessagePart, output: &mut Vec<String>) {
-    let has_payload = part
-        .body
-        .as_ref()
-        .is_some_and(|body| body.attachment_id.is_some());
-    if has_payload || part.filename.is_some() {
-        output.push(
-            part.filename
-                .clone()
-                .unwrap_or_else(|| "(unnamed attachment)".into()),
-        );
+    let filename = part
+        .filename
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let disposition_attachment = part.headers.iter().flatten().any(|header| {
+        header.name.eq_ignore_ascii_case("Content-Disposition")
+            && header
+                .value
+                .trim_start()
+                .get(..10)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("attachment"))
+    });
+    if filename.is_some() || disposition_attachment {
+        output.push(filename.map_or_else(|| "(unnamed attachment)".into(), str::to_string));
     }
     if let Some(parts) = &part.parts {
         for child in parts {
@@ -952,25 +973,124 @@ fn source_reference(mailbox: &str, message_id: &str) -> String {
 }
 
 /// The Gmail message id a reference names: a Gmail web URL copied from the
-/// browser (`https://mail.google.com/mail/u/0/#inbox/<id>`, the legacy
-/// `?th=<id>` form included) or a bare Gmail message id. None when the
-/// reference is neither, so a misspelled file path falls through to the
-/// caller's file handling.
+/// browser (`https://mail.google.com/mail/u/0/#inbox/<id>`, any
+/// `#<label>/…/<id>` or `#search/<query>/<id>` form, and the legacy
+/// `?th=<id>` form included), a bare Gmail message id, or the browser's
+/// `FMfcgz…` web id, decoded to its hex id. None when the reference is
+/// none of these, so a misspelled file path falls through to the caller's
+/// file handling.
+///
+/// The browser's id names the conversation: for a one-message thread it is
+/// the message id, and for a longer one Gmail resolves it to the thread's
+/// first message — the same reading the legacy hex URLs always had.
 fn gmail_message_id(reference: &str) -> Option<String> {
-    if let Ok(url) = Url::parse(reference) {
-        if !url.host_str()?.ends_with("mail.google.com") {
-            return None;
-        }
-        if let Some((_, id)) = url.query_pairs().find(|(name, _)| name == "th") {
-            return Some(id.into_owned()).filter(|id| is_gmail_id(id));
-        }
-        let id = url
-            .fragment()?
-            .rsplit('/')
-            .find(|segment| !segment.is_empty())?;
-        return Some(id.to_string()).filter(|id| is_gmail_id(id));
+    let candidate = reference_id_segment(reference)?;
+    if let Some(GmailWebId::Decoded(id)) = gmail_web_id(&candidate) {
+        return Some(id);
     }
-    Some(reference.to_string()).filter(|id| is_gmail_id(id))
+    Some(candidate).filter(|id| is_gmail_id(id))
+}
+
+/// The id-shaped segment of a reference: the `th` query value or last
+/// fragment segment of a Gmail web URL, or the reference itself. None for
+/// a URL on another host or with no id segment.
+fn reference_id_segment(reference: &str) -> Option<String> {
+    let Ok(url) = Url::parse(reference) else {
+        return Some(reference.to_string());
+    };
+    if !url.host_str()?.ends_with("mail.google.com") {
+        return None;
+    }
+    if let Some((_, id)) = url.query_pairs().find(|(name, _)| name == "th") {
+        return Some(id.into_owned());
+    }
+    let fragment = url.fragment()?;
+    // `#inbox/<id>?projector=1` opens an attachment preview over the message.
+    let fragment = fragment.split_once('?').map_or(fragment, |(path, _)| path);
+    fragment
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .map(str::to_string)
+}
+
+/// What a browser web id (`FMfcgz…`) decodes to.
+#[derive(Debug, PartialEq, Eq)]
+enum GmailWebId {
+    /// A thread or message id in the API's hex form.
+    Decoded(String),
+    /// A well-formed web id that carries no API id (`thread-a:r…`, the form
+    /// Gmail uses for drafts and some sent mail).
+    Opaque,
+}
+
+/// Gmail's web ids re-encode `base64("<kind>:<decimal id>")` in a
+/// forty-consonant alphabet. Numeric kinds (`f:`, `thread-f:`, `msg-f:`)
+/// decode offline to the API's hex id. None when `token` is not a web id
+/// at all.
+fn gmail_web_id(token: &str) -> Option<GmailWebId> {
+    const WEB: &[u8] = b"BCDFGHJKLMNPQRSTVWXZbcdfghjklmnpqrstvwxz";
+    const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const STANDARD_ANY_PAD: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        base64::engine::GeneralPurposeConfig::new()
+            .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+    );
+    if !(16..=128).contains(&token.len()) {
+        return None;
+    }
+    // Base conversion, 40 to 64, over little-endian digit vectors.
+    let mut digits: Vec<u32> = Vec::new();
+    for byte in token.bytes() {
+        let mut carry = u32::try_from(WEB.iter().position(|&c| c == byte)?).ok()?;
+        for digit in &mut digits {
+            let value = *digit * 40 + carry;
+            *digit = value % 64;
+            carry = value / 64;
+        }
+        while carry > 0 {
+            digits.push(carry % 64);
+            carry /= 64;
+        }
+    }
+    let encoded: String = digits
+        .iter()
+        .rev()
+        .map(|&digit| char::from(BASE64[digit as usize]))
+        .collect();
+    let decoded = String::from_utf8(STANDARD_ANY_PAD.decode(encoded).ok()?).ok()?;
+    let (kind, value) = decoded.split_once(':')?;
+    if kind.is_empty() || !kind.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') {
+        return None;
+    }
+    match value.parse::<u64>() {
+        Ok(number) if kind.ends_with('f') => Some(GmailWebId::Decoded(format!("{number:x}"))),
+        _ => Some(GmailWebId::Opaque),
+    }
+}
+
+/// The error for a reference that names no message: a web id that cannot
+/// be decoded offline gets its own explanation, anything else `fallback`.
+fn unresolved_reference_or(reference: &str, fallback: &str) -> anyhow::Error {
+    if reference_id_segment(reference)
+        .and_then(|segment| gmail_web_id(&segment))
+        .is_some_and(|id| id == GmailWebId::Opaque)
+    {
+        return anyhow!(
+            "the reference carries a Gmail web id that names no API message id (Gmail uses \
+             this form for drafts and some sent mail): {reference}. Find its Gmail message id \
+             with `navigator mail search` and pass that, or copy the URL from a conversation \
+             view"
+        );
+    }
+    anyhow!("{fallback}: {reference}")
+}
+
+/// [`unresolved_reference_or`] with the Gmail-only fallback message.
+fn unresolved_reference(reference: &str) -> anyhow::Error {
+    unresolved_reference_or(
+        reference,
+        "the reference is neither a Gmail web URL nor a Gmail message id",
+    )
 }
 
 /// Gmail message ids are base64url strings (commonly 16 characters) with
@@ -1014,13 +1134,15 @@ fn communication_request(
 }
 
 /// Gmail returns `format=raw` messages URL-safe base64 encoded.
+/// Whether the `=` padding is present varies by caller and message, so
+/// decoding accepts both forms.
 ///
 /// # Errors
 ///
 /// [`anyhow::Error`] when the response carries no raw field or it does not
 /// decode.
 fn decode_gmail_raw(raw: &str) -> Result<Vec<u8>> {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
+    GMAIL_BASE64URL
         .decode(raw.trim())
         .context("decode Gmail raw message")
 }
@@ -1114,11 +1236,47 @@ fn write_saved_mail(path: &Path, bytes: &[u8]) -> Result<SavedMail> {
     Ok(SavedMail::Written)
 }
 
-fn scoped_query(query: &str, project: Option<&str>) -> String {
-    let Some(email) = project.and_then(|_| client_contact_from_manifest()) else {
+/// What a Project-scoped `mail search` admits: the client contact's mail and
+/// any message naming one of the Project's case numbers — a court notice
+/// comes from the court, never the client, so the contact alone hid them.
+#[derive(Debug, Default)]
+struct SearchScope {
+    contact: Option<String>,
+    dockets: Vec<String>,
+}
+
+impl SearchScope {
+    /// The scope the Project checkout in the working directory declares.
+    fn from_manifest() -> Self {
+        let Some(manifest) = crate::projects::manifest::read(Path::new(".")) else {
+            return Self::default();
+        };
+        if manifest.project.is_none() {
+            return Self::default();
+        }
+        Self {
+            contact: client_contact_from_manifest(),
+            dockets: manifest.dockets,
+        }
+    }
+}
+
+fn scoped_query(query: &str, scope: &SearchScope) -> String {
+    let mut terms = Vec::new();
+    if let Some(email) = &scope.contact {
+        terms.push(format!("from:{email} OR to:{email}"));
+    }
+    for docket in &scope.dockets {
+        let docket = docket.replace('"', "");
+        let docket = docket.trim();
+        if !docket.is_empty() {
+            terms.push(format!("\"{docket}\""));
+        }
+    }
+    if terms.is_empty() {
         return query.to_owned();
-    };
-    format!("({query}) (from:{email} OR to:{email})")
+    }
+    format!("({query}) ({})", terms.join(" OR "))
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -1463,8 +1621,12 @@ struct ArchivedMessage {}
 /// INBOX label. Never a trash delete, and never a send. This is the only
 /// Gmail write `inbox process` performs.
 pub async fn archive(reference: &str) -> Result<()> {
-    let id = gmail_message_id(reference)
-        .ok_or_else(|| anyhow!("cannot resolve a Gmail message id from the reference"))?;
+    let id = gmail_message_id(reference).ok_or_else(|| {
+        unresolved_reference_or(
+            reference,
+            "cannot resolve a Gmail message id from the reference",
+        )
+    })?;
     let client = client().await?;
     client.archive_message(&id).await
 }
@@ -1472,11 +1634,20 @@ pub async fn archive(reference: &str) -> Result<()> {
 #[allow(clippy::too_many_lines)] // one dispatch arm per verb; each arm delegates
 async fn run_inner(action: MailAction) -> Result<()> {
     match action {
-        MailAction::Search { query } => {
-            let project = crate::projects::manifest::read(Path::new("."))
-                .and_then(|manifest| manifest.project);
-            let query = scoped_query(&query, project.as_deref());
-            let threads = client().await?.search(&query).await?;
+        MailAction::Search { query, unscoped } => {
+            let scope = if unscoped {
+                SearchScope::default()
+            } else {
+                SearchScope::from_manifest()
+            };
+            let scoped = scoped_query(&query, &scope);
+            let threads = client().await?.search(&scoped).await?;
+            if threads.is_empty() && scoped != query {
+                eprintln!(
+                    "navigator mail: no threads matched within this Project's scope (its client \
+                     contact and dockets: case numbers); pass --unscoped to search the whole mailbox"
+                );
+            }
             for thread in threads {
                 println!("{}\t{}", thread.id, thread.snippet.unwrap_or_default());
             }
@@ -1866,8 +2037,9 @@ async fn parse_command(
         return parse_local_file(reference, project, host, kind).await;
     }
     let message_id = gmail_message_id(reference).ok_or_else(|| {
-    anyhow!(
-            "the reference is neither an existing file, a Gmail web URL, nor a Gmail message id: {reference}"
+        unresolved_reference_or(
+            reference,
+            "the reference is neither an existing file, a Gmail web URL, nor a Gmail message id",
         )
     })?;
     parse_gmail_message(&message_id, project, host).await
@@ -2037,9 +2209,7 @@ async fn save_message_command(
     dir: Option<&Path>,
     name: Option<&str>,
 ) -> Result<()> {
-    let message_id = gmail_message_id(reference).ok_or_else(|| {
-        anyhow!("the reference is neither a Gmail web URL nor a Gmail message id: {reference}")
-    })?;
+    let message_id = gmail_message_id(reference).ok_or_else(|| unresolved_reference(reference))?;
     if let Some(name) = name {
         check_mail_save_name(name)?;
     }
@@ -2174,6 +2344,50 @@ mod tests {
     }
 
     #[test]
+    fn gmail_web_ids_in_browser_urls_decode_to_their_hex_id() {
+        // Synthetic web ids: base64("f:<decimal>") re-encoded in Gmail's
+        // forty-consonant alphabet, the `FMfcgz…` shape the browser shows.
+        for url in [
+            "https://mail.google.com/mail/u/0/#inbox/FMfcgzQcqbThLrGqQsnjtQPDxLcKcpDw",
+            "https://mail.google.com/mail/u/0/#all/FMfcgzQcqbThLrGqQsnjtQPDxLcKcpDw",
+            "https://mail.google.com/mail/u/1/#label/Court+Notices/FMfcgzQcqbThLrGqQsnjtQPDxLcKcpDw",
+            "https://mail.google.com/mail/u/0/#search/from%3Aecf/FMfcgzQcqbThLrGqQsnjtQPDxLcKcpDw",
+            "FMfcgzQcqbThLrGqQsnjtQPDxLcKcpDw",
+        ] {
+            assert_eq!(
+                gmail_message_id(url).as_deref(),
+                Some("19a24cff5a335f79"),
+                "{url}"
+            );
+        }
+        // `msg-f:` and `thread-f:` payloads decode the same way.
+        assert_eq!(
+            gmail_message_id(
+                "https://mail.google.com/mail/u/0/#inbox/CXKnWZngLGgsJngQCFjlMGBrHTdgzqmNNwWpWbB"
+            )
+            .as_deref(),
+            Some("19a24cff5a335f7a")
+        );
+        assert_eq!(
+            gmail_web_id("NHgvNZFVxQXXXjLLlrBqXjgFWLFMMggHDSCgTnzMCbV"),
+            Some(GmailWebId::Decoded("19a24cff5a335f7b".into()))
+        );
+    }
+
+    #[test]
+    fn gmail_web_ids_without_a_hex_id_are_named_in_the_error() {
+        // `thread-a:r…` web ids (drafts, some sent mail) carry no API id.
+        let url =
+            "https://mail.google.com/mail/u/0/#sent/hxTnWLsSgZFtzTnCPbnHcvHmljQSrDDfZXkDZLjbFLLzr";
+        assert_eq!(gmail_message_id(url), None);
+        let message = unresolved_reference(url).to_string();
+        assert!(message.contains("Gmail web id"), "{message}");
+        assert!(message.contains("navigator mail search"), "{message}");
+        let plain = unresolved_reference("notes/draft-body.txt").to_string();
+        assert!(plain.contains("neither"), "{plain}");
+    }
+
+    #[test]
     fn non_gmail_references_name_no_message() {
         assert_eq!(
             gmail_message_id("https://example.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7"),
@@ -2259,6 +2473,71 @@ mod tests {
             b"From: client@example.test\r\n\r\nHello".to_vec()
         );
         assert!(decode_gmail_raw("not base64!").is_err());
+    }
+
+    #[test]
+    fn gmail_raw_copies_decode_whether_or_not_they_carry_padding() {
+        // A length that is not a multiple of three, so the padded form ends in `=`.
+        let message = b"From: court@example.test\r\nSubject: Notice\r\n\r\nHi?>";
+        let padded = base64::engine::general_purpose::URL_SAFE.encode(message);
+        assert!(padded.ends_with('='), "fixture must exercise padding");
+        assert_eq!(decode_gmail_raw(&padded).unwrap(), message.to_vec());
+        let unpadded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(message);
+        assert_eq!(decode_gmail_raw(&unpadded).unwrap(), message.to_vec());
+    }
+
+    #[test]
+    fn body_parts_with_empty_filenames_are_not_attachments() {
+        // Gmail's API reports `filename: ""` on every body part, the
+        // multipart container included.
+        let payload: MessagePart = serde_json::from_value(json!({
+            "mimeType": "multipart/alternative",
+            "filename": "",
+            "body": { "size": 0 },
+            "parts": [
+                { "mimeType": "text/plain", "filename": "",
+                  "headers": [{ "name": "Content-Type", "value": "text/plain; charset=UTF-8" }],
+                  "body": { "data": "SGVsbG8" } },
+                { "mimeType": "text/html", "filename": "",
+                  "body": { "data": "PHA-SGVsbG88L3A-" } }
+            ]
+        }))
+        .unwrap();
+        let mut names = Vec::new();
+        attachments(&payload, &mut names);
+        assert!(names.is_empty(), "{names:?}");
+    }
+
+    #[test]
+    fn named_or_disposition_attachment_parts_are_attachments() {
+        let payload: MessagePart = serde_json::from_value(json!({
+            "mimeType": "multipart/mixed",
+            "filename": "",
+            "parts": [
+                { "mimeType": "text/plain", "filename": "", "body": { "data": "SGVsbG8" } },
+                { "mimeType": "application/pdf", "filename": "order.pdf",
+                  "body": { "attachmentId": "att-1" } },
+                { "mimeType": "application/octet-stream", "filename": "",
+                  "headers": [{ "name": "Content-Disposition", "value": "attachment" }],
+                  "body": { "attachmentId": "att-2" } }
+            ]
+        }))
+        .unwrap();
+        let mut names = Vec::new();
+        attachments(&payload, &mut names);
+        assert_eq!(names, vec!["order.pdf", "(unnamed attachment)"]);
+    }
+
+    #[test]
+    fn gmail_body_parts_decode_whether_or_not_they_carry_padding() {
+        let padded = base64::engine::general_purpose::URL_SAFE.encode(b"Hello there");
+        assert!(padded.ends_with('='));
+        let part: MessagePart = serde_json::from_value(json!({
+            "mimeType": "text/plain",
+            "body": { "data": padded }
+        }))
+        .unwrap();
+        assert_eq!(decoded_body(&part).as_deref(), Some("Hello there"));
     }
 
     #[test]
@@ -2392,7 +2671,6 @@ mod tests {
             headers: None,
             body: Some(MessageBody {
                 data: Some(encode("Part one")),
-                attachment_id: None,
             }),
             parts: None,
             filename: None,
@@ -2402,7 +2680,6 @@ mod tests {
             headers: None,
             body: Some(MessageBody {
                 data: Some(encode("Part two")),
-                attachment_id: None,
             }),
             parts: None,
             filename: None,
@@ -2424,7 +2701,6 @@ mod tests {
             headers: None,
             body: Some(MessageBody {
                 data: Some(encode("<p>Hello &amp; goodbye</p>")),
-                attachment_id: None,
             }),
             parts: None,
             filename: None,
@@ -3394,7 +3670,6 @@ mod tests {
                 }]),
                 body: Some(MessageBody {
                     data: Some(body_data.into()),
-                    attachment_id: None,
                 }),
                 parts: None,
                 filename: None,
@@ -3428,10 +3703,7 @@ mod tests {
                 parts: Some(vec![MessagePart {
                     mime_type: Some("application/pdf".into()),
                     headers: None,
-                    body: Some(MessageBody {
-                        data: None,
-                        attachment_id: Some("att-1".into()),
-                    }),
+                    body: Some(MessageBody { data: None }),
                     parts: None,
                     filename: Some("contract.pdf".into()),
                 }]),
@@ -3602,7 +3874,55 @@ mod tests {
 
     #[test]
     fn a_scoped_query_only_scopes_when_the_manifest_names_a_contact() {
-        assert_eq!(scoped_query("retainer", None), "retainer");
+        assert_eq!(
+            scoped_query("retainer", &SearchScope::default()),
+            "retainer"
+        );
+        let client_only = SearchScope {
+            contact: Some("client@example.test".into()),
+            dockets: vec![],
+        };
+        assert_eq!(
+            scoped_query("retainer", &client_only),
+            "(retainer) (from:client@example.test OR to:client@example.test)"
+        );
+    }
+
+    #[test]
+    fn a_scoped_query_reaches_court_notices_naming_the_projects_case_numbers() {
+        let scope = SearchScope {
+            contact: Some("client@example.test".into()),
+            dockets: vec!["2:26-bk-10001".into(), "A-26-900001-C".into()],
+        };
+        assert_eq!(
+            scoped_query("from:uscourts.gov", &scope),
+            "(from:uscourts.gov) (from:client@example.test OR to:client@example.test \
+             OR \"2:26-bk-10001\" OR \"A-26-900001-C\")"
+        );
+        // Dockets alone still scope, and a stray quote cannot break the query.
+        let dockets_only = SearchScope {
+            contact: None,
+            dockets: vec!["26-\"10002\"".into(), "  ".into()],
+        };
+        assert_eq!(
+            scoped_query("notice", &dockets_only),
+            "(notice) (\"26-10002\")"
+        );
+    }
+
+    #[test]
+    fn mail_search_accepts_an_unscoped_flag() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Harness {
+            #[command(subcommand)]
+            action: MailAction,
+        }
+        let parsed = Harness::try_parse_from(["mail", "search", "--unscoped", "from:ecf"]).unwrap();
+        assert!(matches!(
+            parsed.action,
+            MailAction::Search { unscoped: true, ref query } if query == "from:ecf"
+        ));
     }
 
     #[tokio::test]
