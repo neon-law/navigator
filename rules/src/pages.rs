@@ -50,6 +50,8 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "people",
     "portal",
     "review",
+    "stages",
+    "tasks",
     "testimonial",
     "view-as-client",
 ];

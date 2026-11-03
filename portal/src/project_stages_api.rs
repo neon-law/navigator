@@ -92,26 +92,28 @@ async fn postgres(
 /// added before the mirror was enabled would otherwise be wrongly refused
 /// there. Mirroring the participation rows also carries their Persons, which
 /// covers every actor this door can admit.
-async fn prepared_store(
-    state: &ApiState,
+///
+/// Shared with the form doors in [`crate::project_stage_forms`], so the JSON
+/// and browser entry points cannot drift.
+pub(crate) async fn prepared_store(
+    surreal: &store::surreal::SurrealDb,
     operation: &'static str,
     project_id: Uuid,
 ) -> Result<store::postgres::PostgresDb, Response> {
     let pg = postgres(operation, project_id).await?;
     let mirrored = async {
         postgres_mirror::mirror(
-            &state.surreal,
+            surreal,
             &pg,
             &postgres_mirror::MirrorKey::Project(project_id),
         )
         .await?;
-        let participations =
-            store::projects::participations_for_project(&state.surreal, project_id)
-                .await
-                .map_err(|_| postgres_mirror::MirrorError::Source)?;
+        let participations = store::projects::participations_for_project(surreal, project_id)
+            .await
+            .map_err(|_| postgres_mirror::MirrorError::Source)?;
         for role in participations {
             postgres_mirror::mirror(
-                &state.surreal,
+                surreal,
                 &pg,
                 &postgres_mirror::MirrorKey::ProjectParticipation(role.id),
             )
@@ -191,7 +193,7 @@ pub(crate) async fn set(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state, "set", project_id).await {
+    let pg = match prepared_store(&state.surreal, "set", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };

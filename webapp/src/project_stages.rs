@@ -21,6 +21,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::components::{Badge, BadgeTone, Choice, Empty, Field, FormCard, Heading};
 use crate::people::ViewerRole;
 
 /// One entry in the Firm's ordered stage vocabulary.
@@ -58,6 +59,141 @@ pub struct MatterStageView {
     pub current: Option<StageDefinitionRow>,
     /// Every transition, oldest first.
     pub history: Vec<StageEventRow>,
+}
+
+/// The stage chip in the matter header — where the matter sits in the
+/// Firm's workflow, or `not set` until the Firm places it. Deliberately
+/// distinct from the lifecycle `Status` the header renders beside it:
+/// a stage moves as the work moves; the lifecycle status does not.
+#[component]
+pub fn StageChip(current: Option<String>) -> Element {
+    match current {
+        Some(label) => rsx! {
+            " · Stage: "
+            Badge { tone: BadgeTone::Active, "{label}" }
+        },
+        None => rsx! {
+            " · Stage: not set"
+        },
+    }
+}
+
+/// The Overview tab's stage surface: where the matter sits in the Firm's
+/// workflow, the control that moves it, and the audited trail of where it
+/// has been. A Case Stage is Firm-authored workflow placement — never the
+/// matter's lifecycle status (`project.status`) and never a court case's
+/// status (`case.status`), and the copy keeps the three apart.
+///
+/// The set control is a native-form POST to the matter's stage handler,
+/// which re-asks the same authorization this page rendered under.
+#[component]
+pub fn StageSection(
+    code: String,
+    csrf: String,
+    stage: MatterStageView,
+    /// The `?error=` flash a refused write redirected back with.
+    #[props(default)]
+    error: Option<String>,
+) -> Element {
+    rsx! {
+        section { class: "lawyer-detail__section lawyer-detail__stage",
+            h2 { "Case stage" }
+            if let Some(error) = error {
+                p { class: "nav-form-error", role: "alert", "{error}" }
+            }
+            match &stage.current {
+                Some(current) => rsx! {
+                    p { class: "lawyer-detail__stage-current",
+                        "This matter is in the "
+                        Badge { tone: BadgeTone::Active, "{current.label}" }
+                        " stage of the Firm's workflow."
+                    }
+                },
+                None => rsx! {
+                    Empty {
+                        title: "No stage set for this matter yet".to_string(),
+                        description: Some(
+                            "A Case Stage is where this matter sits in the Firm's own \
+                             workflow — not the matter's lifecycle status, and not a \
+                             court case's status. Choose the stage below.".to_string(),
+                        ),
+                    }
+                },
+            }
+            if !stage.history.is_empty() {
+                div { class: "nav-table-wrap",
+                    table { class: "nav-table",
+                        thead {
+                            tr {
+                                th { scope: "col", "From" }
+                                th { scope: "col", "To" }
+                                th { scope: "col", "By" }
+                                th { scope: "col", "When" }
+                                th { scope: "col", "Note" }
+                            }
+                        }
+                        tbody {
+                            for row in stage.history.iter() {
+                                tr {
+                                    td { "{dash_or(row.from_label.as_ref())}" }
+                                    td {
+                                        Badge { tone: BadgeTone::Active, "{row.to_label}" }
+                                    }
+                                    td { "{dash_or(row.actor.as_ref())}" }
+                                    td { "{day_of(&row.occurred_at)}" }
+                                    td { "{row.note.clone().unwrap_or_default()}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if stage.definitions.is_empty() {
+                Empty {
+                    title: "The Firm has no stage vocabulary yet".to_string(),
+                    description: Some(
+                        "Stages are the Firm's own workflow vocabulary. Once the \
+                         Firm defines its stages, this matter can be placed in one.".to_string(),
+                    ),
+                }
+            } else {
+                {
+                    let choices: Vec<Choice> = stage
+                        .definitions
+                        .iter()
+                        .map(|row| Choice::new(row.id.clone(), row.label.clone()))
+                        .collect();
+                    let selected = stage.current.as_ref().map(|row| row.id.clone());
+                    rsx! {
+                        FormCard {
+                            title: "Set stage".to_string(),
+                            action: "/app/projects/{code}/stages/set",
+                            submit_label: "Set stage".to_string(),
+                            heading: Heading::H2,
+                            csrf_token: Some(csrf.clone()),
+                            fields: vec![
+                                Field::select("Stage", "stage_id", choices, selected)
+                                    .help("The stage the matter has moved to, from the Firm's own vocabulary."),
+                                Field::textarea("Note", "note", "", 2)
+                                    .help("Optional. Why the matter moved — recorded on the audited transition."),
+                            ],
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The day a transition happened, out of its RFC 3339 timestamp — the
+/// precision a lawyer reads a stage history at.
+fn day_of(occurred_at: &str) -> String {
+    occurred_at.get(..10).unwrap_or(occurred_at).to_string()
+}
+
+/// A display word or an em dash — never a blank cell.
+fn dash_or(value: Option<&String>) -> String {
+    value.cloned().unwrap_or_else(|| "\u{2014}".to_string())
 }
 
 /// Commit the `404` the matter surface answers for a caller the matter does
@@ -106,6 +242,57 @@ fn event_rows(
             occurred_at: row.occurred_at.to_rfc3339(),
         })
         .collect()
+}
+
+/// Fetch the matter's stage read for a dashboard server fn that has already
+/// resolved its viewer — the same wasm-safe view [`get_matter_stage`]
+/// returns, without re-asking router admission. The stage store is
+/// PostgreSQL-native: the caller decides what a deployment without
+/// PostgreSQL renders (the dashboard workbench renders without a stage).
+#[cfg(feature = "server")]
+pub(crate) async fn read_stage(
+    surreal: &store::surreal::SurrealDb,
+    pg: &store::postgres::PostgresDb,
+    project: &store::projects::Project,
+) -> Result<MatterStageView, ServerFnError> {
+    let definitions = match project.firm_id {
+        Some(firm_id) => store::case_stages::list_definitions(pg, firm_id)
+            .await
+            .map_err(crate::lawyer_project_detail::server_error)?,
+        None => Vec::new(),
+    };
+    let current = store::case_stages::current_stage(pg, project.id)
+        .await
+        .map_err(crate::lawyer_project_detail::server_error)?;
+    let history = store::case_stages::history(pg, project.id)
+        .await
+        .map_err(crate::lawyer_project_detail::server_error)?;
+
+    // Resolve every id the rows carry to a display word: stage ids to the
+    // Firm's labels, actor ids to person names from the directory.
+    let labels: std::collections::HashMap<uuid::Uuid, String> = definitions
+        .iter()
+        .map(|row| (row.id, row.label.clone()))
+        .collect();
+    let actor_ids: Vec<uuid::Uuid> = history.iter().map(|row| row.actor_person_id).collect();
+    let names: std::collections::HashMap<uuid::Uuid, String> =
+        store::persons::find_by_ids(surreal, &actor_ids)
+            .await
+            .map_err(crate::lawyer_project_detail::server_error)?
+            .into_iter()
+            .map(|person| (person.id, person.name))
+            .collect();
+
+    Ok(MatterStageView {
+        definitions: definition_rows(&definitions),
+        current: current.as_ref().map(|row| StageDefinitionRow {
+            id: row.id.to_string(),
+            label: row.label.clone(),
+            position: row.position,
+            case_type: row.case_type.clone(),
+        }),
+        history: event_rows(&history, &labels, &names),
+    })
 }
 
 /// Fetch the matter's stage read: the Firm's vocabulary, the stage the matter
@@ -158,49 +345,13 @@ pub async fn get_matter_stage() -> Result<MatterStageView, ServerFnError> {
     let pg = store::postgres::PostgresDb::from_env().await.map_err(|_| {
         crate::lawyer_project_detail::server_error("the stage store is unavailable")
     })?;
-    let definitions = match project.firm_id {
-        Some(firm_id) => store::case_stages::list_definitions(&pg, firm_id)
-            .await
-            .map_err(crate::lawyer_project_detail::server_error)?,
-        None => Vec::new(),
-    };
-    let current = store::case_stages::current_stage(&pg, project.id)
-        .await
-        .map_err(crate::lawyer_project_detail::server_error)?;
-    let history = store::case_stages::history(&pg, project.id)
-        .await
-        .map_err(crate::lawyer_project_detail::server_error)?;
 
-    // Resolve every id the rows carry to a display word: stage ids to the
-    // Firm's labels, actor ids to person names from the directory.
-    let labels: std::collections::HashMap<uuid::Uuid, String> = definitions
-        .iter()
-        .map(|row| (row.id, row.label.clone()))
-        .collect();
-    let actor_ids: Vec<uuid::Uuid> = history.iter().map(|row| row.actor_person_id).collect();
-    let names: std::collections::HashMap<uuid::Uuid, String> =
-        store::persons::find_by_ids(&surreal, &actor_ids)
-            .await
-            .map_err(crate::lawyer_project_detail::server_error)?
-            .into_iter()
-            .map(|person| (person.id, person.name))
-            .collect();
-
-    Ok(MatterStageView {
-        definitions: definition_rows(&definitions),
-        current: current.as_ref().map(|row| StageDefinitionRow {
-            id: row.id.to_string(),
-            label: row.label.clone(),
-            position: row.position,
-            case_type: row.case_type.clone(),
-        }),
-        history: event_rows(&history, &labels, &names),
-    })
+    read_stage(&surreal, &pg, &project).await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::StageDefinitionRow;
+    use super::*;
     use chrono::DateTime;
     use std::collections::HashMap;
     use store::case_stages::{StageDefinition, StageEvent};
@@ -307,5 +458,136 @@ mod tests {
         assert_eq!(view.definitions, Vec::<StageDefinitionRow>::new());
         assert_eq!(view.current, None);
         assert_eq!(view.history, Vec::new());
+    }
+
+    fn a_view() -> MatterStageView {
+        MatterStageView {
+            definitions: vec![
+                StageDefinitionRow {
+                    id: "00000000-0000-0000-0000-0000000000aa".to_string(),
+                    label: "Intake".to_string(),
+                    position: 1,
+                    case_type: None,
+                },
+                StageDefinitionRow {
+                    id: "00000000-0000-0000-0000-0000000000bb".to_string(),
+                    label: "Discovery".to_string(),
+                    position: 3,
+                    case_type: None,
+                },
+            ],
+            current: None,
+            history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_header_chip_names_the_stage_or_owns_the_absence() {
+        let placed = dioxus_ssr::render_element(rsx! {
+            StageChip { current: Some("Discovery".to_string()) }
+        });
+        assert!(placed.contains("Stage:"), "{placed}");
+        assert!(placed.contains(">Discovery</span>"), "{placed}");
+
+        let unplaced = dioxus_ssr::render_element(rsx! { StageChip { current: None } });
+        assert!(unplaced.contains("Stage: not set"), "{unplaced}");
+    }
+
+    #[test]
+    fn an_unplaced_matter_with_a_vocabulary_offers_the_set_control() {
+        let html = dioxus_ssr::render_element(rsx! {
+            StageSection {
+                code: "acme".to_string(),
+                csrf: "token".to_string(),
+                stage: a_view(),
+            }
+        });
+
+        // The empty state explains itself and hands the reader the next
+        // action — the set control, carried by the same section.
+        assert!(html.contains("No stage set for this matter yet"), "{html}");
+        assert!(
+            html.contains(r#"action="/app/projects/acme/stages/set""#),
+            "{html}"
+        );
+        assert!(html.contains("Intake"), "{html}");
+        assert!(html.contains("Discovery"), "{html}");
+        assert!(html.contains(r#"name="_csrf""#), "{html}");
+        // The copy keeps a Case Stage apart from the two statuses it is not.
+        assert!(html.contains("lifecycle status"), "{html}");
+        assert!(html.contains("court case&#39;s status"), "{html}");
+    }
+
+    #[test]
+    fn the_history_names_the_transitions_in_display_words() {
+        let mut stage = a_view();
+        stage.current = Some(StageDefinitionRow {
+            id: "00000000-0000-0000-0000-0000000000bb".to_string(),
+            label: "Discovery".to_string(),
+            position: 3,
+            case_type: None,
+        });
+        stage.history = vec![StageEventRow {
+            from_label: Some("Intake".to_string()),
+            to_label: "Discovery".to_string(),
+            actor: Some("A. Rivera".to_string()),
+            note: Some("Answers served".to_string()),
+            occurred_at: "1970-01-01T00:01:00+00:00".to_string(),
+        }];
+
+        let html = dioxus_ssr::render_element(rsx! {
+            StageSection {
+                code: "acme".to_string(),
+                csrf: "token".to_string(),
+                stage,
+            }
+        });
+
+        // The current stage reads as a sentence with the stage named, and
+        // the transition is a display word trail, not an id log.
+        assert!(html.contains("stage of the Firm&#39;s workflow"), "{html}");
+        assert!(html.contains("Intake"), "{html}");
+        assert!(html.contains("A. Rivera"), "{html}");
+        assert!(html.contains("Answers served"), "{html}");
+        assert!(html.contains("1970-01-01"), "{html}");
+        assert!(!html.contains("unknown stage"), "{html}");
+    }
+
+    #[test]
+    fn a_refused_stage_write_rides_back_as_the_error_flash() {
+        let html = dioxus_ssr::render_element(rsx! {
+            StageSection {
+                code: "acme".to_string(),
+                csrf: "token".to_string(),
+                stage: a_view(),
+                error: Some("That stage is not in the Firm's vocabulary.".to_string()),
+            }
+        });
+
+        assert!(html.contains(r#"role="alert""#), "{html}");
+        assert!(
+            html.contains("That stage is not in the Firm&#39;s vocabulary."),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn a_matter_without_a_vocabulary_says_so_instead_of_offering_a_control() {
+        let html = dioxus_ssr::render_element(rsx! {
+            StageSection {
+                code: "acme".to_string(),
+                csrf: "token".to_string(),
+                stage: MatterStageView::default(),
+            }
+        });
+
+        assert!(
+            html.contains("The Firm has no stage vocabulary yet"),
+            "{html}"
+        );
+        assert!(
+            !html.contains("/stages/set"),
+            "no control for a command the vocabulary cannot honour: {html}"
+        );
     }
 }
