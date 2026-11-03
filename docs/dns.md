@@ -390,6 +390,27 @@ brand's host still serves a real, trusted certificate — it just answers `404` 
 the brand's page, never a TLS handshake failure. Each family keeps its own isolated `ManagedCertificate` regardless
 (ENG-768), so an unpointed or held-out name in `Provisioning` never holds another family's certificate hostage.
 
+### Changing shared certificate domains
+
+`ops ship` refuses to change an existing `navigator-firm` domain set. GKE recreates a managed certificate when its
+domains change, so removing a retired host can interrupt HTTPS for every retained host on that certificate. This
+preflight runs before the application apply. A new deployment with no shared certificate may provision one normally.
+
+The operator must stage a certificate transition separately in each environment, starting with staging:
+
+1. Create a replacement `ManagedCertificate` under a distinct name, listing every retained environment host.
+2. Attach it alongside the serving certificates in the existing Ingress annotation. Keep the serving certificates
+   and their domains unchanged, and remain within the target proxy's certificate limit.
+3. Wait for the replacement's `Active` status. Verify trusted HTTPS with SNI for every retained host; do not remove
+   working certificates or DNS records while the replacement is still provisioning.
+4. With replacement coverage serving, reconcile `navigator-firm` to the desired domain set. Wait for it to become
+   `Active` and verify trusted HTTPS at every retained host again.
+5. Rerun `ops ship`. Its rendered annotation retains `navigator-firm`; remove the temporary replacement only after
+   the final certificate and host checks pass. Retire the moved host's web records after that verification.
+
+Keep issuance and per-host verification receipts in the deployment's approved private records. A failed or pending
+transition leaves the serving certificates attached; rerun the checks before advancing.
+
 ### Verifying it — `navigator ops brand-readiness`
 
 A rendered manifest and a successful `kubectl apply` are a request, not proof: a `ManagedCertificate` can sit in
@@ -407,8 +428,8 @@ the host's ordinary trust store — **never `-k`/insecure** — and checks the a
 - a **live** brand must answer `200` with its own `og:site_name` (the same marker
   [`features/brand_routing.feature`](../features/tests/features/brand_routing.feature) already asserts on every route);
 - a **held-out** brand must answer `404` — a `200` there is a host-admission regression, not a pass;
-- on the production run only, every **live** brand's apex must redirect to its own canonical `www` host (apex checks
-  are skipped on staging, which carries no apex at all — see [The apex redirect is not done when the `URL` record
+- on the production run only, every **live, unmoved** brand's apex must redirect to its own canonical `www` host (apex
+  checks are skipped on staging, which carries no apex at all — see [The apex redirect is not done when the `URL` record
   lands](#the-apex-redirect-is-not-done-when-the-url-record-lands) above).
 
 It is bounded (one `curl` per host, `--max-time`-limited, no retry loop and no polling for a certificate to become

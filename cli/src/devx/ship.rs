@@ -1073,6 +1073,52 @@ fn firm_certificate_hosts(public_host: &str) -> Vec<String> {
         .collect()
 }
 
+/// Changing SANs recreates the shared certificate. Keep the serving certificate
+/// intact until an operator has staged and verified replacement TLS coverage.
+fn require_unchanged_firm_certificate_domains(
+    existing: &serde_json::Value,
+    desired: &[String],
+) -> Result<()> {
+    let domains = existing
+        .pointer("/spec/domains")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("the existing Firm certificate has no spec.domains"))?;
+    let current: std::collections::BTreeSet<&str> = domains
+        .iter()
+        .map(|domain| {
+            domain
+                .as_str()
+                .ok_or_else(|| anyhow!("the existing Firm certificate has a non-string domain"))
+        })
+        .collect::<Result<_>>()?;
+    let desired: std::collections::BTreeSet<&str> = desired.iter().map(String::as_str).collect();
+    ensure!(
+        current == desired,
+        "refusing to change {FIRM_CERTIFICATE_NAME} domains in place: GKE recreates the \
+         shared certificate and can interrupt HTTPS for other brands. Stage a replacement \
+         certificate alongside the serving one, verify it is Active and serves trusted TLS \
+         for every retained host, then reconcile the shared certificate domains and rerun. \
+         See docs/dns.md, Changing shared certificate domains."
+    );
+    Ok(())
+}
+
+fn ensure_unchanged_firm_certificate_domains(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
+    if dry_run {
+        eprintln!("==> live roll must verify the Firm certificate domains are unchanged");
+        return Ok(());
+    }
+    if let Some(existing) =
+        kubectl_json_if_present(cfg, "managedcertificate", FIRM_CERTIFICATE_NAME)?
+    {
+        require_unchanged_firm_certificate_domains(
+            &existing,
+            &firm_certificate_hosts(&cfg.public_host),
+        )?;
+    }
+    Ok(())
+}
+
 fn managed_certificate_document(namespace: &str, name: &str, domains: &[String]) -> String {
     use std::fmt::Write as _;
     let domains = domains.iter().fold(String::new(), |mut list, domain| {
@@ -3708,6 +3754,7 @@ fn roll(
     //     apply` can write.
     ensure_projected_objects_resolve(&manifests)?;
     ensure_ordered_service_objects(cfg, dry_run, dbos_enabled(deployment))?;
+    ensure_unchanged_firm_certificate_domains(cfg, dry_run)?;
 
     // 5. Reconcile services in dependency order, then apply the application.
     reconcile_ordered_services(cfg, dry_run, &rendered, opts, &tag, &target)?;
@@ -8341,6 +8388,30 @@ mod tests {
             production.len() <= 100,
             "a managed certificate holds at most 100 names"
         );
+    }
+
+    #[test]
+    fn a_shared_certificate_domain_change_requires_staged_tls_coverage() {
+        let current = serde_json::json!({"spec":{"domains":["a.example", "b.example"]}});
+        require_unchanged_firm_certificate_domains(
+            &current,
+            &["b.example".to_string(), "a.example".to_string()],
+        )
+        .unwrap();
+        for domains in [
+            vec!["a.example".to_string()],
+            vec![
+                "a.example".to_string(),
+                "b.example".to_string(),
+                "c.example".to_string(),
+            ],
+        ] {
+            let error = require_unchanged_firm_certificate_domains(&current, &domains)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("Stage a replacement"), "{error}");
+        }
+        assert!(require_unchanged_firm_certificate_domains(&serde_json::json!({}), &[]).is_err());
     }
 
     /// The Ingress host rule for `host`, as `(path, service, port)` triples.
