@@ -69,12 +69,22 @@ async fn get(router: axum::Router, uri: &str) -> axum::response::Response {
 async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bundle() {
     // ── Degraded mode: no staged bundle ──
     std::env::remove_var("NAUTILUS_DIOXUS_PUBLIC_PATH");
-    std::env::remove_var("DIOXUS_PUBLIC_PATH");
+    let foreign = tempfile::tempdir().expect("foreign bundle");
+    std::fs::write(
+        foreign.path().join("index.html"),
+        INDEX_HTML.replace("nautilus-preview.js", "foreign-app.js"),
+    )
+    .expect("foreign template");
+    std::env::set_var("DIOXUS_PUBLIC_PATH", foreign.path());
     let router = portal::dioxus_app::nautilus_preview_router();
 
     let response = get(router, portal::dioxus_app::NAUTILUS_PREVIEW_PATH).await;
     assert_eq!(response.status(), StatusCode::OK);
     let html = body_string(response).await;
+    assert!(
+        !html.contains("foreign-app.js") && !html.contains("data-fixture"),
+        "the SSR-only shell must ignore another app's template: {html}"
+    );
     assert!(
         html.contains("<h1>Nautilus</h1>"),
         "the subscription home must render server-side before any hydration: {html}"

@@ -190,10 +190,7 @@ fn nautilus_bundle_dir() -> Option<PathBuf> {
     dir.join("index.html").is_file().then_some(dir)
 }
 
-/// dioxus-server's only template knob: `ServeConfig::new` picks the served
-/// document's `index.html` out of this environment path, read once at
-/// construction. The preview's bundle override must reach it — a template
-/// from some other bundle would bootstrap the wrong wasm.
+/// `ServeConfig::new` reads the staged bundle's document from this path.
 const DIOXUS_PUBLIC_PATH_ENV: &str = "DIOXUS_PUBLIC_PATH";
 
 /// The Nautilus preview's browser-visible provenance notice. The terminal
@@ -244,11 +241,20 @@ pub fn nautilus_preview_router() -> Router {
     // bundle is the whole contract — callers need not know dioxus-server's
     // internals to serve a hydrated page.
     let bundle = nautilus_bundle_dir();
-    if let Some(dir) = &bundle {
+    let config = if let Some(dir) = &bundle {
         // Safe on this edition, and read once below at `ServeConfig::new`:
         // one server process builds one preview router.
         std::env::set_var(DIOXUS_PUBLIC_PATH_ENV, dir);
-    }
+        ServeConfig::new()
+    } else {
+        // An exported webapp bundle must not supply another app's document
+        // or scripts to the preview's intentionally unhydrated shell.
+        // A device file cannot contain index.html on either supported host
+        // platform. An explicit path prevents Dioxus's executable-directory
+        // fallback from selecting another application's bundle as well.
+        std::env::set_var(DIOXUS_PUBLIC_PATH_ENV, "/dev/null");
+        ServeConfig::new()
+    };
     let mut router = Router::<FullstackState>::new()
         .route(
             NAUTILUS_PREVIEW_PATH,
@@ -256,10 +262,7 @@ pub fn nautilus_preview_router() -> Router {
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(preview_provenance_notice)),
         )
-        .with_state(FullstackState::new(
-            ServeConfig::new(),
-            webapp::mobile::MobileApp,
-        ));
+        .with_state(FullstackState::new(config, webapp::mobile::MobileApp));
     if let Some(dir) = bundle {
         router = router.merge(bundle_assets_router(&dir));
     }
