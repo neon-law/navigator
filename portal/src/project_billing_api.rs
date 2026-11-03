@@ -325,6 +325,9 @@ pub(crate) async fn generate_invoice(
         return Err(InvoiceGenerationError::FutureDatedCost(cost.occurred_on));
     }
     let compose = compose_lines(&entries, &unbilled_costs, flat_fee_cents)?;
+    if compose.total_cents == 0 {
+        return Err(InvoiceGenerationError::NothingToInvoice);
+    }
 
     let Some(party) = billed_party(surreal, project_id).await? else {
         return Err(InvoiceGenerationError::NoBilledParty);

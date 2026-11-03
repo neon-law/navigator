@@ -1211,6 +1211,43 @@ async fn an_empty_matter_never_reaches_the_provider() {
     assert!(status.success());
 }
 
+async fn assert_zero_rate_work_is_a_noop(fixture: &Fixture) {
+    let entry = store::time_entries::create(
+        &fixture.pg,
+        fixture.project_id,
+        fixture.lawyer_id,
+        &store::time_entries::NewTimeEntry {
+            attorney_id: fixture.lawyer_id,
+            performed_on: NaiveDate::from_ymd_opt(2026, 10, 20).unwrap(),
+            minutes: 60,
+            description: "Synthetic pro bono work".into(),
+            billable: true,
+            rate_cents_per_hour: 0,
+            source: store::time_entries::TimeEntrySource::Manual,
+        },
+    )
+    .await
+    .unwrap();
+    let response = generate(&fixture.app, fixture).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body["reason"], "nothing_to_invoice");
+    assert_eq!(time_entry_status(&fixture.pg, entry.id).await, "unbilled");
+    assert!(fixture.provider.inner.contact_calls().is_empty());
+    assert!(fixture.provider.create_keys().is_empty());
+    assert!(pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .is_none());
+    assert!(mirror_rows(&fixture.surreal, fixture.project_id)
+        .await
+        .is_empty());
+}
+
 async fn run_noop() {
     let fixture = fixture().await;
     let response = generate(&fixture.app, &fixture).await;
@@ -1222,6 +1259,7 @@ async fn run_noop() {
     )
     .unwrap();
     assert_eq!(body["reason"], json!("nothing_to_invoice"));
+    assert_zero_rate_work_is_a_noop(&fixture).await;
     let unresolved = seed_entry(&fixture, 60, "Synthetic unresolved contact").await;
     *fixture.provider.contact_override.lock().unwrap() = Some("  ".into());
     assert_eq!(
