@@ -666,7 +666,7 @@ async fn a_matter_with_no_client_to_bill_is_refused() {
     let provider = Arc::new(billing::StubBillingProvider::new());
     let state = AppState {
         sessions: SessionStore::new(KEY),
-        billing_provider: Arc::clone(&provider),
+        billing_provider: provider.clone(),
         storage,
         ..base
     };
