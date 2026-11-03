@@ -18,8 +18,8 @@ declares a page: a frontmatter `kind:` that names a page kind fails `S103`.
 git. The reader's lens comes from their participation on the matter, re-checked on every request; a non-participant, an
 unknown slug, and a page with no face for the reader are the same 404. A matter has one tab strip: the show page
 (Overview) first, each page with a face for the reader in declared order, then the reader's built-in sections — for a
-lawyer, Tasks, Communications, Documents, Billing, and Participants; for the client DRI, Testimonial. Each built-in is its own
-path, `/app/projects/{code}/{section}`, never a query parameter, and `Y021` reserves its slug.
+lawyer, Tasks, Communications, Documents, Billing, and Participants; for the client DRI, Testimonial. Each built-in is
+its own path, `/app/projects/{code}/{section}`, never a query parameter, and `Y021` reserves its slug.
 
 - Rules: [`rules::pages`](../../rules/src/pages.rs) · Store: [`store::matter_pages`](../../store/src/matter_pages.rs) ·
   Schema: [`matter_page`](../../store/postgres/schema.sql) · Contract: [the gate](../gate.md#declaring-a-matter-page)
