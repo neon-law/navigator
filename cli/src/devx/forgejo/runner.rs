@@ -110,12 +110,18 @@ fn job(name: &str, namespace: &str, secret: &str) -> Value {
     })
 }
 
-fn network_policy(name: &str, namespace: &str, ips: &[Ipv4Addr], dns: Option<Ipv4Addr>) -> Value {
+/// GKE's `NodeLocal` DNS cache listener, which GKE writes into every pod's
+/// `resolv.conf`. It is link-local, so a `kube-dns` pod selector never matches
+/// it; without this rule the runner cannot resolve anything on GKE (ENG-1230).
+#[cfg(test)]
+const GKE_NODE_LOCAL_DNS: Ipv4Addr = Ipv4Addr::new(169, 254, 20, 10);
+
+fn network_policy(name: &str, namespace: &str, ips: &[Ipv4Addr], dns: Ipv4Addr) -> Value {
     let destinations: Vec<_> = ips
         .iter()
         .map(|ip| json!({"ipBlock": {"cidr": format!("{ip}/32")}}))
         .collect();
-    let mut policy = json!({
+    json!({
         "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
         "metadata": {"name": name, "namespace": namespace},
         "spec": {
@@ -125,22 +131,14 @@ fn network_policy(name: &str, namespace: &str, ips: &[Ipv4Addr], dns: Option<Ipv
                 {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}},
                     "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}}}],
                     "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]},
-                {"to": destinations, "ports": [{"protocol": "TCP", "port": 443}]}
+                {"to": destinations, "ports": [{"protocol": "TCP", "port": 443}]},
+                // NodeLocal DNS uses a link-local listener rather than a selected
+                // kube-system pod. This exception permits DNS only, not metadata HTTP.
+                {"to": [{"ipBlock": {"cidr": format!("{dns}/32")}}],
+                    "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]}
             ]
         }
-    });
-    if let Some(dns) = dns {
-        // NodeLocal DNS uses a link-local listener rather than a selected
-        // kube-system pod. This exception permits DNS only, not metadata HTTP.
-        policy["spec"]["egress"]
-            .as_array_mut()
-            .expect("invariant: policy literal declares an egress array")
-            .push(json!({
-                "to": [{"ipBlock": {"cidr": format!("{dns}/32")}}],
-                "ports": [{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]
-            }));
-    }
-    policy
+    })
 }
 
 #[derive(Deserialize)]
@@ -344,7 +342,7 @@ fn execute(
     name: &str,
     origin: &str,
     ips: &[Ipv4Addr],
-    dns: Option<Ipv4Addr>,
+    dns: Ipv4Addr,
     registration: &Registration,
 ) -> Result<()> {
     let namespace = kube.namespace();
@@ -409,7 +407,7 @@ pub(in crate::devx) fn run(options: &crate::ForgejoRunnerArgs) -> Result<()> {
         .iter()
         .map(|ip| public_ipv4(ip))
         .collect::<Result<_>>()?;
-    let dns = options.dns_ip.as_deref().map(dns_ipv4).transpose()?;
+    let dns = dns_ipv4(&options.dns_ip)?;
     let api = RunnerApi::new(
         &options.url,
         &options.repository,
@@ -613,7 +611,7 @@ mod tests {
             "forgejo-job-proof",
             "proof",
             &["8.8.8.8".parse().unwrap()],
-            None,
+            GKE_NODE_LOCAL_DNS,
         );
         assert_eq!(policy["spec"]["ingress"], json!([]));
         assert_eq!(
@@ -637,7 +635,7 @@ mod tests {
             "forgejo-job-proof",
             "proof",
             &["8.8.8.8".parse().unwrap()],
-            Some(dns),
+            dns,
         );
         let rule = &policy["spec"]["egress"][2];
         assert_eq!(
@@ -659,12 +657,26 @@ mod tests {
             assert!(dns_ipv4(endpoint).is_err(), "{endpoint}");
         }
         assert_eq!(
-            network_policy("proof", "proof", &[], None)["spec"]["egress"]
+            network_policy("proof", "proof", &[], dns)["spec"]["egress"]
                 .as_array()
                 .unwrap()
                 .len(),
-            2
+            3
         );
+    }
+
+    #[test]
+    fn default_policy_allows_both_kube_dns_and_gke_node_local_dns() {
+        // ENG-1230: GKE pods resolve through 169.254.20.10, which the kube-dns
+        // pod selector never matches; the default must still resolve there.
+        assert_eq!(dns_ipv4("169.254.20.10").unwrap(), GKE_NODE_LOCAL_DNS);
+        let policy = network_policy("proof", "proof", &[], GKE_NODE_LOCAL_DNS);
+        let dns_ports = json!([{"protocol": "UDP", "port": 53}, {"protocol": "TCP", "port": 53}]);
+        let egress = policy["spec"]["egress"].as_array().unwrap();
+        assert!(egress.iter().any(|rule| rule["ports"] == dns_ports
+            && rule["to"][0]["podSelector"]["matchLabels"]["k8s-app"] == "kube-dns"));
+        assert!(egress.iter().any(|rule| rule["ports"] == dns_ports
+            && rule["to"] == json!([{"ipBlock": {"cidr": "169.254.20.10/32"}}])));
     }
 
     #[test]

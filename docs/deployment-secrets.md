@@ -278,7 +278,8 @@ Mount it as a read-only file named `oauth2_jwt_secret`, read from `JWT_SECRET_UR
 only that file path. Keep PostgreSQL and Forgejo logins distinct.
 
 Set the public `NAVIGATOR_FORGEJO_ROOT_URL` coordinate in that deployment's `config.toml` to its HTTPS URL with a
-trailing `/`.
+trailing `/`. `ops ship` renders it into the web pod's environment, where Firm organization creation and Project
+repository provisioning call Forgejo's API, and derives Forgejo's Ingress host from it.
 
 Forgejo's sign-in client at the installation's OIDC issuer is optional as a set: the encrypted
 `NAVIGATOR_FORGEJO_OIDC_CLIENT_SECRET` plus the public `NAVIGATOR_FORGEJO_OIDC_CLIENT_ID` coordinate in `config.toml`. A

@@ -331,13 +331,16 @@ with `navigator.neonlaw.org/runner-network-policy=enforced` and `pod-security.ku
 label records the operator's verified configuration; it does not enable network enforcement. The command refuses
 preexisting broad policies because Kubernetes adds their permissions together.
 
-Only the explicitly supplied public IPv4 destinations on TCP 443 and the cluster's `kube-dns` pods on TCP/UDP 53 are
-allowed. Supply current public addresses for the Forgejo and Navigator endpoints and every pinned release-download
-redirect, including `release-assets.githubusercontent.com`. Missing or changed destinations fail the job; private
-addresses, metadata addresses and CIDRs are refused. This command neither discovers destinations nor broadens egress.
-For a verified NodeLocal DNS topology, pass `--dns-ip <cluster-dns-ipv4>` from the runner pod's resolver configuration.
-This adds only that exact `/32` address on TCP/UDP 53; it grants no metadata HTTP access. Metadata endpoints, CIDRs and
-non-unicast DNS addresses are refused. Without the option, the `kube-dns` pod selector remains the DNS policy.
+Only the explicitly supplied public IPv4 destinations on TCP 443, the cluster's `kube-dns` pods on TCP/UDP 53 and one
+`NodeLocal` DNS address on TCP/UDP 53 are allowed. Supply current public addresses for the Forgejo and Navigator
+endpoints and every pinned release-download redirect, including `release-assets.githubusercontent.com`. Missing or
+changed destinations fail the job; private addresses, metadata addresses and CIDRs are refused. This command neither
+discovers destinations nor broadens egress. The DNS address defaults to `169.254.20.10`, GKE's NodeLocal DNSCache
+listener, which GKE writes into every pod's resolver configuration. The `kube-dns` pod selector never matches that
+link-local address, so without it the runner cannot resolve anything on GKE. For another NodeLocal DNS topology, pass
+`--dns-ip <cluster-dns-ipv4>` from the runner pod's resolver configuration. Either way the policy adds only that exact
+`/32` address on TCP/UDP 53; it grants no metadata HTTP access. Metadata endpoints, CIDRs and non-unicast DNS addresses
+are refused.
 
 Each Job gets its own unannotated service account without an API token, read-only root filesystem, bounded ephemeral
 work and temporary volumes, and no host, persistent or Docker-socket mounts. Registration read-back must confirm the

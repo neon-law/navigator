@@ -3781,9 +3781,9 @@ struct ForgejoRunnerArgs {
         conflicts_with = "cleanup_registration"
     )]
     egress_ip: Vec<String>,
-    /// Explicit cluster DNS IPv4 for `NodeLocal` DNS; permits only TCP/UDP 53 to that exact address.
-    #[arg(long)]
-    dns_ip: Option<String>,
+    /// `NodeLocal` DNS IPv4 permitted on TCP/UDP 53 beside `kube-dns`; defaults to GKE's `NodeLocal` DNS cache.
+    #[arg(long, default_value = "169.254.20.10")]
+    dns_ip: String,
     /// Recover an interrupted invocation's exact numeric runner registration.
     #[arg(long, requires = "cleanup_job")]
     cleanup_registration: Option<u64>,
