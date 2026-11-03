@@ -128,7 +128,7 @@ async fn fixture() -> Fixture {
         &surreal,
         &NewPerson::with_role(
             "Synthetic Billing Client",
-            "billing-client@example.com",
+            format!("billing-client-{}@example.com", Uuid::new_v4()),
             Role::Client,
         ),
     )
@@ -147,7 +147,11 @@ async fn fixture() -> Fixture {
     .unwrap();
     let lawyer = store::persons::create(
         &surreal,
-        &NewPerson::with_role("Billing Lawyer", "billing-lawyer@example.com", Role::Lawyer),
+        &NewPerson::with_role(
+            "Billing Lawyer",
+            format!("billing-lawyer-{}@example.com", Uuid::new_v4()),
+            Role::Lawyer,
+        ),
     )
     .await
     .unwrap();
@@ -194,7 +198,7 @@ async fn fixture() -> Fixture {
         project_id,
         lawyer: portal::SessionData {
             person_id: Some(lawyer.id),
-            ..portal::SessionData::fresh("billing-lawyer@example.com", Role::Lawyer)
+            ..portal::SessionData::fresh(&lawyer.email, Role::Lawyer)
         },
         lawyer_id: lawyer.id,
     }
