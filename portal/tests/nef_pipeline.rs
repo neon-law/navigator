@@ -677,3 +677,32 @@ async fn a_later_notice_files_its_original_when_the_entry_is_already_recorded() 
         .unwrap();
     assert_eq!(documents.len(), 1, "the later message original is filed");
 }
+
+#[tokio::test]
+async fn support_intake_retains_the_original_without_threading_or_a_message_id() {
+    let fixture = fixture().await;
+    let email = portal::inbound_email::InboundEmail {
+        from: "sender@example.com".into(),
+        to: "support@neonlaw.com".into(),
+        text: "Synthetic notice".into(),
+        raw: district_notice(),
+        ..Default::default()
+    };
+    let saved = portal::inbox::ingest_support_email(&fixture.surreal, &fixture.storage, &email)
+        .await
+        .unwrap()
+        .unwrap();
+    let message = store::inbox::message_by_id(&fixture.surreal, saved.message_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let key = message
+        .raw_storage_key
+        .expect("the normalized message retains its source");
+    assert_eq!(fixture.storage.get(&key).await.unwrap().bytes, email.raw);
+    let conversation = store::inbox::conversation_by_id(&fixture.surreal, saved.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(conversation.email_conversation_id.is_none());
+}

@@ -1048,37 +1048,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn support_intake_retains_raw_source_without_threading_or_a_message_id() {
-        let db = store::test_support::mem_surreal().await;
-        let storage = storage().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let email = InboundEmail {
-            from: "sender@example.com".into(),
-            to: "support@neonlaw.com".into(),
-            text: "Synthetic notice".into(),
-            raw: b"Subject: notice\r\n\r\nSynthetic notice".to_vec(),
-            ..InboundEmail::default()
-        };
-        let saved = ingest_support_email_for_firm(&db, &storage, &email, None)
-            .await
-            .unwrap()
-            .unwrap();
-        let message = store::inbox::message_by_id(&db, saved.message_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let key = message
-            .raw_storage_key
-            .expect("raw key belongs to current message");
-        assert_eq!(storage.get(&key).await.unwrap().bytes, email.raw);
-        let conversation = store::inbox::conversation_by_id(&db, saved.conversation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(conversation.email_conversation_id.is_none());
-    }
-
-    #[tokio::test]
     async fn receiving_accounts_keep_two_brands_and_firms_separate() {
         let db = store::test_support::mem_surreal().await;
         let storage = storage().await;
