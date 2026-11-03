@@ -3691,6 +3691,201 @@ sops:
             ]
         );
     }
+
+    // ---------- dry-run applies and the pure payload resolution ----------
+
+    /// A writable copy of the fixture's `example-deployment` row, so a test can
+    /// add a service file or drop a key without touching the checked-in tree.
+    fn copied_fixture_row() -> tempfile::TempDir {
+        let copy = tempfile::tempdir().expect("create a temp tree");
+        let from = fixture_tree().join(TREE).join("example-deployment");
+        let to = copy.path().join(TREE).join("example-deployment");
+        fs::create_dir_all(&to).expect("create the copied row");
+        for file in [CONFIG_FILE, SECRETS_FILE] {
+            fs::copy(from.join(file), to.join(file)).expect("copy a fixture file");
+        }
+        copy
+    }
+
+    /// A SOPS-shaped service file carrying `keys`, every value `ENC[FIXTURE]`.
+    fn write_service_file(root: &Path, service: ServiceSecrets, keys: &[&str]) {
+        let mut body = keys
+            .iter()
+            .map(|key| format!("{key}: ENC[FIXTURE]"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        body.push('\n');
+        body.push_str("sops:\n    version: 3.9.0\n");
+        fs::write(
+            root.join(TREE)
+                .join("example-deployment")
+                .join(service.file_name()),
+            body,
+        )
+        .expect("write the service file");
+    }
+
+    #[test]
+    fn a_dry_run_web_secrets_apply_validates_the_row_and_decrypts_nothing() {
+        // `sops` is never invoked under dry-run, so the fixture's synthetic
+        // `ENC[FIXTURE]` values (which no key could decrypt) are enough.
+        for row in ["example-deployment", "example-automation-home"] {
+            apply(&fixture_tree(), row, true)
+                .unwrap_or_else(|error| panic!("{row} dry-run apply: {error:#}"));
+        }
+        let error = apply(&fixture_tree(), "no-such-row", true).unwrap_err();
+        assert!(error.to_string().contains("example-deployment"), "{error}");
+    }
+
+    #[test]
+    fn a_row_missing_a_boot_requirement_is_refused_before_secret_manager() {
+        let copy = copied_fixture_row();
+        let secrets = copy
+            .path()
+            .join(TREE)
+            .join("example-deployment")
+            .join(SECRETS_FILE);
+        let body = fs::read_to_string(&secrets).unwrap();
+        fs::write(
+            &secrets,
+            body.lines()
+                .filter(|line| !line.starts_with("SESSION_SECRET:"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+
+        let error = apply(copy.path(), "example-deployment", true).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("SESSION_SECRET"), "{message}");
+        assert!(
+            message.contains("Secret Manager was not changed"),
+            "{message}"
+        );
+
+        let error = check_secrets(copy.path(), "example-deployment").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("SESSION_SECRET"), "{message}");
+        assert!(message.contains("Nothing was checked"), "{message}");
+    }
+
+    #[test]
+    fn a_dry_run_service_apply_reads_key_names_only() {
+        let copy = copied_fixture_row();
+        write_service_file(
+            copy.path(),
+            ServiceSecrets::Postgres,
+            ServiceSecrets::Postgres.keys(),
+        );
+        apply_service(
+            copy.path(),
+            "example-deployment",
+            ServiceSecrets::Postgres,
+            true,
+        )
+        .expect("a complete service file plans without decrypting");
+
+        // No Forgejo file: the plan names every key it lacks.
+        let error = apply_service(
+            copy.path(),
+            "example-deployment",
+            ServiceSecrets::Forgejo,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("NAVIGATOR_FORGEJO_DATABASE_PASSWORD"),
+            "{error}"
+        );
+
+        // A key another service owns is refused, not silently carried.
+        write_service_file(
+            copy.path(),
+            ServiceSecrets::Postgres,
+            &[
+                "NAVIGATOR_POSTGRES_PASSWORD",
+                "NAVIGATOR_POSTGRES_TLS_CERTIFICATE",
+                "NAVIGATOR_POSTGRES_TLS_PRIVATE_KEY",
+                "NAVIGATOR_FORGEJO_SECRET_KEY",
+            ],
+        );
+        let error = apply_service(
+            copy.path(),
+            "example-deployment",
+            ServiceSecrets::Postgres,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("not owned by the postgres service"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn payloads_resolve_from_their_planned_source_and_refuse_an_empty_value() {
+        let deployment = deployment(
+            &[
+                (PROJECT_ID, "example-project"),
+                ("NAVIGATOR_PUBLIC_HOST", "navigator.example.invalid"),
+            ],
+            &["SESSION_SECRET"],
+        );
+        let plan = BTreeMap::from([
+            ("SESSION_SECRET".to_owned(), Source::Encrypted),
+            ("NAVIGATOR_PUBLIC_HOST".to_owned(), Source::Coordinate),
+        ]);
+        let decrypted = BTreeMap::from([
+            ("SESSION_SECRET".to_owned(), "synthetic-session".to_owned()),
+            // Present in the document but not planned: never projected.
+            ("UNPLANNED".to_owned(), "synthetic-unplanned".to_owned()),
+        ]);
+        let payloads = resolve_payloads(&deployment, &plan, &decrypted).unwrap();
+        assert_eq!(
+            payloads,
+            BTreeMap::from([
+                (
+                    "NAVIGATOR_PUBLIC_HOST".to_owned(),
+                    "navigator.example.invalid".to_owned()
+                ),
+                ("SESSION_SECRET".to_owned(), "synthetic-session".to_owned()),
+            ])
+        );
+
+        let empty = BTreeMap::from([("SESSION_SECRET".to_owned(), String::new())]);
+        let error = resolve_payloads(&deployment, &plan, &empty).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("SESSION_SECRET resolved to an empty value"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("synthetic"), "{error}");
+
+        let absent_coordinate =
+            BTreeMap::from([("NAVIGATOR_OTHER_HOST".to_owned(), Source::Coordinate)]);
+        let error = resolve_payloads(&deployment, &absent_coordinate, &decrypted).unwrap_err();
+        assert!(
+            error.to_string().contains("NAVIGATOR_OTHER_HOST"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn plan_sources_are_joined_by_name_per_source() {
+        let plan = BTreeMap::from([
+            ("A_SECRET".to_owned(), Source::Encrypted),
+            ("B_COORDINATE".to_owned(), Source::Coordinate),
+            ("C_SECRET".to_owned(), Source::Encrypted),
+        ]);
+        assert_eq!(join_names(&plan, Source::Encrypted), "A_SECRET, C_SECRET");
+        assert_eq!(join_names(&plan, Source::Coordinate), "B_COORDINATE");
+        assert_eq!(join_names(&BTreeMap::new(), Source::Coordinate), "");
+    }
 }
 
 #[cfg(test)]
@@ -3768,5 +3963,29 @@ mod record_apply_tests {
     #[test]
     fn record_apply_dry_run_reads_nothing() {
         apply_from_record(&row(), None, true).unwrap();
+    }
+
+    #[test]
+    fn a_record_service_apply_dry_run_plans_from_key_names_alone() {
+        let mut deployment = row();
+        let error = apply_from_record(&deployment, Some(ServiceSecrets::Postgres), true)
+            .expect_err("a row with no PostgreSQL keys cannot plan its service Secrets");
+        assert!(
+            error.to_string().contains("NAVIGATOR_POSTGRES_PASSWORD"),
+            "{error}"
+        );
+
+        deployment.postgres_encrypted_keys = ServiceSecrets::Postgres
+            .keys()
+            .iter()
+            .map(|key| (*key).to_owned())
+            .collect();
+        apply_from_record(&deployment, Some(ServiceSecrets::Postgres), true)
+            .expect("a complete key set plans without reading Secret Manager");
+
+        deployment.provisioned = false;
+        let error =
+            apply_from_record(&deployment, Some(ServiceSecrets::Postgres), true).unwrap_err();
+        assert!(error.to_string().contains("unprovisioned"), "{error}");
     }
 }

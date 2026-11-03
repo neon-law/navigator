@@ -10199,4 +10199,1427 @@ mod tests {
             store::documents::sha256_hex(&bytes)
         );
     }
+
+    /// A pointer body as the document doors answer it.
+    fn pointer_json(bytes: &[u8]) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "unclassified",
+            "visibility": "internal",
+            "current_version": {
+                "version": 1,
+                "asset_id": Uuid::now_v7(),
+                "created_at": "2026-10-30T12:00:00Z",
+                "sha256": store::documents::sha256_hex(bytes),
+                "size_bytes": bytes.len()
+            }
+        })
+    }
+
+    fn session_json(session_id: Uuid, chunk_size: u64, received: u64) -> serde_json::Value {
+        serde_json::json!({
+            "id": session_id,
+            "chunk_size": chunk_size,
+            "received_bytes": received
+        })
+    }
+
+    /// The JSON body of the only request the server saw on `route`.
+    async fn only_body(server: &MockServer, route: &str) -> serde_json::Value {
+        let requests = server.received_requests().await.unwrap();
+        let matching: Vec<_> = requests
+            .iter()
+            .filter(|request| request.url.path() == route)
+            .collect();
+        assert_eq!(matching.len(), 1, "one request to {route}");
+        serde_json::from_slice(&matching[0].body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn retention_commands_post_their_verb_and_body_and_name_a_refusal() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let asset_id = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        let door =
+            |verb: &str| format!("/app/api/projects/{project_id}/documents/{asset_id}/{verb}");
+
+        Mock::given(method("POST"))
+            .and(path(door("delete")))
+            .and(body_json(serde_json::json!({ "commit_sha": "abc123" })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "deleted": 3 })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(door("delete")))
+            .and(body_json(serde_json::json!({ "manual": true })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "deleted": 1 })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(door("restore")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "restored": 2 })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(door("hold")))
+            .and(body_json(serde_json::json!({ "held": true })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "held": true })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(door("hold")))
+            .and(body_json(serde_json::json!({ "held": false })))
+            .respond_with(ResponseTemplate::new(409).set_body_string("\n  chain is not held\n"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client.soft_delete(asset_id, "abc123").await.unwrap()["deleted"],
+            3
+        );
+        assert_eq!(client.retire(asset_id).await.unwrap()["deleted"], 1);
+        assert_eq!(client.restore(asset_id).await.unwrap()["restored"], 2);
+        assert_eq!(
+            client.set_legal_hold(asset_id, true).await.unwrap()["held"],
+            true
+        );
+        let refusal = client
+            .set_legal_hold(asset_id, false)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            refusal,
+            "document hold failed: 409 Conflict: chain is not held"
+        );
+        // The restore door carries no body at all.
+        let requests = server.received_requests().await.unwrap();
+        let restore = requests
+            .iter()
+            .find(|request| request.url.path() == door("restore"))
+            .unwrap();
+        assert!(restore.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_retention_answer_that_is_not_json_is_a_parse_error() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let asset_id = Uuid::now_v7();
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/{asset_id}/restore"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+        let error = DocumentClient::for_check_tests(server.uri(), project_id)
+            .restore(asset_id)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("parse document restore response"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn document_reads_return_their_bodies_and_name_each_refusal() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let asset_id = Uuid::now_v7();
+        let missing = Uuid::now_v7();
+        let authority_id = Uuid::now_v7();
+        let refused_authority = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/revisions"
+            )))
+            .and(query_param("slug", "gone.pdf"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("no such chain"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/projects/{project_id}/documents")))
+            .respond_with(ResponseTemplate::new(500).set_body_string(""))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/projects/{project_id}/service")))
+            .respond_with(ResponseTemplate::new(403).set_body_string("forbidden\nmore"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/projects/acme/documents/{asset_id}/download"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"revision bytes".to_vec()))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/projects/acme/documents/{missing}/download"
+            )))
+            .respond_with(ResponseTemplate::new(404).set_body_string("not visible"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/authorities/{authority_id}/archive")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"archived".to_vec()))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/authorities/{refused_authority}/archive"
+            )))
+            .respond_with(ResponseTemplate::new(403).set_body_string("not yours"))
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .list_revisions("gone.pdf")
+                .await
+                .unwrap_err()
+                .to_string(),
+            "no revision of `gone.pdf` is visible on this matter: 404 Not Found: no such chain"
+        );
+        assert_eq!(
+            client.list_documents().await.unwrap_err().to_string(),
+            "list documents failed: 500 Internal Server Error: (empty response)"
+        );
+        assert_eq!(
+            client.list_service().await.unwrap_err().to_string(),
+            "list service failed: 403 Forbidden: forbidden"
+        );
+        assert_eq!(
+            client.download_revision(asset_id).await.unwrap(),
+            b"revision bytes"
+        );
+        assert_eq!(
+            client
+                .download_revision(missing)
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!("download of revision {missing} failed: 404 Not Found: not visible")
+        );
+        assert_eq!(
+            client
+                .download_authority_archive(authority_id)
+                .await
+                .unwrap(),
+            b"archived"
+        );
+        assert_eq!(
+            client
+                .download_authority_archive(refused_authority)
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!("download of authority {refused_authority} failed: 403 Forbidden: not yours")
+        );
+    }
+
+    #[tokio::test]
+    async fn document_reads_parse_a_successful_inventory_and_service_list() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/projects/{project_id}/documents")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/projects/{project_id}/service")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/revisions"
+            )))
+            .and(query_param("slug", "letter.pdf"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        assert!(client.list_documents().await.unwrap().is_empty());
+        assert!(client.list_service().await.unwrap().is_empty());
+        let error = client.list_revisions("letter.pdf").await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("parse document revisions response"),
+            "{error:#}"
+        );
+        assert_eq!(client.project_id(), project_id);
+        assert_eq!(client.base(), server.uri());
+        assert_eq!(client.token(), "test-token");
+    }
+
+    #[tokio::test]
+    async fn document_patch_doors_send_their_fields_and_name_each_refusal() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let asset_id = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        let row = format!("/app/api/projects/{project_id}/documents/{asset_id}");
+
+        Mock::given(method("PATCH"))
+            .and(path(&row))
+            .and(body_json(serde_json::json!({ "visibility": "client" })))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(&row))
+            .and(body_json(serde_json::json!({ "visibility": "secret" })))
+            .respond_with(ResponseTemplate::new(422).set_body_string("unknown visibility"))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(&row))
+            .and(body_json(serde_json::json!({
+                "slug": "letter.pdf",
+                "dry_run": false,
+                "kind": "correspondence"
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "slug": "letter.pdf" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(&row))
+            .and(body_json(
+                serde_json::json!({ "slug": "taken.pdf", "dry_run": true }),
+            ))
+            .respond_with(ResponseTemplate::new(409).set_body_string("slug taken"))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(&row))
+            .and(body_json(
+                serde_json::json!({ "kind": "unclassified", "dry_run": true }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "would_change": 2 })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(&row))
+            .and(body_json(
+                serde_json::json!({ "kind": "bogus", "dry_run": false }),
+            ))
+            .respond_with(ResponseTemplate::new(422).set_body_string("unknown kind"))
+            .mount(&server)
+            .await;
+
+        client.set_visibility(asset_id, "client").await.unwrap();
+        assert_eq!(
+            client
+                .set_visibility(asset_id, "secret")
+                .await
+                .unwrap_err()
+                .to_string(),
+            "document visibility failed: 422 Unprocessable Entity: unknown visibility"
+        );
+        assert_eq!(
+            client
+                .assign_slug(asset_id, "letter.pdf", Some("correspondence"), false)
+                .await
+                .unwrap()["slug"],
+            "letter.pdf"
+        );
+        assert_eq!(
+            client
+                .assign_slug(asset_id, "taken.pdf", None, true)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "document slug failed: 409 Conflict: slug taken"
+        );
+        assert_eq!(
+            client
+                .reclassify_kind(asset_id, "unclassified", true)
+                .await
+                .unwrap()["would_change"],
+            2
+        );
+        assert_eq!(
+            client
+                .reclassify_kind(asset_id, "bogus", false)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "document kind failed: 422 Unprocessable Entity: unknown kind"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_moving_doors_name_each_refusal() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let asset_id = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        let row = format!("/app/api/projects/{project_id}/documents/{asset_id}");
+        Mock::given(method("PATCH"))
+            .and(path(&row))
+            .and(body_json(serde_json::json!({
+                "slug": "moved.pdf",
+                "reslug": true,
+                "dry_run": false
+            })))
+            .respond_with(ResponseTemplate::new(409).set_body_string("chain is held"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{row}/reclassify")))
+            .respond_with(ResponseTemplate::new(403).set_body_string("lawyer only"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{row}/storage")))
+            .and(body_json(serde_json::json!({ "dry_run": false })))
+            .respond_with(ResponseTemplate::new(404).set_body_string("no same-hash sibling"))
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .reslug(asset_id, "moved.pdf", false)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "document reslug failed: 409 Conflict: chain is held"
+        );
+        assert_eq!(
+            client
+                .reclassify_accepted_kind(asset_id, "correspondence", false)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "document reclassify failed: 403 Forbidden: lawyer only"
+        );
+        assert_eq!(
+            client
+                .repair_storage(asset_id, false)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "document repair failed: 404 Not Found: no same-hash sibling"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_mail_posts_the_message_and_reports_a_refusal() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let message_id = Uuid::now_v7();
+        let refused = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        let door = format!("/app/api/projects/{project_id}/mail/file");
+        Mock::given(method("POST"))
+            .and(path(&door))
+            .and(body_json(serde_json::json!({
+                "message_id": message_id,
+                "kind": "correspondence",
+                "visibility": "client",
+                "dry_run": false
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "dry_run": false,
+                "attachments": [
+                    {"filename": "a.pdf", "content_type": "application/pdf", "size_bytes": 3}
+                ],
+                "filed": [pointer_json(b"abc")]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&door))
+            .and(body_json(serde_json::json!({
+                "message_id": refused,
+                "kind": "correspondence",
+                "visibility": "client",
+                "dry_run": true
+            })))
+            .respond_with(ResponseTemplate::new(404).set_body_string("no such message"))
+            .mount(&server)
+            .await;
+
+        let filed = client
+            .file_mail(message_id, "correspondence", "client", false)
+            .await
+            .unwrap();
+        assert!(!filed.dry_run);
+        assert_eq!(filed.attachments[0].filename, "a.pdf");
+        assert_eq!(filed.attachments[0].content_type, "application/pdf");
+        assert_eq!(filed.attachments[0].size_bytes, 3);
+        assert_eq!(filed.filed.len(), 1);
+        assert_eq!(
+            client
+                .file_mail(refused, "correspondence", "client", true)
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!("filing message {refused} failed: 404 Not Found: no such message")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_buffered_upload_sends_every_optional_field_and_the_execution_record() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        let door = format!("/app/api/projects/{project_id}/documents");
+        Mock::given(method("POST"))
+            .and(path(&door))
+            .respond_with(ResponseTemplate::new(201).set_body_json(pointer_json(b"signed")))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let signing = store::documents::Signing {
+            method: store::documents::SigningMethod::WetInk,
+            signed_on: chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
+        };
+        let notarization = store::documents::Notarization {
+            method: store::documents::NotarizationMethod::InPerson,
+            acknowledged_on: chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
+            state: "NV".into(),
+            county: "Clark".into(),
+            commission_expires: chrono::NaiveDate::from_ymd_opt(2029, 1, 1).unwrap(),
+        };
+        let execution = DocumentExecution {
+            signing: Some(signing),
+            notarization: vec![notarization.clone()],
+            evidence: None,
+        };
+
+        let pointer = client
+            .upload_bytes_with_details(
+                "deed.pdf",
+                b"signed",
+                "unclassified",
+                Some("client"),
+                Some("  the recorded deed  "),
+                Some("application/pdf"),
+                Some(" deed.pdf "),
+                Some(serde_json::json!({ "commit": "abc" })),
+                Some(serde_json::json!({ "asset_id": "source" })),
+                Some("machine"),
+                &execution,
+            )
+            .await
+            .unwrap();
+        assert_eq!(pointer.current_version.size_bytes, 6);
+
+        let body = only_body(&server, &door).await;
+        assert_eq!(body["filename"], "deed.pdf");
+        assert_eq!(body["content_base64"], "c2lnbmVk");
+        assert_eq!(body["content_type"], "application/pdf");
+        assert_eq!(body["visibility"], "client");
+        assert_eq!(body["description"], "the recorded deed");
+        assert_eq!(body["slug"], "deed.pdf");
+        assert_eq!(body["metadata"]["commit"], "abc");
+        assert_eq!(body["derived_from"]["asset_id"], "source");
+        assert_eq!(body["transcript_quality"], "machine");
+        assert_eq!(body["signing"], serde_json::to_value(signing).unwrap());
+        assert_eq!(
+            body["notarization"],
+            serde_json::to_value(vec![notarization]).unwrap()
+        );
+        assert!(body.get("evidence").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_buffered_upload_maps_401_to_an_expired_session_and_names_other_refusals() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        let door = format!("/app/api/projects/{project_id}/documents");
+        Mock::given(method("POST"))
+            .and(path(&door))
+            .respond_with(ResponseTemplate::new(401))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&door))
+            .respond_with(ResponseTemplate::new(413).set_body_string("too large"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&door))
+            .respond_with(ResponseTemplate::new(200).set_body_string("filed?"))
+            .mount(&server)
+            .await;
+
+        let upload = || {
+            client.upload_bytes(
+                "a.txt",
+                b"abc",
+                "unclassified",
+                None,
+                Some("   "),
+                None,
+                None,
+                None,
+            )
+        };
+        let expired = upload().await.unwrap_err();
+        assert!(expired.downcast_ref::<UploadSessionExpired>().is_some());
+        assert_eq!(
+            upload().await.unwrap_err().to_string(),
+            "document upload failed: 413 Payload Too Large: too large"
+        );
+        let unparsed = upload().await.unwrap_err();
+        assert!(
+            unparsed
+                .to_string()
+                .contains("parse document pointer response"),
+            "{unparsed:#}"
+        );
+        // Defaults apply when no content type, visibility, or real description is given.
+        let requests = server.received_requests().await.unwrap();
+        let first: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(first["content_type"], "application/octet-stream");
+        assert_eq!(first["visibility"], "internal");
+        assert!(first.get("description").is_none());
+        assert!(first.get("slug").is_none());
+    }
+
+    /// Mount the session-open door answering `status` with `body`.
+    async fn mount_session_open(
+        server: &MockServer,
+        project_id: Uuid,
+        status: u16,
+        body: serde_json::Value,
+    ) {
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/upload-session"
+            )))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+
+    async fn stream(client: &DocumentClient, bytes: &[u8]) -> anyhow::Result<()> {
+        client
+            .upload_bytes_streaming(
+                "hearing.mp3",
+                bytes,
+                "transcript",
+                Some("client"),
+                Some("hearing audio"),
+                Some("audio/mpeg"),
+                Some("hearing.mp3"),
+                Some(serde_json::json!({ "source": "court" })),
+                Some(serde_json::json!({ "asset_id": "x" })),
+                Some("machine"),
+                &DocumentExecution::default(),
+            )
+            .await
+            .map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn a_streaming_session_open_refusal_is_named_and_401_is_an_expired_session() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        mount_session_open(&server, project_id, 503, serde_json::json!("busy")).await;
+        let error = stream(&client, b"abcd").await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("streaming upload failed to open a session: 503"),
+            "{error:#}"
+        );
+        // The open request declares the size and digest and every optional field.
+        let body = only_body(
+            &server,
+            &format!("/app/api/projects/{project_id}/documents/upload-session"),
+        )
+        .await;
+        assert_eq!(body["declared_size"], 4);
+        assert_eq!(
+            body["declared_sha256"],
+            store::documents::sha256_hex(b"abcd")
+        );
+        assert_eq!(body["description"], "hearing audio");
+        assert_eq!(body["slug"], "hearing.mp3");
+        assert_eq!(body["metadata"]["source"], "court");
+        assert_eq!(body["derived_from"]["asset_id"], "x");
+        assert_eq!(body["transcript_quality"], "machine");
+        assert_eq!(body["visibility"], "client");
+
+        let server = MockServer::start().await;
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        mount_session_open(&server, project_id, 401, serde_json::json!({})).await;
+        assert!(stream(&client, b"abcd")
+            .await
+            .unwrap_err()
+            .downcast_ref::<UploadSessionExpired>()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn a_streaming_chunk_refusal_names_the_offset_or_the_expired_session() {
+        let project_id = Uuid::now_v7();
+        let session_id = Uuid::now_v7();
+        for (status, expected) in [
+            (410, "the upload session expired mid-upload"),
+            (
+                500,
+                "chunk at offset 0 failed: 500 Internal Server Error: boom",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            let client = DocumentClient::for_check_tests(server.uri(), project_id);
+            mount_session_open(&server, project_id, 201, session_json(session_id, 4, 0)).await;
+            Mock::given(method("POST"))
+                .and(path(format!(
+                    "/app/api/projects/{project_id}/documents/upload-session/chunk"
+                )))
+                .respond_with(ResponseTemplate::new(status).set_body_string("boom"))
+                .mount(&server)
+                .await;
+            let error = stream(&client, b"abcdefgh").await.unwrap_err().to_string();
+            assert!(error.starts_with(expected), "{status}: {error}");
+        }
+
+        let server = MockServer::start().await;
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        mount_session_open(&server, project_id, 201, session_json(session_id, 4, 0)).await;
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/upload-session/chunk"
+            )))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        assert!(stream(&client, b"abcdefgh")
+            .await
+            .unwrap_err()
+            .downcast_ref::<UploadSessionExpired>()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn repeated_chunk_conflicts_stop_after_four_resyncs() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let session_id = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        mount_session_open(&server, project_id, 201, session_json(session_id, 4, 0)).await;
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/upload-session/chunk"
+            )))
+            .respond_with(ResponseTemplate::new(409))
+            .expect(5)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/upload-session/status"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(session_json(session_id, 4, 0)))
+            .expect(4)
+            .mount(&server)
+            .await;
+        let error = stream(&client, b"abcdefgh").await.unwrap_err().to_string();
+        assert!(
+            error.starts_with("the server refused the chunk at offset 0 repeatedly"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resync_against_a_gone_or_refusing_status_door_is_named() {
+        let project_id = Uuid::now_v7();
+        let session_id = Uuid::now_v7();
+        for (status, expected) in [
+            (404, "the streaming upload session is gone"),
+            (
+                500,
+                "upload session status failed: 500 Internal Server Error: down",
+            ),
+            (401, "the session for"),
+        ] {
+            let server = MockServer::start().await;
+            let client = DocumentClient::for_check_tests(server.uri(), project_id);
+            mount_session_open(&server, project_id, 201, session_json(session_id, 4, 0)).await;
+            Mock::given(method("POST"))
+                .and(path(format!(
+                    "/app/api/projects/{project_id}/documents/upload-session/chunk"
+                )))
+                .respond_with(ResponseTemplate::new(409))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path(format!(
+                    "/app/api/projects/{project_id}/documents/upload-session/status"
+                )))
+                .respond_with(ResponseTemplate::new(status).set_body_string("down"))
+                .mount(&server)
+                .await;
+            let error = stream(&client, b"abcdefgh").await.unwrap_err().to_string();
+            assert!(error.starts_with(expected), "{status}: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_acknowledgement_that_does_not_advance_stops_the_upload() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let session_id = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        mount_session_open(&server, project_id, 201, session_json(session_id, 4, 0)).await;
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/upload-session/chunk"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(session_json(session_id, 4, 0)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = stream(&client, b"abcdefgh").await.unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "the server acknowledged 0 bytes after the chunk at offset 0; re-run the command to resume"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resumed_session_sends_only_the_unacknowledged_tail_then_names_a_completion_refusal()
+    {
+        let project_id = Uuid::now_v7();
+        let session_id = Uuid::now_v7();
+        for (status, expired) in [(500, false), (401, true)] {
+            let server = MockServer::start().await;
+            let client = DocumentClient::for_check_tests(server.uri(), project_id);
+            // The session already holds the first four bytes.
+            mount_session_open(&server, project_id, 200, session_json(session_id, 4, 4)).await;
+            Mock::given(method("POST"))
+                .and(path(format!(
+                    "/app/api/projects/{project_id}/documents/upload-session/chunk"
+                )))
+                .and(body_json(serde_json::json!({
+                    "session_id": session_id,
+                    "offset": 4,
+                    "content_base64": "ZWZnaA=="
+                })))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(session_json(session_id, 4, 8)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path(format!(
+                    "/app/api/projects/{project_id}/documents/upload-session/complete"
+                )))
+                .respond_with(ResponseTemplate::new(status).set_body_string("not assembled"))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = stream(&client, b"abcdefgh").await.unwrap_err();
+            if expired {
+                assert!(error.downcast_ref::<UploadSessionExpired>().is_some());
+            } else {
+                assert!(
+                    error.to_string().starts_with(
+                        "streaming upload completion failed: 500 Internal Server Error: not assembled"
+                    ),
+                    "{error:#}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn integration_door_parses_its_report_and_names_a_refusal() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/integrations/slack/ensure"))
+            .and(body_json(serde_json::json!({ "project_code": "acme" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [{"project_code": "acme", "outcome": "created"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/integrations/notion/ensure"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("not an admin"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/integrations/surface/ensure"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html>"))
+            .mount(&server)
+            .await;
+
+        let report = super::post_integration_door(
+            &server.uri(),
+            "t",
+            "/app/api/integrations/slack/ensure",
+            serde_json::json!({ "project_code": "acme" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].outcome, "created");
+        assert_eq!(
+            super::post_integration_door(
+                &server.uri(),
+                "t",
+                "/app/api/integrations/notion/ensure",
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap_err()
+            .to_string(),
+            "integration door failed: 403 Forbidden: not an admin"
+        );
+        assert!(super::post_integration_door(
+            &server.uri(),
+            "t",
+            "/app/api/integrations/surface/ensure",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .starts_with("parse POST"));
+    }
+
+    #[test]
+    fn integration_outcomes_fail_closed_on_any_unrecognized_slug() {
+        let outcome =
+            |code: Option<&str>, outcome: &str, detail: Option<&str>| super::IntegrationOutcome {
+                project_code: code.map(str::to_string),
+                outcome: outcome.to_string(),
+                detail: detail.map(str::to_string),
+            };
+        for success in ["created", "adopted", "unchanged", "repaired", "notified"] {
+            assert!(super::integration_outcome_succeeded(&outcome(
+                Some("acme"),
+                success,
+                None
+            )));
+        }
+        assert!(!super::integration_outcome_succeeded(&outcome(
+            Some("acme"),
+            "credential_missing",
+            None
+        )));
+        assert_eq!(
+            super::describe_integration_outcome(&outcome(
+                Some("acme"),
+                "conflict",
+                Some("renamed")
+            )),
+            "acme: conflict (renamed)"
+        );
+        assert_eq!(
+            super::describe_integration_outcome(&outcome(None, "missing", None)),
+            "unknown Project: missing"
+        );
+
+        assert!(
+            super::report_integration_outcomes("Slack ensure", false, r#"{"results":[]}"#).is_ok()
+        );
+        assert!(super::report_integration_outcomes(
+            "Slack ensure",
+            true,
+            r#"{"results":[{"project_code":"acme","outcome":"unchanged"}]}"#
+        )
+        .is_ok());
+        let mixed = super::report_integration_outcomes(
+            "Notion reconcile",
+            false,
+            r#"{"results":[
+                {"project_code":"acme","outcome":"created"},
+                {"project_code":"beta","outcome":"provider_unavailable","detail":"503"},
+                {"project_code":"gamma","outcome":"brand_new_slug"}
+            ]}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            mixed,
+            "Notion reconcile did not fully succeed: beta: provider_unavailable (503); gamma: brand_new_slug"
+        );
+        let unreadable = super::report_integration_outcomes("Slack ensure", false, "ok\n")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            unreadable,
+            "the server returned a body this CLI could not interpret: ok"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ci_scoped_dry_run_names_the_project_and_is_never_rechecked() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/seed"))
+            .respond_with(ResponseTemplate::new(502).set_body_string("bad gateway"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let session = (server.uri(), "t".to_string());
+        let failure = super::send_chunk(
+            &session,
+            "person",
+            "lookup_fields: [email]\nrecords: []\n",
+            0,
+            SeedOptions {
+                overwrite: false,
+                dry_run: true,
+                as_ci_project: Some("acme"),
+            },
+        )
+        .await
+        .expect_err("a 502 dry run fails");
+        assert_eq!(
+            failure.into_error(0).to_string(),
+            "seed person failed: 502 Bad Gateway: bad gateway"
+        );
+        let body = only_body(&server, "/app/api/seed").await;
+        assert_eq!(body["as_ci"], true);
+        assert_eq!(body["project"], "acme");
+        assert_eq!(body["dry_run"], true);
+        assert_eq!(body["overwrite"], false);
+    }
+
+    #[tokio::test]
+    async fn a_seed_with_no_answer_reports_the_request_failure() {
+        // A listener that is bound and then dropped leaves a port nothing answers on.
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let session = (format!("http://127.0.0.1:{port}"), "t".to_string());
+        let failure = super::send_chunk(
+            &session,
+            "person",
+            "records: []\n",
+            0,
+            SeedOptions::default(),
+        )
+        .await
+        .expect_err("no answer is a failure");
+        let error = failure.into_error(0);
+        assert!(
+            error.to_string().starts_with("POST /app/api/seed:"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_small_seed_document_is_posted_whole_and_counts_its_records() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/seed"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "created": 2 })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let session = (server.uri(), "t".to_string());
+        let yaml = "lookup_fields: [email]\nrecords:\n  - email: a@example.com\n  - email: b@example.com\n";
+        let committed = super::post_seed(&session, "person", yaml, SeedOptions::default())
+            .await
+            .unwrap_or_else(|failure| panic!("{}", failure.into_error(0)));
+        assert_eq!(committed, 2);
+        assert_eq!(only_body(&server, "/app/api/seed").await["yaml"], yaml);
+    }
+
+    #[test]
+    fn seed_helpers_read_counts_records_and_partial_commits() {
+        assert_eq!(
+            super::parse_seed_counts(r#"{"created":1,"updated":2}"#),
+            super::SeedCounts {
+                created: 1,
+                updated: 2,
+                unchanged: 0
+            }
+        );
+        assert_eq!(
+            super::parse_seed_counts("<html>"),
+            super::SeedCounts::default()
+        );
+        let mut total = super::SeedCounts {
+            created: 1,
+            updated: 1,
+            unchanged: 1,
+        };
+        total.add(super::SeedCounts {
+            created: 2,
+            updated: 3,
+            unchanged: 4,
+        });
+        assert_eq!(
+            total,
+            super::SeedCounts {
+                created: 3,
+                updated: 4,
+                unchanged: 5
+            }
+        );
+
+        assert!(super::seed_records("not: [a seed").is_none());
+        assert!(super::seed_records("records: []\n").is_none());
+        let (lookup, records) =
+            super::seed_records("lookup_fields: [email]\nrecords: [{email: a}]\n").unwrap();
+        assert_eq!((lookup.len(), records.len()), (1, 1));
+        let document =
+            super::seed_document(&["email"], &[serde_json::json!({"email": "a"})]).unwrap();
+        assert_eq!(super::seed_records(&document).unwrap().1.len(), 1);
+
+        let untouched = super::SeedFailure {
+            committed: 0,
+            error: anyhow::anyhow!("refused"),
+        }
+        .into_error(0);
+        assert!(untouched.downcast_ref::<super::PartialImport>().is_none());
+        assert_eq!(exit_code_for(&untouched), ExitCode::from(2));
+        let partial = super::SeedFailure {
+            committed: 50,
+            error: anyhow::anyhow!("refused"),
+        }
+        .into_error(100);
+        assert_eq!(
+            partial
+                .downcast_ref::<super::PartialImport>()
+                .unwrap()
+                .committed,
+            150
+        );
+        assert_eq!(
+            format!("{partial}"),
+            "150 record(s) were committed before the import stopped"
+        );
+        assert_eq!(exit_code_for(&partial), ExitCode::from(4));
+
+        let refused = |status: Option<u16>| super::SeedRefused {
+            status: status.map(|code| reqwest::StatusCode::from_u16(code).unwrap()),
+            message: String::new(),
+        };
+        assert!(refused(None).may_have_committed());
+        assert!(refused(Some(503)).may_have_committed());
+        assert!(!refused(Some(422)).may_have_committed());
+    }
+
+    #[test]
+    fn ci_forge_names_its_runner_grant_and_document_door() {
+        let lookup = |value: Option<&'static str>| {
+            move |name: &str| {
+                (name == "FORGEJO_ACTIONS")
+                    .then_some(value)
+                    .flatten()
+                    .map(str::to_string)
+            }
+        };
+        assert_eq!(
+            super::CiForge::from_lookup(lookup(Some(" true "))),
+            super::CiForge::Forgejo
+        );
+        assert_eq!(
+            super::CiForge::from_lookup(lookup(Some("false"))),
+            super::CiForge::GitHub
+        );
+        assert_eq!(
+            super::CiForge::from_lookup(lookup(None)),
+            super::CiForge::GitHub
+        );
+        assert_eq!(super::CiForge::GitHub.name(), "GitHub Actions");
+        assert_eq!(super::CiForge::Forgejo.name(), "Forgejo Actions");
+        assert_eq!(super::CiForge::GitHub.oidc_grant(), "`id-token: write`");
+        assert_eq!(
+            super::CiForge::Forgejo.oidc_grant(),
+            "`enable-openid-connect: true`"
+        );
+        assert_eq!(
+            super::CiForge::GitHub.document_mint_path(),
+            "/auth/ci/document-token"
+        );
+    }
+
+    #[test]
+    fn a_mint_refusal_message_prefers_the_doors_own_message() {
+        assert_eq!(
+            super::mint_refusal_message(r#"{"error":"forbidden","message":"repo not linked"}"#),
+            "repo not linked"
+        );
+        assert_eq!(
+            super::mint_refusal_message("\n<html>proxy timeout</html>\n"),
+            "<html>proxy timeout</html>"
+        );
+        assert_eq!(super::mint_refusal_message(""), "(empty response)");
+        assert_eq!(super::MintRefusal.to_string(), "CI token mint was refused");
+    }
+
+    #[test]
+    fn authenticated_transfers_need_https_unless_the_deployment_is_loopback() {
+        for allowed in [
+            "https://navigator.example.com",
+            "http://localhost:8080",
+            "http://127.0.0.1:3000",
+            "http://[::1]:3000",
+        ] {
+            assert!(
+                super::authenticated_client_builder(allowed).is_ok(),
+                "{allowed} is allowed"
+            );
+        }
+        for refused in ["http://navigator.example.com", "ftp://127.0.0.1"] {
+            assert_eq!(
+                super::authenticated_client_builder(refused)
+                    .unwrap_err()
+                    .to_string(),
+                "authenticated transfers require HTTPS except for a loopback deployment",
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            super::authenticated_client_builder("not a url")
+                .unwrap_err()
+                .to_string(),
+            "parse authenticated deployment URL"
+        );
+    }
+
+    #[tokio::test]
+    async fn step_and_status_reads_name_a_missing_notation_and_a_server_failure() {
+        let server = MockServer::start().await;
+        let missing = Uuid::now_v7();
+        let broken = Uuid::now_v7();
+        Mock::given(method("GET"))
+            .and(path(format!("/app/lawyer/notations/{missing}/step")))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/lawyer/notations/{broken}/step")))
+            .respond_with(
+                ResponseTemplate::new(500)
+                    .set_body_json(serde_json::json!({ "error": "walker crashed" })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/lawyer/notations/{missing}/review")))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/lawyer/notations/{broken}/review")))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let uri = server.uri();
+
+        assert_eq!(
+            fetch_step(&client, &uri, "t", missing)
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!("no notation {missing} on {uri}")
+        );
+        let step_failure = fetch_step(&client, &uri, "t", broken)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            step_failure.starts_with("step failed:") && step_failure.contains("walker crashed"),
+            "{step_failure}"
+        );
+        assert_eq!(
+            fetch_status(&uri, "t", missing)
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!("no notation {missing} on {uri}")
+        );
+        assert_eq!(
+            fetch_status(&uri, "t", broken)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "notation status failed: 503 Service Unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn transcript_coverage_posts_the_file_and_reports_a_refusal() {
+        let server = MockServer::start().await;
+        let notation_id = Uuid::now_v7();
+        let refused = Uuid::now_v7();
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/lawyer/notations/{notation_id}/transcript"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "covered": [{"code": "person__client", "proposed_answer": "Libra"}],
+                "uncovered": ["country__of_birth"]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/lawyer/notations/{refused}/transcript")))
+            .respond_with(ResponseTemplate::new(422).set_body_string("transcript is empty"))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("call.txt");
+        std::fs::write(&transcript, "My name is Libra & I was born in Reno.").unwrap();
+        let client = reqwest::Client::new();
+        let uri = server.uri();
+
+        super::post_transcript_coverage(&client, &uri, "t", notation_id, &transcript)
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let form = String::from_utf8(requests[0].body.clone()).unwrap();
+        let fields: Vec<(String, String)> = url::form_urlencoded::parse(form.as_bytes())
+            .into_owned()
+            .collect();
+        assert_eq!(
+            fields,
+            vec![(
+                "transcript".to_string(),
+                "My name is Libra & I was born in Reno.".to_string()
+            )]
+        );
+
+        let error = super::post_transcript_coverage(&client, &uri, "t", refused, &transcript)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with("transcript coverage failed:")
+                && error.contains("transcript is empty"),
+            "{error}"
+        );
+        let missing = dir.path().join("absent.txt");
+        assert!(
+            super::post_transcript_coverage(&client, &uri, "t", notation_id, &missing)
+                .await
+                .unwrap_err()
+                .to_string()
+                .starts_with("read transcript")
+        );
+    }
+
+    #[test]
+    fn local_pointer_keys_follow_the_new_slugs_extension() {
+        assert_eq!(
+            super::pointer_candidates("engagement", "engagement-letter.pdf"),
+            vec!["engagement".to_string(), "engagement.pdf".to_string()]
+        );
+        assert_eq!(
+            super::pointer_candidates("letter.pdf", "moved.pdf"),
+            vec!["letter.pdf".to_string()]
+        );
+        assert_eq!(
+            super::pointer_candidates("letter", "moved"),
+            vec!["letter".to_string()]
+        );
+        assert_eq!(
+            super::blob_relative("onboarding/letter.pdf"),
+            format!(
+                "{}/onboarding/letter.pdf.yaml",
+                crate::document_sync::POINTER_DIRECTORY
+            )
+        );
+        assert_eq!(
+            super::bytes_relative("letter.pdf"),
+            format!("{}/letter.pdf", crate::document_sync::DOCUMENT_DIRECTORY)
+        );
+        // An unreadable pointer lays the bytes out at the key itself.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            super::laid_out_bytes_relative(dir.path(), "letter.pdf", "blobs/absent.yaml"),
+            super::bytes_relative("letter.pdf")
+        );
+        // With no local pointer there is nothing to refuse.
+        super::validate_local_pointer_move(dir.path(), "letter.pdf", "moved.pdf").unwrap();
+    }
+
+    #[test]
+    fn asset_kinds_and_upload_sizes_are_checked_before_any_request() {
+        assert!(super::is_asset_kind("unclassified"));
+        assert!(!super::is_asset_kind("not-a-kind"));
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("small.txt");
+        std::fs::write(&file, b"abc").unwrap();
+        super::validate_document_upload_size("unclassified", &file).unwrap();
+        assert!(
+            super::validate_document_upload_size("unclassified", &dir.path().join("absent"))
+                .unwrap_err()
+                .to_string()
+                .starts_with("read metadata for")
+        );
+        let cap = store::documents::max_document_upload_bytes("unclassified");
+        assert_eq!(
+            super::validate_document_upload_size_in_bytes("unclassified", cap + 1)
+                .unwrap_err()
+                .to_string(),
+            store::documents::document_upload_size_message_for_kind("unclassified", cap + 1)
+        );
+    }
+
+    #[test]
+    fn a_step_question_reports_whether_it_offers_candidates() {
+        let step: StepResponse = serde_json::from_value(serde_json::json!({
+            "question": {"code": "q", "prompt": "Pick", "answer_type": "text"}
+        }))
+        .unwrap();
+        assert!(!step.question.unwrap().has_candidates());
+        let step: StepResponse = serde_json::from_value(serde_json::json!({
+            "question": {
+                "code": "q",
+                "prompt": "Pick",
+                "answer_type": "entity",
+                "candidates": [{"id": Uuid::now_v7(), "name": "Acme"}]
+            }
+        }))
+        .unwrap();
+        assert!(step.question.unwrap().has_candidates());
+        let done: StepResponse = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(done.question.is_none());
+    }
 }
