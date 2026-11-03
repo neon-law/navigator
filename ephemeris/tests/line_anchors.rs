@@ -46,14 +46,16 @@ struct AnchorRow {
     label: String,
     /// The crate's body-name string (`LineBody::name`).
     body: String,
+    /// Apparent declination from the independent reference provider.
+    dec: f64,
     /// MC meridian longitude in degrees east.
     mc: f64,
     /// IC meridian longitude in degrees east.
     ic: f64,
-    /// ASC anchors as `[longitude, latitude]` pairs sweeping 180° east of
+    /// ASC anchors as `[longitude, latitude]` pairs sweeping 180° west of
     /// the sub-body meridian.
     asc: Vec<[f64; 2]>,
-    /// DSC anchors as `[longitude, latitude]` pairs sweeping 180° west.
+    /// DSC anchors as `[longitude, latitude]` pairs sweeping 180° east.
     dsc: Vec<[f64; 2]>,
 }
 
@@ -292,4 +294,33 @@ mod geometry_helpers {
         );
         assert!((distance - 35.0).abs() < 1e-9, "got {distance}");
     }
+}
+
+/// Check the direction of motion in every reference anchor without kernels.
+/// USNO's altitude equation gives d(sin altitude)/dH = -cos(phi) cos(dec) sin(H).
+#[test]
+fn reference_horizon_anchors_cross_in_the_labeled_direction() {
+    let table: AnchorTable = serde_json::from_str(FIXTURE_JSON).expect("table parses");
+    let mut checked = 0;
+    for row in table.rows {
+        for (anchors, rising) in [(&row.asc, true), (&row.dsc, false)] {
+            for &[lon, lat] in anchors {
+                let hour = (lon - row.mc).to_radians();
+                let phi = lat.to_radians();
+                let dec = row.dec.to_radians();
+                let altitude_sine = phi.sin() * dec.sin() + phi.cos() * dec.cos() * hour.cos();
+                assert!(altitude_sine.abs() < 1e-8, "anchor must lie on horizon");
+                let rate = -phi.cos() * dec.cos() * hour.sin();
+                assert_eq!(
+                    rate > 0.0,
+                    rising,
+                    "{} {} anchor ({lon}, {lat})",
+                    row.body,
+                    row.label
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked >= 2300);
 }

@@ -17,7 +17,7 @@
 //!   solved per longitude λ from the hour angle H = GAST + λ − RA and the
 //!   declination δ: sin φ · sin δ + cos φ · cos δ · cos H = 0, so
 //!   tan φ = −cos H / tan δ. The culmination meridian cuts it into the
-//!   eastern ASC and western DSC semicircles, each spanning 180° of
+//!   western ASC and eastern DSC semicircles, each spanning 180° of
 //!   longitude between the two meridians. Sampled adaptively (finer where
 //!   the curve is steep) and split at the antimeridian; an exactly
 //!   equatorial body degenerates to two meridians.

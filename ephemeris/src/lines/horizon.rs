@@ -11,11 +11,14 @@
 //! The culmination meridian (`λ_sub` and its antipode) cuts the circle into
 //! two semicircles — the astrocartography angles:
 //!
-//! * **ASC** — the eastern semicircle, λ from `λ_sub` to `λ_sub` + 180°: it
-//!   leaves the MC meridian on the side opposite the body's hemisphere, at
-//!   90° − |δ| from the equator, crosses the equator 90° east of the
-//!   sub-body point, and meets the IC meridian on the body's own side.
-//! * **DSC** — the western semicircle, the mirror image through the west.
+//! * **ASC** — the western semicircle, where the local hour angle is
+//!   negative and the body's altitude increases as sidereal time advances.
+//! * **DSC** — the eastern semicircle, where the local hour angle is
+//!   positive and the body's altitude decreases.
+//!
+//! The hour-angle and altitude conventions follow the US Naval Observatory:
+//! <https://aa.usno.navy.mil/faq/alt_az>. At the horizon,
+//! d(sin altitude)/dH = -cos φ cos δ sin H; rising therefore requires H < 0.
 //!
 //! For an exactly equatorial body (δ = 0) the circle degenerates to the two
 //! meridians 90° east and west of the sub-body point — the body then rises
@@ -132,15 +135,14 @@ fn sample_horizon_arc(
 #[must_use]
 pub fn asc_dsc_curves(body: LineBody, dec_deg: f64, mc_lon_deg: f64) -> (AngularLine, AngularLine) {
     if dec_deg.abs() < EQUATORIAL_EPSILON_DEG {
-        let asc = super::vertical::vertical_line(body, Angle::Asc, mc_lon_deg + 90.0);
-        let dsc = super::vertical::vertical_line(body, Angle::Dsc, mc_lon_deg - 90.0);
+        let asc = super::vertical::vertical_line(body, Angle::Asc, mc_lon_deg - 90.0);
+        let dsc = super::vertical::vertical_line(body, Angle::Dsc, mc_lon_deg + 90.0);
         return (asc, dsc);
     }
 
-    // Eastern semicircle: MC junction → east equator point → IC junction.
-    let asc_points = sample_horizon_arc(mc_lon_deg, mc_lon_deg + 180.0, dec_deg, mc_lon_deg);
-    // Western semicircle: the mirror run through the west equator point.
-    let dsc_points = sample_horizon_arc(mc_lon_deg - 180.0, mc_lon_deg, dec_deg, mc_lon_deg);
+    // Rising in the west (negative hour angle), setting in the east.
+    let asc_points = sample_horizon_arc(mc_lon_deg - 180.0, mc_lon_deg, dec_deg, mc_lon_deg);
+    let dsc_points = sample_horizon_arc(mc_lon_deg, mc_lon_deg + 180.0, dec_deg, mc_lon_deg);
 
     (
         AngularLine {
@@ -160,6 +162,31 @@ pub fn asc_dsc_curves(body: LineBody, dec_deg: f64, mc_lon_deg: f64) -> (Angular
 mod tests {
     use super::*;
     use crate::lines::{split_antimeridian, wrap_longitude};
+
+    /// Evaluate altitude before and after Earth rotation at fixed locations,
+    /// independently of the ASC/DSC longitude-label convention.
+    #[test]
+    fn rising_crosses_upward_and_setting_crosses_downward() {
+        for dec in [-23.44, 0.0, 23.44] {
+            let (asc, dsc) = asc_dsc_curves(LineBody::Sun, dec, 17.0);
+            for (line, rising) in [(&asc, true), (&dsc, false)] {
+                let mut checked = 0;
+                for point in &line.points {
+                    let hour_angle = (point.0 - 17.0).to_radians();
+                    if point.1.abs() > 80.0 || hour_angle.sin().abs() < 0.01 {
+                        continue;
+                    }
+                    // GAST increases, so the sub-body longitude decreases.
+                    let before = great_circle_dot(point.0, point.1, 17.01, dec);
+                    let after = great_circle_dot(point.0, point.1, 16.99, dec);
+                    assert_eq!(before < 0.0 && after > 0.0, rising);
+                    assert_eq!(before > 0.0 && after < 0.0, !rising);
+                    checked += 1;
+                }
+                assert!(checked > 100);
+            }
+        }
+    }
 
     /// The horizon circle's junction latitude with the MC meridian: on the
     /// side opposite the body's hemisphere, 90° − |δ| from the equator.
@@ -223,35 +250,35 @@ mod tests {
     /// (MC) and the body's own side (IC), 90° − |δ| from the equator.
     #[test]
     fn junctions_meet_the_culmination_meridians() {
-        let (asc, dsc) = asc_dsc_curves(LineBody::Sun, SUN_DEC, SUN_MC_LON);
+        let (western, eastern) = asc_dsc_curves(LineBody::Sun, SUN_DEC, SUN_MC_LON);
 
-        let first = asc.points[0];
+        let first = eastern.points[0];
         assert!((wrap_longitude(first.0) - SUN_MC_LON).abs() < 1e-9);
         assert!((first.1 - mc_junction_latitude_degrees(SUN_DEC)).abs() < 1e-9);
 
-        let last = asc.points[asc.points.len() - 1];
+        let last = eastern.points[eastern.points.len() - 1];
         assert!((wrap_longitude(last.0) - wrap_longitude(SUN_MC_LON + 180.0)).abs() < 1e-9);
         assert!((last.1 - ic_junction_latitude_degrees(SUN_DEC)).abs() < 1e-9);
 
-        // DSC shares both junctions with ASC, approached from the west.
+        // The western arc shares both junctions with the eastern arc.
         assert!(
-            (wrap_longitude(dsc.points[0].0) - wrap_longitude(SUN_MC_LON + 180.0)).abs() < 1e-9
+            (wrap_longitude(western.points[0].0) - wrap_longitude(SUN_MC_LON + 180.0)).abs() < 1e-9
         );
-        assert!((dsc.points[0].1 - ic_junction_latitude_degrees(SUN_DEC)).abs() < 1e-9);
-        let dsc_last = dsc.points[dsc.points.len() - 1];
-        assert!((wrap_longitude(dsc_last.0) - SUN_MC_LON).abs() < 1e-9);
-        assert!((dsc_last.1 - mc_junction_latitude_degrees(SUN_DEC)).abs() < 1e-9);
+        assert!((western.points[0].1 - ic_junction_latitude_degrees(SUN_DEC)).abs() < 1e-9);
+        let western_last = western.points[western.points.len() - 1];
+        assert!((wrap_longitude(western_last.0) - SUN_MC_LON).abs() < 1e-9);
+        assert!((western_last.1 - mc_junction_latitude_degrees(SUN_DEC)).abs() < 1e-9);
 
         // Southern declination mirrors the geometry: the southern-body MC
         // junction sits in the north and the IC junction in the south.
-        let (asc_s, _) = asc_dsc_curves(LineBody::Sun, -SUN_DEC, SUN_MC_LON);
-        assert!((asc_s.points[0].1 - mc_junction_latitude_degrees(-SUN_DEC)).abs() < 1e-9);
-        let last_s = asc_s.points[asc_s.points.len() - 1];
+        let (_, eastern_s) = asc_dsc_curves(LineBody::Sun, -SUN_DEC, SUN_MC_LON);
+        assert!((eastern_s.points[0].1 - mc_junction_latitude_degrees(-SUN_DEC)).abs() < 1e-9);
+        let last_s = eastern_s.points[eastern_s.points.len() - 1];
         assert!((last_s.1 - ic_junction_latitude_degrees(-SUN_DEC)).abs() < 1e-9);
     }
 
     /// Each curve crosses the equator a quarter turn of longitude from the
-    /// sub-body point: ASC due east, DSC due west.
+    /// sub-body point: ASC due west, DSC due east.
     #[test]
     fn equator_crossing_a_quarter_turn_away() {
         let (asc, dsc) = asc_dsc_curves(LineBody::Sun, SUN_DEC, SUN_MC_LON);
@@ -262,7 +289,7 @@ mod tests {
             .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
             .expect("asc has points");
         assert!(
-            (wrap_longitude(asc_equator.0) - wrap_longitude(SUN_MC_LON + 90.0)).abs() < 0.5,
+            (wrap_longitude(asc_equator.0) - wrap_longitude(SUN_MC_LON - 90.0)).abs() < 0.5,
             "ASC equator crossing longitude {}",
             asc_equator.0
         );
@@ -274,7 +301,7 @@ mod tests {
             .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
             .expect("dsc has points");
         assert!(
-            (wrap_longitude(dsc_equator.0) - wrap_longitude(SUN_MC_LON - 90.0)).abs() < 0.5,
+            (wrap_longitude(dsc_equator.0) - wrap_longitude(SUN_MC_LON + 90.0)).abs() < 0.5,
             "DSC equator crossing longitude {}",
             dsc_equator.0
         );
@@ -288,9 +315,9 @@ mod tests {
     fn equatorial_body_degenerates_to_meridians() {
         let (asc, dsc) = asc_dsc_curves(LineBody::Moon, 0.0, SUN_MC_LON);
         assert_eq!(asc.points.len(), 181);
-        assert_eq!(asc.points[0], Point(SUN_MC_LON + 90.0, -90.0));
-        assert_eq!(asc.points[180], Point(SUN_MC_LON + 90.0, 90.0));
-        assert_eq!(dsc.points[0], Point(SUN_MC_LON - 90.0, -90.0));
+        assert_eq!(asc.points[0], Point(SUN_MC_LON - 90.0, -90.0));
+        assert_eq!(asc.points[180], Point(SUN_MC_LON - 90.0, 90.0));
+        assert_eq!(dsc.points[0], Point(SUN_MC_LON + 90.0, -90.0));
     }
 
     /// Adaptive sampling: flat stretches stay at the 0.5° base step while
@@ -323,8 +350,8 @@ mod tests {
     fn dsc_mirrors_asc_about_the_sub_body_meridian() {
         let (asc, dsc) = asc_dsc_curves(LineBody::Sun, SUN_DEC, SUN_MC_LON);
         for offset in [10.0, 30.0, 60.0, 89.0] {
-            let asc_lat = latitude_at_offset(&asc, offset);
-            let dsc_lat = latitude_at_offset(&dsc, -offset);
+            let asc_lat = latitude_at_offset(&asc, -offset);
+            let dsc_lat = latitude_at_offset(&dsc, offset);
             assert!(
                 (asc_lat - dsc_lat).abs() < 0.05,
                 "offset {offset}: asc {asc_lat} dsc {dsc_lat}"
@@ -350,10 +377,10 @@ mod tests {
     /// every emitted vertex still sits on the horizon circle.
     #[test]
     fn antimeridian_crossing_splits_segments() {
-        // Sub-body point at 170°E: the ASC arc runs 170°E → 350°E, crossing
+        // Sub-body point at 170°E: the DSC arc runs 170°E → 350°E, crossing
         // the ±180° seam.
-        let (asc, _) = asc_dsc_curves(LineBody::Sun, 20.0, 170.0);
-        let segments = asc.segments();
+        let (_, dsc) = asc_dsc_curves(LineBody::Sun, 20.0, 170.0);
+        let segments = dsc.segments();
         assert_eq!(segments.len(), 2, "one split at the seam");
         for segment in &segments {
             for point in segment {
@@ -363,7 +390,7 @@ mod tests {
         }
         // The split points are distinct vertices; nothing was dropped.
         let total: usize = segments.iter().map(Vec::len).sum();
-        assert_eq!(total, asc.points.len());
-        assert_eq!(split_antimeridian(&asc.points).len(), 2);
+        assert_eq!(total, dsc.points.len());
+        assert_eq!(split_antimeridian(&dsc.points).len(), 2);
     }
 }

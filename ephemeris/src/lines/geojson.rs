@@ -260,7 +260,7 @@ mod tests {
             185.0,
         ));
         // ASC arc for a northern declination crossing the antimeridian.
-        let (asc, _) = super::super::horizon::asc_dsc_curves(LineBody::Moon, 20.0, 170.0);
+        let (asc, _) = super::super::horizon::asc_dsc_curves(LineBody::Moon, 20.0, -170.0);
         lines.push(asc);
 
         let provenance = LineProvenance::new(&test_manifest(), test_epoch());
