@@ -3,7 +3,7 @@
 //! Plan by default: listing and showing a message classify server-side and
 //! record nothing. `--apply` records the classified route (idempotent),
 //! posts the metadata-only Slack notice, and — with `--gmail` — archives
-//! the Gmail copy by removing its INBOX label, never by trashing it. The
+//! the Gmail copy after confirmed filing, removing its INBOX label. The
 //! classification itself lives behind the Navigator doors, so the CLI
 //! cannot out-vote it, and nothing here sends anything.
 
@@ -49,10 +49,10 @@ pub enum InboxAction {
         /// Inbox message id from `navigator inbox list`.
         message: Uuid,
         /// Record the classified route, notify the matter channel, and
-        /// archive the Gmail copy passed with --gmail.
+        /// archive --gmail only after a NEF filing finishes; refusals fail in triage.
         #[arg(long)]
         apply: bool,
-        /// Gmail web URL or message id to archive after applying.
+        /// Gmail web URL or message id to archive after processing finishes.
         #[arg(long)]
         gmail: Option<String>,
         /// Navigator host. Defaults to host in navigator.yaml.
@@ -160,6 +160,8 @@ struct ProcessView {
     reason: String,
     recorded_route: Option<String>,
     recorded_at: Option<String>,
+    #[serde(default)]
+    recorded_nef_outcome: Option<String>,
     project_id: Option<Uuid>,
     #[allow(dead_code)]
     occurred_at: String,
@@ -178,6 +180,35 @@ struct ProcessApplyView {
     recorded_at: String,
     already_recorded: bool,
     slack_notice: String,
+    #[serde(default)]
+    nef: Option<NefFiling>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NefFiling {
+    outcome: String,
+}
+
+impl ProcessApplyView {
+    fn require_completed_filing(&self) -> Result<()> {
+        if self.route != store::inbox::route::NEF {
+            return Ok(());
+        }
+        let outcome = self.nef.as_ref().map(|filing| filing.outcome.as_str());
+        match outcome {
+            Some(
+                store::inbox::nef_outcome::FILED
+                | store::inbox::nef_outcome::ALREADY_RECORDED
+                | store::inbox::nef_outcome::TEXT_ONLY,
+            ) => Ok(()),
+            Some(outcome) => Err(anyhow!(
+                "NEF filing remains in triage: {outcome}; Gmail copy left in the inbox"
+            )),
+            None => Err(anyhow!(
+                "NEF filing outcome is unconfirmed; Gmail copy left in the inbox"
+            )),
+        }
+    }
 }
 
 async fn list(host: Option<&str>) -> Result<()> {
@@ -205,12 +236,13 @@ async fn list(host: Option<&str>) -> Result<()> {
     }
     for view in views {
         println!(
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             view.id,
             view.computed_label,
             view.reason,
             view.external_address,
-            view.subject.as_deref().unwrap_or_default()
+            view.subject.as_deref().unwrap_or_default(),
+            view.recorded_nef_outcome.as_deref().unwrap_or("-")
         );
     }
     Ok(())
@@ -247,10 +279,16 @@ fn print_plan(view: &ProcessView, apply: Option<&ProcessApplyView>) {
             );
             println!("Recorded at  {}", apply.recorded_at);
             println!("Slack notice {}", apply.slack_notice);
+            if let Some(filing) = &apply.nef {
+                println!("Filing       {}", filing.outcome);
+            }
         }
         None => {
             if let (Some(route), Some(recorded_at)) = (&view.recorded_route, &view.recorded_at) {
                 println!("Recorded     {route} at {recorded_at}");
+            }
+            if let Some(outcome) = &view.recorded_nef_outcome {
+                println!("Filing       {outcome}");
             }
         }
     }
@@ -286,6 +324,7 @@ async fn process(
     let apply_view: ProcessApplyView =
         serde_json::from_str(&text).context("parse the process response")?;
     print_plan(&apply_view.result, Some(&apply_view));
+    apply_view.require_completed_filing()?;
     match gmail {
         Some(reference) => match crate::mail::archive(reference).await {
             Ok(()) => println!("Archived the Gmail copy (INBOX label removed)."),
@@ -365,6 +404,37 @@ mod tests {
         assert!(!apply.already_recorded);
         assert_eq!(apply.slack_notice, "notified");
         assert_eq!(apply.result.computed_route, "nef");
+    }
+
+    fn applied_response() -> serde_json::Value {
+        serde_json::from_str(
+            r#"{
+            "result": {
+                "id": "00000000-0000-0000-0000-000000000007",
+                "conversation_id": "00000000-0000-0000-0000-000000000001",
+                "channel": "email",
+                "provider_message_id": "<caf@example.test>",
+                "external_address": "ecf@example.test",
+                "subject": "Notice of Electronic Filing",
+                "computed_route": "nef",
+                "computed_label": "NEF",
+                "reason": "the subject says NOTICE of ELECTRONIC FILING",
+                "recorded_route": "nef",
+                "recorded_at": "2026-10-31T12:00:00Z",
+                "project_id": null,
+                "occurred_at": "2026-10-31T12:00:00Z",
+                "inserted_at": "2026-10-31T12:00:00Z"
+            },
+            "route": "nef",
+            "route_label": "NEF",
+            "reason": "the subject says NOTICE of ELECTRONIC FILING",
+            "recorded_at": "2026-10-31T12:00:00Z",
+            "already_recorded": false,
+            "nef": {"outcome": "filed"},
+            "slack_notice": "no_project"
+        }"#,
+        )
+        .unwrap()
     }
 
     /// Env mutation for the credentials file is process-global; serialize the
@@ -501,30 +571,7 @@ mod tests {
     async fn an_apply_against_a_mocked_door_records_and_leaves_gmail_alone() {
         let _lock = CREDENTIALS_LOCK.lock().await;
         let previous = credentials_previous();
-        let apply_json = r#"{
-            "result": {
-                "id": "00000000-0000-0000-0000-000000000007",
-                "conversation_id": "00000000-0000-0000-0000-000000000001",
-                "channel": "email",
-                "provider_message_id": "<caf@example.test>",
-                "external_address": "ecf@example.test",
-                "subject": "Notice of Electronic Filing",
-                "computed_route": "nef",
-                "computed_label": "NEF",
-                "reason": "the subject says NOTICE of ELECTRONIC FILING",
-                "recorded_route": "nef",
-                "recorded_at": "2026-10-31T12:00:00Z",
-                "project_id": null,
-                "occurred_at": "2026-10-31T12:00:00Z",
-                "inserted_at": "2026-10-31T12:00:00Z"
-            },
-            "route": "nef",
-            "route_label": "NEF",
-            "reason": "the subject says NOTICE of ELECTRONIC FILING",
-            "recorded_at": "2026-10-31T12:00:00Z",
-            "already_recorded": false,
-            "slack_notice": "no_project"
-        }"#;
+        let apply_json = applied_response().to_string();
         let base = serve_once("200 OK", apply_json.to_owned()).await;
         stored_login(&base);
 
@@ -537,6 +584,42 @@ mod tests {
         .await;
 
         assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        restore_credentials(previous);
+    }
+
+    #[tokio::test]
+    async fn triage_and_unconfirmed_filings_fail_before_archiving_gmail() {
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        for outcome in [
+            Some("no_project"),
+            Some("not_a_notice"),
+            Some("no_case_number"),
+            Some("future_unknown"),
+            None,
+        ] {
+            let mut response = applied_response();
+            response["nef"] = outcome.map_or(
+                serde_json::Value::Null,
+                |outcome| serde_json::json!({"outcome": outcome}),
+            );
+            let base = serve_once("200 OK", response.to_string()).await;
+            stored_login(&base);
+            let error = super::process(
+                Uuid::from_u128(7),
+                true,
+                Some("invalid-gmail-reference"),
+                Some(&base),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("NEF filing"),
+                "the filing gate refuses before any Gmail adapter: {error}"
+            );
+            assert!(error.contains("Gmail copy left in the inbox"));
+        }
         restore_credentials(previous);
     }
 
