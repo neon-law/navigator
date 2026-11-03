@@ -2813,10 +2813,10 @@ async fn fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch()
                 .unwrap(),
             crate::fi_import::Existing::New
         );
-        let first = crate::fi_import::ingest_on(&f.pg, &scope, row)
+        let first = crate::test_support::ingest_fi_message_on(&f.pg, &scope, row)
             .await
             .unwrap();
-        let replay = crate::fi_import::ingest_on(&f.pg, &scope, row)
+        let replay = crate::test_support::ingest_fi_message_on(&f.pg, &scope, row)
             .await
             .unwrap();
         assert_eq!(first.message_id, replay.message_id);
@@ -2963,7 +2963,7 @@ async fn raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the
         &second
     };
     assert_eq!(
-        crate::fi_import::ingest_on(&f.pg, &scope, losing)
+        crate::test_support::ingest_fi_message_on(&f.pg, &scope, losing)
             .await
             .unwrap_err(),
         crate::fi_import::FiImportError::Conflict
@@ -2985,13 +2985,13 @@ async fn identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it
         let mut scope = fi_scope(&f).await;
         let duration = if kind == "C" { "61" } else { "" };
         let rows = fi_rows(&format!("{kind},I,+15555550456,2026-10-30T18:00:00Z,{duration},read-{kind}-one\n{kind},I,+15555550456,2026-10-30T18:01:00Z,{duration},read-{kind}-two"));
-        let saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        let saved = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
             .await
             .unwrap();
         for project in [None, Some(f.project)] {
             scope.project = project;
             if project.is_some() {
-                crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+                crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
                     .await
                     .unwrap();
                 let assigned = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
@@ -3010,7 +3010,7 @@ async fn identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it
                 .await
                 .unwrap()
                 .unwrap();
-            let replay = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+            let replay = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
                 .await
                 .unwrap();
             assert!(replay.deduped);
@@ -3033,7 +3033,7 @@ async fn identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it
                 "identical replay must preserve Inbox ordering"
             );
         }
-        let new_event = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+        let new_event = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[1])
             .await
             .unwrap();
         assert!(!new_event.deduped);
@@ -3054,7 +3054,7 @@ async fn fi_import_lock_prevents_assignment_until_destination_verification_finis
     let Some(f) = fixture().await else { return };
     let mut scope = fi_scope(&f).await;
     let rows = fi_rows("S,I,+15555550456,2026-10-30T18:00:00Z,,before-assignment\nS,I,+15555550456,2026-10-30T18:01:00Z,,during-import");
-    let first = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+    let first = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
         .await
         .unwrap();
     scope.project = Some(f.project);
@@ -3085,7 +3085,7 @@ async fn fi_import_lock_prevents_assignment_until_destination_verification_finis
         .unwrap();
     assert!(conversation.project_id.is_none());
     import_guard.rollback().await.unwrap();
-    let saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+    let saved = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[1])
         .await
         .unwrap();
     assert_eq!(saved.conversation_id, first.conversation_id);
@@ -3254,7 +3254,7 @@ async fn assert_native_voice_review_attribution(
 async fn assert_native_fi_review_attribution(f: &Fixture, admin: Uuid, other: Uuid) {
     let scope = fi_scope(f).await;
     let rows = fi_rows("S,O,+15555550456,2026-10-30T18:00:00Z,,review-fi-sms");
-    let history = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+    let history = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
         .await
         .unwrap();
     let assignment =
@@ -3523,12 +3523,12 @@ async fn assert_fi_project_is_pinned_before_return(f: &Fixture, kind: &str, park
     };
     if parked {
         scope.project = None;
-        crate::fi_import::ingest_on(&f.pg, &scope, &row)
+        crate::test_support::ingest_fi_message_on(&f.pg, &scope, &row)
             .await
             .unwrap();
         scope.project = Some(f.project);
     }
-    let saved = crate::fi_import::ingest_on(&f.pg, &scope, &row)
+    let saved = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &row)
         .await
         .unwrap();
     let conversation = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
@@ -3547,7 +3547,7 @@ async fn assert_fi_project_is_pinned_before_return(f: &Fixture, kind: &str, park
         (None, f.owner),
         "initial attribution keeps its authenticated actor and unassigned origin"
     );
-    let replay = crate::fi_import::ingest_on(&f.pg, &scope, &row)
+    let replay = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &row)
         .await
         .unwrap();
     assert_eq!(saved.message_id, replay.message_id);
@@ -3557,7 +3557,7 @@ async fn assert_fi_project_is_pinned_before_return(f: &Fixture, kind: &str, park
     wrong.project = Some(other);
     assert!(
         matches!(
-            crate::fi_import::ingest_on(&f.pg, &wrong, &row).await,
+            crate::test_support::ingest_fi_message_on(&f.pg, &wrong, &row).await,
             Err(crate::fi_import::FiImportError::Conflict)
         ),
         "a conflicting replay must leave history and its Project unchanged"
@@ -3565,7 +3565,7 @@ async fn assert_fi_project_is_pinned_before_return(f: &Fixture, kind: &str, park
     let mut unscoped = scope.clone();
     unscoped.project = None;
     assert!(
-        crate::fi_import::ingest_on(&f.pg, &unscoped, &row)
+        crate::test_support::ingest_fi_message_on(&f.pg, &unscoped, &row)
             .await
             .unwrap()
             .deduped
@@ -3626,7 +3626,7 @@ async fn assert_fi_assignment_cannot_cross_commit(f: &Fixture, kind: &str) {
     let mut scope = fi_scope(f).await;
     let duration = if kind == "C" { "61" } else { "" };
     let rows=fi_rows(&format!("{kind},I,+15555550456,2026-10-30T18:00:00Z,{duration},race-first\n{kind},I,+15555550456,2026-10-30T18:01:00Z,{duration},race-second"));
-    let first = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+    let first = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
         .await
         .unwrap();
     let destination = seed_project(
@@ -3716,10 +3716,10 @@ async fn assert_fi_project_batches_reuse_the_selected_thread(f: &Fixture, kind: 
         .collect::<Vec<_>>()
         .join("\n");
     let rows = fi_rows(&csv);
-    let first = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+    let first = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
         .await
         .unwrap();
-    let second = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+    let second = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[1])
         .await
         .unwrap();
     assert_eq!(
@@ -3727,13 +3727,13 @@ async fn assert_fi_project_batches_reuse_the_selected_thread(f: &Fixture, kind: 
         "new Fi events for the selected Project, phone and channel must share one thread"
     );
     assert_ne!(second.message_id, first.message_id);
-    let replay = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+    let replay = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[1])
         .await
         .unwrap();
     assert!(replay.deduped);
     assert_eq!(replay.message_id, second.message_id);
     scope.project = None;
-    let parked = crate::fi_import::ingest_on(&f.pg, &scope, &rows[2])
+    let parked = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[2])
         .await
         .unwrap();
     assert_ne!(
@@ -3750,7 +3750,7 @@ async fn assert_fi_project_batches_reuse_the_selected_thread(f: &Fixture, kind: 
     )
     .await;
     scope.project = Some(other);
-    let other_saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[3])
+    let other_saved = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[3])
         .await
         .unwrap();
     assert_eq!(
@@ -3762,16 +3762,16 @@ async fn assert_fi_project_batches_reuse_the_selected_thread(f: &Fixture, kind: 
         "another Project cannot capture the selected thread"
     );
     scope.project = Some(f.project);
-    let third = crate::fi_import::ingest_on(&f.pg, &scope, &rows[4])
+    let third = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[4])
         .await
         .unwrap();
     assert_eq!(third.conversation_id, first.conversation_id);
     scope.project = None;
-    let still_parked = crate::fi_import::ingest_on(&f.pg, &scope, &rows[5])
+    let still_parked = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[5])
         .await
         .unwrap();
     scope.project = Some(f.project);
-    let fourth = crate::fi_import::ingest_on(&f.pg, &scope, &rows[6])
+    let fourth = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[6])
         .await
         .unwrap();
     assert_eq!(
@@ -3822,7 +3822,7 @@ async fn assert_fi_identical_replay_preserves_reviewed_state(f: &Fixture, kind: 
     let mut scope = fi_scope(f).await;
     let duration = if kind == "C" { "61" } else { "" };
     let rows=fi_rows(&format!("{kind},I,+15555550456,2026-10-30T18:00:00Z,{duration},reviewed-first\n{kind},I,+15555550456,2026-10-30T18:01:00Z,{duration},reviewed-second"));
-    let saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+    let saved = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
         .await
         .unwrap();
     let past: chrono::DateTime<chrono::Utc> = "2020-01-02T03:04:05Z".parse().unwrap();
@@ -3832,7 +3832,7 @@ async fn assert_fi_identical_replay_preserves_reviewed_state(f: &Fixture, kind: 
         .execute(f.pg.pool())
         .await
         .unwrap();
-    let replay = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+    let replay = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
         .await
         .unwrap();
     assert!(replay.deduped);
@@ -3842,7 +3842,7 @@ async fn assert_fi_identical_replay_preserves_reviewed_state(f: &Fixture, kind: 
         "unchanged unscoped history must preserve review status and timestamp"
     );
     scope.project = Some(f.project);
-    crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+    crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
         .await
         .unwrap();
     let pinned = fi_reviewed_state(f, saved.conversation_id).await;
@@ -3859,7 +3859,7 @@ async fn assert_fi_identical_replay_preserves_reviewed_state(f: &Fixture, kind: 
         .execute(f.pg.pool())
         .await
         .unwrap();
-    crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+    crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
         .await
         .unwrap();
     assert_eq!(
@@ -3868,7 +3868,7 @@ async fn assert_fi_identical_replay_preserves_reviewed_state(f: &Fixture, kind: 
         "identical same-Project replay must not reopen reviewed history"
     );
     scope.project = None;
-    crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+    crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[0])
         .await
         .unwrap();
     assert_eq!(
@@ -3877,7 +3877,7 @@ async fn assert_fi_identical_replay_preserves_reviewed_state(f: &Fixture, kind: 
         "unscoped replay of attributed history must not reopen it"
     );
     scope.project = Some(f.project);
-    let fresh = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+    let fresh = crate::test_support::ingest_fi_message_on(&f.pg, &scope, &rows[1])
         .await
         .unwrap();
     assert!(!fresh.deduped);

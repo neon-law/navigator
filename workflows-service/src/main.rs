@@ -935,7 +935,8 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
-    serve_health_listener(health_listener, dbos_ingress);
+    let dbos_probe = dbos_executor.as_ref().map(dbos_engine::Executor::probe);
+    serve_health_listener(health_listener, dbos_ingress, dbos_probe);
 
     let server_result = tokio::select! {
         () = server => Ok(()),
@@ -951,10 +952,11 @@ async fn main() -> anyhow::Result<()> {
 
 /// Unsigned liveness/readiness probe (ENG-551): unlike the Restate endpoint,
 /// it needs no Restate Cloud signature, so kubelet and the GCE LB can reach it
-/// directly on every deployment. Its one route round-trips a throwaway
-/// signature through the same `jsonwebtoken` verification path real traffic
-/// uses, catching an ENG-550-style `CryptoProvider` regression instead of
-/// shipping it invisibly again. Both engines serve it.
+/// directly on every deployment. `/healthz` round-trips a throwaway signature
+/// through the same `jsonwebtoken` verification path real traffic uses,
+/// catching an ENG-550-style `CryptoProvider` regression instead of shipping
+/// it invisibly again; `/readyz` additionally reports the DBOS executor's
+/// health (running + system database reachable). Both engines serve it.
 async fn bind_health_listener() -> anyhow::Result<tokio::net::TcpListener> {
     let health_addr = workflows_service::health::health_listen_addr(|key| std::env::var(key).ok())?;
     let health_listener = tokio::net::TcpListener::bind(health_addr)
@@ -966,6 +968,7 @@ async fn bind_health_listener() -> anyhow::Result<tokio::net::TcpListener> {
 fn serve_health_listener(
     health_listener: tokio::net::TcpListener,
     dbos_ingress: Arc<std::sync::RwLock<workflows_service::dbos_ingress::WorkerIngress>>,
+    dbos_probe: Option<dbos_engine::ExecutorProbe>,
 ) {
     let health_addr = health_listener.local_addr().ok();
     tracing::info!(?health_addr, "health probe listener listening");
@@ -974,9 +977,16 @@ fn serve_health_listener(
             .read()
             .expect("DBOS ingress lock poisoned")
             .clone();
+        let dbos = dbos_probe.map(|probe| {
+            let system_database_url = probe.system_database_url().map(Arc::from);
+            workflows_service::health::DbosReadiness {
+                is_running: Arc::new(move || probe.is_running()),
+                system_database_url,
+            }
+        });
         if let Err(error) = axum::serve(
             health_listener,
-            workflows_service::health::router_with_dbos_ingress(ingress),
+            workflows_service::health::router_with_dbos_ingress(ingress, dbos),
         )
         .await
         {

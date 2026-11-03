@@ -1121,23 +1121,38 @@ async fn post_fi_json(
     session: Option<&portal::SessionData>,
     body: Value,
 ) -> (u16, Value) {
-    let mut request = Request::builder()
-        .method("POST")
-        .uri("/app/api/inbox/import/fi")
-        .header(header::CONTENT_TYPE, "application/json");
-    if let Some(session) = session {
-        request = request.extension(session.clone());
+    // The Fi import lock is instance-wide on the shared CI PostgreSQL, so a
+    // concurrently scheduled test process can answer `Busy` — the route maps
+    // it to 503 with `fi_import::FiImportError::Busy`'s Display and asks the
+    // caller to rerun the unchanged batch. Retry that one body briefly;
+    // every other status returns as-is so tests asserting conflict or
+    // storage failures keep their exact wire semantics.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/app/api/inbox/import/fi")
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(session) = session {
+            request = request.extension(session.clone());
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_slice(&bytes).unwrap();
+        let busy = status == 503
+            && parsed["error"] == "another Fi import is committing; retry the unchanged batch";
+        if !busy || std::time::Instant::now() >= deadline {
+            return (status, parsed);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    let response = app
-        .clone()
-        .oneshot(request.body(Body::from(body.to_string())).unwrap())
-        .await
-        .unwrap();
-    let status = response.status().as_u16();
-    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
-        .await
-        .unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
 }
 
 async fn assert_fi_assignment_authorization(

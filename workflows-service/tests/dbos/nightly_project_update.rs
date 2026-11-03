@@ -206,13 +206,16 @@ async fn registered_nightly_parent_resumes_the_same_date_and_deduplicates_notice
     let first = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
     let first_workflow = nightly::register(&first, context.clone()).expect("register DBOS parent");
     first.launch().await.expect("launch first executor");
-    let router = workflows_service::health::router_with_dbos_ingress(WorkerIngress {
-        nightly_project_update: Some(NightlyIngress::new(
-            "synthetic-service-token".into(),
-            first_workflow,
-        )),
-        ..Default::default()
-    });
+    let router = workflows_service::health::router_with_dbos_ingress(
+        WorkerIngress {
+            nightly_project_update: Some(NightlyIngress::new(
+                "synthetic-service-token".into(),
+                first_workflow,
+            )),
+            ..Default::default()
+        },
+        None,
+    );
     let body = serde_json::json!({ "workflow_id": id.clone() });
     let denied = router
         .clone()

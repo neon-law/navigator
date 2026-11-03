@@ -202,12 +202,17 @@ spec:
             # round-trips a request through live worker code (the same
             # `jsonwebtoken` verification path Restate signatures use), so a
             # `CryptoProvider` regression (ENG-550) fails this instead of the
-            # bare tcpSocket check that let it ship invisibly.
+            # bare tcpSocket check that let it ship invisibly. `/readyz`
+            # additionally reports the DBOS executor's health (running +
+            # system database reachable), so readiness reflects the
+            # durable-execution backend; liveness stays on `/healthz` so a
+            # DBOS outage never restarts the pod.
             httpGet:
-              path: /healthz
+              path: /readyz
               port: 9083
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
