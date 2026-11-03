@@ -178,8 +178,14 @@ fn a_wrong_cached_release_blocks_instead_of_running_current_rules() {
 }
 
 #[test]
-fn a_cached_non_release_binary_stops_after_one_delegation() {
-    let pin = env!("CARGO_PKG_VERSION");
+fn an_unrecognized_cached_binary_stops_after_one_delegation() {
+    // Local builds reproduce the same-version Cargo fallback. A release-tagged
+    // test build needs a different pin to exercise delegation instead.
+    let pin = if option_env!("NAVIGATOR_CLI_VERSION_IS_RELEASE").is_some() {
+        "0.0.1"
+    } else {
+        env!("CARGO_PKG_VERSION")
+    };
     let fixture = Fixture::new(pin, 0);
     // Bound the reproduction even when the delegation guard is absent.
     fs::write(
