@@ -3553,7 +3553,8 @@ async fn inject_catalog_index(
 
 // ─── The free court-form catalog ─────────────────────────────────────────────
 //
-// The public surface of `store/seeds/Court.yaml` (PR 163's registry): one
+// The public surface of the court seeds (`store::court_seeds::COURT_SEEDS`,
+// PR 163's registry): one
 // page per jurisdiction listing each court's forms with filing office,
 // fee, fee waiver, and the official source, plus a machine-readable JSON
 // twin. Both firms host it; the copy carries each brand's free-of-charge

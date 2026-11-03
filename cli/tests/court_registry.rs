@@ -1,6 +1,6 @@
 //! Cross-crate reconciliation for the court-form registry:
-//! `store/seeds/Court.yaml` ↔ the forms shelf ↔ the vendored `FormMeta`
-//! registry. Mirrors `public_notations_catalog_matches_legal_templates`:
+//! `store::court_seeds::COURT_SEEDS` ↔ the forms shelf ↔ the vendored
+//! `FormMeta` registry. Mirrors `public_notations_catalog_matches_legal_templates`:
 //! the tracked registry and the tracked templates must stay in lockstep —
 //! every registry entry resolves to a real template, and no court-form
 //! template is an orphan. No official blank is ever checked in: the
@@ -14,7 +14,7 @@ use store::courts::{Court, CourtForm};
 /// Filing offices that are agencies rather than courts. A form under one
 /// of these directories is an agency form and never appears in the court
 /// registry; any other office directory is a court key and must be
-/// registered under `store/seeds/Court.yaml`.
+/// registered under `store::court_seeds::COURT_SEEDS`.
 const AGENCY_OFFICES: &[&str] = &["irs", "state", "uscis"];
 
 /// One template on the forms shelf.
@@ -196,14 +196,14 @@ fn every_court_template_is_registered() {
                 panic!(
                     "{}: template directory `{}` is neither an agency office \
                      nor a registered court key — add the court to \
-                     store/seeds/Court.yaml or move the template",
+                     store/src/court_seeds.rs or move the template",
                     template.display, template.office
                 )
             });
             assert!(
                 codes.contains(&template.code),
                 "{}: court template `{}` under `{}` has no registry entry — \
-                 register it under court `{}` in store/seeds/Court.yaml",
+                 register it under court `{}` in store/src/court_seeds.rs",
                 template.display,
                 template.code,
                 template.office,
@@ -242,7 +242,7 @@ fn vendored_formmeta_agrees_with_the_registry() {
         let row = by_code.get(form.code).unwrap_or_else(|| {
             panic!(
                 "`{}` is vendored as a court form but has no entry in \
-                 store/seeds/Court.yaml under court `{office}`",
+                 store/src/court_seeds.rs under court `{office}`",
                 form.code
             )
         });

@@ -2,7 +2,8 @@
 //!
 //! One index over the jurisdictions the court-form registry covers, plus one
 //! page per jurisdiction grouping its courts and their forms. The rows are
-//! not copy: the portal builds them straight from `store/seeds/Court.yaml`
+//! not copy: the portal builds them straight from the court seeds
+//! (`store::court_seeds::COURT_SEEDS`)
 //! and injects them here, so the page cannot drift from the registry — the
 //! guard tests pin that join (`free_resources_pages_match_the_registry`).
 

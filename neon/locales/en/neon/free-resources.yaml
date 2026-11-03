@@ -1,5 +1,6 @@
 # The Free Legal Resources catalog's brand copy. The page's rows never pass
-# through this file — they come from store/seeds/Court.yaml — so this catalog
+# through this file — they come from the checked-in court seeds
+# (store/src/court_seeds.rs) — so this catalog
 # holds only the words around them: the promises (free of charge, no outcome
 # promised), the table labels, and the empty states. The jurisdiction page
 # builder composes the jurisdiction's seeded display name onto the generic
