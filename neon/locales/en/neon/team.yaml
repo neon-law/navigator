@@ -4,9 +4,19 @@ page_title: Our team
 members:
   - name: Nick Shook
     href: /team/nick
-profile:
-  name: Nick Shook
-  biography: >-
-    Nick is a lawyer at Neon Law. He builds Navigator, the firm's legal
-    project platform.
-  linkedin_url: https://www.linkedin.com/in/nicholas-shook/
+  - name: Waleed Amer
+    href: /team/waleed
+profiles:
+  /team/nick:
+    name: Nick Shook
+    biography: >-
+      Nick is a lawyer at Neon Law. He builds Navigator, the firm's legal
+      project platform.
+    linkedin_url: https://www.linkedin.com/in/nicholas-shook/
+  /team/waleed:
+    name: Waleed Amer
+    biography: >-
+      Waleed is a lawyer with business litigation experience in New York City.
+      He has represented both plaintiffs and defendants in multimillion-dollar
+      disputes between financial institutions.
+    linkedin_url: https://www.linkedin.com/in/waleed-amer/

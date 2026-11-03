@@ -255,7 +255,7 @@ fn lex_tecnica_catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
     }
 }
 
-/// The public team directory and Nick's profile, authored in Neon's
+/// The public team directory and individual profiles, authored in Neon's
 /// `team.yaml` catalog.
 pub fn team(branding: &views::brand::Branding) -> views::locales::TeamCopy {
     let raw = catalog_yaml(branding.brand_key, "team")
