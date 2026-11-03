@@ -45,6 +45,7 @@ fn command(
     acting_person_id: Uuid,
 ) -> OpenMatterCommand {
     OpenMatterCommand {
+        firm_id: None,
         name: name.to_string(),
         code: code.to_string(),
         client_id,

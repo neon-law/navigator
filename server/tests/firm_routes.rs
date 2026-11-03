@@ -2086,6 +2086,20 @@ async fn the_team_directory_links_to_nicks_profile() {
     );
 }
 
+#[tokio::test]
+async fn the_team_directory_links_to_waleeds_profile() {
+    let app = site_app().await;
+    let directory = body_string(anon_get(&app, "/team").await).await;
+    assert!(directory.contains(r#"href="/team/waleed""#));
+    assert!(directory.contains("Waleed Amer"));
+    let profile = anon_get(&app, "/team/waleed").await;
+    assert_eq!(profile.status(), StatusCode::OK);
+    let profile = body_string(profile).await;
+    assert!(profile.contains("Waleed Amer"));
+    assert!(profile.contains(r#"href="https://www.linkedin.com/in/waleed-amer/""#));
+    assert!(!profile.contains("Nick is a lawyer"));
+}
+
 /// A mounted white-label brand bundle rebrands the firm home and its chrome.
 /// This is the render-side coverage that complements the declared-asset-serving
 /// test in `routes.rs`.

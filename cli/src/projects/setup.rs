@@ -277,6 +277,8 @@ pub async fn run(
         }
         match surfaces::resolve_project_id(&base, &token, code).await {
             Ok(id) => vec![VisibleProject {
+                firm_id: None,
+                brand: None,
                 id,
                 code: code.to_string(),
             }],

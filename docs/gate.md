@@ -28,6 +28,9 @@ can use that cached executable offline. An unavailable release, invalid pin, or 
 before content changes. Remove the named cached executable and retry if its version is wrong. A repository without a pin
 continues to use the installed CLI's rules; `navigator validate` also uses the installed rules.
 
+Delegation is limited to one child. If that executable cannot confirm the pinned published release, it stops with an
+error before checking or fixing content. Remove the cached executable and retry so the CLI downloads the release.
+
 `--check` compares committed document pointers with the live record. The host and Project code come from
 `navigator.yaml`. It moves a legacy layout's pointers from `documents/` to `blobs/` (rule `Y014`), rewrites a drifted
 pointer, and writes a missing pointer under `blobs/`. It never writes to the live site. A missing or corrupt object
@@ -422,7 +425,7 @@ literally and the columns disappear.
 | `Y013` | Warning | Flat `host`/`project` shape should be replaced by the versioned nested shape. | No |
 | `Y014` | Error | Document pointers live under `blobs/`, never under the Git-ignored `documents/`. | Locally |
 | `Y015` | Error | A manifest `skills:` entry must carry non-empty `jurisdiction`, `practice_area`, `version`. | No |
-| `Y016` | Error | A nested manifest needs non-placeholder DRI emails, Slack/Notion URLs or `not provisioned`. | No |
+| `Y016` | Error | Valid DRIs and surface handles; declared Firm/brand pairs need a UUID and key. | No |
 | `Y017` | Error | Onboarding/offboarding templates cannot name Neon Law as the Firm's trade name or party. | No |
 | `Y018` | Error | California onboarding/offboarding templates cannot name an LLC as the law firm. | No |
 | `Y019` | Error | A `matter:` block and each pleading's `caption_title` and `footer_title` must be complete. | No |

@@ -892,6 +892,27 @@ fn register_project_routes(r: Router<AdminState>) -> Router<AdminState> {
             &format!("{prefix}/{{project_code}}/intake/{{notation_id}}"),
             post(crate::intake::intake_save),
         )
+        // The matter dashboard's Tasks tab — native-form doors for the same
+        // commands the JSON API in `project_tasks_api` serves (LAW-186). The
+        // handlers redirect (303) back to the workbench's Tasks tab.
+        .route(
+            &format!("{prefix}/{{project_code}}/tasks"),
+            post(crate::project_tasks_forms::create),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/tasks/{{task_id}}/assign"),
+            post(crate::project_tasks_forms::assign),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/tasks/{{task_id}}/transition"),
+            post(crate::project_tasks_forms::transition),
+        )
+        // The matter dashboard's set-stage control — the browser door to the
+        // same command the JSON API in `project_stages_api` serves.
+        .route(
+            &format!("{prefix}/{{project_code}}/stages/set"),
+            post(crate::project_stage_forms::set),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -1299,7 +1320,7 @@ fn admin_gated_message(is_admin: bool, detail: &str, generic: &str) -> String {
     }
 }
 
-fn not_found_response() -> Response {
+pub(crate) fn not_found_response() -> Response {
     (StatusCode::NOT_FOUND, webapp::error_pages::not_found()).into_response()
 }
 
@@ -3813,6 +3834,7 @@ async fn projects_create_lawyer_only(
     match store::projects::open_matter(
         &state.surreal,
         &store::projects::OpenMatterCommand {
+            firm_id: None,
             name: input.name.clone(),
             code: input.code.clone(),
             client_id: client.id,
@@ -6760,6 +6782,7 @@ mod tests {
         let project = store::projects::open_matter(
             db,
             &store::projects::OpenMatterCommand {
+                firm_id: None,
                 name: "Coverage Matter".into(),
                 code: code.into(),
                 client_id: client.id,

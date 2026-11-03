@@ -110,6 +110,7 @@ pub fn lens_for_viewer(viewer: store::access::MatterViewer) -> PageLens {
 pub enum MatterTab {
     #[default]
     Overview,
+    Tasks,
     Communications,
     Documents,
     Billing,
@@ -119,7 +120,8 @@ pub enum MatterTab {
 
 impl MatterTab {
     /// Every built-in with its own path, which the show-page mount routes.
-    pub const ROUTED: [Self; 5] = [
+    pub const ROUTED: [Self; 6] = [
+        Self::Tasks,
         Self::Communications,
         Self::Documents,
         Self::Billing,
@@ -129,7 +131,8 @@ impl MatterTab {
 
     /// The firm workbench's built-ins, in strip order after the declared
     /// pages.
-    pub const WORKBENCH: [Self; 4] = [
+    pub const WORKBENCH: [Self; 5] = [
+        Self::Tasks,
         Self::Communications,
         Self::Documents,
         Self::Billing,
@@ -141,6 +144,7 @@ impl MatterTab {
     pub const fn segment(self) -> &'static str {
         match self {
             Self::Overview => "",
+            Self::Tasks => "tasks",
             Self::Communications => "communications",
             Self::Documents => "documents",
             Self::Billing => "billing",
@@ -155,6 +159,7 @@ impl MatterTab {
             // `rules::pages::SHOW_PAGE_TITLE`, which `Y021` keeps a declared
             // page from repeating; `rules` is server-only, so a test pins it.
             Self::Overview => "Overview",
+            Self::Tasks => "Tasks",
             Self::Communications => "Communications",
             Self::Documents => "Documents",
             Self::Billing => "Billing",
@@ -1102,6 +1107,7 @@ mod tests {
                 "/app/projects/m",
                 "/app/projects/m/timeline",
                 "/app/projects/m/engagement",
+                "/app/projects/m/tasks",
                 "/app/projects/m/communications",
                 "/app/projects/m/documents",
                 "/app/projects/m/billing",

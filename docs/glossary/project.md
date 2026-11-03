@@ -79,19 +79,19 @@ the spelling picked at creation. The PostgreSQL `project_code_immutable` trigger
 `UpdateProjectCommand` carries no `code` field. There is no rename path. The refusal is a rule with a reason, not an
 absence waiting to be filled in.
 
-**`brand` records the house [Brand](brand.md) assigned to this Project.** A closed key from
-[`BrandKey`](../../views/src/brand.rs) (`neon`, `delete-your-data`, `lawyer-shook`), `NOT NULL`, `DEFAULT 'neon'` for a
-row written before the field existed. At matter-open the server derives it from the resolved request host; an Owner or
-authorized Firm Admin may later change it only together with the owning Firm through `UpdateProjectCommand` or
-`navigator project set --firm <name> --brand <key>`. `store` does not depend on `views`, so `Project::brand` is a plain
-validated `String`; the PostgreSQL schema defines the persisted constraints.
+**`brand` records the [Brand](brand.md) assigned to this Project.** It is a key validated against the live Brand
+catalog. At matter-open the server uses the request brand by default; an Owner or authorized Firm Admin may select a
+Firm/brand pair at creation or change the pair through `UpdateProjectCommand` or `navigator project set --firm <name>
+--brand <key>`. `store` does not depend on `views`, so `Project::brand` is a plain validated `String`; the PostgreSQL
+schema defines the persisted constraints.
 
 **`firm_id` records which [Firm](firm.md) owns the Project.** The Firm must wear the same `brand`, as recorded by the
 [Firm Brand term](firm-brand.md). `store::projects::open_matter` and the self-serve retainer walk resolve this pair at
 matter-open and refuse a brand no Firm wears. `store::schema::apply` assigns each unowned Project to the Firm wearing
 its brand, then uses the anchor Firm only when no Firm wears that brand. It never creates a Firm and preserves existing
 assignments. Owners can target any Firm; an Admin must administer the target Firm. The CLI accepts a Firm name, resolves
-it through the caller's authorized Firm directory, and sends the Firm/brand pair together.
+it through the caller's authorized Firm directory, and sends the Firm/brand pair together. The repository manifest
+records this pair as `project.firm` (UUID) and `project.brand` (key).
 
 Object-storage artifacts (rendered PDFs, signed documents, generated exports) live in
 `gs://YOUR_PROJECT_ID-assets/projects/{id}/` for machine reads, and the nightly store→Parquet snapshots are immutable

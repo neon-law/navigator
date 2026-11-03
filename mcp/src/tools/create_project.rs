@@ -203,6 +203,7 @@ pub async fn call(
     let created = store::projects::open_matter(
         surreal,
         &store::projects::OpenMatterCommand {
+            firm_id: None,
             name,
             code,
             client_id: client.id,

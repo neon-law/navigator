@@ -1727,6 +1727,8 @@ async fn list_projects_door(
         let lookup = vec![DocumentProjectLookup {
             id: project.id,
             code: project.code,
+            firm_id: project.firm_id,
+            brand: project.brand,
             status: project.status,
             repository_url: project.repository_url,
         }];
@@ -1745,15 +1747,17 @@ async fn list_projects_door(
 }
 
 /// The only Project fields the document-verification CLI needs before it asks
-/// for revision metadata, plus the two fields `navigator project gate --ci`
-/// reconciles against `navigator.yaml` (`status`, `repository_url`). Keeping
+/// for revision metadata and the coordinates `navigator project gate --ci`
+/// reconciles against `navigator.yaml` (status, repository URL, Firm and brand). Keeping
 /// this response separate from the human Project payload prevents a CI token
-/// from inheriting unrelated fields such as `name`, `brand`, `entity_id`,
+/// from inheriting unrelated fields such as `name`, `entity_id`,
 /// `description`, or the Slack/Notion URLs.
 #[derive(Debug, Serialize)]
 struct DocumentProjectLookup {
     id: Uuid,
     code: String,
+    firm_id: Option<Uuid>,
+    brand: String,
     status: String,
     repository_url: Option<String>,
 }
@@ -2824,6 +2828,10 @@ async fn delete_entity(
 /// authenticated session (never trusting the client to name who attested).
 #[derive(Debug, Deserialize)]
 struct OpenProjectRequest {
+    #[serde(default)]
+    firm_id: Option<Uuid>,
+    #[serde(default)]
+    brand: Option<String>,
     name: String,
     /// The matter's code, stored exactly as given. Required — no
     /// `serde(default)`, so an omitted `code` is a 422 at deserialize.
@@ -2912,14 +2920,16 @@ async fn open_project(
             ),
         ));
     }
+    let brand = selected_project_brand(&state, &session, input.firm_id, input.brand).await?;
     let command = store::projects::OpenMatterCommand {
+        firm_id: input.firm_id,
         name: input.name,
         code: input.code,
         client_id: input.client_id,
         entity_id: input.entity_id,
         jurisdiction_id: input.jurisdiction_id,
         description: input.description,
-        brand: views::brand::brand_key().as_str().to_string(),
+        brand,
         attestation: input.attestation,
         acting_person_id: acting,
         closed_at: input.closed_at,
@@ -2927,6 +2937,60 @@ async fn open_project(
     let matter = store::projects::open_matter(&state.surreal, &command).await?;
     store::project_surfaces::reconcile_after_open(&state.surreal, matter.id).await;
     Ok((StatusCode::CREATED, Json(matter)).into_response())
+}
+
+/// Validate explicit ownership before the matter-open command writes anything.
+async fn selected_project_brand(
+    state: &ApiState,
+    session: &SessionData,
+    firm_id: Option<Uuid>,
+    brand: Option<String>,
+) -> Result<String, ApiError> {
+    if firm_id.is_some() != brand.is_some() {
+        return Err(ApiError::Project(
+            store::projects::ProjectCommandError::Invalid(
+                "firm_id and brand must be supplied together",
+            ),
+        ));
+    }
+    if let (Some(firm_id), Some(brand)) = (firm_id, brand.as_deref()) {
+        require_project_firm_administration(&state.surreal, session, firm_id).await?;
+        let wearing = store::firms::firm_id_for_brand_key(&state.surreal, brand)
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+        if wearing != Some(firm_id) {
+            return Err(ApiError::Project(
+                store::projects::ProjectCommandError::Invalid(
+                    "the Firm must wear the selected brand",
+                ),
+            ));
+        }
+    }
+    Ok(brand.unwrap_or_else(|| views::brand::brand_key().as_str().to_string()))
+}
+
+/// Creation and reassignment share the same Firm authorization boundary.
+async fn require_project_firm_administration(
+    surreal: &store::surreal::SurrealDb,
+    session: &SessionData,
+    firm_id: Uuid,
+) -> Result<(), ApiError> {
+    if !session.role.is_admin_tier() || session.viewing_as_dri.is_some() {
+        return Err(ApiError::Forbidden);
+    }
+    let decision = store::firm_capability::resolve(
+        surreal,
+        session.role,
+        session.person_id,
+        firm_id,
+        store::firm_capability::FirmCapability::ManageMembership,
+    )
+    .await
+    .map_err(|error| ApiError::Db(error.to_string()))?;
+    if !decision.is_allowed() {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
 }
 
 /// `PATCH /app/api/projects/{id}` — update a matter's descriptive fields (name,
@@ -2947,21 +3011,7 @@ async fn update_project(
     JsonOrForm(input): JsonOrForm<store::projects::UpdateProjectCommand>,
 ) -> Result<Json<store::projects::Project>, ApiError> {
     if let Some(firm_id) = input.firm_id {
-        if !session.role.is_admin_tier() || session.viewing_as_dri.is_some() {
-            return Err(ApiError::Forbidden);
-        }
-        let decision = store::firm_capability::resolve(
-            &state.surreal,
-            session.role,
-            session.person_id,
-            firm_id,
-            store::firm_capability::FirmCapability::ManageMembership,
-        )
-        .await
-        .map_err(|error| ApiError::Db(error.to_string()))?;
-        if !decision.is_allowed() {
-            return Err(ApiError::NotFound);
-        }
+        require_project_firm_administration(&state.surreal, &session, firm_id).await?;
     }
     let updated = store::projects::update_project(&state.surreal, id, &input).await?;
     Ok(Json(updated))
@@ -4763,7 +4813,8 @@ async fn list_entities(
 ///
 /// Owner can resolve any Firm name; Admin can resolve only Firms where their
 /// membership admits `ManageMembership`. The CLI needs this directory to turn
-/// a Firm name into the internal id accepted by the Project update command.
+/// a Firm name into the internal id accepted by Project creation and update,
+/// and to discover the brand keys that Firm wears.
 async fn list_firms(
     State(surreal): State<store::surreal::SurrealDb>,
     AuthedSession(session): AuthedSession,
@@ -4782,21 +4833,24 @@ async fn list_firms(
     let firms = store::firms::all(&surreal)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
-    Ok(Json(
-        firms
-            .into_iter()
-            .filter(|firm| visible.contains(&firm.id))
-            .map(|firm| FirmDirectoryEntry {
-                id: firm.id,
-                name: firm.name,
-                slug: firm.slug,
-            })
-            .collect(),
-    ))
+    let mut entries = Vec::new();
+    for firm in firms.into_iter().filter(|firm| visible.contains(&firm.id)) {
+        let brands = store::firms::brand_keys_for_firm(&surreal, firm.id)
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+        entries.push(FirmDirectoryEntry {
+            id: firm.id,
+            name: firm.name,
+            slug: firm.slug,
+            brands,
+        });
+    }
+    Ok(Json(entries))
 }
 
 #[derive(Debug, Serialize)]
 struct FirmDirectoryEntry {
+    brands: Vec<String>,
     id: Uuid,
     name: String,
     /// The Firm's immutable slug, which names its Forgejo organization.
@@ -9483,6 +9537,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn the_firm_directory_lists_only_firms_the_session_can_administer() {
         let surreal = store::test_support::mem_surreal().await;
         let admin_a = store::persons::create(
@@ -9516,7 +9571,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let _firm_b = store::firms::create(
+        let firm_b = store::firms::create(
             &surreal,
             &store::firms::NewFirm {
                 name: "Practice B".into(),
@@ -9524,6 +9579,15 @@ mod tests {
                 entity_id: store::test_support::seed_entity(&surreal).await,
                 admin_dri_person_id: admin_b.id,
             },
+        )
+        .await
+        .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm_a.id,
+            "neon",
         )
         .await
         .unwrap();
@@ -9543,6 +9607,84 @@ mod tests {
         assert_eq!(admin_firms.len(), 1);
         assert_eq!(admin_firms[0].id, firm_a.id);
         assert_eq!(admin_firms[0].name, "Practice A");
+        assert_eq!(admin_firms[0].brands, vec!["neon"]);
+
+        let state = router_api_state(surreal.clone()).await;
+        let admin_session = crate::SessionData {
+            person_id: Some(admin_a.id),
+            ..crate::SessionData::fresh("admin-a", store::persons::Role::Admin)
+        };
+        let client = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::with_role(
+                "Sample Client",
+                "sample-client@example.com",
+                store::persons::Role::Client,
+            ),
+        )
+        .await
+        .unwrap();
+        let mut body = serde_json::json!({
+            "name":"Sample Matter", "code":"sample-explicit-brand", "client_id":client.id,
+            "entity_id":store::test_support::seed_entity(&surreal).await,
+            "attestation":true, "firm_id":firm_a.id, "brand":"delete-your-data"
+        });
+        let lawyer_session = crate::SessionData {
+            person_id: Some(admin_a.id),
+            ..crate::SessionData::fresh("lawyer", store::persons::Role::Lawyer)
+        };
+        let (status, _) = call(
+            &state,
+            Some(&lawyer_session),
+            "POST",
+            "/app/api/projects",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let mut incomplete = body.clone();
+        incomplete.as_object_mut().unwrap().remove("brand");
+        let (status, _) = call(
+            &state,
+            Some(&admin_session),
+            "POST",
+            "/app/api/projects",
+            Some(incomplete),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = call(
+            &state,
+            Some(&admin_session),
+            "POST",
+            "/app/api/projects",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        body["brand"] = serde_json::json!("neon");
+        body["firm_id"] = serde_json::json!(firm_b.id);
+        let (status, _) = call(
+            &state,
+            Some(&admin_session),
+            "POST",
+            "/app/api/projects",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        body["firm_id"] = serde_json::json!(firm_a.id);
+        let (status, opened) = call(
+            &state,
+            Some(&admin_session),
+            "POST",
+            "/app/api/projects",
+            Some(body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{opened}");
+        assert_eq!(opened["firm_id"], firm_a.id.to_string());
+        assert_eq!(opened["brand"], "neon");
 
         let lawyer = crate::SessionData::fresh("lawyer", store::persons::Role::Lawyer);
         assert!(matches!(

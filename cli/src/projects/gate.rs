@@ -25,6 +25,48 @@ pub(crate) fn ci_flag_refusal(ci: bool, ci_env: Option<&str>) -> Option<&'static
     )
 }
 
+/// Refuse local repairs when declared ownership cannot be verified.
+pub(crate) async fn ownership_preflight(dir: &Path, ci: bool) -> ExitCode {
+    if ci || !super::repository::is_project_repository(dir) {
+        return ExitCode::SUCCESS;
+    }
+    match check_ownership_before_fixes(dir).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!(
+                "navigator: live Project ownership check is inconclusive or disagrees: {error:#}"
+            );
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Check declared ownership before a local gate may rewrite checkout files.
+async fn check_ownership_before_fixes(dir: &Path) -> Result<()> {
+    // The content/layout validator reports malformed manifests with their
+    // structured rule codes. Ownership is meaningful only after parsing.
+    let Some(manifest) = manifest::read(dir) else {
+        return Ok(());
+    };
+    if manifest.firm.is_none() && manifest.brand.is_none() {
+        return Ok(());
+    }
+    let host = manifest_host(dir).map_err(anyhow::Error::msg)?;
+    let (base, token) = remote::resolve(Some(&host))?;
+    let code = manifest
+        .project
+        .as_deref()
+        .ok_or_else(|| anyhow!("navigator.yaml has no project.name"))?;
+    let project = super::surfaces::list_visible_projects(&base, &token)
+        .await?
+        .into_iter()
+        .find(|project| project.code == code)
+        .ok_or_else(|| anyhow!("no live row for the declared Project"))?;
+    manifest
+        .check_live_ownership(project.firm_id, project.brand.as_deref())
+        .map_err(anyhow::Error::msg)
+}
+
 /// Check a Project's live status and required coordinates through an
 /// authorized local or CI session.
 pub(crate) async fn live_status(dir: &Path, ci: bool) -> ExitCode {
@@ -311,11 +353,14 @@ async fn check_live_handles(dir: &Path, base: &str, token: &str) -> Result<()> {
         .as_deref()
         .ok_or_else(|| anyhow!("navigator.yaml has no project.name"))?;
     let projects = super::surfaces::list_visible_projects(base, token).await?;
-    let project_id = projects
+    let project = projects
         .into_iter()
         .find(|project| project.code == project_code)
-        .map(|project| project.id)
         .ok_or_else(|| anyhow!("no live row for the declared Project"))?;
+    let project_id = project.id;
+    manifest
+        .check_live_ownership(project.firm_id, project.brand.as_deref())
+        .map_err(anyhow::Error::msg)?;
     let live = super::surfaces::get_handles(base, token, project_id).await?;
     if super::docket::renumber::has_filings(dir)? {
         let client = remote::DocumentClient::with_credential(
@@ -827,6 +872,27 @@ mod tests {
         assert!(can_mint_ci_session_for(forgejo, "refs/heads/main", "push"));
     }
 
+    #[tokio::test]
+    async fn a_manifest_ownership_mismatch_refuses_before_reading_handles() {
+        let server = MockServer::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("navigator.yaml"),
+            "project:\n  host: example.test\n  name: sample\n  firm: 00000000-0000-0000-0000-000000000001\n  brand: sample-brand\n").unwrap();
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id":"00000000-0000-0000-0000-000000000002", "code":"sample",
+                 "firm_id":"00000000-0000-0000-0000-000000000001", "brand":"other"}
+            ])))
+            .mount(&server)
+            .await;
+        let error = check_live_handles(dir.path(), &server.uri(), "token")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Firm and brand differ"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn live_open_row_passes_through_oidc() {
         let _lock = ENV_LOCK.lock().await;
@@ -1145,6 +1211,7 @@ mod tests {
             concat!(
                 "version: 26.9.26\nproject:\n",
                 "  host: staging.neonlaw.com\n  name: acme\n",
+                "  firm: 00000000-0000-0000-0000-000000000001\n  brand: sample\n",
                 "  lawyer_dri: lawyer@example.com\n",
                 "  client_dri: client@example.com\n",
                 "  private_slack_channel: https://slack.example.com/private\n",
@@ -1156,7 +1223,7 @@ mod tests {
             .and(path("/app/api/projects"))
             .and(header_matcher("authorization", "Bearer local-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                { "id": project_id, "code": "acme" }
+                { "id": project_id, "code": "acme", "firm_id":project_id, "brand":"sample" }
             ])))
             .mount(&navigator)
             .await;
@@ -1401,18 +1468,8 @@ mod tests {
         }
     }
 
-    /// The regression this module exists to catch: a document-scoped CI
-    /// token's real `GET /app/api/projects` response, produced by the actual
-    /// `portal::router` handler rather than hand-written JSON, must
-    /// deserialize into [`LiveMatter`]. The other tests above mock the
-    /// endpoint with a JSON literal that already includes every field this
-    /// struct wants, which is exactly why the server's `DocumentProjectLookup`
-    /// narrowing (introduced in 26.9.21) could drop `status` and
-    /// `repository_url` for two releases without any test here noticing —
-    /// see ENG-842. This test fails the same way `ci / verify` does the
-    /// moment the two shapes diverge again.
-    #[tokio::test]
-    async fn document_scoped_projects_response_deserializes_into_live_matter() {
+    /// Read the real Project lookup with a freshly minted document-scoped credential.
+    async fn document_scoped_projects_body() -> String {
         let surreal = store::test_support::mem_surreal().await;
         let entity_id = store::test_support::seed_entity(&surreal).await;
         let project_id = store::projects::create(
@@ -1504,8 +1561,17 @@ mod tests {
         let body = axum::body::to_bytes(projects_response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let body = String::from_utf8(body.to_vec()).unwrap();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
 
+    /// The document-scoped response must deserialize into both CLI Project readers.
+    #[tokio::test]
+    async fn document_scoped_projects_response_deserializes_into_live_matter() {
+        let body = document_scoped_projects_body().await;
+
+        let visible: Vec<super::super::surfaces::VisibleProject> =
+            serde_json::from_str(&body).unwrap();
+        assert_eq!(visible[0].brand.as_deref(), Some("neon"));
         let matters: Vec<LiveMatter> =
             serde_json::from_str(&body).expect("the live door's own response must parse");
         let acme = matters

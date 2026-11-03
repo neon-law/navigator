@@ -126,6 +126,10 @@ reason = "The firm's principal, by name; public in the bar directories."
 values = ["Nick Shook", "Nicholas Shook", "Nicholas Richard Shook", "Lawyer Shook"]
 
 [[names]]
+reason = "A Neon Law team member, by name; published on the public /team page."
+values = ["Waleed Amer"]
+
+[[names]]
 reason = "Copyright and credit attributions: photographers, type designers, artists."
 values = [
   "Karl Solano",
