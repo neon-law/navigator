@@ -193,7 +193,8 @@ values = [
   # sample matters and docket fixtures
   "cornelius", "montgomery", "dermot", "odile", "cruller", "wendell", "prine",
   "quentin", "quill", "uma", "upton", "vera", "venue", "fern", "filer", "gus",
-  "gavel", "hana", "hearsay", "walt", "writ", "jon", "sison", "zzz", "person",
+  "gavel", "hana", "hearsay", "walt", "writ", "xena", "xerox", "jon", "sison", "zzz",
+  "person",
 ]
 
 [[non_name_words]]
