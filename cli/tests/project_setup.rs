@@ -335,6 +335,31 @@ async fn project_set_from_live_uses_the_stored_bearer_and_fills_required_coordin
     ] {
         assert!(manifest.contains(value), "missing {value}: {manifest}");
     }
+    // A coordinate edit with current ownership must not claim an ownership edit,
+    // in either the actual change report or its dry-run preview.
+    for dry_run in [false, true] {
+        fs::write(
+            checkout.path().join("navigator.yaml"),
+            manifest.replace("lawyer@example.com", "previous-lawyer@example.com"),
+        )
+        .unwrap();
+        let mut cmd = command();
+        cmd.current_dir(checkout.path())
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+            .args(["project", "set", "--from-live", "--host", &host]);
+        if dry_run {
+            cmd.arg("--dry-run");
+        }
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = String::from_utf8_lossy(&output.stdout);
+        assert!(report.contains("lawyer_dri"), "{report}");
+        assert!(!report.contains("manifest Firm and brand"), "{report}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

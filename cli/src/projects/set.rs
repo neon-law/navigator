@@ -135,9 +135,10 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
     )?;
     let ownership = manifest_ownership(host, project, firm.zip(brand), from_live).await?;
     if let Some((firm, brand)) = ownership {
+        let before_ownership = updated.clone();
         updated = replace_project_key(&updated, "firm", &firm.to_string())?;
         updated = replace_project_key(&updated, "brand", &brand)?;
-        if updated != contents {
+        if updated != before_ownership {
             changed.push("manifest Firm and brand".into());
         }
     }
