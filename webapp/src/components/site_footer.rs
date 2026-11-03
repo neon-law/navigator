@@ -784,6 +784,16 @@ pub fn SiteFooterLegal(
                                 stars: github_stars,
                             }
                         }
+                        if copyright_holder == "Guieb & Shook PC" {
+                            img {
+                                class: "site-footer__gvc-badge",
+                                src: views::assets::bucket_asset_url(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY),
+                                alt: "Proud member of Greater Vancouver Chamber",
+                                width: "1500",
+                                height: "1050",
+                                loading: "lazy",
+                            }
+                        }
                     }
                 }
             }
