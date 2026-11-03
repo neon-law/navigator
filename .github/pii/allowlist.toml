@@ -225,6 +225,10 @@ values = [
 reason = "Synthetic names used only by the PII scanner's recognizer canary and regression fixtures."
 values = ["John Smith", "Zelda Quillstone", "Fixture Person"]
 
+[[non_name_words]]
+reason = "Latin legal term of art in published court form titles (in forma pauperis fee-waiver applications) and a San Francisco street name in the court seeds' provenance comments — published court reference data, not people."
+values = ["pauperis", "forma", "mcallister"]
+
 [[names]]
 reason = "Corporate party in the published Nevada case citation used by the synthetic litigation fixture."
 values = ["D.R. Horton"]
