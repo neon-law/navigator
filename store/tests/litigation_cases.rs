@@ -813,3 +813,34 @@ async fn an_entry_is_recorded_linked_and_superseded_through_the_project_docket()
     );
     assert!(link_document(db, Uuid::now_v7(), asset_id).await.is_err());
 }
+
+#[tokio::test]
+async fn docket_lookup_ignores_judge_suffixes_on_either_side() {
+    let db = mem().await;
+    let project_id = open_matter(&db, "docket-judge-suffix").await;
+    let new = NewCase {
+        docket_number: Some("9:26-cv-00042-XYZ"),
+        ..a_case(project_id, "Alpha v. Beta")
+    };
+    let case = open_case(&db, &new).await.unwrap();
+    for number in [
+        "9:26-cv-00042",
+        "9:26-CV-00042-ABC",
+        "9:26-cv-00042-XYZ-DEF",
+    ] {
+        assert_eq!(
+            store::cases::find_case_by_docket_number(&db, project_id, number)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            case.id
+        );
+    }
+    assert!(
+        store::cases::find_case_by_docket_number(&db, project_id, "9:26-cv-00043-XYZ")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

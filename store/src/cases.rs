@@ -556,10 +556,8 @@ pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Case>, 
     Ok(rows.into_iter().filter_map(CaseRow::into_case).collect())
 }
 
-/// The case on `project_id` whose docket number is `docket_number`, compared
-/// without regard to case. A notice prints the judge's initials after the
-/// number (`9:26-cv-00042-XYZ`) where a manifest leaves them off, so a
-/// docket number that starts with the stored one followed by `-` matches too.
+/// The case on `project_id` with the same docket number, ignoring case
+/// and trailing judge initials on either number.
 ///
 /// # Errors
 /// Propagates any database error.
@@ -568,13 +566,29 @@ pub async fn find_case_by_docket_number(
     project_id: Uuid,
     docket_number: &str,
 ) -> Result<Option<Case>, CaseError> {
-    let wanted = docket_number.trim().to_ascii_lowercase();
+    let wanted = canonical_docket_number(docket_number);
     Ok(for_project(db, project_id).await?.into_iter().find(|case| {
-        case.docket_number.as_deref().is_some_and(|stored| {
-            let stored = stored.trim().to_ascii_lowercase();
-            stored == wanted || wanted.starts_with(&format!("{stored}-"))
-        })
+        case.docket_number
+            .as_deref()
+            .is_some_and(|stored| canonical_docket_number(stored) == wanted)
     }))
+}
+
+/// A docket's identity excludes trailing judge initials. Single-letter
+/// case-type codes (such as Nevada's `-C`) remain part of the number.
+fn canonical_docket_number(number: &str) -> String {
+    let mut number = number.trim().to_ascii_lowercase();
+    while let Some((base, suffix)) = number.rsplit_once('-') {
+        let has_serial = base
+            .split('-')
+            .any(|part| part.len() >= 4 && part.bytes().all(|byte| byte.is_ascii_digit()));
+        if !has_serial || suffix.len() < 2 || !suffix.bytes().all(|byte| byte.is_ascii_alphabetic())
+        {
+            break;
+        }
+        number.truncate(base.len());
+    }
+    number
 }
 
 /// Every docket entry on every case of `project_id`, case by case in the
