@@ -6,5 +6,6 @@
 
 pub mod feedback_scan;
 pub mod import;
+pub mod letterhead;
 pub mod pii_audit;
 pub mod snapshot_audit;

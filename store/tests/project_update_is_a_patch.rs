@@ -53,6 +53,15 @@ async fn matter(surreal: &store::surreal::SurrealDb) -> store::projects::Project
 }
 
 async fn firm_wearing_neon(surreal: &store::surreal::SurrealDb) -> Uuid {
+    let (firm_id, _) = firm_with_admin_dri(surreal).await;
+    store::firms::attach_brand(surreal, store::persons::Role::Owner, None, firm_id, "neon")
+        .await
+        .expect("firm wears neon");
+    firm_id
+}
+
+/// A Firm and its Admin DRI's person id, wearing no Brand yet.
+async fn firm_with_admin_dri(surreal: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
     let admin = store::persons::create(
         surreal,
         &store::persons::NewPerson::with_role(
@@ -74,10 +83,7 @@ async fn firm_wearing_neon(surreal: &store::surreal::SurrealDb) -> Uuid {
     )
     .await
     .expect("firm");
-    store::firms::attach_brand(surreal, store::persons::Role::Owner, None, firm.id, "neon")
-        .await
-        .expect("firm wears neon");
-    firm.id
+    (firm.id, admin.id)
 }
 
 /// The central rule. One field is sent; every other column survives.
@@ -305,9 +311,10 @@ async fn a_firm_and_brand_update_writes_a_matching_pair() {
 }
 
 #[tokio::test]
-async fn a_firm_that_does_not_wear_the_selected_brand_is_refused_by_name() {
+async fn a_brand_worn_by_a_different_firm_is_refused_by_name() {
     let surreal = mem_surreal().await;
     let before = matter(&surreal).await;
+    firm_wearing_neon(&surreal).await;
 
     let error = update_project(
         &surreal,
@@ -321,10 +328,67 @@ async fn a_firm_that_does_not_wear_the_selected_brand_is_refused_by_name() {
     .await
     .expect_err("the pair must agree with firm_brand");
 
-    assert_eq!(
-        error.to_string(),
-        "That Firm does not wear the selected brand."
-    );
+    assert_eq!(error.to_string(), "That brand is worn by a different Firm.");
+}
+
+/// LAW-255: a key no `brand` row carries is named as unknown, not folded into
+/// the different-Firm refusal.
+#[tokio::test]
+async fn an_unknown_brand_key_is_refused_as_unknown() {
+    let surreal = mem_surreal().await;
+    let before = matter(&surreal).await;
+    let firm_id = firm_wearing_neon(&surreal).await;
+
+    let error = update_project(
+        &surreal,
+        before.id,
+        &UpdateProjectCommand {
+            firm_id: Some(firm_id),
+            brand: Some("no-such-brand".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("an unknown key must be refused");
+
+    assert_eq!(error.to_string(), "No Brand has that key.");
+}
+
+/// LAW-255: a Brand row its Firm has not yet attached is named as worn by no
+/// Firm, distinct from both an unknown key and another Firm's key.
+#[tokio::test]
+async fn a_brand_no_firm_wears_is_refused_by_name() {
+    let surreal = mem_surreal().await;
+    let before = matter(&surreal).await;
+    let (firm_id, admin_id) = firm_with_admin_dri(&surreal).await;
+    let key = format!("unattached-{}", Uuid::now_v7().simple());
+    store::brands::create(
+        &surreal,
+        store::persons::Role::Admin,
+        Some(admin_id),
+        &store::brands::NewBrand {
+            name: format!("Unattached {key}"),
+            key: key.clone(),
+            firm_id: Some(firm_id),
+            ..store::brands::NewBrand::default()
+        },
+    )
+    .await
+    .expect("an unattached brand row");
+
+    let error = update_project(
+        &surreal,
+        before.id,
+        &UpdateProjectCommand {
+            firm_id: Some(firm_id),
+            brand: Some(key),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("a brand no Firm wears must be refused");
+
+    assert_eq!(error.to_string(), "That brand is not worn by a Firm.");
 }
 
 /// LAW-213: the Drive ingest folder id joins the sparse patch — one field

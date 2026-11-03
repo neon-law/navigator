@@ -229,9 +229,11 @@ own name (`output: client_letter`).
 
 - **omit it** and the document renders on its kind's default profile — plain is our standard serif, one-inch margins,
   no letterhead. The body's `{{placeholders}}` fill from the questionnaire answers.
-- **`output: letter`** renders the same body on Neon Law letterhead: our logo, the firm name and contact line, a rule
-  across the top. This is the dressing we use for the documents that go out under the firm's name, such as engagement
-  letters and demand letters. It is typeset airily, for a document someone reads once before deciding to sign it.
+- **`output: letter`** renders the same body on the Project's Brand letterhead: the Brand's wordmark, the Firm's legal
+  name, the contact line, and a rule across the top. The Brand is `project.brand` in `navigator.yaml`, else the Brand
+  `project.host` belongs to; one the registry does not know refuses the render. This is the dressing we use for the
+  documents that go out under the firm's name, such as engagement letters and demand letters. It is typeset airily, for
+  a document someone reads once before deciding to sign it.
 - **`output: client_letter`** is the `letter` frame with the letterhead left out, for a letter the client sends in their
   own name. Declare it on a `kind: letter` template; without it a letter always gets the firm letterhead.
 - **`output: contract`** (retired spelling `agreement`) frames an executed contract with **no letterhead**, typeset

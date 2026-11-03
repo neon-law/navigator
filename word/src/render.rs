@@ -11,9 +11,14 @@ use crate::provenance::{Provenance, PROVENANCE_PART, PROVENANCE_RELATIONSHIP_TYP
 /// Firm identity carried by a letter-frame Word document.
 pub struct RenderLetterhead<'a> {
     pub name: &'a str,
+    /// The Firm's legal name, beneath the wordmark; empty, or equal to
+    /// `name`, prints nothing.
+    pub entity: &'a str,
     pub phone: &'a str,
     pub email: &'a str,
     pub web: &'a str,
+    /// The mark heading the page; empty draws none, so a Brand without a
+    /// compiled mark opens on its wordmark.
     pub logo_png: &'a [u8],
 }
 
@@ -208,18 +213,20 @@ pub fn render_notation(
             first_header_xml(letterhead).as_bytes(),
             file_options,
         )?;
-        write_entry(
-            &mut archive,
-            "word/_rels/header2.xml.rels",
-            HEADER_RELS.as_bytes(),
-            file_options,
-        )?;
-        write_entry(
-            &mut archive,
-            "word/media/logo-neon-law.png",
-            letterhead.logo_png,
-            file_options,
-        )?;
+        if !letterhead.logo_png.is_empty() {
+            write_entry(
+                &mut archive,
+                "word/_rels/header2.xml.rels",
+                HEADER_RELS.as_bytes(),
+                file_options,
+            )?;
+            write_entry(
+                &mut archive,
+                "word/media/logo-neon-law.png",
+                letterhead.logo_png,
+                file_options,
+            )?;
+        }
     }
     Ok(archive.finish()?.into_inner())
 }
@@ -985,14 +992,37 @@ fn field(instruction: &str) -> String {
     format!("<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r>")
 }
 
+/// The letterhead's rule, a bottom border on the mark's last paragraph.
+const RULE: &str = r#"<w:pBdr><w:bottom w:val="single" w:sz="8" w:color="06B6D4"/></w:pBdr>"#;
+
 fn first_header_xml(letterhead: &RenderLetterhead<'_>) -> String {
     let contact = [letterhead.phone, letterhead.email, letterhead.web]
         .into_iter()
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>()
         .join(" · ");
+    let logo = if letterhead.logo_png.is_empty() {
+        ""
+    } else {
+        r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline><wp:extent cx="329184" cy="329184"/><wp:docPr id="1" name="Neon Law mark"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="logo-neon-law.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="329184" cy="329184"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+    };
+    // The rule sits under the last line of the mark: beneath the Firm's
+    // name when the letterhead carries one, else beneath the wordmark.
+    let entity = letterhead.entity.trim();
+    let names_entity = !entity.is_empty() && !entity.eq_ignore_ascii_case(letterhead.name.trim());
+    let (wordmark_rule, entity) = if names_entity {
+        (
+            "",
+            format!(
+                r#"<w:p><w:pPr><w:jc w:val="center"/>{RULE}</w:pPr><w:r><w:rPr><w:sz w:val="16"/></w:rPr><w:t>{}</w:t></w:r></w:p>"#,
+                xml(entity)
+            ),
+        )
+    } else {
+        (RULE, String::new())
+    };
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline><wp:extent cx="329184" cy="329184"/><wp:docPr id="1" name="Neon Law mark"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="logo-neon-law.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="329184" cy="329184"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p><w:p><w:pPr><w:jc w:val="center"/><w:pBdr><w:bottom w:val="single" w:sz="8" w:color="06B6D4"/></w:pBdr></w:pPr><w:r><w:rPr><w:b/><w:color w:val="06B6D4"/><w:spacing w:val="80"/></w:rPr><w:t>{}</w:t></w:r></w:p><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>{}</w:t></w:r></w:p></w:hdr>"#,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">{logo}<w:p><w:pPr><w:jc w:val="center"/>{wordmark_rule}</w:pPr><w:r><w:rPr><w:b/><w:color w:val="06B6D4"/><w:spacing w:val="80"/></w:rPr><w:t>{}</w:t></w:r></w:p>{entity}<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>{}</w:t></w:r></w:p></w:hdr>"#,
         xml(&letterhead.name.to_uppercase()),
         xml(&contact)
     )
@@ -1385,6 +1415,7 @@ mod tests {
             "# Demand\n\n## I. Payment\n\nPay now.",
             Some(&RenderLetterhead {
                 name: "Neon Law",
+                entity: "Example Firm PC",
                 phone: "+1 510 800 2090",
                 email: "contact@neonlaw.com",
                 web: "www.neonlaw.com",
@@ -1402,6 +1433,42 @@ mod tests {
     #[test]
     fn repeated_word_renders_are_byte_identical() {
         assert_eq!(render(), render());
+    }
+
+    #[test]
+    fn a_letterhead_names_the_firm_and_an_empty_mark_draws_no_image() {
+        let first_header = |bytes: Vec<u8>| {
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let has_logo = archive.by_name("word/media/logo-neon-law.png").is_ok();
+            let mut header = String::new();
+            archive
+                .by_name("word/header2.xml")
+                .unwrap()
+                .read_to_string(&mut header)
+                .unwrap();
+            (header, has_logo)
+        };
+        let (header, has_logo) = first_header(render());
+        assert!(header.contains("Example Firm PC") && header.contains("<w:drawing>"));
+        assert!(has_logo);
+
+        let bare = render_notation(
+            "Body.",
+            Some(&RenderLetterhead {
+                name: "Example Brand",
+                entity: "",
+                phone: "",
+                email: "contact@examplefirm.test",
+                web: "examplefirm.test",
+                logo_png: &[],
+            }),
+            &RenderOptions::default(),
+        )
+        .unwrap();
+        let (header, has_logo) = first_header(bare);
+        assert!(header.contains("EXAMPLE BRAND"), "{header}");
+        assert!(!header.contains("<w:drawing>"), "{header}");
+        assert!(!has_logo);
     }
 
     #[test]

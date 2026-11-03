@@ -288,6 +288,7 @@ mod tests {
     fn a_letterhead_render_keeps_the_provenance_part() {
         let letterhead = RenderLetterhead {
             name: "Neon Law",
+            entity: "",
             phone: "702",
             email: "hello@neonlaw.com",
             web: "neonlaw.com",

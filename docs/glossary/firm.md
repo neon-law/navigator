@@ -7,8 +7,8 @@ An owning practice. The `firm` table is the tenancy boundary for [Projects](proj
 them: `project.firm_id` points at the practice that owns the matter, and [`Person–Firm Role`](personfirm-role.md)
 records who belongs to that practice. A Firm **is** an [Entity](entity.md): `firm.entity_id` is the legal person that
 practice is (the seeded practice is `Guieb & Shook PC`). A Firm is not a [Brand](brand.md). Brand is the storefront a
-request resolved to; Firm is which practice owns the matter. `firm_brand` records which closed house-brand keys that
-practice wears.
+request resolved to; Firm is which practice owns the matter. [Firm Brand](firm-brand.md) (`firm_brand`) records which
+Brands that practice wears; a [Brand Key](brand-key.md) is worn by at most one Firm, so the key implies its Firm.
 
 `firm.slug` names the Firm's Forgejo organization. Each Project the Firm owns is a repository in it, at
 `<firm-slug>/<project-code>` (`store::firms::forgejo::repository_path`): Firm "Example Law PC" owns
