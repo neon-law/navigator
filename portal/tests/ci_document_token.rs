@@ -287,11 +287,24 @@ async fn a_minted_document_token_allows_only_its_project_metadata_for_bearer_and
             projects[0]["repository_url"],
             "https://github.com/neon-law-staging/acme"
         );
-        // `id`, `code`, `status`, `repository_url` — the four fields the live
-        // gate (ENG-842) and the document verifier need, and nothing more:
-        // `name`, `brand`, `entity_id`, `description`, and the Slack/Notion
-        // URLs stay off this response.
-        assert_eq!(projects[0].as_object().unwrap().len(), 4);
+        // CI receives only Project coordinates needed for gate and document checks.
+        let row = store::projects::find_by_id(&fixture.state.surreal, fixture.project_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(projects[0]["firm_id"], serde_json::json!(row.firm_id));
+        assert_eq!(projects[0]["brand"], row.brand);
+        let mut keys: Vec<_> = projects[0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["brand", "code", "firm_id", "id", "repository_url", "status"]
+        );
 
         let (status, revisions) = request(
             &fixture.app,

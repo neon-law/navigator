@@ -31,7 +31,8 @@ pub const VERSION_CODE: &str = "Y012";
 pub const DEPRECATED_CODE: &str = "Y013";
 /// `Y015` — a `skills:` entry must carry `jurisdiction`, `practice_area`, and `version`.
 pub const SKILLS_CODE: &str = "Y015";
-/// `Y016` — required Project coordinates must be present and populated.
+/// `Y016` — required Project coordinates must be present and populated;
+/// declared Firm/brand ownership must be a UUID/key pair.
 pub const HANDLE_CODE: &str = "Y016";
 /// `Y020` — `dockets:` must be a list of non-empty case numbers.
 pub const DOCKETS_CODE: &str = "Y020";
@@ -68,6 +69,8 @@ pub const ACCEPTED_KEYS: &[&str] = &[
 ];
 
 const PROJECT_KEYS: &[&str] = &[
+    "firm",
+    "brand",
     "calendar_id",
     "client_dri",
     "drive_folder_id",
@@ -150,6 +153,8 @@ pub struct Manifest {
     pub version: Option<String>,
     pub host: Option<String>,
     pub project: Option<String>,
+    pub firm: Option<String>,
+    pub brand: Option<String>,
     pub lawyer_dri: Option<String>,
     pub client_dri: Option<String>,
     pub private_slack_channel: Option<String>,
@@ -180,6 +185,28 @@ pub struct Manifest {
     /// `crate::scraper::config`, the one reader the lint (`Y024`) and the
     /// `navigator scraper` commands share.
     pub scrapers: Option<serde_yaml::Value>,
+}
+
+impl Manifest {
+    /// Refuse drift from declared ownership; an absent pair can be filled from live.
+    pub(crate) fn check_live_ownership(
+        &self,
+        firm_id: Option<uuid::Uuid>,
+        brand: Option<&str>,
+    ) -> Result<(), &'static str> {
+        if self.firm.is_none() && self.brand.is_none() {
+            return Ok(());
+        }
+        match (
+            self.firm
+                .as_deref()
+                .and_then(|id| uuid::Uuid::parse_str(id).ok()),
+            self.brand.as_deref(),
+        ) {
+            (Some(firm), Some(key)) if Some(firm) == firm_id && Some(key) == brand => Ok(()),
+            _ => Err("navigator.yaml Firm and brand differ from the live Project"),
+        }
+    }
 }
 
 /// One manifest finding, with a Y-family rule code.
@@ -591,6 +618,21 @@ pub fn lint_contents(path: &Path, contents: &str) -> Vec<ManifestFinding> {
         None => {
             findings.extend(lint_flat_host(path, mapping));
             findings.extend(lint_flat_project(path, mapping));
+        }
+    }
+    if let Some(project) = mapping
+        .get("project")
+        .and_then(serde_yaml::Value::as_mapping)
+    {
+        if project.contains_key("firm") || project.contains_key("brand") {
+            let firm = project.get("firm").and_then(serde_yaml::Value::as_str);
+            let brand = project.get("brand").and_then(serde_yaml::Value::as_str);
+            if firm.is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
+                || brand.is_none_or(|key| key.trim().is_empty())
+            {
+                findings.push(ManifestFinding::at(path, 1, HANDLE_CODE,
+                    "project.firm must be a UUID and project.brand a non-empty key; declare both together"));
+            }
         }
     }
     findings.extend(lint_rowless(path, mapping));
@@ -1104,6 +1146,8 @@ pub fn parse(contents: &str) -> Result<Manifest, String> {
         version,
         host,
         project,
+        firm: values("firm")?,
+        brand: values("brand")?,
         lawyer_dri: values("lawyer_dri")?,
         client_dri: values("client_dri")?,
         private_slack_channel: values("private_slack_channel")?,
@@ -1370,6 +1414,35 @@ mod tests {
         "      adapter: la-superior\n",
         "      portal_url: https://canvas.lasuperiorcourt.org\n",
     );
+
+    #[test]
+    fn ownership_requires_a_uuid_and_brand_together() {
+        for fields in [
+            "  firm: example\n  brand: sample\n",
+            "  brand: sample\n",
+            "  firm: 00000000-0000-0000-0000-000000000001\n",
+        ] {
+            let yaml = format!("project:\n  host: example.test\n  name: sample\n{fields}");
+            assert!(lint_contents(Path::new(FILE), &yaml)
+                .iter()
+                .any(|finding| finding.code == HANDLE_CODE
+                    && finding.message.contains("project.firm")));
+        }
+    }
+
+    #[test]
+    fn project_declares_firm_and_brand() {
+        let yaml = "project:\n  host: example.test\n  name: sample\n  firm: 00000000-0000-0000-0000-000000000001\n  brand: sample-brand\n";
+        assert!(!lint_contents(Path::new(FILE), yaml)
+            .iter()
+            .any(|f| f.code == UNKNOWN_KEY_CODE));
+        let parsed = parse(yaml).unwrap();
+        assert_eq!(
+            parsed.firm.as_deref(),
+            Some("00000000-0000-0000-0000-000000000001")
+        );
+        assert_eq!(parsed.brand.as_deref(), Some("sample-brand"));
+    }
 
     #[test]
     fn a_well_shaped_scrapers_section_parses_into_the_manifest() {

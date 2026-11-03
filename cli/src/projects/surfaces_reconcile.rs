@@ -226,6 +226,8 @@ mod tests {
     fn visible(id: Uuid, code: &str) -> super::VisibleProject {
         super::VisibleProject {
             id,
+            firm_id: None,
+            brand: None,
             code: code.to_string(),
         }
     }
