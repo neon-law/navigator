@@ -30,7 +30,7 @@ Purchase and sandbox overage invoice creation use separate legacy paths. Those p
 an interruption after provider creation can outlive key retention before a retry. The matter-batch guards here do not
 cover that recovery risk.
 
-The table is `matter_billing_batch`.
+PostgreSQL table: `matter_billing_batch`.
 
 Schema: [`matter_billing_batch`](../../store/postgres/schema.sql).
 
