@@ -52,13 +52,10 @@ pub const APP_NAME: &str = "navigator-workflows";
 pub const SYSTEM_SCHEMA: &str = "dbos";
 
 /// A DBOS switch or connection the environment does not complete.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum SettingsError {
-    #[error("{0} is required to run DBOS")]
-    Missing(&'static str),
-    #[error("{0} is not valid for DBOS")]
-    Invalid(&'static str),
-}
+///
+/// Defined in [`crate::flags`] so callers without the `dbos` feature parse
+/// the same switches; re-exported here for the established path.
+pub use crate::flags::SettingsError;
 
 /// Whether [`ENABLED_ENV`] asks this process to host the executor.
 ///
@@ -71,15 +68,7 @@ pub fn enabled(lookup: impl Fn(&str) -> Option<String>) -> Result<bool, Settings
     flag_enabled(ENABLED_ENV, value.as_deref())
 }
 
-/// Parse one workflow-specific switch with the same strict `true` / `false`
-/// contract as the executor switch.
-pub fn flag_enabled(name: &'static str, value: Option<&str>) -> Result<bool, SettingsError> {
-    match value.map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err(SettingsError::Invalid(name)),
-    }
-}
+pub use crate::flags::flag_enabled;
 
 /// The DBOS login's connection variables. DBOS signs in with its own login,
 /// never the application's, and reads only the `dbos` schema.

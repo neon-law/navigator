@@ -45,6 +45,24 @@ spec:
                       name: navigator-web-secrets
                       key: RESTATE_AUTH_TOKEN
                       optional: true
+                # Flip the switch to submit through the worker's DBOS
+                # ingress instead of Restate. Default off: Restate stays
+                # the active engine until the cutover. The ingress URL and
+                # bearer come from the same secret the worker reads.
+                - name: NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED
+                  value: "false"
+                - name: NAVIGATOR_DBOS_INGRESS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_DBOS_INGRESS_URL
+                      optional: true
+                - name: NAVIGATOR_DBOS_INGRESS_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_DBOS_INGRESS_TOKEN
+                      optional: true
                 - name: RUST_LOG
                   value: info
               envFrom:

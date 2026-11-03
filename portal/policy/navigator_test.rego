@@ -2989,6 +2989,29 @@ test_anonymous_denied_app_owner if {
 	not authz.allow with input as {"path": ["app", "owner"], "method": "GET", "session": null}
 }
 
+test_lawyer_can_preview_fi_history if {
+	authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": lawyer_session}
+}
+
+test_fi_history_import_denies_client_clerk_and_anonymous if {
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": null}
+}
+
+test_fi_history_import_policy_is_exact if {
+	every method in ["GET", "PUT", "PATCH", "DELETE"] {
+		not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": method, "session": lawyer_session}
+	}
+	every path in [
+		["app", "api", "inbox", "import", "fi", "extra"],
+		["app", "api", "inbox", "import", "fi-extra"],
+		["app", "api", "inbox", "import", "other"],
+	] {
+		not authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+	}
+}
+
 test_lawyer_can_import_historical_messages if {
 	authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "POST", "session": lawyer_session}
 	authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "POST", "session": lawyer_session}
@@ -3277,4 +3300,16 @@ test_stage_doors_are_shape_bound if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "GET", "session": lawyer_session}
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "s1"], "method": "POST", "session": lawyer_session}
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set", "extra"], "method": "POST", "session": lawyer_session}
+}
+
+
+# Call triage uses the existing firm Inbox intent; reporting is admin-only.
+test_call_queue_admits_lawyer_but_not_client if {
+    authz.allow with input as {"path": ["app", "inbox", "calls"], "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "inbox", "calls"], "method": "GET", "session": client_session}
+}
+
+test_brand_communications_admits_admin_but_not_lawyer if {
+    authz.allow with input as {"path": ["app", "admin", "communications"], "method": "GET", "session": admin_session}
+    not authz.allow with input as {"path": ["app", "admin", "communications"], "method": "GET", "session": lawyer_session}
 }

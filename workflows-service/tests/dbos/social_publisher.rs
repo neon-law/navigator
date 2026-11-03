@@ -365,7 +365,8 @@ async fn the_reconciler_runs_an_empty_slot_without_provider_requests() {
                 "RESTATE_BROKER_URL" => Some("http://restate.invalid".to_owned()),
                 _ => None,
             },
-        ),
+        )
+        .expect("build reconciler context"),
     )
     .expect("register SocialPublishReconciler");
     worker.launch().await.expect("launch");
@@ -411,7 +412,8 @@ async fn a_stopped_reconciler_schedule_starts_nothing() {
             publisher(&fixture, &server),
             publisher_workflow,
             |_| None,
-        ),
+        )
+        .expect("build reconciler context"),
     )
     .expect("register SocialPublishReconciler");
     worker.launch().await.expect("launch");

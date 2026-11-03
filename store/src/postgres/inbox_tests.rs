@@ -93,6 +93,7 @@ async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
     }
     assert_public_native_lifecycle(&f).await;
     assert_public_native_private_triage(&f).await;
+    assert_public_native_call_and_fi_triage_coordination(&f).await;
 }
 
 async fn assert_public_native_private_triage(f: &Fixture) {
@@ -446,6 +447,42 @@ async fn native_contact_link_preserves_a_persons_existing_number() {
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn native_voice_ingest_preserves_transcripts_and_provider_replay() {
+    let Some(f) = fixture().await else { return };
+    let provider_id = format!("synthetic-call-{}", Uuid::now_v7());
+    let mut input = inbound(
+        f.firm,
+        channel::VOICE,
+        "synthetic-receiving-account",
+        &provider_id,
+        "synthetic-caller",
+    );
+    input.visibility = Some("private");
+    input.body = "Synthetic voice transcript.";
+    let first = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let replay = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    assert!(!first.deduped);
+    assert!(replay.deduped);
+    assert_eq!(first.conversation_id, replay.conversation_id);
+    assert_eq!(first.message_id, replay.message_id);
+    let saved_channel: String =
+        sqlx::query_scalar("SELECT channel FROM inbox_conversation WHERE id=$1")
+            .bind(first.conversation_id)
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(saved_channel, channel::VOICE);
+    let body: String = sqlx::query_scalar("SELECT body FROM message WHERE id=$1")
+        .bind(first.message_id)
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(body, input.body);
+    assert_eq!(message_count(&f.pg).await, 1);
+    assert_eq!(ingress_count(&f.pg).await, 1);
 }
 
 #[tokio::test]
@@ -2423,6 +2460,647 @@ async fn ensure_receipt_firm_entity(f: &Fixture) {
 }
 
 #[tokio::test]
+async fn native_triage_public_doors_preserve_canonical_inbox_authority() {
+    const CHILD: &str = "NAVIGATOR_TEST_NATIVE_TRIAGE_CHILD";
+    let Ok(case) = std::env::var(CHILD) else {
+        if crate::postgres_mirror::tests::test_postgres().is_none() {
+            return;
+        }
+        let name = format!(
+            "{}::native_triage_public_doors_preserve_canonical_inbox_authority",
+            module_path!().split_once("::").unwrap().1
+        );
+        for case in ["brand", "assignment", "mirror"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &name, "--nocapture"])
+                .env(CHILD, case)
+                .env(pg_inbox::AUTHORITY_ENV, "0")
+                .env_remove("NAVIGATOR_POSTGRES_MIRROR")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "native triage {case}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    };
+    let Some(f) = fixture().await else { return };
+    configure_native_triage_fixture(&f).await;
+    let mut input = inbound(
+        f.firm,
+        channel::EMAIL,
+        "triage@example.test",
+        "triage-a",
+        "a@example.test",
+    );
+    input.brand_key = Some("native-a");
+    let one = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    input.brand_key = Some("native-b");
+    input.provider_message_id = "triage-b";
+    input.external_address = "b@example.test";
+    let two = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    match case.as_str() {
+        "brand" => {
+            let rows = crate::inbox::list_intake_in_brand(&f.db, f.owner, "native-a")
+                .await
+                .unwrap();
+            assert_eq!(
+                rows.len(),
+                1,
+                "Brand filtering must read canonical native Inbox rows"
+            );
+            assert_eq!(rows[0].id, one.conversation_id);
+            assert_ne!(rows[0].id, two.conversation_id);
+            assert_eq!(
+                crate::inbox::intake_brands(&f.db, f.owner).await.unwrap(),
+                vec!["native-a", "native-b"]
+            );
+        }
+        "assignment" => native_triage_admin_assignment(&f, one).await,
+        "mirror" => native_triage_mirror_preserves_native_parent(&f, one).await,
+        _ => panic!("unknown isolated native triage test case"),
+    }
+    let mut source = f.db.query("SELECT * FROM inbox_conversation; SELECT * FROM message; SELECT * FROM inbox_assignment").await.unwrap();
+    for index in 0..3 {
+        let rows: Vec<serde_json::Value> = source.take(index).unwrap();
+        assert!(
+            rows.is_empty(),
+            "native triage must not create a stale Source Inbox shadow"
+        );
+    }
+}
+
+async fn configure_native_triage_fixture(f: &Fixture) {
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    for (key, value) in [
+        ("NAVIGATOR_POSTGRES_HOST", "127.0.0.1".to_string()),
+        (
+            "NAVIGATOR_POSTGRES_PORT",
+            std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").unwrap(),
+        ),
+        ("NAVIGATOR_POSTGRES_USER", "postgres".to_string()),
+        ("NAVIGATOR_POSTGRES_PASSWORD", "synthetic".to_string()),
+        ("NAVIGATOR_POSTGRES_DATABASE", database),
+        ("NAVIGATOR_POSTGRES_SSLMODE", "disable".to_string()),
+        (pg_inbox::AUTHORITY_ENV, "1".to_string()),
+    ] {
+        std::env::set_var(key, value);
+    }
+}
+
+async fn record_native_triage(f: &Fixture, message_id: Uuid) -> crate::inbox_triage::InboxTriage {
+    use crate::inbox_triage::{NewInboxTriage, PrivilegeLabel, TriageDisposition};
+    crate::inbox_triage::record(
+        &f.db,
+        &NewInboxTriage {
+            message_id,
+            firm_id: f.firm,
+            suggested_project_id: Some(f.project),
+            project_confidence: None,
+            privilege: PrivilegeLabel::Uncertain,
+            privilege_confidence: None,
+            rationale: None,
+            model_id: None,
+            prompt_version: crate::inbox_triage::RULES_ONLY_PROMPT.into(),
+            raw_output: None,
+            disposition: TriageDisposition::NeedsHuman,
+            labeled_example: false,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+async fn native_triage_admin_assignment(f: &Fixture, one: crate::inbox::IngestedInbound) {
+    let admin = persons::create(
+        &f.db,
+        &NewPerson::with_role("Triage Admin", "triage-admin@example.test", Role::Admin),
+    )
+    .await
+    .unwrap();
+    firms::add_membership(
+        &f.db,
+        &firms::NewPersonFirmRole {
+            person_id: admin.id,
+            firm_id: f.firm,
+            membership: firms::FirmMembership::Admin,
+            is_dri: false,
+        },
+    )
+    .await
+    .unwrap();
+    // Match fixture()'s canonical identity rows for the additional actor.
+    sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'Triage Admin','triage-admin@example.test','admin')")
+        .bind(admin.id).execute(f.pg.pool()).await.unwrap();
+    assert!(matches!(
+        crate::inbox::assign(&f.db, admin.id, one.conversation_id, f.project).await,
+        Err(InboxError::Denied)
+    ));
+    let triage = record_native_triage(f, one.message_id).await;
+    crate::inbox_triage::confirm_project(&f.db, admin.id, triage.id, f.project)
+        .await
+        .unwrap();
+    assert_eq!(
+        pg_inbox::conversation_by_id_on(&f.pg, one.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
+        Some(f.project)
+    );
+    assert_eq!(
+        pg_inbox::assignments_on(&f.pg, one.conversation_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+async fn native_triage_mirror_preserves_native_parent(
+    f: &Fixture,
+    one: crate::inbox::IngestedInbound,
+) {
+    use crate::postgres_mirror::{mirror, MirrorError, MirrorKey};
+    seed_triage_mirror_catalogs(f).await;
+    let triage = record_native_triage(f, one.message_id).await;
+    Box::pin(mirror(&f.db, &f.pg, &MirrorKey::InboxTriage(triage.id)))
+        .await
+        .unwrap();
+    let firm: Uuid = sqlx::query_scalar("SELECT firm_id FROM inbox_triage WHERE id=$1")
+        .bind(triage.id)
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(firm, f.firm);
+    f.db.query("UPDATE $id SET firm_id=$firm")
+        .bind(("id", crate::surreal::record_id("inbox_triage", triage.id)))
+        .bind(("firm", crate::surreal::record_id("firm", Uuid::now_v7())))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    assert!(
+        Box::pin(mirror(&f.db, &f.pg, &MirrorKey::InboxTriage(triage.id)))
+            .await
+            .is_err()
+    );
+    let firm: Uuid = sqlx::query_scalar("SELECT firm_id FROM inbox_triage WHERE id=$1")
+        .bind(triage.id)
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        firm, f.firm,
+        "forged Source metadata cannot replace canonical Firm evidence"
+    );
+    assert!(matches!(
+        Box::pin(mirror(
+            &f.db,
+            &f.pg,
+            &MirrorKey::InboxMessage(one.message_id)
+        ))
+        .await,
+        Err(MirrorError::InboxAuthority)
+    ));
+    assert!(crate::postgres_mirror::inbox::reconcile(&f.db, &f.pg)
+        .await
+        .is_err());
+    std::env::set_var(pg_inbox::AUTHORITY_ENV, "invalid-native-authority");
+    assert!(matches!(
+        Box::pin(mirror(&f.db, &f.pg, &MirrorKey::InboxTriage(triage.id))).await,
+        Err(MirrorError::InboxAuthority)
+    ));
+}
+
+async fn seed_triage_mirror_catalogs(f: &Fixture) {
+    use crate::postgres_mirror::{mirror, MirrorKey, Mirrored};
+    use crate::test_support::{SEED_ENTITY_JURISDICTION_ID, SEED_ENTITY_TYPE_ID};
+    // seed_entity() deliberately uses unresolved catalog links. This case
+    // actually projects its parents, so provide those two Source rows.
+    f.db.query("CREATE $entity_type SET name='Triage Synthetic Type'; CREATE $jurisdiction SET name='Triage Synthetic Jurisdiction', code='ZZ', jurisdiction_type='state'")
+        .bind(("entity_type", crate::surreal::record_id("entity_type", SEED_ENTITY_TYPE_ID)))
+        .bind(("jurisdiction", crate::surreal::record_id("jurisdiction", SEED_ENTITY_JURISDICTION_ID)))
+        .await.unwrap().check().unwrap();
+    for key in [
+        MirrorKey::EntityType(SEED_ENTITY_TYPE_ID),
+        MirrorKey::Jurisdiction(SEED_ENTITY_JURISDICTION_ID),
+    ] {
+        assert_ne!(
+            Box::pin(mirror(&f.db, &f.pg, &key)).await.unwrap(),
+            Mirrored::Deleted
+        );
+    }
+}
+
+#[tokio::test]
+async fn existing_x_rows_survive_the_linkedin_import_migration() {
+    let Some(f) = fixture().await else { return };
+    let input = inbound(
+        f.firm,
+        channel::X,
+        "synthetic-x-account",
+        "x-before-linkedin",
+        "synthetic-x-sender",
+    );
+    let before = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    // Model the deployed X schema before the new import column exists.
+    sqlx::query("ALTER TABLE message DROP COLUMN raw_storage_key")
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../postgres/migrations/20261102020000_linkedin_channel_and_raw_storage.sql"
+    ))
+    .execute(f.pg.pool())
+    .await
+    .expect("the import migration must preserve existing X history");
+    let stored = pg_inbox::conversation_by_id_on(&f.pg, before.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.channel, channel::X);
+    let mut linkedin = input;
+    linkedin.channel = channel::LINKEDIN;
+    linkedin.provider_message_id = "linkedin-after-migration";
+    linkedin.provider_account = "synthetic-linkedin-account";
+    linkedin.external_address = "synthetic-linkedin-sender";
+    let imported = pg_inbox::ingest_inbound_on(&f.pg, &linkedin).await.unwrap();
+    assert!(pg_inbox::message_by_id_on(&f.pg, imported.message_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .raw_storage_key
+        .is_none());
+}
+
+#[tokio::test]
+async fn native_voice_ingest_deduplicates_and_projects_to_the_call_spine() {
+    let Some(f) = fixture().await else { return };
+    let input = inbound(
+        f.firm,
+        channel::VOICE,
+        "+15555550123",
+        "CAnative-voice",
+        "+15555550456",
+    );
+    let first = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let repeated = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    assert_eq!(first.message_id, repeated.message_id);
+    pg_inbox::assign_on(&f.pg, &f.db, f.owner, first.conversation_id, f.project)
+        .await
+        .unwrap();
+    let source_ref = format!("inbox:{}", first.message_id);
+    let projected = crate::communications::find_by_source(
+        &f.db,
+        crate::communications::channel::CALL,
+        &source_ref,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(projected.project_id, f.project);
+}
+
+fn fi_mapping() -> crate::fi_import::Mapping {
+    serde_json::from_value(serde_json::json!({
+        "columns":{"kind":"type","direction":"way","counterparty":"phone","timestamp":["at"],"duration":"length","identity":"id","status":null},
+        "kinds":{"C":"call","S":"sms"},"directions":{"I":"inbound","O":"outbound"},
+        "timestamp_format":"%+","timestamp_separator":" ","timezone":{"mode":"embedded_offset"},"duration_unit":"seconds"
+    })).unwrap()
+}
+
+async fn fi_scope(f: &Fixture) -> crate::fi_import::Scope {
+    sqlx::query("INSERT INTO brand(name,brand_key,firm_id) VALUES('Fi Synthetic','fi-synthetic',$1) ON CONFLICT(brand_key) DO NOTHING")
+        .bind(f.firm).execute(f.pg.pool()).await.unwrap();
+    crate::fi_import::Scope {
+        actor: f.owner,
+        firm: f.firm,
+        brand: "fi-synthetic".into(),
+        account: crate::fi_import::account("+15555550123").unwrap(),
+        project: None,
+    }
+}
+
+fn fi_rows(rows: &str) -> Vec<crate::fi_import::Row> {
+    let Ok(parsed) = crate::fi_import::parse(
+        &fi_mapping(),
+        "+15555550123",
+        format!("type,way,phone,at,length,id\n{rows}\n").as_bytes(),
+    ) else {
+        panic!("the synthetic Fi CSV fixture must parse");
+    };
+    parsed
+}
+
+#[tokio::test]
+async fn fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch() {
+    let Some(f) = fixture().await else { return };
+    let scope = fi_scope(&f).await;
+    let rows=fi_rows("S,O,+15555550456,2026-10-30T18:00:00Z,,sms-one\nC,I,+15555550789,2026-10-30T14:01:00.123456-04:00,61,call-one");
+    let mut saved = Vec::new();
+    for row in &rows {
+        assert_eq!(
+            crate::fi_import::preview_on(&f.pg, &scope, row)
+                .await
+                .unwrap(),
+            crate::fi_import::Existing::New
+        );
+        let first = crate::fi_import::ingest_on(&f.pg, &scope, row)
+            .await
+            .unwrap();
+        let replay = crate::fi_import::ingest_on(&f.pg, &scope, row)
+            .await
+            .unwrap();
+        assert_eq!(first.message_id, replay.message_id);
+        assert!(replay.deduped);
+        let message = pg_inbox::message_by_id_on(&f.pg, first.message_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(message.delivery_state, delivery::RECEIVED);
+        assert!(message.raw_storage_key.is_none());
+        assert!(message.attachment_asset_id.is_none());
+        assert_eq!(message.direction, row.metadata.direction.as_str());
+        assert!(
+            message.author_person_id.is_none(),
+            "direction does not prove a historical human author"
+        );
+        pg_inbox::assign_on(&f.pg, &f.db, f.owner, first.conversation_id, f.project)
+            .await
+            .unwrap();
+        let view =
+            pg_inbox::project_thread_on(&f.pg, &f.db, f.lawyer, f.project, first.conversation_id)
+                .await
+                .unwrap();
+        assert!(!view.can_send);
+        assert!(view.can_note);
+        assert!(matches!(
+            pg_inbox::queue_reply_on(
+                &f.pg,
+                &f.db,
+                f.lawyer,
+                first.conversation_id,
+                "must not send",
+                purpose::MATTER
+            )
+            .await,
+            Err(InboxError::Denied)
+        ));
+        saved.push(first);
+    }
+    assert!(matches!(
+        pg_inbox::queue_sms_reply_on(
+            &f.pg,
+            &f.db,
+            f.lawyer,
+            saved[0].conversation_id,
+            "must not send"
+        )
+        .await,
+        Err(InboxError::Denied)
+    ));
+    let report = pg_inbox::dispatch_queued_on(&f.pg, &f.db, &NoTransport)
+        .await
+        .unwrap();
+    assert_eq!(report.submitted, 0);
+    // Even an accidentally queued historical row cannot escape the source guard.
+    sqlx::query("UPDATE message SET delivery_state='queued',author_person_id=$2 WHERE id=$1")
+        .bind(saved[0].message_id)
+        .bind(f.lawyer)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    let report = pg_inbox::dispatch_queued_on(&f.pg, &f.db, &NoTransport)
+        .await
+        .unwrap();
+    assert_eq!(report.suppressed, 1);
+    let bills: i64 = sqlx::query_scalar("SELECT count(*) FROM billed_call")
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(bills, 0);
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM inbox_message_asset")
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(links, 0);
+}
+
+#[tokio::test]
+async fn raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the_winner() {
+    let Some(f) = fixture().await else { return };
+    let scope = fi_scope(&f).await;
+    let Some(first) = fi_rows("C,I,+15555550456,2026-10-30T18:00:00Z,61,same-native-id")
+        .into_iter()
+        .next()
+    else {
+        panic!("the synthetic call fixture must contain a row");
+    };
+    let Some(second) = fi_rows("S,O,+15555550456,2026-10-30T18:00:00Z,,same-native-id")
+        .into_iter()
+        .next()
+    else {
+        panic!("the synthetic SMS fixture must contain a row");
+    };
+    assert!(
+        first.provider_message_id == second.provider_message_id,
+        "the native ID must identify the same imported event across channels"
+    );
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+    let mut tasks = Vec::new();
+    for index in 0..8 {
+        let pg = f.pg.clone();
+        let scope = scope.clone();
+        let barrier = barrier.clone();
+        let row = if index % 2 == 0 {
+            first.clone()
+        } else {
+            second.clone()
+        };
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            crate::fi_import::ingest_on(&pg, &scope, &row).await
+        }));
+    }
+    let mut successes = 0;
+    for task in tasks {
+        match task.await.unwrap() {
+            Ok(_) => successes += 1,
+            Err(
+                crate::fi_import::FiImportError::Busy | crate::fi_import::FiImportError::Conflict,
+            ) => {}
+            Err(error) => panic!("unexpected ingest error: {error}"),
+        }
+    }
+    assert!(successes > 0);
+    let a = crate::fi_import::preview_on(&f.pg, &scope, &first)
+        .await
+        .unwrap();
+    let b = crate::fi_import::preview_on(&f.pg, &scope, &second)
+        .await
+        .unwrap();
+    assert!(matches!(
+        (a, b),
+        (
+            crate::fi_import::Existing::Identical,
+            crate::fi_import::Existing::Conflict
+        ) | (
+            crate::fi_import::Existing::Conflict,
+            crate::fi_import::Existing::Identical
+        )
+    ));
+    let losing = if a == crate::fi_import::Existing::Conflict {
+        &first
+    } else {
+        &second
+    };
+    assert_eq!(
+        crate::fi_import::ingest_on(&f.pg, &scope, losing)
+            .await
+            .unwrap_err(),
+        crate::fi_import::FiImportError::Conflict
+    );
+    let count:i64=sqlx::query_scalar("SELECT count(*) FROM inbox_ingress WHERE firm_id=$1 AND provider_account=$2 AND provider_message_id=$3")
+        .bind(f.firm).bind(&scope.account).bind(&first.provider_message_id).fetch_one(f.pg.pool()).await.unwrap();
+    assert_eq!(count, 1);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM message")
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn identical_fi_replays_preserve_reviewed_history_and_new_events_reopen_it() {
+    let Some(f) = fixture().await else { return };
+    for kind in ["C", "S"] {
+        let mut scope = fi_scope(&f).await;
+        let duration = if kind == "C" { "61" } else { "" };
+        let rows = fi_rows(&format!("{kind},I,+15555550456,2026-10-30T18:00:00Z,{duration},read-{kind}-one\n{kind},I,+15555550456,2026-10-30T18:01:00Z,{duration},read-{kind}-two"));
+        let saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+            .await
+            .unwrap();
+        for project in [None, Some(f.project)] {
+            scope.project = project;
+            if project.is_some() {
+                crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+                    .await
+                    .unwrap();
+                let assigned = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(assigned.unread, "new Project attribution requires review");
+                assert_eq!(assigned.project_id, project);
+            }
+            sqlx::query("UPDATE inbox_conversation SET unread=false,updated_at=now() WHERE id=$1")
+                .bind(saved.conversation_id)
+                .execute(f.pg.pool())
+                .await
+                .unwrap();
+            let before = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let replay = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+                .await
+                .unwrap();
+            assert!(replay.deduped);
+            assert_eq!(replay.message_id, saved.message_id);
+            if let Some(project) = project {
+                pg_inbox::assign_on(&f.pg, &f.db, f.owner, saved.conversation_id, project)
+                    .await
+                    .unwrap();
+            }
+            let after = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                !after.unread,
+                "identical replay must preserve reviewed history"
+            );
+            assert_eq!(
+                after.updated_at, before.updated_at,
+                "identical replay must preserve Inbox ordering"
+            );
+        }
+        let new_event = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+            .await
+            .unwrap();
+        assert!(!new_event.deduped);
+        assert_eq!(new_event.conversation_id, saved.conversation_id);
+        let changed = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            changed.unread,
+            "a new event must reopen its thread for review"
+        );
+    }
+}
+
+#[tokio::test]
+async fn fi_import_lock_prevents_assignment_until_destination_verification_finishes() {
+    let Some(f) = fixture().await else { return };
+    let mut scope = fi_scope(&f).await;
+    let rows = fi_rows("S,I,+15555550456,2026-10-30T18:00:00Z,,before-assignment\nS,I,+15555550456,2026-10-30T18:01:00Z,,during-import");
+    let first = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    scope.project = Some(f.project);
+    let mut import_guard = f.pg.pool().begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('google_fi:import:v1',168))")
+        .execute(&mut *import_guard)
+        .await
+        .unwrap();
+    for result in [
+        pg_inbox::assign_on(&f.pg, &f.db, f.owner, first.conversation_id, f.project).await,
+        pg_inbox::assign_for_triage_review_on(
+            &f.pg,
+            &f.db,
+            f.owner,
+            first.conversation_id,
+            f.project,
+        )
+        .await,
+    ] {
+        assert!(
+            matches!(result, Err(InboxError::Invalid(_))),
+            "assignment must yield while an import is checking its destination"
+        );
+    }
+    let conversation = pg_inbox::conversation_by_id_on(&f.pg, first.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(conversation.project_id.is_none());
+    import_guard.rollback().await.unwrap();
+    let saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+        .await
+        .unwrap();
+    assert_eq!(saved.conversation_id, first.conversation_id);
+    pg_inbox::assign_on(&f.pg, &f.db, f.owner, saved.conversation_id, f.project)
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::fi_import::preview_on(&f.pg, &scope, &rows[1])
+            .await
+            .unwrap(),
+        crate::fi_import::Existing::Identical
+    );
+}
+
+#[tokio::test]
 async fn native_relay_requires_a_current_person_eligible_role_and_native_thread() {
     let Some(f) = fixture().await else { return };
     let missing_thread = Uuid::now_v7();
@@ -2449,4 +3127,776 @@ async fn native_relay_requires_a_current_person_eligible_role_and_native_thread(
         0,
         "denied reads cannot create a thread"
     );
+}
+
+/// The review door uses its own canonical Admin/participation admission, but
+/// cannot bypass initial call attribution or leave a completed bill parked.
+async fn assert_public_native_call_and_fi_triage_coordination(f: &Fixture) {
+    let admin = persons::create(
+        &f.db,
+        &NewPerson::with_role(
+            "Review Admin",
+            "voice-review-admin@example.test",
+            Role::Admin,
+        ),
+    )
+    .await
+    .unwrap()
+    .id;
+    sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'Review Admin','voice-review-admin@example.test','admin')")
+        .bind(admin).execute(f.pg.pool()).await.unwrap();
+    firms::ensure_membership(
+        &f.db,
+        &firms::NewPersonFirmRole {
+            person_id: admin,
+            firm_id: f.firm,
+            membership: firms::FirmMembership::Admin,
+            is_dri: false,
+        },
+    )
+    .await
+    .unwrap();
+    let outsider = persons::create(
+        &f.db,
+        &NewPerson::with_role(
+            "Other Admin",
+            "voice-review-other@example.test",
+            Role::Admin,
+        ),
+    )
+    .await
+    .unwrap()
+    .id;
+    let other = seed_project(
+        &f.pg,
+        &f.db,
+        f.entity,
+        f.firm,
+        "voice-review-other",
+        "Other review matter",
+    )
+    .await;
+    assert_native_voice_review_attribution(f, admin, outsider, other).await;
+    assert_native_fi_review_attribution(f, admin, other).await;
+    assert_native_live_sms_review_moves(f, admin, other).await;
+}
+
+async fn assert_native_voice_review_attribution(
+    f: &Fixture,
+    admin: Uuid,
+    outsider: Uuid,
+    other: Uuid,
+) {
+    use crate::billed_calls::{self, NewBilledCall};
+    let voice = inbound(
+        f.firm,
+        channel::VOICE,
+        "+15555550144",
+        "CAreview-native",
+        "+15555550145",
+    );
+    let saved = crate::inbox::ingest_inbound(&f.db, &voice).await.unwrap();
+    let input = NewBilledCall {
+        call_sid: "CAreview-native".into(),
+        conversation_id: saved.conversation_id,
+        firm_id: f.firm,
+        duration_seconds: 361,
+        call_started_at: "2026-10-30T18:00:00Z".parse().unwrap(),
+    };
+    let before = billed_calls::record(&f.pg, &input).await.unwrap();
+    assert!(matches!(
+        crate::inbox::assign_for_triage_review(&f.db, outsider, saved.conversation_id, f.project)
+            .await,
+        Err(InboxError::Denied)
+    ));
+    assert!(billed_calls::find_by_call_sid(&f.pg, &input.call_sid)
+        .await
+        .unwrap()
+        .unwrap()
+        .project_id
+        .is_none());
+    let first =
+        crate::inbox::assign_for_triage_review(&f.db, admin, saved.conversation_id, f.project)
+            .await
+            .unwrap();
+    let again =
+        crate::inbox::assign_for_triage_review(&f.db, admin, saved.conversation_id, f.project)
+            .await
+            .unwrap();
+    assert_eq!(first.id, again.id);
+    assert!(matches!(
+        crate::inbox::assign_for_triage_review(&f.db, admin, saved.conversation_id, other).await,
+        Err(InboxError::Denied)
+    ));
+    let bill = billed_calls::find_by_call_sid(&f.pg, &input.call_sid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bill.project_id, Some(f.project));
+    assert_eq!(
+        (bill.duration_seconds, bill.tenths, bill.call_started_at),
+        (
+            before.duration_seconds,
+            before.tenths,
+            before.call_started_at
+        )
+    );
+    assert_eq!(
+        crate::inbox::conversation_by_id(&f.db, saved.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
+        Some(f.project)
+    );
+}
+
+async fn assert_native_fi_review_attribution(f: &Fixture, admin: Uuid, other: Uuid) {
+    let scope = fi_scope(f).await;
+    let rows = fi_rows("S,O,+15555550456,2026-10-30T18:00:00Z,,review-fi-sms");
+    let history = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    let assignment =
+        crate::inbox::assign_for_triage_review(&f.db, admin, history.conversation_id, f.project)
+            .await
+            .unwrap();
+    assert_eq!(
+        crate::inbox::assign_for_triage_review(&f.db, admin, history.conversation_id, f.project)
+            .await
+            .unwrap()
+            .id,
+        assignment.id
+    );
+    assert!(matches!(
+        crate::inbox::assign_for_triage_review(&f.db, admin, history.conversation_id, other).await,
+        Err(InboxError::Denied)
+    ));
+    let bills: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM billed_call WHERE conversation_id=$1")
+            .bind(history.conversation_id)
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        bills, 0,
+        "Fi history never fabricates billable provider calls"
+    );
+    assert!(crate::inbox::message_by_id(&f.db, history.message_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .author_person_id
+        .is_none());
+}
+
+async fn assert_native_live_sms_review_moves(f: &Fixture, admin: Uuid, other: Uuid) {
+    // Candidate behavior remains unchanged for ordinary live SMS review moves.
+    let sms = inbound(
+        f.firm,
+        channel::SMS,
+        "+15555550144",
+        "SMreview-live",
+        "+15555550146",
+    );
+    let live = crate::inbox::ingest_inbound(&f.db, &sms).await.unwrap();
+    crate::inbox::assign_for_triage_review(&f.db, admin, live.conversation_id, f.project)
+        .await
+        .unwrap();
+    crate::inbox::assign_for_triage_review(&f.db, admin, live.conversation_id, other)
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::inbox::conversation_by_id(&f.db, live.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
+        Some(other)
+    );
+}
+
+async fn voice_reply_fixture() -> Option<(Fixture, Uuid, Uuid)> {
+    let f = fixture().await?;
+    let clerk = persons::create(
+        &f.db,
+        &NewPerson::with_role("Voice Clerk", "voice-clerk@example.com", Role::Clerk),
+    )
+    .await
+    .unwrap()
+    .id;
+    projects::add_participation(
+        &f.db,
+        f.project,
+        clerk,
+        projects::participation_for_role(Role::Clerk),
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO person(id,name,email,role) VALUES($1,'Voice Clerk','voice-clerk@example.com','clerk')").bind(clerk).execute(f.pg.pool()).await.unwrap();
+    let mut input = inbound(
+        f.firm,
+        channel::VOICE,
+        "+12025550100",
+        "CAvoice-reply-guard",
+        "+12025550101",
+    );
+    input.project_id = Some(f.project);
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    Some((f, clerk, saved.conversation_id))
+}
+
+#[tokio::test]
+async fn native_voice_threads_allow_internal_notes_without_offering_replies() {
+    let Some((f, clerk, conversation)) = voice_reply_fixture().await else {
+        return;
+    };
+    for actor in [f.lawyer, clerk] {
+        let view = pg_inbox::project_thread_on(&f.pg, &f.db, actor, f.project, conversation)
+            .await
+            .unwrap();
+        assert!(view.can_note, "participating firm people may note a call");
+        assert!(!view.can_send, "VOICE has no outbound reply transport");
+        assert_eq!(view.next_action, "Leave an internal note");
+        let rows = pg_inbox::list_project_on(&f.pg, &f.db, actor, f.project)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.id == conversation)
+                .unwrap()
+                .next_action,
+            "Leave an internal note"
+        );
+        let note = pg_inbox::post_note_on(
+            &f.pg,
+            &f.db,
+            actor,
+            conversation,
+            "Synthetic call follow-up",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            pg_inbox::message_by_id_on(&f.pg, note)
+                .await
+                .unwrap()
+                .unwrap()
+                .direction,
+            direction::INTERNAL
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_voice_reply_refusal_creates_no_pending_outbound_message() {
+    let Some((f, clerk, conversation)) = voice_reply_fixture().await else {
+        return;
+    };
+    for actor in [f.lawyer, clerk] {
+        assert!(
+            matches!(
+                pg_inbox::queue_reply_on(
+                    &f.pg,
+                    &f.db,
+                    actor,
+                    conversation,
+                    "Synthetic reply",
+                    purpose::MATTER
+                )
+                .await,
+                Err(InboxError::Denied)
+            ),
+            "VOICE replies must be refused before queue creation"
+        );
+    }
+    let outbound: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM message WHERE conversation_id=$1 AND direction='outbound'",
+    )
+    .bind(conversation)
+    .fetch_one(f.pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        outbound, 0,
+        "refused call replies leave no pending outbound Messages"
+    );
+}
+
+#[tokio::test]
+async fn native_existing_voice_outbound_rows_never_reach_the_transport() {
+    let Some((f, _, conversation)) = voice_reply_fixture().await else {
+        return;
+    };
+    let mut ids = Vec::new();
+    for state in [delivery::FAILED, delivery::QUEUED] {
+        let id = Uuid::now_v7();
+        sqlx::query("INSERT INTO message(id,conversation_id,direction,body,author_person_id,delivery_state,purpose,occurred_at,inserted_at,updated_at) VALUES($1,$2,'outbound','Synthetic prior reply',$3,$4,'matter','2026-11-02T00:00:00Z',now(),now())")
+            .bind(id).bind(conversation).bind(f.lawyer).bind(state).execute(f.pg.pool()).await.unwrap();
+        ids.push(id);
+    }
+    let report = pg_inbox::dispatch_queued_on(&f.pg, &f.db, &NoTransport)
+        .await
+        .unwrap();
+    assert_eq!(report.suppressed, 1);
+    for (id, state) in ids
+        .into_iter()
+        .zip([delivery::FAILED, delivery::SUPPRESSED])
+    {
+        assert_eq!(
+            pg_inbox::message_by_id_on(&f.pg, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .delivery_state,
+            state
+        );
+    }
+}
+
+#[tokio::test]
+async fn fi_project_destination_is_reserved_before_any_history_commit() {
+    const CHILD: &str = "NAVIGATOR_TEST_FI_ATOMIC_DESTINATION_CHILD";
+    let Ok(case) = std::env::var(CHILD) else {
+        if crate::postgres_mirror::tests::test_postgres().is_none() {
+            return;
+        }
+        let name = format!(
+            "{}::fi_project_destination_is_reserved_before_any_history_commit",
+            module_path!().split_once("::").unwrap().1
+        );
+        for case in [
+            "new_call",
+            "new_sms",
+            "replay_call",
+            "replay_sms",
+            "race_call",
+            "race_sms",
+            "group_call",
+            "group_sms",
+            "reviewed_call",
+            "reviewed_sms",
+        ] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &name, "--nocapture"])
+                .env(CHILD, case)
+                .env(pg_inbox::AUTHORITY_ENV, "0")
+                .env_remove("NAVIGATOR_POSTGRES_MIRROR")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "Fi destination {case}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    };
+    let Some(f) = fixture().await else {
+        return;
+    };
+    configure_native_triage_fixture(&f).await;
+    let kind = if case.ends_with("sms") { "S" } else { "C" };
+    if case.starts_with("reviewed") {
+        assert_fi_identical_replay_preserves_reviewed_state(&f, kind).await;
+    } else if case.starts_with("group") {
+        assert_fi_project_batches_reuse_the_selected_thread(&f, kind).await;
+    } else if case.starts_with("race") {
+        assert_fi_assignment_cannot_cross_commit(&f, kind).await;
+    } else {
+        assert_fi_project_is_pinned_before_return(&f, kind, case.starts_with("replay")).await;
+    }
+}
+
+async fn assert_fi_project_is_pinned_before_return(f: &Fixture, kind: &str, parked: bool) {
+    let mut scope = fi_scope(f).await;
+    scope.project = Some(f.project);
+    let duration = if kind == "C" { "61" } else { "" };
+    let Some(row) = fi_rows(&format!(
+        "{kind},I,+15555550456,2026-10-30T18:00:00Z,{duration},pin-one"
+    ))
+    .into_iter()
+    .next() else {
+        panic!("the synthetic Fi fixture must contain a row");
+    };
+    if parked {
+        scope.project = None;
+        crate::fi_import::ingest_on(&f.pg, &scope, &row)
+            .await
+            .unwrap();
+        scope.project = Some(f.project);
+    }
+    let saved = crate::fi_import::ingest_on(&f.pg, &scope, &row)
+        .await
+        .unwrap();
+    let conversation = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        conversation.project_id,
+        Some(f.project),
+        "requested Project must already be pinned before the API's later attribution call"
+    );
+    let audit:(Option<Uuid>,Uuid)=sqlx::query_as("SELECT from_project_id,actor_person_id FROM inbox_assignment WHERE conversation_id=$1 AND to_project_id=$2")
+        .bind(saved.conversation_id).bind(f.project).fetch_one(f.pg.pool()).await.unwrap();
+    assert_eq!(
+        audit,
+        (None, f.owner),
+        "initial attribution keeps its authenticated actor and unassigned origin"
+    );
+    let replay = crate::fi_import::ingest_on(&f.pg, &scope, &row)
+        .await
+        .unwrap();
+    assert_eq!(saved.message_id, replay.message_id);
+    assert!(replay.deduped);
+    let other = seed_project(&f.pg, &f.db, f.entity, f.firm, "fi-other", "Fi other").await;
+    let mut wrong = scope.clone();
+    wrong.project = Some(other);
+    assert!(
+        matches!(
+            crate::fi_import::ingest_on(&f.pg, &wrong, &row).await,
+            Err(crate::fi_import::FiImportError::Conflict)
+        ),
+        "a conflicting replay must leave history and its Project unchanged"
+    );
+    let mut unscoped = scope.clone();
+    unscoped.project = None;
+    assert!(
+        crate::fi_import::ingest_on(&f.pg, &unscoped, &row)
+            .await
+            .unwrap()
+            .deduped
+    );
+    assert_eq!(
+        pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
+        Some(f.project),
+        "unscoped replay must not unassign history"
+    );
+    assert!(
+        crate::inbox::assign(&f.db, f.owner, saved.conversation_id, other)
+            .await
+            .is_err(),
+        "a later competing destination cannot move committed Fi history"
+    );
+    let repaired = crate::inbox::assign(&f.db, f.owner, saved.conversation_id, f.project)
+        .await
+        .unwrap();
+    assert_eq!(repaired.from_project_id, None);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM inbox_assignment WHERE conversation_id=$1")
+            .bind(saved.conversation_id)
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        count, 1,
+        "same-target projection repair reuses the atomic attribution audit"
+    );
+    assert_fi_history_has_no_author_or_billing(f, &saved).await;
+}
+
+async fn assert_fi_history_has_no_author_or_billing(
+    f: &Fixture,
+    saved: &crate::inbox::IngestedInbound,
+) {
+    let message = pg_inbox::message_by_id_on(&f.pg, saved.message_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(message.author_person_id.is_none());
+    assert!(message.raw_storage_key.is_none());
+    assert_eq!(message.delivery_state, delivery::RECEIVED);
+    let bills: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM billed_call WHERE conversation_id=$1")
+            .bind(saved.conversation_id)
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(bills, 0);
+}
+
+async fn assert_fi_assignment_cannot_cross_commit(f: &Fixture, kind: &str) {
+    let mut scope = fi_scope(f).await;
+    let duration = if kind == "C" { "61" } else { "" };
+    let rows=fi_rows(&format!("{kind},I,+15555550456,2026-10-30T18:00:00Z,{duration},race-first\n{kind},I,+15555550456,2026-10-30T18:01:00Z,{duration},race-second"));
+    let first = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    let destination = seed_project(
+        &f.pg,
+        &f.db,
+        f.entity,
+        f.firm,
+        "fi-destination",
+        "Fi destination",
+    )
+    .await;
+    scope.project = Some(destination);
+    // Only this synthetic row pauses, after native thread selection and before INSERT commits.
+    let trigger=format!("CREATE FUNCTION fi_insert_latch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.provider_message_id='{}' THEN PERFORM pg_advisory_xact_lock(168765432); END IF; RETURN NEW; END $$; CREATE TRIGGER fi_insert_latch BEFORE INSERT ON message FOR EACH ROW EXECUTE FUNCTION fi_insert_latch();",rows[1].provider_message_id);
+    // The interpolated identity is generated by the canonical Fi parser from synthetic fixture CSV.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(trigger.as_str()))
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    let mut blocker = f.pg.pool().begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(168765432)")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let pg = f.pg.clone();
+    let row = rows[1].clone();
+    let importer =
+        tokio::spawn(async move { crate::fi_import::ingest_on(&pg, &scope, &row).await });
+    let paused=tokio::time::timeout(std::time::Duration::from_secs(10),async {
+        loop {
+            let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=0 AND objid=168765432 AND objsubid=1 AND NOT granted)").fetch_one(f.pg.pool()).await.unwrap();
+            if waiting{break;}
+            tokio::task::yield_now().await;
+        }
+    }).await;
+    if paused.is_err() {
+        blocker.rollback().await.unwrap();
+        let _ = importer.await;
+        panic!("synthetic Fi INSERT did not reach its latch");
+    }
+    let assigned = crate::billed_calls::assign_conversation(
+        &f.pg,
+        &f.db,
+        f.owner,
+        first.conversation_id,
+        f.project,
+    )
+    .await;
+    blocker.rollback().await.unwrap();
+    let result = importer.await.unwrap();
+    sqlx::raw_sql("DROP TRIGGER fi_insert_latch ON message; DROP FUNCTION fi_insert_latch();")
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    let persisted: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM message WHERE provider_message_id=$1")
+            .bind(&rows[1].provider_message_id)
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert!(!(matches!(&result,Err(crate::fi_import::FiImportError::Conflict))&&persisted>0),"Conflict must roll back the current Fi row, not leave hidden history under the competing Project");
+    assert!(
+        assigned.is_err(),
+        "assignment must share the import's Conversation fence"
+    );
+    let saved = result.unwrap();
+    assert_eq!(persisted, 1);
+    assert_eq!(saved.conversation_id, first.conversation_id);
+    assert_eq!(
+        pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
+        Some(destination)
+    );
+}
+
+async fn assert_fi_project_batches_reuse_the_selected_thread(f: &Fixture, kind: &str) {
+    let mut scope = fi_scope(f).await;
+    scope.project = Some(f.project);
+    let duration = if kind == "C" { "61" } else { "" };
+    let csv = (0..7)
+        .map(|index| {
+            format!("{kind},I,+15555550456,2026-10-30T18:0{index}:00Z,{duration},group-{index}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let rows = fi_rows(&csv);
+    let first = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    let second = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+        .await
+        .unwrap();
+    assert_eq!(
+        second.conversation_id, first.conversation_id,
+        "new Fi events for the selected Project, phone and channel must share one thread"
+    );
+    assert_ne!(second.message_id, first.message_id);
+    let replay = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+        .await
+        .unwrap();
+    assert!(replay.deduped);
+    assert_eq!(replay.message_id, second.message_id);
+    scope.project = None;
+    let parked = crate::fi_import::ingest_on(&f.pg, &scope, &rows[2])
+        .await
+        .unwrap();
+    assert_ne!(
+        parked.conversation_id, first.conversation_id,
+        "unscoped new history cannot join a Project thread"
+    );
+    let other = seed_project(
+        &f.pg,
+        &f.db,
+        f.entity,
+        f.firm,
+        "fi-group-other",
+        "Fi group other",
+    )
+    .await;
+    scope.project = Some(other);
+    let other_saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[3])
+        .await
+        .unwrap();
+    assert_eq!(
+        other_saved.conversation_id, parked.conversation_id,
+        "targeted ingestion can still claim an existing parked thread"
+    );
+    assert_ne!(
+        other_saved.conversation_id, first.conversation_id,
+        "another Project cannot capture the selected thread"
+    );
+    scope.project = Some(f.project);
+    let third = crate::fi_import::ingest_on(&f.pg, &scope, &rows[4])
+        .await
+        .unwrap();
+    assert_eq!(third.conversation_id, first.conversation_id);
+    scope.project = None;
+    let still_parked = crate::fi_import::ingest_on(&f.pg, &scope, &rows[5])
+        .await
+        .unwrap();
+    scope.project = Some(f.project);
+    let fourth = crate::fi_import::ingest_on(&f.pg, &scope, &rows[6])
+        .await
+        .unwrap();
+    assert_eq!(
+        fourth.conversation_id, first.conversation_id,
+        "prefer the selected Project over an unrelated parked thread"
+    );
+    assert_eq!(
+        pg_inbox::conversation_by_id_on(&f.pg, still_parked.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
+        None
+    );
+    assert_fi_group_audit_and_messages(f, first.conversation_id).await;
+}
+
+async fn assert_fi_group_audit_and_messages(f: &Fixture, conversation: Uuid) {
+    for _ in 0..2 {
+        let assignment = crate::inbox::assign(&f.db, f.owner, conversation, f.project)
+            .await
+            .unwrap();
+        assert_eq!(assignment.from_project_id, None);
+        assert_eq!(assignment.actor_person_id, f.owner);
+    }
+    let audits: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM inbox_assignment WHERE conversation_id=$1")
+            .bind(conversation)
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        audits, 1,
+        "grouping and projection repair keep one initial assignment audit"
+    );
+    let messages: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM message WHERE conversation_id=$1")
+        .bind(conversation)
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        messages, 4,
+        "all distinct events remain separate Messages in the same thread"
+    );
+}
+
+async fn assert_fi_identical_replay_preserves_reviewed_state(f: &Fixture, kind: &str) {
+    let mut scope = fi_scope(f).await;
+    let duration = if kind == "C" { "61" } else { "" };
+    let rows=fi_rows(&format!("{kind},I,+15555550456,2026-10-30T18:00:00Z,{duration},reviewed-first\n{kind},I,+15555550456,2026-10-30T18:01:00Z,{duration},reviewed-second"));
+    let saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    let past: chrono::DateTime<chrono::Utc> = "2020-01-02T03:04:05Z".parse().unwrap();
+    sqlx::query("UPDATE inbox_conversation SET unread=false,updated_at=$2 WHERE id=$1")
+        .bind(saved.conversation_id)
+        .bind(past)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    let replay = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    assert!(replay.deduped);
+    assert_eq!(
+        fi_reviewed_state(f, saved.conversation_id).await,
+        (false, past),
+        "unchanged unscoped history must preserve review status and timestamp"
+    );
+    scope.project = Some(f.project);
+    crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    let pinned = fi_reviewed_state(f, saved.conversation_id).await;
+    assert!(pinned.0);
+    assert!(
+        pinned.1 > past,
+        "initial Project attribution must update review state"
+    );
+    let audits:i64=sqlx::query_scalar("SELECT COUNT(*) FROM inbox_assignment WHERE conversation_id=$1 AND from_project_id IS NULL AND to_project_id=$2").bind(saved.conversation_id).bind(f.project).fetch_one(f.pg.pool()).await.unwrap();
+    assert_eq!(audits, 1);
+    sqlx::query("UPDATE inbox_conversation SET unread=false,updated_at=$2 WHERE id=$1")
+        .bind(saved.conversation_id)
+        .bind(past)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    assert_eq!(
+        fi_reviewed_state(f, saved.conversation_id).await,
+        (false, past),
+        "identical same-Project replay must not reopen reviewed history"
+    );
+    scope.project = None;
+    crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    assert_eq!(
+        fi_reviewed_state(f, saved.conversation_id).await,
+        (false, past),
+        "unscoped replay of attributed history must not reopen it"
+    );
+    scope.project = Some(f.project);
+    let fresh = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+        .await
+        .unwrap();
+    assert!(!fresh.deduped);
+    assert_eq!(fresh.conversation_id, saved.conversation_id);
+    let changed = fi_reviewed_state(f, saved.conversation_id).await;
+    assert!(changed.0);
+    assert!(
+        changed.1 > past,
+        "a fresh event in the reused thread must reopen it"
+    );
+}
+
+async fn fi_reviewed_state(
+    f: &Fixture,
+    conversation: Uuid,
+) -> (bool, chrono::DateTime<chrono::Utc>) {
+    sqlx::query_as("SELECT unread,updated_at FROM inbox_conversation WHERE id=$1")
+        .bind(conversation)
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap()
 }

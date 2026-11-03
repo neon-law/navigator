@@ -23,28 +23,57 @@ const SMS_SIGNATURE: &str = "x-navigator-signature";
 /// Every triage action redirects back to the review queue.
 const TRIAGE_QUEUE: &str = "/app/inbox/triage";
 
-/// Start a message-keyed Restate workflow after the inbound Message has been
+/// Start a message-keyed durable alert after the inbound Message has been
 /// persisted. Repeated provider deliveries attach to the same Slack alert.
+/// The `InboundMessageAlert` switch chooses the worker's DBOS ingress; the
+/// Restate lane remains while it is off, and a deployment with neither
+/// configured is a no-op, as before.
 pub async fn start_inbound_message_alert(message_id: Uuid) -> Result<(), String> {
-    let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(());
-    };
-    let request = workflows::InboundMessageAlertRequest { message_id };
-    workflows::start_workflow(
-        &ingress,
-        std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
-        "InboundMessageAlert",
-        &message_id.to_string(),
-        "run",
-        &request,
-        true,
+    let target = workflows::trigger::service_target(
+        workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
+        std::env::var(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
     )
-    .await
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    let request = workflows::InboundMessageAlertRequest { message_id };
+    match &target {
+        workflows::trigger::ServiceTarget::Dbos { ingress, token } => {
+            workflows::trigger::start_dbos_inbound_message_alert(
+                ingress,
+                token,
+                &serde_json::json!({
+                    "workflow_id":
+                        workflows::trigger::inbound_message_alert_workflow_id(message_id),
+                    "request": request,
+                }),
+            )
+            .await
+            .map_err(|error| error.to_string())
+        }
+        workflows::trigger::ServiceTarget::Restate => {
+            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+            else {
+                return Ok(());
+            };
+            workflows::start_workflow(
+                &ingress,
+                std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
+                "InboundMessageAlert",
+                &message_id.to_string(),
+                "run",
+                &request,
+                true,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        }
+    }
 }
 
 /// Ingest a parsed inbound email's clean attachments as content-addressed
@@ -592,15 +621,31 @@ pub async fn new_text_post(
     let Ok(Some(config)) = crate::twilio_sms::SmsIntakeConfig::from_env() else {
         return redirect_error(back, "Texting is not configured on this deployment");
     };
-    let (firm_id, brand) = match crate::twilio_sms::receiving_firm(&state.surreal, &config).await {
-        Ok(found) => found,
-        Err(error) => return redirect_error(back, &error),
+    // The deployment's sending number must be a registered number: the
+    // registry — not the webhook host — says which Brand and Firm the
+    // conversation belongs to.
+    let Some(registry) = state.twilio_registry.as_deref() else {
+        return redirect_error(back, "Texting is not configured on this deployment");
+    };
+    let registered = match store::brand_phone_numbers::find_by_number(registry, &config.number)
+        .await
+    {
+        Ok(Some(registered)) => registered,
+        Ok(None) => return redirect_error(back, "Texting is not configured on this deployment"),
+        Err(error) => return redirect_error(back, &error.to_string()),
+    };
+    let firm_id = match store::firms::firm_id_for_brand_key(&state.surreal, &registered.brand_key)
+        .await
+    {
+        Ok(Some(firm_id)) => firm_id,
+        Ok(None) => return redirect_error(back, "The texting number's Brand has no owning Firm"),
+        Err(error) => return redirect_error(back, &error.to_string()),
     };
     let queued = store::inbox::open_sms_conversation(
         &state.surreal,
         actor_id,
         firm_id,
-        Some(brand.as_str()),
+        Some(&registered.brand_key),
         &config.number,
         &form.to,
         &form.body,
@@ -1126,6 +1171,7 @@ mod tests {
             secure_cookies: false,
             attachment_scanner: app.attachment_scanner,
             runtime_kms: app.runtime_kms,
+            twilio_registry: None,
         };
         let form = || {
             axum::Form(ContactForm {
@@ -1172,6 +1218,7 @@ mod tests {
             secure_cookies: false,
             attachment_scanner: app.attachment_scanner,
             runtime_kms: app.runtime_kms,
+            twilio_registry: None,
         };
         let form = || {
             axum::Form(NewTextForm {
@@ -1219,6 +1266,7 @@ mod tests {
             secure_cookies: false,
             attachment_scanner: app.attachment_scanner,
             runtime_kms: app.runtime_kms,
+            twilio_registry: None,
         };
         let missing_session = intake_reply_post(
             State(state.clone()),
@@ -1551,6 +1599,7 @@ mod tests {
             secure_cookies: false,
             attachment_scanner: app.attachment_scanner,
             runtime_kms: app.runtime_kms,
+            twilio_registry: None,
         };
         let response = intake_reply_post(
             State(state),
@@ -1638,6 +1687,7 @@ mod tests {
             secure_cookies: false,
             attachment_scanner: app.attachment_scanner,
             runtime_kms: app.runtime_kms,
+            twilio_registry: None,
         };
         let response = reply_post(
             State(state),

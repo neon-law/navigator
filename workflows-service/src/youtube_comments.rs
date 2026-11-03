@@ -26,6 +26,7 @@ use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 use workflows::social_publish::{self, TokenRefreshConfig};
+use workflows::trigger::ServiceTarget;
 
 const YOUTUBE_API: &str = "https://www.googleapis.com/youtube/v3";
 /// Page size for commentThreads reads.
@@ -375,6 +376,50 @@ impl YoutubeCommentsPollerService {
 /// A failed durable submission — the caller's journaled step retries it while
 /// ingest itself stays untouched.
 async fn start_inbound_hooks(message_id: Uuid) -> anyhow::Result<()> {
+    // The alert's rollout switch chooses the worker's DBOS ingress for the
+    // alert; triage has no DBOS twin yet and keeps its Restate submission,
+    // which stays a no-op on a deployment without a broker configured.
+    let alert_target = workflows::trigger::service_target(
+        workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
+        std::env::var(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
+    )?;
+    match &alert_target {
+        ServiceTarget::Dbos { ingress, token } => {
+            workflows::trigger::start_dbos_inbound_message_alert(
+                ingress,
+                token,
+                &serde_json::json!({
+                    "workflow_id":
+                        workflows::trigger::inbound_message_alert_workflow_id(message_id),
+                    "request": workflows::InboundMessageAlertRequest { message_id },
+                }),
+            )
+            .await?;
+        }
+        ServiceTarget::Restate => {
+            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+            else {
+                return Ok(());
+            };
+            let auth = std::env::var("RESTATE_AUTH_TOKEN").ok();
+            workflows::start_workflow(
+                &ingress,
+                auth.as_deref(),
+                "InboundMessageAlert",
+                &message_id.to_string(),
+                "run",
+                &workflows::InboundMessageAlertRequest { message_id },
+                true,
+            )
+            .await?;
+        }
+    }
     let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -382,16 +427,6 @@ async fn start_inbound_hooks(message_id: Uuid) -> anyhow::Result<()> {
         return Ok(());
     };
     let auth = std::env::var("RESTATE_AUTH_TOKEN").ok();
-    workflows::start_workflow(
-        &ingress,
-        auth.as_deref(),
-        "InboundMessageAlert",
-        &message_id.to_string(),
-        "run",
-        &workflows::InboundMessageAlertRequest { message_id },
-        true,
-    )
-    .await?;
     workflows::start_workflow(
         &ingress,
         auth.as_deref(),

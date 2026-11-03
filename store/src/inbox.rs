@@ -37,6 +37,7 @@ const ATTEMPT: &str = "inbox_delivery_attempt";
 pub mod channel {
     pub const EMAIL: &str = "email";
     pub const SMS: &str = "sms";
+    pub const VOICE: &str = "voice";
     pub const FACEBOOK: &str = "facebook";
     pub const INSTAGRAM: &str = "instagram";
     pub const THREADS: &str = "threads";
@@ -540,6 +541,11 @@ impl AssignmentRow {
     }
 }
 
+pub(crate) fn allows_external_reply(conversation: &Conversation) -> bool {
+    conversation.channel != channel::VOICE
+        && !crate::fi_import::is_account(&conversation.provider_account)
+}
+
 /// The label the inbox shows for what the viewer should do next.
 #[must_use]
 pub fn next_action(
@@ -653,6 +659,22 @@ pub(crate) async fn ingest_attachment_on(
     })
 }
 
+/// Rebuild the deduped result for an already-ingested provider id: the
+/// caller receives the original conversation/message pair, marked `deduped`.
+async fn replay_existing_message(
+    db: &SurrealDb,
+    message_id: Uuid,
+) -> Result<IngestedInbound, InboxError> {
+    let Some(message) = message_by_id(db, message_id).await? else {
+        return Err(InboxError::NotFound);
+    };
+    Ok(IngestedInbound {
+        conversation_id: message.conversation_id,
+        message_id: message.id,
+        deduped: true,
+    })
+}
+
 /// Ingest one provider delivery. A repeated webhook with the same Firm,
 /// channel, account, and provider message id returns the original row.
 ///
@@ -729,7 +751,7 @@ async fn ingest_inbound_surreal(
 ) -> Result<IngestedInbound, InboxError> {
     let channel_supported = matches!(
         inbound.channel,
-        channel::EMAIL | channel::SMS | channel::SCRAPER
+        channel::EMAIL | channel::SMS | channel::SCRAPER | channel::VOICE
     ) || is_social_channel(inbound.channel);
     if !channel_supported
         || !matches!(
@@ -748,14 +770,7 @@ async fn ingest_inbound_surreal(
     )
     .await?
     {
-        let Some(message) = message_by_id(db, existing).await? else {
-            return Err(InboxError::NotFound);
-        };
-        return Ok(IngestedInbound {
-            conversation_id: message.conversation_id,
-            message_id: message.id,
-            deduped: true,
-        });
+        return replay_existing_message(db, existing).await;
     }
 
     let conversation = match find_open_thread(db, inbound).await? {
@@ -966,6 +981,24 @@ async fn recover_deduped_ingress(
     Err(error)
 }
 
+/// Check the authoritative Person and participation before an Inbox assignment.
+/// Owners may assign across Projects; Lawyers and Clerks require participation.
+///
+/// # Errors
+/// Returns an error when the Person or participation cannot be read.
+pub async fn can_assign_project(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<bool, InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    match actor.role {
+        Role::Owner => Ok(true),
+        Role::Lawyer | Role::Clerk => sees_project(db, actor_id, actor.role, project_id).await,
+        Role::Admin | Role::Client => Ok(false),
+    }
+}
+
 /// Attribute or reassign a conversation to a Project in the same Firm.
 ///
 /// # Errors
@@ -973,7 +1006,59 @@ async fn recover_deduped_ingress(
 /// [`InboxError::Denied`] when the actor is not an Owner or a participating Lawyer/Clerk.
 /// [`InboxError::CrossFirm`] when the Project belongs to another Firm.
 /// [`InboxError::NotFound`] when the conversation or Project is missing.
+/// Voice billing and read-only Fi SMS history leave the Firm queue once.
+/// Repeated assignment to that Project repairs a checkpoint gap without
+/// allowing a concurrent import to move the history to another Project.
 pub async fn assign(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+    project_id: Uuid,
+) -> Result<Assignment, InboxError> {
+    let conversation = conversation_by_id(db, conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if conversation.channel == channel::VOICE
+        || (conversation.channel == channel::SMS
+            && crate::fi_import::is_account(&conversation.provider_account))
+    {
+        let pg = crate::postgres::PostgresDb::from_env()
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?;
+        return Box::pin(crate::billed_calls::assign_conversation(
+            &pg,
+            db,
+            actor_id,
+            conversation_id,
+            project_id,
+        ))
+        .await;
+    }
+    assign_unbilled(db, actor_id, conversation_id, project_id).await
+}
+
+/// Require ordinary Inbox assignment rights using the authoritative Person and Project.
+/// Owner may assign; a Lawyer or Clerk needs target Project participation.
+/// The target Project must belong to the Conversation or import's resolved Firm.
+pub async fn require_assignment_authorization(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    firm_id: Uuid,
+    project_id: Uuid,
+) -> Result<(), InboxError> {
+    let project = projects::find_by_id(db, project_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if project.firm_id != Some(firm_id) {
+        return Err(InboxError::CrossFirm);
+    }
+    if !can_assign_project(db, actor_id, project_id).await? {
+        return Err(InboxError::Denied);
+    }
+    Ok(())
+}
+
+pub(crate) async fn assign_unbilled(
     db: &SurrealDb,
     actor_id: Uuid,
     conversation_id: Uuid,
@@ -989,22 +1074,10 @@ pub async fn assign(
         ))
         .await;
     }
-    let actor = load_person(db, actor_id).await?;
     let conversation = conversation_by_id(db, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
-    let project = projects::find_by_id(db, project_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if project.firm_id != Some(conversation.firm_id) {
-        return Err(InboxError::CrossFirm);
-    }
-    if !matches!(actor.role, Role::Owner)
-        && (!matches!(actor.role, Role::Lawyer | Role::Clerk)
-            || !sees_project(db, actor_id, actor.role, project_id).await?)
-    {
-        return Err(InboxError::Denied);
-    }
+    require_assignment_authorization(db, actor_id, conversation.firm_id, project_id).await?;
     assign_write(db, actor_id, &conversation, project_id).await
 }
 
@@ -1018,6 +1091,40 @@ pub async fn assign(
 /// Lawyer/Clerk without active participation on the Project. The other
 /// cases of [`assign`] apply unchanged.
 pub(crate) async fn assign_for_triage_review(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+    project_id: Uuid,
+) -> Result<Assignment, InboxError> {
+    let conversation = conversation_by_id(db, conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if conversation.channel == channel::VOICE
+        || (conversation.channel == channel::SMS
+            && crate::fi_import::is_account(&conversation.provider_account))
+    {
+        let pg = crate::postgres::PostgresDb::from_env()
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?;
+        return Box::pin(crate::billed_calls::assign_conversation_for_triage_review(
+            &pg,
+            db,
+            actor_id,
+            conversation_id,
+            project_id,
+        ))
+        .await;
+    }
+    Box::pin(assign_for_triage_review_unbilled(
+        db,
+        actor_id,
+        conversation_id,
+        project_id,
+    ))
+    .await
+}
+
+pub(crate) async fn assign_for_triage_review_unbilled(
     db: &SurrealDb,
     actor_id: Uuid,
     conversation_id: Uuid,
@@ -1133,6 +1240,21 @@ async fn assign_write(
 ) -> Result<Assignment, InboxError> {
     let conversation_id = conversation.id;
     let from_project_id = conversation.project_id;
+    if from_project_id == Some(project_id)
+        && (conversation.channel == channel::VOICE
+            || (conversation.channel == channel::SMS
+                && crate::fi_import::is_account(&conversation.provider_account)))
+    {
+        project_all_messages(db, conversation).await?;
+        if let Some(previous) = assignments(db, conversation_id)
+            .await?
+            .into_iter()
+            .rev()
+            .find(|assignment| assignment.to_project_id == project_id)
+        {
+            return Ok(previous);
+        }
+    }
     db.query("UPDATE $id SET project_id = $project, unread = true, updated_at = time::now()")
         .bind(("id", record_id(CONVERSATION, conversation_id)))
         .bind(("project", record_id(projects::PROJECT_TABLE, project_id)))
@@ -1286,6 +1408,9 @@ pub async fn queue_reply(
     let conversation = conversation_by_id(db, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
+    if !allows_external_reply(&conversation) {
+        return Err(InboxError::Denied);
+    }
     let Some(project_id) = conversation.project_id else {
         return Err(InboxError::Denied);
     };
@@ -1427,10 +1552,12 @@ pub(crate) async fn sender_identity(
                 .as_ref()
                 .map(ContactLink::of),
         ),
-        channel::SMS => Ok(persons::find_by_phone(db, &conversation.external_address)
-            .await?
-            .as_ref()
-            .map(ContactLink::of)),
+        phone if has_phone_counterparty(phone) => {
+            Ok(persons::find_by_phone(db, &conversation.external_address)
+                .await?
+                .as_ref()
+                .map(ContactLink::of))
+        }
         other => match social_system(other) {
             Some(system) => Ok(external_identities::find_person_by_account(
                 db,
@@ -1638,6 +1765,9 @@ async fn queue_sms_message(
     actor_id: Uuid,
     body: &str,
 ) -> Result<Uuid, InboxError> {
+    if crate::fi_import::is_account(&conversation.provider_account) {
+        return Err(InboxError::Denied);
+    }
     let message_id = create_message(
         db,
         conversation.id,
@@ -1706,29 +1836,23 @@ async fn dispatch_queued_surreal(
             report.suppressed += 1;
             continue;
         }
-        let allowed = match message.author_person_id {
-            Some(author_id)
-                if is_social_channel(&conversation.channel)
-                    || conversation.channel == channel::SMS =>
-            {
-                // A text is sent by the Owner or the Firm's Brand-content Admin,
-                // exactly like a social reply, besides a participating Lawyer or
-                // Clerk, so the admin inbox can open and answer text threads.
-                social_reply_actor_still_authorized(db, author_id, &conversation).await?
-            }
-            Some(author_id) => {
-                participant_still_may_reply(db, author_id, conversation.project_id).await?
-            }
-            None => false,
-        };
-        if !allowed {
+        let allowed = queued_author_still_authorized(db, &conversation, &message).await?;
+        if !allowed || !allows_external_reply(&conversation) {
             set_delivery(db, message.id, delivery::SUPPRESSED, None).await?;
             journal_attempt(
                 db,
                 message.id,
                 delivery::SUPPRESSED,
                 None,
-                Some("participation revoked"),
+                Some(
+                    if crate::fi_import::is_account(&conversation.provider_account) {
+                        "import source is read-only"
+                    } else if conversation.channel == channel::VOICE {
+                        "voice replies are unsupported"
+                    } else {
+                        "participation revoked"
+                    },
+                ),
             )
             .await?;
             report.suppressed += 1;
@@ -1788,6 +1912,25 @@ async fn dispatch_queued_surreal(
         }
     }
     Ok(report)
+}
+
+async fn queued_author_still_authorized(
+    db: &SurrealDb,
+    conversation: &Conversation,
+    message: &Message,
+) -> Result<bool, InboxError> {
+    match message.author_person_id {
+        Some(author_id)
+            if is_social_channel(&conversation.channel) || conversation.channel == channel::SMS =>
+        {
+            // Text and social replies retain the same Firm and participation checks.
+            social_reply_actor_still_authorized(db, author_id, conversation).await
+        }
+        Some(author_id) => {
+            participant_still_may_reply(db, author_id, conversation.project_id).await
+        }
+        None => Ok(false),
+    }
 }
 
 pub(crate) fn outbound_envelope(
@@ -2396,6 +2539,7 @@ pub async fn intake_detail(
     let can_social_reply = is_social_channel(&conversation.channel)
         && social_reply_actor_still_authorized(db, actor_id, &conversation).await?;
     let can_sms_reply = conversation.channel == channel::SMS
+        && !crate::fi_import::is_account(&conversation.provider_account)
         && social_reply_actor_still_authorized(db, actor_id, &conversation).await?;
     let bodies_visible =
         conversation.project_id.is_none() || participates || can_social_reply || can_sms_reply;
@@ -2466,7 +2610,8 @@ pub async fn project_thread(
         return Err(InboxError::NotFound);
     }
     let can_note = matches!(actor.role, Role::Lawyer | Role::Clerk);
-    let can_send = matches!(actor.role, Role::Lawyer | Role::Clerk);
+    let can_send =
+        matches!(actor.role, Role::Lawyer | Role::Clerk) && allows_external_reply(&conversation);
     let delivery_state = latest_outbound_state(db, conversation.id).await?;
     let messages = messages_for(db, conversation.id).await?;
     mark_read(db, conversation.id).await?;
@@ -2531,7 +2676,13 @@ pub async fn list_project(
             channel: conversation.channel.clone(),
             assignee: assignee_label(db, conversation.project_id).await?,
             unread: conversation.unread,
-            next_action: next_action(actor.role, true, &delivery_state, can_send).to_string(),
+            next_action: next_action(
+                actor.role,
+                true,
+                &delivery_state,
+                can_send && allows_external_reply(&conversation),
+            )
+            .to_string(),
             delivery: delivery_state,
             external_address: conversation.external_address,
             external_name: conversation.external_name,
@@ -2814,6 +2965,13 @@ pub(crate) fn is_social_channel(channel_name: &str) -> bool {
             | channel::X
             | channel::LINKEDIN
     )
+}
+
+/// Whether a conversation's counterparty address is a phone number. A call
+/// arrives from the same E.164 address a text does, so the display-only
+/// contact link applies to both.
+fn has_phone_counterparty(channel_name: &str) -> bool {
+    matches!(channel_name, channel::SMS | channel::VOICE)
 }
 
 async fn authorize_social_reply(
@@ -3165,6 +3323,7 @@ async fn project_message(
 
 pub(crate) fn spine_channel(channel_name: &str, direction_value: &str) -> &'static str {
     match (channel_name, direction_value) {
+        (channel::VOICE, _) => communications::channel::CALL,
         (channel::SMS, direction::OUTBOUND) => communications::channel::SMS_OUTBOUND,
         (channel::SMS, _) => communications::channel::SMS_INBOUND,
         (channel::EMAIL, direction::OUTBOUND) => communications::channel::EMAIL_OUTBOUND,
@@ -3418,6 +3577,18 @@ async fn mark_read(db: &SurrealDb, conversation_id: Uuid) -> Result<(), InboxErr
 
 /// Shared transport handle for callers that dispatch after a request returns.
 pub type SharedTransport = Arc<dyn OutboundTransport>;
+
+/// Messages for an already-authorized reporting Conversation, from its active
+/// authority. The caller must resolve visibility before supplying this ID.
+pub(crate) async fn messages_for_reporting(
+    db: &SurrealDb,
+    id: Uuid,
+) -> Result<Vec<Message>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return crate::postgres::inbox::messages_for_on(&pg, id).await;
+    }
+    messages_for(db, id).await
+}
 
 #[cfg(test)]
 mod tests {
@@ -3863,6 +4034,50 @@ mod tests {
         assert_eq!(audit.len(), 1);
         assert_eq!(audit[0].to_project_id, world.project);
         assert!(audit[0].from_project_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn ordinary_assignment_authorization_uses_source_roles_and_supervised_participation() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        for actor in [world.owner, world.lawyer, world.clerk] {
+            require_assignment_authorization(&db, actor, world.firm, world.project)
+                .await
+                .unwrap();
+        }
+        for actor in [world.admin, world.client, world.outsider] {
+            assert!(matches!(
+                require_assignment_authorization(&db, actor, world.firm, world.project).await,
+                Err(InboxError::Denied)
+            ));
+        }
+        assert!(matches!(
+            require_assignment_authorization(&db, world.owner, world.firm, world.foreign_project)
+                .await,
+            Err(InboxError::CrossFirm)
+        ));
+        assert!(firms::memberships_for_person(&db, world.outsider)
+            .await
+            .unwrap()
+            .is_empty());
+        projects::add_participation(
+            &db,
+            world.project,
+            world.outsider,
+            projects::participation_for_role(Role::Lawyer),
+        )
+        .await
+        .unwrap();
+        require_assignment_authorization(&db, world.outsider, world.firm, world.project)
+            .await
+            .unwrap();
+        projects::remove_participation(&db, world.clerk_participation)
+            .await
+            .unwrap();
+        assert!(matches!(
+            require_assignment_authorization(&db, world.clerk, world.firm, world.project).await,
+            Err(InboxError::Denied)
+        ));
     }
 
     #[tokio::test]
@@ -5522,6 +5737,80 @@ mod tests {
         assert_eq!(listed[0].channel, channel::EMAIL);
     }
 
+    #[tokio::test]
+    async fn a_call_opens_one_thread_per_caller_and_dedups_by_call_sid() {
+        fn call(firm: Uuid, call_sid: &str) -> IngestInbound<'_> {
+            IngestInbound {
+                firm_id: firm,
+                project_id: None,
+                brand_key: Some("neon"),
+                interaction_type: Some("message"),
+                provider_post_id: None,
+                parent_provider_message_id: None,
+                visibility: Some("private"),
+                channel: channel::VOICE,
+                provider_account: "+15550100000",
+                provider_message_id: call_sid,
+                provider_thread_ref: None,
+                external_address: "+15555550100",
+                external_name: None,
+                subject: None,
+                body: "Call from +15555550100 — completed (42s).",
+                source_page: Some("+15550100000"),
+                source_channel: Some(channel::VOICE),
+                matter_consent: false,
+                promotional_opt_in: false,
+                email_conversation_id: None,
+                attachments: Vec::new(),
+                occurred_at: "2026-10-30T18:00:00+00:00",
+                raw_storage_key: None,
+            }
+        }
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let first = ingest_inbound(&db, &call(world.firm, "CA1111111"))
+            .await
+            .unwrap();
+        assert!(!first.deduped);
+        let again = ingest_inbound(&db, &call(world.firm, "CA1111111"))
+            .await
+            .unwrap();
+        assert!(
+            again.deduped,
+            "a redelivered CallSid returns the original row"
+        );
+        assert_eq!(again.message_id, first.message_id);
+        assert_eq!(again.conversation_id, first.conversation_id);
+
+        // A later call from the same caller threads onto the open one.
+        let second_call = ingest_inbound(&db, &call(world.firm, "CA2222222"))
+            .await
+            .unwrap();
+        assert!(!second_call.deduped);
+        assert_eq!(second_call.conversation_id, first.conversation_id);
+
+        let listed = list_intake(&db, world.owner).await.unwrap();
+        let row = listed
+            .iter()
+            .find(|row| row.id == first.conversation_id)
+            .unwrap();
+        assert_eq!(row.channel, channel::VOICE);
+        assert_eq!(row.brand_key.as_deref(), Some("neon"));
+    }
+
+    /// The whitelist stays closed: adding the voice lane admits no others.
+    #[tokio::test]
+    async fn an_unlisted_channel_is_still_denied() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let mut fax = inbound(world.firm, "fax", "+15550100000", "fax-1", "+15555550100");
+        fax.brand_key = Some("neon");
+        assert!(matches!(
+            ingest_inbound(&db, &fax).await,
+            Err(InboxError::Denied)
+        ));
+    }
+
     #[test]
     fn delivery_does_not_move_backward() {
         assert_eq!(
@@ -5705,5 +5994,141 @@ mod tests {
             process_context(&db, world.owner, Uuid::now_v7()).await,
             Err(InboxError::NotFound)
         ));
+    }
+    #[tokio::test]
+    async fn voice_threads_allow_internal_notes_without_offering_replies() {
+        let db = mem_surreal().await;
+        let w = world(&db).await;
+        let mut input = inbound(
+            w.firm,
+            channel::VOICE,
+            "+12025550100",
+            "CAvoice-view-guard",
+            "+12025550101",
+        );
+        input.project_id = Some(w.project);
+        let saved = ingest_inbound(&db, &input).await.unwrap();
+        for actor in [w.lawyer, w.clerk] {
+            let view = project_thread(&db, actor, w.project, saved.conversation_id)
+                .await
+                .unwrap();
+            assert!(view.can_note, "participating firm people may note a call");
+            assert!(!view.can_send, "VOICE has no outbound reply transport");
+            assert_eq!(view.next_action, "Leave an internal note");
+            let rows = list_project(&db, actor, w.project).await.unwrap();
+            assert_eq!(
+                rows.iter()
+                    .find(|r| r.id == saved.conversation_id)
+                    .unwrap()
+                    .next_action,
+                "Leave an internal note"
+            );
+            let note = post_note(
+                &db,
+                actor,
+                saved.conversation_id,
+                "Synthetic call follow-up",
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                message_by_id(&db, note).await.unwrap().unwrap().direction,
+                direction::INTERNAL
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn voice_reply_refusal_creates_no_pending_outbound_message() {
+        let db = mem_surreal().await;
+        let w = world(&db).await;
+        let mut input = inbound(
+            w.firm,
+            channel::VOICE,
+            "+12025550100",
+            "CAvoice-queue-guard",
+            "+12025550101",
+        );
+        input.project_id = Some(w.project);
+        let saved = ingest_inbound(&db, &input).await.unwrap();
+        for actor in [w.lawyer, w.clerk] {
+            assert!(
+                matches!(
+                    queue_reply(
+                        &db,
+                        actor,
+                        saved.conversation_id,
+                        "Synthetic reply",
+                        purpose::MATTER
+                    )
+                    .await,
+                    Err(InboxError::Denied)
+                ),
+                "VOICE replies must be refused before queue creation"
+            );
+        }
+        assert!(
+            messages_for(&db, saved.conversation_id)
+                .await
+                .unwrap()
+                .iter()
+                .all(|m| m.direction != direction::OUTBOUND),
+            "refused call replies leave no pending outbound Messages"
+        );
+    }
+    #[tokio::test]
+    async fn existing_voice_outbound_rows_never_reach_the_transport() {
+        let db = mem_surreal().await;
+        let w = world(&db).await;
+        let mut input = inbound(
+            w.firm,
+            channel::VOICE,
+            "+12025550100",
+            "CAvoice-pending-guard",
+            "+12025550101",
+        );
+        input.project_id = Some(w.project);
+        let saved = ingest_inbound(&db, &input).await.unwrap();
+        let mut ids = Vec::new();
+        for state in [delivery::FAILED, delivery::QUEUED] {
+            ids.push(
+                create_message(
+                    &db,
+                    saved.conversation_id,
+                    direction::OUTBOUND,
+                    "Synthetic prior reply",
+                    Some(w.lawyer),
+                    None,
+                    None,
+                    state,
+                    purpose::MATTER,
+                    None,
+                    None,
+                    "2026-11-02T00:00:00Z",
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        let transport = RecordingTransport::new(TransportOutcome::Unknown);
+        let report = dispatch_queued(&db, &transport).await.unwrap();
+        assert_eq!(report.suppressed, 1);
+        assert!(
+            transport.calls().is_empty(),
+            "unsupported call replies never reach a provider"
+        );
+        for (id, state) in ids
+            .into_iter()
+            .zip([delivery::FAILED, delivery::SUPPRESSED])
+        {
+            assert_eq!(
+                message_by_id(&db, id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .delivery_state,
+                state
+            );
+        }
     }
 }

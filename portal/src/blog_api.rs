@@ -379,9 +379,28 @@ pub(crate) async fn status(
     Ok(Json(json!({
         "post":post,"publications":publications,"accounts":accounts,
         "connection_setup":connection_setup,
-        "publisher_configured":crate::cron_schedules::restate_broker_url().is_some()
+        "publisher_configured":publisher_configured()
     }))
     .into_response())
+}
+
+/// Whether this deployment can start publications: the `SocialPublisher`
+/// switch selects the worker's DBOS ingress, else the Restate broker.
+fn publisher_configured() -> bool {
+    match workflows::trigger::service_target(
+        workflows::trigger::SOCIAL_PUBLISHER_ENABLED_ENV,
+        std::env::var(workflows::trigger::SOCIAL_PUBLISHER_ENABLED_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
+    ) {
+        Ok(workflows::trigger::ServiceTarget::Dbos { .. }) => true,
+        Ok(workflows::trigger::ServiceTarget::Restate) => {
+            crate::cron_schedules::restate_broker_url().is_some()
+        }
+        Err(_) => false,
+    }
 }
 
 async fn selected_accounts(
@@ -566,15 +585,67 @@ pub(crate) async fn publish(
     Json(input): Json<PublishPost>,
 ) -> Result<Response, BlogError> {
     authorize(&state, &actor, &input.brand).await?;
-    let broker = crate::cron_schedules::restate_broker_url().ok_or(BlogError::Unavailable)?;
-    queue_publication(
-        &state,
-        &actor,
-        &input,
-        &broker,
-        std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
+    let target = workflows::trigger::service_target(
+        workflows::trigger::SOCIAL_PUBLISHER_ENABLED_ENV,
+        std::env::var(workflows::trigger::SOCIAL_PUBLISHER_ENABLED_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
+    )
+    .map_err(|error| BlogError::Invalid(error.to_string()))?;
+    match &target {
+        workflows::trigger::ServiceTarget::Dbos { ingress, token } => {
+            queue_publication_dbos(&state, &actor, &input, ingress, token).await
+        }
+        workflows::trigger::ServiceTarget::Restate => {
+            let broker =
+                crate::cron_schedules::restate_broker_url().ok_or(BlogError::Unavailable)?;
+            queue_publication(
+                &state,
+                &actor,
+                &input,
+                &broker,
+                std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
+            )
+            .await
+        }
+    }
+}
+
+/// Schedule one publication through the authenticated internal DBOS worker
+/// ingress, keyed by the same `(post, scheduled time)` identity the Restate
+/// invocation key carried. The caller has already authorized the brand.
+async fn queue_publication_dbos(
+    state: &ApiState,
+    actor: &SessionData,
+    input: &PublishPost,
+    ingress: &str,
+    token: &str,
+) -> Result<Response, BlogError> {
+    let request = prepare(state, actor, input, Utc::now()).await?;
+    workflows::trigger::start_dbos_social_publisher(
+        ingress,
+        token,
+        &serde_json::json!({
+            "workflow_id":
+                workflows::trigger::social_publisher_workflow_id(
+                    request.post_id,
+                    request.publish_at,
+                ),
+            "request": request,
+        }),
     )
     .await
+    .map_err(database)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "post_id":request.post_id,"status":"scheduled","publish_at":request.publish_at,
+            "outcome":"queued","brand":input.brand,"account_ids":input.account_ids
+        })),
+    )
+        .into_response())
 }
 
 async fn queue_publication(

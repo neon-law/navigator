@@ -366,6 +366,7 @@ fn inbox_channels() -> Vec<String> {
     vec![
         store::inbox::channel::EMAIL.into(),
         store::inbox::channel::SMS.into(),
+        store::inbox::channel::VOICE.into(),
         store::inbox::channel::FACEBOOK.into(),
         store::inbox::channel::INSTAGRAM.into(),
         store::inbox::channel::THREADS.into(),
@@ -970,6 +971,7 @@ pub fn inbox_list_body(page: &InboxPage) -> Element {
         main { id: "inbox", class: "nav-theme",
             header { class: "page-header",
                 h1 { "{title}" }
+                a { href: crate::communication_dashboard::PARKED_CALLS_PATH, "Parked calls" }
                 p { class: "page-subtitle",
                     "Every email, text, and message to the firm, newest first."
                 }
@@ -1050,6 +1052,15 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
     let firm_name = page.firm_name.clone();
     let title = page.title.clone();
     let unread = if page.unread { "Unread" } else { "Read" };
+    let fi_metadata = page.provider_account.starts_with("google_fi:");
+    let next_action = if page.next_action == "Reassign"
+        && page.assign_action.is_none()
+        && (page.channel == "voice" || fi_metadata)
+    {
+        "Review"
+    } else {
+        page.next_action.as_str()
+    };
     let messages = page.messages.iter().map(|message| {
         let label = if message.internal {
             "Internal note"
@@ -1203,11 +1214,13 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
                 }
                 if let Some(reference) = page.provider_post_id.as_ref() { p { class: "nav-muted", "Provider post: {reference}" } }
                 if let Some(reference) = page.provider_thread_ref.as_ref() { p { class: "nav-muted", "Provider thread: {reference}" } }
-                p { class: "page-subtitle", "Next: {page.next_action}" }
+                p { class: "page-subtitle", "Next: {next_action}" }
                 if unsupported_private {
                     p { "This channel supports public comment replies only; private replies are unavailable." }
                 }
-                if page.reply_action.is_none() {
+                if fi_metadata {
+                    p { class: "nav-muted", "Imported Fi history cannot send external replies." }
+                } else if page.reply_action.is_none() {
                     p { class: "nav-muted", "Replies require an assigned Project and active Lawyer or Clerk participation. Owner and the Firm Admin DRI may reply to texts and supported social interactions." }
                 }
             }
@@ -1443,6 +1456,19 @@ mod tests {
         assert!(!brand_matches(Some("other"), Some("neon")));
         assert!(!brand_matches(None, Some("neon")));
         assert!(brand_matches(None, None));
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn voice_filter_preserves_the_selected_brand() {
+        let mut view = page(ViewerRole::Owner, Vec::new());
+        view.channels = super::inbox_channels();
+        view.brand_filter = Some("neon".into());
+        let html = dioxus_ssr::render_element(inbox_list_body(&view));
+        assert!(
+            html.contains(r#"href="/app/inbox?channel=voice&#38;brand=neon""#),
+            "the Inbox must offer voice calls without dropping the Brand filter: {html}"
+        );
     }
 
     fn page(role: ViewerRole, rows: Vec<InboxRowView>) -> InboxPage {

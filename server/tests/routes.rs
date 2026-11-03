@@ -772,6 +772,7 @@ async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
         inbound_email_secret: None,
         summary_intake: None,
         sms_intake: None,
+        twilio_registry: None,
         email_events_secret: None,
         sendgrid_events_public_key: None,
         bootstrap_owner_email: None,
@@ -23394,12 +23395,34 @@ async fn the_firm_show_page_renders_its_invoice_graphs_for_owner_and_the_firms_a
     );
 }
 
+async fn seed_sms_summary_mailroom(surreal: &store::surreal::SurrealDb) {
+    let addr = store::addresses::create(
+        surreal,
+        &store::addresses::NewAddress {
+            line1: "1 Test".into(),
+            city: "Reno".into(),
+            region: "NV".into(),
+            postal_code: "89501".into(),
+            country: "US".into(),
+            ..store::addresses::NewAddress::default()
+        },
+    )
+    .await
+    .unwrap();
+    store::mailrooms::create(surreal, "HQ", addr.id)
+        .await
+        .unwrap();
+}
+
 /// A signed Twilio text lands on the same summary lane as support email:
 /// one receipt keyed to the firm's number, one archived message the worker
 /// can normalize, an `EmailSummary` start, and a redelivery that reuses all
 /// three.
 #[tokio::test]
 async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
+    let Some(registry) = store::test_support::twilio::postgres().await else {
+        return;
+    };
     let (mut state, surreal) = state_with_engines().await;
     let (firm_id, _, _, project_id) = seed_summary_dri(&surreal).await;
     let restate = MockServer::start().await;
@@ -23416,22 +23439,7 @@ async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
         .await
         .unwrap(),
     );
-    let addr = store::addresses::create(
-        &surreal,
-        &store::addresses::NewAddress {
-            line1: "1 Test".into(),
-            city: "Reno".into(),
-            region: "NV".into(),
-            postal_code: "89501".into(),
-            country: "US".into(),
-            ..store::addresses::NewAddress::default()
-        },
-    )
-    .await
-    .unwrap();
-    store::mailrooms::create(&surreal, "HQ", addr.id)
-        .await
-        .unwrap();
+    seed_sms_summary_mailroom(&surreal).await;
     let (public_key, _headers) = summary_test_key();
     state.summary_intake = Some(portal::inbound_email::SummaryIntakeConfig {
         envelope_recipients: vec!["intake@parse.example.com".into()],
@@ -23453,6 +23461,18 @@ async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
         auth_token: "synthetic-token".into(),
         webhook_url: "https://www.neonlaw.com/webhook/twilio/sms".into(),
     };
+    store::test_support::twilio::register_number(
+        &surreal,
+        &registry,
+        firm_id,
+        "neon",
+        &sms.number,
+        &sms.auth_token,
+    )
+    .await;
+    state.runtime_kms = Arc::new(cloud::FakeKms::new("spine-test"));
+    state.canonical_host = CanonicalHost::new(Some("www.neonlaw.com".into()));
+    state.twilio_registry = Some(Arc::new(registry));
     state.sms_intake = Some(sms.clone());
     let params: Vec<(String, String)> = [
         ("MessageSid", "SM0000000000000000000000000000001"),
@@ -23474,6 +23494,7 @@ async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
         let request = Request::builder()
             .method("POST")
             .uri(portal::twilio_sms::SMS_WEBHOOK_PATH)
+            .header("host", "www.neonlaw.com")
             .header("content-type", "application/x-www-form-urlencoded")
             .header("x-twilio-signature", &signature)
             .body(Body::from(body.clone()))

@@ -3069,13 +3069,11 @@ async fn seed_entities(
         }
         match crate::entities::create(surreal, &new_entity(&rec.name, et.id, jur.id)).await {
             Ok(_) => report.entities_inserted += 1,
-            // The firm's own row is the one fixture two seeds can race for,
-            // because it is the only one that takes `firm_anchor_key` — and
-            // the UNIQUE index is what makes the loser lose. The cucumber
-            // suites run scenarios concurrently against one shared engine and
-            // each re-seeds this fixture, so losing that race has to be
-            // "someone else already did it", not a failed seed.
-            Err(crate::entities::EntityError::FirmAnchorTaken) => {}
+            // Claiming the anchor precedes writing its Entity. A concurrent
+            // seed must wait for that row before later steps can resolve it.
+            Err(crate::entities::EntityError::FirmAnchorTaken) => {
+                wait_for_seed_entity(surreal, &rec.name).await?;
+            }
             Err(error) => return Err(error.into()),
         }
     }
@@ -3088,6 +3086,25 @@ async fn seed_entities(
             Err(error) => return Err(error.into()),
         }
     }
+    Ok(())
+}
+
+/// Wait for a concurrent claimant to publish its Entity. A stranded claim
+/// fails the seed without releasing or replacing another writer's ownership.
+async fn wait_for_seed_entity(surreal: &SurrealDb, name: &str) -> anyhow::Result<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if crate::entities::find_by_name(surreal, name)
+                .await?
+                .is_some()
+            {
+                return Ok::<(), crate::entities::EntityError>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("concurrent seed claim has no visible Entity: {name}"))??;
     Ok(())
 }
 
@@ -4448,6 +4465,98 @@ mod tests {
     use crate::question_registry::QuestionType;
     use crate::test_support::mem_surreal;
     use crate::{entities, entity_types, projects};
+
+    #[tokio::test]
+    async fn a_seed_waits_for_the_entity_behind_a_concurrent_anchor_claim() {
+        let db = mem_surreal().await;
+        let mut reference_report = SeedReport::default();
+        super::seed_jurisdictions(&db, &mut reference_report)
+            .await
+            .unwrap();
+        super::seed_entity_types(&db, &mut reference_report)
+            .await
+            .unwrap();
+        let entity_type = entity_types::find_by_name(&db, "Professional Corporation")
+            .await
+            .unwrap()
+            .unwrap();
+        let jurisdiction = jurisdictions::find_by_name(&db, "California")
+            .await
+            .unwrap()
+            .unwrap();
+        let input = super::new_entity(super::FIRM_ENTITY_NAME, entity_type.id, jurisdiction.id);
+        let owner = uuid::Uuid::now_v7();
+        db.query("CREATE type::record('firm_anchor', $key) SET entity_id = $entity")
+            .bind(("key", input.firm_anchor_key.clone().unwrap()))
+            .bind(("entity", crate::surreal::record_id("entity", owner)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let mut yaml: serde_yaml::Value = serde_yaml::from_str(super::canonical::ENTITY).unwrap();
+        yaml["records"]
+            .as_sequence_mut()
+            .unwrap()
+            .retain(|record| record["name"].as_str() == Some(super::FIRM_ENTITY_NAME));
+        let yaml = serde_yaml::to_string(&yaml).unwrap();
+        let mut report = SeedReport::default();
+        {
+            let seeding = super::seed_entities(&db, &yaml, "synthetic-entity-seed", &mut report);
+            tokio::pin!(seeding);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(100), &mut seeding)
+                    .await
+                    .is_err(),
+                "a claim alone does not prove the entity has been written"
+            );
+            entities::upsert_with_id(&db, owner, &input).await.unwrap();
+            seeding.await.unwrap();
+        }
+        assert_eq!(report.entities_inserted, 0);
+        assert_eq!(
+            entities::find_by_name(&db, super::FIRM_ENTITY_NAME)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            owner
+        );
+        assert_eq!(
+            entities::firm_anchor_holder(&db, input.firm_anchor_key.as_ref().unwrap())
+                .await
+                .unwrap(),
+            Some(owner)
+        );
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_stranded_seed_claim_fails_without_replacing_its_owner() {
+        let db = mem_surreal().await;
+        let owner = uuid::Uuid::now_v7();
+        let key = crate::entity_commands::firm_anchor_key(
+            super::FIRM_ENTITY_NAME,
+            super::FIRM_ENTITY_NAME,
+        )
+        .unwrap();
+        db.query("CREATE type::record('firm_anchor', $key) SET entity_id = $entity")
+            .bind(("key", key.clone()))
+            .bind(("entity", crate::surreal::record_id("entity", owner)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert!(super::wait_for_seed_entity(&db, super::FIRM_ENTITY_NAME)
+            .await
+            .is_err());
+        assert_eq!(
+            entities::firm_anchor_holder(&db, &key).await.unwrap(),
+            Some(owner)
+        );
+        assert!(entities::find_by_name(&db, super::FIRM_ENTITY_NAME)
+            .await
+            .unwrap()
+            .is_none());
+    }
 
     /// Every key a Firm is seeded wearing has a `brand` row to wear.
     ///

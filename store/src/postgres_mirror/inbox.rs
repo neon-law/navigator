@@ -216,15 +216,45 @@ fn parent(column: &str, id: Uuid) -> Option<MirrorKey> {
 }
 
 // No Source row is deletion or overwrite evidence after native Inbox cutover.
-fn require_source_authority() -> Result<(), MirrorError> {
+fn native_inbox_authority_selected() -> Result<bool, MirrorError> {
     let setting = match std::env::var(crate::postgres::inbox::AUTHORITY_ENV) {
         Ok(value) => Some(value),
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => return Err(MirrorError::InboxAuthority),
     };
-    match crate::postgres::inbox::enabled_from(setting.as_deref()) {
-        Ok(false) => Ok(()),
-        Ok(true) | Err(_) => Err(MirrorError::InboxAuthority),
+    crate::postgres::inbox::enabled_from(setting.as_deref())
+        .map_err(|_| MirrorError::InboxAuthority)
+}
+
+fn require_source_authority() -> Result<(), MirrorError> {
+    if native_inbox_authority_selected()? {
+        Err(MirrorError::InboxAuthority)
+    } else {
+        Ok(())
+    }
+}
+
+async fn require_native_triage_parent(pg: &PostgresDb, row: &Value) -> Result<(), MirrorError> {
+    let message = row
+        .get("message_id")
+        .and_then(uuid_in)
+        .ok_or(MirrorError::Source)?;
+    let firm = row
+        .get("firm_id")
+        .and_then(uuid_in)
+        .ok_or(MirrorError::Source)?;
+    let valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM message m JOIN inbox_conversation c \
+         ON c.id=m.conversation_id WHERE m.id=$1 AND c.firm_id=$2)",
+    )
+    .bind(message)
+    .bind(firm)
+    .fetch_one(&pg.0)
+    .await?;
+    if valid {
+        Ok(())
+    } else {
+        Err(MirrorError::Source)
     }
 }
 
@@ -244,7 +274,12 @@ async fn mirror_inner(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
-    require_source_authority()?;
+    let native_triage = if matches!(key, MirrorKey::InboxTriage(_)) {
+        native_inbox_authority_selected()?
+    } else {
+        require_source_authority()?;
+        false
+    };
     let table = table(key.table())?;
     let id = match key {
         MirrorKey::InboxConversation(id)
@@ -257,12 +292,18 @@ async fn mirror_inner(
         _ => return Err(MirrorError::Source),
     };
     if let Some(row) = source_one(surreal, table, id).await? {
+        if native_triage {
+            require_native_triage_parent(pg, &row).await?;
+        }
         for column in table.references.split(',').filter(|column| *column != "id") {
             if let Some(parent) = row
                 .get(column)
                 .and_then(uuid_in)
                 .and_then(|id| parent(column, id))
             {
+                if native_triage && matches!(parent, MirrorKey::InboxMessage(_)) {
+                    continue;
+                }
                 Box::pin(super::mirror(surreal, pg, &parent)).await?;
             }
         }
@@ -680,6 +721,40 @@ mod tests {
             .await
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn a_voice_transcript_preserves_its_channel_in_postgres() {
+        use crate::postgres_mirror::{self, MirrorKey};
+        let Some((options, database)) = postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = postgres_mirror::tests::connect(&options, &database).await;
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let mut input = inbound(firm);
+        input.channel = crate::inbox::channel::VOICE;
+        let saved = crate::inbox::ingest_inbound(&db, &input).await.unwrap();
+        let entity = crate::firms::find_by_id(&db, firm)
+            .await
+            .unwrap()
+            .unwrap()
+            .entity_id
+            .unwrap();
+        postgres_mirror::tests::mirror_identity(&pg, &[entity], &[]).await;
+        for key in [
+            MirrorKey::InboxConversation(saved.conversation_id),
+            MirrorKey::InboxMessage(saved.message_id),
+        ] {
+            postgres_mirror::mirror(&db, &pg, &key).await.unwrap();
+        }
+        let channel: String =
+            sqlx::query_scalar("SELECT channel FROM inbox_conversation WHERE id=$1")
+                .bind(saved.conversation_id)
+                .fetch_one(pg.pool())
+                .await
+                .unwrap();
+        assert_eq!(channel, crate::inbox::channel::VOICE);
     }
 
     /// Seed one Suggested triage row for a mirrored message with model

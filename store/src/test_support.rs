@@ -22,6 +22,9 @@
 
 use uuid::Uuid;
 
+/// Synthetic Twilio registry and credential fixtures shared by route tests.
+pub mod twilio;
+
 /// A synthetic 40-hex commit sha for a project-scoped template version in a
 /// test. `store::templates::save_version` refuses one without a commit.
 pub const SYNTHETIC_COMMIT_SHA: &str = "0123456789abcdef0123456789abcdef01234567";

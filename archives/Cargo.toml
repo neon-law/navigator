@@ -48,7 +48,7 @@ telemetry.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
-workflows.workspace = true
+workflows = { workspace = true, features = ["dbos"] }
 iceberg = "0.10"
 
 [dev-dependencies]
