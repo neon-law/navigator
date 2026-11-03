@@ -1111,11 +1111,11 @@
 {"file":"store/src/brand_domains.rs","line":343,"function":"the_upgrade_backfill_runs_once_from_the_compiled_registry","operation":"bind","sql_operations":[],"tables":["brand"],"transaction":false}
 {"file":"store/src/brand_domains.rs","line":343,"function":"the_upgrade_backfill_runs_once_from_the_compiled_registry","operation":"bind","sql_operations":[],"tables":["firm"],"transaction":false}
 {"file":"store/src/brand_domains.rs","line":343,"function":"the_upgrade_backfill_runs_once_from_the_compiled_registry","operation":"query","sql_operations":["CREATE","UPDATE","UPSERT"],"tables":["brand","schema_version"],"transaction":false}
-{"file":"store/src/brand_phone_numbers.rs","line":146,"function":"put","operation":"begin","sql_operations":[],"tables":[],"transaction":true}
-{"file":"store/src/brand_phone_numbers.rs","line":147,"function":"put","operation":"query","sql_operations":["INSERT"],"tables":[],"transaction":false}
-{"file":"store/src/brand_phone_numbers.rs","line":160,"function":"put","operation":"query","sql_operations":["SELECT","UPDATE"],"tables":[],"transaction":false}
-{"file":"store/src/brand_phone_numbers.rs","line":170,"function":"put","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
-{"file":"store/src/brand_phone_numbers.rs","line":179,"function":"find_by_number","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"store/src/brand_phone_numbers.rs","line":148,"function":"put","operation":"begin","sql_operations":[],"tables":[],"transaction":true}
+{"file":"store/src/brand_phone_numbers.rs","line":149,"function":"put","operation":"query","sql_operations":["INSERT"],"tables":[],"transaction":false}
+{"file":"store/src/brand_phone_numbers.rs","line":162,"function":"put","operation":"query","sql_operations":["SELECT","UPDATE"],"tables":[],"transaction":false}
+{"file":"store/src/brand_phone_numbers.rs","line":172,"function":"put","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
+{"file":"store/src/brand_phone_numbers.rs","line":181,"function":"find_by_number","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"store/src/brands.rs","line":517,"function":"create_unchecked","operation":"bind","sql_operations":[],"tables":["brand"],"transaction":false}
 {"file":"store/src/brands.rs","line":517,"function":"create_unchecked","operation":"bind","sql_operations":[],"tables":["firm"],"transaction":false}
 {"file":"store/src/brands.rs","line":517,"function":"create_unchecked","operation":"query","sql_operations":["SELECT","CREATE"],"tables":[],"transaction":false}
