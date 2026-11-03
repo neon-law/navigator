@@ -68,14 +68,20 @@ impl MatterFinancials {
 }
 
 /// The Work in Progress time component: unbilled billable entries priced at
-/// each entry's own snapshotted rate. Non-billable work, written-off work,
-/// and work already under an invoice contribute nothing.
+/// each entry's own snapshotted rate. Work drawn into a pending batch is
+/// still unbilled — no invoice holds it — so it counts. Non-billable work,
+/// written-off work, and work already under an invoice contribute nothing.
 #[must_use]
 pub fn unbilled_time_cents(entries: &[crate::time_entries::TimeEntry]) -> i64 {
     entries
         .iter()
         .filter(|entry| {
-            entry.billable && entry.billing_status == crate::time_entries::BillingStatus::Unbilled
+            entry.billable
+                && matches!(
+                    entry.billing_status,
+                    crate::time_entries::BillingStatus::Unbilled
+                        | crate::time_entries::BillingStatus::Reserved
+                )
         })
         .map(|entry| {
             crate::time_entries::entry_amount_cents(entry.minutes, entry.rate_cents_per_hour)
@@ -84,12 +90,16 @@ pub fn unbilled_time_cents(entries: &[crate::time_entries::TimeEntry]) -> i64 {
 }
 
 /// The Work in Progress cost component: confirmed receipts no invoice has
-/// linked. An estimated amount is not yet the firm's money and stays out.
+/// linked, including those drawn into a pending batch. An estimated amount
+/// is not yet the firm's money and stays out.
 #[must_use]
 pub fn unbilled_costs_cents(costs: &[crate::project_costs::ProjectCost]) -> i64 {
     costs
         .iter()
-        .filter(|cost| cost.amount_status == "confirmed" && cost.billing_status == "unbilled")
+        .filter(|cost| {
+            cost.amount_status == "confirmed"
+                && (cost.billing_status == "unbilled" || cost.billing_status == "reserved")
+        })
         .map(|cost| cost.amount_cents)
         .sum()
 }
@@ -118,7 +128,7 @@ pub async fn for_project(
     pg: &PostgresDb,
     project_id: Uuid,
 ) -> Result<MatterFinancials, MatterFinancialsError> {
-    let entries = crate::time_entries::unbilled_billable(pg, project_id).await?;
+    let entries = crate::time_entries::wip_billable(pg, project_id).await?;
     let costs = crate::project_costs::list_for_project(pg, project_id).await?;
     let invoices = crate::xero_invoices::for_projects(surreal, &[project_id])
         .await
@@ -128,7 +138,7 @@ pub async fn for_project(
 
 #[cfg(test)]
 mod tests {
-    use super::{outstanding_cents, unbilled_time_cents, MatterFinancials};
+    use super::{outstanding_cents, unbilled_costs_cents, unbilled_time_cents, MatterFinancials};
     use crate::project_costs::ProjectCost;
     use crate::time_entries::{BillingStatus, TimeEntry, TimeEntrySource};
     use crate::xero_invoices::XeroInvoice;
@@ -194,6 +204,30 @@ mod tests {
         assert_eq!(financials.outstanding_cents, 0);
         assert_eq!(financials.unbilled_time_cents, 0);
         assert_eq!(financials.unbilled_costs_cents, 0);
+    }
+
+    #[test]
+    fn wip_keeps_work_drawn_into_a_pending_batch() {
+        // Reserved work carries no invoice yet: it stays part of the
+        // matter's WIP, priced at its own snapshot.
+        let entries = [
+            entry(60, true, BillingStatus::Unbilled),
+            entry(60, true, BillingStatus::Reserved),
+            entry(
+                60,
+                true,
+                BillingStatus::Invoiced {
+                    xero_invoice_id: "inv-9".into(),
+                },
+            ),
+        ];
+        assert_eq!(unbilled_time_cents(&entries), 50_000);
+        let costs = [
+            cost(1_000, "confirmed", "unbilled"),
+            cost(2_000, "confirmed", "reserved"),
+            cost(4_000, "confirmed", "invoiced"),
+        ];
+        assert_eq!(unbilled_costs_cents(&costs), 3_000);
     }
 
     #[test]

@@ -3679,6 +3679,9 @@ CREATE TABLE matter_billing_batch (
     currency TEXT NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
     entry_ids UUID[] NOT NULL,
     cost_ids UUID[] NOT NULL,
+    -- The provider invoice id, saved the moment a raise returns so a resume
+    -- reuses the exact invoice instead of re-raising; NULL until then.
+    xero_invoice_id TEXT,
     -- The flat fee the batch bills, when the matter carries one; NULL bills
     -- time and costs only.
     flat_fee_cents BIGINT,

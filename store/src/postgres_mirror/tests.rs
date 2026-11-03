@@ -2022,7 +2022,7 @@ async fn assert_invoice_link_contract(
         ),
     ] {
         assert!(matches!(
-            crate::project_costs::link_invoice(surreal, pg, cost_id, actor_id, id).await,
+            crate::project_costs::link_invoice(surreal, pg, cost_id, actor_id, id, false).await,
             Err(crate::project_costs::ProjectCostError::Invalid(message)) if message == expected
         ));
     }
@@ -2038,6 +2038,7 @@ async fn assert_invoice_link_contract(
         cost_id,
         actor_id,
         "synthetic-valid-invoice",
+        false,
     )
     .await
     .unwrap();

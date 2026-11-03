@@ -44,6 +44,10 @@ pub struct MatterBillingBatch {
     pub currency: String,
     pub entry_ids: Vec<Uuid>,
     pub cost_ids: Vec<Uuid>,
+    /// The provider's invoice id, saved the moment a raise returns — a
+    /// resume reuses it instead of re-raising under the provider's own
+    /// (finite) idempotency window.
+    pub xero_invoice_id: Option<String>,
     /// The flat fee the batch bills, when the matter carries one.
     pub flat_fee_cents: Option<i64>,
     pub actor_id: Uuid,
@@ -62,6 +66,7 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<MatterBillingBatch, sqlx::Err
         currency: row.try_get("currency")?,
         entry_ids: row.try_get("entry_ids")?,
         cost_ids: row.try_get("cost_ids")?,
+        xero_invoice_id: row.try_get("xero_invoice_id")?,
         flat_fee_cents: row.try_get("flat_fee_cents")?,
         actor_id: row.try_get("actor_id")?,
         inserted_at: row.try_get("inserted_at")?,
@@ -93,8 +98,8 @@ async fn insert_in_tx(
     batch: &MatterBillingBatch,
 ) -> Result<MatterBillingBatch, BillingBatchError> {
     let row = sqlx::query(
-        "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,flat_fee_cents,actor_id,inserted_at,updated_at) \
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *",
+        "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,xero_invoice_id,flat_fee_cents,actor_id,inserted_at,updated_at) \
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *",
     )
     .bind(batch.id)
     .bind(batch.project_id)
@@ -105,6 +110,7 @@ async fn insert_in_tx(
     .bind(&batch.currency)
     .bind(&batch.entry_ids)
     .bind(&batch.cost_ids)
+    .bind(&batch.xero_invoice_id)
     .bind(batch.flat_fee_cents)
     .bind(batch.actor_id)
     .bind(batch.inserted_at)
@@ -119,6 +125,27 @@ async fn insert_in_tx(
             BillingBatchError::Database(error)
         }
     })?;
+    from_row(&row).map_err(BillingBatchError::Database)
+}
+
+/// Save the provider's invoice id the moment the raise returns — before any
+/// local flip — so a resumed batch reuses the exact invoice instead of
+/// re-raising and relying on the provider's own idempotency window.
+pub async fn attach_invoice(
+    pg: &PostgresDb,
+    id: Uuid,
+    xero_invoice_id: &str,
+) -> Result<MatterBillingBatch, BillingBatchError> {
+    let row = sqlx::query(
+        "UPDATE matter_billing_batch SET xero_invoice_id=$2,updated_at=$3 \
+         WHERE id=$1 RETURNING *",
+    )
+    .bind(id)
+    .bind(xero_invoice_id)
+    .bind(chrono::Utc::now())
+    .fetch_optional(&pg.0)
+    .await?
+    .ok_or(BillingBatchError::NotFound)?;
     from_row(&row).map_err(BillingBatchError::Database)
 }
 

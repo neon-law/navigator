@@ -499,6 +499,28 @@ pub async fn unreserve(
 
 /// A Project's unbilled billable time — what an invoice would draw from,
 /// oldest work first.
+/// The matter's billable work in progress: unbilled entries plus entries
+/// drawn into a pending batch. Reserved work carries no invoice yet, so it
+/// stays part of the matter's WIP until an invoice holds it.
+pub async fn wip_billable(
+    pg: &PostgresDb,
+    project_id: Uuid,
+) -> Result<Vec<TimeEntry>, TimeEntryError> {
+    sqlx::query(
+        "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         inserted_at,updated_at FROM time_entry \
+         WHERE project_id=$1 AND billable AND billing_status IN ('unbilled','reserved') \
+         ORDER BY performed_on, id",
+    )
+    .bind(project_id)
+    .fetch_all(&pg.0)
+    .await?
+    .iter()
+    .map(from_row)
+    .collect()
+}
+
 pub async fn unbilled_billable(
     pg: &PostgresDb,
     project_id: Uuid,
@@ -850,7 +872,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            mark_invoiced(&pg, &[invoiced.id], actor, "inv-1")
+            mark_invoiced(&pg, &[invoiced.id], actor, "inv-1", false)
                 .await
                 .unwrap();
             write_off(&pg, written_off.id, actor, "Included in the flat fee")
@@ -882,7 +904,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            let marked = mark_invoiced(&pg, &[first.id, second.id], actor, "inv-42")
+            let marked = mark_invoiced(&pg, &[first.id, second.id], actor, "inv-42", false)
                 .await
                 .unwrap();
             assert_eq!(marked.len(), 2);
@@ -897,7 +919,7 @@ mod tests {
 
             // A replay under the same invoice id changes nothing.
             let events_after_first_pass = list_events(&pg, first.id).await.unwrap().len();
-            let replayed = mark_invoiced(&pg, &[first.id, second.id], actor, "inv-42")
+            let replayed = mark_invoiced(&pg, &[first.id, second.id], actor, "inv-42", false)
                 .await
                 .unwrap();
             assert_eq!(replayed.len(), 2);
@@ -909,13 +931,13 @@ mod tests {
 
             // The same entries under a different invoice id are a conflict.
             assert!(matches!(
-                mark_invoiced(&pg, &[first.id], actor, "inv-43").await,
+                mark_invoiced(&pg, &[first.id], actor, "inv-43", false).await,
                 Err(TimeEntryError::Conflict)
             ));
 
             // An unknown entry id is not found.
             assert!(matches!(
-                mark_invoiced(&pg, &[Uuid::new_v4()], actor, "inv-44").await,
+                mark_invoiced(&pg, &[Uuid::new_v4()], actor, "inv-44", false).await,
                 Err(TimeEntryError::NotFound)
             ));
         }
@@ -947,7 +969,7 @@ mod tests {
                 Err(TimeEntryError::Invalid("entry is already resolved"))
             ));
             assert!(matches!(
-                mark_invoiced(&pg, &[created.id], actor, "inv-7").await,
+                mark_invoiced(&pg, &[created.id], actor, "inv-7", false).await,
                 Err(TimeEntryError::Invalid("entry is already resolved"))
             ));
         }
@@ -963,7 +985,7 @@ mod tests {
             let created = create(&pg, seed.project_id, actor, &entry(seed.attorney, 60, true))
                 .await
                 .unwrap();
-            mark_invoiced(&pg, &[created.id], actor, "inv-9")
+            mark_invoiced(&pg, &[created.id], actor, "inv-9", false)
                 .await
                 .unwrap();
 
