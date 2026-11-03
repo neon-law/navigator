@@ -22,12 +22,6 @@
 
 use dioxus::prelude::*;
 
-/// The firm's final footer lines, shared by public and authenticated pages.
-pub const FOOTER_TAGLINE: [&str; 2] = [
-    "Everyone deserves access to justice.",
-    "Made with ❤️ in 🗽.",
-];
-
 use crate::components::{ExternalLink, Icon, IconName};
 
 /// Provider and property notices, independent of the operating firm.
@@ -759,7 +753,6 @@ pub fn SiteFooterLegal(
                             }
                         }
                     }
-                    p { class: "site-footer__tagline", "{FOOTER_TAGLINE[0]}" br {} "{FOOTER_TAGLINE[1]}" }
                     // One line names the software this page runs: "Powered
                     // by", the public source repository, the release serving
                     // here, and the repository's stars.
@@ -826,12 +819,7 @@ mod tests {
         let owner = html
             .find("Neon Law is a trademark of Neon Law IP LLC.")
             .expect("owner");
-        let mission = html.find(FOOTER_TAGLINE[0]).expect("mission");
-        assert!(
-            html.contains("access to justice.<br/>Made with"),
-            "two lines: {html}"
-        );
-        assert!(provider < owner && owner < mission, "{html}");
+        assert!(provider < owner, "{html}");
         assert!(!html.contains("trademark of Example Practice PC"), "{html}");
     }
     use super::*;
@@ -917,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn ends_the_legal_strip_with_the_copyright_and_platform_after_the_tagline() {
+    fn ends_the_legal_strip_with_the_copyright_and_platform_and_no_tagline() {
         let out = legal_html();
         let legal = out
             .split(r#"<div class="site-footer__legal">"#)
@@ -935,15 +923,13 @@ mod tests {
         let platform = legal
             .find("site-footer__legal-platform")
             .expect("the platform renders");
-        let tagline = legal
-            .rfind(FOOTER_TAGLINE[0])
-            .expect("the final tagline renders");
         let powered = legal
             .find("site-footer__powered")
             .expect("the platform line renders");
-        assert!(disclaimer < trademark && trademark < tagline);
-        assert!(tagline < platform && platform < copyright && copyright < powered);
-        assert_eq!(legal.matches(FOOTER_TAGLINE[0]).count(), 1);
+        assert!(disclaimer < trademark && trademark < platform);
+        assert!(platform < copyright && copyright < powered);
+        assert!(!legal.contains("site-footer__tagline"));
+        assert!(!legal.contains("Made with"));
     }
 
     /// A deploy holding no registration notices none, and one that cites a
