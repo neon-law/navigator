@@ -14,10 +14,13 @@ use chrono::{Datelike, NaiveDate};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Choice, Field, FormCard, Heading};
+use crate::components::{Accordion, Choice, Field, FormCard, Heading};
 use crate::people::ViewerRole;
 
 pub const APP_PATH: &str = "/app/admin/blog";
+
+/// The social publishing calendar, where scheduled Posts can be cancelled.
+const SOCIAL_CALENDAR_PATH: &str = "/app/social/calendar";
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlogPostRow {
@@ -188,8 +191,9 @@ fn calendar_month(month: Option<&str>, day: Option<&str>, today: NaiveDate) -> C
     }
 }
 
-fn calendar_href(page: &BlogCatalogPage, month: &str, day: Option<&str>) -> String {
-    let mut url = format!("/app/social/calendar?month={month}");
+/// A month or day link that stays on the page at `base`.
+fn calendar_href(page: &BlogCatalogPage, base: &str, month: &str, day: Option<&str>) -> String {
+    let mut url = format!("{base}?month={month}");
     if let Some(brand) = page.brand_filter.as_ref() {
         let encoded =
             percent_encoding::utf8_percent_encode(brand, percent_encoding::NON_ALPHANUMERIC);
@@ -237,16 +241,28 @@ fn post_providers(page: &BlogCatalogPage, row: &BlogPostRow) -> String {
         .join(" · ")
 }
 
-fn month_calendar(page: &BlogCatalogPage) -> Element {
+/// The month grid of Posts by UTC day. `base` is the page it renders on, so
+/// month navigation and day links stay there; both pages carry the composer.
+fn month_calendar(page: &BlogCatalogPage, base: &str) -> Element {
     let calendar = &page.calendar;
+    let review_href = |row: &BlogPostRow| {
+        if base == SOCIAL_CALENDAR_PATH {
+            format!("#scheduled-post-{}", row.id)
+        } else {
+            format!(
+                "{SOCIAL_CALENDAR_PATH}?month={}#scheduled-post-{}",
+                calendar.month, row.id
+            )
+        }
+    };
     rsx! {
         section { class: "social-month", aria_label: "Monthly publishing calendar",
             header { class: "social-month__toolbar",
                 h2 { "{calendar.label}" }
                 nav { aria_label: "Calendar month",
-                    a { href: calendar_href(page, &calendar.previous, None), aria_label: "Previous month", "← Previous" }
-                    a { href: calendar_href(page, calendar.today.get(..7).unwrap_or(&calendar.month), None), "Today" }
-                    a { href: calendar_href(page, &calendar.next, None), aria_label: "Next month", "Next →" }
+                    a { href: calendar_href(page, base, &calendar.previous, None), aria_label: "Previous month", "← Previous" }
+                    a { href: calendar_href(page, base, calendar.today.get(..7).unwrap_or(&calendar.month), None), "Today" }
+                    a { href: calendar_href(page, base, &calendar.next, None), aria_label: "Next month", "Next →" }
                 }
             }
             p { "All calendar dates and times are UTC. Choose a day to prepare a Post; publishing still requires approval." }
@@ -258,7 +274,7 @@ fn month_calendar(page: &BlogCatalogPage) -> Element {
                     for (index, day) in calendar.days.iter().enumerate() {
                         if let Some(day) = day {
                             section { key: "{day}", class: "social-month__day", aria_label: "{day}",
-                                a { class: "social-month__date", href: calendar_href(page, &calendar.month, Some(day)),
+                                a { class: "social-month__date", href: calendar_href(page, base, &calendar.month, Some(day)),
                                     aria_label: "Prepare a Post for {day} UTC",
                                     time { datetime: "{day}", "{day.get(8..).unwrap_or(day)}" }
                                     if day == &calendar.today { " · Today" }
@@ -278,7 +294,7 @@ fn month_calendar(page: &BlogCatalogPage) -> Element {
                                             p { "{provider_label(&publication.provider)}: {publication.state}" }
                                         }
                                         if row.status == "scheduled" {
-                                            a { href: "#scheduled-post-{row.id}", "Review schedule" }
+                                            a { href: review_href(row), "Review schedule" }
                                         } else {
                                             a { href: "/app/social", "Review publication" }
                                         }
@@ -557,14 +573,32 @@ fn schedule_table(
 /// out, and what went out. Sending itself is a durable workflow; this only
 /// reads the outcome tables.
 fn schedule_section(page: &BlogCatalogPage) -> Element {
-    let (upcoming, sent) = schedule_entries(page);
     rsx! {
         section { id: "publishing-schedule", "aria-labelledby": "publishing-schedule-heading",
             h2 { id: "publishing-schedule-heading", "Publishing schedule" }
-            p { "Times are UTC." }
-            {schedule_table("Going out", upcoming, "Nothing is scheduled.")}
-            {schedule_table("Went out", sent, "Nothing has gone out yet.")}
+            {schedule_tables(page)}
         }
+    }
+}
+
+/// The publishing schedule as a month calendar, with the same schedule as
+/// tables folded into an accordion below it.
+fn calendar_schedule_section(page: &BlogCatalogPage, base: &str) -> Element {
+    rsx! {
+        section { id: "publishing-schedule", "aria-labelledby": "publishing-schedule-heading",
+            h2 { id: "publishing-schedule-heading", "Publishing schedule" }
+            {month_calendar(page, base)}
+            Accordion { title: "Table view".to_string(), {schedule_tables(page)} }
+        }
+    }
+}
+
+fn schedule_tables(page: &BlogCatalogPage) -> Element {
+    let (upcoming, sent) = schedule_entries(page);
+    rsx! {
+        p { "Times are UTC." }
+        {schedule_table("Going out", upcoming, "Nothing is scheduled.")}
+        {schedule_table("Went out", sent, "Nothing has gone out yet.")}
     }
 }
 
@@ -731,7 +765,7 @@ fn social_calendar_body(page: &BlogCatalogPage) -> Element {
                 p { a { href: "/app/social", "Back to social" } }
             }
             if let Some(error) = page.error.as_ref() { p { class: "page-subtitle", "{error}" } }
-            {month_calendar(page)}
+            {month_calendar(page, SOCIAL_CALENDAR_PATH)}
             {schedule_section(page)}
             {schedule_post_form(page)}
             div { class: "team-home__cards", "aria-label": "Scheduled publications", {rows} }
@@ -880,7 +914,7 @@ fn brand_blog_catalog_body(page: &BlogCatalogPage) -> Element {
                 p { "Posts for the Brands you manage, as stored in the database." }
             }
             if let Some(error) = page.error.as_ref() { p { class: "page-subtitle", "{error}" } }
-            {schedule_section(page)}
+            {calendar_schedule_section(page, APP_PATH)}
             {schedule_post_form(page)}
             section { "aria-label": "Social links",
                 h2 { "Social links" }
@@ -1083,7 +1117,7 @@ mod tests {
         let mut payload = serde_json::to_value(page()).unwrap();
         payload.as_object_mut().unwrap().remove("calendar");
         let old: BlogCatalogPage = serde_json::from_value(payload).unwrap();
-        let html = dioxus_ssr::render_element(month_calendar(&old));
+        let html = dioxus_ssr::render_element(month_calendar(&old, SOCIAL_CALENDAR_PATH));
         assert!(html.contains("Monthly publishing calendar"));
     }
 
@@ -1114,7 +1148,7 @@ mod tests {
             post_utc_date(&calendar.rows[0]).as_deref(),
             Some("2026-10-13")
         );
-        let html = dioxus_ssr::render_element(month_calendar(&calendar));
+        let html = dioxus_ssr::render_element(month_calendar(&calendar, SOCIAL_CALENDAR_PATH));
         for expected in [
             "October 2026",
             "Previous month",
@@ -1317,6 +1351,30 @@ mod tests {
             assert!(html.contains("Going out"), "{html}");
             assert!(html.contains("Went out"), "{html}");
         }
+    }
+
+    #[test]
+    fn the_blog_catalog_shows_the_month_calendar_with_the_tables_in_an_accordion() {
+        let html = dioxus_ssr::render_element(brand_blog_catalog_body(&page()));
+        let calendar = html
+            .find("Monthly publishing calendar")
+            .expect("month calendar");
+        let accordion = html.find("nav-accordion").expect("table accordion");
+        let table = html.find("schedule-table").expect("schedule table");
+        assert!(calendar < accordion && accordion < table, "{html}");
+        assert!(html.contains("Table view"), "{html}");
+        assert!(
+            !html.contains(r#"class="nav-accordion" open"#),
+            "the table view starts closed: {html}"
+        );
+        // Month and day links stay on the catalog; review goes to the calendar.
+        assert!(html.contains("/app/admin/blog?month=2026-11"), "{html}");
+        assert!(html.contains("day=2026-10-12#compose-post"), "{html}");
+        assert!(
+            html.contains("/app/social/calendar?month=2026-10#scheduled-post-post-1"),
+            "{html}"
+        );
+        assert!(!html.contains(r##"href="#scheduled-post-"##), "{html}");
     }
 
     #[test]
