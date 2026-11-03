@@ -179,8 +179,8 @@ pub struct Message {
     pub attachment_asset_id: Option<Uuid>,
     /// Object-storage key of the verbatim payload this Message was ingested
     /// from — the raw `.eml`, or the member data-export CSV for an imported
-    /// LinkedIn thread (LAW-238 D1). `None` for webhook-delivered mail, which
-    /// archives under the email-thread model instead.
+    /// LinkedIn thread (LAW-238 D1). Webhook-delivered mail retains its raw
+    /// source here independently of optional email threading.
     pub raw_storage_key: Option<String>,
     pub communication_id: Option<Uuid>,
     pub occurred_at: String,
@@ -237,8 +237,8 @@ pub struct IngestInbound<'a> {
     pub email_conversation_id: Option<Uuid>,
     pub attachments: Vec<IngestAttachment>,
     pub occurred_at: &'a str,
-    /// Object-storage key of the verbatim import payload (LAW-238 D1); see
-    /// [`Message::raw_storage_key`]. `None` for every webhook-shaped caller.
+    /// Object-storage key of the archived source, including raw email and
+    /// import payloads; see [`Message::raw_storage_key`]. Absent when unavailable.
     pub raw_storage_key: Option<&'a str>,
 }
 
@@ -834,6 +834,7 @@ async fn ingest_inbound_surreal(
             .first()
             .map(|attachment| attachment.asset_id),
         inbound.occurred_at,
+        inbound.raw_storage_key,
     )
     .await?;
     link_message_assets(db, inbound.firm_id, message_id, &inbound.attachments).await?;
@@ -1400,6 +1401,7 @@ pub async fn post_note(
         None,
         None,
         &Utc::now().to_rfc3339(),
+        None,
     )
     .await?;
     let message = message_by_id(db, message_id)
@@ -1471,6 +1473,7 @@ pub async fn queue_reply(
         None,
         None,
         &Utc::now().to_rfc3339(),
+        None,
     )
     .await
 }
@@ -1545,6 +1548,7 @@ pub async fn queue_social_reply(
         Some(visibility),
         None,
         &Utc::now().to_rfc3339(),
+        None,
     )
     .await?;
     let message = message_by_id(db, message_id)
@@ -1819,6 +1823,7 @@ async fn queue_sms_message(
         None,
         None,
         &Utc::now().to_rfc3339(),
+        None,
     )
     .await?;
     let message = message_by_id(db, message_id)
@@ -3283,6 +3288,7 @@ async fn create_message(
     visibility: Option<&str>,
     attachment_asset_id: Option<Uuid>,
     occurred_at: &str,
+    raw_storage_key: Option<&str>,
 ) -> Result<Uuid, InboxError> {
     let id = Uuid::now_v7();
     db.query(
@@ -3290,7 +3296,8 @@ async fn create_message(
          visibility = $visibility, alert_state = $alert_state, \
          author_person_id = $author, provider_message_id = $provider_message, \
          provider_ref = $provider_ref, delivery_state = $delivery, purpose = $purpose, \
-         attachment_asset_id = $attachment, communication_id = NONE, occurred_at = $occurred, \
+         attachment_asset_id = $attachment, raw_storage_key = $raw_storage_key, \
+         communication_id = NONE, occurred_at = $occurred, \
          inserted_at = time::now(), updated_at = time::now()",
     )
     .bind(("id", record_id(MESSAGE, id)))
@@ -3312,6 +3319,7 @@ async fn create_message(
         attachment_asset_id.map(|id| record_id("asset", id)),
     ))
     .bind(("occurred", occurred_at.to_string()))
+    .bind(("raw_storage_key", raw_storage_key.map(str::to_string)))
     .await?
     .check()?;
     after_write(db, MirrorKey::InboxMessage(id)).await;
@@ -6168,6 +6176,7 @@ mod tests {
                     None,
                     None,
                     "2026-11-02T00:00:00Z",
+                    None,
                 )
                 .await
                 .unwrap(),
