@@ -285,6 +285,43 @@ pub struct Executor {
     stop: dbos::CancellationToken,
     schedules: Vec<tokio::task::JoinHandle<()>>,
 }
+/// A readiness-probe handle for a launched executor: shares the stop token and
+/// the system database URL without owning the executor, so the health route can
+/// report DBOS state while `main` keeps exclusive shutdown rights.
+#[derive(Clone)]
+pub struct ExecutorProbe {
+    stop: dbos::CancellationToken,
+    system_database_url: Arc<String>,
+}
+
+impl ExecutorProbe {
+    /// True while the executor is launched and no shutdown has been requested.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        !self.stop.is_cancelled()
+    }
+
+    /// The system database URL this executor launched against.
+    ///
+    /// `None` when the executor runs against no configured system database,
+    /// which readiness reports as unhealthy rather than skipping the check.
+    #[must_use]
+    pub fn system_database_url(&self) -> Option<&str> {
+        let url = self.system_database_url.as_str();
+        (!url.is_empty()).then_some(url)
+    }
+}
+
+impl Executor {
+    /// Snapshot a readiness-probe handle for this executor.
+    #[must_use]
+    pub fn probe(&self) -> ExecutorProbe {
+        ExecutorProbe {
+            stop: self.stop.clone(),
+            system_database_url: Arc::new(self.dbos.config().database_url.clone()),
+        }
+    }
+}
 
 impl Executor {
     /// Register every ported workflow, launch DBOS, and start each schedule.

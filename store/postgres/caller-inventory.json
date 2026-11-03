@@ -524,6 +524,7 @@
       "workflows-service/src/dbos_ingress.rs",
       "workflows-service/src/dbos_notation.rs",
       "workflows-service/src/dri_digest.rs",
+      "workflows-service/src/health.rs",
       "workflows-service/src/project_slack.rs",
       "workflows-service/src/social_publisher.rs",
       "workflows/src/email/service.rs",

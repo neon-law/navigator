@@ -49,21 +49,24 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
         dbos_finance_aggregate::register(&executor, Context::new(surreal.clone(), storage.clone()))
             .expect("register FinanceAggregate");
     executor.launch().await.expect("launch DBOS");
-    let router = workflows_service::health::router_with_dbos_ingress(WorkerIngress {
-        finance: Some(FinanceIngress::new(
-            "synthetic-service-token".into(),
-            workflow.clone(),
-            executor.clone(),
-            surreal.clone(),
-            postgres.clone(),
-        )),
-        reconcile: None,
-        nightly_project_update: None,
-        email_summary: None,
-        inbound_message_alert: None,
-        project_slack: None,
-        notation: None,
-    });
+    let router = workflows_service::health::router_with_dbos_ingress(
+        WorkerIngress {
+            finance: Some(FinanceIngress::new(
+                "synthetic-service-token".into(),
+                workflow.clone(),
+                executor.clone(),
+                surreal.clone(),
+                postgres.clone(),
+            )),
+            reconcile: None,
+            nightly_project_update: None,
+            email_summary: None,
+            inbound_message_alert: None,
+            project_slack: None,
+            notation: None,
+        },
+        None,
+    );
 
     let request = RunRequest {
         project_id,
