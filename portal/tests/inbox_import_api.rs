@@ -461,6 +461,66 @@ async fn assert_downloaded_email_attachment(fixture: &Fixture, path: &str) {
 }
 
 #[tokio::test]
+async fn embedded_policy_admits_the_lawyer_fi_preview_to_validation() {
+    let fixture = fixture().await;
+    let actor = fixture.lawyer_session.person_id.unwrap();
+    let firm = store::firms::memberships_for_person(&fixture.surreal, actor)
+        .await
+        .unwrap()[0]
+        .firm_id;
+    let admin = store::firms::memberships_for_firm(&fixture.surreal, firm)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|member| member.is_dri)
+        .unwrap()
+        .person_id;
+    store::brands::create(
+        &fixture.surreal,
+        Role::Admin,
+        Some(admin),
+        &store::brands::NewBrand {
+            key: "fi-http".into(),
+            name: "Synthetic Fi Brand".into(),
+            firm_id: Some(firm),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    store::firms::ensure_brand(&fixture.surreal, firm, "fi-http")
+        .await
+        .unwrap();
+    let app = fixture
+        .app
+        .clone()
+        .layer(axum::middleware::from_fn_with_state(
+            (
+                portal::SessionStore::new(vec![7_u8; 32]),
+                portal::policy::PolicyClient::embedded().expect("compile deployed policy"),
+            ),
+            portal::policy::require_policy,
+        ))
+        .layer(tower_cookies::CookieManagerLayer::new());
+    // The default preview must reach Fi validation through the deployed policy.
+    // An invalid account produces 400 before PostgreSQL or any import write.
+    let request = fi_body("", &json!({"account": "invalid-account"}));
+    assert!(request.get("dry_run").is_none());
+    let (status, body) = post_json_at(
+        &app,
+        Some(&fixture.lawyer_session),
+        "/app/api/inbox/import/fi",
+        request,
+    )
+    .await;
+    assert_eq!(
+        status, 400,
+        "Lawyer Fi preview must reach validation: {body}"
+    );
+    assert_eq!(body["error"], "fi_mapping");
+}
+
+#[tokio::test]
 async fn embedded_policy_admits_the_lawyer_import_door() {
     let fixture = fixture().await;
     let app = fixture

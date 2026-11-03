@@ -496,9 +496,11 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // 658 + 4 + 3 = 665.
     // + 2 for call-queue and Brand-report role admission.
     // 665 + 2 = 667.
+    // + 3 for mapped Fi history: Lawyer admission, denied tiers, and exact shape.
+    // 667 + 3 = 670.
     assert_eq!(
         test_names.len(),
-        667,
+        670,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

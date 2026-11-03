@@ -626,6 +626,13 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Import explicitly mapped Fi metadata. The handler repeats Firm and Project checks.
+route_allow if {
+    input.path == ["app", "api", "inbox", "import", "fi"]
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
 # File an already-read provider message into one Project. The handler repeats
 # Project participation before ingestion; no outbound message is sent.
 route_allow if {

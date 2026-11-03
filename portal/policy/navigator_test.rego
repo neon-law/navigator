@@ -2989,6 +2989,29 @@ test_anonymous_denied_app_owner if {
 	not authz.allow with input as {"path": ["app", "owner"], "method": "GET", "session": null}
 }
 
+test_lawyer_can_preview_fi_history if {
+	authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": lawyer_session}
+}
+
+test_fi_history_import_denies_client_clerk_and_anonymous if {
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": null}
+}
+
+test_fi_history_import_policy_is_exact if {
+	every method in ["GET", "PUT", "PATCH", "DELETE"] {
+		not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": method, "session": lawyer_session}
+	}
+	every path in [
+		["app", "api", "inbox", "import", "fi", "extra"],
+		["app", "api", "inbox", "import", "fi-extra"],
+		["app", "api", "inbox", "import", "other"],
+	] {
+		not authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+	}
+}
+
 test_lawyer_can_import_historical_messages if {
 	authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "POST", "session": lawyer_session}
 	authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "POST", "session": lawyer_session}
