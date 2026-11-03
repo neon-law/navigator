@@ -465,14 +465,21 @@ async fn local_gate_refuses_ownership_drift_before_markdown_or_layout_fixes() {
     ] {
         fs::write(checkout.path().join(path), contents).unwrap();
     }
+    // Select the compiled release so this gate reaches the ownership check.
     let output = command()
         .current_dir(checkout.path())
         .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+        .env("NAVIGATOR_RELEASE_TAG", env!("CARGO_PKG_VERSION"))
         .args(["project", "gate"])
         .output()
         .unwrap();
     assert!(!output.status.success(), "ownership drift must be refused");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Firm and brand differ"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Firm and brand differ"),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     for (path, original) in [
         ("navigator.yaml", manifest.as_str()),
         ("README.md", readme),
