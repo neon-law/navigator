@@ -260,3 +260,7 @@ values = ["D.R. Horton"]
 [[names]]
 reason = "Vesta's public fictional mascot introduction, not a person's name."
 values = ["Meet Aster"]
+
+[[paths]]
+reason = "Explicitly staged minified release wasm-bindgen glue, generated from repository source; source is scanned separately and the bundle contains no request or birth data."
+values = ["server/public/dioxus/assets/webapp-dxh163f817c7d3576a5.js"]
