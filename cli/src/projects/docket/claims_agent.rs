@@ -380,6 +380,7 @@ pub fn is_block_page(bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::is_claims_agent_sender;
 
     #[test]
@@ -401,5 +402,88 @@ mod tests {
                 "{address} is not a claims-agent sender"
             );
         }
+    }
+
+    #[test]
+    fn docket_entry_numbers_keep_their_printed_padding() {
+        assert_eq!(docket_entry_number("Docket No. 29 - Notice"), Some("29".into()));
+        assert_eq!(
+            docket_entry_number("Dkt. No. 0029 - Certification"),
+            Some("0029".into())
+        );
+        assert_eq!(docket_entry_number("Notice of Chapter 11"), None);
+        assert_eq!(docket_entry_number(""), None);
+    }
+
+    #[test]
+    fn link_titles_drop_only_the_docket_prefix() {
+        assert_eq!(
+            link_title("Docket No. 29 - Notice of Chapter 11"),
+            "Notice of Chapter 11"
+        );
+        assert_eq!(link_title("  Notice of Chapter 11  "), "Notice of Chapter 11");
+        // A `Docket` word with no number leaves the whole label alone.
+        assert_eq!(link_title("Docket information sheet"), "Docket information sheet");
+    }
+
+    #[test]
+    fn case_numbers_prefer_the_marker_and_reject_dates() {
+        assert_eq!(
+            case_number("IN RE: Debtor, Case No. 26-10042, Chapter 11"),
+            Some("26-10042".into())
+        );
+        // The function works on lowercased text: judge initials come back lowercased.
+        assert_eq!(
+            case_number("Case: 26-1073-KNS filed by the agent"),
+            Some("26-1073-kns".into())
+        );
+        // A lone date is never a case number.
+        assert_eq!(case_number("filed on 2026-03-05 and nothing else"), None);
+        // Without a marker, the bankruptcy shape is found in the text.
+        assert_eq!(case_number("the petition in 26-10042 was filed"), Some("26-10042".into()));
+    }
+
+    #[test]
+    fn a_plain_text_agent_notice_parses_its_case_and_download_links() {
+        let eml = concat!(
+            "From: notices@kroll.com\r\n",
+            "Subject: Notice of Bankruptcy\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n",
+            "\r\n",
+            "Case No. 26-10042\r\n",
+            "Docket No. 29 - Notice of Chapter 11\r\n",
+            "https://case.kroll.com/Home-DownloadPDF?id1=abc123\r\n",
+        );
+        let notice = parse(eml.as_bytes()).expect("a claims-agent notice parses");
+        assert_eq!(notice.case_no.as_deref(), Some("26-10042"));
+        assert_eq!(notice.links.len(), 1);
+        assert!(notice.links[0].url.contains("DownloadPDF"));
+        assert!(notice.links[0].url.contains("id1=abc123"));
+    }
+
+    #[test]
+    fn a_non_agent_notice_is_not_parsed_here() {
+        let eml = concat!(
+            "From: clerk@ecf.nvb.uscourts.gov\r\n",
+            "Subject: NEF\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n",
+            "\r\n",
+            "Case No. 26-10042\r\n",
+            "https://ecf.nvb.uscourts.gov/doc1/abc123\r\n",
+        );
+        assert_eq!(parse(eml.as_bytes()), None);
+    }
+
+    #[test]
+    fn an_agent_notice_without_a_download_link_is_not_parsed() {
+        let eml = concat!(
+            "From: notices@kroll.com\r\n",
+            "Subject: Notice\r\n",
+            "Content-Type: text/plain; charset=utf-8\r\n",
+            "\r\n",
+            "Case No. 26-10042\r\n",
+            "Visit https://case.kroll.com/case-info for details\r\n",
+        );
+        assert_eq!(parse(eml.as_bytes()), None);
     }
 }

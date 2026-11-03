@@ -96,3 +96,63 @@ fn print_report(report: &[store::firms::AdminDriStatus]) -> ExitCode {
         ExitCode::FAILURE
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use store::firms::{AdminDriProblem, AdminDriStatus};
+    use uuid::Uuid;
+
+    fn status(name: &str, problem: Option<AdminDriProblem>) -> AdminDriStatus {
+        AdminDriStatus {
+            firm_id: Uuid::now_v7(),
+            firm_name: name.to_string(),
+            problem,
+        }
+    }
+
+    #[test]
+    fn an_empty_report_is_a_success() {
+        assert_eq!(print_report(&[]), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn every_firm_healthy_is_a_success() {
+        let report = vec![status("Guieb & Shook", None)];
+        assert_eq!(print_report(&report), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn a_missing_dri_fails() {
+        let report = vec![status("Guieb & Shook", Some(AdminDriProblem::Missing))];
+        assert_eq!(print_report(&report), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn multiple_dris_fail() {
+        let report = vec![status(
+            "Guieb & Shook",
+            Some(AdminDriProblem::Multiple(vec![Uuid::now_v7(), Uuid::now_v7()])),
+        )];
+        assert_eq!(print_report(&report), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn an_ineligible_dri_fails() {
+        let report = vec![status(
+            "Guieb & Shook",
+            Some(AdminDriProblem::Ineligible(Uuid::now_v7())),
+        )];
+        assert_eq!(print_report(&report), ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn one_bad_firm_fails_the_whole_report_even_beside_healthy_ones() {
+        let report = vec![
+            status("Healthy Firm", None),
+            status("Guieb & Shook", Some(AdminDriProblem::Missing)),
+            status("Another Healthy Firm", None),
+        ];
+        assert_eq!(print_report(&report), ExitCode::FAILURE);
+    }
+}
