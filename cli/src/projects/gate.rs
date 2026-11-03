@@ -25,6 +25,28 @@ pub(crate) fn ci_flag_refusal(ci: bool, ci_env: Option<&str>) -> Option<&'static
     )
 }
 
+/// Check declared ownership before a local gate may rewrite checkout files.
+pub(crate) async fn check_ownership_before_fixes(dir: &Path) -> Result<()> {
+    let manifest = manifest::read(dir).ok_or_else(|| anyhow!("cannot parse navigator.yaml"))?;
+    if manifest.firm.is_none() && manifest.brand.is_none() {
+        return Ok(());
+    }
+    let host = manifest_host(dir).map_err(anyhow::Error::msg)?;
+    let (base, token) = remote::resolve(Some(&host))?;
+    let code = manifest
+        .project
+        .as_deref()
+        .ok_or_else(|| anyhow!("navigator.yaml has no project.name"))?;
+    let project = super::surfaces::list_visible_projects(&base, &token)
+        .await?
+        .into_iter()
+        .find(|project| project.code == code)
+        .ok_or_else(|| anyhow!("no live row for the declared Project"))?;
+    manifest
+        .check_live_ownership(project.firm_id, project.brand.as_deref())
+        .map_err(anyhow::Error::msg)
+}
+
 /// Check a Project's live status and required coordinates through an
 /// authorized local or CI session.
 pub(crate) async fn live_status(dir: &Path, ci: bool) -> ExitCode {

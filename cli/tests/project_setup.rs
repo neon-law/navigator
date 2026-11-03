@@ -435,6 +435,58 @@ async fn project_set_from_live_refuses_ownership_drift_without_writes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn local_gate_refuses_ownership_drift_before_markdown_or_layout_fixes() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let login = TempDir::new().unwrap();
+    let credentials_path = credentials(&login, &host);
+    let checkout = TempDir::new().unwrap();
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id": Uuid::now_v7(), "code":"acme", "firm_id": Uuid::now_v7(), "brand":"sample"}
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let manifest = format!(
+        "version: {}\nproject:\n  host: {host}\n  name: acme\n  firm: {}\n  brand: other\n",
+        env!("CARGO_PKG_VERSION"),
+        Uuid::now_v7()
+    );
+    let readme = "# Example\n\nText with trailing whitespace.  \n";
+    let workflow = "name: automerge\n# needs canonical layout repair\n";
+    fs::create_dir(checkout.path().join(".git")).unwrap();
+    fs::create_dir_all(checkout.path().join(".github/workflows")).unwrap();
+    for (path, contents) in [
+        ("navigator.yaml", manifest.as_str()),
+        ("README.md", readme),
+        (".github/workflows/automerge.yml", workflow),
+    ] {
+        fs::write(checkout.path().join(path), contents).unwrap();
+    }
+    let output = command()
+        .current_dir(checkout.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+        .args(["project", "gate"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "ownership drift must be refused");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Firm and brand differ"));
+    for (path, original) in [
+        ("navigator.yaml", manifest.as_str()),
+        ("README.md", readme),
+        (".github/workflows/automerge.yml", workflow),
+    ] {
+        assert_eq!(
+            fs::read_to_string(checkout.path().join(path)).unwrap(),
+            original,
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn project_commands_refuse_a_firm_uuid_instead_of_a_name() {
     let server = MockServer::start().await;
     let host = server.uri();
