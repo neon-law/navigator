@@ -7914,11 +7914,11 @@ async fn lawyer_shook_hosts_redirect_to_guieb_shook() {
     for (host, expected) in [
         (
             "www.lawyershook.com",
-            "https://www.guiebandshook.com/testimonials?ref=x",
+            "https://www.guiebshook.com/testimonials?ref=x",
         ),
         (
             "staging.lawyershook.com",
-            "https://staging.guiebandshook.com/testimonials?ref=x",
+            "https://staging.guiebshook.com/testimonials?ref=x",
         ),
     ] {
         let resp = app
@@ -11050,7 +11050,7 @@ async fn assert_unregistered_host_redirects(
 async fn host_brand_path_matrix_resolves_every_combination() {
     let default_host = "www.neonlaw.com";
     let delete_your_data_host = "staging.deleteyourdata.com";
-    let holding_host = "staging.guiebandshook.com";
+    let holding_host = "staging.guiebshook.com";
     let unknown_host = "unregistered.example";
     let state =
         empty_state_with_canonical_host(CanonicalHost::new(Some(default_host.into()))).await;

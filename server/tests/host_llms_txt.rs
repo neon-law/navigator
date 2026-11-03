@@ -177,7 +177,7 @@ async fn only_neon_advertises_the_delete_your_debt_gateway() {
 
     for host in [
         "staging.deleteyourdata.com",
-        "staging.guiebandshook.com",
+        "staging.guiebshook.com",
         "staging.deleteyourdebt.com",
     ] {
         let (status, body) = get_on_host(&app, "/llms.txt", Some(host)).await;
@@ -201,7 +201,7 @@ async fn only_neon_advertises_the_delete_your_data_gateway() {
 
     for host in [
         "staging.deleteyourdata.com",
-        "staging.guiebandshook.com",
+        "staging.guiebshook.com",
         "staging.deleteyourdebt.com",
     ] {
         let (status, body) = get_on_host(&app, "/llms.txt", Some(host)).await;
@@ -225,7 +225,7 @@ async fn only_neon_advertises_the_immigration_gateway() {
 
     for host in [
         "staging.deleteyourdata.com",
-        "staging.guiebandshook.com",
+        "staging.guiebshook.com",
         "staging.abhayaimmigration.com",
     ] {
         let (status, body) = get_on_host(&app, "/llms.txt", Some(host)).await;
@@ -249,7 +249,7 @@ async fn only_neon_advertises_the_estate_planning_gateway() {
 
     for host in [
         "staging.deleteyourdata.com",
-        "staging.guiebandshook.com",
+        "staging.guiebshook.com",
         "staging.vestaestateplanning.com",
     ] {
         let (status, body) = get_on_host(&app, "/llms.txt", Some(host)).await;
@@ -273,7 +273,7 @@ async fn only_neon_advertises_the_accidents_gateway() {
 
     for host in [
         "staging.deleteyourdata.com",
-        "staging.guiebandshook.com",
+        "staging.guiebshook.com",
         "staging.misericordialaw.com",
     ] {
         let (status, body) = get_on_host(&app, "/llms.txt", Some(host)).await;
@@ -297,7 +297,7 @@ async fn only_neon_advertises_the_divorce_gateway() {
 
     for host in [
         "staging.deleteyourdata.com",
-        "staging.guiebandshook.com",
+        "staging.guiebshook.com",
         "staging.daybridgedivorce.com",
     ] {
         let (status, body) = get_on_host(&app, "/llms.txt", Some(host)).await;
@@ -431,7 +431,7 @@ async fn the_delete_your_data_llms_txt_is_that_brands_pages_under_its_host() {
 #[tokio::test]
 async fn the_guieb_shook_llms_txt_is_that_brands_pages_under_its_host() {
     let app = app().await;
-    let host = "staging.guiebandshook.com";
+    let host = "staging.guiebshook.com";
     let (status, body) = get_on_host(&app, "/llms.txt", Some(host)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     // The firm's own index: its home and services pages under its host,

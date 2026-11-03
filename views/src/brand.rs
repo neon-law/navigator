@@ -635,8 +635,8 @@ pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
         is_law_firm: true,
         legal_entity: "Guieb & Shook PC",
     },
-    firm_email: "contact@guiebandshook.com",
-    support_domain: "guiebandshook.com",
+    firm_email: "contact@guiebshook.com",
+    support_domain: "guiebshook.com",
     firm_phone: "+1 510 800 2090",
     firm_offices: FIRM_OFFICES,
     firm_attorneys: &[],
@@ -650,7 +650,7 @@ pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
     terms_url: "/terms",
     privacy_url: "/privacy",
     base_url: "",
-    primary_domain: "guiebandshook.com",
+    primary_domain: "guiebshook.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
     // The `llms.txt` summary for this brand: the firm speaks as itself.
     mission_description: "Guieb & Shook PC is an American law firm helping people and businesses face a dispute, plan a decision, or complete a defined legal task.",
@@ -1556,7 +1556,7 @@ impl BrandKey {
             Self::DeathAndDivorce => "deathanddivorcelaw.com",
             Self::Aegis => "aegiscriminaldefense.com",
             Self::Groundwork => "groundworkrealestatelaw.com",
-            Self::GuiebShook => "guiebandshook.com",
+            Self::GuiebShook => "guiebshook.com",
             Self::CyberInjuryLaw => "cyberinjurylaw.com",
             // Served on `neonlaw.com` subdomains, so there is no naked domain
             // of their own to redirect.
@@ -1630,7 +1630,7 @@ impl BrandKey {
                 "staging.groundworkrealestatelaw.com",
             ],
             Self::CyberInjuryLaw => &["www.cyberinjurylaw.com", "staging.cyberinjurylaw.com"],
-            Self::GuiebShook => &["www.guiebandshook.com", "staging.guiebandshook.com"],
+            Self::GuiebShook => &["www.guiebshook.com", "staging.guiebshook.com"],
             Self::LexTecnica => &["lex-tecnica.neonlaw.com", "staging-lex-tecnica.neonlaw.com"],
             Self::IepDefenders => &["iep.neonlaw.com", "staging-iep.neonlaw.com"],
         }

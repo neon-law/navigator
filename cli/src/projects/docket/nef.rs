@@ -41,6 +41,11 @@ pub struct Notice {
     pub original_filename: Option<String>,
     /// Everyone the notice was electronically mailed to.
     pub service_list: Vec<ServiceListEntry>,
+    /// Everyone the notice says it reached by other means (or did not
+    /// electronically mail), one name per entry; their postal address lines
+    /// are dropped. Not part of the [`Notice::service_list`]: these entries
+    /// carry no email to key a Person on.
+    pub other_means: Vec<String>,
 }
 
 /// One document attached to the main document of a docket entry.
@@ -90,13 +95,36 @@ const NOTICE_HEADING: &str = "Notice of Electronic Filing";
 /// [`NefError`] when the message is not a notice or lacks its case number.
 pub fn parse_eml(bytes: &[u8]) -> Result<Notice, NefError> {
     let (text, links) = message_text(bytes);
-    parse_text(&text, &links)
+    let hrefs: Vec<String> = links.iter().map(|link| link.href.clone()).collect();
+    let mut notice = parse_text(&text, &hrefs)?;
+    if notice.doc_no.is_none() && !says_no_document_attached(&text) {
+        // The notice links its document but its `Document Number:` line did
+        // not survive as text: the doc1 link's own label is the number. A
+        // text-only entry keeps no number even when its docket text links an
+        // earlier order.
+        notice.doc_no = links
+            .iter()
+            .find(|link| is_free_look(&link.href))
+            .and_then(|link| docket_number(&link.label));
+    }
+    Ok(notice)
+}
+
+/// Whether the notice states its entry carries no document.
+fn says_no_document_attached(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("no document attached")
+}
+
+/// One HTML link: its `href` and the text it wraps, whitespace collapsed.
+struct Link {
+    href: String,
+    label: String,
 }
 
 /// The readable text of a message and every link its HTML carried. The HTML
 /// part wins when there is one: it is the only part that is sure to carry
 /// the free-look link.
-fn message_text(bytes: &[u8]) -> (String, Vec<String>) {
+fn message_text(bytes: &[u8]) -> (String, Vec<Link>) {
     if let Some(message) = mail_parser::MessageParser::default().parse(bytes) {
         if let Some(html) = message
             .html_body()
@@ -104,7 +132,7 @@ fn message_text(bytes: &[u8]) -> (String, Vec<String>) {
             .filter(|part| matches!(part.kind(), mail_parser::PartKind::Html))
             .and_then(|part| part.text())
         {
-            return html_to_text(&html);
+            return reduce_html(&html);
         }
         if let Some(text) = message.body_text(0) {
             return (text.into_owned(), Vec::new());
@@ -139,17 +167,20 @@ pub fn parse_text(text: &str, links: &[String]) -> Result<Notice, NefError> {
         free_look_url: None,
         original_filename: None,
         service_list: Vec::new(),
+        other_means: Vec::new(),
     };
     let mut section = Section::Header;
     let mut docket_lines: Vec<&str> = Vec::new();
     let mut documents: Vec<Document> = Vec::new();
-    let mut pending_name: Option<&str> = None;
+    let mut pending_name: Option<String> = None;
+    let mut in_postal_block = false;
     let mut inline_links: Vec<String> = Vec::new();
 
     for line in &rows[heading + 1..] {
         if let Some(next) = section_marker(line) {
             section = next;
             pending_name = None;
+            in_postal_block = false;
             continue;
         }
         match section {
@@ -166,6 +197,16 @@ pub fn parse_text(text: &str, links: &[String]) -> Result<Notice, NefError> {
             Section::Documents => read_document_line(line, &mut documents),
             Section::ServiceList => {
                 read_service_line(line, &mut pending_name, &mut notice.service_list);
+            }
+            Section::OtherMeans => {
+                // Each entry is a name then its postal address lines; a blank
+                // line ends the entry.
+                if line.is_empty() {
+                    in_postal_block = false;
+                } else if !in_postal_block {
+                    in_postal_block = true;
+                    notice.other_means.push((*line).to_string());
+                }
             }
             Section::Other => {}
         }
@@ -207,6 +248,7 @@ enum Section {
     DocketText,
     Documents,
     ServiceList,
+    OtherMeans,
     Other,
 }
 
@@ -233,7 +275,7 @@ fn section_marker(line: &str) -> Option<Section> {
         || lower.ends_with("notice will not be electronically mailed to:")
         || lower.ends_with("notice will be delivered by other means to:")
     {
-        return Some(Section::Other);
+        return Some(Section::OtherMeans);
     }
     None
 }
@@ -260,17 +302,23 @@ fn read_header_line(line: &str, notice: &mut Notice, inline_links: &mut Vec<Stri
         "filer" => notice.filed_by = non_empty(value),
         "document number" => {
             let (number, href) = split_inline_link(value);
-            notice.doc_no = number
-                .split_whitespace()
-                .next()
-                .filter(|token| token.chars().next().is_some_and(|c| c.is_ascii_digit()))
-                .map(str::to_string);
+            notice.doc_no = docket_number(number);
             if let Some(href) = href {
                 inline_links.push(href);
             }
         }
         _ => {}
     }
+}
+
+/// The docket entry number a `Document Number:` value or doc1 link label
+/// starts with: `29` from `29 (3 pgs)`. None for `No document attached`.
+fn docket_number(value: &str) -> Option<String> {
+    value
+        .split_whitespace()
+        .next()
+        .filter(|token| token.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .map(str::to_string)
 }
 
 /// `Document Number: 29 <https://…>` — the number and the link a plain-text
@@ -333,48 +381,54 @@ fn strip_label<'a>(line: &'a str, label: &str) -> Option<&'a str> {
 }
 
 /// One service-list line. A line with a name and addresses is a whole entry;
-/// a name alone waits for the address line beneath it.
-fn read_service_line<'a>(
-    line: &'a str,
-    pending_name: &mut Option<&'a str>,
+/// a name alone waits for the address line beneath it. A line that carries
+/// several entries — `Name a@x, b@x Other Name c@x`, as a list whose line
+/// breaks were lost prints — splits wherever a name follows an address.
+fn read_service_line(
+    line: &str,
+    pending_name: &mut Option<String>,
     entries: &mut Vec<ServiceListEntry>,
 ) {
     if line.is_empty() {
         *pending_name = None;
         return;
     }
-    let (name_part, emails) = split_emails(line);
-    let name_part = name_part.trim().trim_end_matches([',', ';']).trim();
-    if emails.is_empty() {
-        if !name_part.is_empty() {
-            *pending_name = Some(line);
+    for (name_part, emails) in service_groups(line) {
+        let name_part = name_part.trim().trim_end_matches([',', ';']).trim();
+        if emails.is_empty() {
+            if !name_part.is_empty() {
+                *pending_name = Some(name_part.to_string());
+            }
+            continue;
         }
-        return;
+        let name = if name_part.is_empty() {
+            pending_name.take().unwrap_or_default()
+        } else {
+            *pending_name = None;
+            name_part.to_string()
+        };
+        let (name, party) = match name.split_once(" on behalf of ") {
+            Some((name, party)) => (name.trim(), non_empty(party)),
+            None => (name.trim(), None),
+        };
+        if name.is_empty() {
+            continue;
+        }
+        entries.push(ServiceListEntry {
+            name: name.to_string(),
+            party,
+            emails,
+        });
     }
-    let name = if name_part.is_empty() {
-        pending_name.take().unwrap_or("")
-    } else {
-        name_part
-    };
-    *pending_name = None;
-    let (name, party) = match name.split_once(" on behalf of ") {
-        Some((name, party)) => (name.trim(), non_empty(party)),
-        None => (name.trim(), None),
-    };
-    if name.is_empty() {
-        return;
-    }
-    entries.push(ServiceListEntry {
-        name: name.to_string(),
-        party,
-        emails,
-    });
 }
 
-/// The line with its email addresses removed, and those addresses lowercased.
-fn split_emails(line: &str) -> (String, Vec<String>) {
-    let mut rest = String::new();
-    let mut emails = Vec::new();
+/// A service-list line cut into `(name, addresses)` groups: a group's name
+/// words run until its first address, and the next name word after an
+/// address opens the next group.
+fn service_groups(line: &str) -> Vec<(String, Vec<String>)> {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    let mut name = String::new();
+    let mut emails: Vec<String> = Vec::new();
     for token in line.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
         let cleaned = token.trim_matches(|c: char| matches!(c, '<' | '>' | '(' | ')' | '"'));
         if is_email(cleaned) {
@@ -383,13 +437,19 @@ fn split_emails(line: &str) -> (String, Vec<String>) {
                 emails.push(email);
             }
         } else if !token.is_empty() {
-            if !rest.is_empty() {
-                rest.push(' ');
+            if !emails.is_empty() {
+                groups.push((std::mem::take(&mut name), std::mem::take(&mut emails)));
             }
-            rest.push_str(token);
+            if !name.is_empty() {
+                name.push(' ');
+            }
+            name.push_str(token);
         }
     }
-    (rest, emails)
+    if !name.is_empty() || !emails.is_empty() {
+        groups.push((name, emails));
+    }
+    groups
 }
 
 fn is_email(token: &str) -> bool {
@@ -441,19 +501,29 @@ fn collapse_whitespace(text: &str) -> String {
 
 /// Reduce HTML to text lines in one pass: block tags (`<br>`, `<p>`, `<div>`,
 /// `<tr>`) end a line, a table cell becomes a space, every other tag
-/// disappears, and each `href` is collected in document order.
+/// disappears, and each `href` is collected in document order. Line breaks
+/// in the HTML source are whitespace, as a browser renders them, so a table
+/// row whose cells sit on separate source lines stays one line.
 #[must_use]
 pub fn html_to_text(html: &str) -> (String, Vec<String>) {
+    let (text, links) = reduce_html(html);
+    (text, links.into_iter().map(|link| link.href).collect())
+}
+
+fn reduce_html(html: &str) -> (String, Vec<Link>) {
     let mut text = String::with_capacity(html.len() / 2);
-    let mut links = Vec::new();
+    let mut links: Vec<Link> = Vec::new();
+    // The text offset where the open `<a>` began, and its link's index.
+    let mut open_link: Option<(usize, usize)> = None;
     let mut rest = html;
     while let Some(open) = rest.find('<') {
-        text.push_str(&decode_entities(&rest[..open]));
+        push_source_text(&mut text, &rest[..open]);
         let Some(close) = rest[open..].find('>') else {
             rest = "";
             break;
         };
         let tag = &rest[open + 1..open + close];
+        let closing = tag.starts_with('/');
         let name: String = tag
             .trim_start_matches('/')
             .chars()
@@ -463,17 +533,40 @@ pub fn html_to_text(html: &str) -> (String, Vec<String>) {
         match name.as_str() {
             "br" | "p" | "div" | "tr" | "table" | "li" | "h1" | "h2" | "h3" => text.push('\n'),
             "td" | "th" => text.push(' '),
+            "a" if closing => {
+                if let Some((start, index)) = open_link.take() {
+                    links[index].label = collapse_whitespace(&text[start..]);
+                }
+            }
             "a" => {
                 if let Some(href) = attribute(tag, "href") {
-                    links.push(decode_entities(href).into_owned());
+                    open_link = Some((text.len(), links.len()));
+                    links.push(Link {
+                        href: decode_entities(href).into_owned(),
+                        label: String::new(),
+                    });
                 }
             }
             _ => {}
         }
         rest = &rest[open + close + 1..];
     }
-    text.push_str(&decode_entities(rest));
+    push_source_text(&mut text, rest);
     (text, links)
+}
+
+/// Text between tags, entities decoded and source line breaks as spaces.
+fn push_source_text(text: &mut String, source: &str) {
+    let decoded = decode_entities(source);
+    if decoded.contains(['\n', '\r']) {
+        text.extend(
+            decoded
+                .chars()
+                .map(|c| if c == '\n' || c == '\r' { ' ' } else { c }),
+        );
+    } else {
+        text.push_str(&decoded);
+    }
 }
 
 fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
@@ -635,6 +728,78 @@ mod tests {
     }
 
     #[test]
+    fn a_notice_whose_cells_wrap_reads_its_doc1_link_and_every_recipient() {
+        let notice = parse_eml(&fixture("bankruptcy-html-wrapped.eml")).unwrap();
+
+        assert_eq!(notice.case_no, "26-10077-QQQ");
+        assert_eq!(
+            notice.doc_no.as_deref(),
+            Some("57"),
+            "a doc1 link means a document is attached"
+        );
+        assert_eq!(
+            notice.free_look_url.as_deref(),
+            Some("https://ecf.example.com/doc1/0310077?caseid=99&de_seq_num=410&magic_num=5150")
+        );
+        assert_eq!(
+            notice.original_filename.as_deref(),
+            Some("objection-claim-12.pdf")
+        );
+
+        let people: Vec<_> = notice
+            .service_list
+            .iter()
+            .map(|e| (e.name.as_str(), e.party.as_deref(), e.emails.clone()))
+            .collect();
+        assert_eq!(
+            people,
+            vec![
+                (
+                    "Quentin Quill",
+                    Some("Creditor Harbor Recovery Fund"),
+                    vec![
+                        "quentin.quill@example.com".to_string(),
+                        "claims@example.com".to_string()
+                    ]
+                ),
+                (
+                    "Uma Upton",
+                    Some("U.S. Trustee U.S. Trustee"),
+                    vec!["uma.upton@example.com".to_string()]
+                ),
+                (
+                    "Vera Venue",
+                    Some("Debtor Widget Works LLC"),
+                    vec!["vera.venue@example.com".to_string()]
+                ),
+            ]
+        );
+        assert_eq!(notice.other_means, vec!["Walt Writ", "Xena Xerox"]);
+    }
+
+    #[test]
+    fn a_doc1_link_without_a_readable_number_takes_the_links_own_label() {
+        let html = "<p>U.S. District Court</p><p>District of Nowhere</p>\
+                    <p>Notice of Electronic Filing</p>\
+                    <table><tr><td>Case Number:</td><td>9:26-cv-00042-XYZ</td></tr></table>\
+                    <p>See <a href=\"https://ecf.example.com/doc1/0420002?magic_num=1\">14</a></p>\
+                    <p>Docket Text:<br>ORDER granting motion.</p>";
+        let message = format!("MIME-Version: 1.0\r\nContent-Type: text/html\r\n\r\n{html}");
+        let notice = parse_eml(message.as_bytes()).unwrap();
+        assert_eq!(notice.doc_no.as_deref(), Some("14"));
+        assert_eq!(
+            notice.free_look_url.as_deref(),
+            Some("https://ecf.example.com/doc1/0420002?magic_num=1")
+        );
+    }
+
+    #[test]
+    fn the_not_mailed_block_lists_its_recipients_by_name() {
+        let notice = parse_eml(&fixture("bankruptcy-transfer.eml")).unwrap();
+        assert_eq!(notice.other_means, vec!["Walt Writ"]);
+    }
+
+    #[test]
     fn a_text_only_entry_has_no_document_number() {
         let text = "U.S. District Court\n\nDistrict of Nowhere\n\nNotice of Electronic Filing\n\n\
                     The following transaction was entered on 3/6/2026 at 8:00 AM PST and filed on 3/6/2026\n\
@@ -645,6 +810,18 @@ mod tests {
         assert_eq!(notice.doc_no, None);
         assert_eq!(notice.filer_attorney, None);
         assert_eq!(notice.docket_text, "MINUTE ORDER setting a hearing.");
+    }
+
+    #[test]
+    fn a_text_only_html_entry_does_not_take_an_earlier_orders_link() {
+        let html = "<p>Notice of Electronic Filing</p>\
+                    <table><tr><td>Case Number:</td><td>9:26-cv-00042-XYZ</td></tr>\
+                    <tr><td>Document Number:</td><td>No document attached</td></tr></table>\
+                    <p>Docket Text:<br>MINUTE ORDER regarding \
+                    <a href=\"https://ecf.example.com/doc1/1?magic_num=1\">12</a> Order.</p>";
+        let message =
+            format!("MIME-Version: 1.0\r\nContent-Type: text/html; charset=us-ascii\r\n\r\n{html}");
+        assert_eq!(parse_eml(message.as_bytes()).unwrap().doc_no, None);
     }
 
     #[test]

@@ -381,7 +381,7 @@ mod tests {
             (BrandKey::Misericordia, "misericordialaw.com"),
             (BrandKey::Abhaya, "abhayaimmigration.com"),
             (BrandKey::LawyerShook, "lawyershook.com"),
-            (BrandKey::GuiebShook, "guiebandshook.com"),
+            (BrandKey::GuiebShook, "guiebshook.com"),
             (BrandKey::DeleteYourDebt, "deleteyourdebt.com"),
             (BrandKey::Summons, "summonsdefense.nyc"),
             (BrandKey::Daybridge, "daybridgedivorce.com"),
