@@ -184,3 +184,15 @@ fn country_matches_code_spelling_or_name() {
         assert_eq!(resolved.country_code, "US", "{spelling}");
     }
 }
+
+#[test]
+fn unresolved_city_in_a_small_country_returns_suggestions() {
+    let date = NaiveDate::from_ymd_opt(1990, 6, 15).expect("valid date");
+    let error =
+        geotime::resolve("Gibraltarr", "GI", date, None).expect_err("typo does not resolve");
+    let ResolveError::UnknownCity { suggestions, .. } = error else {
+        panic!("Gibraltar is a recognized country");
+    };
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].name, "Gibraltar");
+}

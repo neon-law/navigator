@@ -132,9 +132,11 @@ impl Index {
             })
             .collect();
         let limit = limit.min(ranked.len());
-        ranked.select_nth_unstable_by_key(limit, |(distance, population, _)| {
-            (*distance, std::cmp::Reverse(*population))
-        });
+        if limit < ranked.len() {
+            ranked.select_nth_unstable_by_key(limit, |(distance, population, _)| {
+                (*distance, std::cmp::Reverse(*population))
+            });
+        }
         ranked
             .into_iter()
             .take(limit)
@@ -162,7 +164,9 @@ impl Index {
             })
             .collect();
         let limit = limit.min(ranked.len());
-        ranked.select_nth_unstable_by_key(limit, |(distance, _)| *distance);
+        if limit < ranked.len() {
+            ranked.select_nth_unstable_by_key(limit, |(distance, _)| *distance);
+        }
         ranked
             .into_iter()
             .take(limit)
@@ -253,5 +257,32 @@ fn parse_bundled() -> Index {
         cities,
         by_key,
         countries,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suggestions_accept_empty_and_short_indexes_and_zero_limits() {
+        let sample = global().cities[0];
+        for count in [0, 1, 3, 4] {
+            let index = Index {
+                cities: vec![sample; count],
+                by_key: Vec::new(),
+                countries: global().countries.iter().take(count).copied().collect(),
+            };
+            for limit in [0, 3, 4] {
+                assert_eq!(
+                    index.suggestions_in("typo", None, limit).len(),
+                    count.min(limit)
+                );
+                assert_eq!(
+                    index.closest_countries("typo", limit).len(),
+                    count.min(limit)
+                );
+            }
+        }
     }
 }
