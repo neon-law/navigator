@@ -43,7 +43,11 @@ pub(crate) async fn ownership_preflight(dir: &Path, ci: bool) -> ExitCode {
 
 /// Check declared ownership before a local gate may rewrite checkout files.
 async fn check_ownership_before_fixes(dir: &Path) -> Result<()> {
-    let manifest = manifest::read(dir).ok_or_else(|| anyhow!("cannot parse navigator.yaml"))?;
+    // The content/layout validator reports malformed manifests with their
+    // structured rule codes. Ownership is meaningful only after parsing.
+    let Some(manifest) = manifest::read(dir) else {
+        return Ok(());
+    };
     if manifest.firm.is_none() && manifest.brand.is_none() {
         return Ok(());
     }
