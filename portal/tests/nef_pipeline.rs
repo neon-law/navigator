@@ -671,11 +671,52 @@ async fn a_later_notice_files_its_original_when_the_entry_is_already_recorded() 
         .await
         .unwrap();
     assert_eq!(entries.len(), 1);
-    assert!(entries[0].document_asset_id.is_some());
+    assert!(
+        entries[0].document_asset_id.is_none(),
+        "the email is not the court document"
+    );
     let documents = store::assets::for_project(&fixture.surreal, project_id)
         .await
         .unwrap();
     assert_eq!(documents.len(), 1, "the later message original is filed");
+    let attachment = store::assets::ingest_content(
+        &fixture.surreal,
+        &fixture.storage,
+        b"%PDF-1.4 synthetic later court document",
+        "application/pdf",
+    )
+    .await
+    .unwrap();
+    let final_notice = seed_notice(
+        &fixture,
+        Some(project_id),
+        None,
+        &text,
+        vec![store::inbox::IngestAttachment {
+            asset_id: attachment,
+            filename: "court-document.pdf".into(),
+            sha256: store::assets::sha256_hex(b"%PDF-1.4 synthetic later court document"),
+        }],
+    )
+    .await;
+    let (status, applied) = request(
+        &fixture.app,
+        "POST",
+        "/app/api/inbox/process",
+        Some(&fixture.lawyer_session),
+        Some(json!({"message": final_notice, "apply": true})),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(applied["nef"]["outcome"], "already_recorded");
+    let entries = store::cases::docket(&fixture.surreal, case.id)
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(
+        entries[0].document_asset_id.is_some(),
+        "a later court document repairs the pending source"
+    );
 }
 
 #[tokio::test]

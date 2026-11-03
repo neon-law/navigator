@@ -219,7 +219,7 @@ fn parse_notice(raw: Option<&[u8]>, body: &str) -> Result<store::nef::Notice, Ne
 /// File the notice's attachment assets and, when its raw source survived
 /// the ingest, the original. Returns how many documents were filed and
 /// the asset the docket entry links — the first filed attachment when
-/// one exists, else the original.
+/// one exists. The email original is provenance, not the court document.
 async fn file_notice_documents(
     state: &crate::api::ApiState,
     row: &store::inbox::UnprocessedRow,
@@ -288,7 +288,7 @@ async fn file_notice_documents(
             received_at: &row.occurred_at,
             subject: row.subject.as_deref().unwrap_or_default(),
         };
-        let filed = store::documents::ingest_bytes_with_mail_provenance_once(
+        store::documents::ingest_bytes_with_mail_provenance_once(
             &state.surreal,
             &state.storage,
             &args,
@@ -298,7 +298,6 @@ async fn file_notice_documents(
         )
         .await
         .map_err(|error| ApiError::Revision(store::assets::RevisionError::Ingest(error)))?;
-        document_asset_id = document_asset_id.or(Some(filed.asset_id));
         filed_documents += 1;
     }
 
