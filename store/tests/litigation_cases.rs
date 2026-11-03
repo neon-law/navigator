@@ -851,6 +851,7 @@ async fn assert_concurrent_intake_converges(
     project_id: Uuid,
 ) {
     let gate = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+    let document_id = Uuid::now_v7();
     let mut tasks = tokio::task::JoinSet::new();
     for index in 0..8 {
         let db = if index % 2 == 0 {
@@ -864,12 +865,9 @@ async fn assert_concurrent_intake_converges(
             let case = store::cases::ensure_case(&db, &a_case(project_id, "Alpha v. Beta"))
                 .await
                 .unwrap();
-            let entry = store::cases::ensure_entry(
-                &db,
-                &an_entry(case.id, "12", EntryKind::Motion, "Motion to dismiss"),
-            )
-            .await
-            .unwrap();
+            let mut new = an_entry(case.id, "12", EntryKind::Motion, "Motion to dismiss");
+            new.document_asset_id = (index % 2 == 0).then_some(document_id);
+            let entry = store::cases::ensure_entry(&db, &new).await.unwrap();
             (case.id, entry.id)
         });
     }
@@ -884,7 +882,29 @@ async fn assert_concurrent_intake_converges(
     );
     let cases = for_project(first, project_id).await.unwrap();
     assert_eq!(cases.len(), 1);
-    assert_eq!(docket(first, cases[0].id).await.unwrap().len(), 1);
+    let entries = docket(first, cases[0].id).await.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].document_asset_id, Some(document_id));
+}
+
+#[tokio::test]
+async fn reusing_an_entry_fills_only_its_missing_document() {
+    let db = mem().await;
+    let project = open_matter(&db, "pending-source-intake").await;
+    let case = open_case(&db, &a_case(project, "Alpha v. Beta"))
+        .await
+        .unwrap();
+    let mut new = an_entry(case.id, "12", EntryKind::Motion, "Motion to dismiss");
+    let original = store::cases::ensure_entry(&db, &new).await.unwrap();
+    assert!(original.document_asset_id.is_none());
+    let document = Uuid::now_v7();
+    new.document_asset_id = Some(document);
+    let repaired = store::cases::ensure_entry(&db, &new).await.unwrap();
+    assert_eq!(repaired.id, original.id);
+    assert_eq!(repaired.document_asset_id, Some(document));
+    new.document_asset_id = Some(Uuid::now_v7());
+    let retained = store::cases::ensure_entry(&db, &new).await.unwrap();
+    assert_eq!(retained.document_asset_id, Some(document));
 }
 
 #[tokio::test]

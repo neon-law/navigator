@@ -878,7 +878,10 @@ async fn persist_entry(
             "BEGIN; UPDATE $case_id SET updated_at = time::now(); \
             LET $existing = (SELECT VALUE id FROM {DOCKET_ENTRY_TABLE} \
                 WHERE case_id = $case_id AND entry_number = $entry_number LIMIT 1)[0]; \
-            IF $existing = NONE {{ {create}; }}; COMMIT;"
+            IF $existing = NONE {{ {create}; }} ELSE {{ \
+                UPDATE $existing SET document_asset_id = $document_asset_id, updated_at = time::now() \
+                WHERE document_asset_id = NONE AND $document_asset_id != NONE; \
+            }}; COMMIT;"
         )
     } else {
         create
