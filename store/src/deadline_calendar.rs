@@ -1199,10 +1199,16 @@ mod tests {
         let mut retitled = stored(sample(Uuid::now_v7()));
         retitled.id = row.id;
         retitled.title = Some("Reply brief due".into());
-        assert_ne!(body_sha(&retitled, "ACME", None), base);
+        assert_ne!(
+            body_sha(&retitled, "ACME", Some("https://www.example.com")),
+            base
+        );
 
         // A different matter code changes the digest.
-        assert_ne!(body_sha(&row, "OTHER", None), base);
+        assert_ne!(
+            body_sha(&row, "OTHER", Some("https://www.example.com")),
+            base
+        );
         // The digest is a 64-character lowercase hex string.
         assert_eq!(base.len(), 64);
         assert!(base
