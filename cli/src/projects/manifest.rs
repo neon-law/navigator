@@ -187,6 +187,28 @@ pub struct Manifest {
     pub scrapers: Option<serde_yaml::Value>,
 }
 
+impl Manifest {
+    /// Refuse drift from declared ownership; an absent pair can be filled from live.
+    pub(crate) fn check_live_ownership(
+        &self,
+        firm_id: Option<uuid::Uuid>,
+        brand: Option<&str>,
+    ) -> Result<(), &'static str> {
+        if self.firm.is_none() && self.brand.is_none() {
+            return Ok(());
+        }
+        match (
+            self.firm
+                .as_deref()
+                .and_then(|id| uuid::Uuid::parse_str(id).ok()),
+            self.brand.as_deref(),
+        ) {
+            (Some(firm), Some(key)) if Some(firm) == firm_id && Some(key) == brand => Ok(()),
+            _ => Err("navigator.yaml Firm and brand differ from the live Project"),
+        }
+    }
+}
+
 /// One manifest finding, with a Y-family rule code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestFinding {

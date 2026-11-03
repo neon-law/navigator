@@ -1261,7 +1261,7 @@ enum ProjectsCmd {
         /// for it to have preceded.
         #[arg(long, requires = "closed")]
         closed_at: Option<chrono::DateTime<chrono::Utc>>,
-        /// Owning Firm name or UUID. Requires --brand.
+        /// Owning Firm name. Requires --brand.
         #[arg(long, requires = "brand")]
         firm: Option<String>,
         /// Brand key worn by the Firm. Requires --firm.
@@ -1318,7 +1318,7 @@ enum ProjectsCmd {
         /// `--resume` rebuilds the tree in an empty directory.
         #[arg(long, value_name = "EMAIL", requires = "resume")]
         client_email: Option<String>,
-        /// Owning Firm name or UUID. Requires --brand.
+        /// Owning Firm name. Requires --brand.
         #[arg(long, requires = "brand", conflicts_with = "resume")]
         firm: Option<String>,
         /// Brand key worn by the Firm. Requires --firm.

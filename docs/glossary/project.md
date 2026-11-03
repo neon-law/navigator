@@ -89,9 +89,9 @@ schema defines the persisted constraints.
 [Firm Brand term](firm-brand.md). `store::projects::open_matter` and the self-serve retainer walk resolve this pair at
 matter-open and refuse a brand no Firm wears. `store::schema::apply` assigns each unowned Project to the Firm wearing
 its brand, then uses the anchor Firm only when no Firm wears that brand. It never creates a Firm and preserves existing
-assignments. Owners can target any Firm; an Admin must administer the target Firm. The CLI accepts a Firm name or UUID,
-resolves it through the caller's authorized Firm directory, and sends the Firm/brand pair together. The repository
-manifest records this pair as `project.firm` (UUID) and `project.brand` (key).
+assignments. Owners can target any Firm; an Admin must administer the target Firm. The CLI accepts a Firm name, resolves
+it through the caller's authorized Firm directory, and sends the Firm/brand pair together. The repository manifest
+records this pair as `project.firm` (UUID) and `project.brand` (key).
 
 Object-storage artifacts (rendered PDFs, signed documents, generated exports) live in
 `gs://YOUR_PROJECT_ID-assets/projects/{id}/` for machine reads, and the nightly store→Parquet snapshots are immutable

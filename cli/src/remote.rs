@@ -4069,7 +4069,7 @@ pub async fn set_project_firm_brand(
     Ok(())
 }
 
-/// Resolve a Firm name or UUID only within the caller's authorized directory.
+/// Resolve a Firm name only within the caller's authorized directory.
 pub(crate) async fn resolve_firm(
     base: &str,
     token: &str,
@@ -4095,14 +4095,14 @@ pub(crate) async fn resolve_firm(
     let firms: Vec<Firm> = response.json().await.context("parse Firm directory")?;
     let matches: Vec<_> = firms
         .iter()
-        .filter(|firm| {
-            firm.name.eq_ignore_ascii_case(needle.trim()) || firm.id.to_string() == needle.trim()
-        })
+        .filter(|firm| firm.name.eq_ignore_ascii_case(needle.trim()))
         .collect();
     let firm = match matches.as_slice() {
         [firm] => firm,
-        [] => anyhow::bail!("no Firm with that name or id is visible to this caller"),
-        _ => anyhow::bail!("more than one visible Firm has that name; use its id"),
+        [] => anyhow::bail!("no Firm with that name is visible to this caller"),
+        _ => anyhow::bail!(
+            "more than one visible Firm has that name; ask an administrator to disambiguate"
+        ),
     };
     if brand.is_some_and(|brand| !firm.brands.iter().any(|key| key == brand)) {
         anyhow::bail!(
@@ -5734,10 +5734,18 @@ mod tests {
         .unwrap();
         assert_eq!(id.to_string(), "00000000-0000-0000-0000-000000000001");
         assert!(
-            super::resolve_firm(&server.uri(), "test-token", &id.to_string(), Some("other"))
+            super::resolve_firm(&server.uri(), "test-token", &id.to_string(), Some("sample"))
                 .await
                 .is_err()
         );
+        assert!(super::resolve_firm(
+            &server.uri(),
+            "test-token",
+            "Example Practice",
+            Some("other")
+        )
+        .await
+        .is_err());
         assert!(
             super::resolve_firm(&server.uri(), "test-token", "hidden", Some("sample"))
                 .await

@@ -97,6 +97,7 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
         .ok_or_else(|| {
             anyhow!("navigator.yaml must declare project.name or pass a Project code")
         })?;
+    let ownership = manifest_ownership(host, project, &parsed, firm.zip(brand), from_live).await?;
     let [lawyer_dri, client_dri, private_slack_channel, private_notion_page] = supplied;
     let mut values: [Option<String>; 6] = [
         lawyer_dri,
@@ -133,7 +134,6 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
         clear_calendar,
         clear_drive_folder,
     )?;
-    let ownership = manifest_ownership(host, project, firm.zip(brand), from_live).await?;
     if let Some((firm, brand)) = ownership {
         let before_ownership = updated.clone();
         updated = replace_project_key(&updated, "firm", &firm.to_string())?;
@@ -177,9 +177,27 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
 async fn manifest_ownership(
     host: &str,
     project: &str,
+    declared: &manifest::Manifest,
     explicit: Option<(&str, &str)>,
     from_live: bool,
 ) -> Result<Option<(uuid::Uuid, String)>> {
+    let live = if from_live {
+        let (base, token) = remote::resolve(Some(host))?;
+        let row = surfaces::list_visible_projects(&base, &token)
+            .await?
+            .into_iter()
+            .find(|row| row.code == project)
+            .context("no live Project")?;
+        declared
+            .check_live_ownership(row.firm_id, row.brand.as_deref())
+            .map_err(anyhow::Error::msg)?;
+        Some((
+            row.firm_id.context("live Project has no Firm")?,
+            row.brand.context("live Project has no brand")?,
+        ))
+    } else {
+        None
+    };
     if let Some((firm, brand)) = explicit {
         let (base, token) = remote::resolve(Some(host))?;
         return Ok(Some((
@@ -187,19 +205,7 @@ async fn manifest_ownership(
             brand.to_string(),
         )));
     }
-    if !from_live {
-        return Ok(None);
-    }
-    let (base, token) = remote::resolve(Some(host))?;
-    let row = surfaces::list_visible_projects(&base, &token)
-        .await?
-        .into_iter()
-        .find(|row| row.code == project)
-        .context("no live Project")?;
-    Ok(Some((
-        row.firm_id.context("live Project has no Firm")?,
-        row.brand.context("live Project has no brand")?,
-    )))
+    Ok(live)
 }
 
 /// The navigator.yaml text and the names of the changed keys after the

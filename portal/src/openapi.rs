@@ -905,7 +905,7 @@ fn canonical_document(base: &str) -> Value {
             "summary": "List Firms the caller may administer",
             "description":
               "Owner sees every Firm. Admin sees only Firms where their membership admits `manage_membership`. \
-               This directory lets the CLI resolve a Firm name or id and discover the brand keys each authorized Firm wears.",
+               This directory lets the CLI resolve a Firm name and discover the brand keys each authorized Firm wears.",
             "responses": {
               "200": { "description": "Visible Firm ids, names, slugs, and brand keys", "content": { "application/json": {
                 "schema": { "type": "array", "items": { "type": "object", "required": ["id", "name", "slug", "brands"], "properties": {

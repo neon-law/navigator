@@ -316,18 +316,9 @@ async fn check_live_handles(dir: &Path, base: &str, token: &str) -> Result<()> {
         .find(|project| project.code == project_code)
         .ok_or_else(|| anyhow!("no live row for the declared Project"))?;
     let project_id = project.id;
-    if manifest.firm.is_some() || manifest.brand.is_some() {
-        let declared_firm = manifest
-            .firm
-            .as_deref()
-            .and_then(|id| uuid::Uuid::parse_str(id).ok());
-        if declared_firm.is_none()
-            || declared_firm != project.firm_id
-            || manifest.brand.as_deref() != project.brand.as_deref()
-        {
-            anyhow::bail!("navigator.yaml Firm and brand differ from the live Project");
-        }
-    }
+    manifest
+        .check_live_ownership(project.firm_id, project.brand.as_deref())
+        .map_err(anyhow::Error::msg)?;
     let live = super::surfaces::get_handles(base, token, project_id).await?;
     if super::docket::renumber::has_filings(dir)? {
         let client = remote::DocumentClient::with_credential(
@@ -1435,18 +1426,8 @@ mod tests {
         }
     }
 
-    /// The regression this module exists to catch: a document-scoped CI
-    /// token's real `GET /app/api/projects` response, produced by the actual
-    /// `portal::router` handler rather than hand-written JSON, must
-    /// deserialize into [`LiveMatter`]. The other tests above mock the
-    /// endpoint with a JSON literal that already includes every field this
-    /// struct wants, which is exactly why the server's `DocumentProjectLookup`
-    /// narrowing (introduced in 26.9.21) could drop `status` and
-    /// `repository_url` for two releases without any test here noticing —
-    /// see ENG-842. This test fails the same way `ci / verify` does the
-    /// moment the two shapes diverge again.
-    #[tokio::test]
-    async fn document_scoped_projects_response_deserializes_into_live_matter() {
+    /// Read the real Project lookup with a freshly minted document-scoped credential.
+    async fn document_scoped_projects_body() -> String {
         let surreal = store::test_support::mem_surreal().await;
         let entity_id = store::test_support::seed_entity(&surreal).await;
         let project_id = store::projects::create(
@@ -1538,7 +1519,13 @@ mod tests {
         let body = axum::body::to_bytes(projects_response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let body = String::from_utf8(body.to_vec()).unwrap();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    /// The document-scoped response must deserialize into both CLI Project readers.
+    #[tokio::test]
+    async fn document_scoped_projects_response_deserializes_into_live_matter() {
+        let body = document_scoped_projects_body().await;
 
         let visible: Vec<super::super::surfaces::VisibleProject> =
             serde_json::from_str(&body).unwrap();
