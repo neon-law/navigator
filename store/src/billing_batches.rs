@@ -22,6 +22,10 @@ pub enum BillingBatchError {
     PendingExists,
     #[error("billing batch was not found")]
     NotFound,
+    #[error("time entry store failed: {0}")]
+    Time(#[from] crate::time_entries::TimeEntryError),
+    #[error("project cost store failed: {0}")]
+    Cost(#[from] crate::project_costs::ProjectCostError),
     #[error("database operation failed")]
     Database(#[from] sqlx::Error),
 }
@@ -78,6 +82,16 @@ pub async fn insert(
     if batch.status != "pending" {
         return Err(BillingBatchError::Invalid("status"));
     }
+    let mut tx = pg.0.begin().await?;
+    let batch = insert_in_tx(&mut tx, batch).await?;
+    tx.commit().await?;
+    Ok(batch)
+}
+
+async fn insert_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    batch: &MatterBillingBatch,
+) -> Result<MatterBillingBatch, BillingBatchError> {
     let row = sqlx::query(
         "INSERT INTO matter_billing_batch(id,project_id,status,reference,line_items,total_cents,currency,entry_ids,cost_ids,flat_fee_cents,actor_id,inserted_at,updated_at) \
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *",
@@ -95,7 +109,7 @@ pub async fn insert(
     .bind(batch.actor_id)
     .bind(batch.inserted_at)
     .bind(batch.updated_at)
-    .fetch_one(&pg.0)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|error| {
         // The partial unique index enforces one pending batch per matter.
@@ -106,6 +120,54 @@ pub async fn insert(
         }
     })?;
     from_row(&row).map_err(BillingBatchError::Database)
+}
+
+/// Reserve the batch's rows and persist its intent in ONE transaction — the
+/// other order (reserve, then insert) can crash in between and strand
+/// reserved work with no batch to resume it.
+pub async fn insert_with_reservations(
+    pg: &PostgresDb,
+    batch: &MatterBillingBatch,
+) -> Result<MatterBillingBatch, BillingBatchError> {
+    if batch.total_cents <= 0 {
+        return Err(BillingBatchError::Invalid("total"));
+    }
+    if batch.status != "pending" {
+        return Err(BillingBatchError::Invalid("status"));
+    }
+    let mut tx = pg.0.begin().await?;
+    if !batch.entry_ids.is_empty() {
+        crate::time_entries::reserve_in_tx(&mut tx, &batch.entry_ids, batch.actor_id)
+            .await
+            .map_err(BillingBatchError::from)?;
+    }
+    if !batch.cost_ids.is_empty() {
+        crate::project_costs::reserve_in_tx(&mut tx, &batch.cost_ids, batch.actor_id)
+            .await
+            .map_err(BillingBatchError::from)?;
+    }
+    let batch = insert_in_tx(&mut tx, batch).await?;
+    tx.commit().await?;
+    Ok(batch)
+}
+
+/// Whether a completed batch has already billed this flat fee on this
+/// matter: the fee is consumed by its first invoice, and a repeat must not
+/// charge it again under a new batch.
+pub async fn flat_fee_billed(
+    pg: &PostgresDb,
+    project_id: Uuid,
+    flat_fee_cents: i64,
+) -> Result<bool, BillingBatchError> {
+    let hit = sqlx::query(
+        "SELECT 1 FROM matter_billing_batch \
+         WHERE project_id=$1 AND status='completed' AND flat_fee_cents=$2 LIMIT 1",
+    )
+    .bind(project_id)
+    .bind(flat_fee_cents)
+    .fetch_optional(&pg.0)
+    .await?;
+    Ok(hit.is_some())
 }
 
 /// The matter's open invoice intent, if any — the batch a retry resumes.

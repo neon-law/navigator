@@ -36,17 +36,11 @@ CREATE UNIQUE INDEX matter_billing_batch_one_pending
 -- it is not yet 'invoiced' either. Reserved rows carry no xero id and no
 -- write-off reason, so the status-evidence constraint gains a third arm.
 ALTER TABLE time_entry DROP CONSTRAINT time_entry_billing_status_check;
-ALTER TABLE time_entry
-    ADD CONSTRAINT time_entry_billing_status_check
-    CHECK (billing_status IN ('unbilled', 'reserved', 'invoiced', 'written_off'));
+ALTER TABLE time_entry ADD CONSTRAINT time_entry_billing_status_check CHECK (billing_status IN ('unbilled', 'reserved', 'invoiced', 'written_off'));
 ALTER TABLE time_entry DROP CONSTRAINT time_entry_status_evidence;
-ALTER TABLE time_entry ADD CONSTRAINT time_entry_status_evidence CHECK (
-    (billing_status = 'unbilled' AND xero_invoice_id IS NULL AND written_off_reason IS NULL) OR (billing_status = 'reserved' AND xero_invoice_id IS NULL AND written_off_reason IS NULL) OR (billing_status = 'invoiced' AND xero_invoice_id IS NOT NULL AND written_off_reason IS NULL) OR (billing_status = 'written_off' AND xero_invoice_id IS NULL AND written_off_reason IS NOT NULL)
-);
+ALTER TABLE time_entry ADD CONSTRAINT time_entry_status_evidence CHECK ( (billing_status = 'unbilled' AND xero_invoice_id IS NULL AND written_off_reason IS NULL) OR (billing_status = 'reserved' AND xero_invoice_id IS NULL AND written_off_reason IS NULL) OR (billing_status = 'invoiced' AND xero_invoice_id IS NOT NULL AND written_off_reason IS NULL) OR (billing_status = 'written_off' AND xero_invoice_id IS NULL AND written_off_reason IS NOT NULL) );
 ALTER TABLE time_entry_events DROP CONSTRAINT time_entry_events_event_kind_check;
-ALTER TABLE time_entry_events
-    ADD CONSTRAINT time_entry_events_event_kind_check
-    CHECK (event_kind IN ('created', 'reserved', 'unreserved', 'invoiced', 'written_off'));
+ALTER TABLE time_entry_events ADD CONSTRAINT time_entry_events_event_kind_check CHECK (event_kind IN ('created', 'reserved', 'unreserved', 'invoiced', 'written_off'));
 
 -- The audit trigger whitelists the event kinds an update may carry; the
 -- reservation transitions are audited like every other mutation.
@@ -69,13 +63,9 @@ END;
 $$;
 
 ALTER TABLE project_costs DROP CONSTRAINT project_costs_billing_status_check;
-ALTER TABLE project_costs
-    ADD CONSTRAINT project_costs_billing_status_check
-    CHECK (billing_status IN ('unbilled', 'reserved', 'invoiced', 'resolved'));
+ALTER TABLE project_costs ADD CONSTRAINT project_costs_billing_status_check CHECK (billing_status IN ('unbilled', 'reserved', 'invoiced', 'resolved'));
 ALTER TABLE project_cost_events DROP CONSTRAINT project_cost_events_event_kind_check;
-ALTER TABLE project_cost_events
-    ADD CONSTRAINT project_cost_events_event_kind_check
-    CHECK (event_kind IN ('created', 'amount_confirmed', 'reserved', 'unreserved', 'invoice_linked', 'resolved'));
+ALTER TABLE project_cost_events ADD CONSTRAINT project_cost_events_event_kind_check CHECK (event_kind IN ('created', 'amount_confirmed', 'reserved', 'unreserved', 'invoice_linked', 'resolved'));
 
 CREATE OR REPLACE FUNCTION enforce_project_cost_audit() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE actor_id UUID;

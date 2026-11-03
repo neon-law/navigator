@@ -303,6 +303,7 @@ pub async fn mark_invoiced(
     entry_ids: &[Uuid],
     actor_id: Uuid,
     xero_invoice_id: &str,
+    allow_reserved: bool,
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     if entry_ids.is_empty() {
         return Err(TimeEntryError::Invalid("entries"));
@@ -326,9 +327,16 @@ pub async fn mark_invoiced(
     let rows = before.iter().map(from_row).collect::<Result<Vec<_>, _>>()?;
     for entry in &rows {
         match &entry.billing_status {
-            // Unbilled: nothing to check yet. Reserved by the batch now
-            // completing: the reservation's whole point — the mark closes it.
-            BillingStatus::Unbilled | BillingStatus::Reserved => {}
+            // Unbilled: nothing to check yet.
+            BillingStatus::Unbilled => {}
+            // Reserved by the batch now completing: the mark closes it — but
+            // only the owning batch may close it. A manual link cannot pull
+            // a reserved entry out from under a pending invoice intent.
+            BillingStatus::Reserved => {
+                if !allow_reserved {
+                    return Err(TimeEntryError::Conflict);
+                }
+            }
             // Already invoiced under the same invoice id: the replay no-op.
             BillingStatus::Invoiced {
                 xero_invoice_id: id,
@@ -411,14 +419,31 @@ pub async fn reserve(
         return Err(TimeEntryError::Invalid("entries"));
     }
     let mut tx = pg.0.begin().await?;
+    reserve_in_tx(&mut tx, entry_ids, actor_id).await?;
+    tx.commit().await?;
+    let mut entries = Vec::with_capacity(entry_ids.len());
+    for entry_id in entry_ids {
+        entries.push(fetch(pg, *entry_id).await?);
+    }
+    Ok(entries)
+}
+
+/// The reservation transition inside a caller's transaction — the billing
+/// batch reserves its rows and persists its intent atomically, so a crash
+/// between the two cannot strand reserved work without a batch to resume.
+pub(crate) async fn reserve_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    entry_ids: &[Uuid],
+    actor_id: Uuid,
+) -> Result<(), TimeEntryError> {
     let before = sqlx::query(
-        "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\\
-         inserted_at,updated_at FROM time_entry WHERE id = ANY($1) \\
+        "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         inserted_at,updated_at FROM time_entry WHERE id = ANY($1) \
          ORDER BY performed_on, id FOR UPDATE",
     )
     .bind(entry_ids)
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await?;
     if before.len() != entry_ids.len() {
         return Err(TimeEntryError::NotFound);
@@ -431,21 +456,16 @@ pub async fn reserve(
             return Err(TimeEntryError::Conflict);
         }
     }
-    set_audit_context(&mut tx, actor_id, "reserved").await?;
+    set_audit_context(&mut *tx, actor_id, "reserved").await?;
     sqlx::query(
-        "UPDATE time_entry SET billing_status='reserved',updated_at=$2 \\
+        "UPDATE time_entry SET billing_status='reserved',updated_at=$2 \
          WHERE id = ANY($1) AND billing_status='unbilled'",
     )
     .bind(entry_ids)
     .bind(Utc::now())
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
-    let mut entries = Vec::with_capacity(entry_ids.len());
-    for entry_id in entry_ids {
-        entries.push(fetch(pg, *entry_id).await?);
-    }
-    Ok(entries)
+    Ok(())
 }
 
 /// Release reserved entries back to Unbilled — a batch abandoned before the
@@ -462,7 +482,7 @@ pub async fn unreserve(
     let mut tx = pg.0.begin().await?;
     set_audit_context(&mut tx, actor_id, "unreserved").await?;
     sqlx::query(
-        "UPDATE time_entry SET billing_status='unbilled',updated_at=$2 \\
+        "UPDATE time_entry SET billing_status='unbilled',updated_at=$2 \
          WHERE id = ANY($1) AND billing_status='reserved'",
     )
     .bind(entry_ids)

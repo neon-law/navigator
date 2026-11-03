@@ -260,6 +260,14 @@ pub(crate) async fn generate_invoice(
         .filter(|cost| cost.amount_status == "confirmed" && cost.billing_status == "unbilled")
         .collect::<Vec<_>>();
     let flat_fee_cents = attorney_rates::flat_fee_cents(pg, project_id).await?;
+    // A flat fee is consumed by its first invoice: a completed batch that
+    // billed it makes the repeat a no-op for the fee. New time and costs
+    // still compose the next batch, and a quiet matter lands in the
+    // nothing-to-invoice branch below instead of charging the fee again.
+    let flat_fee_cents = match flat_fee_cents {
+        Some(fee) if billing_batches::flat_fee_billed(pg, project_id, fee).await? => None,
+        other => other,
+    };
 
     // The zero-unbilled no-op: with no fee agreed and nothing unbilled there
     // is nothing to compose, and the provider is never called — a repeat of a
@@ -293,17 +301,13 @@ pub(crate) async fn generate_invoice(
         })
         .await?;
     let entry_ids = entries.iter().map(|entry| entry.id).collect::<Vec<_>>();
-    if !entry_ids.is_empty() {
-        time_entries::reserve(pg, &entry_ids, actor_id).await?;
-    }
     let cost_ids = unbilled_costs
         .iter()
         .map(|cost| cost.id)
         .collect::<Vec<_>>();
-    if !cost_ids.is_empty() {
-        costs::reserve(pg, &cost_ids, actor_id).await?;
-    }
-    let batch = billing_batches::insert(
+    // Reservation and intent persist in ONE transaction: a crash between
+    // them cannot strand reserved work with no batch to resume it.
+    let batch = billing_batches::insert_with_reservations(
         pg,
         &billing_batches::MatterBillingBatch {
             id: Uuid::new_v4(),
@@ -385,10 +389,10 @@ async fn raise_batch(
     .await
     .map_err(Box::new)?;
     if !batch.entry_ids.is_empty() {
-        time_entries::mark_invoiced(pg, &batch.entry_ids, actor_id, &invoice.0).await?;
+        time_entries::mark_invoiced(pg, &batch.entry_ids, actor_id, &invoice.0, true).await?;
     }
     for cost_id in &batch.cost_ids {
-        costs::link_invoice(surreal, pg, *cost_id, actor_id, &invoice.0).await?;
+        costs::link_invoice(surreal, pg, *cost_id, actor_id, &invoice.0, true).await?;
     }
     billing_batches::complete(pg, batch.id).await?;
 

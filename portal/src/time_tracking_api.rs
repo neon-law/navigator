@@ -344,7 +344,9 @@ pub(crate) async fn mark_invoiced(
     if entry.project_id != project_id {
         return Err(ApiError::NotFound);
     }
-    match time_entries::mark_invoiced(&pg, &[entry_id], actor_id, &input.xero_invoice_id).await {
+    match time_entries::mark_invoiced(&pg, &[entry_id], actor_id, &input.xero_invoice_id, false)
+        .await
+    {
         Ok(mut rows) => Ok(Json(entry_view(&rows.remove(0))).into_response()),
         Err(e) => Ok(entry_error(&e, "mark_invoiced", project_id, Some(entry_id))),
     }

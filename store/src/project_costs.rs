@@ -359,6 +359,7 @@ pub async fn link_invoice(
     id: Uuid,
     actor_id: Uuid,
     invoice_id: &str,
+    allow_reserved: bool,
 ) -> Result<ProjectCost, ProjectCostError> {
     let mut tx = pg.0.begin().await?;
     let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id=$1 FOR UPDATE")
@@ -383,6 +384,22 @@ pub async fn link_invoice(
     if invoice.issued_at.date_naive() < before.occurred_on {
         return Err(ProjectCostError::Invalid(
             "cost cannot be linked to an earlier invoice",
+        ));
+    }
+    if before.billing_status == "invoiced" {
+        // Linked under the same invoice: the replay no-op — a resumed batch
+        // re-links every cost it reserved, and the ones the first attempt
+        // got to must not refuse it.
+        if before.xero_invoice_id.as_deref() == Some(invoice_id) {
+            return fetch(pg, id).await;
+        }
+        return Err(ProjectCostError::Invalid("cost is already resolved"));
+    }
+    if before.billing_status == "reserved" && !allow_reserved {
+        // Reserved rows belong to their billing batch: a manual link must
+        // not pull work out from under a pending invoice intent.
+        return Err(ProjectCostError::Invalid(
+            "cost is reserved by a pending billing batch",
         ));
     }
     if !matches!(before.billing_status.as_str(), "unbilled" | "reserved") {
@@ -436,8 +453,24 @@ pub async fn reserve(
         return Err(ProjectCostError::Invalid("costs"));
     }
     let mut tx = pg.0.begin().await?;
+    reserve_in_tx(&mut tx, cost_ids, actor_id).await?;
+    tx.commit().await?;
+    let mut costs = Vec::with_capacity(cost_ids.len());
+    for cost_id in cost_ids {
+        costs.push(fetch(pg, *cost_id).await?);
+    }
+    Ok(costs)
+}
+
+/// The reservation transition inside a caller's transaction — the billing
+/// batch reserves its costs and persists its intent atomically.
+pub(crate) async fn reserve_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    cost_ids: &[Uuid],
+    actor_id: Uuid,
+) -> Result<(), ProjectCostError> {
     let before = sqlx::query("SELECT id,project_id,occurred_on,payee,description,amount_cents,currency,amount_status,billing_status,receipt_document_id,source_reference,xero_invoice_id,inserted_at,updated_at FROM project_costs WHERE id = ANY($1) FOR UPDATE")
-        .bind(cost_ids).fetch_all(&mut *tx).await?;
+        .bind(cost_ids).fetch_all(&mut **tx).await?;
     if before.len() != cost_ids.len() {
         return Err(ProjectCostError::NotFound);
     }
@@ -449,15 +482,10 @@ pub async fn reserve(
             return Err(ProjectCostError::Conflict);
         }
     }
-    set_audit_context(&mut tx, actor_id, "reserved", None).await?;
+    set_audit_context(&mut *tx, actor_id, "reserved", None).await?;
     sqlx::query("UPDATE project_costs SET billing_status='reserved',updated_at=$2 WHERE id = ANY($1) AND billing_status='unbilled'")
-        .bind(cost_ids).bind(Utc::now()).execute(&mut *tx).await?;
-    tx.commit().await?;
-    let mut costs = Vec::with_capacity(cost_ids.len());
-    for cost_id in cost_ids {
-        costs.push(fetch(pg, *cost_id).await?);
-    }
-    Ok(costs)
+        .bind(cost_ids).bind(Utc::now()).execute(&mut **tx).await?;
+    Ok(())
 }
 
 /// Release reserved costs back to 'unbilled' — a batch abandoned before the
