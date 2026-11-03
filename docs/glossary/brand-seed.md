@@ -3,10 +3,10 @@ title: "Brand Seed"
 description: "A Brand Seed is the data layer a Site applies on every boot of its binary, including production."
 ---
 
-The seed layer a [`Site`](brand.md) owns, applied on every boot of that binary **including production**. Keyed to the
-serving binary, not to a request's resolved [`BrandKey`](brand.md): it carries the data one binary holds and another
-must not — `neon` seeds the Firm's own entities and postal identities regardless of which house brand a given request
-resolves to, and `tenant` seeds none of ours at all ([`store::seed::BrandSeed`](../../store/src/seed.rs)).
+The seed layer a [`Site`](house-brand.md) owns, applied on every boot of that binary **including production**. Keyed to
+the serving binary, not to a request's resolved [House Brand](house-brand.md): it carries the data one binary holds and
+another must not — `neon` seeds the Firm's own entities and postal identities regardless of which house brand a given
+request resolves to, and `tenant` seeds none of ours at all ([`store::seed::BrandSeed`](../../store/src/seed.rs)).
 
 The canonical layer keeps the *shared registry* — the firm anchor and the identities every deployment resolves by name.
 An entity no deployment of ours does business as belongs nowhere in these layers at all, which is what keeps a `tenant`

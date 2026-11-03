@@ -1,20 +1,23 @@
 ---
 title: "Firm Brand"
-description: "A Firm Brand links a Firm to the house-brand keys it can use."
+description: "A Firm Brand records that one Firm wears one Brand, the link Project ownership is checked against."
 ---
 
-Which house-brand keys a [Firm](firm.md) wears. The `firm_brand` table is the join: `firm_id`, a `brand_key`, and
-timestamps. Unique on the pair, and unique on `brand_key` globally: one storefront key belongs to at most one practice.
-Distinct from [Brand](brand.md), which is the storefront a request resolved to.
+Which [Brands](brand.md) a [Firm](firm.md) wears. **The `firm_brand` table is the source of truth for wearing**: a row
+holds `firm_id`, a [Brand Key](brand-key.md), and timestamps, unique on the pair and unique on `brand_key` across the
+whole deployment, so one key is worn by at most one Firm and a Brand Key implies its Firm. Project ownership reads this
+table: `store::firms::firm_id_for_brand_key` resolves the Firm for a key, and a Project's `firm_id` must be that Firm.
 
-A Firm wears a Brand it creates at `/app/admin/brands/new` at once. A Brand row its Firm does not yet wear shows an
-"Attach to Firm" button on its edit page, which calls `store::firms::attach_own_brand`: Owner, or that Firm's own Admin,
-and the Firm is read from the `brand` row, never from the form, so no Firm can wear another Firm's Brand.
+Distinct from `brand.firm_id`, which records which Firm *owns* the Brand row and so whose Admin DRI may edit it. The two
+normally agree, and the attach paths keep them so: a Firm wears a Brand it creates at `/app/admin/brands/new` at once,
+and a Brand row its Firm does not yet wear shows an "Attach to Firm" button on its edit page, which calls
+`store::firms::attach_own_brand` (Owner, or that Firm's Admin), reading the Firm from the `brand` row, never from the
+form, so no Firm can wear another Firm's Brand that way. Owner's `store::firms::attach_brand` names its Firm directly.
 
 `store::firms::attach_brand` validates `brand_key` against the `brand` table (`store::brands`): a live row carrying that
-key, not the closed `CLOSED_BRAND_KEYS` array directly. A Firm may therefore wear any brand a `brand` row names, not
-only the nine compiled ones. `store::firms::CLOSED_BRAND_KEYS` names every entry in the compiled registry; `store::seed`
-migrates them into `brand` rows on first boot so validation has a catalog from the start.
+key. A Firm may therefore wear any Brand a row names, runtime-created ones included, not only the compiled [House
+Brands](house-brand.md). `store::seed` migrates each House Brand into a `brand` row on first boot
+(`store::firms::CLOSED_BRAND_KEYS` is the compiled list it reads) so validation has a catalog from the start.
 
 Every footer names the Firm actually wearing the request's resolved brand, not a compiled constant:
 `webapp::firm_footer::resolve_firm_footer_model` reads the Firm's Entity for the legal name and `firm_brand` for the
