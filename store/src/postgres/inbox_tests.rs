@@ -2978,6 +2978,57 @@ async fn raced_fi_native_id_payloads_cannot_split_across_channels_or_replace_the
 }
 
 #[tokio::test]
+async fn fi_import_lock_prevents_assignment_until_destination_verification_finishes() {
+    let Some(f) = fixture().await else { return };
+    let mut scope = fi_scope(&f).await;
+    let rows = fi_rows("S,I,+15555550456,2026-10-30T18:00:00Z,,before-assignment\nS,I,+15555550456,2026-10-30T18:01:00Z,,during-import");
+    let first = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    scope.project = Some(f.project);
+    let mut import_guard = f.pg.pool().begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('google_fi:import:v1',168))")
+        .execute(&mut *import_guard)
+        .await
+        .unwrap();
+    for result in [
+        pg_inbox::assign_on(&f.pg, &f.db, f.owner, first.conversation_id, f.project).await,
+        pg_inbox::assign_for_triage_review_on(
+            &f.pg,
+            &f.db,
+            f.owner,
+            first.conversation_id,
+            f.project,
+        )
+        .await,
+    ] {
+        assert!(
+            matches!(result, Err(InboxError::Invalid(_))),
+            "assignment must yield while an import is checking its destination"
+        );
+    }
+    let conversation = pg_inbox::conversation_by_id_on(&f.pg, first.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(conversation.project_id.is_none());
+    import_guard.rollback().await.unwrap();
+    let saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+        .await
+        .unwrap();
+    assert_eq!(saved.conversation_id, first.conversation_id);
+    pg_inbox::assign_on(&f.pg, &f.db, f.owner, saved.conversation_id, f.project)
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::fi_import::preview_on(&f.pg, &scope, &rows[1])
+            .await
+            .unwrap(),
+        crate::fi_import::Existing::Identical
+    );
+}
+
+#[tokio::test]
 async fn native_relay_requires_a_current_person_eligible_role_and_native_thread() {
     let Some(f) = fixture().await else { return };
     let missing_thread = Uuid::now_v7();

@@ -652,23 +652,11 @@ fn canonical(row: &Row) -> bool {
         && body(value) == row.body
 }
 
-/// Native transactional ingress uniqueness chooses one immutable winner.
-/// Post-insert verification rejects raced payload mismatches before attribution.
-pub async fn ingest_on(
+/// Fence Fi imports and assignments through destination verification. Try-locking
+/// releases competing coordinator connections instead of exhausting the pool.
+pub(crate) async fn lock_on(
     pg: &crate::postgres::PostgresDb,
-    scope: &Scope,
-    row: &Row,
-) -> Result<inbox::IngestedInbound, FiImportError> {
-    let number = scope
-        .account
-        .strip_prefix(ACCOUNT_PREFIX)
-        .ok_or(FiImportError::Mapping("Fi account namespace required"))?;
-    if account(number)? != scope.account || !canonical(row) {
-        return Err(FiImportError::Mapping("canonical Fi metadata required"));
-    }
-    // This import-only global try-lock also fences cross-channel native-ID
-    // changes. One winner holds a coordinator connection while native ingest
-    // uses another; losers release immediately rather than exhausting the pool.
+) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, FiImportError> {
     let mut guard = pg
         .pool()
         .begin()
@@ -683,6 +671,24 @@ pub async fn ingest_on(
     if !acquired {
         return Err(FiImportError::Busy);
     }
+    Ok(guard)
+}
+
+/// Native transactional ingress uniqueness chooses one immutable winner.
+/// Assignment cannot change the destination between preflight and verification.
+pub async fn ingest_on(
+    pg: &crate::postgres::PostgresDb,
+    scope: &Scope,
+    row: &Row,
+) -> Result<inbox::IngestedInbound, FiImportError> {
+    let number = scope
+        .account
+        .strip_prefix(ACCOUNT_PREFIX)
+        .ok_or(FiImportError::Mapping("Fi account namespace required"))?;
+    if account(number)? != scope.account || !canonical(row) {
+        return Err(FiImportError::Mapping("canonical Fi metadata required"));
+    }
+    let guard = lock_on(pg).await?;
     if preview_on(pg, scope, row).await? == Existing::Conflict {
         return Err(FiImportError::Conflict);
     }

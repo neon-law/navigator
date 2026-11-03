@@ -587,6 +587,7 @@ pub(crate) async fn assign_on(
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
     let actor = inbox::load_person(db, actor_id).await?;
+    let _fi_guard = fi_assignment_guard_on(pg, conversation_id).await?;
     let conversation = conversation_by_id_on(pg, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
@@ -615,6 +616,7 @@ pub(crate) async fn assign_for_triage_review_on(
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
     let actor = inbox::load_person(db, actor_id).await?;
+    let _fi_guard = fi_assignment_guard_on(pg, conversation_id).await?;
     let conversation = conversation_by_id_on(pg, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
@@ -635,6 +637,27 @@ pub(crate) async fn assign_for_triage_review_on(
         }
     }
     assign_write_on(pg, db, actor_id, &conversation, project_id).await
+}
+
+async fn fi_assignment_guard_on(
+    pg: &PostgresDb,
+    conversation_id: Uuid,
+) -> Result<Option<sqlx::Transaction<'_, sqlx::Postgres>>, InboxError> {
+    let conversation = conversation_by_id_on(pg, conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if !crate::fi_import::is_account(&conversation.provider_account) {
+        return Ok(None);
+    }
+    crate::fi_import::lock_on(pg)
+        .await
+        .map(Some)
+        .map_err(|error| match error {
+            crate::fi_import::FiImportError::Busy => InboxError::Invalid(
+                "Fi import or assignment is in progress; retry assignment".into(),
+            ),
+            _ => InboxError::Db("Fi assignment coordination is unavailable".into()),
+        })
 }
 
 async fn assign_write_on(
