@@ -504,6 +504,37 @@ async fn run_flat_fee() {
     let repeat = generate(&fixture.app, &fixture).await;
     assert_eq!(repeat.status(), StatusCode::CONFLICT);
     assert_eq!(fixture.provider.create_keys().len(), 1);
+    assert_amended_fee_bills_only_the_balance(&fixture).await;
+}
+
+async fn assert_amended_fee_bills_only_the_balance(fixture: &Fixture) {
+    store::attorney_rates::set_flat_fee(&fixture.pg, fixture.project_id, 750_000)
+        .await
+        .unwrap();
+    let amended = generate(&fixture.app, fixture).await;
+    assert_eq!(amended.status(), StatusCode::OK);
+    let receipt: Value = serde_json::from_slice(
+        &axum::body::to_bytes(amended.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        receipt["total_cents"], 250_000,
+        "an amendment charges only the remaining agreed fee"
+    );
+    assert_eq!(receipt["line_items"][0]["unit_amount_cents"], 250_000);
+    assert_eq!(
+        store::billing_batches::flat_fee_billed_cents(&fixture.pg, fixture.project_id)
+            .await
+            .unwrap(),
+        750_000
+    );
+    assert_eq!(
+        generate(&fixture.app, fixture).await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(fixture.provider.create_keys().len(), 2);
 }
 
 #[tokio::test]
@@ -817,12 +848,55 @@ async fn run_recovery_safety() {
         ..batch
     };
     assert!(matches!(
-        store::billing_batches::insert_with_reservations(&fixture.pg, &stale).await,
+        store::billing_batches::insert_with_reservations(&fixture.pg, &stale, Some(0)).await,
         Err(store::billing_batches::BillingBatchError::FlatFeeAlreadyBilled)
     ));
     assert!(pending_batch(&fixture.pg, fixture.project_id)
         .await
         .is_none());
+    assert_voided_invoice_remains_reserved().await;
+}
+
+async fn assert_voided_invoice_remains_reserved() {
+    let fixture = fixture().await;
+    let entry = seed_entry(&fixture, 60, "Synthetic voided invoice recovery").await;
+    fixture.provider.fail_next();
+    assert_eq!(
+        generate(&fixture.app, &fixture).await.status(),
+        StatusCode::BAD_GATEWAY
+    );
+    let batch = pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .unwrap();
+    store::billing_batches::attach_invoice(&fixture.pg, batch.id, "synthetic-voided")
+        .await
+        .unwrap();
+    fixture.provider.inner.set_invoice_status(
+        "synthetic-voided",
+        InvoiceStatus {
+            status: "VOIDED".into(),
+            amount_paid_cents: 0,
+        },
+    );
+    let retry = generate(&fixture.app, &fixture).await;
+    assert_eq!(retry.status(), StatusCode::CONFLICT);
+    assert_eq!(time_entry_status(&fixture.pg, entry.id).await, "reserved");
+    assert!(pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .is_some());
+    let invoices = mirror_rows(&fixture.surreal, fixture.project_id).await;
+    assert_eq!(invoices.len(), 1);
+    assert_eq!(invoices[0].status, "VOIDED");
+    assert_eq!(store::matter_financials::outstanding_cents(&invoices), 0);
+    let financials =
+        store::matter_financials::for_project(&fixture.surreal, &fixture.pg, fixture.project_id)
+            .await
+            .unwrap();
+    assert_eq!(
+        financials.wip_cents, 15_000,
+        "voided pending work is still unpaid"
+    );
+    assert_eq!(fixture.provider.create_keys(), vec![batch.id]);
 }
 
 #[tokio::test]

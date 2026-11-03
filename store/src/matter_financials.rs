@@ -141,6 +141,7 @@ pub async fn for_project(
     // it out of WIP without hiding reservations from refused creates.
     let invoice_ids = invoices
         .iter()
+        .filter(|invoice| invoice.status != "VOIDED")
         .map(|invoice| invoice.xero_invoice_id.as_str())
         .collect::<Vec<_>>();
     let batches = sqlx::query(

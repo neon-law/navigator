@@ -198,6 +198,8 @@ pub(crate) enum InvoiceGenerationError {
     FlatFeeAlreadyBilled,
     #[error("the pending invoice requires reconciliation before another provider attempt")]
     ReconciliationRequired,
+    #[error("the provider invoice is not authorised or paid; reconciliation is required")]
+    InvoiceNotBillable,
     #[error(transparent)]
     Batch(#[from] billing_batches::BillingBatchError),
     #[error(transparent)]
@@ -263,15 +265,11 @@ pub(crate) async fn generate_invoice(
         .into_iter()
         .filter(|cost| cost.amount_status == "confirmed" && cost.billing_status == "unbilled")
         .collect::<Vec<_>>();
-    let flat_fee_cents = attorney_rates::flat_fee_cents(pg, project_id).await?;
-    // A flat fee is consumed by its first invoice: a completed batch that
-    // billed it makes a quiet repeat a no-op. Additional work under the
-    // consumed agreement refuses below until the fee is amended.
-    let fee_billed = match flat_fee_cents {
-        Some(fee) => billing_batches::flat_fee_billed(pg, project_id, fee).await?,
-        None => false,
-    };
-    let flat_fee_cents = if fee_billed { None } else { flat_fee_cents };
+    let agreed_fee_cents = attorney_rates::flat_fee_cents(pg, project_id).await?;
+    let billed_fee_cents = billing_batches::flat_fee_billed_cents(pg, project_id).await?;
+    let flat_fee_cents =
+        agreed_fee_cents.and_then(|fee| (fee > billed_fee_cents).then_some(fee - billed_fee_cents));
+    let fee_billed = agreed_fee_cents.is_some() && flat_fee_cents.is_none();
 
     // The zero-unbilled no-op: with no fee agreed and nothing unbilled there
     // is nothing to compose, and the provider is never called — a repeat of a
@@ -336,6 +334,7 @@ pub(crate) async fn generate_invoice(
             inserted_at: now,
             updated_at: now,
         },
+        agreed_fee_cents.map(|_| billed_fee_cents),
     )
     .await?;
     raise_batch(surreal, pg, provider, project_id, &batch, actor_id, now).await
@@ -397,6 +396,7 @@ async fn raise_batch(
         invoice
     };
 
+    let invoice_state = provider.get_invoice(&invoice_id.0).await?;
     // Mirror first (the costs' link validates against it), then flip the
     // consumed work through its own audited transitions — reserved rows
     // included. A refusal anywhere below leaves the earlier local steps
@@ -408,7 +408,7 @@ async fn raise_batch(
             project_id,
             xero_invoice_id: invoice_id.0.clone(),
             reference: batch.reference.clone(),
-            status: "AUTHORISED".to_string(),
+            status: invoice_state.status.clone(),
             amount_cents: batch.total_cents,
             currency: batch.currency.clone(),
             issued_at: now,
@@ -417,6 +417,17 @@ async fn raise_batch(
     )
     .await
     .map_err(Box::new)?;
+    xero_invoices::record_reconcile(
+        surreal,
+        &invoice_id.0,
+        &invoice_state.status,
+        invoice_state.amount_paid_cents,
+    )
+    .await
+    .map_err(Box::new)?;
+    if !matches!(invoice_state.status.as_str(), "AUTHORISED" | "PAID") {
+        return Err(InvoiceGenerationError::InvoiceNotBillable);
+    }
     if !batch.entry_ids.is_empty() {
         time_entries::mark_invoiced(pg, &batch.entry_ids, actor_id, &invoice_id.0, true).await?;
     }
@@ -458,7 +469,8 @@ fn error(error: &InvoiceGenerationError, project_id: Uuid) -> Response {
         | InvoiceGenerationError::Batch(billing_batches::BillingBatchError::FlatFeeAlreadyBilled) => {
             (StatusCode::CONFLICT, "flat_fee_already_billed")
         }
-        InvoiceGenerationError::ReconciliationRequired => {
+        InvoiceGenerationError::ReconciliationRequired
+        | InvoiceGenerationError::InvoiceNotBillable => {
             (StatusCode::CONFLICT, "invoice_reconciliation_required")
         }
         InvoiceGenerationError::CurrencyMismatch(_) => {

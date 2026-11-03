@@ -50,7 +50,7 @@ pub struct MatterBillingBatch {
     /// resume reuses it instead of re-raising under the provider's own
     /// (finite) idempotency window.
     pub xero_invoice_id: Option<String>,
-    /// The flat fee the batch bills, when the matter carries one.
+    /// The portion of the matter's agreed flat fee charged by this batch.
     pub flat_fee_cents: Option<i64>,
     pub actor_id: Uuid,
     pub inserted_at: chrono::DateTime<chrono::Utc>,
@@ -157,6 +157,7 @@ pub async fn attach_invoice(
 pub async fn insert_with_reservations(
     pg: &PostgresDb,
     batch: &MatterBillingBatch,
+    expected_billed_fee_cents: Option<i64>,
 ) -> Result<MatterBillingBatch, BillingBatchError> {
     if batch.total_cents <= 0 {
         return Err(BillingBatchError::Invalid("total"));
@@ -172,16 +173,12 @@ pub async fn insert_with_reservations(
         .bind(batch.project_id)
         .fetch_one(&mut *tx)
         .await?;
-    if let Some(fee) = batch.flat_fee_cents {
-        let billed: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM matter_billing_batch \
-             WHERE project_id=$1 AND status='completed' AND flat_fee_cents=$2)",
-        )
-        .bind(batch.project_id)
-        .bind(fee)
-        .fetch_one(&mut *tx)
-        .await?;
-        if billed {
+    if let Some(expected) = expected_billed_fee_cents {
+        let billed: i64 = sqlx::query_scalar(BILLED_FLAT_FEE_SQL)
+            .bind(batch.project_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if billed != expected {
             return Err(BillingBatchError::FlatFeeAlreadyBilled);
         }
     }
@@ -200,23 +197,20 @@ pub async fn insert_with_reservations(
     Ok(batch)
 }
 
-/// Whether a completed batch has already billed this flat fee on this
-/// matter: the fee is consumed by its first invoice, and a repeat must not
-/// charge it again under a new batch.
-pub async fn flat_fee_billed(
+const BILLED_FLAT_FEE_SQL: &str =
+    "SELECT COALESCE(SUM(flat_fee_cents),0)::bigint FROM matter_billing_batch \
+     WHERE project_id=$1 AND status='completed'";
+
+/// The portions of the agreed flat fee already charged by completed batches.
+/// An amended fee bills only the difference from this total.
+pub async fn flat_fee_billed_cents(
     pg: &PostgresDb,
     project_id: Uuid,
-    flat_fee_cents: i64,
-) -> Result<bool, BillingBatchError> {
-    let hit = sqlx::query(
-        "SELECT 1 FROM matter_billing_batch \
-         WHERE project_id=$1 AND status='completed' AND flat_fee_cents=$2 LIMIT 1",
-    )
-    .bind(project_id)
-    .bind(flat_fee_cents)
-    .fetch_optional(&pg.0)
-    .await?;
-    Ok(hit.is_some())
+) -> Result<i64, BillingBatchError> {
+    Ok(sqlx::query_scalar(BILLED_FLAT_FEE_SQL)
+        .bind(project_id)
+        .fetch_one(&pg.0)
+        .await?)
 }
 
 /// The matter's open invoice intent, if any — the batch a retry resumes.
