@@ -193,6 +193,21 @@ async fn ingest_support_email_for_firm(
         }
     }
     let provider_message_id = provider_message_id(email);
+    // Keep the source on this normalized message even without optional
+    // threading or an RFC Message-ID. The content key also survives replay.
+    let raw_storage_key = if email.raw.is_empty() {
+        None
+    } else {
+        let key = format!(
+            "inbound/inbox/{firm_id}/{}.eml",
+            store::assets::sha256_hex(&email.raw)
+        );
+        storage
+            .put(&key, &email.raw, "message/rfc822")
+            .await
+            .map_err(|error| error.to_string())?;
+        Some(key)
+    };
     let email_conversation_id = linked_email_conversation(db, email, &from).await?;
     let attachments = ingest_attachments(db, storage, email, firm_id, None).await?;
     let account = std::env::var("NAVIGATOR_EMAIL_PROVIDER_ACCOUNT")
@@ -224,7 +239,7 @@ async fn ingest_support_email_for_firm(
             email_conversation_id,
             attachments,
             occurred_at: &chrono::Utc::now().to_rfc3339(),
-            raw_storage_key: None,
+            raw_storage_key: raw_storage_key.as_deref(),
         },
     )
     .await
@@ -1030,6 +1045,37 @@ mod tests {
     async fn start_inbound_message_alert_is_ok_without_a_broker() {
         std::env::remove_var("RESTATE_BROKER_URL");
         start_inbound_message_alert(Uuid::now_v7()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn support_intake_retains_raw_source_without_threading_or_a_message_id() {
+        let db = store::test_support::mem_surreal().await;
+        let storage = storage().await;
+        store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let email = InboundEmail {
+            from: "sender@example.com".into(),
+            to: "support@neonlaw.com".into(),
+            text: "Synthetic notice".into(),
+            raw: b"Subject: notice\r\n\r\nSynthetic notice".to_vec(),
+            ..InboundEmail::default()
+        };
+        let saved = ingest_support_email_for_firm(&db, &storage, &email, None)
+            .await
+            .unwrap()
+            .unwrap();
+        let message = store::inbox::message_by_id(&db, saved.message_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let key = message
+            .raw_storage_key
+            .expect("raw key belongs to current message");
+        assert_eq!(storage.get(&key).await.unwrap().bytes, email.raw);
+        let conversation = store::inbox::conversation_by_id(&db, saved.conversation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(conversation.email_conversation_id.is_none());
     }
 
     #[tokio::test]
