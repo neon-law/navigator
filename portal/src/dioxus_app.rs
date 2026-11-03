@@ -5504,8 +5504,14 @@ async fn inject_world(
     mut req: Request,
     next: Next,
 ) -> Response {
-    req.extensions_mut()
-        .insert(webapp::world_page::InjectedWorld(content));
+    if req
+        .extensions()
+        .get::<webapp::world_page::InjectedWorld>()
+        .is_none()
+    {
+        req.extensions_mut()
+            .insert(webapp::world_page::InjectedWorld(content));
+    }
     next.run(req).await
 }
 
@@ -5514,6 +5520,46 @@ mod tests {
     use super::*;
     use axum::routing::get;
     use tower::ServiceExt as _;
+
+    #[tokio::test]
+    async fn world_content_preserves_the_request_brand_and_supplies_a_fallback() {
+        async fn title(
+            axum::Extension(world): axum::Extension<webapp::world_page::InjectedWorld>,
+        ) -> String {
+            world.0.head_title
+        }
+        let fallback = webapp::world_page::WorldContent {
+            head_title: "Neon Law | World".to_string(),
+            ..Default::default()
+        };
+        let app = Router::new()
+            .route("/world", get(title))
+            .layer(from_fn_with_state(fallback, inject_world));
+        for mounted_title in [None, Some("Vesta | World")] {
+            let mut request = Request::builder()
+                .uri("/world")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            if let Some(head_title) = mounted_title {
+                request
+                    .extensions_mut()
+                    .insert(webapp::world_page::InjectedWorld(
+                        webapp::world_page::WorldContent {
+                            head_title: head_title.to_string(),
+                            ..Default::default()
+                        },
+                    ));
+            }
+            let response = app.clone().oneshot(request).await.unwrap();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(
+                body.as_ref(),
+                mounted_title.unwrap_or("Neon Law | World").as_bytes()
+            );
+        }
+    }
 
     /// Every matter route names its matter the same way: `{project_code}`.
     ///
