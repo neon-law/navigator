@@ -3474,6 +3474,8 @@ async fn fi_project_destination_is_reserved_before_any_history_commit() {
             "race_sms",
             "group_call",
             "group_sms",
+            "reviewed_call",
+            "reviewed_sms",
         ] {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", &name, "--nocapture"])
@@ -3497,7 +3499,9 @@ async fn fi_project_destination_is_reserved_before_any_history_commit() {
     };
     configure_native_triage_fixture(&f).await;
     let kind = if case.ends_with("sms") { "S" } else { "C" };
-    if case.starts_with("group") {
+    if case.starts_with("reviewed") {
+        assert_fi_identical_replay_preserves_reviewed_state(&f, kind).await;
+    } else if case.starts_with("group") {
         assert_fi_project_batches_reuse_the_selected_thread(&f, kind).await;
     } else if case.starts_with("race") {
         assert_fi_assignment_cannot_cross_commit(&f, kind).await;
@@ -3809,4 +3813,87 @@ async fn assert_fi_group_audit_and_messages(f: &Fixture, conversation: Uuid) {
         messages, 4,
         "all distinct events remain separate Messages in the same thread"
     );
+}
+
+async fn assert_fi_identical_replay_preserves_reviewed_state(f: &Fixture, kind: &str) {
+    let mut scope = fi_scope(f).await;
+    let duration = if kind == "C" { "61" } else { "" };
+    let rows=fi_rows(&format!("{kind},I,+15555550456,2026-10-30T18:00:00Z,{duration},reviewed-first\n{kind},I,+15555550456,2026-10-30T18:01:00Z,{duration},reviewed-second"));
+    let saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    let past: chrono::DateTime<chrono::Utc> = "2020-01-02T03:04:05Z".parse().unwrap();
+    sqlx::query("UPDATE inbox_conversation SET unread=false,updated_at=$2 WHERE id=$1")
+        .bind(saved.conversation_id)
+        .bind(past)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    let replay = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    assert!(replay.deduped);
+    assert_eq!(
+        fi_reviewed_state(f, saved.conversation_id).await,
+        (false, past),
+        "unchanged unscoped history must preserve review status and timestamp"
+    );
+    scope.project = Some(f.project);
+    crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    let pinned = fi_reviewed_state(f, saved.conversation_id).await;
+    assert!(pinned.0);
+    assert!(
+        pinned.1 > past,
+        "initial Project attribution must update review state"
+    );
+    let audits:i64=sqlx::query_scalar("SELECT COUNT(*) FROM inbox_assignment WHERE conversation_id=$1 AND from_project_id IS NULL AND to_project_id=$2").bind(saved.conversation_id).bind(f.project).fetch_one(f.pg.pool()).await.unwrap();
+    assert_eq!(audits, 1);
+    sqlx::query("UPDATE inbox_conversation SET unread=false,updated_at=$2 WHERE id=$1")
+        .bind(saved.conversation_id)
+        .bind(past)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    assert_eq!(
+        fi_reviewed_state(f, saved.conversation_id).await,
+        (false, past),
+        "identical same-Project replay must not reopen reviewed history"
+    );
+    scope.project = None;
+    crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    assert_eq!(
+        fi_reviewed_state(f, saved.conversation_id).await,
+        (false, past),
+        "unscoped replay of attributed history must not reopen it"
+    );
+    scope.project = Some(f.project);
+    let fresh = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+        .await
+        .unwrap();
+    assert!(!fresh.deduped);
+    assert_eq!(fresh.conversation_id, saved.conversation_id);
+    let changed = fi_reviewed_state(f, saved.conversation_id).await;
+    assert!(changed.0);
+    assert!(
+        changed.1 > past,
+        "a fresh event in the reused thread must reopen it"
+    );
+}
+
+async fn fi_reviewed_state(
+    f: &Fixture,
+    conversation: Uuid,
+) -> (bool, chrono::DateTime<chrono::Utc>) {
+    sqlx::query_as("SELECT unread,updated_at FROM inbox_conversation WHERE id=$1")
+        .bind(conversation)
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap()
 }
