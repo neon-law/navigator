@@ -8,6 +8,8 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Context as _, Result};
 use sha2::{Digest as _, Sha256};
 
+const DELEGATED_RELEASE: &str = "NAVIGATOR_PINNED_GATE_DELEGATED";
+
 /// The mutually exclusive gate modes admitted by the command parser.
 pub(crate) enum GateMode {
     TrackedFiles,
@@ -71,6 +73,15 @@ async fn run(root: &Path, running_release: &str, arguments: &[&str]) -> Result<O
     if pin == running_release {
         return Ok(None);
     }
+    // A version-shaped Cargo fallback is not proof of a published release.
+    // Never let an unrecognized cached build delegate to itself indefinitely.
+    if let Some(delegated) = std::env::var_os(DELEGATED_RELEASE) {
+        return Err(anyhow!(
+            "gate already delegated to release {}; this executable cannot confirm pinned release {pin}; \
+             refusing to delegate again; remove the cached executable and retry",
+            delegated.to_string_lossy()
+        ));
+    }
     let platform = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "macos",
         ("linux", "x86_64") => "linux",
@@ -91,6 +102,7 @@ async fn run(root: &Path, running_release: &str, arguments: &[&str]) -> Result<O
         .args(arguments)
         .current_dir(root)
         .env_remove("NAVIGATOR_RELEASE_TAG")
+        .env(DELEGATED_RELEASE, &pin)
         .status()
         .await
         .with_context(|| format!("run gate release {pin} at {}", binary.display()))?;
