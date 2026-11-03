@@ -234,7 +234,7 @@ The registry keeps three surfaces in lockstep, enforced by `cli/tests/court_regi
 
 | Surface | Join key | The guard requires |
 | --- | --- | --- |
-| `COURT_SEEDS` (`store/src/court_seeds.rs`) | per-form entry `code` | resolves to a real template; fee-waiver code resolves too |
+| `COURT_SEEDS` (`store/src/court_seeds.rs`) | per-form entry `code` | template and fee-waiver code resolve |
 | forms-shelf template | its court-key directory | frontmatter `jurisdiction:` matches the court's; no orphans |
 | vendored `FormMeta` | `FormMeta.code` | `origin_url`, pin, fee, and fee-waiver code match the registry row |
 

@@ -84,8 +84,9 @@ records where those bytes came from.
 
 The office directory — the last path segment before the form's filename — says who accepts the filing. Agency offices
 (`irs`, `uscis`, `state`) decide their own fees and never appear in the court-form registry. Any other office directory
-is a court key from the court seeds (`store/src/court_seeds.rs`), and that registry's guard test (`cli/tests/court_registry.rs`) requires a
-registered entry for every court template; see [docs/gov-forms.md](../docs/gov-forms.md).
+is a court key from the court seeds (`store/src/court_seeds.rs`); that registry's guard test
+(`cli/tests/court_registry.rs`) requires a registered entry for every court template; see
+[docs/gov-forms.md](../docs/gov-forms.md).
 
 `notations/neon_law/` holds the firm's letters, sample litigation documents, and business templates:
 

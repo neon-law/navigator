@@ -44,9 +44,9 @@ permission to place sensitive material somewhere it does not scan.
 
 Every file under `store/seeds/` ships in the binary, so each row is either a public firm fact, nonidentifying reference
 data, or conspicuously synthetic. Most files also seed a database; the court-form registry is not among them — it is
-Rust data (`store/src/court_seeds.rs`), served by the public catalog and reconciled by guard tests rather than a
-table, so filing-fee figures are not part of every environment's seed state. Nothing else belongs there; private firm
-and client configuration is runtime data supplied to a deployment, never a committed seed.
+Rust data (`store/src/court_seeds.rs`), served by the public catalog and reconciled by guard tests rather than a table,
+so filing-fee figures are not part of every environment's seed state. Nothing else belongs there; private firm and
+client configuration is runtime data supplied to a deployment, never a committed seed.
 
 | Layer | Path | Applied | Holds |
 | --- | --- | --- | --- |
