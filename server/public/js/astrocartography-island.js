@@ -53,10 +53,14 @@
     var el = document.getElementById(DATA_ID);
     if (!el) return null;
     try {
-      // Dioxus's SSR hydration markers (<!--node-id…-->) can sit inside the
-      // element's text; comments are not JSON, so drop them before parsing.
-      var text = el.textContent.replace(/<!--[\s\S]*?-->/g, "");
-      return JSON.parse(text);
+      // Dioxus wraps the JSON object in hydration markers. Select the object
+      // without rewriting its contents: comment-like text in JSON strings is
+      // data, and this value is parsed as JSON, never inserted as HTML.
+      var text = el.textContent;
+      var start = text.indexOf("{");
+      var end = text.lastIndexOf("}");
+      if (start < 0 || end < start) return null;
+      return JSON.parse(text.slice(start, end + 1));
     } catch (error) {
       console.error("astrocartography island: unreadable payload", error);
       return null;
@@ -86,43 +90,50 @@
       if (!style) return;
       var body = feature.properties.body;
       var layout = { "line-cap": "round", "line-join": "round" };
-      if (style.dasharray) layout["line-dasharray"] = style.dasharray;
+      var paint = { "line-color": style.color, "line-width": 2 };
+      if (style.dasharray) paint["line-dasharray"] = style.dasharray;
       map.addLayer({
         id: layerId(person.id, body, style.name),
         type: "line",
         source: sourceId,
         filter: ["all", ["==", ["get", "body"], body], ["==", ["get", "angle"], style.name]],
         layout: layout,
-        paint: { "line-color": style.color, "line-width": 2 }
+        paint: paint
       });
     });
   }
 
-  // Sync each body checkbox's current state to the island's layers, then
-  // keep listening: the same fieldset drives the SVG fallback (Dioxus
-  // signals) and the island (plain events).
-  function wireBodyToggles(map, persons) {
+  // All controls constrain the same layers. Recompute their intersection
+  // whenever one changes so toggling an angle cannot reveal a hidden body.
+  function applyVisibility(map, persons, visibility) {
+    persons.forEach(function (person) {
+      (person.geojson.features || []).forEach(function (feature) {
+        var properties = feature.properties;
+        if (!properties) return;
+        var id = layerId(person.id, properties.body, properties.angle);
+        if (!map.getLayer(id)) return;
+        var visible = visibility.persons[person.id] !== false &&
+          visibility.bodies[properties.body] !== false &&
+          visibility.angles[properties.angle] !== false;
+        map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
+      });
+    });
+  }
+
+  // The same body fieldset drives the Dioxus SVG and the plain-event island.
+  function wireBodyToggles(map, persons, visibility) {
     var boxes = document.querySelectorAll('input[name="astro-map-body"]');
     Array.prototype.forEach.call(boxes, function (box) {
       var apply = function () {
-        persons.forEach(function (person) {
-          ANGLE_STYLES.forEach(function (style) {
-            var layer = layerId(person.id, box.value, style.name);
-            if (map.getLayer(layer)) {
-              map.setLayoutProperty(layer, "visibility", box.checked ? "visible" : "none");
-            }
-          });
-        });
+        visibility.bodies[box.value] = box.checked;
+        applyVisibility(map, persons, visibility);
       };
       box.addEventListener("change", apply);
       apply();
     });
   }
 
-  // Angle checkboxes are an island-only control: the static map draws all
-  // four angles always, so there is nothing on the shared surface for the
-  // fallback to wire them to.
-  function buildAngleControls(mount, map, persons) {
+  function buildAngleControls(mount, map, persons, visibility) {
     var row = document.createElement("div");
     row.className = "astro-map-island__angles";
     ANGLE_STYLES.forEach(function (style) {
@@ -133,17 +144,8 @@
       box.value = style.name;
       box.checked = true;
       box.addEventListener("change", function () {
-        // One layer per (body, angle); toggle every body sharing the angle.
-        persons.forEach(function (person) {
-          (person.geojson.features || []).forEach(function (feature) {
-            if (feature.properties && feature.properties.angle === style.name) {
-              var id = layerId(person.id, feature.properties.body, style.name);
-              if (map.getLayer(id)) {
-                map.setLayoutProperty(id, "visibility", box.checked ? "visible" : "none");
-              }
-            }
-          });
-        });
+        visibility.angles[style.name] = box.checked;
+        applyVisibility(map, persons, visibility);
       });
       label.appendChild(box);
       label.appendChild(document.createTextNode(style.name.toUpperCase()));
@@ -152,9 +154,7 @@
     mount.appendChild(row);
   }
 
-  // Person checkboxes appear only when the payload carries more than one
-  // person (the /world surface); the specimen page has exactly one.
-  function buildPersonControls(mount, map, persons) {
+  function buildPersonControls(mount, map, persons, visibility) {
     if (persons.length < 2) return;
     var row = document.createElement("div");
     row.className = "astro-map-island__persons";
@@ -166,16 +166,8 @@
       box.value = person.id;
       box.checked = true;
       box.addEventListener("change", function () {
-        ANGLE_STYLES.forEach(function (style) {
-          (person.geojson.features || []).forEach(function (feature) {
-            if (feature.properties && feature.properties.angle === style.name) {
-              var layer = layerId(person.id, feature.properties.body, style.name);
-              if (map.getLayer(layer)) {
-                map.setLayoutProperty(layer, "visibility", box.checked ? "visible" : "none");
-              }
-            }
-          });
-        });
+        visibility.persons[person.id] = box.checked;
+        applyVisibility(map, persons, visibility);
       });
       label.appendChild(box);
       label.appendChild(document.createTextNode(person.label || person.id));
@@ -208,9 +200,14 @@
       statusMessage(mount, "");
       var persons = payload.persons || [];
       persons.forEach(function (person) { addLines(map, person); });
-      buildPersonControls(mount, map, persons);
-      buildAngleControls(mount, map, persons);
-      wireBodyToggles(map, persons);
+      var visibility = {
+        bodies: Object.create(null),
+        angles: Object.create(null),
+        persons: Object.create(null)
+      };
+      buildPersonControls(mount, map, persons, visibility);
+      buildAngleControls(mount, map, persons, visibility);
+      wireBodyToggles(map, persons, visibility);
       mount.dataset.live = "true";
     });
   }
