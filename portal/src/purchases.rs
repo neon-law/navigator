@@ -784,4 +784,249 @@ mod tests {
         let row = offering_row(&copy, &copy.offerings[0], &rows, false);
         assert!(row.action == OfferingAction::Active);
     }
+
+    fn purchase(offering: &OfferingCopy, state: PurchaseState) -> Purchase {
+        let now = Utc::now();
+        Purchase {
+            id: uuid::Uuid::now_v7(),
+            person_id: uuid::Uuid::now_v7(),
+            email: "pat@example.com".into(),
+            offering: offering.id.clone(),
+            offering_name: offering.name.clone(),
+            cadence: cadence(offering),
+            amount_cents: offering.amount_cents().unwrap_or(0),
+            currency: CURRENCY.into(),
+            account_code: offering.account_code.clone(),
+            state,
+            xero_contact_id: None,
+            xero_invoice_id: None,
+            invoice_url: Some("https://in.xero.test/synthetic".into()),
+            xero_repeating_invoice_id: None,
+            inserted_at: now,
+            updated_at: now,
+            activated_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_purchase_copies_the_catalog_price_and_names_its_invoice_line() {
+        let copy = bundled_copy();
+        let person = client_person().await;
+        let cadences: Vec<Cadence> = copy.offerings.iter().map(cadence).collect();
+        assert_eq!(cadences, [Cadence::Once, Cadence::Month, Cadence::Year]);
+        let annual = &copy.offerings[2];
+        let draft = new_purchase(&person, annual);
+        assert_eq!(draft.person_id, person.id);
+        assert_eq!(draft.email, "pat@example.com");
+        assert_eq!(draft.offering, "delete-your-data-annual");
+        assert_eq!(draft.cadence, Cadence::Year);
+        assert_eq!(draft.amount_cents, 29_000);
+        assert_eq!(draft.currency, "USD");
+        assert_eq!(draft.account_code, annual.account_code);
+
+        let row = purchase(annual, PurchaseState::Invoiced);
+        let invoice_line = line(&row);
+        assert_eq!(invoice_line.description, annual.name);
+        assert_eq!(invoice_line.quantity, 1);
+        assert_eq!(invoice_line.unit_amount_cents, 29_000);
+        assert_eq!(invoice_line.account_code, annual.account_code);
+        assert_eq!(
+            reference(&row),
+            format!("{} {}", annual.name, &row.id.simple().to_string()[..8])
+        );
+    }
+
+    #[test]
+    fn an_open_invoice_outranks_an_active_purchase_and_both_outrank_the_waiver() {
+        let copy = bundled_copy();
+        let consultation = &copy.offerings[0];
+        let invoiced = purchase(consultation, PurchaseState::Invoiced);
+        let active = purchase(consultation, PurchaseState::Active);
+        let row = offering_row(
+            &copy,
+            consultation,
+            &[active.clone(), invoiced.clone()],
+            true,
+        );
+        assert!(
+            row.action
+                == OfferingAction::Invoiced {
+                    pay_url: invoiced.invoice_url.clone()
+                }
+        );
+        assert!(row.google_hint.is_none());
+        let row = offering_row(&copy, consultation, std::slice::from_ref(&active), false);
+        assert!(row.action == OfferingAction::Active);
+        assert!(
+            row.google_hint.is_none(),
+            "no hint beside a consultation in force"
+        );
+        // Another Offering's Purchase never changes this row.
+        let plan = purchase(&copy.offerings[1], PurchaseState::Active);
+        let row = offering_row(&copy, consultation, &[plan], true);
+        assert!(row.action == OfferingAction::Complimentary);
+        assert_eq!(row.price, "$100");
+        assert_eq!(row.name, consultation.name);
+    }
+
+    #[test]
+    fn the_refusal_shell_carries_the_copy_but_offers_nothing() {
+        let copy = bundled_copy();
+        let page = refusal(Some(&copy));
+        assert!(!page.available);
+        assert!(page.offerings.is_empty());
+        assert_eq!(page.title, copy.title);
+        assert_eq!(page.refusal, copy.refusal);
+        assert_eq!(page.buy_label, copy.buy_label);
+        let blank = refusal(None);
+        assert!(!blank.available);
+        assert!(blank.title.is_empty());
+    }
+
+    // --- the mounted routes ---
+
+    use axum::body::Body;
+    use axum::http::{header, Request as HttpRequest};
+    use tower::ServiceExt;
+
+    fn bearer(person_id: Option<uuid::Uuid>, role: Role) -> String {
+        let sessions = crate::SessionStore::new(crate::test_support::TEST_SESSION_KEY);
+        let mut session = SessionData::fresh("synthetic-purchaser", role);
+        session.person_id = person_id;
+        session.source = crate::session::SessionSource::Cli;
+        format!("Bearer {}", sessions.encode(&session))
+    }
+
+    async fn send(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        auth: &str,
+    ) -> (StatusCode, String, String) {
+        let response = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header(header::AUTHORIZATION, auth)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let location = response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            location,
+            String::from_utf8_lossy(&bytes).into_owned(),
+        )
+    }
+
+    /// The routes over a fresh store holding one Client, with or without
+    /// the catalog copy and a real Xero organisation.
+    async fn mounted(copy: Option<PurchaseCopy>, xero: bool) -> (Router, Person) {
+        let db = store::test_support::mem_surreal().await;
+        let person = store::persons::create(
+            &db,
+            &store::persons::NewPerson::with_role("Pat Client", "pat@example.com", Role::Client),
+        )
+        .await
+        .unwrap();
+        let state = crate::test_support::app_state(db).await;
+        // The full router installs the cookie layer the session and CSRF
+        // middleware read; mounted alone, the routes need it too.
+        let app = routes_with(&state, copy, xero).layer(tower_cookies::CookieManagerLayer::new());
+        (app, person)
+    }
+
+    #[tokio::test]
+    async fn the_page_refuses_to_sell_without_a_real_xero_organisation() {
+        let copy = bundled_copy();
+        for xero in [false, true] {
+            let (app, person) = mounted(Some(copy.clone()), xero).await;
+            let (status, _, body) = send(
+                &app,
+                "GET",
+                PURCHASES_PATH,
+                &bearer(Some(person.id), Role::Client),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "xero={xero}");
+            assert!(body.contains(&copy.title), "xero={xero}");
+            // The bundled refusal contains an apostrophe-free sentence, so
+            // its opening words survive HTML escaping verbatim.
+            assert!(
+                body.contains("Online purchases are not available right now"),
+                "without Xero or PostgreSQL the page refuses (xero={xero})"
+            );
+            assert!(!body.contains("action=\"/purchases/consultation\""));
+        }
+        // A brand with no purchase block renders the empty refusal.
+        let empty = PurchaseCopy {
+            offerings: Vec::new(),
+            ..bundled_copy()
+        };
+        let (app, person) = mounted(Some(empty), true).await;
+        let (status, _, body) = send(
+            &app,
+            "GET",
+            PURCHASES_PATH,
+            &bearer(Some(person.id), Role::Client),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.contains(&copy.title), "no copy without Offerings");
+    }
+
+    #[tokio::test]
+    async fn buying_refuses_an_unknown_offering_and_a_viewer_who_is_not_the_client() {
+        let (app, person) = mounted(None, true).await;
+        let client = bearer(Some(person.id), Role::Client);
+        let (status, _, _) = send(&app, "POST", "/purchases/consultation", &client).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "no catalog, nothing to buy");
+
+        let copy = bundled_copy();
+        let (app, person) = mounted(Some(copy.clone()), true).await;
+        let client = bearer(Some(person.id), Role::Client);
+        let (status, _, _) = send(&app, "POST", "/purchases/no-such-offering", &client).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        for viewer in [
+            bearer(Some(person.id), Role::Lawyer),
+            bearer(None, Role::Client),
+            bearer(Some(uuid::Uuid::now_v7()), Role::Client),
+        ] {
+            let (status, _, body) = send(&app, "POST", "/purchases/consultation", &viewer).await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(body, copy.refusal);
+        }
+    }
+
+    #[tokio::test]
+    async fn buying_without_a_purchase_store_returns_the_client_to_the_page() {
+        if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_some() {
+            return;
+        }
+        let (app, person) = mounted(Some(bundled_copy()), true).await;
+        let (status, location, _) = send(
+            &app,
+            "POST",
+            "/purchases/delete-your-data-monthly",
+            &bearer(Some(person.id), Role::Client),
+        )
+        .await;
+        assert!(status.is_redirection(), "{status}");
+        assert_eq!(location, PURCHASES_PATH);
+    }
 }

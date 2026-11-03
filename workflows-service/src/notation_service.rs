@@ -1129,4 +1129,96 @@ END: {}
         assert_eq!(captured[0].to, "aries@example.com");
         assert_eq!(captured[0].template_slug.as_deref(), Some("welcome"));
     }
+
+    #[test]
+    fn the_object_key_must_be_a_notation_id() {
+        let id = uuid::Uuid::now_v7();
+        assert_eq!(super::parse_notation_id(&id.to_string()).unwrap(), id);
+        let error = super::parse_notation_id("not-a-uuid").expect_err("a non-uuid key");
+        assert!(
+            format!("{error:?}").contains("object key `not-a-uuid` is not a valid notation_id"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn both_logic_failure_classes_surface_as_terminal_errors() {
+        use crate::notation_logic::NotationLogicError;
+        for (error, message) in [
+            (
+                NotationLogicError::Terminal("already at END".into()),
+                "already at END",
+            ),
+            (
+                NotationLogicError::Store("store unavailable".into()),
+                "store unavailable",
+            ),
+        ] {
+            let mapped = super::terminal_from(error);
+            assert!(format!("{mapped:?}").contains(message), "{mapped:?}");
+        }
+    }
+
+    #[test]
+    fn signal_bodies_default_their_optional_fields() {
+        let start: super::StartBody = serde_json::from_str(r#"{"spec_yaml":"BEGIN: {}"}"#).unwrap();
+        assert!(
+            !start.ephemeral,
+            "legacy callers start notation-backed runs"
+        );
+        let question: super::QuestionnaireSignalBody =
+            serde_json::from_str(r#"{"condition":"_"}"#).unwrap();
+        assert!(question.value.is_none() && question.acting_person_id.is_none());
+        let workflow: super::WorkflowSignalBody =
+            serde_json::from_str(r#"{"condition":"approved"}"#).unwrap();
+        assert!(!workflow.ephemeral);
+        assert!(workflow.value.is_none() && workflow.acting_person_id.is_none());
+        let response = serde_json::to_value(super::SignalResponse {
+            next_state: "END".into(),
+        })
+        .unwrap();
+        assert_eq!(response, serde_json::json!({ "next_state": "END" }));
+        let current = serde_json::to_value(super::CurrentStateResponse { state: None }).unwrap();
+        assert_eq!(current, serde_json::json!({ "state": null }));
+    }
+
+    #[test]
+    fn next_state_refuses_an_unknown_from_state() {
+        let spec = WorkflowSpec::from_yaml(SPEC).unwrap();
+        let error = next_state(&spec, &StateName::from("not_in_spec"), "_")
+            .expect_err("an unknown from-state has no transition");
+        assert!(!format!("{error:?}").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_wait_state_dispatches_nothing() {
+        let email = Arc::new(CapturingEmail::new());
+        let deps = StepDeps::new(email.clone(), fs_storage("wait-state").await);
+        let payload = dispatch_workflow_step(
+            &deps,
+            uuid::Uuid::from_u128(3),
+            &StateName::from("client_name"),
+            Some("ignored"),
+        )
+        .await
+        .expect("a state without a side effect is a no-op");
+        assert!(payload.is_none());
+        assert!(email.captured().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_dispatch_is_a_terminal_error() {
+        let email = Arc::new(CapturingEmail::new());
+        let deps = StepDeps::new(email.clone(), fs_storage("bad-payload").await);
+        let error = dispatch_workflow_step(
+            &deps,
+            uuid::Uuid::from_u128(4),
+            &StateName::from("email_send__welcome"),
+            Some("not an email payload"),
+        )
+        .await
+        .expect_err("an unparseable payload cannot be sent");
+        assert!(format!("{error:?}").contains("dispatch:"), "{error:?}");
+        assert!(email.captured().is_empty());
+    }
 }

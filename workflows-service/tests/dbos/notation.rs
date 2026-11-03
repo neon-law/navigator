@@ -47,15 +47,18 @@ async fn the_authenticated_caller_keeps_both_notation_machines_independent() {
     )
     .unwrap();
     worker.launch().await.unwrap();
-    let router = workflows_service::health::router_with_dbos_ingress(WorkerIngress {
-        notation: Some(NotationIngress::new(
-            "synthetic-worker-token".into(),
-            surreal,
-            postgres,
-            workflow,
-        )),
-        ..WorkerIngress::default()
-    });
+    let router = workflows_service::health::router_with_dbos_ingress(
+        WorkerIngress {
+            notation: Some(NotationIngress::new(
+                "synthetic-worker-token".into(),
+                surreal,
+                postgres,
+                workflow,
+            )),
+            ..WorkerIngress::default()
+        },
+        None,
+    );
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .unwrap();

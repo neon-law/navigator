@@ -907,6 +907,7 @@ fn ops_help_lists_operator_members() {
             "forgejo",
             "gcp",
             "github",
+            "host",
             "logs",
             "lsp",
             "notices",

@@ -36,6 +36,7 @@ pub const WORKFLOW_SERVICES: &[&str] = &[
     "FinanceAggregate",
     "GeneralNag",
     "InboundMessageAlert",
+    "InboundTriage",
     "NightlyProjectUpdate",
     "NightlyProjectUpdateMembership",
     "NightlyProjectUpdateSlack",
@@ -43,6 +44,7 @@ pub const WORKFLOW_SERVICES: &[&str] = &[
     "NotationReset",
     "SocialPublisher",
     "SocialPublishReconciler",
+    "YoutubeCommentsPoller",
 ];
 
 /// Virtual-object services bound by the worker. Lowercase kebab-case by

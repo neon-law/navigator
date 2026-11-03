@@ -52,13 +52,10 @@ pub const APP_NAME: &str = "navigator-workflows";
 pub const SYSTEM_SCHEMA: &str = "dbos";
 
 /// A DBOS switch or connection the environment does not complete.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum SettingsError {
-    #[error("{0} is required to run DBOS")]
-    Missing(&'static str),
-    #[error("{0} is not valid for DBOS")]
-    Invalid(&'static str),
-}
+///
+/// Defined in [`crate::flags`] so callers without the `dbos` feature parse
+/// the same switches; re-exported here for the established path.
+pub use crate::flags::SettingsError;
 
 /// Whether [`ENABLED_ENV`] asks this process to host the executor.
 ///
@@ -71,15 +68,7 @@ pub fn enabled(lookup: impl Fn(&str) -> Option<String>) -> Result<bool, Settings
     flag_enabled(ENABLED_ENV, value.as_deref())
 }
 
-/// Parse one workflow-specific switch with the same strict `true` / `false`
-/// contract as the executor switch.
-pub fn flag_enabled(name: &'static str, value: Option<&str>) -> Result<bool, SettingsError> {
-    match value.map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err(SettingsError::Invalid(name)),
-    }
-}
+pub use crate::flags::flag_enabled;
 
 /// The DBOS login's connection variables. DBOS signs in with its own login,
 /// never the application's, and reads only the `dbos` schema.
@@ -284,6 +273,43 @@ pub struct Executor {
     dbos: dbos::DBOS,
     stop: dbos::CancellationToken,
     schedules: Vec<tokio::task::JoinHandle<()>>,
+}
+/// A readiness-probe handle for a launched executor: shares the stop token and
+/// the system database URL without owning the executor, so the health route can
+/// report DBOS state while `main` keeps exclusive shutdown rights.
+#[derive(Clone)]
+pub struct ExecutorProbe {
+    stop: dbos::CancellationToken,
+    system_database_url: Arc<String>,
+}
+
+impl ExecutorProbe {
+    /// True while the executor is launched and no shutdown has been requested.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        !self.stop.is_cancelled()
+    }
+
+    /// The system database URL this executor launched against.
+    ///
+    /// `None` when the executor runs against no configured system database,
+    /// which readiness reports as unhealthy rather than skipping the check.
+    #[must_use]
+    pub fn system_database_url(&self) -> Option<&str> {
+        let url = self.system_database_url.as_str();
+        (!url.is_empty()).then_some(url)
+    }
+}
+
+impl Executor {
+    /// Snapshot a readiness-probe handle for this executor.
+    #[must_use]
+    pub fn probe(&self) -> ExecutorProbe {
+        ExecutorProbe {
+            stop: self.stop.clone(),
+            system_database_url: Arc::new(self.dbos.config().database_url.clone()),
+        }
+    }
 }
 
 impl Executor {

@@ -468,6 +468,20 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
 
     tracing::info!(enabled = sms_intake.is_some(), "SMS inbox intake");
 
+    // The Firm registry of Twilio receiving numbers, in PostgreSQL. Every
+    // Twilio webhook resolves through it; without a registry the deployment
+    // has no receiving numbers and the lanes answer 404.
+    let twilio_registry = match store::postgres::PostgresDb::from_env().await {
+        Ok(db) => Some(std::sync::Arc::new(db)),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "Twilio receiving-number registry unavailable; webhook lanes off"
+            );
+            None
+        }
+    };
+
     let state = crate::AppState {
         brand_bundle,
         surreal,
@@ -512,6 +526,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         inbound_email_secret,
         summary_intake,
         sms_intake,
+        twilio_registry,
         email_events_secret,
         sendgrid_events_public_key,
         bootstrap_owner_email: crate::oauth::bootstrap_owner_email_from_env(),
@@ -1226,16 +1241,25 @@ fn preflight(brand: &Site, rt: &HostRuntime) {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_ports, should_host_billing_canary, should_host_deadline_mirror,
-        should_host_dri_digest, should_host_general_nag, should_host_notation_reset,
-        should_host_project_recovery, should_host_retention_purge, should_host_source_imports,
+        bind_ports, should_host_billing_canary, should_host_billing_digest,
+        should_host_deadline_mirror, should_host_dri_digest, should_host_general_nag,
+        should_host_notation_reset, should_host_project_recovery, should_host_purchase_activation,
+        should_host_retention_purge, should_host_source_imports,
     };
 
     type Gate = fn(bool, &dyn Fn(&str) -> Option<String>) -> anyhow::Result<bool>;
 
     /// The schedules gated only by DBOS and their own flag.
-    fn recovery_gates() -> [(Gate, &'static str); 5] {
+    fn recovery_gates() -> [(Gate, &'static str); 7] {
         [
+            (
+                |host, lookup| should_host_billing_digest(host, lookup),
+                workflows::dbos_engine::billing_digest::ENABLED_ENV,
+            ),
+            (
+                |host, lookup| should_host_purchase_activation(host, lookup),
+                workflows::dbos_engine::purchase_activation::ENABLED_ENV,
+            ),
             (
                 |host, lookup| should_host_project_recovery(host, lookup),
                 workflows::dbos_engine::project_recovery::ENABLED_ENV,

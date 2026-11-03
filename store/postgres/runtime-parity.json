@@ -508,38 +508,53 @@
     ]
   },
   "inbox_assignment": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
+    "remaining": [
+      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
+    ],
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
+      },
+      {
+        "file": "store/src/postgres/inbox_tests.rs",
+        "function": "attribution_projects_moves_and_dedups",
+        "proves": "Native attribution projects Messages to Communications, moves them between Projects, and deduplicates projection."
+      },
+      {
+        "file": "portal/tests/inbox_import_api.rs",
+        "function": "an_import_walks_the_postgres_ingest_idempotently",
+        "proves": "Replaying an attributed import preserves one assignment event while recovering interrupted filings."
       }
     ],
-    "remaining": [
-      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
-    ]
+    "scenario": "same-Firm round trip; cross-Firm refusal"
   },
   "inbox_conversation": {
-    "scenario": "same-Firm assignment; Project reassignment history; participation revocation; internal visibility",
+    "remaining": [
+      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
+    ],
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
+      },
+      {
+        "file": "store/src/postgres/inbox_tests.rs",
+        "function": "targeted_ingest_preserves_project_scope_and_all_attachments",
+        "proves": "Native ingest retains the supplied Project and keeps unassigned intake in a separate Conversation."
       }
     ],
-    "remaining": [
-      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
-    ]
+    "scenario": "same-Firm assignment; Project reassignment history; participation revocation; internal visibility"
   },
   "inbox_delivery_attempt": {
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
       }
     ],
     "remaining": [
@@ -547,20 +562,27 @@
     ]
   },
   "inbox_ingress": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
+    "remaining": [
+      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
+    ],
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
+      },
+      {
+        "file": "store/src/postgres/inbox_tests.rs",
+        "function": "concurrent_replays_dedup_race_safely",
+        "proves": "Concurrent native deliveries reuse one ingress identity and Message without orphan Conversations."
       }
     ],
-    "remaining": [
-      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
-    ]
+    "scenario": "same-Firm round trip; cross-Firm refusal"
   },
   "inbox_message_asset": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal; repeated ingest reuses the ordered link",
+    "remaining": [
+      "Application reads of the ordered attachments through the matter Communications view require separate acceptance."
+    ],
     "runtime_tests": [
       {
         "file": "store/src/inbox.rs",
@@ -569,12 +591,33 @@
       },
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "The inbox_message_asset image mirrors to PostgreSQL and immutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "The populated inbox_message_asset image mirrors to PostgreSQL and immutable updates are refused."
+      },
+      {
+        "file": "store/src/postgres/inbox_tests.rs",
+        "function": "targeted_ingest_preserves_project_scope_and_all_attachments",
+        "proves": "Native ingest commits every ordered attachment link with its Message; replay does not duplicate links."
+      },
+      {
+        "file": "portal/tests/inbox_import_api.rs",
+        "function": "an_import_walks_the_postgres_ingest_idempotently",
+        "proves": "The HTTP import files and links attachments, recovers an interrupted import, and retains valid repository-pointer identities."
+      }
+    ],
+    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal; repeated ingest reuses the ordered link"
+  },
+  "inbox_triage": {
+    "scenario": "one triage row per message; structural privilege label; suggestion-only Project routing; human disposition transitions",
+    "runtime_tests": [
+      {
+        "file": "store/src/postgres_mirror/inbox.rs",
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
       }
     ],
     "remaining": [
-      "Application reads of the ordered attachments through the matter Communications view require separate acceptance."
+      "Classifier-driven rows, human confirm and override transitions, and review-queue application queries require separate acceptance."
     ]
   },
   "iolta_account": {
@@ -708,17 +751,27 @@
     ]
   },
   "message": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+    "remaining": [
+      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
+    ],
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "seven_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All seven Inbox table images persist and mirror; mutable target drift reconciles and immutable updates are refused."
+      },
+      {
+        "file": "store/src/postgres/inbox_tests.rs",
+        "function": "lawyer_sent_imports_ingest_outbound_with_author",
+        "proves": "Native historical outbound Messages retain their author and received delivery state."
+      },
+      {
+        "file": "portal/tests/inbox_import_api.rs",
+        "function": "an_import_walks_the_postgres_ingest_idempotently",
+        "proves": "Imported Message replay, raw payload retention, PostgreSQL process state and backlog reads, and attachment recovery pass through the HTTP door."
       }
     ],
-    "remaining": [
-      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
-    ]
+    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal"
   },
   "notarization": {
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
@@ -922,6 +975,19 @@
     ],
     "remaining": [
       "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
+    ]
+  },
+  "person_phone": {
+    "scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes",
+    "runtime_tests": [
+      {
+        "file": "store/tests/person_phones.rs",
+        "function": "setting_a_number_primary_demotes_the_previous_primary",
+        "proves": "Row identity is stable across label and primary changes: differently formatted spellings converge on one row and exactly one primary survives each write, the facts the whole-row projection must reproduce."
+      }
+    ],
+    "remaining": [
+      "PostgreSQL-side whole-row convergence for person_phone is covered by the shared source_domain_records mirror machinery; a live-Postgres parity run for this table specifically is pending with the identity-storage slice."
     ]
   },
   "person_project_role": {
@@ -1249,19 +1315,6 @@
     "runtime_tests": [],
     "remaining": [
       "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "person_phone": {
-    "scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes",
-    "runtime_tests": [
-      {
-        "file": "store/tests/person_phones.rs",
-        "function": "setting_a_number_primary_demotes_the_previous_primary",
-        "proves": "Row identity is stable across label and primary changes: differently formatted spellings converge on one row and exactly one primary survives each write, the facts the whole-row projection must reproduce."
-      }
-    ],
-    "remaining": [
-      "PostgreSQL-side whole-row convergence for person_phone is covered by the shared source_domain_records mirror machinery; a live-Postgres parity run for this table specifically is pending with the identity-storage slice."
     ]
   }
 }

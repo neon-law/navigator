@@ -47,6 +47,9 @@ use uuid::Uuid;
 #[path = "common/practice_preview.rs"]
 mod practice_preview;
 
+#[path = "common/inbox_triage.rs"]
+mod inbox_triage;
+
 /// Nautilus collects contact details before sign-in and keeps them when going Back.
 #[tokio::test]
 async fn nautilus_intake_preserves_answers_and_reviews_before_sign_in() {
@@ -2272,6 +2275,7 @@ async fn seed_inbox_walkthrough(db: &store::surreal::SurrealDb) -> store::inbox:
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            raw_storage_key: None,
             project_id: None,
             firm_id: firm,
             brand_key: Some("neon"),

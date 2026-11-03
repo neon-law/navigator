@@ -71,6 +71,7 @@ match = '''(?:token@www\.notion\.so|secret@www\.tiktok\.com)'''
 paths = [
   "portal/src/social_oauth/tiktok.rs",
   "store/tests/project_resource_links.rs",
+  "workflows-service/src/social_publisher.rs",
   ".github/pii/allowlist.toml",
 ]
 reason = "URL userinfo fixtures proving the code strips credentials from a provider URL; no mailbox exists."

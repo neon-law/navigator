@@ -101,6 +101,9 @@ pub fn document_with_base(base: &str) -> Value {
     add_blog_operations(&mut document);
     add_graph_operations(&mut document);
     add_upload_session_operations(&mut document);
+    add_inbox_import_operation(&mut document);
+    add_fi_import_operation(&mut document);
+    add_inbox_attachment_operation(&mut document);
     document["paths"]["/app/api/projects/{id}/section-counts"] = serde_json::json!({
       "get": {
         "operationId": "getProjectSectionCounts", "tags": ["Projects"],
@@ -427,6 +430,163 @@ fn add_draft_aliases(document: &mut Value) {
         }
         document["paths"][twin] = item;
     }
+}
+
+fn add_inbox_attachment_operation(document: &mut Value) {
+    let parameters = ["id", "conversation_id", "message_id", "asset_id"]
+        .map(|name| json!({"name": name, "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}));
+    document["paths"]["/app/api/projects/{id}/inbox/{conversation_id}/messages/{message_id}/attachments/{asset_id}"] = json!({"get": {
+        "operationId": "downloadInboxMessageAttachment", "tags": ["Inbox"],
+        "summary": "Download a Project Message attachment",
+        "description": "Requires a Lawyer participating in the Project. The Conversation must belong to that Project, the Message to that Conversation, and the Asset to that Message and Firm. The attachment retains its provider filename; bare Inbox assets do not need a Project document identity.",
+        "parameters": parameters,
+        "responses": {
+            "200": {"description": "Attachment bytes with Content-Disposition attachment and the provider filename", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+            "401": {"description": "No authenticated session"},
+            "403": {"description": "The caller is not Lawyer tier"},
+            "404": {"description": "No visible Project/Conversation/Message attachment with these identities"}
+        }
+    }});
+}
+
+fn fi_import_mapping_schema() -> Value {
+    let optional_column = json!({"type": ["string", "null"], "description": "Exact CSV header, or null when absent."});
+    json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["columns", "kinds", "directions", "timestamp_format", "timestamp_separator", "timezone", "duration_unit"],
+        "properties": {
+            "columns": {
+                "type": "object", "additionalProperties": false,
+                "required": ["kind", "direction", "counterparty", "timestamp"],
+                "properties": {
+                    "kind": {"type": "string"}, "direction": {"type": "string"},
+                    "counterparty": {"type": "string", "description": "Counterparty telephone-number header."},
+                    "timestamp": {"type": "array", "minItems": 1, "maxItems": 2, "items": {"type": "string"}},
+                    "duration": optional_column, "identity": optional_column, "status": optional_column
+                }
+            },
+            "kinds": {"type": "object", "minProperties": 1, "maxProperties": 32, "additionalProperties": {"enum": ["call", "sms"]}},
+            "directions": {"type": "object", "minProperties": 1, "maxProperties": 32, "additionalProperties": {"enum": ["inbound", "outbound"]}},
+            "statuses": {"type": "object", "default": {}, "maxProperties": 32, "additionalProperties": {"enum": ["completed", "missed", "unknown"]}},
+            "timestamp_format": {"type": "string", "minLength": 1, "maxLength": 128, "description": "Explicit Chrono strftime format; embedded_offset requires an offset-bearing format. Local times must resolve uniquely in the declared timezone."},
+            "timestamp_separator": {"type": "string", "maxLength": 8, "description": "Join separator when timestamp names two headers; required even for one header."},
+            "timezone": {"oneOf": [
+                {"type": "object", "additionalProperties": false, "required": ["mode"], "properties": {"mode": {"const": "embedded_offset"}}},
+                {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "iana"}, "value": {"type": "string", "description": "IANA timezone, such as America/Los_Angeles."}}},
+                {"type": "object", "additionalProperties": false, "required": ["mode", "value"], "properties": {"mode": {"const": "fixed_offset"}, "value": {"type": "string", "description": "Fixed offset, such as -08:00."}}}
+            ]},
+            "duration_unit": {"enum": ["seconds", "minutes"], "description": "Explicit source duration unit, normalized to whole seconds; invalid or inexact values are refused."}
+        }
+    })
+}
+
+fn add_fi_import_operation(document: &mut Value) {
+    let imported = json!({"type": "array", "items": {
+        "type": "object", "required": ["row", "message_id", "conversation_id", "deduped"],
+        "properties": {"row": {"type": "integer"}, "message_id": {"type": "string", "format": "uuid"},
+            "conversation_id": {"type": "string", "format": "uuid"}, "deduped": {"type": "boolean"}}
+    }});
+    let preview = json!({"type": "object", "required": ["dry_run", "new", "existing", "conflicts", "rows", "imported"],
+        "properties": {"dry_run": {"type": "boolean"}, "new": {"type": "integer"}, "existing": {"type": "integer"}, "conflicts": {"type": "integer"},
+            "imported": {"type": "array", "maxItems": 0}, "rows": {"type": "array", "items": {
+                "type": "object", "required": ["row", "status", "kind", "direction", "occurred_at", "duration_seconds"],
+                "properties": {"row": {"type": "integer"}, "status": {"enum": ["new", "identical", "conflict"]},
+                    "kind": {"enum": ["call", "sms"]}, "direction": {"enum": ["inbound", "outbound"]},
+                    "occurred_at": {"type": "string", "format": "date-time"}, "duration_seconds": {"type": ["integer", "null"]}}
+            }}}
+    });
+    let partial = json!({"type": "object", "required": ["dry_run", "failed_row", "error", "imported", "reconcile"],
+        "properties": {"dry_run": {"const": false}, "failed_row": {"type": "integer"}, "error": {"type": "string"},
+            "imported": imported, "outcome_may_be_committed": {"type": "boolean", "description": "Storage uncertainty may include the failed row; absent for attribution failures."},
+            "reconcile": {"type": "string", "description": "Retry the unchanged batch and Project to reconcile source identities."}}
+    });
+    let committed = json!({"type": "object", "required": ["dry_run", "new", "existing", "conflicts", "imported"],
+        "properties": {"dry_run": {"const": false}, "new": {"type": "integer"}, "existing": {"type": "integer"},
+            "conflicts": {"const": 0}, "imported": imported}
+    });
+    document["paths"]["/app/api/inbox/import/fi"] = json!({"post": {
+        "operationId": "importFiMetadata", "tags": ["Inbox"], "summary": "Preview or import Google Fi call and SMS metadata",
+        "description": "Requires lawyer-tier access, a same-Firm Brand, and native PostgreSQL Inbox authority even for preview. Explicit mappings name CSV headers, values, timestamp format, timezone, and duration units; no header or timezone guessing. Both historical directions are recorded without an author, raw-payload archive, outbound dispatch, or Fi bill. Optional visible Project attribution is initial-only. Defaults to dry-run preview. Up to 4 MiB decoded CSV and 10,000 rows; the JSON request limit is 8 MiB. Full parsing and identity preflight precede writes; later failures may leave the reported imported rows committed. Retry the unchanged batch and Project to reconcile, including a possibly committed failed row after storage uncertainty.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+            "type": "object", "additionalProperties": false, "required": ["account", "brand", "mapping", "payload_base64"],
+            "properties": {"account": {"type": "string", "description": "Google Fi account telephone number in E.164 format."},
+                "brand": {"type": "string", "description": "Same-Firm Brand key."},
+                "project": {"type": ["string", "null"], "description": "Optional visible Project code."},
+                "mapping": fi_import_mapping_schema(), "payload_base64": {"type": "string", "contentEncoding": "base64", "description": "Metadata CSV bytes; raw payload is not archived."},
+                "dry_run": {"type": "boolean", "default": true}}
+        }}}},
+        "responses": {
+            "200": {"description": "Read-only preview", "content": {"application/json": {"schema": preview}}},
+            "201": {"description": "Imported or reconciled metadata", "content": {"application/json": {"schema": committed}}},
+            "400": {"description": "Invalid account, mapping, CSV, payload, scope selection, or decoded byte/row limit"},
+            "401": {"description": "No authenticated session"}, "403": {"description": "Lawyer-tier access required"},
+            "404": {"description": "Brand or Project absent or outside the caller's Firm/scope"},
+            "409": {"description": "Preflight identity conflicts (no writes), or a conflict after earlier rows committed", "content": {"application/json": {"schema": {"oneOf": [preview, partial]}}}},
+            "413": {"description": "JSON request exceeds the body limit"},
+            "500": {"description": "Native Inbox authority, database, or dependency projection unavailable"},
+            "503": {"description": "Import busy, storage uncertainty, or Project attribution needs reconciliation; earlier rows may be committed", "content": {"application/json": {"schema": partial}}}
+        }
+    }});
+}
+
+fn add_inbox_import_operation(document: &mut Value) {
+    let project = json!({"type": ["string", "null"], "description": "Optional visible Project code for attribution."});
+    let attachment = json!({
+        "type": "object", "required": ["filename", "content_type", "size_bytes", "asset_id"],
+        "properties": {
+            "filename": {"type": "string", "description": "Original provider filename."},
+            "content_type": {"type": "string"}, "size_bytes": {"type": "integer", "minimum": 0},
+            "asset_id": {"type": "string", "format": "uuid"}
+        }
+    });
+    let message = json!({
+        "type": "object", "required": ["message_id", "conversation_id", "deduped", "direction", "attachments"],
+        "properties": {
+            "message_id": {"type": "string", "format": "uuid"},
+            "conversation_id": {"type": "string", "format": "uuid"},
+            "deduped": {"type": "boolean", "description": "The Message already existed; interrupted filing or attribution can still finish."},
+            "direction": {"type": "string", "enum": ["inbound", "outbound"]},
+            "attachments": {"type": "array", "items": attachment}
+        }
+    });
+    let preview = json!({
+        "type": "object", "required": ["source", "mailbox", "dry_run", "would_import", "project"],
+        "properties": {
+            "source": {"type": "string"}, "mailbox": {"type": "string"},
+            "dry_run": {"const": true}, "would_import": {"type": "integer", "minimum": 1}, "project": project
+        }
+    });
+    let imported = json!({
+        "type": "object", "required": ["source", "mailbox", "archived_key", "project", "imported"],
+        "properties": {
+            "source": {"type": "string"}, "mailbox": {"type": "string"},
+            "archived_key": {"type": "string", "description": "The Firm-scoped verbatim payload object key."},
+            "project": project, "imported": {"type": "array", "minItems": 1, "items": message}
+        }
+    });
+    document["paths"]["/app/api/inbox/import"] = json!({"post": {
+        "operationId": "importInboxMessages", "tags": ["Inbox"], "summary": "Import historical Messages without sending",
+        "description": "Requires lawyer-tier access; writing imports also requires the PostgreSQL Inbox authority. Imports RFC 5322 email or a LinkedIn messages.csv export. The mailbox identifies the importing account. Optional Project attribution requires access; filed content is internal by default. Retries reuse Messages and finish missing attachment filings. A dry run parses and previews without archiving or writing records.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+            "type": "object", "additionalProperties": false, "required": ["source", "mailbox", "payload_base64"],
+            "properties": {
+                "source": {"type": "string", "enum": ["email", "linkedin"]},
+                "mailbox": {"type": "string", "minLength": 1, "description": "Mailbox address or LinkedIn profile URL."},
+                "payload_base64": {"type": "string", "contentEncoding": "base64", "description": "Verbatim .eml or CSV payload bytes."},
+                "project": project, "dry_run": {"type": "boolean", "default": false}
+            }
+        }}}},
+        "responses": {
+            "200": {"description": "Dry-run preview; nothing written", "content": {"application/json": {"schema": preview}}},
+            "201": {"description": "Imported or resumed Messages", "content": {"application/json": {"schema": imported}}},
+            "400": {"description": "Invalid source, mailbox, payload, Project code, or ambiguous Firm"},
+            "401": {"description": "No authenticated session"},
+            "403": {"description": "Lawyer-tier access required"},
+            "404": {"description": "Project or Conversation outside the caller's scope"},
+            "413": {"description": "Payload exceeds the request limit"},
+            "500": {"description": "Database, storage, or Inbox authority unavailable"}
+        }
+    }});
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2104,6 +2264,23 @@ fn canonical_document(base: &str) -> Value {
             "description": "Records an attorney's hourly rate in integer cents, either the firm default (project_id null) or a matter override. Rows are effective-dated and never edited: a row for the same scope and effective date replaces the prior one, any other date appends to the history. Authorization: lawyer tier.",
             "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["person_id", "hourly_rate_cents", "effective_on"], "properties": { "person_id": { "type": "string", "format": "uuid" }, "project_id": { "type": "string", "format": "uuid", "nullable": true }, "hourly_rate_cents": { "type": "integer" }, "effective_on": { "type": "string", "format": "date" } } } } } },
             "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such attorney or matter", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "201": { "description": "The stored rate", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The rate is not valid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/stages": {
+          "get": {
+            "summary": "Read a matter's stage",
+            "description": "Returns the Firm's stage vocabulary, the stage the matter currently holds (null until the Firm places it), and the matter's audited stage history, oldest first. A Case Stage is where the matter sits in the Firm's own workflow — distinct from project.status and case.status. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The Firm's vocabulary, the matter's current stage, and its history", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/stages/set": {
+          "post": {
+            "summary": "Set a matter's current stage",
+            "description": "Moves the matter to a stage from the Firm's own vocabulary and appends the audited history row; the history is immutable and setting the stage the matter already holds is a no-op. The stage must belong to the Project's Firm. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["stage_id"], "properties": { "stage_id": { "type": "string", "format": "uuid" }, "note": { "type": "string" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project or stage, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The appended stage event (or the current one on a no-op)", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The stage is not in the matter Firm's vocabulary, or the note is invalid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
           }
         },
         "/app/api/projects/{id}/deadlines": {

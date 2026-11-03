@@ -87,11 +87,16 @@ const COMPILED_SITES: &[CompiledSite] = &[
         www: "www.guiebandshook.com",
         live: true,
     },
-    // Registered for isolated staging; public launch remains held back.
+    // Lex Tecnica's brands are served on `neonlaw.com` subdomains.
+    CompiledSite {
+        key: "lex-tecnica",
+        www: "lex-tecnica.neonlaw.com",
+        live: true,
+    },
     CompiledSite {
         key: "iep-defenders",
-        www: "www.iepdefenders.com",
-        live: false,
+        www: "iep.neonlaw.com",
+        live: true,
     },
 ];
 
@@ -191,7 +196,7 @@ mod tests {
     fn every_compiled_listing_host_is_the_www_form() {
         for site in COMPILED_SITES {
             assert!(
-                site.www.starts_with("www."),
+                site.www.starts_with("www.") || site.www.ends_with(".neonlaw.com"),
                 "{} production host is the www form: {}",
                 site.key,
                 site.www
@@ -219,6 +224,8 @@ mod tests {
                 "groundwork",
                 "cyber-injury-law",
                 "guieb-shook",
+                "lex-tecnica",
+                "iep-defenders",
             ],
             "the live listing set is the launched house brands"
         );

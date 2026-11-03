@@ -68,6 +68,10 @@ pub mod channel {
     pub const TIKTOK_OUTBOUND: &str = "tiktok_outbound";
     pub const YOUTUBE_INBOUND: &str = "youtube_inbound";
     pub const YOUTUBE_OUTBOUND: &str = "youtube_outbound";
+    pub const X_INBOUND: &str = "x_inbound";
+    pub const X_OUTBOUND: &str = "x_outbound";
+    pub const LINKEDIN_INBOUND: &str = "linkedin_inbound";
+    pub const LINKEDIN_OUTBOUND: &str = "linkedin_outbound";
     /// A phone call or other off-system contact, logged after the fact as
     /// an internal note (LAW-140). The row's `direction` is its visibility
     /// (`internal` unless the firm chose to share it); the call's own
@@ -782,7 +786,7 @@ pub async fn move_to_project(
 }
 
 /// The row a `(channel, source_ref)` pair already resolves to, if any.
-async fn find_by_source(
+pub(crate) async fn find_by_source(
     db: &SurrealDb,
     channel: &str,
     source_ref: &str,

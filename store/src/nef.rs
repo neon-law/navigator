@@ -2,7 +2,7 @@
 //!
 //! A court's CM/ECF system mails one notice per docket entry. Almost all of
 //! its body — often hundreds of thousands of characters — is the
-//! [Service List](../../../../docs/glossary/service-list.md); the docket entry itself is a
+//! [Service List](../../docs/glossary/service-list.md); the docket entry itself is a
 //! handful of labelled lines and one single-use free-look link.
 //!
 //! This module is pure: bytes in, a [`Notice`] out. It opens no connection

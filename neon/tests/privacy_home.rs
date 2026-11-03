@@ -38,7 +38,6 @@ async fn privacy_home_publishes_both_plans_with_referrals_and_shared_footer() {
         "$290/year",
         "Annual — prepaid",
         "non-legal service",
-        "Everyone deserves access to justice.",
         "forming an LLC",
         "Prepay $290/year.",
         "Gift cards available",

@@ -201,6 +201,7 @@ fn secret_kind_choices() -> Vec<Choice> {
         Choice::new("notion_token", "Notion token"),
         Choice::new("github_app_private_key", "GitHub App private key"),
         Choice::new("forgejo_access_token", "Forgejo access token"),
+        Choice::new("twilio_auth_token", "Twilio auth token"),
     ]
 }
 
@@ -684,7 +685,7 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                                 }
                                 tbody {
                                     for row in fields.secrets.iter().cloned() {
-                                        tr { class: "firm-secret-row", key: "{row.provider}-{row.kind}",
+                                        tr { class: "firm-secret-row", key: "{row.provider}-{row.kind}-{row.version}",
                                             td { "{row.provider}" }
                                             td { "{row.kind}" }
                                             td { "{row.status}" }
@@ -699,7 +700,13 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                                                         "aria-label": "Revoke {row.kind}",
                                                         input { r#type: "hidden", name: "_csrf", value: "{fields.csrf_token}" }
                                                         input { r#type: "hidden", name: "kind", value: "{row.kind}" }
-                                                        button { class: "nav-btn nav-btn--secondary", r#type: "submit", "Revoke" }
+                                                        button { class: "nav-btn nav-btn--secondary", r#type: "submit",
+                                                            if row.kind == "twilio_auth_token" {
+                                                                "Revoke all Twilio tokens"
+                                                            } else {
+                                                                "Revoke"
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -710,6 +717,9 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                         }
                     }
                     if fields.can_manage_secrets {
+                        p { class: "page-subtitle",
+                            "Saving a Twilio token keeps earlier versions active. Revoke all Twilio tokens disables every active Twilio token for this Firm."
+                        }
                         FormCard {
                             title: "Add or replace a secret".to_string(),
                             action: format!("/app/admin/firms/{}/secrets", view.id),
@@ -1034,6 +1044,36 @@ mod tests {
             dri_view.contains(r#"action="/app/admin/firms/firm-1/secrets""#),
             "{dri_view}"
         );
+    }
+
+    #[test]
+    fn multiple_twilio_versions_name_the_kind_wide_revocation() {
+        let secrets = [1, 2]
+            .into_iter()
+            .map(|version| SecretMetadataRow {
+                provider: "twilio".into(),
+                kind: "twilio_auth_token".into(),
+                status: "active".into(),
+                version,
+                updated_at: "2026-11-01T00:00:00Z".into(),
+            })
+            .collect();
+        let html = render(Some(FirmFields {
+            name: "Managed Practice".into(),
+            status: "active".into(),
+            entity_name: "Managed Entity".into(),
+            can_view_secrets: true,
+            can_manage_secrets: true,
+            secrets,
+            ..Default::default()
+        }));
+        assert_eq!(html.matches("firm-secret-row").count(), 2, "{html}");
+        assert_eq!(
+            html.matches(">Revoke all Twilio tokens</button>").count(),
+            2,
+            "{html}"
+        );
+        assert!(html.contains(">1<") && html.contains(">2<"), "{html}");
     }
 
     #[test]

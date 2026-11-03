@@ -484,9 +484,23 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   denied; and a path deeper than one segment past the collection
     //   denied to Lawyer.
     // 645 + 7 = 652.
+    // + 6 for the matter-stage doors (GET /app/api/projects/{id}/stages and
+    //   POST .../stages/set): Lawyer admitted on both doors, Admin (bypass) on the
+    //   set door; Clerk, Client, and anonymous denied at the boundary; and the
+    //   method/path-shape boundary — POST/DELETE on the read, GET on the set, a
+    //   deeper segment, and an extra path element denied even to Lawyer.
+    // 652 + 6 = 658.
+
+    // + 4 for historical message import admission, denied tiers, and exact routes.
+    // + 3 for Message attachment downloads: Lawyer admission, denied tiers, exact route.
+    // 658 + 4 + 3 = 665.
+    // + 2 for call-queue and Brand-report role admission.
+    // 665 + 2 = 667.
+    // + 3 for mapped Fi history: Lawyer admission, denied tiers, and exact shape.
+    // 667 + 3 = 670.
     assert_eq!(
         test_names.len(),
-        652,
+        670,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

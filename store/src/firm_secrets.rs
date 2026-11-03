@@ -30,6 +30,7 @@ pub enum IntegrationProvider {
     /// Court and program websites with authenticated member portals. The
     /// docket scraper resolves its session credentials through this provider.
     CourtPortal,
+    Twilio,
 }
 
 impl IntegrationProvider {
@@ -43,6 +44,7 @@ impl IntegrationProvider {
             Self::GitHub => "github",
             Self::Forgejo => "forgejo",
             Self::CourtPortal => "court_portal",
+            Self::Twilio => "twilio",
         }
     }
 }
@@ -51,7 +53,7 @@ impl IntegrationProvider {
 /// view builds its "create a secret" choices from this rather than a
 /// hand-kept second list, so a new kind cannot be added to the enum without
 /// also appearing there.
-pub const ALL_KINDS: [IntegrationSecretKind; 11] = [
+pub const ALL_KINDS: [IntegrationSecretKind; 12] = [
     IntegrationSecretKind::MercuryReadToken,
     IntegrationSecretKind::XeroTenantId,
     IntegrationSecretKind::XeroWebhookKey,
@@ -63,6 +65,7 @@ pub const ALL_KINDS: [IntegrationSecretKind; 11] = [
     IntegrationSecretKind::GitHubAppPrivateKey,
     IntegrationSecretKind::ForgejoAccessToken,
     IntegrationSecretKind::PortalLogin,
+    IntegrationSecretKind::TwilioAuthToken,
 ];
 
 /// Typed Firm API credentials and provider webhook verification keys.
@@ -83,6 +86,10 @@ pub enum IntegrationSecretKind {
     /// A username or password for an external court or program portal,
     /// stored for the docket scraper's Chromium sessions.
     PortalLogin,
+    /// The auth token that signs webhooks for one of the Firm's Twilio
+    /// receiving numbers. Each registered number resolves through its own
+    /// version, not through a Firm-wide current one.
+    TwilioAuthToken,
 }
 
 impl IntegrationSecretKind {
@@ -100,6 +107,7 @@ impl IntegrationSecretKind {
             Self::GitHubAppPrivateKey => "github_app_private_key",
             Self::ForgejoAccessToken => "forgejo_access_token",
             Self::PortalLogin => "portal_login",
+            Self::TwilioAuthToken => "twilio_auth_token",
         }
     }
 
@@ -117,6 +125,7 @@ impl IntegrationSecretKind {
             Self::GitHubAppPrivateKey => IntegrationProvider::GitHub,
             Self::ForgejoAccessToken => IntegrationProvider::Forgejo,
             Self::PortalLogin => IntegrationProvider::CourtPortal,
+            Self::TwilioAuthToken => IntegrationProvider::Twilio,
         }
     }
 }
@@ -137,6 +146,7 @@ pub struct SecretMetadata {
 }
 
 /// Inputs for storing one Firm/provider credential version.
+#[derive(Clone, Copy)]
 pub struct SecretPutRequest<'a> {
     pub actor_role: Role,
     pub actor_person_id: Option<Uuid>,
@@ -206,6 +216,8 @@ pub enum SecretStoreError {
     InvalidValue,
     #[error("writing a firm secret returned no usable row")]
     WriteReturnedNothing,
+    #[error("the referenced credential {0} is missing, revoked, or not the resolving Firm's")]
+    MissingRef(Uuid),
 }
 
 #[derive(SurrealValue)]
@@ -248,6 +260,7 @@ pub fn parse_provider(value: &str) -> Option<IntegrationProvider> {
         "github" => Some(IntegrationProvider::GitHub),
         "forgejo" => Some(IntegrationProvider::Forgejo),
         "court_portal" => Some(IntegrationProvider::CourtPortal),
+        "twilio" => Some(IntegrationProvider::Twilio),
         _ => None,
     }
 }
@@ -268,6 +281,7 @@ pub fn parse_kind(value: &str) -> Option<IntegrationSecretKind> {
         "xero_webhook_key" => Some(IntegrationSecretKind::XeroWebhookKey),
         "forgejo_access_token" => Some(IntegrationSecretKind::ForgejoAccessToken),
         "portal_login" => Some(IntegrationSecretKind::PortalLogin),
+        "twilio_auth_token" => Some(IntegrationSecretKind::TwilioAuthToken),
         _ => None,
     }
 }
@@ -290,6 +304,34 @@ fn not_configured(provider: IntegrationProvider, kind: IntegrationSecretKind) ->
     SecretStoreError::NotConfigured {
         provider: provider.as_str(),
         kind: kind.as_str(),
+    }
+}
+
+/// A fresh store has no `firm_integration_secret` table yet: SurrealDB
+/// refuses the query with a table-not-found error instead of returning an
+/// empty result (observed live as `NotFound: The table
+/// 'firm_integration_secret' does not exist`). `surrealdb::Error` carries
+/// no structured variant for that condition, so the error's rendered text
+/// is the only signal. The match lives here — the one module that owns the
+/// table — so every resolver treats a fresh database as "nothing
+/// configured" while every other query fault (permissions, serialization,
+/// connection) still surfaces as a hard `Db` error.
+fn is_missing_table(error: &surrealdb::Error) -> bool {
+    let text = error.to_string().to_lowercase();
+    text.contains("table") && (text.contains("does not exist") || text.contains("doesn't exist"))
+}
+
+/// Project a store query fault into a `SecretStoreError`, mapping only the
+/// missing-table case to `NotConfigured`.
+fn classify_query_error(
+    error: surrealdb::Error,
+    provider: IntegrationProvider,
+    kind: IntegrationSecretKind,
+) -> SecretStoreError {
+    if is_missing_table(&error) {
+        not_configured(provider, kind)
+    } else {
+        SecretStoreError::Db(error)
     }
 }
 
@@ -323,7 +365,9 @@ async fn authorize(
     }
 }
 
-/// Create or replace the current version.
+/// Create a credential version. Twilio tokens remain independently active
+/// because receiving numbers pin their record ids; other kinds replace the
+/// current version.
 ///
 /// Two orderings protect the last valid credential. Encryption and the KMS
 /// wrap complete before any write, so a KMS fault leaves the current version
@@ -337,6 +381,39 @@ pub async fn put(
     request: SecretPutRequest<'_>,
     kms: &dyn RuntimeKms,
 ) -> Result<SecretMetadata, SecretStoreError> {
+    write_secret(surreal, request, kms).await?;
+    metadata_for_firm(
+        surreal,
+        request.actor_role,
+        request.actor_person_id,
+        request.firm_id,
+        request.provider,
+        request.kind,
+    )
+    .await
+}
+
+/// Store one independently active Twilio token and return the exact record
+/// id a receiving number pins. Uses the same Firm management authorization
+/// and encryption as [`put`].
+pub async fn put_twilio_auth_token(
+    surreal: &SurrealDb,
+    request: SecretPutRequest<'_>,
+    kms: &dyn RuntimeKms,
+) -> Result<Uuid, SecretStoreError> {
+    if request.provider != IntegrationProvider::Twilio
+        || request.kind != IntegrationSecretKind::TwilioAuthToken
+    {
+        return Err(SecretStoreError::InvalidKind);
+    }
+    write_secret(surreal, request, kms).await
+}
+
+async fn write_secret(
+    surreal: &SurrealDb,
+    request: SecretPutRequest<'_>,
+    kms: &dyn RuntimeKms,
+) -> Result<Uuid, SecretStoreError> {
     let SecretPutRequest {
         actor_role,
         actor_person_id,
@@ -386,17 +463,19 @@ pub async fn put(
         .await
         .map_err(SecretStoreError::Kms)?;
     let now = chrono::Utc::now().to_rfc3339();
+    let secret_ref = Uuid::now_v7();
     surreal
         .query(format!(
             "BEGIN; \
              UPDATE {TABLE} SET status = 'revoked', updated_at = $now WHERE \
-             firm_id = $firm_id AND provider = $provider AND kind = $kind AND status = 'active'; \
+             firm_id = $firm_id AND provider = $provider AND kind = $kind AND status = 'active' AND $replace_current; \
              CREATE $id SET firm_id = $firm_id, provider = $provider, kind = $kind, version = $version, \
              ciphertext = $ciphertext, wrapped_dek = $wrapped_dek, kms_key_version = $kms_key_version, \
              kms_context = $kms_context, status = 'active', actor_id = $actor_id, created_at = $now, updated_at = $now; \
              COMMIT;"
         ))
-        .bind(("id", record_id(TABLE, Uuid::now_v7())))
+        .bind(("id", record_id(TABLE, secret_ref)))
+        .bind(("replace_current", kind != IntegrationSecretKind::TwilioAuthToken))
         .bind(("firm_id", record_id(FIRM_TABLE, firm_id)))
         .bind(("provider", provider.as_str().to_string()))
         .bind(("kind", kind.as_str().to_string()))
@@ -409,21 +488,12 @@ pub async fn put(
         .bind(("now", now.clone()))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
-    let metadata = metadata_for_firm(
-        surreal,
-        actor_role,
-        actor_person_id,
-        firm_id,
-        provider,
-        kind,
-    )
-    .await?;
     crate::postgres_mirror::after_write(
         surreal,
         crate::postgres_mirror::MirrorKey::FirmIntegrationSecrets(firm_id),
     )
     .await;
-    Ok(metadata)
+    Ok(secret_ref)
 }
 
 /// Read only metadata for the current version.
@@ -495,7 +565,8 @@ pub async fn list_metadata_for_firm(
     rows.into_iter().map(metadata).collect()
 }
 
-/// Revoke a current credential without calling the provider. Provider-side
+/// Revoke every active version of a kind without calling the provider.
+/// For one pinned Twilio token, use [`revoke_twilio_auth_token_by_ref`]. Provider-side
 /// revocation remains an operator action and is stated in the settings UI.
 pub async fn revoke(
     surreal: &SurrealDb,
@@ -529,6 +600,46 @@ pub async fn revoke(
     let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
     if ids.is_empty() {
         return Err(not_configured(provider, kind));
+    }
+    crate::postgres_mirror::after_write(
+        surreal,
+        crate::postgres_mirror::MirrorKey::FirmIntegrationSecrets(firm_id),
+    )
+    .await;
+    Ok(())
+}
+
+/// Revoke one Twilio token within the managing Firm, leaving other receiving
+/// numbers' pinned tokens active. Provider-side revocation is separate.
+pub async fn revoke_twilio_auth_token_by_ref(
+    surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    firm_id: Uuid,
+    secret_ref: Uuid,
+) -> Result<(), SecretStoreError> {
+    authorize(
+        surreal,
+        actor_role,
+        actor_person_id,
+        firm_id,
+        FirmCapability::ManageIntegrationSecrets,
+    )
+    .await?;
+    let mut response = surreal
+        .query(format!(
+            "UPDATE {TABLE} SET status = 'revoked', updated_at = $now \
+             WHERE id = $id AND firm_id = $firm AND provider = 'twilio' \
+             AND kind = 'twilio_auth_token' AND status = 'active' RETURN VALUE id"
+        ))
+        .bind(("id", record_id(TABLE, secret_ref)))
+        .bind(("firm", record_id(FIRM_TABLE, firm_id)))
+        .bind(("now", chrono::Utc::now().to_rfc3339()))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
+    if ids.is_empty() {
+        return Err(SecretStoreError::MissingRef(secret_ref));
     }
     crate::postgres_mirror::after_write(
         surreal,
@@ -575,7 +686,8 @@ pub async fn resolve_firm_credential(
         .bind(("provider", provider.as_str().to_string()))
         .bind(("kind", kind.as_str().to_string()))
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(|error| classify_query_error(error, provider, kind))?;
     let rows: Vec<SecretRow> = response.take(0)?;
     let row = rows
         .into_iter()
@@ -612,11 +724,162 @@ pub async fn resolve_firm_credential(
         .map_err(|_| SecretStoreError::InvalidValue)
 }
 
+/// Resolve the exact credential version a registry row pins, addressed by
+/// the secret record's UUID, as `(token, owning Firm)`. The webhook
+/// resolution spine passes each registered number's `auth_token_secret_ref`
+/// and checks the owning Firm against the Brand's. The row must be the
+/// named record, active, and a Twilio auth token — a reference to any other
+/// credential kind is [`SecretStoreError::InvalidKind`]. Unlike
+/// [`resolve_firm_credential`], which takes the Firm's current version,
+/// this pins the version the registry registered, so per-number tokens
+/// rotate independently.
+pub async fn resolve_twilio_auth_token_by_ref(
+    surreal: &SurrealDb,
+    secret_ref: Uuid,
+    kms: &dyn RuntimeKms,
+) -> Result<(ResolvedCredential, Uuid), SecretStoreError> {
+    let mut response = surreal
+        .query(format!(
+            "SELECT firm_id, provider, kind, version, ciphertext, wrapped_dek, kms_key_version, \
+             kms_context, status, actor_id, created_at, updated_at FROM {TABLE} WHERE id = $id"
+        ))
+        .bind(("id", record_id(TABLE, secret_ref)))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    let rows: Vec<SecretRow> = response.take(0)?;
+    let row = rows
+        .into_iter()
+        .next()
+        .ok_or(SecretStoreError::MissingRef(secret_ref))?;
+    let provider = parse_provider(&row.provider).ok_or(SecretStoreError::InvalidKind)?;
+    let kind = parse_kind(&row.kind).ok_or(SecretStoreError::InvalidKind)?;
+    validate_kind(provider, kind)?;
+    if kind != IntegrationSecretKind::TwilioAuthToken {
+        return Err(SecretStoreError::InvalidKind);
+    }
+    let firm_id = record_uuid(&row.firm_id).ok_or(SecretStoreError::MissingRef(secret_ref))?;
+    if row.status != "active" {
+        return Err(SecretStoreError::MissingRef(secret_ref));
+    }
+    let context = KmsContext::new(firm_id, provider.as_str(), kind.as_str());
+    if row.kms_context != context.aad() {
+        return Err(SecretStoreError::Kms(KmsError::ContextMismatch));
+    }
+    let wrapped = WrappedDataKey {
+        ciphertext: BASE64
+            .decode(row.wrapped_dek)
+            .map_err(|_| SecretStoreError::Kms(KmsError::InvalidResponse))?,
+        key_version: row.kms_key_version,
+    };
+    let data_key = kms
+        .unwrap_data_key(&wrapped, &context)
+        .await
+        .map_err(SecretStoreError::Kms)?;
+    let ciphertext = BASE64
+        .decode(row.ciphertext)
+        .map_err(|_| SecretStoreError::Kms(KmsError::InvalidResponse))?;
+    let plaintext = cloud::open(&ciphertext, &data_key, &context).map_err(SecretStoreError::Kms)?;
+    let credential = String::from_utf8(plaintext)
+        .map(|value| ResolvedCredential {
+            value: value.into_bytes(),
+        })
+        .map_err(|_| SecretStoreError::InvalidValue)?;
+    Ok((credential, firm_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{zeroize, IntegrationProvider, IntegrationSecretKind, ResolvedCredential};
 
     const SECRET: &[u8] = b"la-superior-password";
+
+    /// The live shape the engine raises for a query against a table that
+    /// does not exist yet (art_UoDN4Gp6, fresh local SurrealDB 3.2.3).
+    fn missing_table_error() -> surrealdb::Error {
+        surrealdb::Error::query(
+            "The table 'firm_integration_secret' does not exist".to_string(),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_missing_table_error_is_classified_as_not_configured() {
+        let error = super::classify_query_error(
+            missing_table_error(),
+            IntegrationProvider::CourtPortal,
+            IntegrationSecretKind::PortalLogin,
+        );
+        assert!(matches!(
+            error,
+            super::SecretStoreError::NotConfigured {
+                provider: "court_portal",
+                kind: "portal_login"
+            }
+        ));
+    }
+
+    #[test]
+    fn any_other_query_fault_stays_a_hard_db_error() {
+        let faults = [
+            surrealdb::Error::query("Query timed out".to_string(), None),
+            surrealdb::Error::query(
+                "The table 'firm_integration_secret' was locked".to_string(),
+                None,
+            ),
+        ];
+        for fault in faults {
+            let error = super::classify_query_error(
+                fault,
+                IntegrationProvider::CourtPortal,
+                IntegrationSecretKind::PortalLogin,
+            );
+            assert!(
+                matches!(error, super::SecretStoreError::Db(_)),
+                "only the missing-table case may map to NotConfigured"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fresh_store_without_the_secret_table_resolves_to_not_configured() {
+        // The behavioral end-to-end pin lives in `cli`'s scraper
+        // credentials tests against the mem store; this one pins the
+        // classification at the store seam.
+        assert!(super::is_missing_table(&missing_table_error()));
+        assert!(!super::is_missing_table(&surrealdb::Error::query(
+            "Not authorized".to_string(),
+            None
+        )));
+    }
+
+    #[tokio::test]
+    async fn resolving_without_a_credential_table_is_not_configured() {
+        let db = crate::test_support::mem_surreal().await;
+        db.query("REMOVE TABLE firm_integration_secret")
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let kms = cloud::FakeKms::new("synthetic-missing-credential-table");
+        let result = super::resolve_firm_credential(
+            &db,
+            uuid::Uuid::now_v7(),
+            IntegrationProvider::CourtPortal,
+            IntegrationSecretKind::PortalLogin,
+            &kms,
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Err(super::SecretStoreError::NotConfigured {
+                    provider: "court_portal",
+                    kind: "portal_login",
+                })
+            ),
+            "a fresh store cannot turn absence of credentials into a storage outage"
+        );
+    }
 
     #[test]
     fn zeroize_helper_overwrites_every_byte() {
@@ -657,7 +920,7 @@ mod tests {
 
     #[test]
     fn all_kinds_includes_the_court_portal_pair() {
-        assert_eq!(super::ALL_KINDS.len(), 11);
+        assert_eq!(super::ALL_KINDS.len(), 12);
         assert_eq!(IntegrationSecretKind::PortalLogin.as_str(), "portal_login");
         assert_eq!(
             IntegrationSecretKind::PortalLogin.provider(),

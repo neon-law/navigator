@@ -619,6 +619,23 @@ erDiagram
         number position
         string sha256
     }
+    inbox_triage {
+        string id
+        string disposition
+        uuid firm_id
+        datetime inserted_at
+        boolean labeled_example
+        uuid message_id
+        string model_id
+        string privilege
+        number privilege_confidence
+        number project_confidence
+        string prompt_version
+        string rationale
+        string raw_output
+        uuid suggested_project_id
+        datetime updated_at
+    }
     iolta_account {
         string id
         number balance_cents
@@ -768,6 +785,7 @@ erDiagram
         string provider_message_id
         string provider_ref
         string purpose
+        string raw_storage_key
         string route
         datetime updated_at
         string visibility
@@ -1451,6 +1469,9 @@ erDiagram
     asset }o--|| inbox_message_asset : asset_id
     firm }o--|| inbox_message_asset : firm_id
     message }o--|| inbox_message_asset : message_id
+    firm }o--|| inbox_triage : firm_id
+    message }o--|| inbox_triage : message_id
+    project }o--|| inbox_triage : suggested_project_id
     jurisdiction }o--|| iolta_account : jurisdiction_id
     project }o--|| iolta_allocation : project_id
     jurisdiction }o--|| iolta_withdrawal : jurisdiction_id

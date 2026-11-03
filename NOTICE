@@ -27,6 +27,16 @@ permission to use those marks. Apache-2.0 section 6 states that limit for the
 Apache option. Configure a fork's branding through
 views::brand_bundle rather than presenting it as Neon Law.
 
+[Draft — pending review by counsel.] Lex Tecnica and IEP Defenders material
+belongs to Lex Tecnica, Ltd.: the page copy under neon/locales/en/lex-tecnica/
+and neon/locales/en/iep-defenders/, the logos under
+server/public/brand/lex-tecnica/ and server/public/brand/iep-defenders/, and
+the names, marks, contact details, disclaimers, and brand presentation for both
+brands in views/src/brand.rs and views/src/brand_presentation.rs. The project
+license does not cover that material. Neither license grants any right to copy
+or use it, or the names LEX TECNICA or IEP DEFENDERS. Permission must come from
+Lex Tecnica, Ltd. in writing.
+
 Names and logos of other companies, including the service providers this project
 integrates with and the practice names shown on lawyershook.com, belong to their
 owners. THIRD-PARTY-NOTICES.txt lists them. This project grants no right to use any of

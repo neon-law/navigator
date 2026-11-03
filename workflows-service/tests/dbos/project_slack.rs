@@ -262,10 +262,13 @@ async fn the_ingress_posts_one_relayed_event_once() {
         lane.surreal.clone(),
         lane.postgres.clone(),
     );
-    let router = workflows_service::health::router_with_dbos_ingress(WorkerIngress {
-        project_slack: Some(ingress),
-        ..WorkerIngress::default()
-    });
+    let router = workflows_service::health::router_with_dbos_ingress(
+        WorkerIngress {
+            project_slack: Some(ingress),
+            ..WorkerIngress::default()
+        },
+        None,
+    );
     let id = dbos_project_slack::main_push_workflow_id(matter.project, &push("abc1234", 1));
     let payload = serde_json::json!({
         "workflow_id": id,
@@ -403,10 +406,13 @@ async fn the_ingress_never_rebinds_a_claimed_event_id() {
         lane.surreal.clone(),
         lane.postgres.clone(),
     );
-    let router = workflows_service::health::router_with_dbos_ingress(WorkerIngress {
-        project_slack: Some(ingress),
-        ..WorkerIngress::default()
-    });
+    let router = workflows_service::health::router_with_dbos_ingress(
+        WorkerIngress {
+            project_slack: Some(ingress),
+            ..WorkerIngress::default()
+        },
+        None,
+    );
     let id = dbos_project_slack::main_push_workflow_id(matter.project, &push("abc1234", 1));
     let deliver = |body: serde_json::Value| {
         Request::builder()

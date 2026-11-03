@@ -87,7 +87,7 @@ pub struct FormMeta {
     /// [`pinned_sha256`](Self::pinned_sha256).
     pub sha256_pin: &'static str,
     /// The filing fee the office charges for this form, when it publishes
-    /// a flat one. The court-form registry (`store/seeds/Court.yaml`) is
+    /// a flat one. The court-form registry (`store/src/court_seeds.rs`) is
     /// the curated source of fee data; the cross-crate guard test pins a
     /// vendored form's fee to its registry row.
     pub filing_fee: Option<FilingFee>,
@@ -217,7 +217,7 @@ const BUNDLED: &[FormMeta] = &[
     },
     // First-wave court forms: statewide Judicial Council blanks (California)
     // and Nevada Supreme Court self-help blanks, registered under their
-    // filing courts in `store/seeds/Court.yaml`.
+    // filing courts in `store/src/court_seeds.rs`.
     FormMeta {
         code: "ca__name_change_petition",
         jurisdiction: "CA",

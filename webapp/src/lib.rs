@@ -87,6 +87,7 @@ pub mod harvard_outline;
 pub mod home;
 pub mod html_escape;
 pub mod inbox;
+pub mod inbox_triage;
 pub mod intake_review;
 pub mod keyboard;
 pub mod lawyer_dashboard;
@@ -105,6 +106,9 @@ pub mod litigation_page;
 pub mod marketing_page;
 pub mod matter_directory;
 pub mod matter_surface;
+// The Nautilus subscription shell. `nautilus-mobile/` launches it natively;
+// it lives here so the workspace suite renders and tests it.
+pub mod mobile;
 pub mod notation_demo;
 pub mod notation_document_review;
 pub mod notation_draft;
@@ -128,6 +132,7 @@ pub mod project_new;
 pub mod project_notation;
 pub mod project_participation;
 pub mod project_resources;
+pub mod project_stages;
 pub mod project_tasks;
 pub mod project_timeline;
 pub mod public_chrome;
@@ -190,3 +195,5 @@ pub fn App() -> Element {
         main { id: "dioxus-demo" }
     }
 }
+
+pub mod communication_dashboard;

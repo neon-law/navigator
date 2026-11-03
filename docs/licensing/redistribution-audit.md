@@ -58,6 +58,7 @@ private instruments and clearance references outside this repository.
 | Notice | Notices delivered inside the extension package and each image | Release |
 | Asset | Ferris illustration and Plausible script provenance | Owner |
 | Asset | Brand logos, marks, and illustrations B1 through B29 | Owner/counsel |
+| Rights | Brand material of Lex Tecnica, Ltd. and the draft NOTICE exclusion | Owner/counsel |
 | Asset | Workshop screenshot B32 | Owner/counsel |
 | Asset | Embedded assets in the synthetic seed PDF B33 | Owner |
 | Asset | GORP Serif: proprietary; no binary tracked, operator licence required | Operator/counsel |
@@ -1667,6 +1668,8 @@ assets retain their upstream notice review separately; the synthetic PDF needs e
 | synthetic-initial-case-assessment.pdf | B33 | Unverified | R; U | Owner/release/counsel |
 | logo.png | B34 | Unverified | R; U; F | Owner/release/counsel |
 | logo.svg | B35 | Unverified | R; U; F | Owner/release/counsel |
+| logo.svg | B36 | Lex Tecnica, Ltd. | U | Owner/counsel |
+| logo.svg | B37 | Lex Tecnica, Ltd. | U | Owner/counsel |
 
 B1: [logo-neon-law.png](../../pdf/assets/brand/logo-neon-law.png)
 
@@ -1738,6 +1741,10 @@ B34: [logo.png](../../server/public/brand/guieb-shook/logo.png) — rendered fro
 
 B35: [logo.svg](../../server/public/brand/guieb-shook/logo.svg) — glyph outlines drawn from the tracked Tinos Regular
 WOFF2 (E32), so its font notice follows Tinos web Regular/Bold.
+
+B36: [logo.svg](../../server/public/brand/lex-tecnica/logo.svg) — a brand mark of Lex Tecnica, Ltd.
+
+B37: [logo.svg](../../server/public/brand/iep-defenders/logo.svg) — a brand mark of Lex Tecnica, Ltd.
 
 ## Detailed matrix evidence
 

@@ -508,6 +508,88 @@ mod tests {
         assert_eq!(entity, None);
     }
 
+    fn lawyer_view(depth: u8) -> GraphPageView {
+        let (href_person, href_firm, href_entity) = href_templates(ViewerRole::Lawyer);
+        GraphPageView {
+            tokens_href: "/public/css/tokens/neon-law.css".to_string(),
+            firm_name: "Neon Law".to_string(),
+            heading: "Cruller v. Prine".to_string(),
+            back_text: "Back to the matter".to_string(),
+            back_href: "/app/projects/sample-litigation".to_string(),
+            endpoint: format!("/app/api/graph/project/42?depth={depth}"),
+            depth,
+            href_person,
+            href_firm,
+            href_entity,
+        }
+    }
+
+    #[test]
+    fn the_shell_mounts_the_island_with_the_gated_endpoint_and_templates() {
+        let html = dioxus_ssr::render_element(rsx! { GraphPageShell { view: lawyer_view(2) } });
+        assert!(html.contains("Graph: Cruller v. Prine"));
+        assert!(html.contains(r#"href="/app/projects/sample-litigation""#));
+        assert!(html.contains("Back to the matter"));
+        assert!(html.contains(r#"data-endpoint="/app/api/graph/project/42?depth=2""#));
+        // A lawyer may open Entity pages only; the admin-tier templates stay empty.
+        assert!(html.contains(r#"data-href-entity="/app/admin/entities/{id}/edit""#));
+        assert!(html.contains(r#"data-href-person="""#));
+        assert!(html.contains(r#"data-href-firm="""#));
+        assert!(
+            html.contains("Loading graph…"),
+            "the no-JavaScript status line"
+        );
+        assert!(
+            html.contains("graph-legend"),
+            "the shell carries the legend"
+        );
+        assert!(
+            html.contains("graph-depth"),
+            "below the ceiling the selector shows"
+        );
+    }
+
+    #[test]
+    fn the_depth_selector_marks_only_the_active_depth() {
+        let html = dioxus_ssr::render_element(rsx! { DepthSelector { depth: 1 } });
+        for candidate in 1..=MAX_GRAPH_DEPTH {
+            assert!(html.contains(&format!(r#"href="?depth={candidate}""#)));
+        }
+        assert_eq!(html.matches(r#"aria-current="true""#).count(), 1);
+        assert!(html.contains(
+            r#"class="nav-link graph-depth__option graph-depth__option--active" href="?depth=1""#
+        ));
+    }
+
+    #[test]
+    fn the_depth_selector_disappears_at_the_ceiling() {
+        let html = dioxus_ssr::render_element(rsx! { DepthSelector { depth: MAX_GRAPH_DEPTH } });
+        assert!(
+            !html.contains("graph-depth"),
+            "nothing to raise to at the cap: {html}"
+        );
+    }
+
+    #[test]
+    fn the_legend_names_every_vertex_kind() {
+        let html = dioxus_ssr::render_element(rsx! { GraphLegend {} });
+        for kind in ["person", "entity", "project", "firm"] {
+            assert!(html.contains(&format!("graph-legend__chip--{kind}")));
+        }
+        assert!(html.contains("Red edges are adverse"));
+    }
+
+    #[test]
+    fn the_not_found_body_does_not_disclose_the_record() {
+        #[component]
+        fn NotFound() -> Element {
+            not_found_body()
+        }
+        let html = dioxus_ssr::render_element(rsx! { NotFound {} });
+        assert!(html.contains("That record was not found."));
+        assert!(!html.contains("data-endpoint"));
+    }
+
     #[test]
     fn the_page_carries_the_island() {
         assert_eq!(GRAPH_VIEW_SCRIPT_HREF, "/public/js/graph-view.js");
@@ -523,5 +605,299 @@ mod tests {
             MAX_GRAPH_DEPTH,
             store::postgres_graph_views::MAX_GRAPH_DEPTH
         );
+    }
+
+    fn sample_view() -> GraphPageView {
+        GraphPageView {
+            tokens_href: "/public/css/tokens.css".to_string(),
+            firm_name: "Neon Law".to_string(),
+            heading: "Cruller v. Prine".to_string(),
+            back_text: "← Back to the matter".to_string(),
+            back_href: "/app/projects/sample-litigation".to_string(),
+            endpoint: "/app/api/graph/project/p1?depth=2".to_string(),
+            depth: 2,
+            href_person: None,
+            href_firm: None,
+            href_entity: Some("/app/admin/entities/{id}/edit".to_string()),
+        }
+    }
+
+    fn render_shell(view: GraphPageView) -> String {
+        let mut dom = VirtualDom::new_with_props(GraphPageShell, GraphPageShellProps { view });
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    fn render_selector(depth: u8) -> String {
+        let mut dom = VirtualDom::new_with_props(DepthSelector, DepthSelectorProps { depth });
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    #[test]
+    fn the_shell_mounts_the_island_with_the_gated_endpoint_and_templates_coverage() {
+        let html = render_shell(sample_view());
+        assert!(html.contains("Graph: Cruller v. Prine"), "{html}");
+        assert!(
+            html.contains(r#"data-endpoint="/app/api/graph/project/p1?depth=2""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"data-href-entity="/app/admin/entities/{id}/edit""#),
+            "{html}"
+        );
+        // A template the tier may not open is an empty attribute, never a URL.
+        assert!(html.contains(r#"data-href-person="""#), "{html}");
+        assert!(html.contains(r#"data-href-firm="""#), "{html}");
+        assert!(
+            html.contains(r#"href="/app/projects/sample-litigation""#),
+            "{html}"
+        );
+        assert!(html.contains("← Back to the matter"), "{html}");
+        assert!(html.contains("Loading graph…"), "{html}");
+        assert!(html.contains("graph-legend"), "{html}");
+        assert!(html.contains("graph-depth"), "{html}");
+    }
+
+    #[test]
+    fn the_depth_selector_marks_the_active_depth_and_offers_every_hop() {
+        let html = render_selector(2);
+        for candidate in 1..=MAX_GRAPH_DEPTH {
+            assert!(
+                html.contains(&format!(r#"href="?depth={candidate}""#)),
+                "{candidate}: {html}"
+            );
+        }
+        assert_eq!(html.matches(r#"aria-current="true""#).count(), 1, "{html}");
+        assert!(
+            html.contains(r#"graph-depth__option--active" href="?depth=2""#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn the_depth_selector_is_absent_at_the_ceiling() {
+        assert!(!render_selector(MAX_GRAPH_DEPTH).contains("graph-depth"));
+        let html = render_shell(GraphPageView {
+            depth: MAX_GRAPH_DEPTH,
+            ..sample_view()
+        });
+        assert!(!html.contains("Graph depth"), "{html}");
+    }
+
+    #[test]
+    fn the_legend_names_every_vertex_kind_coverage() {
+        let mut dom = VirtualDom::new(GraphLegend);
+        dom.rebuild_in_place();
+        let html = dioxus_ssr::render(&dom);
+        for kind in ["person", "entity", "project", "firm"] {
+            assert!(
+                html.contains(&format!("graph-legend__chip--{kind}")),
+                "{kind}: {html}"
+            );
+        }
+        assert!(html.contains("Red edges are adverse"), "{html}");
+    }
+
+    #[test]
+    fn the_not_found_body_discloses_nothing() {
+        let html = dioxus_ssr::render_element(not_found_body());
+        assert!(html.contains("That record was not found."), "{html}");
+        assert!(!html.contains("data-endpoint"), "{html}");
+    }
+
+    #[cfg(feature = "server")]
+    mod loaders {
+        use super::super::*;
+        use crate::inbox::server_fn_test_support::{call, request_parts, runtime, Viewer};
+
+        fn load<F: std::future::Future<Output = Result<GraphPageView, ServerFnError>>>(
+            rt: &tokio::runtime::Runtime,
+            surreal: &store::surreal::SurrealDb,
+            route: &str,
+            uri: &str,
+            viewer: &Viewer,
+            loader: impl FnOnce() -> F,
+        ) -> (Result<GraphPageView, ServerFnError>, axum::http::StatusCode) {
+            let parts = request_parts(rt, route, uri, viewer);
+            call(
+                rt,
+                parts,
+                |dom| dom.provide_root_context(surreal.clone()),
+                loader,
+            )
+        }
+
+        #[test]
+        fn the_not_found_view_has_an_empty_heading_and_no_templates() {
+            let view = not_found_view();
+            assert!(view.heading.is_empty());
+            assert!(view.endpoint.is_empty());
+            assert_eq!(view.depth, DEFAULT_DEPTH);
+            assert_eq!(
+                (view.href_person, view.href_firm, view.href_entity),
+                (None, None, None)
+            );
+        }
+
+        #[test]
+        fn a_client_is_refused_by_every_graph_page() {
+            let rt = runtime();
+            let surreal = rt.block_on(store::test_support::mem_surreal());
+            let client = Viewer::new(ViewerRole::Client, None);
+            let id = uuid::Uuid::now_v7();
+            let (result, _) = load(
+                &rt,
+                &surreal,
+                "/app/projects/{project_code}/graph",
+                "/app/projects/anything/graph",
+                &client,
+                get_project_graph_page,
+            );
+            assert!(result.is_err());
+            let (result, _) = load(
+                &rt,
+                &surreal,
+                "/app/people/{id}/graph",
+                &format!("/app/people/{id}/graph"),
+                &client,
+                get_lawyer_graph_page,
+            );
+            assert!(result.is_err());
+            let (result, _) = load(
+                &rt,
+                &surreal,
+                "/app/admin/firms/{id}/graph",
+                &format!("/app/admin/firms/{id}/graph"),
+                &client,
+                get_firm_graph_page,
+            );
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn the_lawyer_and_firm_pages_bake_the_depth_into_the_endpoint() {
+            let rt = runtime();
+            let surreal = rt.block_on(store::test_support::mem_surreal());
+            let lawyer = Viewer::new(ViewerRole::Lawyer, Some(uuid::Uuid::now_v7()));
+            let id = uuid::Uuid::now_v7();
+
+            let (view, status) = load(
+                &rt,
+                &surreal,
+                "/app/people/{id}/graph",
+                &format!("/app/people/{id}/graph?depth=1"),
+                &lawyer,
+                get_lawyer_graph_page,
+            );
+            let view = view.unwrap();
+            assert_eq!(status, axum::http::StatusCode::OK);
+            assert_eq!(view.depth, 1);
+            assert_eq!(view.endpoint, format!("/app/api/graph/lawyer/{id}?depth=1"));
+            assert_eq!(view.back_href, "/app/admin/people");
+            assert_eq!(view.href_person, None, "a Lawyer opens no person record");
+            assert!(view.href_entity.is_some());
+
+            let (view, _) = load(
+                &rt,
+                &surreal,
+                "/app/admin/firms/{id}/graph",
+                &format!("/app/admin/firms/{id}/graph?depth=1"),
+                &Viewer::new(ViewerRole::Owner, None),
+                get_firm_graph_page,
+            );
+            let view = view.unwrap();
+            assert_eq!(view.depth, MAX_GRAPH_DEPTH, "the firm read is fixed-depth");
+            assert_eq!(view.endpoint, format!("/app/api/graph/firm/{id}"));
+            assert_eq!(view.heading, "Firm graph");
+            assert!(view.href_person.is_some() && view.href_firm.is_some());
+        }
+
+        #[test]
+        fn a_malformed_seed_id_is_a_404_not_found_body() {
+            let rt = runtime();
+            let surreal = rt.block_on(store::test_support::mem_surreal());
+            let lawyer = Viewer::new(ViewerRole::Lawyer, None);
+            for (route, uri, page) in [
+                ("/app/people/{id}/graph", "/app/people/nope/graph", 0),
+                (
+                    "/app/admin/firms/{id}/graph",
+                    "/app/admin/firms/nope/graph",
+                    1,
+                ),
+            ] {
+                let (view, status) = if page == 0 {
+                    load(&rt, &surreal, route, uri, &lawyer, get_lawyer_graph_page)
+                } else {
+                    load(&rt, &surreal, route, uri, &lawyer, get_firm_graph_page)
+                };
+                assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{uri}");
+                assert!(view.unwrap().heading.is_empty(), "{uri}");
+            }
+        }
+
+        #[test]
+        fn the_project_page_resolves_the_code_and_gates_on_the_matter() {
+            let rt = runtime();
+            let surreal = rt.block_on(store::test_support::mem_surreal());
+            let project = rt.block_on(store::test_support::seed_project(&surreal, "Graph Matter"));
+            let route = "/app/projects/{project_code}/graph";
+
+            // An unknown code is the non-disclosing 404.
+            let (view, status) = load(
+                &rt,
+                &surreal,
+                route,
+                "/app/projects/no-such-matter/graph",
+                &Viewer::new(ViewerRole::Owner, None),
+                get_project_graph_page,
+            );
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+            assert!(view.unwrap().heading.is_empty());
+
+            // A Lawyer with no participation on the matter reads the same 404.
+            let uri = format!("/app/projects/{}/graph?depth=3", project.code);
+            let (view, status) = load(
+                &rt,
+                &surreal,
+                route,
+                &uri,
+                &Viewer::new(ViewerRole::Lawyer, Some(uuid::Uuid::now_v7())),
+                get_project_graph_page,
+            );
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+            assert!(view.unwrap().heading.is_empty());
+
+            // The matter's lawyer DRI sees it.
+            let dri = rt.block_on(async {
+                let dri = store::test_support::dri_person(&surreal).await;
+                store::projects::designate_dri_in_surreal(
+                    &surreal,
+                    project.id,
+                    dri,
+                    store::projects::DriSide::Lawyer,
+                )
+                .await
+                .unwrap();
+                dri
+            });
+            let (view, status) = load(
+                &rt,
+                &surreal,
+                route,
+                &uri,
+                &Viewer::new(ViewerRole::Lawyer, Some(dri)),
+                get_project_graph_page,
+            );
+            assert_eq!(status, axum::http::StatusCode::OK);
+            let view = view.unwrap();
+            assert_eq!(view.heading, "Graph Matter");
+            assert_eq!(view.depth, 3);
+            assert_eq!(
+                view.endpoint,
+                format!("/app/api/graph/project/{}?depth=3", project.id)
+            );
+            assert_eq!(view.back_href, format!("/app/projects/{}", project.code));
+        }
     }
 }

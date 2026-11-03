@@ -25,6 +25,20 @@ async fn main() -> Result<()> {
     let _ = dotenvy::from_path(".devx/env");
     let _telemetry = telemetry::init("navigator-notation-reset-trigger");
 
+    // The DBOS engine's standalone schedule owns this job when its switch
+    // is on: there is no worker ingress route to submit to, so the CronJob
+    // exits without submitting and the engine fires the workflow itself.
+    // With the switch off this binary drives the Restate submit.
+    if workflows::trigger::dbos_owns_schedule("NAVIGATOR_DBOS_NOTATION_RESET_ENABLED", |name| {
+        std::env::var(name).ok()
+    })
+    .context("read NAVIGATOR_DBOS_NOTATION_RESET_ENABLED")?
+    {
+        tracing::info!("DBOS engine owns the NotationReset schedule; skipping the Restate submit");
+        println!("DBOS engine owns NotationReset; Restate submit skipped");
+        return Ok(());
+    }
+
     let ingress = std::env::var("RESTATE_INGRESS_URL")
         .context("RESTATE_INGRESS_URL must be set (the Restate ingress endpoint)")?;
     let auth_token = std::env::var("RESTATE_AUTH_TOKEN").ok();

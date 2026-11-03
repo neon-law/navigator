@@ -107,6 +107,7 @@ async fn seed_notice(
     body: &str,
     attachments: Vec<store::inbox::IngestAttachment>,
 ) -> Uuid {
+    let provider_message_id = format!("nef-{}", Uuid::new_v4());
     let mut email_conversation_id = None;
     if let Some((raw_key, raw_bytes)) = raw {
         fixture
@@ -127,6 +128,33 @@ async fn seed_notice(
         )
         .await
         .expect("open the synthetic email conversation");
+        // A prior hop must never supply the source for the current message.
+        let prior_key = format!("{raw_key}.prior");
+        fixture
+            .storage
+            .put(
+                &prior_key,
+                b"Subject: prior\r\n\r\nUnrelated message",
+                "message/rfc822",
+            )
+            .await
+            .expect("archive an unrelated prior hop");
+        store::email_conversations::append(
+            &fixture.surreal,
+            &store::email_conversations::NewMessage {
+                conversation_id: opened,
+                direction: store::email_conversations::DIRECTION_FROM_EXTERNAL,
+                from_addr: NEF_ADDRESS,
+                to_addr: "support@firm.example",
+                subject: "Prior message",
+                body_text: "Unrelated message",
+                raw_storage_key: Some(&prior_key),
+                provider_message_id: Some("unrelated-prior-message"),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("append a prior hop before the notice");
         store::email_conversations::append(
             &fixture.surreal,
             &store::email_conversations::NewMessage {
@@ -137,6 +165,7 @@ async fn seed_notice(
                 subject: NEF_SUBJECT,
                 body_text: body,
                 raw_storage_key: Some(raw_key),
+                provider_message_id: Some(&provider_message_id),
                 ..Default::default()
             },
         )
@@ -156,7 +185,7 @@ async fn seed_notice(
             visibility: None,
             channel: store::inbox::channel::EMAIL,
             provider_account: "support",
-            provider_message_id: &format!("nef-{}", Uuid::new_v4()),
+            provider_message_id: &provider_message_id,
             provider_thread_ref: None,
             external_address: NEF_ADDRESS,
             external_name: None,
@@ -168,6 +197,7 @@ async fn seed_notice(
             promotional_opt_in: false,
             email_conversation_id,
             attachments,
+            raw_storage_key: None,
             occurred_at: &chrono::Utc::now().to_rfc3339(),
         },
     )

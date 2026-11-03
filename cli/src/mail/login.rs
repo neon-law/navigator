@@ -428,10 +428,125 @@ fn prompt_hidden(_prompt: &str) -> Result<String> {
     ))
 }
 
+/// A selected Secret Manager source. Values are identifiers, never secret bytes.
+pub(super) struct GcpSecret {
+    pub(super) project: String,
+    pub(super) secret: String,
+}
+
+pub(super) fn gcp_source(
+    project: Option<&str>,
+    secret: Option<&str>,
+    requested: bool,
+    stored: &super::StoredSetup,
+) -> Result<Option<GcpSecret>> {
+    let project = project.or(stored.gcp_project.as_deref());
+    let secret = secret.or(stored.gcp_secret.as_deref());
+    if project.is_none() && !requested && secret.is_none() {
+        return Ok(None);
+    }
+    let project = project.ok_or_else(|| {
+        anyhow!("GCP client secret needs a project; run navigator mail setup --project <project>")
+    })?;
+    let secret = secret.unwrap_or("navigator-mail-oauth-client-secret");
+    for value in [project, secret] {
+        if value.is_empty()
+            || !value
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+            || value.starts_with('-')
+        {
+            return Err(anyhow!(
+                "GCP project and secret must be nonempty resource identifiers"
+            ));
+        }
+    }
+    Ok(Some(GcpSecret {
+        project: project.into(),
+        secret: secret.into(),
+    }))
+}
+
+async fn fetch_gcp_secret(source: &GcpSecret) -> Result<String> {
+    fetch_gcp_secret_with(source, std::ffi::OsStr::new("gcloud")).await
+}
+
+async fn fetch_gcp_secret_with(source: &GcpSecret, program: &std::ffi::OsStr) -> Result<String> {
+    fetch_gcp_secret_with_timeout(source, program, Duration::from_secs(60)).await
+}
+
+async fn fetch_gcp_secret_with_timeout(
+    source: &GcpSecret,
+    program: &std::ffi::OsStr,
+    timeout: Duration,
+) -> Result<String> {
+    let output = tokio::time::timeout(
+        timeout,
+        tokio::process::Command::new(program)
+            .args([
+                "secrets",
+                "versions",
+                "access",
+                "latest",
+                "--quiet",
+                "--verbosity=error",
+                "--project",
+                &source.project,
+                "--secret",
+                &source.secret,
+            ])
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| anyhow!("GCP client secret lookup timed out"))?
+    .map_err(|_| anyhow!("cannot run gcloud; install it and run gcloud auth login"))?;
+    gcp_secret_result(output.status.success(), &output.stdout, &output.stderr)
+}
+
+fn gcp_secret_result(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<String> {
+    if !success {
+        let diagnostic = String::from_utf8_lossy(stderr);
+        let message = if diagnostic.contains("PERMISSION_DENIED") || diagnostic.contains("403") {
+            "GCP client secret access denied; check membership in the lawyers group and its Secret Manager permissions"
+        } else if diagnostic.contains("NOT_FOUND") || diagnostic.contains("404") {
+            "GCP client secret not found; check the configured project, secret and latest version"
+        } else {
+            "GCP client secret lookup failed; check gcloud authentication and Secret Manager access"
+        };
+        return Err(anyhow!(message));
+    }
+    let secret = std::str::from_utf8(stdout)
+        .map_err(|_| anyhow!("GCP client secret is not UTF-8"))?
+        .trim();
+    if secret.is_empty() {
+        return Err(anyhow!("GCP client secret is empty; nothing was stored"));
+    }
+    Ok(secret.to_owned())
+}
+
+async fn store_gcp_client_secret(
+    client_id: &str,
+    fetch: impl std::future::Future<Output = Result<String>>,
+    store: impl FnOnce(&str, &str, &str) -> Result<()>,
+) -> Result<String> {
+    let secret = fetch.await?;
+    store(CLIENT_SECRET_SERVICE, client_id, &secret)?;
+    Ok(secret)
+}
+
 /// `navigator mail login`.
-pub(super) async fn login_command(secret_file: Option<&Path>) -> Result<()> {
+pub(super) async fn login_command(
+    secret_file: Option<&Path>,
+    gcp: Option<&GcpSecret>,
+) -> Result<()> {
     let (account, client_id) = super::configured_setup()?;
-    let client_secret = client_secret(&client_id, secret_file)?;
+    let client_secret = if let Some(source) = gcp {
+        store_gcp_client_secret(&client_id, fetch_gcp_secret(source), keychain_write).await?
+    } else {
+        client_secret(&client_id, secret_file)?
+    };
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("bind the loopback listener on 127.0.0.1")?;
@@ -1024,5 +1139,170 @@ mod tests {
         ] {
             assert!(!body.contains(forbidden), "login prints `{forbidden}`");
         }
+    }
+}
+
+#[cfg(test)]
+mod gcp_tests {
+    use super::*;
+
+    #[test]
+    fn gcp_secret_errors_distinguish_denied_and_missing_without_provider_output() {
+        for (message, expected) in [
+            ("PERMISSION_DENIED private-marker", "lawyers group"),
+            ("NOT_FOUND private-marker", "not found"),
+            ("unknown private-marker", "failed"),
+        ] {
+            let error = gcp_secret_result(false, b"private-secret", message.as_bytes())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{error}");
+            assert!(!error.contains("private-marker"));
+            assert!(!error.contains("private-secret"));
+        }
+        assert_eq!(
+            gcp_secret_result(true, b" synthetic-secret\n", b"").unwrap(),
+            "synthetic-secret"
+        );
+        assert!(gcp_secret_result(true, b"  ", b"").is_err());
+        assert!(gcp_secret_result(true, &[255], b"").is_err());
+    }
+    #[test]
+    fn gcp_source_uses_saved_settings_and_explicit_overrides() {
+        let stored = super::super::StoredSetup {
+            gcp_project: Some("example-mail".into()),
+            gcp_secret: Some("shared-client".into()),
+            ..Default::default()
+        };
+        let saved = gcp_source(None, None, false, &stored).unwrap().unwrap();
+        assert_eq!(saved.project, "example-mail");
+        assert_eq!(saved.secret, "shared-client");
+        let explicit = gcp_source(Some("other-mail"), Some("other-client"), true, &stored)
+            .unwrap()
+            .unwrap();
+        assert_eq!(explicit.project, "other-mail");
+        assert_eq!(explicit.secret, "other-client");
+        let empty = super::super::StoredSetup::default();
+        assert!(gcp_source(None, None, false, &empty).unwrap().is_none());
+        assert!(gcp_source(None, None, true, &empty).is_err());
+        assert!(gcp_source(None, Some("client"), false, &empty).is_err());
+        for invalid in ["", "--flag", "a/b", "a b", "a\n"] {
+            assert!(gcp_source(Some(invalid), None, true, &empty).is_err());
+        }
+        assert_eq!(
+            gcp_source(Some("example-mail"), None, true, &empty)
+                .unwrap()
+                .unwrap()
+                .secret,
+            "navigator-mail-oauth-client-secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn gcp_lookup_captures_bytes_and_stores_them_before_login() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("fake-gcloud");
+        std::fs::write(&program, r#"#!/bin/sh
+[ "$*" = "secrets versions access latest --quiet --verbosity=error --project example-mail --secret shared-client" ] || exit 2
+printf 'synthetic-secret\n'
+"#).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let source = GcpSecret {
+            project: "example-mail".into(),
+            secret: "shared-client".into(),
+        };
+        let secret = store_gcp_client_secret(
+            "test-client",
+            fetch_gcp_secret_with(&source, program.as_os_str()),
+            |service, account, bytes| {
+                assert_eq!(service, CLIENT_SECRET_SERVICE);
+                assert_eq!(account, "test-client");
+                assert_eq!(bytes, "synthetic-secret");
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(secret, "synthetic-secret");
+        assert!(store_gcp_client_secret(
+            "test-client",
+            async { Err(anyhow!("denied")) },
+            |_, _, _| panic!("a failed fetch must not write Keychain")
+        )
+        .await
+        .is_err());
+        assert!(store_gcp_client_secret(
+            "test-client",
+            async { Ok("synthetic".into()) },
+            |_, _, _| Err(anyhow!("Keychain unavailable"))
+        )
+        .await
+        .is_err());
+        assert!(
+            fetch_gcp_secret_with(&source, dir.path().join("absent").as_os_str())
+                .await
+                .is_err()
+        );
+    }
+    #[tokio::test]
+    async fn gcp_process_failures_do_not_escape_into_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("fake-gcloud");
+        std::fs::write(&program, "#!/bin/sh\nprintf 'private-stdout'\nprintf 'PERMISSION_DENIED private-stderr' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let source = GcpSecret {
+            project: "example-mail".into(),
+            secret: "shared-client".into(),
+        };
+        let error = fetch_gcp_secret_with(&source, program.as_os_str())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("lawyers group"));
+        assert!(!error.contains("private-stdout"));
+        assert!(!error.contains("private-stderr"));
+    }
+    #[tokio::test]
+    async fn gcp_timeout_kills_the_child_and_never_writes_keychain() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("waiting-gcloud");
+        std::fs::write(&program, "#!/bin/sh\necho $$ > \"$0.pid\"\nexec sleep 60\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let source = GcpSecret {
+            project: "example-mail".into(),
+            secret: "shared-client".into(),
+        };
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            store_gcp_client_secret(
+                "test-client",
+                fetch_gcp_secret_with_timeout(&source, program.as_os_str(), Duration::from_secs(1)),
+                |_, _, _| panic!("a timed-out lookup must not write Keychain"),
+            ),
+        )
+        .await
+        .expect("lookup must respect its timeout")
+        .unwrap_err();
+        assert_eq!(error.to_string(), "GCP client secret lookup timed out");
+        let pid = std::fs::read_to_string(program.with_extension("pid")).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = tokio::process::Command::new("/bin/kill")
+                    .args(["-0", pid.trim()])
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await
+                    .unwrap();
+                if !status.success() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the timed-out child must exit and be reaped");
     }
 }

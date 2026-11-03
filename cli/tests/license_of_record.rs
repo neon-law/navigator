@@ -493,7 +493,8 @@ fn the_firm_entity_of_record_is_one_string_across_brand_seed_and_entity_row() {
         "the firm entity of record must be named"
     );
 
-    for key in views::brand::BrandKey::ALL {
+    // Lex Tecnica's brands are another firm's and name Lex Tecnica, Ltd.
+    for key in views::brand::BrandKey::GUIEB_SHOOK_FAMILY {
         let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
         assert!(
             store::seed::FIRM_ENTITY_NAMES.contains(&branding.firm.legal_entity),

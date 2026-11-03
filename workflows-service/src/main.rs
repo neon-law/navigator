@@ -25,6 +25,7 @@ use workflows_service::engine::Engine;
 use workflows_service::finance_aggregate::FinanceAggregateService;
 use workflows_service::general_nag::GeneralNagService;
 use workflows_service::inbound_message_alert::InboundMessageAlertService;
+use workflows_service::inbound_triage::{InboundTriageService, TriageProviders};
 use workflows_service::nightly_project_update::{
     membership::MembershipTagService,
     repository::{EnvFirmForges, RepositoryForge, RepositoryTagService},
@@ -34,13 +35,14 @@ use workflows_service::nightly_project_update::{
 use workflows_service::notation_reset::NotationResetService;
 use workflows_service::request_identity::{apply_identity_key, install_crypto_provider};
 use workflows_service::social_publisher::{SocialPublishReconcilerService, SocialPublisherService};
+use workflows_service::youtube_comments::YoutubeCommentsPollerService;
 use workflows_service::{
     email_from_env, notifier_from_env, project_slack::ProjectSlackService, slack_bot_from_env,
     NotationService,
 };
 
 macro_rules! bind_common_services {
-    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $forge:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
+    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $forge:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
         $endpoint
             .bind(NotationService::new(
                 $surreal.clone(),
@@ -57,12 +59,17 @@ macro_rules! bind_common_services {
                 $kms.clone(),
                 $assets_storage.clone(),
             ))
+            .bind(YoutubeCommentsPollerService::new(
+                $surreal.clone(),
+                $kms.clone(),
+            ))
             .bind(SocialPublishReconcilerService::new(
                 $surreal.clone(),
                 $kms,
                 $assets_storage,
             ))
             .bind($email_summary)
+            .bind($inbound_triage)
             .bind(InboundMessageAlertService::new(
                 $surreal.clone(),
                 $slack_bot.clone(),
@@ -250,6 +257,8 @@ async fn main() -> anyhow::Result<()> {
             || inbound_message_alert_enabled
             || project_slack_enabled
             || notation_enabled
+            || social_publisher_enabled
+            || social_reconciler_enabled
         {
             let token = lookup("NAVIGATOR_DBOS_INGRESS_TOKEN")
                 .filter(|token| !token.trim().is_empty())
@@ -574,6 +583,10 @@ async fn main() -> anyhow::Result<()> {
     let dbos_alert_messages_channel = messages_channel.clone();
     let dbos_alert_staging_messages_channel = staging_messages_channel.clone();
     let dbos_alert_portal_origin = portal_origin.clone();
+    // Rules-only when `NAVIGATOR_TRIAGE_ENABLED` is unset: the service stays
+    // registered and every message still gets a triage row, from rules alone.
+    let triage_providers = TriageProviders::from_env().context("configure triage providers")?;
+    let inbound_triage = InboundTriageService::new(surreal.clone(), triage_providers);
 
     let listen: SocketAddr = std::env::var("WORKFLOWS_SERVICE_LISTEN")
         .unwrap_or_else(|_| "0.0.0.0:9080".into())
@@ -602,6 +615,7 @@ async fn main() -> anyhow::Result<()> {
             assets_storage,
             kms,
             email_summary,
+            inbound_triage,
             notifier,
             ops_delivery,
             slack_bot,
@@ -866,6 +880,14 @@ async fn main() -> anyhow::Result<()> {
                                     social_publisher.clone(),
                                 ),
                             )?;
+                        if let Some(token) = dbos_ingress_token.clone() {
+                            registered_ingress.social_publisher = Some(
+                                workflows_service::dbos_ingress::SocialPublisherIngress::new(
+                                    token,
+                                    social_workflow.clone(),
+                                ),
+                            );
+                        }
                         if social_reconciler_enabled {
                             let reconciler = workflows_service::dbos_social_publisher
                                 ::register_reconciler(
@@ -876,8 +898,20 @@ async fn main() -> anyhow::Result<()> {
                                             social_publisher,
                                             social_workflow.clone(),
                                             lookup,
-                                        ),
+                                        )
+                                        .map_err(|error| {
+                                            dbos::Error::Config(error.to_string())
+                                        })?,
                                 )?;
+                            if let Some(token) = dbos_ingress_token.clone() {
+                                registered_ingress.social_reconciler = Some(
+                                    workflows_service::dbos_ingress
+                                        ::SocialReconcilerIngress::new(
+                                            token,
+                                            reconciler.clone(),
+                                        ),
+                                );
+                            }
                             launchers.push(Box::new(move |stop| {
                                 let clock: workflows_service::dbos_social_publisher::Clock =
                                     Arc::new(chrono::Utc::now);
@@ -901,7 +935,8 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
-    serve_health_listener(health_listener, dbos_ingress);
+    let dbos_probe = dbos_executor.as_ref().map(dbos_engine::Executor::probe);
+    serve_health_listener(health_listener, dbos_ingress, dbos_probe);
 
     let server_result = tokio::select! {
         () = server => Ok(()),
@@ -917,10 +952,11 @@ async fn main() -> anyhow::Result<()> {
 
 /// Unsigned liveness/readiness probe (ENG-551): unlike the Restate endpoint,
 /// it needs no Restate Cloud signature, so kubelet and the GCE LB can reach it
-/// directly on every deployment. Its one route round-trips a throwaway
-/// signature through the same `jsonwebtoken` verification path real traffic
-/// uses, catching an ENG-550-style `CryptoProvider` regression instead of
-/// shipping it invisibly again. Both engines serve it.
+/// directly on every deployment. `/healthz` round-trips a throwaway signature
+/// through the same `jsonwebtoken` verification path real traffic uses,
+/// catching an ENG-550-style `CryptoProvider` regression instead of shipping
+/// it invisibly again; `/readyz` additionally reports the DBOS executor's
+/// health (running + system database reachable). Both engines serve it.
 async fn bind_health_listener() -> anyhow::Result<tokio::net::TcpListener> {
     let health_addr = workflows_service::health::health_listen_addr(|key| std::env::var(key).ok())?;
     let health_listener = tokio::net::TcpListener::bind(health_addr)
@@ -932,6 +968,7 @@ async fn bind_health_listener() -> anyhow::Result<tokio::net::TcpListener> {
 fn serve_health_listener(
     health_listener: tokio::net::TcpListener,
     dbos_ingress: Arc<std::sync::RwLock<workflows_service::dbos_ingress::WorkerIngress>>,
+    dbos_probe: Option<dbos_engine::ExecutorProbe>,
 ) {
     let health_addr = health_listener.local_addr().ok();
     tracing::info!(?health_addr, "health probe listener listening");
@@ -940,9 +977,16 @@ fn serve_health_listener(
             .read()
             .expect("DBOS ingress lock poisoned")
             .clone();
+        let dbos = dbos_probe.map(|probe| {
+            let system_database_url = probe.system_database_url().map(Arc::from);
+            workflows_service::health::DbosReadiness {
+                is_running: Arc::new(move || probe.is_running()),
+                system_database_url,
+            }
+        });
         if let Err(error) = axum::serve(
             health_listener,
-            workflows_service::health::router_with_dbos_ingress(ingress),
+            workflows_service::health::router_with_dbos_ingress(ingress, dbos),
         )
         .await
         {

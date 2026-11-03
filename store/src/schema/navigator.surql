@@ -784,7 +784,7 @@ DEFINE INDEX OVERWRITE person_delegate_pair ON person_delegate
 DEFINE TABLE IF NOT EXISTS person_external_identity SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE person_id ON person_external_identity TYPE record<person>;
 DEFINE FIELD OVERWRITE system ON person_external_identity TYPE string
-    ASSERT $value IN ['github', 'slack', 'docusign', 'google', 'linear', 'claude', 'chatgpt', 'notion'];
+    ASSERT $value IN ['github', 'slack', 'docusign', 'google', 'linear', 'claude', 'chatgpt', 'notion', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok'];
 DEFINE FIELD OVERWRITE external_id ON person_external_identity TYPE string;
 DEFINE FIELD OVERWRITE handle ON person_external_identity TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON person_external_identity TYPE datetime DEFAULT time::now();
@@ -943,11 +943,11 @@ DEFINE INDEX OVERWRITE firm_slug ON firm FIELDS slug UNIQUE;
 DEFINE TABLE IF NOT EXISTS firm_integration_secret SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE firm_id ON firm_integration_secret TYPE record<firm>;
 DEFINE FIELD OVERWRITE provider ON firm_integration_secret TYPE string
-    ASSERT $value IN ['xero', 'slack', 'notion', 'github', 'mercury', 'forgejo', 'court_portal'];
+    ASSERT $value IN ['xero', 'slack', 'notion', 'github', 'mercury', 'forgejo', 'court_portal', 'twilio'];
 DEFINE FIELD OVERWRITE kind ON firm_integration_secret TYPE string
     ASSERT $value IN ['xero_client_id', 'xero_client_secret', 'xero_refresh_token',
                       'slack_bot_token', 'notion_token', 'github_app_private_key', 'mercury_read_token', 'xero_tenant_id', 'xero_webhook_key',
-                      'forgejo_access_token', 'portal_login'];
+                      'forgejo_access_token', 'portal_login', 'twilio_auth_token'];
 DEFINE FIELD OVERWRITE version ON firm_integration_secret TYPE int;
 DEFINE FIELD OVERWRITE ciphertext ON firm_integration_secret TYPE string;
 DEFINE FIELD OVERWRITE wrapped_dek ON firm_integration_secret TYPE string;
@@ -2514,8 +2514,10 @@ DEFINE FIELD OVERWRITE channel ON communication TYPE string
                       'portal_message', 'sms_inbound', 'sms_outbound',
                       'facebook_inbound', 'facebook_outbound',
                       'instagram_inbound', 'instagram_outbound',
+                      'linkedin_inbound', 'linkedin_outbound',
                       'threads_inbound', 'threads_outbound',
                       'youtube_inbound', 'youtube_outbound', 'tiktok_inbound', 'tiktok_outbound',
+                      'x_inbound', 'x_outbound',
                       'call', 'note'];
 DEFINE FIELD OVERWRITE direction ON communication TYPE string
     ASSERT $value IN ['inbound', 'outbound', 'internal'];
@@ -2622,7 +2624,7 @@ DEFINE FIELD OVERWRITE interaction_type ON inbox_conversation TYPE string DEFAUL
 DEFINE FIELD OVERWRITE provider_post_id ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE project_id ON inbox_conversation TYPE option<record<project>>;
 DEFINE FIELD OVERWRITE channel ON inbox_conversation TYPE string
-    ASSERT $value IN ['email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'scraper'];
+    ASSERT $value IN ['email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'scraper', 'x', 'linkedin', 'voice'];
 DEFINE FIELD OVERWRITE external_address ON inbox_conversation TYPE string;
 DEFINE FIELD OVERWRITE external_name ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE subject ON inbox_conversation TYPE option<string>;
@@ -2663,6 +2665,9 @@ DEFINE FIELD OVERWRITE purpose ON message TYPE string DEFAULT 'matter'
 DEFINE FIELD OVERWRITE attachment_asset_id ON message TYPE option<record<asset>>;
 DEFINE FIELD OVERWRITE communication_id ON message TYPE option<record<communication>>;
 DEFINE FIELD OVERWRITE occurred_at ON message TYPE string;
+-- Object-storage key of the verbatim import payload (LAW-238 D1). Written
+-- only by the postgres-authoritative import path; Surreal rows read None.
+DEFINE FIELD OVERWRITE raw_storage_key ON message TYPE option<string>;
 DEFINE FIELD OVERWRITE alert_state ON message TYPE option<string>
     ASSERT $value IS NONE OR $value IN ['pending', 'notified', 'unknown', 'failed', 'disabled'];
 DEFINE FIELD OVERWRITE alert_channel_id ON message TYPE option<string>;
@@ -2735,6 +2740,37 @@ DEFINE FIELD OVERWRITE detail ON inbox_delivery_attempt TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON inbox_delivery_attempt TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE inbox_delivery_attempt_message ON inbox_delivery_attempt
     FIELDS message_id;
+
+
+-- `inbox_triage`: one triage row per inbound Message — whether the message
+-- is privileged, which Project is suggested for it, and the audit trail of
+-- how both were decided. Privilege is structural, not statistical: a
+-- public social post is not privileged; private or unknown visibility
+-- remains uncertain for human review. Client email may be flagged privileged by a
+-- classifier at or above the confidence floor, and every other automated
+-- outcome is `uncertain` — automation can never mark client email
+-- `not_privileged`. The suggested Project is never applied on its own: a
+-- person confirms it, and the row records the decision.
+DEFINE TABLE IF NOT EXISTS inbox_triage SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE message_id ON inbox_triage TYPE record<message>;
+DEFINE FIELD OVERWRITE firm_id ON inbox_triage TYPE record<firm>;
+DEFINE FIELD OVERWRITE suggested_project_id ON inbox_triage
+    TYPE option<record<project>>;
+DEFINE FIELD OVERWRITE project_confidence ON inbox_triage TYPE option<number>;
+DEFINE FIELD OVERWRITE privilege ON inbox_triage TYPE string
+    ASSERT $value IN ['privileged', 'not_privileged', 'uncertain'];
+DEFINE FIELD OVERWRITE privilege_confidence ON inbox_triage TYPE option<number>;
+DEFINE FIELD OVERWRITE rationale ON inbox_triage TYPE option<string>;
+DEFINE FIELD OVERWRITE model_id ON inbox_triage TYPE option<string>;
+DEFINE FIELD OVERWRITE prompt_version ON inbox_triage TYPE string;
+DEFINE FIELD OVERWRITE raw_output ON inbox_triage TYPE option<string>;
+DEFINE FIELD OVERWRITE disposition ON inbox_triage TYPE string
+    ASSERT $value IN ['suggested', 'confirmed', 'overridden', 'needs_human'];
+DEFINE FIELD OVERWRITE labeled_example ON inbox_triage TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE inserted_at ON inbox_triage TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON inbox_triage TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE inbox_triage_message ON inbox_triage FIELDS message_id UNIQUE;
+DEFINE INDEX OVERWRITE inbox_triage_firm ON inbox_triage FIELDS firm_id;
 
 -- `finance_aggregate`: one row per `FinanceAggregate` workflow run, keyed on
 -- the run id so a replayed store step rewrites its own row. The latest row per

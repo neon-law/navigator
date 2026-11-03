@@ -410,6 +410,13 @@ route_allow if {
 # the same gate the `LawyerSession` extractor applies; the handler resolves
 # `store::access::matter_viewer` and answers 404 for a caller with no
 # firm-side participation row, Owner and Admin included.
+#
+# Matter stages: the stage chip's read and write surface. GET (the Firm's
+# vocabulary, the matter's current stage, and its audited history) and POST
+# .../stages/set (a transition) at /app/api/projects/{id}/stages. Lawyer tier,
+# the same gate the `LawyerSession` extractor applies; the handler resolves
+# `store::access::matter_viewer` and answers 404 for a caller with no
+# firm-side participation row, Owner and Admin included.
 route_allow if {
     input.path[0] == "app"
     input.path[1] == "api"
@@ -417,6 +424,16 @@ route_allow if {
     input.path[4] in {"time-entries", "timer", "flat-fee"}
     count(input.path) == 5
     input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "stages"
+    count(input.path) == 5
+    input.method == "GET"
     is_lawyer(input.session)
 }
 
@@ -437,6 +454,17 @@ route_allow if {
     input.path[2] == "projects"
     input.path[4] == "timer"
     input.path[5] in {"stop", "discard"}
+    count(input.path) == 6
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "stages"
+    input.path[5] == "set"
     count(input.path) == 6
     input.method == "POST"
     is_lawyer(input.session)
@@ -588,6 +616,47 @@ route_allow if {
     count(input.path) == 5
     input.method == "GET"
     is_authenticated(input.session)
+}
+
+# Import historical messages. The handler resolves Firm membership and optional
+# Project participation; admission permits only the lawyer tier.
+route_allow if {
+    input.path == ["app", "api", "inbox", "import"]
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+# Import explicitly mapped Fi metadata. The handler repeats Firm and Project checks.
+route_allow if {
+    input.path == ["app", "api", "inbox", "import", "fi"]
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+# File an already-read provider message into one Project. The handler repeats
+# Project participation before ingestion; no outbound message is sent.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "inbox-ingest"
+    count(input.path) == 5
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+# Download an Inbox Message's attachment. The handler checks Project
+# participation, Conversation and Message membership, and the Asset link.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "inbox"
+    input.path[6] == "messages"
+    input.path[8] == "attachments"
+    count(input.path) == 10
+    input.method == "GET"
+    is_lawyer(input.session)
 }
 
 # Log a Communication (LAW-140): POST /app/api/projects/{id}/communications.

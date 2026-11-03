@@ -17,6 +17,27 @@ use uuid::Uuid;
 
 #[derive(Subcommand)]
 pub enum InboxAction {
+    /// Preview a metadata-only Google Fi CSV using an explicit column mapping.
+    ImportFi {
+        #[arg(long)]
+        file: std::path::PathBuf,
+        #[arg(long)]
+        mapping: std::path::PathBuf,
+        /// Historical Fi account in E.164 form; it is never a live sender.
+        #[arg(long)]
+        account: String,
+        #[arg(long)]
+        brand: String,
+        #[arg(long)]
+        project: Option<String>,
+        /// Write validated historical metadata; omitted means read-only preview.
+        #[arg(long)]
+        apply: bool,
+        #[command(flatten)]
+        host: crate::HostOpt,
+    },
+    #[command(flatten)]
+    Import(crate::inbox_import::InboxCmd),
     /// List the unprocessed lawyer-mailbox messages, oldest first.
     List {
         /// Navigator host. Defaults to host in navigator.yaml.
@@ -56,6 +77,47 @@ fn finish(result: Result<()>) -> ExitCode {
 
 async fn run_inner(action: InboxAction) -> Result<()> {
     match action {
+        InboxAction::ImportFi {
+            file,
+            mapping,
+            account,
+            brand,
+            project,
+            apply,
+            host,
+        } => {
+            crate::inbox_import::import_fi(crate::inbox_import::NewFiImport {
+                file,
+                mapping,
+                account,
+                brand,
+                project,
+                apply,
+                host: host.host,
+            })
+            .await
+        }
+
+        InboxAction::Import(crate::inbox_import::InboxCmd::Import {
+            source,
+            mailbox,
+            file,
+            dir,
+            project,
+            dry_run,
+            host,
+        }) => {
+            crate::inbox_import::import(crate::inbox_import::NewInboxImport {
+                source,
+                mailbox,
+                files: file,
+                dir,
+                project,
+                dry_run,
+                host: host.host,
+            })
+            .await
+        }
         InboxAction::List { host } => list(host.as_deref()).await,
         InboxAction::Process {
             message,

@@ -2989,6 +2989,69 @@ test_anonymous_denied_app_owner if {
 	not authz.allow with input as {"path": ["app", "owner"], "method": "GET", "session": null}
 }
 
+test_lawyer_can_preview_fi_history if {
+	authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": lawyer_session}
+}
+
+test_fi_history_import_denies_client_clerk_and_anonymous if {
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": "POST", "session": null}
+}
+
+test_fi_history_import_policy_is_exact if {
+	every method in ["GET", "PUT", "PATCH", "DELETE"] {
+		not authz.allow with input as {"path": ["app", "api", "inbox", "import", "fi"], "method": method, "session": lawyer_session}
+	}
+	every path in [
+		["app", "api", "inbox", "import", "fi", "extra"],
+		["app", "api", "inbox", "import", "fi-extra"],
+		["app", "api", "inbox", "import", "other"],
+	] {
+		not authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+	}
+}
+
+test_lawyer_can_import_historical_messages if {
+	authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "POST", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "POST", "session": lawyer_session}
+}
+
+test_client_and_clerk_cannot_import_historical_messages if {
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "POST", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "POST", "session": clerk_session}
+}
+
+test_anonymous_cannot_import_historical_messages if {
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "POST", "session": null}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "POST", "session": null}
+}
+
+test_historical_import_policy_is_exact if {
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "GET", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "extra"], "method": "POST", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "DELETE", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest", "extra"], "method": "POST", "session": lawyer_session}
+}
+
+test_lawyer_can_download_a_project_message_attachment if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a"], "method": "GET", "session": lawyer_session}
+}
+
+test_message_attachment_download_denies_other_tiers if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a"], "method": "GET", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a"], "method": "GET", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a"], "method": "GET", "session": null}
+}
+
+test_message_attachment_download_policy_is_exact if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a"], "method": "POST", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a", "extra"], "method": "GET", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments"], "method": "GET", "session": lawyer_session}
+}
+
 test_owner_can_open_owner_inbox if {
 	authz.allow with input as {"path": ["app", "owner", "inbox"], "method": "GET", "session": owner_session}
 }
@@ -3194,4 +3257,59 @@ test_task_doors_are_shape_bound if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1"], "method": "GET", "session": lawyer_session}
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "delete"], "method": "POST", "session": lawyer_session}
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "assign", "extra"], "method": "POST", "session": lawyer_session}
+}
+
+# ---------- Matter stages under /app/api/projects/{id}/stages (lawyer tier) ----------
+
+# The stage chip's doors: the read (the Firm's vocabulary, the matter's
+# current stage, its audited history) and the set command. Lawyer tier at
+# route admission; the handler resolves `matter_viewer` and answers 404 for a
+# caller with no firm-side participation row, so route admission must not
+# answer the tenant question either.
+
+test_lawyer_can_read_and_set_stages if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages"], "method": "GET", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "POST", "session": lawyer_session}
+}
+
+test_admin_can_set_a_stage if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "POST", "session": admin_session}
+}
+
+# Clerk and client are denied the set command at the boundary. The GET rides
+# the matter-read-cluster rule, which admits any authenticated session to
+# five-segment /app/api/projects sub-reads and leaves the tier question to the
+# handler — the handler's `LawyerSession` extractor answers a clerk or client
+# 403 before the matter question is ever asked.
+test_clerk_denied_the_stage_set_door if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "POST", "session": clerk_session}
+}
+
+test_client_denied_the_stage_set_door if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "POST", "session": client_session}
+}
+
+test_anonymous_denied_the_stage_doors if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages"], "method": "GET", "session": null}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "POST", "session": null}
+}
+
+test_stage_doors_are_shape_bound if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages"], "method": "POST", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages"], "method": "DELETE", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set"], "method": "GET", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "s1"], "method": "POST", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "stages", "set", "extra"], "method": "POST", "session": lawyer_session}
+}
+
+
+# Call triage uses the existing firm Inbox intent; reporting is admin-only.
+test_call_queue_admits_lawyer_but_not_client if {
+    authz.allow with input as {"path": ["app", "inbox", "calls"], "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "inbox", "calls"], "method": "GET", "session": client_session}
+}
+
+test_brand_communications_admits_admin_but_not_lawyer if {
+    authz.allow with input as {"path": ["app", "admin", "communications"], "method": "GET", "session": admin_session}
+    not authz.allow with input as {"path": ["app", "admin", "communications"], "method": "GET", "session": lawyer_session}
 }

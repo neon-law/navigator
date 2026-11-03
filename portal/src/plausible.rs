@@ -39,6 +39,7 @@ pub const PLAUSIBLE_LOADER_HREF: &str = "/public/js/plausible.js";
 const UNCONFIGURED_DEATH_AND_DIVORCE_ID: &str = "pa-unconfigured-death-and-divorce";
 const UNCONFIGURED_AEGIS_ID: &str = "pa-unconfigured-aegis";
 const UNCONFIGURED_GROUNDWORK_ID: &str = "pa-unconfigured-groundwork";
+const UNCONFIGURED_LEX_TECNICA_ID: &str = "pa-unconfigured-lex-tecnica";
 const UNCONFIGURED_IEP_DEFENDERS_ID: &str = "pa-unconfigured-iep-defenders";
 
 /// The Plausible script id (the `pa-…` stem of the snippet's script URL) for
@@ -50,6 +51,7 @@ pub const fn script_id(key: BrandKey) -> Option<&'static str> {
     match key {
         BrandKey::Aegis => Some(UNCONFIGURED_AEGIS_ID),
         BrandKey::Groundwork => Some(UNCONFIGURED_GROUNDWORK_ID),
+        BrandKey::LexTecnica => Some(UNCONFIGURED_LEX_TECNICA_ID),
         BrandKey::GuiebShook => Some("pa-CjqS6UQxwrqmMRdiG44m3"),
         BrandKey::CyberInjuryLaw => Some("pa-Ns-yAKpkSNXzfvnEJYZJX"),
         BrandKey::Neon => Some("pa-dktgfAn-5R5ufpXARu6zb"),
@@ -119,6 +121,7 @@ impl PlausibleSite {
             UNCONFIGURED_DEATH_AND_DIVORCE_ID,
             UNCONFIGURED_AEGIS_ID,
             UNCONFIGURED_GROUNDWORK_ID,
+            UNCONFIGURED_LEX_TECNICA_ID,
             UNCONFIGURED_IEP_DEFENDERS_ID,
         ]
         .contains(&script_id)

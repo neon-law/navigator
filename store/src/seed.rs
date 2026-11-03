@@ -3069,13 +3069,11 @@ async fn seed_entities(
         }
         match crate::entities::create(surreal, &new_entity(&rec.name, et.id, jur.id)).await {
             Ok(_) => report.entities_inserted += 1,
-            // The firm's own row is the one fixture two seeds can race for,
-            // because it is the only one that takes `firm_anchor_key` — and
-            // the UNIQUE index is what makes the loser lose. The cucumber
-            // suites run scenarios concurrently against one shared engine and
-            // each re-seeds this fixture, so losing that race has to be
-            // "someone else already did it", not a failed seed.
-            Err(crate::entities::EntityError::FirmAnchorTaken) => {}
+            // Claiming the anchor precedes writing its Entity. A concurrent
+            // seed must wait for that row before later steps can resolve it.
+            Err(crate::entities::EntityError::FirmAnchorTaken) => {
+                wait_for_seed_entity(surreal, &rec.name).await?;
+            }
             Err(error) => return Err(error.into()),
         }
     }
@@ -3088,6 +3086,25 @@ async fn seed_entities(
             Err(error) => return Err(error.into()),
         }
     }
+    Ok(())
+}
+
+/// Wait for a concurrent claimant to publish its Entity. A stranded claim
+/// fails the seed without releasing or replacing another writer's ownership.
+async fn wait_for_seed_entity(surreal: &SurrealDb, name: &str) -> anyhow::Result<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if crate::entities::find_by_name(surreal, name)
+                .await?
+                .is_some()
+            {
+                return Ok::<(), crate::entities::EntityError>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("concurrent seed claim has no visible Entity: {name}"))??;
     Ok(())
 }
 
@@ -3293,20 +3310,34 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
     },
 ];
 
-/// The second firm's compiled brands: Lex wears only `iep-defenders`,
-/// whose row is firm-scoped to Lex from the moment it is first seeded.
-/// The key joins [`crate::firms::CLOSED_BRAND_KEYS`] for registry-ordered
-/// footer display and the website-URL backfill, but no practice-firm
-/// attachment — the brand belongs to Lex Tecnica, Ltd. alone. Its row copies
-/// the compiled presentation: `BrandKey::IepDefenders`
-/// `default_typeface` and `default_palette().light.primary`.
-const LEX_COMPILED_BRANDS: &[CompiledBrand] = &[CompiledBrand {
-    key: "iep-defenders",
-    website_url: "https://www.iepdefenders.com",
-    name: "IEP Defenders",
-    typeface: "source-sans-3",
-    primary_hex: "#5B21B6",
-}];
+/// The second firm's compiled brands: Lex wears `iep-defenders` and
+/// `lex-tecnica`, whose rows are firm-scoped to Lex from the moment they are
+/// first seeded. The keys join [`crate::firms::CLOSED_BRAND_KEYS`] for
+/// registry-ordered footer display and the website-URL backfill, but no
+/// practice-firm attachment — the brands belong to Lex Tecnica, Ltd. alone.
+/// Each row copies the compiled presentation: the key's `default_typeface`
+/// and `default_palette().light.primary`.
+///
+/// Their website URLs are the firm's own public sites rather than the
+/// `neonlaw.com` hosts they are served on: the URL is what approves an email
+/// domain for account admission ([`crate::brand_domains`]), separate from
+/// host routing.
+const LEX_COMPILED_BRANDS: &[CompiledBrand] = &[
+    CompiledBrand {
+        key: "iep-defenders",
+        website_url: "https://www.iepdefenders.com",
+        name: "IEP Defenders",
+        typeface: "source-sans-3",
+        primary_hex: "#5B21B6",
+    },
+    CompiledBrand {
+        key: "lex-tecnica",
+        website_url: "https://www.lextecnica.com",
+        name: "Lex Tecnica",
+        typeface: "eb-garamond",
+        primary_hex: "#7A5E27",
+    },
+];
 
 /// The website URL [`COMPILED_BRANDS`] seeds for `key`, if it names a
 /// compiled brand. Public for the same reason as [`compiled_brand_name`]: a
@@ -4434,6 +4465,98 @@ mod tests {
     use crate::question_registry::QuestionType;
     use crate::test_support::mem_surreal;
     use crate::{entities, entity_types, projects};
+
+    #[tokio::test]
+    async fn a_seed_waits_for_the_entity_behind_a_concurrent_anchor_claim() {
+        let db = mem_surreal().await;
+        let mut reference_report = SeedReport::default();
+        super::seed_jurisdictions(&db, &mut reference_report)
+            .await
+            .unwrap();
+        super::seed_entity_types(&db, &mut reference_report)
+            .await
+            .unwrap();
+        let entity_type = entity_types::find_by_name(&db, "Professional Corporation")
+            .await
+            .unwrap()
+            .unwrap();
+        let jurisdiction = jurisdictions::find_by_name(&db, "California")
+            .await
+            .unwrap()
+            .unwrap();
+        let input = super::new_entity(super::FIRM_ENTITY_NAME, entity_type.id, jurisdiction.id);
+        let owner = uuid::Uuid::now_v7();
+        db.query("CREATE type::record('firm_anchor', $key) SET entity_id = $entity")
+            .bind(("key", input.firm_anchor_key.clone().unwrap()))
+            .bind(("entity", crate::surreal::record_id("entity", owner)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let mut yaml: serde_yaml::Value = serde_yaml::from_str(super::canonical::ENTITY).unwrap();
+        yaml["records"]
+            .as_sequence_mut()
+            .unwrap()
+            .retain(|record| record["name"].as_str() == Some(super::FIRM_ENTITY_NAME));
+        let yaml = serde_yaml::to_string(&yaml).unwrap();
+        let mut report = SeedReport::default();
+        {
+            let seeding = super::seed_entities(&db, &yaml, "synthetic-entity-seed", &mut report);
+            tokio::pin!(seeding);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(100), &mut seeding)
+                    .await
+                    .is_err(),
+                "a claim alone does not prove the entity has been written"
+            );
+            entities::upsert_with_id(&db, owner, &input).await.unwrap();
+            seeding.await.unwrap();
+        }
+        assert_eq!(report.entities_inserted, 0);
+        assert_eq!(
+            entities::find_by_name(&db, super::FIRM_ENTITY_NAME)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            owner
+        );
+        assert_eq!(
+            entities::firm_anchor_holder(&db, input.firm_anchor_key.as_ref().unwrap())
+                .await
+                .unwrap(),
+            Some(owner)
+        );
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_stranded_seed_claim_fails_without_replacing_its_owner() {
+        let db = mem_surreal().await;
+        let owner = uuid::Uuid::now_v7();
+        let key = crate::entity_commands::firm_anchor_key(
+            super::FIRM_ENTITY_NAME,
+            super::FIRM_ENTITY_NAME,
+        )
+        .unwrap();
+        db.query("CREATE type::record('firm_anchor', $key) SET entity_id = $entity")
+            .bind(("key", key.clone()))
+            .bind(("entity", crate::surreal::record_id("entity", owner)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert!(super::wait_for_seed_entity(&db, super::FIRM_ENTITY_NAME)
+            .await
+            .is_err());
+        assert_eq!(
+            entities::firm_anchor_holder(&db, &key).await.unwrap(),
+            Some(owner)
+        );
+        assert!(entities::find_by_name(&db, super::FIRM_ENTITY_NAME)
+            .await
+            .unwrap()
+            .is_none());
+    }
 
     /// Every key a Firm is seeded wearing has a `brand` row to wear.
     ///
@@ -6972,7 +7095,10 @@ records:
         let lex_keys = crate::firms::brand_keys_for_firm(&surreal, lex.id)
             .await
             .unwrap();
-        assert_eq!(lex_keys, vec!["iep-defenders".to_string()]);
+        assert_eq!(
+            lex_keys,
+            vec!["iep-defenders".to_string(), "lex-tecnica".to_string()]
+        );
 
         // The Lex key resolves to the Lex firm and to nothing else.
         assert_eq!(

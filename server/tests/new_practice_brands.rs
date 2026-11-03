@@ -158,12 +158,7 @@ async fn launched_domains_serve_their_own_brand_and_apexes_redirect_to_their_own
             .resolve_branding(&views::brand::DEFAULT_BRANDING)
             .firm
             .site_name;
-        for host in key
-            .hosts()
-            .iter()
-            .copied()
-            .chain(std::iter::once(key.apex()))
-        {
+        for host in key.hosts().iter().copied().chain(key.apex()) {
             let response = app
                 .clone()
                 .oneshot(
@@ -175,7 +170,7 @@ async fn launched_domains_serve_their_own_brand_and_apexes_redirect_to_their_own
                 )
                 .await
                 .expect("response");
-            if host == key.apex() {
+            if key.apex() == Some(host) {
                 assert_eq!(response.status(), StatusCode::MOVED_PERMANENTLY, "{host}");
                 assert_eq!(
                     response.headers()[header::LOCATION],

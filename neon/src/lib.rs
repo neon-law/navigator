@@ -183,6 +183,11 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             .chain(key.practice_pages().iter().map(|(path, _)| *path))
             .map(str::to_string)
             .collect(),
+        // Lex Tecnica publishes its home and services pages only.
+        BrandKey::LexTecnica => ["/", "/services"]
+            .iter()
+            .map(|path| (*path).to_string())
+            .collect(),
         BrandKey::LawyerShook | BrandKey::GuiebShook => ["/", "/testimonials"]
             .iter()
             .map(|path| (*path).to_string())
@@ -305,6 +310,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
         | BrandKey::DeathAndDivorce
         | BrandKey::CyberInjuryLaw
         | BrandKey::GuiebShook
+        | BrandKey::LexTecnica
         | BrandKey::IepDefenders) => practice_brand_llms_txt(key),
         BrandKey::DeleteYourData => {
             let branding = &views::brand::DELETE_YOUR_DATA_BRANDING;

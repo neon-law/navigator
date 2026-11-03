@@ -301,6 +301,7 @@ async fn ingest_comment(
             email_conversation_id: None,
             attachments: Vec::new(),
             occurred_at: &occurred_at.to_rfc3339(),
+            raw_storage_key: None,
         },
     )
     .await
@@ -308,6 +309,9 @@ async fn ingest_comment(
     // The alert workflow is keyed by Message ID. A repeated delivery must
     // retry durable submission if the first submission failed after ingest.
     crate::inbox::start_inbound_message_alert(received.message_id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    crate::inbox::start_inbound_message_triage(received.message_id)
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(())

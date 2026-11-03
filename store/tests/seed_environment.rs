@@ -765,7 +765,10 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
     let lex_brands = store::firms::brand_keys_for_firm(&surreal, lex.id)
         .await
         .unwrap();
-    assert_eq!(lex_brands, vec!["iep-defenders".to_string()]);
+    assert_eq!(
+        lex_brands,
+        vec!["iep-defenders".to_string(), "lex-tecnica".to_string()]
+    );
 }
 
 #[tokio::test]

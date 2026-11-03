@@ -917,6 +917,46 @@ fn brand_blog_catalog_body(page: &BlogCatalogPage) -> Element {
 mod tests {
     use super::*;
 
+    #[test]
+    fn provider_labels_use_the_display_name_and_pass_unknown_providers_through() {
+        assert_eq!(provider_label("tiktok"), "TikTok for Business");
+        assert_eq!(provider_label("youtube"), "YouTube");
+        assert_eq!(provider_label("x"), "X");
+        assert_eq!(provider_label("mastodon"), "mastodon");
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn a_schedule_refusal_keeps_the_copy_and_resubmits_with_the_session_token() {
+        let html = schedule_refusal_html(
+            "vesta",
+            "TOK",
+            "Facebook is not connected for <vesta>.",
+            vec![
+                Field::text("Title", "title", "Spring filing deadlines"),
+                Field::select(
+                    "facebook destination",
+                    "facebook",
+                    vec![Choice::new("page-1", "page-1")],
+                    Some("page-1".to_string()),
+                ),
+            ],
+        );
+        assert!(html.starts_with("<!doctype html>"), "a whole page: {html}");
+        assert!(html.contains("<title>Review Post schedule</title>"));
+        assert!(html.contains(crate::components::THEME_STYLESHEET_HREF));
+        // The refusal is announced, and its text is escaped, not injected.
+        assert!(html.contains(r#"role="alert""#));
+        assert!(html.contains("&#60;vesta&#62;"), "{html}");
+        assert!(!html.contains("<vesta>"));
+        assert!(html.contains(r#"href="/app/admin/brands/vesta/edit""#));
+        assert!(html.contains(r#"action="/app/api/blog/schedule""#));
+        assert!(html.contains(r#"name="_csrf" value="TOK""#));
+        assert!(html.contains(r#"value="Spring filing deadlines""#));
+        assert!(html.contains("Approve and schedule"));
+        crate::components::assert_forms_accessible(&html, "schedule_refusal_html");
+    }
+
     #[allow(clippy::too_many_lines)]
     fn page() -> BlogCatalogPage {
         BlogCatalogPage {
@@ -1290,5 +1330,181 @@ mod tests {
             whats,
             vec!["Could not send to Instagram", "Sent to Facebook"]
         );
+    }
+
+    /// A Brand on its own Firm whose Admin DRI may manage its content.
+    #[cfg(feature = "server")]
+    async fn practice(db: &store::surreal::SurrealDb, label: &str) -> (uuid::Uuid, String) {
+        use store::persons::{NewPerson, Role};
+        let admin = store::persons::create(
+            db,
+            &NewPerson::with_role(
+                format!("{label} Admin"),
+                format!("{label}-{}@example.com", uuid::Uuid::now_v7()),
+                Role::Admin,
+            ),
+        )
+        .await
+        .unwrap();
+        let firm = store::firms::create(
+            db,
+            &store::firms::NewFirm {
+                name: format!("{label} Firm"),
+                status: "active".into(),
+                entity_id: store::test_support::seed_entity(db).await,
+                admin_dri_person_id: admin.id,
+            },
+        )
+        .await
+        .unwrap();
+        let key = format!("{label}-brand");
+        store::brands::create(
+            db,
+            Role::Admin,
+            Some(admin.id),
+            &store::brands::NewBrand {
+                name: format!("{label} Brand"),
+                key: key.clone(),
+                firm_id: Some(firm.id),
+                primary_color: None,
+                accent_color: None,
+                typeface: None,
+            },
+        )
+        .await
+        .unwrap();
+        (admin.id, key)
+    }
+
+    #[cfg(feature = "server")]
+    fn source_post<'a>(
+        brand: &'a str,
+        slug: &'a str,
+        status: &'a str,
+    ) -> store::posts::SourcePost<'a> {
+        store::posts::SourcePost {
+            brand_key: brand,
+            slug,
+            title: "A synthetic post",
+            description: "Synthetic description",
+            body_html: "<p>Synthetic</p>",
+            body_markdown: None,
+            status,
+            publish_at: chrono::Utc::now() + chrono::Duration::days(3),
+            video_asset: Some("blog/videos/clip.mp4"),
+            vertical_video: Some(true),
+            tiktok_ai_generated: Some(false),
+            captions: store::posts::SourceCaptions {
+                facebook: Some("Facebook copy"),
+                instagram: None,
+                threads: None,
+                youtube: None,
+            },
+            accounts: &[],
+            social_links: &[],
+        }
+    }
+
+    /// The loader reads only the Brands this Admin manages, honors the
+    /// `brand_key`, `video_asset`, `month`, `day`, and `error` query values,
+    /// and projects each Post with its per-provider eligibility.
+    #[cfg(feature = "server")]
+    #[test]
+    fn the_catalog_loader_projects_the_admins_posts_and_query() {
+        use crate::inbox::server_fn_test_support::{call, request_parts, runtime, Viewer};
+
+        let rt = runtime();
+        let (surreal, admin, brand) = rt.block_on(async {
+            let surreal = store::test_support::mem_surreal().await;
+            let (admin, brand) = practice(&surreal, "catalog-loader").await;
+            let (_, other_brand) = practice(&surreal, "catalog-other").await;
+            store::posts::import_source(
+                &surreal,
+                &source_post(&brand, "first-post", "scheduled"),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+            store::posts::import_source(
+                &surreal,
+                &source_post(&other_brand, "hidden-post", "scheduled"),
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+            store::posts::record_video(&surreal, &brand, "blog/videos/clip.mp4", 1080, 1920)
+                .await
+                .unwrap();
+            (surreal, admin, brand)
+        });
+
+        let uri = format!(
+            "{APP_PATH}?brand_key={brand}&video_asset=blog/videos/clip.mp4&month=2026-02&day=2026-02-14&error=Refused"
+        );
+        let parts = request_parts(
+            &rt,
+            APP_PATH,
+            &uri,
+            &Viewer::new(ViewerRole::Admin, Some(admin)),
+        );
+        let (page, status) = call(
+            &rt,
+            parts,
+            |dom| dom.provide_root_context(surreal.clone()),
+            blog_catalog_page,
+        );
+        assert_eq!(status, axum::http::StatusCode::OK);
+        let page = page.expect("the Admin may read the catalog");
+        assert_eq!(page.role, ViewerRole::Admin);
+        assert_eq!(page.brands, vec![brand.clone()], "only the managed Brand");
+        assert_eq!(page.brand_filter.as_deref(), Some(brand.as_str()));
+        assert_eq!(page.error.as_deref(), Some("Refused"));
+        assert_eq!(page.csrf_token, "CSRF");
+        assert_eq!(page.calendar.month, "2026-02");
+        assert_eq!(page.calendar.compose_at, "2026-02-14T09:00:00+00:00");
+        let video = page.uploaded_video.expect("the Brand's own upload");
+        assert_eq!((video.width, video.height), (1080, 1920));
+        assert_eq!(video.orientation, "vertical");
+
+        assert_eq!(page.rows.len(), 1, "the other Firm's Post stays hidden");
+        let row = &page.rows[0];
+        assert_eq!(row.slug, "first-post");
+        assert_eq!(row.status, "scheduled");
+        assert_eq!(row.facebook_caption.as_deref(), Some("Facebook copy"));
+        assert_eq!(row.tiktok_ai_generated, Some(false));
+        assert!(row.vertical_video);
+        assert!(row
+            .video_url
+            .as_deref()
+            .is_some_and(|url| url.ends_with("clip.mp4")));
+        assert_eq!(row.eligibility.len(), ELIGIBILITY_PROVIDERS.len());
+        assert!(row
+            .eligibility
+            .iter()
+            .any(|item| item.provider == "TikTok for Business"));
+    }
+
+    /// A Lawyer is refused before the store is read, and an Admin with no
+    /// linked person is refused too.
+    #[cfg(feature = "server")]
+    #[test]
+    fn the_catalog_loader_refuses_a_non_admin_and_an_unlinked_admin() {
+        use crate::inbox::server_fn_test_support::{call, request_parts, runtime, Viewer};
+
+        let rt = runtime();
+        let surreal = rt.block_on(store::test_support::mem_surreal());
+        for viewer in [
+            Viewer::new(ViewerRole::Lawyer, Some(uuid::Uuid::now_v7())),
+            Viewer::new(ViewerRole::Admin, None),
+        ] {
+            let parts = request_parts(&rt, APP_PATH, APP_PATH, &viewer);
+            let (page, _) = call(
+                &rt,
+                parts,
+                |dom| dom.provide_root_context(surreal.clone()),
+                blog_catalog_page,
+            );
+            assert!(page.is_err());
+        }
     }
 }

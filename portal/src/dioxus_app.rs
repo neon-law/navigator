@@ -614,7 +614,9 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
         views::brand::BrandKey::Neon => &GORP_HEAD,
         views::brand::BrandKey::DeleteYourData => &PLUS_JAKARTA_SANS_HEAD,
         views::brand::BrandKey::LawyerShook => &LAWYER_SHOOK_HEAD,
-        views::brand::BrandKey::GuiebShook => &GUIEB_SHOOK_HEAD,
+        views::brand::BrandKey::GuiebShook | views::brand::BrandKey::LexTecnica => {
+            &GUIEB_SHOOK_HEAD
+        }
         views::brand::BrandKey::Vesta => &VESTA_HEAD,
         views::brand::BrandKey::Abhaya => &ABHAYA_HEAD,
         views::brand::BrandKey::DeleteYourDebt => &DELETE_YOUR_DEBT_HEAD,
@@ -3551,7 +3553,8 @@ async fn inject_catalog_index(
 
 // ─── The free court-form catalog ─────────────────────────────────────────────
 //
-// The public surface of `store/seeds/Court.yaml` (PR 163's registry): one
+// The public surface of the court seeds (`store::court_seeds::COURT_SEEDS`,
+// PR 163's registry): one
 // page per jurisdiction listing each court's forms with filing office,
 // fee, fee waiver, and the official source, plus a machine-readable JSON
 // twin. Both firms host it; the copy carries each brand's free-of-charge
@@ -4891,21 +4894,58 @@ pub fn owner_inbox_router(
     surreal: store::surreal::SurrealDb,
 ) -> Router {
     csrf_page_router(
-        webapp::inbox::INBOX_PATH,
-        webapp::inbox::OwnerInbox,
+        webapp::communication_dashboard::PARKED_CALLS_PATH,
+        webapp::communication_dashboard::Communications,
         surreal.clone(),
         sessions.clone(),
         policy.clone(),
         auth.clone(),
     )
     .merge(csrf_page_router(
-        OWNER_INBOX_PATH,
-        webapp::inbox::OwnerInbox,
+        webapp::communication_dashboard::BRAND_COMMUNICATIONS_PATH,
+        webapp::communication_dashboard::Communications,
+        surreal.clone(),
+        sessions.clone(),
+        policy.clone(),
+        auth.clone(),
+    ))
+    .merge(
+        csrf_page_router(
+            webapp::inbox::INBOX_PATH,
+            webapp::inbox::OwnerInbox,
+            surreal.clone(),
+            sessions.clone(),
+            policy.clone(),
+            auth.clone(),
+        )
+        .merge(csrf_page_router(
+            OWNER_INBOX_PATH,
+            webapp::inbox::OwnerInbox,
+            surreal,
+            sessions,
+            policy,
+            auth,
+        )),
+    )
+}
+
+/// `/app/inbox/triage` — the human-review queue over `NeedsHuman` and
+/// `Suggested` triage rows. Same admission as the rest of `/app/inbox`:
+/// Owner, Admin, Lawyer, and Clerk; the store re-checks the actor.
+pub fn triage_queue_router(
+    sessions: crate::session::SessionStore,
+    policy: crate::policy::PolicyClient,
+    auth: crate::auth::AuthConfig,
+    surreal: store::surreal::SurrealDb,
+) -> Router {
+    csrf_page_router(
+        webapp::inbox_triage::TRIAGE_QUEUE_PATH,
+        webapp::inbox_triage::TriageQueue,
         surreal,
         sessions,
         policy,
         auth,
-    ))
+    )
 }
 
 /// `/app/inbox/{conversation_id}`.

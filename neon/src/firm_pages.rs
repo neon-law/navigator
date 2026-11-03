@@ -1506,6 +1506,10 @@ fn resolve_firm_contact_content(
             "Reach {firm_name}, attorneys at law. Attorney advertisement. Nothing here is legal \
              advice without a signed retainer for an active project."
         ),
+        BrandKey::LexTecnica => format!(
+            "Reach {firm_name}, a brand of Lex Tecnica, Ltd., about legal services. Attorney \
+             advertisement. Contacting the firm does not create an attorney-client relationship."
+        ),
         BrandKey::Neon => format!(
             "Reach {firm_name} for estate planning, corporate formation, litigation, and ongoing \
              legal services."
@@ -1573,6 +1577,7 @@ pub(crate) fn resolve_firm_home_content(
         | BrandKey::Aegis
         | BrandKey::Groundwork
         | BrandKey::DeathAndDivorce
+        | BrandKey::LexTecnica
         | BrandKey::IepDefenders => locales::home_for_host(branding, deployment_host),
     }
 }
@@ -1643,7 +1648,9 @@ fn portfolio_practices(copy: Vec<webapp::home::PracticeLink>) -> Vec<webapp::hom
         .into_iter()
         .map(|practice| (practice.href, practice.body))
         .collect();
-    let mut practices: Vec<webapp::home::PracticeLink> = views::brand::BrandKey::LIVE
+    // Guieb & Shook's own practices only: Lex Tecnica's brands are another
+    // firm's.
+    let mut practices: Vec<webapp::home::PracticeLink> = views::brand::BrandKey::GUIEB_SHOOK_FAMILY
         .iter()
         .copied()
         .filter(|key| !matches!(key, BrandKey::LawyerShook | BrandKey::GuiebShook))

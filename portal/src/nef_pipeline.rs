@@ -42,8 +42,8 @@ pub(crate) enum NefOutcome {
         entry_number: String,
     },
     /// The notice carries no document number, so there is no docket
-    /// ordinal to record. Only the email original is filed; nothing was
-    /// recorded on the docket.
+    /// ordinal to record. Available attachment assets and the email original
+    /// are filed, with no docket entry.
     TextOnly { filed_documents: usize },
     /// The message belongs to no matter. Nothing was filed; the message
     /// stays in the triage backlog.
@@ -294,6 +294,18 @@ async fn raw_source(
     state: &crate::api::ApiState,
     row: &store::inbox::UnprocessedRow,
 ) -> Result<Option<Vec<u8>>, ApiError> {
+    // An import can keep the raw source directly on the normalized message.
+    if let Some(message) = store::inbox::message_by_id(&state.surreal, row.id)
+        .await
+        .map_err(map_inbox)?
+    {
+        if let Some(key) = message.raw_storage_key {
+            return read_raw_source(state, &key).await.map(Some);
+        }
+    }
+    let Some(provider_message_id) = row.provider_message_id.as_deref() else {
+        return Ok(None);
+    };
     let Some(conversation) = store::inbox::conversation_by_id(&state.surreal, row.conversation_id)
         .await
         .map_err(map_inbox)?
@@ -307,18 +319,24 @@ async fn raw_source(
         .await
         .map_err(|error| map_email(&error))?
         .into_iter()
-        .find_map(|hop| hop.raw_storage_key);
+        .find(|hop| {
+            hop.direction == store::email_conversations::DIRECTION_FROM_EXTERNAL
+                && hop.provider_message_id.as_deref() == Some(provider_message_id)
+        })
+        .and_then(|hop| hop.raw_storage_key);
     let Some(key) = raw_key else {
         return Ok(None);
     };
-    Ok(Some(
-        state
-            .storage
-            .get(&key)
-            .await
-            .map_err(|error| ApiError::Db(error.to_string()))?
-            .bytes,
-    ))
+    read_raw_source(state, &key).await.map(Some)
+}
+
+async fn read_raw_source(state: &crate::api::ApiState, key: &str) -> Result<Vec<u8>, ApiError> {
+    Ok(state
+        .storage
+        .get(key)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .bytes)
 }
 
 /// Every attachment asset the message links, with their bytes read back

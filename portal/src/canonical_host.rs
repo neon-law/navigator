@@ -29,10 +29,13 @@
 //! whether or not `CANONICAL_HOST` is configured, because the gate is about
 //! what this build may publish rather than about which host it prefers.
 //!
-//! When browser OAuth is configured, `/app` and sign-in entry points first
-//! redirect to the callback origin, before any authentication cookie is issued.
-//! That configured origin is also admitted so canonical-host enforcement cannot
-//! bounce it back to a different public host. Health probes remain exempt.
+//! When browser OAuth is configured, a brand host keeps its own `/app` and
+//! session: its `/auth/login` detours through the callback origin and is
+//! handed back (see [`crate::host_handoff`]). Any other host's `/app` and
+//! sign-in entry points redirect to the callback origin before any
+//! authentication cookie is issued. That configured origin is also admitted so
+//! canonical-host enforcement cannot bounce it back to a different public host.
+//! Health probes remain exempt.
 //!
 //! Locally there is no DNS standing in for a second brand's real hostname, so
 //! [`CanonicalHost`] also carries a *local port map*: a `BrandKey` a
@@ -116,6 +119,20 @@ impl CanonicalHost {
             }) == origin.port_or_known_default()
     }
 
+    /// Whether a sign-in may be handed back to `host` (a `Host:` value, port
+    /// included): a live brand host on its default port, or one of this
+    /// deployment's local brand listeners. Never the callback origin itself.
+    #[must_use]
+    pub fn is_handoff_host(&self, host: &str) -> bool {
+        if self.is_sign_in_host(host) {
+            return false;
+        }
+        if self.resolve_local_port(host).is_some() {
+            return crate::host_handoff::is_loopback(host);
+        }
+        !host.contains(':') && admitted_brand_key(host).is_some()
+    }
+
     #[must_use]
     pub fn is_enforced(&self) -> bool {
         self.canonical.is_some()
@@ -167,6 +184,39 @@ fn local_brand_ports_from_lookup<F: Fn(&str) -> Option<String>>(get: F) -> BTree
         .collect()
 }
 
+/// Where a sign-in entry, or `/app` on a host without its own session, goes
+/// instead of being served here. `None` serves the request.
+fn sign_in_detour(cfg: &CanonicalHost, host: &str, uri: &axum::http::Uri) -> Option<Response> {
+    let origin = cfg.sign_in_origin.as_ref()?;
+    if cfg.is_sign_in_host(host) {
+        return None;
+    }
+    let path = uri.path();
+    let login_entry = path == "/auth/login" || path.starts_with("/auth/login/");
+    let app_entry = path == "/app" || path.starts_with("/app/");
+    let path_and_query = uri
+        .path_and_query()
+        .map_or("/", axum::http::uri::PathAndQuery::as_str);
+    // A brand host keeps its own `/app` and its own session. Its sign-in
+    // detours through the callback origin, the one redirect URI every
+    // provider knows, and is handed back afterwards.
+    if login_entry && cfg.is_handoff_host(host) {
+        return Some(crate::host_handoff::brand_host_login_redirect(
+            origin,
+            host,
+            path_and_query,
+        ));
+    }
+    // Any other host signs in on the callback origin itself.
+    if login_entry || (app_entry && !cfg.is_handoff_host(host)) {
+        // Concatenate an origin with the existing absolute path. URL joining
+        // would interpret a leading `//` as a new, untrusted authority.
+        let target = format!("{}{path_and_query}", origin.origin().ascii_serialization());
+        return Some(Redirect::to(&target).into_response());
+    }
+    None
+}
+
 /// Axum middleware. Resolves the request's brand from its `Host:` header and
 /// stashes it as a [`BrandKey`] request extension for `scope_branding` to
 /// read; redirects an unregistered, non-canonical host when enforcement is
@@ -210,22 +260,8 @@ pub async fn resolve_brand_and_enforce_host(
     }) {
         return (StatusCode::NOT_FOUND, webapp::error_pages::not_found()).into_response();
     }
-    let path = req.uri().path();
-    let sign_in_entry = path == "/app"
-        || path.starts_with("/app/")
-        || path == "/auth/login"
-        || path.starts_with("/auth/login/");
-    if sign_in_entry && raw_host.is_some_and(|host| !cfg.is_sign_in_host(host)) {
-        if let Some(origin) = &cfg.sign_in_origin {
-            let path_and_query = req
-                .uri()
-                .path_and_query()
-                .map_or("/", axum::http::uri::PathAndQuery::as_str);
-            // Concatenate an origin with the existing absolute path. URL joining
-            // would interpret a leading `//` as a new, untrusted authority.
-            let target = format!("{}{path_and_query}", origin.origin().ascii_serialization());
-            return Redirect::to(&target).into_response();
-        }
+    if let Some(detour) = raw_host.and_then(|host| sign_in_detour(&cfg, host, req.uri())) {
+        return detour;
     }
     // The local port map takes the full authority — a bound local port
     // forces its brand regardless of hostname, since `localhost` (or any
@@ -291,6 +327,15 @@ pub async fn resolve_brand_and_enforce_host(
         }
     }
 
+    // `/privacy` and `/terms` publish Guieb & Shook PC's own policy and terms.
+    // Another firm's brand sends a reader to that firm's published page, or
+    // answers 404 where it publishes none, rather than presenting Guieb &
+    // Shook's documents as its own.
+    if let Some(key) = resolved.filter(|key| !key.is_guieb_shook()) {
+        if let Some(response) = other_firm_legal_page(key, req.uri().path()) {
+            return response;
+        }
+    }
     match (resolved, cfg.canonical()) {
         (Some(key), _) => {
             req.extensions_mut().insert(key);
@@ -315,6 +360,22 @@ pub async fn resolve_brand_and_enforce_host(
     }
 }
 
+/// The response for `/privacy` or `/terms` on a brand of another firm: a 302
+/// to that firm's own published page, or 404 when it publishes none.
+fn other_firm_legal_page(key: BrandKey, path: &str) -> Option<Response> {
+    let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+    let target = match path.trim_end_matches('/') {
+        "/privacy" => branding.privacy_url,
+        "/terms" => branding.terms_url,
+        _ => return None,
+    };
+    Some(if target.starts_with("https://") {
+        Redirect::to(target).into_response()
+    } else {
+        (StatusCode::NOT_FOUND, webapp::error_pages::not_found()).into_response()
+    })
+}
+
 fn strip_port(host_header: &str) -> &str {
     host_header.split(':').next().unwrap_or(host_header)
 }
@@ -335,22 +396,28 @@ mod tests {
     /// same thing more quietly.
     #[test]
     fn each_apex_resolves_to_its_own_brand() {
-        for key in BrandKey::ALL {
+        for (key, apex) in apexes() {
             assert_eq!(
-                views::brand::brand_key_for_apex(key.apex()),
-                Some(*key),
-                "{} owns its apex {}",
+                views::brand::brand_key_for_apex(apex),
+                Some(key),
+                "{} owns its apex {apex}",
                 key.as_str(),
-                key.apex(),
             );
             assert!(
-                key.canonical_host().ends_with(key.apex()),
-                "{}'s canonical host {} must sit under its own apex {}",
+                key.canonical_host().ends_with(apex),
+                "{}'s canonical host {} must sit under its own apex {apex}",
                 key.as_str(),
                 key.canonical_host(),
-                key.apex(),
             );
         }
+    }
+
+    /// Every key with a naked domain of its own, and that domain. Brands on
+    /// `neonlaw.com` subdomains have none.
+    fn apexes() -> impl Iterator<Item = (BrandKey, &'static str)> {
+        BrandKey::ALL
+            .iter()
+            .filter_map(|key| key.apex().map(|apex| (*key, apex)))
     }
 
     /// An apex is never also a served host.
@@ -360,17 +427,16 @@ mod tests {
     /// the wrong fix.
     #[test]
     fn an_apex_is_never_a_served_host() {
-        for key in BrandKey::ALL {
+        for (key, apex) in apexes() {
             assert!(
-                views::brand::registered_brand_key(key.apex()).is_none(),
-                "{} serves its apex {} instead of redirecting it",
+                views::brand::registered_brand_key(apex).is_none(),
+                "{} serves its apex {apex} instead of redirecting it",
                 key.as_str(),
-                key.apex(),
             );
             for host in key.hosts() {
                 assert_ne!(
                     *host,
-                    key.apex(),
+                    apex,
                     "{} lists its apex among the hosts it serves",
                     key.as_str()
                 );
@@ -383,14 +449,13 @@ mod tests {
     #[test]
     fn no_two_brands_share_an_apex() {
         let mut seen: Vec<&str> = Vec::new();
-        for key in BrandKey::ALL {
+        for (key, apex) in apexes() {
             assert!(
-                !seen.contains(&key.apex()),
-                "{} repeats an apex already claimed: {}",
+                !seen.contains(&apex),
+                "{} repeats an apex already claimed: {apex}",
                 key.as_str(),
-                key.apex(),
             );
-            seen.push(key.apex());
+            seen.push(apex);
         }
     }
 

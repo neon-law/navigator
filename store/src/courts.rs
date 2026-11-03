@@ -1,11 +1,12 @@
 //! The court-form registry — reference data for court self-help forms and
 //! the offices that accept them.
 //!
-//! `store/seeds/Court.yaml` models two things: the courts (name, jurisdiction
-//! code, county/city, level) and, nested under each court, the per-form
-//! entries keyed to forms-shelf template codes (official form number, title,
-//! source URL, sha-256 of the official blank, filing office, filing fee, and
-//! the fee-waiver form the office accepts).
+//! The [`crate::court_seeds::COURT_SEEDS`] table models two things: the
+//! courts (name, jurisdiction code, county/city, level) and, nested under
+//! each court, the per-form entries keyed to forms-shelf template codes
+//! (official form number, title, source URL, sha-256 of the official
+//! blank, filing office, filing fee, and the fee-waiver form the office
+//! accepts).
 //!
 //! # No table, deliberately
 //!
@@ -13,9 +14,8 @@
 //! it is compile-time reference data, served by the public catalog and
 //! reconciled by the cross-crate guard test (`cli/tests/court_registry.rs`),
 //! because fee data must not become part of every environment's seed state.
-//! `store/tests/seed_boundary.rs` still classifies the file in the canonical
-//! layer, and [`parse`] is strict — `deny_unknown_fields` on every record —
-//! so a schema drift fails tests rather than a catalog page later.
+//! [`embedded`] is strict — it validates every record — so a schema drift
+//! fails tests rather than a catalog page later.
 //!
 //! # The join contract
 //!
@@ -35,9 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-/// The registry YAML embedded at compile time — the file this module types.
-/// Public so cross-crate tests reconcile the exact bytes the binary ships.
-pub const COURT_SEED_YAML: &str = include_str!("../seeds/Court.yaml");
+use crate::court_seeds::COURT_SEEDS;
 
 /// One court, or the court that approves a statewide form set. A
 /// county-specific court names its county; a city or township court names
@@ -189,10 +187,6 @@ pub struct FilingFee {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RegistryError {
-    #[error("parse court registry: {0}")]
-    Parse(#[from] serde_yaml::Error),
-    #[error("court registry lookup_fields must be exactly [key], got {0:?}")]
-    UnexpectedLookupFields(Vec<String>),
     #[error("court key `{0}` is registered twice")]
     DuplicateCourt(String),
     #[error("form code `{0}` is registered twice (under {1} and {2})")]
@@ -215,36 +209,16 @@ pub enum RegistryError {
     BlankField(String, String, &'static str),
 }
 
-#[derive(Debug, Deserialize)]
-struct Envelope<T> {
-    lookup_fields: Vec<String>,
-    records: Vec<T>,
-}
-
-/// Parse and validate a registry document — the full seed-shaped envelope,
-/// strict about unknown fields, duplicate keys, and unseeded jurisdictions.
+/// The shipped registry: the court seeds, validated against the registry
+/// schema.
 ///
 /// # Errors
 ///
-/// [`RegistryError`] naming the court or form the document goes wrong on.
-pub fn parse(yaml: &str) -> Result<Vec<Court>, RegistryError> {
-    let envelope: Envelope<Court> = serde_yaml::from_str(yaml)?;
-    if envelope.lookup_fields != vec!["key"] {
-        return Err(RegistryError::UnexpectedLookupFields(
-            envelope.lookup_fields,
-        ));
-    }
-    validate(&envelope.records)?;
-    Ok(envelope.records)
-}
-
-/// The embedded registry: parse and validate [`COURT_SEED_YAML`].
-///
-/// # Errors
-///
-/// [`RegistryError`] when the shipped file fails its own schema.
+/// [`RegistryError`] when the shipped seed data fails its own schema.
 pub fn embedded() -> Result<Vec<Court>, RegistryError> {
-    parse(COURT_SEED_YAML)
+    let courts = COURT_SEEDS.clone();
+    validate(&courts)?;
+    Ok(courts)
 }
 
 /// The jurisdiction codes `store/seeds/Jurisdiction.yaml` seeds.
@@ -286,7 +260,7 @@ pub fn jurisdiction_name(code: &str) -> Option<String> {
         .map(|record| record.name)
 }
 
-fn validate(courts: &[Court]) -> Result<(), RegistryError> {
+pub(crate) fn validate(courts: &[Court]) -> Result<(), RegistryError> {
     let jurisdiction_codes = seeded_jurisdiction_codes();
     let mut court_keys = BTreeSet::new();
     let mut form_courts: BTreeMap<&str, &str> = BTreeMap::new();
@@ -447,25 +421,43 @@ fn is_decimal_amount(amount: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        embedded, is_decimal_amount, is_sha256_pin, jurisdiction_name, parse, Court, RegistryError,
+        embedded, is_decimal_amount, is_sha256_pin, jurisdiction_name, validate, Court, CourtForm,
+        FilingFee, RegistryError,
     };
-
-    /// Wrap one or more full court records (already YAML-indented) in the
-    /// seed envelope, so each fixture reads as the document it parses.
-    fn document(records: &str) -> String {
-        format!("lookup_fields:\n  - key\nrecords:\n{records}")
-    }
 
     const VALID_SHA256: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-    fn adult_name_change(code: &str) -> String {
-        format!(
-            "      - code: {code}
-        title: Petition for Adult Name Change
-        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-adult-petition-pdf-fillable.pdf
-        sha256: {VALID_SHA256}
-        filing_office: Family Division Clerk's Office"
-        )
+    /// One registered form, parameterized only by the field a negative test
+    /// varies.
+    fn form(code: &str) -> CourtForm {
+        CourtForm {
+            code: code.to_string(),
+            title: "Petition for Adult Name Change".to_string(),
+            form_number: None,
+            source_url:
+                "https://selfhelp.nvcourts.gov/images/name-change/name-adult-petition-pdf-fillable.pdf"
+                    .to_string(),
+            sha256: VALID_SHA256.to_string(),
+            filing_office: "Family Division Clerk's Office".to_string(),
+            filing_fee: None,
+            fee_note: None,
+            fee_waiver_code: None,
+        }
+    }
+
+    /// One registered court, parameterized only by the fields a negative
+    /// test varies.
+    fn court(key: &str, jurisdiction: &str, forms: Vec<CourtForm>) -> Court {
+        Court {
+            key: key.to_string(),
+            name: "Eighth Judicial District Court".to_string(),
+            jurisdiction: jurisdiction.to_string(),
+            county: Some("Clark".to_string()),
+            city: None,
+            level: super::CourtLevel::District,
+            forms,
+            surveyed_forms: Vec::new(),
+        }
     }
 
     #[test]
@@ -493,8 +485,8 @@ mod tests {
     }
 
     #[test]
-    fn embedded_registry_parses_and_validates() {
-        let courts = embedded().expect("shipped court registry must parse and validate");
+    fn embedded_registry_validates() {
+        let courts = embedded().expect("shipped court registry must validate");
         assert!(!courts.is_empty(), "registry lists no courts");
         for court in &courts {
             assert!(!court.key.is_empty());
@@ -503,79 +495,47 @@ mod tests {
     }
 
     #[test]
-    fn a_valid_form_entry_round_trips() {
-        let document = document(&format!(
-            "  - key: eighth_judicial_district_court
-    name: Eighth Judicial District Court
-    jurisdiction: NV
-    county: Clark
-    level: district
-    forms:
-      - code: nv__adult_name_change_petition
-        title: Petition for Adult Name Change
-        form_number: null
-        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-adult-petition-pdf-fillable.pdf
-        sha256: {VALID_SHA256}
-        filing_office: Family Division Clerk's Office
-        filing_fee:
-          amount: \"270.00\"
-          currency: USD
-        fee_note: null
-        fee_waiver_code: nv__fee_waiver_application"
-        ));
-        let courts = parse(&document).expect("a fully specified form entry parses");
-        let form = &courts[0].forms[0];
-        assert_eq!(form.filing_fee.as_ref().expect("fee").currency, "USD");
-        assert_eq!(
-            form.fee_waiver_code.as_deref(),
-            Some("nv__fee_waiver_application")
-        );
+    fn a_fully_specified_form_entry_is_valid() {
+        let mut form = form("nv__adult_name_change_petition");
+        form.filing_fee = Some(FilingFee {
+            amount: "270.00".to_string(),
+            currency: "USD".to_string(),
+        });
+        form.fee_waiver_code = Some("nv__fee_waiver_application".to_string());
+        validate(&[court("eighth_judicial_district_court", "NV", vec![form])])
+            .expect("a fully specified form entry validates");
     }
 
     #[test]
     fn duplicate_court_keys_are_refused() {
-        let court = "  - key: nevada_supreme_court
-    name: Nevada Supreme Court
-    jurisdiction: NV
-    level: supreme
-    forms: []";
-        let err = parse(&document(&format!("{court}\n{court}")))
+        let key = "eighth_judicial_district_court";
+        let err = validate(&[court(key, "NV", Vec::new()), court(key, "NV", Vec::new())])
             .expect_err("a duplicate court key must fail");
-        assert!(matches!(err, RegistryError::DuplicateCourt(key) if key == "nevada_supreme_court"));
+        assert!(matches!(err, RegistryError::DuplicateCourt(k) if k == key));
     }
 
     #[test]
     fn duplicate_form_codes_across_courts_are_refused() {
-        let document = document(&format!(
-            "  - key: nevada_supreme_court
-    name: Nevada Supreme Court
-    jurisdiction: NV
-    level: supreme
-    forms:
-{}
-  - key: eighth_judicial_district_court
-    name: Eighth Judicial District Court
-    jurisdiction: NV
-    level: district
-    forms:
-{}",
-            adult_name_change("nv__fee_waiver_application"),
-            adult_name_change("nv__fee_waiver_application"),
-        ));
-        let err = parse(&document).expect_err("the same code under two courts must fail");
+        let err = validate(&[
+            court(
+                "nevada_supreme_court",
+                "NV",
+                vec![form("nv__fee_waiver_application")],
+            ),
+            court(
+                "eighth_judicial_district_court",
+                "NV",
+                vec![form("nv__fee_waiver_application")],
+            ),
+        ])
+        .expect_err("the same code under two courts must fail");
         assert!(matches!(err, RegistryError::DuplicateFormCode(..)));
     }
 
     #[test]
     fn unseeded_jurisdiction_codes_are_refused() {
-        let document = document(
-            "  - key: ontario_court_of_justice
-    name: Ontario Court of Justice
-    jurisdiction: ON
-    level: justice
-    forms: []",
-        );
-        let err = parse(&document).expect_err("an unseeded jurisdiction code must fail");
+        let err = validate(&[court("ontario_court_of_justice", "ON", Vec::new())])
+            .expect_err("an unseeded jurisdiction code must fail");
         assert!(
             matches!(err, RegistryError::UnknownJurisdiction(_, code) if code == "ON"),
             "a jurisdiction outside store/seeds/Jurisdiction.yaml must be refused"
@@ -584,71 +544,51 @@ mod tests {
 
     #[test]
     fn insecure_source_urls_and_bad_pins_are_refused() {
-        let record = |url: &str, sha: &str| {
-            document(&format!(
-                "  - key: eighth_judicial_district_court
-    name: Eighth Judicial District Court
-    jurisdiction: NV
-    level: district
-    forms:
-      - code: nv__adult_name_change_petition
-        title: Petition for Adult Name Change
-        source_url: {url}
-        sha256: {sha}
-        filing_office: Family Division Clerk's Office"
-            ))
+        let with = |mutate: fn(&mut CourtForm)| {
+            let mut form = form("nv__adult_name_change_petition");
+            mutate(&mut form);
+            validate(&[court("eighth_judicial_district_court", "NV", vec![form])])
         };
-        let err = parse(&record("http://selfhelp.nvcourts.gov/x.pdf", VALID_SHA256))
+        let err = with(|f| f.source_url = "http://selfhelp.nvcourts.gov/x.pdf".to_string())
             .expect_err("a non-https source_url must fail");
         assert!(matches!(err, RegistryError::InsecureSourceUrl(..)));
-        let err = parse(&record("https://selfhelp.nvcourts.gov/x.pdf", "DEADBEEF"))
-            .expect_err("a non-hex sha256 must fail");
+        let err =
+            with(|f| f.sha256 = "DEADBEEF".to_string()).expect_err("a non-hex sha256 must fail");
         assert!(matches!(err, RegistryError::BadSha256(..)));
     }
 
     #[test]
     fn malformed_fees_are_refused() {
-        let record = |amount: &str, currency: &str| {
-            document(&format!(
-                "  - key: eighth_judicial_district_court
-    name: Eighth Judicial District Court
-    jurisdiction: NV
-    level: district
-    forms:
-      - code: nv__adult_name_change_petition
-        title: Petition for Adult Name Change
-        source_url: https://selfhelp.nvcourts.gov/x.pdf
-        sha256: {VALID_SHA256}
-        filing_office: Family Division Clerk's Office
-        filing_fee:
-          amount: \"{amount}\"
-          currency: {currency}"
-            ))
+        let with = |amount: &str, currency: &str| {
+            let mut form = form("nv__adult_name_change_petition");
+            form.filing_fee = Some(FilingFee {
+                amount: amount.to_string(),
+                currency: currency.to_string(),
+            });
+            validate(&[court("eighth_judicial_district_court", "NV", vec![form])])
         };
-        let err = parse(&record("270", "dollars")).expect_err("a non-ISO currency must fail");
+        let err = with("270", "dollars").expect_err("a non-ISO currency must fail");
         assert!(matches!(err, RegistryError::BadFeeCurrency(..)));
-        let err =
-            parse(&record("twenty-seven", "USD")).expect_err("a non-decimal amount must fail");
+        let err = with("twenty-seven", "USD").expect_err("a non-decimal amount must fail");
         assert!(matches!(err, RegistryError::BadFeeAmount(..)));
     }
 
     #[test]
     fn a_self_referential_fee_waiver_is_refused() {
-        let document = document(&format!(
-            "  - key: eighth_judicial_district_court
-    name: Eighth Judicial District Court
-    jurisdiction: NV
-    level: district
-    forms:
-      - code: nv__fee_waiver_application
-        title: Application to Waive Filing Fee
-        source_url: https://selfhelp.nvcourts.gov/x.pdf
-        sha256: {VALID_SHA256}
-        filing_office: Clerk's Office
-        fee_waiver_code: nv__fee_waiver_application"
-        ));
-        let err = parse(&document).expect_err("a form cannot waive its own fee");
+        let mut form = form("nv__fee_waiver_application");
+        form.fee_waiver_code = Some("nv__fee_waiver_application".to_string());
+        let err = validate(&[court("eighth_judicial_district_court", "NV", vec![form])])
+            .expect_err("a form cannot waive its own fee");
         assert!(matches!(err, RegistryError::SelfReferentialWaiver(..)));
+    }
+
+    #[test]
+    fn blank_titles_and_offices_are_refused() {
+        let mut form = form("nv__adult_name_change_petition");
+        form.title = "   ".to_string();
+        let err = validate(&[court("eighth_judicial_district_court", "NV", vec![form])])
+            .expect_err("a blank title must fail");
+        assert!(matches!(err, RegistryError::BlankField(..)));
     }
 
     #[test]

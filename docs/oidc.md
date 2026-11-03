@@ -21,29 +21,45 @@ This document is the canonical narrative for the system. The Rust modules link b
 
 ## Login sequence
 
-### One sign-in origin across brand hosts
+### Per-host sign-in on one registered callback
 
-Browser authentication lives on the origin of `OAUTH_REDIRECT_URI`. Public pages retain their brand host, but a request
-to `/app`, `/app/*`, `/auth/login`, or `/auth/login/{provider}` on another host receives a 303 to the same path and
-query on that origin. This happens before session renewal, the sign-in chooser's CSRF cookie, or the provider's
-state/PKCE cookie can be issued. A 303 starts a new GET; it does not replay a submitted request body across hosts. The
-`/app/health` and `/app/readyz` probes remain exempt.
+Every identity provider knows one callback, the origin of `OAUTH_REDIRECT_URI`. Each brand host still keeps its own
+session and its own `/app`, so a person signed in on `iep.neonlaw.com` has a session there and nowhere else. No provider
+needs one redirect URI per host.
+
+1. `/auth/login` or `/auth/login/{provider}` on a live brand host sets a host-only `navigator_handoff_nonce` cookie and
+   answers 303 to the same path and query on the callback origin, adding `return_host` and `handoff_nonce`.
+2. The callback origin keeps both in a signed `navigator_return_host` cookie, only when `return_host` is a live brand
+   host on its default port or a loopback brand listener in development. Any other host is ignored.
+3. After the provider verifies the person, the callback origin redirects to `https://<return_host>/auth/handoff` with a
+   signed payload that expires in 60 seconds and is bound to that host and nonce.
+4. The brand host checks the signature, the expiry, its own `Host:`, and its nonce cookie, then clears the cookie. It
+   re-reads the role and admission from the Person row and sets its own `navigator_session`.
+
+A captured handoff URL fails in any other browser, because the nonce lives in an `HttpOnly` cookie on the brand host.
+The handoff answers with `Referrer-Policy: no-referrer`.
+
+`/app` on a host that is neither the callback origin nor a live brand host still answers 303 to the callback origin. A
+303 starts a new GET; it does not replay a submitted request body across hosts. The `/app/health` and `/app/readyz`
+probes remain exempt.
 
 The callback origin comes from configuration, never a forwarded host header. Host matching ignores letter case and
 normalizes the scheme's default port; local listener ports remain distinct. The configured callback host is admitted
 even when `CANONICAL_HOST` names a different public host, preventing a redirect loop. Without browser OAuth configured,
 ordinary brand-host routing applies.
 
-All providers use the primary origin's callback. The selected provider stays in the direct sign-in route and then in the
-signed pre-auth cookie. A safe local `return_to` path keeps its query string through the chooser and callback; external
-URLs, network-path URLs, backslashes, and control characters fall back to the person's role landing. Provider links
-encode that destination as one query value. State, nonce, PKCE, and token validation remain mandatory. A callback
-missing its pre-auth cookie is refused with a message pointing to the configured primary sign-in URL.
+A safe local `return_to` path keeps its query string through the chooser, the callback and the handoff. External URLs,
+network-path URLs, backslashes, and control characters fall back to the person's role landing. State, nonce, PKCE, and
+token validation remain mandatory. A callback missing its pre-auth cookie is refused with a message pointing to the
+configured primary sign-in URL.
 
-[`server/tests/oauth_host.rs`](../server/tests/oauth_host.rs) exercises these boundaries through the composed router.
-Its live browser case uses the worktree's secondary listener at `127.0.0.1` and the primary callback at `localhost`, so
-the browser must enforce host-only cookie isolation. Run that case with the generated `.devx/env` and the browser
-harness, alongside the required browser and accessibility suites.
+`navigator ops host setup --host <host> --deployment <name>` checks a new host's sign-in detour along with its DNS and
+certificate.
+
+[`server/tests/oauth_host.rs`](../server/tests/oauth_host.rs) exercises these boundaries through the composed router,
+including the full handoff round trip and a refused handoff without the nonce cookie. Its live browser case uses the
+worktree's secondary listener at `127.0.0.1` and the primary callback at `localhost`, so the browser enforces host-only
+cookie isolation.
 
 ### Authorization Code flow
 
@@ -363,12 +379,13 @@ not part of this switch.
 
 ### One callback, two providers
 
-Both providers share `OAUTH_REDIRECT_URI`, so there is exactly one public callback to register and defend. The provider
-is carried in `PreAuth`, inside the existing HMAC-signed, `HttpOnly`, one-shot pre-auth cookie, next to `state` and the
-PKCE verifier. The browser cannot forge it, and binding all three together means an authorization code can only be
-redeemed at the token endpoint of the provider the login actually started against — the mitigation shape RFC 9207
-describes for IdP mix-up. The field is `serde(default)`, so a login already in flight when a new build rolls out
-completes against the primary provider instead of failing on an unrecognised cookie.
+Every provider shares `OAUTH_REDIRECT_URI`, so there is exactly one public callback to register and defend, however many
+brand hosts sign in through it. The provider is carried in `PreAuth`, inside the existing HMAC-signed, `HttpOnly`,
+one-shot pre-auth cookie, next to `state` and the PKCE verifier. The browser cannot forge it, and binding all three
+together means an authorization code can only be redeemed at the token endpoint of the provider the login actually
+started against — the mitigation shape RFC 9207 describes for IdP mix-up. The field is `serde(default)`, so a login
+already in flight when a new build rolls out completes against the primary provider instead of failing on an
+unrecognised cookie.
 
 `/auth/login/{provider}` takes the slug (`oidc` for the primary slot, which is why the historical `/auth/login/oidc` URL
 still resolves; `microsoft` for Entra). An unknown or unconfigured slug is a 404 — substituting the primary provider

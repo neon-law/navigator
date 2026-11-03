@@ -979,7 +979,7 @@ fn additional_brand_bindings(public_host: &str) -> Vec<AdditionalBrandBinding> {
     views::brand::release_brand_hosts()
         .into_iter()
         .filter(|(key, _)| *key != BrandKey::default())
-        .filter(|(_, host)| host.starts_with("staging.") == staging)
+        .filter(|(_, host)| views::brand::is_staging_host(host) == staging)
         .map(|(key, host)| AdditionalBrandBinding { key, host })
         .collect()
 }
@@ -1009,6 +1009,9 @@ const FIRM_CERTIFICATE_ONLY: &[BrandKey] = &[
     BrandKey::Abhaya,
     BrandKey::DeathAndDivorce,
     BrandKey::GuiebShook,
+    // Born on the Firm certificate: they never had one of their own.
+    BrandKey::LexTecnica,
+    BrandKey::IepDefenders,
 ];
 
 fn has_own_certificate(key: BrandKey) -> bool {
@@ -2687,6 +2690,21 @@ fn ensure_ship_permissions(
     opts: &ShipOpts,
     lane: ShipLane,
 ) -> Result<()> {
+    let permissions = ship_permissions(cfg, deployment, opts, lane)?;
+    check_ship_permissions(&permissions, |permission| {
+        review_ship_permission(cfg, permission)
+    })
+}
+
+/// Every Kubernetes permission the selected lane exercises, resolved from the
+/// rendered release without contacting the cluster. Split from
+/// [`ensure_ship_permissions`] so the set is unit-tested per lane.
+fn ship_permissions(
+    cfg: &ShipConfig,
+    deployment: &super::deployments::Deployment,
+    opts: &ShipOpts,
+    lane: ShipLane,
+) -> Result<BTreeSet<ShipPermission>> {
     let mut permissions = BTreeSet::new();
     for verb in ["get", "list", "watch", "patch"] {
         permissions.insert(ShipPermission::new(
@@ -2772,9 +2790,7 @@ fn ensure_ship_permissions(
             ));
         }
     }
-    check_ship_permissions(&permissions, |permission| {
-        review_ship_permission(cfg, permission)
-    })
+    Ok(permissions)
 }
 
 fn check_ship_permissions(
@@ -6794,11 +6810,11 @@ mod tests {
                 "{}'s production host gets an Ingress rule: {ingress}",
                 key.as_str(),
             );
-            let staging_host = format!("staging.{}", key.apex());
+            let staging_host = key.staging_host();
             assert!(
-                !cert_manifest.contains(&staging_host)
-                    && !brand_certs.contains(&staging_host)
-                    && !ingress.contains(&staging_host),
+                !cert_manifest.contains(staging_host)
+                    && !brand_certs.contains(staging_host)
+                    && !ingress.contains(staging_host),
                 "a production render must not carry {}'s staging sibling",
                 key.as_str(),
             );
@@ -7751,7 +7767,9 @@ mod tests {
             [
                 "navigator-web-abhaya",
                 "navigator-web-death-and-divorce",
-                "navigator-web-guieb-shook"
+                "navigator-web-guieb-shook",
+                "navigator-web-lex-tecnica",
+                "navigator-web-iep-defenders"
             ]
         );
         for name in &retired {
@@ -7945,7 +7963,8 @@ mod tests {
                 "www.aegiscriminaldefense.com",
                 "www.groundworkrealestatelaw.com",
                 "www.guiebandshook.com",
-                "www.iepdefenders.com",
+                "lex-tecnica.neonlaw.com",
+                "iep.neonlaw.com",
             ],
             "a production public host pulls in every other registered brand's production host — \
              ENG-808: the full registry, not only the launched ones"
@@ -7966,14 +7985,14 @@ mod tests {
                 "staging.aegiscriminaldefense.com",
                 "staging.groundworkrealestatelaw.com",
                 "staging.guiebandshook.com",
-                "staging.iepdefenders.com",
+                "staging-lex-tecnica.neonlaw.com",
+                "staging-iep.neonlaw.com",
             ],
             "a staging public host pulls in only the other brands' staging hosts"
         );
-        assert!(!views::brand::BrandKey::IepDefenders.is_live());
         assert!(
             views::brand::admitted_brand_key("www.iepdefenders.com").is_none(),
-            "release TLS readiness does not admit a held-out public route"
+            "IEP Defenders is served on neonlaw.com, never its own domain"
         );
     }
 
@@ -7993,14 +8012,16 @@ mod tests {
             if *key == views::brand::BrandKey::default() {
                 continue;
             }
+            let Some(apex) = key.apex() else {
+                continue;
+            };
             assert!(
-                !production.contains(&key.apex()),
-                "{} apex {} must not reach the load balancer: {production:?}",
+                !production.contains(&apex),
+                "{} apex {apex} must not reach the load balancer: {production:?}",
                 key.as_str(),
-                key.apex(),
             );
             assert!(
-                views::brand::registered_brand_key(key.apex()).is_none(),
+                views::brand::registered_brand_key(apex).is_none(),
                 "{}'s apex must redirect rather than serve",
                 key.as_str(),
             );
@@ -8008,7 +8029,7 @@ mod tests {
         assert!(
             !additional_brand_hosts("staging.navigator.example.invalid")
                 .iter()
-                .any(|host| !host.starts_with("staging.")),
+                .any(|host| !views::brand::is_staging_host(host)),
             "staging carries no apex"
         );
     }
@@ -8031,7 +8052,7 @@ mod tests {
                 continue;
             }
             for host in key.hosts() {
-                let public_host = if host.starts_with("staging.") {
+                let public_host = if views::brand::is_staging_host(host) {
                     "staging.navigator.example.invalid"
                 } else {
                     "navigator.example.invalid"
@@ -8076,7 +8097,7 @@ mod tests {
             // deployment never routes would be a live-brand regression.
             for (key, host) in views::brand::live_brand_hosts() {
                 if key == views::brand::BrandKey::default()
-                    || host.starts_with("staging.") != staging
+                    || views::brand::is_staging_host(host) != staging
                 {
                     continue;
                 }
@@ -8110,7 +8131,7 @@ mod tests {
     #[test]
     fn the_family_row_lists_only_admitted_brands() {
         let listed = webapp::firm_footer::compiled_family_brands(views::brand::BrandKey::default());
-        for key in views::brand::BrandKey::ALL {
+        for key in views::brand::BrandKey::GUIEB_SHOOK_FAMILY {
             let href = key.public_home_href();
             let present = listed.iter().any(|brand| brand.href == href);
             assert_eq!(
@@ -8145,7 +8166,7 @@ mod tests {
         for key in views::brand::BrandKey::ALL {
             if *key != views::brand::BrandKey::default() {
                 assert!(
-                    !cert_manifest.contains(&format!("staging.{}", key.apex())),
+                    !cert_manifest.contains(key.staging_host()),
                     "{}'s staging host must not share the default-brand certificate",
                     key.as_str(),
                 );
@@ -8158,7 +8179,7 @@ mod tests {
             if *key == views::brand::BrandKey::default() {
                 continue;
             }
-            let staging_host = format!("staging.{}", key.apex());
+            let staging_host = key.staging_host();
             assert!(
                 brand_certs.contains(&format!("- {staging_host}")),
                 "{}'s staging host gets its own certificate",
@@ -8237,16 +8258,16 @@ mod tests {
         let staging = firm_certificate_hosts("staging.neonlaw.com");
         for key in views::brand::BrandKey::ALL {
             let www = key.canonical_host();
-            let staging_host = format!("staging.{}", key.apex());
+            let staging_host = key.staging_host();
             assert!(
                 production.iter().any(|host| host == www),
                 "{www} is on the production Firm certificate"
             );
             assert!(
-                staging.contains(&staging_host),
+                staging.iter().any(|host| host == staging_host),
                 "{staging_host} is on the staging Firm certificate"
             );
-            assert!(!production.contains(&staging_host));
+            assert!(!production.iter().any(|host| host == staging_host));
             assert!(!staging.iter().any(|host| host == www));
         }
         assert!(
@@ -8475,7 +8496,9 @@ mod tests {
                         || domain.starts_with("navigator.")
                         || domain.starts_with("workflows.")
                         || domain.starts_with("forge.")
-                        || domain.starts_with("staging."),
+                        || views::brand::is_staging_host(domain)
+                        || views::brand::registered_brand_key(domain)
+                            .is_some_and(|key| key.apex().is_none()),
                     "managed certificates must not include an apex"
                 );
             }
@@ -8508,7 +8531,7 @@ mod tests {
                 key.as_str(),
             );
             assert!(
-                !hosts.contains(&key.apex()),
+                key.apex().is_none_or(|apex| !hosts.contains(&apex)),
                 "{}'s apex must not carry an Ingress rule",
                 key.as_str(),
             );
@@ -12288,5 +12311,415 @@ spec:
         )
         .expect("restart-only completion does not need asset verification");
         assert_eq!(*events.borrow(), ["restate"]);
+    }
+
+    /// [`ordered_deployment`] plus the cluster coordinate
+    /// [`ShipConfig::from_deployment`] requires, so the whole selected-ship
+    /// entry point resolves from it.
+    fn shippable_deployment() -> super::super::deployments::Deployment {
+        let mut deployment = ordered_deployment();
+        deployment.coordinates.insert(
+            "NAVIGATOR_GKE_CLUSTER_NAME".into(),
+            "example-cluster".into(),
+        );
+        deployment
+    }
+
+    /// [`shippable_deployment`] with the PostgreSQL mirror switched on.
+    fn mirrored_deployment() -> super::super::deployments::Deployment {
+        let mut deployment = shippable_deployment();
+        for (key, value) in [
+            (NAVIGATOR_POSTGRES_ENABLED, "true"),
+            (store::postgres_mirror::MIRROR_ENV, "1"),
+        ] {
+            deployment.coordinates.insert(key.into(), value.into());
+        }
+        deployment
+    }
+
+    fn offline_opts(tag: Option<&str>) -> ShipOpts {
+        ShipOpts {
+            deployment: "example-prod".into(),
+            dry_run: true,
+            tag: tag.map(str::to_owned),
+            ..ShipOpts::default()
+        }
+    }
+
+    /// The config `ShipConfig::from_deployment` resolves for
+    /// [`shippable_deployment`], so overlays pinned to its namespace render.
+    fn shippable_config() -> ShipConfig {
+        ShipConfig::from_deployment(&shippable_deployment()).expect("synthetic row resolves")
+    }
+
+    #[test]
+    fn a_dry_run_ship_plans_every_lane_offline() {
+        // The root is never read on the offline path: no asset inventory, no
+        // credentials, no cluster. A nonexistent one proves it.
+        let root = Path::new("/nonexistent");
+        let deployment = shippable_deployment();
+        run_selected_ship(root, &deployment, &offline_opts(Some("26.8.17")))
+            .expect("an offline roll plan renders and validates locally");
+        run_selected_ship(
+            root,
+            &deployment,
+            &ShipOpts {
+                image_only: true,
+                ..offline_opts(Some("26.8.17"))
+            },
+        )
+        .expect("an offline image-only plan renders and validates locally");
+        run_selected_ship(
+            root,
+            &deployment,
+            &ShipOpts {
+                restart_only: true,
+                ..offline_opts(None)
+            },
+        )
+        .expect("an offline restart plan needs no tag");
+        run_selected_ship(
+            root,
+            &deployment,
+            &ShipOpts {
+                quiet: true,
+                project_id: Some("example-project".into()),
+                ..offline_opts(Some("26.8.17"))
+            },
+        )
+        .expect("a quiet offline plan prints only its verdict");
+
+        run_selected_ship(root, &mirrored_deployment(), &offline_opts(Some("26.8.17")))
+            .expect("an offline roll plan covers the mirror reconciliation");
+    }
+
+    #[test]
+    fn a_dry_run_ship_refuses_what_the_live_ship_would_refuse() {
+        let root = Path::new("/nonexistent");
+        let deployment = shippable_deployment();
+
+        let error = run_selected_ship(root, &deployment, &offline_opts(None)).unwrap_err();
+        assert!(error.to_string().contains("--tag"), "{error}");
+        assert!(run_selected_ship(root, &deployment, &offline_opts(Some("2026-08-17"))).is_err());
+
+        let error = run_selected_ship(
+            root,
+            &deployment,
+            &ShipOpts {
+                image_only: true,
+                ..offline_opts(None)
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("--image-only requires --tag"),
+            "{error}"
+        );
+
+        // The asset bucket gates the two lanes that move images, not the restart.
+        let mut no_bucket = shippable_deployment();
+        no_bucket.coordinates.remove(ASSETS_BUCKET_KEY);
+        let error =
+            run_selected_ship(root, &no_bucket, &offline_opts(Some("26.8.17"))).unwrap_err();
+        assert!(error.to_string().contains(ASSETS_BUCKET_KEY), "{error}");
+        run_selected_ship(
+            root,
+            &no_bucket,
+            &ShipOpts {
+                restart_only: true,
+                ..offline_opts(None)
+            },
+        )
+        .expect("a restart changes no image or content version");
+
+        // The asset origin gates every lane, the restart included.
+        let mut no_origin = shippable_deployment();
+        no_origin.coordinates.remove(ASSET_BASE_URL_KEY);
+        let error = run_selected_ship(
+            root,
+            &no_origin,
+            &ShipOpts {
+                restart_only: true,
+                ..offline_opts(None)
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains(ASSET_BASE_URL_KEY), "{error}");
+
+        // A roll still checks the ordered service inputs offline.
+        let mut no_postgres = shippable_deployment();
+        no_postgres
+            .postgres_encrypted_keys
+            .remove("NAVIGATOR_POSTGRES_BACKUP_PASSWORD");
+        let error =
+            run_selected_ship(root, &no_postgres, &offline_opts(Some("26.8.17"))).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("NAVIGATOR_POSTGRES_BACKUP_PASSWORD"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rendered_yaml_validation_counts_mappings_and_refuses_anything_else() {
+        assert_eq!(
+            validate_yaml_documents("a: 1\n---\nb: 2\n", "stream").unwrap(),
+            2
+        );
+        let error = validate_yaml_documents("- a\n- b\n", "stream").unwrap_err();
+        assert!(error.to_string().contains("must be a mapping"), "{error}");
+        assert!(error.to_string().contains("stream"), "{error}");
+        let error = validate_yaml_documents("a: [", "stream").unwrap_err();
+        assert!(
+            error.to_string().contains("parse YAML document in stream"),
+            "{error}"
+        );
+
+        let empty = tempfile::tempdir().unwrap();
+        let error = validate_rendered_tree(empty.path()).unwrap_err();
+        assert!(
+            error.to_string().contains("contains no YAML documents"),
+            "{error}"
+        );
+
+        let tree = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tree.path().join("nested")).unwrap();
+        fs::write(tree.path().join("a.yaml"), "a: 1\n---\nb: 2\n").unwrap();
+        fs::write(tree.path().join("nested/c.yml"), "c: 3\n").unwrap();
+        fs::write(tree.path().join("notes.txt"), "not: [yaml").unwrap();
+        assert_eq!(validate_rendered_tree(tree.path()).unwrap(), 3);
+
+        fs::write(tree.path().join("nested/broken.yaml"), "- not a mapping\n").unwrap();
+        let error = validate_rendered_tree(tree.path()).unwrap_err();
+        assert!(error.to_string().contains("broken.yaml"), "{error}");
+    }
+
+    #[test]
+    fn restart_only_needs_only_deployment_rollout_permissions() {
+        let cfg = sample_config();
+        let permissions = ship_permissions(
+            &cfg,
+            &ordered_deployment(),
+            &ShipOpts::default(),
+            ShipLane::RestartOnly,
+        )
+        .unwrap();
+        let expected: BTreeSet<_> = ["get", "list", "watch", "patch"]
+            .into_iter()
+            .map(|verb| ShipPermission::new(&cfg.namespace, "apps", "deployments", verb))
+            .collect();
+        assert_eq!(permissions, expected);
+    }
+
+    #[test]
+    fn image_only_permissions_cover_the_diff_and_the_cronjob_repin_but_no_cleanup() {
+        let cfg = shippable_config();
+        let deployment = shippable_deployment();
+        let permissions = ship_permissions(
+            &cfg,
+            &deployment,
+            &offline_opts(Some("26.8.17")),
+            ShipLane::ImageOnly,
+        )
+        .unwrap();
+        for (group, resource, verb) in [
+            ("apps", "deployments", "patch"),
+            ("apps", "deployments", "watch"),
+            ("batch", "cronjobs", "patch"),
+            ("batch", "cronjobs", "list"),
+        ] {
+            assert!(
+                permissions.contains(&ShipPermission::new(&cfg.namespace, group, resource, verb)),
+                "image-only needs {verb} {resource}.{group}"
+            );
+        }
+        for (group, resource, verb) in [
+            ("apps", "statefulsets", "delete"),
+            ("batch", "jobs", "delete"),
+            ("networking.gke.io", "managedcertificates", "delete"),
+        ] {
+            assert!(
+                !permissions.contains(&ShipPermission::new(&cfg.namespace, group, resource, verb)),
+                "image-only never asks for {verb} {resource}.{group}"
+            );
+        }
+
+        let error = ship_permissions(&cfg, &deployment, &offline_opts(None), ShipLane::ImageOnly)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("image-only roll requires --tag"),
+            "{error}"
+        );
+        assert!(ship_permissions(
+            &cfg,
+            &deployment,
+            &offline_opts(Some("not-a-tag")),
+            ShipLane::ImageOnly
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn roll_permissions_cover_every_service_overlay_and_the_cleanup_verbs() {
+        // The fixture row, because a roll also renders the per-row Secret
+        // Manager catalog, which needs the row's encrypted key names.
+        let mut deployment =
+            super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
+                .expect("fixture row loads");
+        for (key, value) in [
+            (NAVIGATOR_POSTGRES_ENABLED, "true"),
+            (store::postgres_mirror::MIRROR_ENV, "1"),
+        ] {
+            deployment.coordinates.insert(key.into(), value.into());
+        }
+        let cfg = ShipConfig::from_deployment(&deployment).expect("fixture row resolves");
+        let permissions = ship_permissions(
+            &cfg,
+            &deployment,
+            &offline_opts(Some("26.8.17")),
+            ShipLane::Roll,
+        )
+        .unwrap();
+        for (group, resource, verb) in [
+            ("", "secrets", "get"),
+            ("", "configmaps", "get"),
+            ("", "persistentvolumeclaims", "patch"),
+            ("apps", "statefulsets", "delete"),
+            ("apps", "statefulsets", "watch"),
+            ("batch", "jobs", "delete"),
+            ("batch", "cronjobs", "delete"),
+            ("networking.gke.io", "managedcertificates", "delete"),
+            ("apps", "deployments", "patch"),
+        ] {
+            assert!(
+                permissions.contains(&ShipPermission::new(&cfg.namespace, group, resource, verb)),
+                "a roll needs {verb} {resource}.{group}"
+            );
+        }
+        // The service overlays' own kinds are part of the reviewed set.
+        assert!(permissions.iter().any(|permission| {
+            permission.resource == "statefulsets" && permission.verb == "create"
+        }));
+
+        let error =
+            ship_permissions(&cfg, &deployment, &offline_opts(None), ShipLane::Roll).unwrap_err();
+        assert!(
+            error.to_string().contains("release roll requires --tag"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_dry_run_job_overlay_requires_the_named_job_and_deletes_nothing() {
+        let deployment = shippable_deployment();
+        let cfg = shippable_config();
+        let substitutions = deployment_substitutions(&deployment, "26.8.17").unwrap();
+        let rendered = render_manifests_with(&substitutions).unwrap();
+
+        let roles = render_service_overlay(&rendered, &cfg, "postgres/access").unwrap();
+        run_job_overlay(&cfg, true, &roles, "navigator-postgres-roles", "15m")
+            .expect("the roles overlay renders its Job, and a dry run deletes nothing");
+        let error = run_job_overlay(&cfg, true, &roles, "navigator-absent-job", "15m")
+            .expect_err("a Job the overlay does not render is refused before any delete");
+        assert!(
+            error
+                .to_string()
+                .contains("required Job/navigator-absent-job is missing"),
+            "{error}"
+        );
+
+        let postgres = render_service_overlay(&rendered, &cfg, "postgres").unwrap();
+        ensure_required_manifest(&postgres, "StatefulSet", "navigator-postgres").unwrap();
+        // Kind and name must both match: the StatefulSet is not a Job.
+        assert!(ensure_required_manifest(&postgres, "Job", "navigator-postgres").is_err());
+    }
+
+    #[test]
+    fn dry_run_cluster_steps_print_their_commands_and_never_run_them() {
+        // The context names no real cluster, so any step that shelled out
+        // would fail rather than return `Ok`.
+        let cfg = sample_config();
+        wait_statefulset(&cfg, true, "navigator-postgres", ROLLOUT_TIMEOUT).unwrap();
+        wait_job(&cfg, true, "navigator-migrate", "15m").unwrap();
+        ensure_ordered_service_objects(&cfg, true, true).unwrap();
+        retire_dbos_hosted_cronjobs(&cfg, true, &ordered_deployment()).unwrap();
+        retire_firm_only_brand_certificates(&cfg, true).unwrap();
+        ensure_manifest_images_published(
+            &cfg,
+            true,
+            "image: ghcr.io/example/navigator/neon-server:26.8.17\n",
+            "26.8.17",
+        )
+        .unwrap();
+        // A dry run never reads the digest manifest, so a missing one is fine.
+        pin_cronjob_images(
+            &cfg,
+            "26.8.17",
+            Some(Path::new("/nonexistent/image-digests.json")),
+            true,
+        )
+        .unwrap();
+        smoke_check(&cfg, true);
+    }
+
+    #[test]
+    fn dry_run_waits_render_the_exact_kubectl_commands() {
+        let cfg = sample_config();
+        let mut cmd = kubectl(&cfg);
+        cmd.arg("rollout")
+            .arg("status")
+            .arg("statefulset/navigator-postgres");
+        assert_eq!(
+            render_cmd(&cmd),
+            "kubectl --context gke_my-org-prod_example-region_navigator -n navigator rollout \
+             status statefulset/navigator-postgres"
+        );
+        assert_eq!(
+            render_cmd(&kubectl_ctx(&cfg)),
+            "kubectl --context gke_my-org-prod_example-region_navigator"
+        );
+    }
+
+    #[test]
+    fn projected_object_preflight_skips_a_tree_without_a_catalog_and_refuses_a_malformed_one() {
+        ensure_projected_objects_resolve("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n")
+            .expect("no SecretProviderClass means nothing to resolve and no GCP call");
+        let error = ensure_projected_objects_resolve(
+            "apiVersion: secrets-store.csi.x-k8s.io/v1\nkind: SecretProviderClass\nmetadata:\n  \
+             name: x\nspec:\n  parameters:\n    secrets: |\n      - resourceName: \"not/a/name\"\n        \
+             path: X\n",
+        )
+        .expect_err("a malformed reference stops the ship before any read");
+        assert!(
+            error
+                .to_string()
+                .contains("is not a Secret Manager resource name"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_image_digest_manifest_is_read_as_a_repository_to_digest_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("image-digests.json");
+        let digest = format!("sha256:{}", "a".repeat(64));
+        fs::write(&path, format!(r#"{{"neon-server": "{digest}"}}"#)).unwrap();
+        let digests = read_digest_manifest(&path).unwrap();
+        assert_eq!(digests.get("neon-server"), Some(&digest));
+
+        fs::write(&path, "[1, 2]").unwrap();
+        let error = read_digest_manifest(&path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("parse image digest manifest JSON"),
+            "{error}"
+        );
+        let error = read_digest_manifest(&dir.path().join("absent.json")).unwrap_err();
+        assert!(
+            error.to_string().contains("read image digest manifest"),
+            "{error}"
+        );
     }
 }

@@ -189,3 +189,131 @@ pub(crate) fn find_adapter<'a>(
         .find(|adapter| adapter.site() == site)
         .map(|adapter| &**adapter)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn site_key_accepts_the_documented_vocabulary() {
+        for value in ["la-superior", "pacer", "nysaf", "23-cv"] {
+            let key = SiteKey::new(value).expect("a documented key must parse");
+            assert_eq!(key.as_str(), value);
+            assert_eq!(key.to_string(), value, "Display is the key's string form");
+        }
+    }
+
+    #[test]
+    fn site_key_rejects_vocabulary_outside_letters_digits_and_inner_hyphens() {
+        for value in [
+            "",            // empty: names no registry entry
+            "-lead",       // leading hyphen
+            "trail-",      // trailing hyphen
+            "LA-Superior", // uppercase is outside the vocabulary
+            "la superior", // spaces never appear in keys
+            "café",        // non-ASCII bytes are refused
+            "la/superior", // path separators would forge state paths
+        ] {
+            let error =
+                SiteKey::new(value).expect_err("a key outside the vocabulary must be refused");
+            assert!(
+                error.to_string().contains(value),
+                "the error must name the offending key, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn notice_key_is_site_docket_and_entry_number() {
+        let site = SiteKey::new("la-superior").expect("documented key");
+        assert_eq!(
+            NoticeKey::new(&site, "23-cv-08134", "29-1").as_str(),
+            "la-superior/23-cv-08134/29-1"
+        );
+    }
+
+    #[test]
+    fn notice_key_serializes_transparently_as_its_string_form() {
+        let site = SiteKey::new("pacer").expect("documented key");
+        let key = NoticeKey::new(&site, "4:21-cv-00123", "4");
+        let json = serde_json::to_string(&key).expect("notice keys serialize as strings");
+        assert_eq!(json, "\"pacer/4:21-cv-00123/4\"");
+        let round: NoticeKey = serde_json::from_str(&json).expect("the string form parses back");
+        assert_eq!(round, key);
+    }
+
+    #[test]
+    fn a_notice_ref_keys_itself_by_its_entry_number() {
+        let site = SiteKey::new("nysaf").expect("documented key");
+        let notice = NoticeRef {
+            entry_number: "29-1".to_owned(),
+            title: "Notice of Motion".to_owned(),
+            url: "https://portal.example/29-1.pdf".to_owned(),
+            extension: "pdf".to_owned(),
+        };
+        assert_eq!(
+            notice.key(&site, "23-cv-08134"),
+            NoticeKey::new(&site, "23-cv-08134", "29-1")
+        );
+    }
+
+    /// The registry lookup's contract exercised through the real trait: the
+    /// named adapter is returned, a miss is `None`, and identity is by site
+    /// key, not by credential key.
+    struct StubAdapter {
+        key: SiteKey,
+        credential: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl SiteAdapter for StubAdapter {
+        fn site(&self) -> &SiteKey {
+            &self.key
+        }
+
+        fn credential_key(&self) -> &str {
+            self.credential
+        }
+
+        async fn login(
+            &self,
+            _session: &BrowserSession,
+            _login: Option<&SiteLogin>,
+        ) -> Result<(), AdapterError> {
+            unreachable!("the registry lookup never drives an adapter")
+        }
+
+        async fn notices(
+            &self,
+            _fetcher: &dyn HttpFetcher,
+            _query: &NoticeQuery,
+        ) -> Result<Vec<NoticeRef>, AdapterError> {
+            unreachable!("the registry lookup never drives an adapter")
+        }
+
+        async fn download(
+            &self,
+            _fetcher: &dyn HttpFetcher,
+            _notice: &NoticeRef,
+            _sink: &mut DownloadSink,
+        ) -> Result<(), AdapterError> {
+            unreachable!("the registry lookup never drives an adapter")
+        }
+    }
+
+    #[test]
+    fn find_adapter_resolves_by_site_key_and_misses_cleanly() {
+        let registry: Vec<Box<dyn SiteAdapter>> = vec![Box::new(StubAdapter {
+            key: SiteKey::new("la-superior").expect("documented key"),
+            credential: "la-superior-credential",
+        })];
+        let found = find_adapter(
+            &registry,
+            &SiteKey::new("la-superior").expect("documented key"),
+        )
+        .expect("a registered site resolves");
+        assert_eq!(found.site().as_str(), "la-superior");
+        assert_eq!(found.credential_key(), "la-superior-credential");
+        assert!(find_adapter(&registry, &SiteKey::new("pacer").expect("documented key")).is_none());
+    }
+}

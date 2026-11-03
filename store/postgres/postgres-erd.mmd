@@ -122,6 +122,17 @@ erDiagram
         string role
         datetime updated_at
     }
+    billed_call {
+        string call_sid
+        datetime call_started_at
+        uuid conversation_id
+        int duration_seconds
+        uuid firm_id
+        datetime inserted_at
+        uuid project_id
+        int tenths
+        datetime updated_at
+    }
     blog_video {
         string brand_key
         int height
@@ -149,6 +160,15 @@ erDiagram
         string typeface
         datetime updated_at
         string website_url
+    }
+    brand_phone_number {
+        uuid auth_token_secret_ref
+        string brand_key
+        string channel_kinds
+        datetime inserted_at
+        string number_e164
+        string twilio_account_sid
+        datetime updated_at
     }
     cap_table_holding {
         json holder_id
@@ -630,6 +650,12 @@ erDiagram
         datetime inserted_at
         uuid to_project_id
     }
+    inbox_attachment_receipt {
+        uuid asset_id
+        uuid firm_id
+        datetime inserted_at
+        string sha256
+    }
     inbox_conversation {
         string brand_key
         string channel
@@ -679,6 +705,23 @@ erDiagram
         uuid message_id
         int position
         string sha256
+    }
+    inbox_triage {
+        string disposition
+        uuid firm_id
+        uuid id
+        datetime inserted_at
+        boolean labeled_example
+        uuid message_id
+        string model_id
+        string privilege
+        number privilege_confidence
+        number project_confidence
+        string prompt_version
+        string rationale
+        string raw_output
+        uuid suggested_project_id
+        datetime updated_at
     }
     iolta_account {
         int balance_cents
@@ -878,12 +921,14 @@ erDiagram
         string direction
         uuid id
         datetime inserted_at
+        string nef_outcome
         string occurred_at
         uuid parent_message_id
         string processed_at
         string provider_message_id
         string provider_ref
         string purpose
+        string raw_storage_key
         string route
         datetime updated_at
         string visibility
@@ -1781,6 +1826,8 @@ erDiagram
     inbox_conversation }o--|| inbox_assignment : references
     person }o--|| inbox_assignment : references
     project }o--|| inbox_assignment : references
+    asset }o--|| inbox_attachment_receipt : references
+    firm }o--|| inbox_attachment_receipt : references
     email_conversation }o--|| inbox_conversation : references
     firm }o--|| inbox_conversation : references
     project }o--|| inbox_conversation : references
@@ -1790,6 +1837,9 @@ erDiagram
     asset }o--|| inbox_message_asset : references
     firm }o--|| inbox_message_asset : references
     message }o--|| inbox_message_asset : references
+    firm }o--|| inbox_triage : references
+    message }o--|| inbox_triage : references
+    project }o--|| inbox_triage : references
     firm }o--|| journal_entry : references
     journal_entry }o--|| journal_entry : references
     journal_entry }o--|| journal_entry_source : references

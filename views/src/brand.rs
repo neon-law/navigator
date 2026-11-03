@@ -145,10 +145,10 @@ const FIRM_NAV: &[NavLink] = &[
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
-/// Neon's header links its subscription home and separate business counsel page.
+/// Neon's header links its fee schedule and separate business counsel page;
+/// the logo carries the reader home to Nautilus.
 const NEON_NAV: &[NavLink] = &[
     NavLink::leaf("Services", "/services"),
-    NavLink::leaf("Nautilus", "/"),
     NavLink::leaf("Business", "/business"),
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
@@ -504,7 +504,7 @@ pub static DEFAULT_BRANDING: Branding = Branding {
     firm_attorneys: FIRM_ATTORNEYS,
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: FIRM_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     // The mark as registered: the register carries the word mark in capitals,
     // and a notice that cites a registration should spell the mark the way the
     // registration does. `site_name` above is the same mark set the way the
@@ -555,7 +555,7 @@ pub static DELETE_YOUR_DATA_BRANDING: Branding = Branding {
     // brands, on this practice's pages as on the firm's own.
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -598,7 +598,7 @@ pub static LAWYER_SHOOK_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -642,7 +642,7 @@ pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -658,6 +658,58 @@ pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
     portal_only: false,
     brand_key: BrandKey::GuiebShook,
 };
+
+/// The Lex Tecnica firm site, at `lex-tecnica.neonlaw.com`. Lex Tecnica is a
+/// separate firm from Guieb & Shook PC, so this brand names its own legal
+/// entity and family and borrows none of Guieb & Shook's offices, bar
+/// memberships, or social profiles. Every value comes from lextecnica.com's
+/// public pages; the site publishes no postal address.
+pub static LEX_TECNICA_BRANDING: Branding = Branding {
+    firm: SiteBrand {
+        site_name: "Lex Tecnica",
+        home_href: "/",
+        tagline: "Your General Counsel",
+        postal_address: "",
+        logo_href: "/public/brand/lex-tecnica/logo.svg",
+        social_image: "",
+        nav: &[
+            NavLink::leaf("Legal Services", "/services"),
+            NavLink::leaf("Fees", "/services#fees"),
+            NavLink::leaf("Contact Us", LEX_TECNICA_CONTACT_URL),
+        ],
+        is_law_firm: true,
+        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+    },
+    firm_email: "contact@lextecnica.com",
+    support_domain: "lextecnica.com",
+    firm_phone: "+1 725 239 8413",
+    firm_offices: &[],
+    firm_attorneys: &[],
+    firm_memberships: &[],
+    firm_social: &[],
+    firm_family: BrandKey::LEX_TECNICA_FAMILY,
+    firm_trademark: "",
+    firm_trademark_registration: "",
+    firm_trademark_record_url: "",
+    consultation_url: LEX_TECNICA_CONTACT_URL,
+    // The firm's own published terms. lextecnica.com publishes no privacy
+    // policy page, so there is no privacy link.
+    terms_url: "https://lextecnica.com/terms-conditions/",
+    privacy_url: "",
+    base_url: "",
+    primary_domain: "lex-tecnica.neonlaw.com",
+    firm_disclaimer: "Attorney advertisement. Not all attorneys are licensed in every jurisdiction. Contacting the firm does not create an attorney-client relationship.",
+    mission_description: "Lex Tecnica gives entrepreneurs and businesses general counsel with an in-house attorney's loyalty at a cost they can afford, and lets each client choose the attorney they work with.",
+    service_description: "Lex Tecnica offers fractional general counsel, business law and mergers and acquisitions, technology and data center law, litigation, intellectual property, wealth management, immigration, real estate, and child rights work.",
+    portal_only: false,
+    brand_key: BrandKey::LexTecnica,
+};
+
+/// Lex Tecnica's legal name, as its terms page publishes it.
+pub const LEX_TECNICA_LEGAL_ENTITY: &str = "Lex Tecnica, Ltd.";
+
+/// Lex Tecnica's public contact page; it publishes no booking calendar.
+pub const LEX_TECNICA_CONTACT_URL: &str = "https://lextecnica.com/contact/";
 
 /// The `vesta` house brand. Page copy lives in `neon/locales/en/vesta/`;
 /// the strings here are the chrome and crawler descriptions for the same
@@ -686,7 +738,7 @@ pub static VESTA_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: VESTA_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -725,7 +777,7 @@ pub static MISERICORDIA_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -764,7 +816,7 @@ pub static ABHAYA_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -803,7 +855,7 @@ pub static DELETE_YOUR_DEBT_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -845,7 +897,7 @@ pub static SUMMONS_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -928,7 +980,7 @@ pub static DEATH_AND_DIVORCE_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -981,7 +1033,7 @@ pub const AEGIS_BRANDING: Branding = Branding {
     mission_description: "Aegis Criminal Defense is a practice of Guieb & Shook PC. Criminal defense. Scope, fees, and jurisdiction are confirmed before an engagement.",
     service_description: "Criminal defense. Scope, fees, and jurisdiction are confirmed before an engagement.",
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -1008,7 +1060,7 @@ pub const GROUNDWORK_BRANDING: Branding = Branding {
     mission_description: "Groundwork Real Estate Law is a practice of Guieb & Shook PC. Real estate legal services. Scope, fees, and jurisdiction are confirmed before an engagement.",
     service_description: "Real estate legal services. Scope, fees, and jurisdiction are confirmed before an engagement.",
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::ALL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -1022,7 +1074,7 @@ pub const GROUNDWORK_BRANDING: Branding = Branding {
 /// Guieb & Shook PC's offices, attorneys, memberships, socials, or postal
 /// box are inherited here: those fields start empty until Lex's own
 /// verified public details exist. The trademark fields are empty because
-/// no registration exists to cite.
+/// no registration exists to cite. Served at `iep.neonlaw.com`.
 pub const IEP_DEFENDERS_BRANDING: Branding = Branding {
     firm: SiteBrand {
         site_name: "IEP Defenders",
@@ -1031,13 +1083,16 @@ pub const IEP_DEFENDERS_BRANDING: Branding = Branding {
         // No address published for Lex Tecnica, Ltd. yet; the live Firm row,
         // not this fallback, is what the footer's copyright resolves from.
         postal_address: "",
-        logo_href: "",
+        logo_href: "/public/brand/iep-defenders/logo.svg",
         social_image: "",
-        nav: &[],
+        nav: &[
+            NavLink::leaf("How we help", "/services"),
+            NavLink::leaf("Contact", "/contact"),
+        ],
         is_law_firm: true,
         // The legal person a client engages on this brand: the second firm,
         // kept in step with `store::seed::LEX_ENTITY_NAME`.
-        legal_entity: "Lex Tecnica, Ltd.",
+        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
     },
     firm_email: "IEPDefenders@LexTecnica.com",
     support_domain: "lextecnica.com",
@@ -1045,20 +1100,23 @@ pub const IEP_DEFENDERS_BRANDING: Branding = Branding {
     firm_offices: &[],
     firm_attorneys: &[],
     firm_memberships: &[],
-    firm_social: SHARED_SOCIAL,
-    // Lex wears only IEP Defenders, so the family row is IEP Defenders
-    // alone — not the Guieb & Shook family `BrandKey::ALL` would advertise.
-    firm_family: &[BrandKey::IepDefenders],
+    // Guieb & Shook's profiles are not Lex Tecnica's.
+    firm_social: &[],
+    // Lex Tecnica's own family, never the Guieb & Shook one.
+    firm_family: BrandKey::LEX_TECNICA_FAMILY,
     // Held empty until a registration exists to cite; a brand with an
     // empty trademark renders no trademark notice at all.
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
     consultation_url: "",
-    terms_url: "/terms",
-    privacy_url: "/privacy",
+    // The brand's own published privacy policy. iepdefenders.com publishes
+    // no terms page, so there is no terms link; `/privacy` and `/terms` on
+    // this host never render Guieb & Shook PC's documents.
+    terms_url: "",
+    privacy_url: "https://iepdefenders.com/privacy-policy/",
     base_url: "",
-    primary_domain: "iepdefenders.com",
+    primary_domain: "iep.neonlaw.com",
     firm_disclaimer:
         "Attorney advertising. IEP Defenders is a practice of Lex Tecnica, Ltd.; nothing \
          here is legal advice without a signed engagement. Past results do not guarantee \
@@ -1110,6 +1168,8 @@ pub enum BrandKey {
     /// key's brand row and `firm_brand` attachment seed under
     /// [`crate::seed`] differently from every house brand above.
     IepDefenders,
+    /// Lex Tecnica, Ltd.'s own site, the second brand its firm wears.
+    LexTecnica,
 }
 
 impl BrandKey {
@@ -1129,8 +1189,31 @@ impl BrandKey {
         Self::Aegis,
         Self::Groundwork,
         Self::GuiebShook,
+        Self::LexTecnica,
         Self::IepDefenders,
     ];
+
+    /// The brands Guieb & Shook PC trades under: every key but Lex Tecnica's.
+    /// The footer's "Our Family" row on a Guieb & Shook brand lists these.
+    pub const GUIEB_SHOOK_FAMILY: &'static [Self] = &[
+        Self::Neon,
+        Self::DeleteYourData,
+        Self::DeleteYourDebt,
+        Self::Vesta,
+        Self::Misericordia,
+        Self::Abhaya,
+        Self::LawyerShook,
+        Self::Summons,
+        Self::Daybridge,
+        Self::DeathAndDivorce,
+        Self::CyberInjuryLaw,
+        Self::Aegis,
+        Self::Groundwork,
+        Self::GuiebShook,
+    ];
+
+    /// The brands Lex Tecnica, Ltd. trades under.
+    pub const LEX_TECNICA_FAMILY: &'static [Self] = &[Self::LexTecnica, Self::IepDefenders];
 
     /// The compiled keys whose hosts currently serve a public site. The
     /// remaining registered keys are built and staged, but intentionally stay
@@ -1150,7 +1233,17 @@ impl BrandKey {
         Self::Aegis,
         Self::Groundwork,
         Self::GuiebShook,
+        Self::LexTecnica,
+        Self::IepDefenders,
     ];
+
+    /// Whether Guieb & Shook PC is the firm behind this key. Lex Tecnica's
+    /// brands are another firm's, so Guieb & Shook surfaces (its services
+    /// directory, its portfolio, its family row) leave them out.
+    #[must_use]
+    pub fn is_guieb_shook(self) -> bool {
+        Self::GUIEB_SHOOK_FAMILY.contains(&self)
+    }
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -1169,6 +1262,7 @@ impl BrandKey {
             Self::Groundwork => "groundwork",
             Self::GuiebShook => "guieb-shook",
             Self::CyberInjuryLaw => "cyber-injury-law",
+            Self::LexTecnica => "lex-tecnica",
             Self::IepDefenders => "iep-defenders",
         }
     }
@@ -1198,6 +1292,7 @@ impl BrandKey {
             Self::Groundwork => "real estate transactions and property disputes",
             Self::GuiebShook => "attorneys at law",
             Self::CyberInjuryLaw => "injury claims and cybercrime",
+            Self::LexTecnica => "general counsel for entrepreneurs",
             Self::IepDefenders => "special education attorneys for your child's IEP",
         }
     }
@@ -1232,15 +1327,24 @@ impl BrandKey {
     /// the production URL.
     #[must_use]
     pub fn public_home_href_for(self, deployment_host: Option<&str>) -> String {
-        let staging = deployment_host.is_some_and(|host| host.starts_with("staging."));
-        let prefix = if staging { "staging." } else { "www." };
-        let host = self
-            .hosts()
+        let staging = deployment_host.is_some_and(is_staging_host);
+        let host = if staging {
+            self.staging_host()
+        } else {
+            self.canonical_host()
+        };
+        format!("https://{host}")
+    }
+
+    /// This key's staging host: the registered host [`is_staging_host`]
+    /// recognises (`staging.<apex>` or `staging-<label>.neonlaw.com`).
+    #[must_use]
+    pub fn staging_host(self) -> &'static str {
+        self.hosts()
             .iter()
             .copied()
-            .find(|host| host.starts_with(prefix))
-            .unwrap_or_else(|| self.canonical_host());
-        format!("https://{host}")
+            .find(|host| is_staging_host(host))
+            .unwrap_or_else(|| self.canonical_host())
     }
 
     /// English catalog stems this key ships under `locales/en/<key>/`.
@@ -1290,14 +1394,15 @@ impl BrandKey {
             ],
             Self::LawyerShook
             | Self::GuiebShook
+            | Self::LexTecnica
+            | Self::IepDefenders
             | Self::DeleteYourData
             | Self::Misericordia
             | Self::Abhaya
             | Self::DeleteYourDebt
             | Self::Summons
             | Self::Daybridge
-            | Self::DeathAndDivorce
-            | Self::IepDefenders => &["home", "services"],
+            | Self::DeathAndDivorce => &["home", "services"],
         }
     }
 
@@ -1377,6 +1482,9 @@ impl BrandKey {
             | Self::IepDefenders => {
                 matches!(path, "/" | "/services" | "/contact" | "/testimonials")
             }
+            // Lex Tecnica publishes its home and services pages; the contact
+            // page it links to is on the firm's own site.
+            Self::LexTecnica => matches!(path, "/" | "/services"),
         }
     }
 
@@ -1429,8 +1537,8 @@ impl BrandKey {
     /// publish the same content at two addresses. The apex only ever
     /// redirects.
     #[must_use]
-    pub const fn apex(self) -> &'static str {
-        match self {
+    pub const fn apex(self) -> Option<&'static str> {
+        Some(match self {
             Self::Neon => "neonlaw.com",
             Self::DeleteYourData => "deleteyourdata.com",
             Self::LawyerShook => "lawyershook.com",
@@ -1445,8 +1553,10 @@ impl BrandKey {
             Self::Groundwork => "groundworkrealestatelaw.com",
             Self::GuiebShook => "guiebandshook.com",
             Self::CyberInjuryLaw => "cyberinjurylaw.com",
-            Self::IepDefenders => "iepdefenders.com",
-        }
+            // Served on `neonlaw.com` subdomains, so there is no naked domain
+            // of their own to redirect.
+            Self::LexTecnica | Self::IepDefenders => return None,
+        })
     }
 
     /// Where this key's apex sends a visitor: its own production host.
@@ -1515,7 +1625,8 @@ impl BrandKey {
             ],
             Self::CyberInjuryLaw => &["www.cyberinjurylaw.com", "staging.cyberinjurylaw.com"],
             Self::GuiebShook => &["www.guiebandshook.com", "staging.guiebandshook.com"],
-            Self::IepDefenders => &["www.iepdefenders.com", "staging.iepdefenders.com"],
+            Self::LexTecnica => &["lex-tecnica.neonlaw.com", "staging-lex-tecnica.neonlaw.com"],
+            Self::IepDefenders => &["iep.neonlaw.com", "staging-iep.neonlaw.com"],
         }
     }
 
@@ -1541,6 +1652,7 @@ impl BrandKey {
             Self::Groundwork => &GROUNDWORK_BRANDING,
             Self::GuiebShook => &GUIEB_SHOOK_BRANDING,
             Self::CyberInjuryLaw => &CYBER_INJURY_BRANDING,
+            Self::LexTecnica => &LEX_TECNICA_BRANDING,
             Self::IepDefenders => &IEP_DEFENDERS_BRANDING,
         }
     }
@@ -1576,8 +1688,9 @@ impl BrandKey {
             Self::Aegis => Some("NAVIGATOR_LOCAL_AEGIS_PORT"),
             Self::Groundwork => Some("NAVIGATOR_LOCAL_GROUNDWORK_PORT"),
             Self::GuiebShook => Some("NAVIGATOR_LOCAL_GUIEB_SHOOK_PORT"),
-            Self::CyberInjuryLaw => Some("NAVIGATOR_LOCAL_CYBER_INJURY_LAW_PORT"),
+            Self::LexTecnica => Some("NAVIGATOR_LOCAL_LEX_TECNICA_PORT"),
             Self::IepDefenders => Some("NAVIGATOR_LOCAL_IEP_DEFENDERS_PORT"),
+            Self::CyberInjuryLaw => Some("NAVIGATOR_LOCAL_CYBER_INJURY_LAW_PORT"),
         }
     }
 }
@@ -1591,10 +1704,18 @@ impl BrandKey {
 /// compiled.
 #[must_use]
 pub fn brand_key_for_apex(host: &str) -> Option<BrandKey> {
-    BrandKey::ALL
-        .iter()
-        .copied()
-        .find(|key| key.apex().eq_ignore_ascii_case(host))
+    BrandKey::ALL.iter().copied().find(|key| {
+        key.apex()
+            .is_some_and(|apex| apex.eq_ignore_ascii_case(host))
+    })
+}
+
+/// Whether `host` is a staging host: `staging.<apex>` for a brand on its own
+/// domain, or `staging-<label>.neonlaw.com` for one on a `neonlaw.com`
+/// subdomain.
+#[must_use]
+pub fn is_staging_host(host: &str) -> bool {
+    host.starts_with("staging.") || host.starts_with("staging-")
 }
 
 /// Look up which key, if any, is registered to serve `host` (already
@@ -1664,7 +1785,7 @@ pub fn live_brand_apexes() -> Vec<(BrandKey, &'static str)> {
     BrandKey::LIVE
         .iter()
         .copied()
-        .map(|key| (key, key.apex()))
+        .filter_map(|key| key.apex().map(|apex| (key, apex)))
         .collect()
 }
 
@@ -2137,6 +2258,27 @@ pub fn firm_trademark() -> (&'static str, &'static str, &'static str) {
 pub fn firm_footer_nav() -> Vec<NavLink> {
     let branding = current();
     let mut nav: Vec<NavLink> = Vec::new();
+    // Another firm's brand links its own pages only: its blog, its contact
+    // page, and whichever of its privacy policy and terms it publishes. The
+    // shared row, Testimonials, and `/contact` are Guieb & Shook's.
+    if !branding.brand_key.is_guieb_shook() {
+        nav.push(NavLink::leaf("Blog", "/blog"));
+        let contact = if branding.consultation_url.is_empty() {
+            "/contact"
+        } else {
+            branding.consultation_url
+        };
+        nav.push(NavLink::leaf("Contact", contact));
+        for (label, href) in [
+            ("Privacy", branding.privacy_url),
+            ("Terms", branding.terms_url),
+        ] {
+            if !href.is_empty() {
+                nav.push(NavLink::leaf(label, href));
+            }
+        }
+        return nav;
+    }
     if !branding.firm_family.is_empty() {
         let shared = shared_footer_hrefs();
         nav.extend(FIRM_FOOTER_NAV.iter().map(|link| match link.href {
@@ -2308,7 +2450,7 @@ mod tests {
             ("groundwork", "groundworkrealestatelaw.com"),
         ] {
             let key = BrandKey::parse(name).expect("practice is registered");
-            assert_eq!(key.apex(), domain);
+            assert_eq!(key.apex(), Some(domain));
             assert_eq!(key.canonical_host(), format!("www.{domain}"));
             assert_eq!(
                 super::registered_brand_key(&format!("staging.{domain}")),
@@ -2521,13 +2663,13 @@ mod tests {
             serde_yaml::from_str("version: 1\nbrand:\n  firm_phone: '+1 555 000 0000'\n").unwrap();
         scope(Branding::from_manifest(&untouched), async {
             assert_eq!(super::firm_memberships(), DEFAULT_BRANDING.firm_memberships);
-            assert_eq!(super::firm_family(), BrandKey::ALL);
+            assert_eq!(super::firm_family(), BrandKey::GUIEB_SHOOK_FAMILY);
             assert_eq!(super::firm_social(), DEFAULT_BRANDING.firm_social);
         })
         .await;
         for branding in [&DELETE_YOUR_DATA_BRANDING, &LAWYER_SHOOK_BRANDING] {
             assert_eq!(branding.firm_memberships, DEFAULT_BRANDING.firm_memberships);
-            assert_eq!(branding.firm_family, BrandKey::ALL);
+            assert_eq!(branding.firm_family, BrandKey::GUIEB_SHOOK_FAMILY);
             assert_eq!(branding.firm_social, super::SHARED_SOCIAL);
             // Every house brand publishes the same firm offices.
             assert_eq!(branding.firm_offices, DEFAULT_BRANDING.firm_offices);
@@ -2561,7 +2703,8 @@ mod tests {
                 ),
             ]
         );
-        for key in BrandKey::ALL {
+        // Lex Tecnica's brands are another firm's and share none of these.
+        for key in BrandKey::GUIEB_SHOOK_FAMILY {
             if *key == BrandKey::Neon {
                 continue;
             }
@@ -2876,17 +3019,15 @@ mod tests {
     }
 
     #[test]
-    fn the_firm_nav_links_services_nautilus_business_and_consultation() {
-        assert_eq!(FIRM_BRAND.nav.len(), 4);
+    fn the_firm_nav_links_services_business_and_consultation() {
+        assert_eq!(FIRM_BRAND.nav.len(), 3);
         assert_eq!(FIRM_BRAND.nav[0].label, "Services");
         assert_eq!(FIRM_BRAND.nav[0].href, "/services");
-        assert_eq!(FIRM_BRAND.nav[1].label, "Nautilus");
-        assert_eq!(FIRM_BRAND.nav[1].href, "/");
-        assert_eq!(FIRM_BRAND.nav[2].label, "Business");
-        assert_eq!(FIRM_BRAND.nav[2].href, "/business");
-        assert_eq!(FIRM_BRAND.nav[3].label, "Book Consultation");
+        assert_eq!(FIRM_BRAND.nav[1].label, "Business");
+        assert_eq!(FIRM_BRAND.nav[1].href, "/business");
+        assert_eq!(FIRM_BRAND.nav[2].label, "Book Consultation");
         assert_eq!(
-            FIRM_BRAND.nav[3].href,
+            FIRM_BRAND.nav[2].href,
             "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
         );
     }
@@ -2950,7 +3091,7 @@ mod tests {
     /// Every registered Brand publishes the same twelve-link footer row.
     #[tokio::test]
     async fn every_brand_footer_has_twelve_links_including_design() {
-        for key in super::BrandKey::ALL {
+        for key in super::BrandKey::GUIEB_SHOOK_FAMILY {
             let branding = key.resolve_branding(&super::DEFAULT_BRANDING);
             scope(branding, async {
                 let nav = super::firm_footer_nav();
@@ -2966,6 +3107,27 @@ mod tests {
                     .find(|n| n.label == "Design")
                     .unwrap_or_else(|| panic!("{} footer links Design", key.as_str()));
                 assert!(design.href.ends_with("/design"), "{}", design.href);
+            })
+            .await;
+        }
+    }
+
+    /// Another firm's brand links only its own pages: no shared row, no
+    /// Testimonials, and no Privacy or Terms it does not publish.
+    #[tokio::test]
+    async fn another_firms_footer_links_only_its_own_pages() {
+        for key in [super::BrandKey::LexTecnica, super::BrandKey::IepDefenders] {
+            let branding = key.resolve_branding(&super::DEFAULT_BRANDING);
+            scope(branding, async move {
+                let nav = super::firm_footer_nav();
+                let labels: Vec<_> = nav.iter().map(|n| n.label).collect();
+                assert_eq!(labels[..2], ["Blog", "Contact"], "{}", key.as_str());
+                // Its own contact page: the firm's site, or this host's
+                // `/contact`, which feeds the Lex Firm inbox.
+                assert!(nav[1].href.starts_with("https://") || nav[1].href == "/contact");
+                assert!(nav[2..].iter().all(|n| n.href.starts_with("https://")));
+                assert!(nav.iter().all(|n| !n.href.is_empty()));
+                assert!(!labels.contains(&"Testimonials") && !labels.contains(&"Design"));
             })
             .await;
         }
@@ -3198,17 +3360,63 @@ mod tests {
         }
     }
 
+    /// Lex Tecnica's brands live on `neonlaw.com` subdomains: no naked domain
+    /// of their own, a `staging-` staging host, and a family of their own.
+    #[test]
+    fn lex_tecnica_brands_are_neonlaw_subdomains_of_their_own_firm() {
+        for (key, production, staging) in [
+            (
+                BrandKey::LexTecnica,
+                "lex-tecnica.neonlaw.com",
+                "staging-lex-tecnica.neonlaw.com",
+            ),
+            (
+                BrandKey::IepDefenders,
+                "iep.neonlaw.com",
+                "staging-iep.neonlaw.com",
+            ),
+        ] {
+            assert_eq!(key.apex(), None);
+            assert_eq!(key.hosts(), [production, staging]);
+            assert_eq!(registered_brand_key(production), Some(key));
+            assert_eq!(registered_brand_key(staging), Some(key));
+            assert_eq!(key.staging_host(), staging);
+            assert!(!key.is_guieb_shook());
+            let branding = key.resolve_branding(&DEFAULT_BRANDING);
+            assert_eq!(branding.firm.legal_entity, "Lex Tecnica, Ltd.");
+            assert_eq!(branding.firm_family, BrandKey::LEX_TECNICA_FAMILY);
+            assert!(branding.firm_offices.is_empty());
+            assert!(branding.firm_memberships.is_empty());
+        }
+        assert_eq!(registered_brand_key("neonlaw.com"), None);
+        assert_eq!(
+            super::brand_key_for_apex("neonlaw.com"),
+            Some(BrandKey::Neon)
+        );
+        for key in BrandKey::GUIEB_SHOOK_FAMILY {
+            assert!(
+                !key.resolve_branding(&DEFAULT_BRANDING)
+                    .firm_family
+                    .iter()
+                    .any(|member| !member.is_guieb_shook()),
+                "{key:?} lists another firm's brand"
+            );
+        }
+    }
+
     #[test]
     fn public_home_href_matches_the_deployments_host_family() {
         for key in BrandKey::ALL {
             assert_eq!(
                 key.public_home_href_for(Some("www.neonlaw.com")),
-                format!("https://www.{}", key.apex()),
+                format!("https://{}", key.hosts()[0]),
             );
             assert_eq!(
                 key.public_home_href_for(Some("staging.neonlaw.com")),
-                format!("https://staging.{}", key.apex()),
+                format!("https://{}", key.hosts()[1]),
             );
+            assert!(super::is_staging_host(key.hosts()[1]), "{key:?}");
+            assert!(!super::is_staging_host(key.hosts()[0]), "{key:?}");
             assert_eq!(key.public_home_href_for(None), key.public_home_href());
         }
     }
@@ -3230,28 +3438,24 @@ mod tests {
 
     // --- The launch gate ---------------------------------------------------
 
-    /// IEP Defenders is registered but held out: its hosts await launch
-    /// approval, and its compiled trademark fields stay empty
-    /// until a registration exists to cite — so no trademark notice may
-    /// render for it under any footer shape.
+    /// IEP Defenders is live on its `neonlaw.com` subdomains, which have no
+    /// naked domain of their own, and its compiled trademark fields stay empty
+    /// until a registration exists to cite — so no trademark notice may render
+    /// for it under any footer shape.
     #[test]
-    fn iep_defenders_is_registered_but_held_out_with_empty_trademark() {
+    fn iep_defenders_is_live_on_neonlaw_subdomains_with_empty_trademark() {
         let key = BrandKey::parse("iep-defenders").expect("iep-defenders is registered");
-        assert!(BrandKey::ALL.contains(&key), "iep-defenders is in ALL");
-        assert!(
-            !BrandKey::LIVE.contains(&key),
-            "registration does not approve launch"
-        );
-        assert!(!key.is_live());
+        assert!(key.is_live());
+        assert_eq!(key.hosts(), ["iep.neonlaw.com", "staging-iep.neonlaw.com"]);
         for host in key.hosts() {
-            assert_eq!(super::admitted_brand_key(host), None);
-            assert!(super::held_out_host(host));
+            assert_eq!(super::admitted_brand_key(host), Some(key));
+            assert!(!super::held_out_host(host));
         }
-        assert_eq!(super::admitted_brand_key_for_apex(key.apex()), None);
-        assert!(super::held_out_host(key.apex()));
+        assert_eq!(key.apex(), None);
         let branding = BrandKey::IepDefenders.resolve_branding(&DEFAULT_BRANDING);
         assert_eq!(branding.firm.legal_entity, "Lex Tecnica, Ltd.");
         assert!(branding.firm.is_law_firm);
+        assert_eq!(branding.firm_family, BrandKey::LEX_TECNICA_FAMILY);
         assert_eq!(branding.firm_trademark, "");
         assert_eq!(branding.firm_trademark_registration, "");
         assert_eq!(branding.firm_trademark_record_url, "");
@@ -3297,7 +3501,9 @@ mod tests {
     #[test]
     fn the_launch_gate_admits_exactly_the_live_apexes() {
         for key in BrandKey::ALL {
-            let apex = key.apex();
+            let Some(apex) = key.apex() else {
+                continue;
+            };
             if key.is_live() {
                 assert_eq!(super::admitted_brand_key_for_apex(apex), Some(*key));
                 assert!(!super::held_out_host(apex));
@@ -3332,8 +3538,11 @@ mod tests {
         }
         assert_eq!(
             super::live_brand_apexes().len(),
-            BrandKey::LIVE.len(),
-            "one apex per live key"
+            BrandKey::LIVE
+                .iter()
+                .filter(|key| key.apex().is_some())
+                .count(),
+            "one apex per live key that owns a naked domain"
         );
     }
 

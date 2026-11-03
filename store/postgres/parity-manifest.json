@@ -170,6 +170,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "billed_call",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "brand_phone_number",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "clause",
       "missing_column": null,
       "missing_table": null,
@@ -199,6 +213,13 @@
     {
       "extra_column": null,
       "extra_table": "firm_forgejo_organization",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "inbox_attachment_receipt",
       "missing_column": null,
       "missing_table": null,
       "table": null
@@ -430,7 +451,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 111,
+    "table_count": 112,
     "tables": {
       "address": {
         "city": "string",
@@ -1052,6 +1073,23 @@
         "position": "int",
         "sha256": "string"
       },
+      "inbox_triage": {
+        "disposition": "string",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "labeled_example": "bool",
+        "message_id": "record<message>",
+        "model_id": "option<string>",
+        "privilege": "string",
+        "privilege_confidence": "option<number>",
+        "project_confidence": "option<number>",
+        "prompt_version": "string",
+        "rationale": "option<string>",
+        "raw_output": "option<string>",
+        "suggested_project_id": "option<record<project>>",
+        "updated_at": "datetime"
+      },
       "iolta_account": {
         "balance_cents": "int",
         "currency": "string",
@@ -1201,6 +1239,7 @@
         "provider_message_id": "option<string>",
         "provider_ref": "option<string>",
         "purpose": "string",
+        "raw_storage_key": "option<string>",
         "route": "option<string>",
         "updated_at": "datetime",
         "visibility": "option<string>"
@@ -1798,7 +1837,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 146,
+    "table_count": 150,
     "tables": {
       "address": {
         "columns": {
@@ -2046,6 +2085,22 @@
         "name": "authority_use",
         "references": []
       },
+      "billed_call": {
+        "columns": {
+          "call_sid": "TEXT",
+          "call_started_at": "TIMESTAMPTZ",
+          "conversation_id": "UUID",
+          "duration_seconds": "BIGINT",
+          "firm_id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "tenths": "BIGINT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "billed_call",
+        "references": []
+      },
       "blog_video": {
         "columns": {
           "brand_key": "TEXT",
@@ -2097,6 +2152,20 @@
         "references": [
           "firm"
         ]
+      },
+      "brand_phone_number": {
+        "columns": {
+          "auth_token_secret_ref": "UUID",
+          "brand_key": "TEXT",
+          "channel_kinds": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "number_e164": "TEXT",
+          "twilio_account_sid": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "brand_phone_number",
+        "references": []
       },
       "cap_table_holding": {
         "columns": {
@@ -2993,6 +3062,29 @@
           "project"
         ]
       },
+      "inbox_attachment_receipt": {
+        "columns": {
+          "asset_id": "UUID",
+          "firm_id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "sha256": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "asset_id",
+            "asset"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "inbox_attachment_receipt",
+        "references": [
+          "asset",
+          "firm"
+        ]
+      },
       "inbox_conversation": {
         "columns": {
           "brand_key": "TEXT",
@@ -3114,6 +3206,45 @@
           "asset",
           "firm",
           "message"
+        ]
+      },
+      "inbox_triage": {
+        "columns": {
+          "disposition": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "labeled_example": "BOOLEAN",
+          "message_id": "UUID",
+          "model_id": "TEXT",
+          "privilege": "TEXT",
+          "privilege_confidence": "DOUBLE",
+          "project_confidence": "DOUBLE",
+          "prompt_version": "TEXT",
+          "rationale": "TEXT",
+          "raw_output": "TEXT",
+          "suggested_project_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "message_id",
+            "message"
+          ],
+          [
+            "suggested_project_id",
+            "project"
+          ]
+        ],
+        "name": "inbox_triage",
+        "references": [
+          "firm",
+          "message",
+          "project"
         ]
       },
       "iolta_account": {
@@ -3521,6 +3652,7 @@
           "provider_message_id": "TEXT",
           "provider_ref": "TEXT",
           "purpose": "TEXT",
+          "raw_storage_key": "TEXT",
           "route": "TEXT",
           "updated_at": "TIMESTAMPTZ",
           "visibility": "TEXT"

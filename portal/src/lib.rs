@@ -99,11 +99,13 @@ pub(crate) mod docket_api;
 pub(crate) mod efilings_api;
 pub(crate) mod firm_forgejo_api;
 pub(crate) mod handoffs_api;
+pub(crate) mod inbox_import_api;
 pub(crate) mod lawyer_mailbox;
 pub(crate) mod matter_caption_api;
 pub(crate) mod module_records_api;
 pub(crate) mod pages_api;
 pub(crate) mod project_costs_api;
+pub(crate) mod project_stages_api;
 pub(crate) mod project_tasks_api;
 pub(crate) mod recovery_archives_api;
 pub(crate) mod service_api;
@@ -150,6 +152,7 @@ pub mod glossary;
 pub mod google_oauth;
 pub mod gov_forms;
 pub mod hcaptcha;
+pub mod host_handoff;
 pub mod hosting;
 pub mod idp_admin;
 pub mod inbound_email;
@@ -204,11 +207,16 @@ pub mod tenant;
 /// use it; see the module docs.
 pub mod test_support;
 mod tiktok_comments;
+#[cfg(test)]
+pub(crate) use store::test_support::twilio as twilio_registry_harness;
+pub mod twilio_resolution;
 pub mod twilio_sms;
+pub mod twilio_voice;
 pub mod visitor_analytics;
 pub mod webhook_auth;
 pub mod welcome;
 pub mod workshops;
+pub mod x_activity;
 
 pub use oauth::{AuthState as OAuthState, OAuthConfig};
 pub use session::{SessionData, SessionSource, SessionStore};
@@ -460,9 +468,17 @@ pub struct AppState {
     /// Opt-in authenticated summary intake. The legacy SendGrid path remains
     /// unchanged when this is absent.
     pub summary_intake: Option<inbound_email::SummaryIntakeConfig>,
-    /// Opt-in Twilio SMS intake onto the shared Inbox and optional summary lane. `None` unless the
-    /// deployment names `NAVIGATOR_SMS_NUMBER`; see [`twilio_sms`].
+    /// Opt-in Twilio SMS intake onto the shared Inbox and optional summary lane. The outbound
+    /// transport still sends through this deployment-wide configuration; inbound verification
+    /// no longer reads it. `None` unless the deployment names `NAVIGATOR_SMS_NUMBER`; see
+    /// [`twilio_sms`].
     pub sms_intake: Option<twilio_sms::SmsIntakeConfig>,
+    /// The Firm registry of Twilio receiving numbers (`brand_phone_number`), the lane behind
+    /// every Twilio webhook. Each registered number carries its Brand and its own KMS-backed
+    /// credential, verified by the resolution spine in [`twilio_resolution`]; an unknown number
+    /// or an unresolvable one fails closed. `None` in dev/tests keeps every Twilio webhook lane
+    /// off; production builds it from the deployment's PostgreSQL environment.
+    pub twilio_registry: Option<std::sync::Arc<store::postgres::PostgresDb>>,
     /// Shared secret SendGrid's Event Webhook must include in the
     /// delivery-event URL path (`/webhook/email-events/{secret}`). Same
     /// `None`-accepts-any-token dev posture as `inbound_email_secret`;
@@ -718,6 +734,7 @@ fn public_ingress_routes() -> Router<AppState> {
         .route("/assets/{*key}", get(public_asset))
         .merge(social_webhooks::routes())
         .merge(tiktok_comments::routes())
+        .merge(x_activity::routes())
         .merge(journal_webhooks::routes())
         .merge(social_oauth::public_routes())
         .route(
@@ -735,6 +752,10 @@ fn public_ingress_routes() -> Router<AppState> {
         .route(
             twilio_sms::SMS_WEBHOOK_PATH,
             axum::routing::post(twilio_sms::webhook),
+        )
+        .route(
+            crate::twilio_voice::VOICE_STATUS_PATH,
+            axum::routing::post(crate::twilio_voice::status),
         )
         .route(
             "/webhook/sendgrid/inbound/{secret}",
@@ -957,6 +978,7 @@ pub fn bootstrap_with_forgejo_oidc(
         secure_cookies: secure_cookies(&state),
         attachment_scanner: state.attachment_scanner.clone(),
         runtime_kms: state.runtime_kms.clone(),
+        twilio_registry: state.twilio_registry.clone(),
     };
     // #956 Phase 4: the client self-serve intake page renders through Dioxus at
     // /app/projects/{project_code}/intake/{notation_id}. Its pre-layer resolves the
@@ -1048,6 +1070,12 @@ pub fn bootstrap_with_forgejo_oidc(
         state.surreal.clone(),
     );
     let dioxus_owner_inbox = dioxus_app::owner_inbox_router(
+        state.sessions.clone(),
+        state.policy.clone(),
+        state.auth.clone(),
+        state.surreal.clone(),
+    );
+    let dioxus_triage_queue = dioxus_app::triage_queue_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -1381,6 +1409,10 @@ pub fn bootstrap_with_forgejo_oidc(
             // loop so cookies still round-trip in dev. The redirect URI
             // carries the external scheme even behind a TLS-terminating LB.
             secure_cookies: oauth.redirect_uri().starts_with("https://"),
+            canonical_host: state
+                .canonical_host
+                .clone()
+                .with_sign_in_origin(Some(oauth.redirect_uri())),
         })
         // Throttle the credential endpoints (login, password submit,
         // callback) per IP — the brute-force / credential-stuffing target.
@@ -2051,6 +2083,7 @@ pub fn bootstrap_with_forgejo_oidc(
         dioxus_app_owner,
         dioxus_deployment_keys,
         dioxus_owner_inbox,
+        dioxus_triage_queue,
         dioxus_owner_inbox_thread,
         dioxus_project_inbox,
         dioxus_project_inbox_thread,

@@ -772,6 +772,7 @@ async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
         inbound_email_secret: None,
         summary_intake: None,
         sms_intake: None,
+        twilio_registry: None,
         email_events_secret: None,
         sendgrid_events_public_key: None,
         bootstrap_owner_email: None,
@@ -10568,6 +10569,20 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
             copy: "written engagement before work begins",
         },
     ),
+    (
+        views::brand::BrandKey::LexTecnica,
+        LiveHomeContract::Authored {
+            title: "<title>Lex Tecnica | Home</title>",
+            copy: "A law firm for entrepreneurs, by entrepreneurs.",
+        },
+    ),
+    (
+        views::brand::BrandKey::IepDefenders,
+        LiveHomeContract::Authored {
+            title: "<title>IEP Defenders | Home</title>",
+            copy: "Special education lawyers defending your child",
+        },
+    ),
 ];
 
 fn live_home_contract(key: views::brand::BrandKey) -> &'static LiveHomeContract {
@@ -11188,11 +11203,20 @@ async fn assert_brand_home_lead_capture(
         StatusCode::OK,
         "{host}: confirmation"
     );
-    assert_eq!(
-        get_on_host(app, "/privacy", host).await.status(),
-        StatusCode::OK,
-        "{host}: privacy"
-    );
+    let privacy = get_on_host(app, "/privacy", host).await;
+    if brand.is_guieb_shook() {
+        assert_eq!(privacy.status(), StatusCode::OK, "{host}: privacy");
+    } else {
+        // Another firm's brand never presents Guieb & Shook PC's policy as its
+        // own: it sends the reader to the policy its firm publishes, or 404s.
+        let branding = brand.resolve_branding(&views::brand::DEFAULT_BRANDING);
+        if branding.privacy_url.is_empty() {
+            assert_eq!(privacy.status(), StatusCode::NOT_FOUND, "{host}: privacy");
+        } else {
+            assert_eq!(privacy.status(), StatusCode::SEE_OTHER, "{host}: privacy");
+            assert_eq!(privacy.headers()[header::LOCATION], branding.privacy_url);
+        }
+    }
 }
 
 async fn brand_home_lead_form(
@@ -11307,13 +11331,8 @@ async fn every_registered_host_serves_its_brand_and_its_apex_redirects_home() {
         let site_name = brand.firm.site_name;
         let mailbox = brand.firm_email;
 
-        for host in key
-            .hosts()
-            .iter()
-            .copied()
-            .chain(std::iter::once(key.apex()))
-        {
-            let apex = host == key.apex();
+        for host in key.hosts().iter().copied().chain(key.apex()) {
+            let apex = key.apex() == Some(host);
 
             if key.is_live() {
                 // A live served host renders; a live apex 301s to that
@@ -23376,12 +23395,34 @@ async fn the_firm_show_page_renders_its_invoice_graphs_for_owner_and_the_firms_a
     );
 }
 
+async fn seed_sms_summary_mailroom(surreal: &store::surreal::SurrealDb) {
+    let addr = store::addresses::create(
+        surreal,
+        &store::addresses::NewAddress {
+            line1: "1 Test".into(),
+            city: "Reno".into(),
+            region: "NV".into(),
+            postal_code: "89501".into(),
+            country: "US".into(),
+            ..store::addresses::NewAddress::default()
+        },
+    )
+    .await
+    .unwrap();
+    store::mailrooms::create(surreal, "HQ", addr.id)
+        .await
+        .unwrap();
+}
+
 /// A signed Twilio text lands on the same summary lane as support email:
 /// one receipt keyed to the firm's number, one archived message the worker
 /// can normalize, an `EmailSummary` start, and a redelivery that reuses all
 /// three.
 #[tokio::test]
 async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
+    let Some(registry) = store::test_support::twilio::postgres().await else {
+        return;
+    };
     let (mut state, surreal) = state_with_engines().await;
     let (firm_id, _, _, project_id) = seed_summary_dri(&surreal).await;
     let restate = MockServer::start().await;
@@ -23398,22 +23439,7 @@ async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
         .await
         .unwrap(),
     );
-    let addr = store::addresses::create(
-        &surreal,
-        &store::addresses::NewAddress {
-            line1: "1 Test".into(),
-            city: "Reno".into(),
-            region: "NV".into(),
-            postal_code: "89501".into(),
-            country: "US".into(),
-            ..store::addresses::NewAddress::default()
-        },
-    )
-    .await
-    .unwrap();
-    store::mailrooms::create(&surreal, "HQ", addr.id)
-        .await
-        .unwrap();
+    seed_sms_summary_mailroom(&surreal).await;
     let (public_key, _headers) = summary_test_key();
     state.summary_intake = Some(portal::inbound_email::SummaryIntakeConfig {
         envelope_recipients: vec!["intake@parse.example.com".into()],
@@ -23435,6 +23461,18 @@ async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
         auth_token: "synthetic-token".into(),
         webhook_url: "https://www.neonlaw.com/webhook/twilio/sms".into(),
     };
+    store::test_support::twilio::register_number(
+        &surreal,
+        &registry,
+        firm_id,
+        "neon",
+        &sms.number,
+        &sms.auth_token,
+    )
+    .await;
+    state.runtime_kms = Arc::new(cloud::FakeKms::new("spine-test"));
+    state.canonical_host = CanonicalHost::new(Some("www.neonlaw.com".into()));
+    state.twilio_registry = Some(Arc::new(registry));
     state.sms_intake = Some(sms.clone());
     let params: Vec<(String, String)> = [
         ("MessageSid", "SM0000000000000000000000000000001"),
@@ -23456,6 +23494,7 @@ async fn twilio_sms_joins_the_summary_lane_and_dedupes_redelivery() {
         let request = Request::builder()
             .method("POST")
             .uri(portal::twilio_sms::SMS_WEBHOOK_PATH)
+            .header("host", "www.neonlaw.com")
             .header("content-type", "application/x-www-form-urlencoded")
             .header("x-twilio-signature", &signature)
             .body(Body::from(body.clone()))

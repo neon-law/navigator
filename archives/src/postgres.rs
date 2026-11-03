@@ -66,6 +66,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "entity",
     "firm",
     "brand",
+    "brand_phone_number",
     "firm_brand",
     "firm_integration_secret",
     "firm_forgejo_organization",
@@ -83,6 +84,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "attorney_rate",
     "matter_flat_fee",
     "time_entry",
+    "billed_call",
     "time_entry_events",
     "timer",
     "ssh_public_key",
@@ -133,6 +135,8 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "inbox_assignment",
     "inbox_delivery_attempt",
     "inbox_message_asset",
+    "inbox_triage",
+    "inbox_attachment_receipt",
     "sent_email",
     "email_receipt",
     "email_delivery",
@@ -1015,7 +1019,7 @@ mod tests {
         assert_eq!(
             exported.len(),
             declared.len(),
-            "no duplicate export entries"
+            "export inventory and canonical schema must have the same table count"
         );
         assert_eq!(exported, declared);
     }

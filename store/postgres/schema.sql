@@ -3097,6 +3097,14 @@ BEGIN
 END
 $$;
 
+-- Migration: 20261031090000_extend_identity_systems.sql
+-- The sender-identity vocabulary grows with the inbox: the social channels
+-- Navigator ingests on (Meta's three surfaces, YouTube, and TikTok) can name
+-- a Person's identity the same way GitHub or Slack already do, so the inbox
+-- can resolve a sender instead of showing a bare provider id.
+ALTER TABLE person_external_identity DROP CONSTRAINT person_external_identity_system_check;
+ALTER TABLE person_external_identity ADD CONSTRAINT person_external_identity_system_check CHECK (system IN ('github', 'slack', 'docusign', 'google', 'linear', 'claude', 'chatgpt', 'notion', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok'));
+
 -- Migration: 20261031120000_add_project_onboarding_jurisdiction.sql
 -- The jurisdiction an onboarding Notation's Clauses bind to. NULL until recorded.
 ALTER TABLE project ADD COLUMN onboarding_jurisdiction TEXT;
@@ -3500,6 +3508,51 @@ CREATE TABLE notation_machine_state (
     PRIMARY KEY (notation_id, machine_kind)
 );
 
+-- Migration: 20261101150000_create_brand_phone_number.sql
+-- Migration: brand_phone_number — the Firm's Twilio receiving numbers.
+-- Born in PostgreSQL: the webhook resolution spine reads it before any
+-- Surreal record is touched. No foreign keys on purpose — brand_key and the
+-- secret reference resolve against mirrors that can lag a registration;
+-- intake fails closed when either does not resolve.
+CREATE TABLE IF NOT EXISTS brand_phone_number (
+    number_e164 TEXT PRIMARY KEY
+        CHECK (number_e164 ~ '^\+[0-9]{8,15}$'),
+    brand_key TEXT NOT NULL
+        CHECK (brand_key = trim(brand_key) AND brand_key <> '' AND length(brand_key) <= 100),
+    twilio_account_sid TEXT NOT NULL
+        CHECK (twilio_account_sid = trim(twilio_account_sid) AND twilio_account_sid <> '' AND length(twilio_account_sid) <= 64),
+    auth_token_secret_ref UUID NOT NULL,
+    channel_kinds TEXT NOT NULL
+        CHECK (channel_kinds IN ('sms', 'voice', 'both')),
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Migration: 20261101160000_create_billed_call.sql
+-- Migration: billed_call — billed time for completed voice calls.
+-- Born in PostgreSQL: one idempotent row per CallSid, written only from
+-- Twilio's final CallStatus=completed event. No foreign keys on purpose —
+-- the conversation is authored in the store the webhook serves and project
+-- attribution happens at intake; either can lag the completed event, and
+-- billing must not fail closed on a mirror race. `tenths` is derived from
+-- `duration_seconds` in the store and stored beside it so the audit trail
+-- shows the billed units as they landed.
+CREATE TABLE IF NOT EXISTS billed_call (
+    call_sid TEXT PRIMARY KEY
+        CHECK (call_sid = trim(call_sid) AND call_sid <> '' AND length(call_sid) <= 64),
+    conversation_id UUID NOT NULL,
+    firm_id UUID NOT NULL,
+    project_id UUID,
+    duration_seconds BIGINT NOT NULL
+        CHECK (duration_seconds >= 0),
+    tenths BIGINT NOT NULL
+        CHECK (tenths >= 0),
+    call_started_at TIMESTAMPTZ NOT NULL,
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX billed_call_firm_started ON billed_call(firm_id, call_started_at);
+
 -- Migration: 20261101170000_create_ssh_public_key.sql
 -- A Firm user's SSH public keys, the authoritative list Navigator reconciles
 -- onto the Person's account on the installation's Forgejo (ENG-1219). Only
@@ -3537,6 +3590,40 @@ CREATE UNIQUE INDEX ssh_public_key_live_fingerprint
 -- The sync and the profile page read one Person's keys.
 CREATE INDEX ssh_public_key_person_idx ON ssh_public_key (person_id);
 
+-- Migration: 20261101190000_create_inbox_attachment_receipt.sql
+-- Trusted clean-byte receipt for an unassigned Firm Inbox attachment.
+-- A globally deduplicated bare Asset may be independently received by many Firms.
+CREATE TABLE inbox_attachment_receipt (
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    asset_id UUID NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (firm_id, asset_id)
+);
+
+-- Migration: 20261101200000_create_inbox_triage.sql
+-- SurrealDB remains the write authority; the Inbox triage row is an opt-in mirror.
+CREATE TABLE inbox_triage (
+    id UUID PRIMARY KEY,
+    message_id UUID NOT NULL REFERENCES message(id),
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    suggested_project_id UUID REFERENCES project(id),
+    project_confidence DOUBLE PRECISION,
+    privilege TEXT NOT NULL CHECK (privilege IN ('privileged', 'not_privileged', 'uncertain')),
+    privilege_confidence DOUBLE PRECISION,
+    rationale TEXT,
+    model_id TEXT,
+    prompt_version TEXT NOT NULL,
+    raw_output TEXT,
+    disposition TEXT NOT NULL
+        CHECK (disposition IN ('suggested', 'confirmed', 'overridden', 'needs_human')),
+    labeled_example BOOLEAN NOT NULL DEFAULT FALSE,
+    inserted_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT inbox_triage_one_per_message UNIQUE (message_id)
+);
+CREATE INDEX inbox_triage_firm ON inbox_triage (firm_id);
+
 -- Migration: 20261101210000_create_notation_transition.sql
 -- Target-only DBOS runtime ownership; ephemeral Notations need no domain row.
 CREATE TABLE notation_transition (
@@ -3553,7 +3640,25 @@ CREATE TABLE notation_transition (
 CREATE UNIQUE INDEX notation_transition_pending ON notation_transition(notation_id) WHERE result IS NULL;
 CREATE INDEX notation_transition_notation ON notation_transition(notation_id);
 
--- Migration: 20261102000000_add_message_nef_outcome.sql
+-- Migration: 20261102000000_allow_x_inbox_channel.sql
+-- Retain the current Inbox channels while admitting X activity to the mirror.
+ALTER TABLE inbox_conversation DROP CONSTRAINT inbox_conversation_channel_check;
+ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'scraper', 'x'));
+
+-- Migration: 20261102010000_allow_voice_inbox_channel.sql
+-- Preserve Inbox channel storage across voice, social, and scraper ingestion.
+ALTER TABLE inbox_conversation DROP CONSTRAINT inbox_conversation_channel_check;
+ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'voice', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'scraper', 'linkedin', 'x'));
+
+-- Migration: 20261102020000_linkedin_channel_and_raw_storage.sql
+-- Imported direct messages and scraper notices share the Inbox channel vocabulary.
+DO $$ BEGIN
+    ALTER TABLE inbox_conversation DROP CONSTRAINT IF EXISTS inbox_conversation_channel_check;
+END $$;
+ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'linkedin', 'scraper', 'x', 'voice'));
+ALTER TABLE message ADD COLUMN raw_storage_key TEXT;
+
+-- Migration: 20261103000000_add_message_nef_outcome.sql
 -- The NEF pipeline's recorded outcome beside the route: filed, a text-only
 -- filing, a rerun over an already-recorded entry, or one of the triage
 -- results that leaves the message in the backlog. NULL for messages that

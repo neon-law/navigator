@@ -82,7 +82,11 @@ When a dirty tree is ready to land:
    `Closes ENG-NN` trailer in the body — see [Linking a PR to its Linear issue](#linking-a-pr-to-its-linear-issue).
    Ready PRs from this repository arm App-owned auto-merge automatically. Use draft status to hold a PR. Do not run `gh
    pr merge` yourself.
-8. Clean up task-owned local resources before ending the session. See [Resource cleanup](#resource-cleanup).
+8. Wait for the review comments before calling the PR done. Greptile and any human reviewer post after CI starts, and
+   an unresolved review thread blocks auto-merge just as a red check does. Answer every comment through [Address a PR
+   comment](#address-a-pr-comment) — fix it or reply with the reason not to — and resolve its thread. Report the PR only
+   once every thread is answered.
+9. Clean up task-owned local resources before ending the session. See [Resource cleanup](#resource-cleanup).
 
 If the work should become multiple PRs, decide that before committing. Use the Engineering Council for real sequencing
 questions.
@@ -264,7 +268,7 @@ Implement only the defined fix:
 - Restart and click through UI or behavior changes. Embed requested captures through GitHub user attachments, never a
   raw `/tmp` path.
 - Run the focused test for the fix. Coverage findings require a non-gated router test, not harness-gated e2e alone.
-  CI measures the 91.0% line floor. Opening a PR does not re-run that suite; see [Create a PR](#create-a-pr).
+  CI measures the 92.2% line floor. Opening a PR does not re-run that suite; see [Create a PR](#create-a-pr).
 - Commit on the branch as a Conventional Commit referencing the finding, and push so CI re-runs:
 
 ```bash
@@ -329,7 +333,7 @@ Treat a failed Action as a narrow task and start from its first actionable failu
 5. When the failure exposes a behavior gap, add the non-gated covering test that would have caught it. Do not add a test
    merely to restate an infrastructure outage.
 6. Re-run the failed command and the directly affected gate. For a coverage failure, run `cargo llvm-cov --workspace
-   --fail-under-lines 91.0` — CI exports no lcov, so the per-file table it prints is the diagnostic — and read it for
+   --fail-under-lines 92.2` — CI exports no lcov, so the per-file table it prints is the diagnostic — and read it for
    the file that regressed. Opening a new PR does not re-run that suite.
 7. Commit, push, and report the root cause, minimum fix, local proof, and any unrelated failing checks left untouched.
 

@@ -239,6 +239,18 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::DeleteYourData, "home") => Some(DELETE_YOUR_DATA_HOME_YAML),
         (BrandKey::DeleteYourData, "services") => Some(DELETE_YOUR_DATA_SERVICES_YAML),
         (BrandKey::LawyerShook, "services") => Some(LAWYER_SHOOK_SERVICES_YAML),
+        _ => lex_tecnica_catalog_yaml(key, page),
+    }
+}
+
+/// Lex Tecnica's own site, kept apart from the Guieb & Shook family's
+/// catalogs.
+fn lex_tecnica_catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
+    match (key, page) {
+        (BrandKey::LexTecnica, "home") => Some(include_str!("../locales/en/lex-tecnica/home.yaml")),
+        (BrandKey::LexTecnica, "services") => {
+            Some(include_str!("../locales/en/lex-tecnica/services.yaml"))
+        }
         _ => None,
     }
 }
@@ -1821,7 +1833,7 @@ mod tests {
         // Neon Law's own site needs no Neon Law card, and the Lawyer Shook
         // and Guieb & Shook holding pages are firm marks, not services, so
         // neither is listed.
-        let brands: Vec<BrandKey> = BrandKey::LIVE
+        let brands: Vec<BrandKey> = BrandKey::GUIEB_SHOOK_FAMILY
             .iter()
             .copied()
             .filter(|key| {
@@ -1831,10 +1843,6 @@ mod tests {
                 )
             })
             .collect();
-        assert!(
-            !brands.contains(&BrandKey::IepDefenders),
-            "held-out brands are not public directory entries"
-        );
         assert_eq!(cards.len(), brands.len());
         for key in brands {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
@@ -3582,14 +3590,15 @@ mod tests {
     fn every_public_brand_names_the_firm_behind_it() {
         for key in views::brand::BrandKey::ALL {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+            let firm = if key.is_guieb_shook() {
+                "Guieb & Shook PC"
+            } else {
+                views::brand::LEX_TECNICA_LEGAL_ENTITY
+            };
             assert_eq!(
                 branding.firm.legal_entity,
-                if *key == views::brand::BrandKey::IepDefenders {
-                    "Lex Tecnica, Ltd."
-                } else {
-                    "Guieb & Shook PC"
-                },
-                "{} names its own firm",
+                firm,
+                "{} names the firm",
                 key.as_str()
             );
             assert_ne!(

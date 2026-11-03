@@ -118,8 +118,8 @@ pub enum Error {
 /// Parses the canonical PostgreSQL DDL in a deliberately small, stable subset.
 /// The subset is sufficient for the checked-in migrations: CREATE TABLE,
 /// column declarations, inline REFERENCES, named table constraints,
-/// standalone indexes, and named CHECK constraints (which do not change
-/// table/column parity).
+/// standalone indexes, and named CHECK constraints and dropped named
+/// constraints (neither changes table/column parity).
 #[expect(
     clippy::too_many_lines,
     reason = "single ordered pass tracks SQL table and procedural block state"
@@ -270,6 +270,21 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
                     && constraint.as_bytes()[0].is_ascii_alphabetic();
                 if expression.is_empty() || !valid_identifier || !tables.contains_key(*name) {
+                    return Err(Error::UnsupportedSql(line.to_string()));
+                }
+                continue;
+            }
+            if let Some((name, constraint)) =
+                rest.trim_end_matches(';').split_once(" DROP CONSTRAINT ")
+            {
+                // Dropping a named constraint changes no table, column, or
+                // foreign key the parity model records; validate the shape
+                // and move on.
+                let valid_identifier = !constraint.is_empty()
+                    && constraint
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric() || character == '_');
+                if !valid_identifier || !tables.contains_key(name) {
                     return Err(Error::UnsupportedSql(line.to_string()));
                 }
                 continue;
@@ -682,7 +697,10 @@ fn surreal_erd_type(surreal_type: &str) -> &'static str {
         "uuid"
     } else if surreal_type.contains("bool") {
         "boolean"
-    } else if surreal_type.contains("int") || surreal_type.contains("float") {
+    } else if surreal_type.contains("int")
+        || surreal_type.contains("float")
+        || matches!(surreal_type, "number" | "option<number>")
+    {
         "number"
     } else if surreal_type.contains("datetime") {
         "datetime"
@@ -701,6 +719,7 @@ fn erd_type(sql_type: &str) -> &'static str {
         "UUID" => "uuid",
         "BOOLEAN" => "boolean",
         "BIGINT" | "INTEGER" | "SMALLINT" => "int",
+        "DOUBLE" | "DOUBLE PRECISION" | "REAL" | "FLOAT" => "number",
         "TIMESTAMPTZ" | "TIMESTAMP" | "DATE" => "datetime",
         "JSONB" | "JSON" => "json",
         _ => "string",
@@ -998,7 +1017,10 @@ mod tests {
                 "20261010120000_create_core_tenancy.sql",
                 initial_migration(),
             ),
-            ("20261010130000_create_post.sql", post_migration()),
+            (
+                "20261010130000_create_post.sql",
+                post_migration(),
+            ),
             (
                 "20261011120000_create_social_handle_and_publication.sql",
                 social_migration(),
@@ -1091,7 +1113,10 @@ mod tests {
                 "20261017110000_create_mailrooms_letters.sql",
                 mailrooms_letters_migration(),
             ),
-            ("20261017120000_create_leads.sql", leads_migration()),
+            (
+                "20261017120000_create_leads.sql",
+                leads_migration(),
+            ),
             (
                 "20261018120000_create_matter_pages_and_captions.sql",
                 matter_pages_captions_migration(),
@@ -1099,10 +1124,6 @@ mod tests {
             (
                 "20261018150000_create_project_archive.sql",
                 include_str!("../postgres/migrations/20261018150000_create_project_archive.sql"),
-            ),
-            (
-                "20261021130000_create_social_account_selection.sql",
-                include_str!("../postgres/migrations/20261021130000_create_social_account_selection.sql"),
             ),
             (
                 "20261018160000_create_project_source_import.sql",
@@ -1124,7 +1145,10 @@ mod tests {
                     "../postgres/migrations/20261018190000_create_project_handoff_acknowledgment.sql"
                 ),
             ),
-            ("20261020010000_create_inbox.sql", inbox_migration()),
+            (
+                "20261020010000_create_inbox.sql",
+                inbox_migration(),
+            ),
             (
                 "20261020100000_create_firm_integration_secret.sql",
                 firm_integration_secret_migration(),
@@ -1142,6 +1166,10 @@ mod tests {
                 attestation_migration(),
             ),
             (
+                "20261021130000_create_social_account_selection.sql",
+                include_str!("../postgres/migrations/20261021130000_create_social_account_selection.sql"),
+            ),
+            (
                 "20261021140000_create_project_records.sql",
                 include_str!("../postgres/migrations/20261021140000_create_project_records.sql"),
             ),
@@ -1157,7 +1185,14 @@ mod tests {
                 "20261021160000_create_mirror_backfill.sql",
                 include_str!("../postgres/migrations/20261021160000_create_mirror_backfill.sql"),
             ),
-            ("20261021170000_create_blog_video.sql", blog_video_migration()),
+            (
+                "20261021170000_create_blog_video.sql",
+                blog_video_migration(),
+            ),
+            (
+                "20261022120000_create_source_domain_records.sql",
+                SOURCE_DOMAIN_RECORDS_MIGRATION,
+            ),
             (
                 "20261022140000_create_dbos_workflow_request.sql",
                 dbos_workflow_request_migration(),
@@ -1165,10 +1200,6 @@ mod tests {
             (
                 "20261022200000_add_tenancy_authority_constraints.sql",
                 tenancy_authority_migration(),
-            ),
-            (
-                "20261022120000_create_source_domain_records.sql",
-                SOURCE_DOMAIN_RECORDS_MIGRATION,
             ),
             (
                 "20261022210000_enforce_project_code.sql",
@@ -1187,14 +1218,14 @@ mod tests {
                 include_str!("../postgres/migrations/20261026130000_add_deadline_description.sql"),
             ),
             (
-                "20261029010000_add_communication_receipts.sql",
-                include_str!("../postgres/migrations/20261029010000_add_communication_receipts.sql"),
-            ),
-            (
                 "20261027120000_add_project_calendar_and_booking_url.sql",
                 include_str!(
                     "../postgres/migrations/20261027120000_add_project_calendar_and_booking_url.sql"
                 ),
+            ),
+            (
+                "20261029010000_add_communication_receipts.sql",
+                include_str!("../postgres/migrations/20261029010000_add_communication_receipts.sql"),
             ),
             (
                 "20261030010000_add_template_firm.sql",
@@ -1229,6 +1260,10 @@ mod tests {
                 include_str!(
                     "../postgres/migrations/20261031025000_graph_conflict_names_and_runtime_grants.sql"
                 ),
+            ),
+            (
+                "20261031090000_extend_identity_systems.sql",
+                include_str!("../postgres/migrations/20261031090000_extend_identity_systems.sql"),
             ),
             (
                 "20261031120000_add_project_onboarding_jurisdiction.sql",
@@ -1293,16 +1328,44 @@ mod tests {
                 include_str!("../postgres/migrations/20261101140000_create_notation_machine_state.sql"),
             ),
             (
+                "20261101150000_create_brand_phone_number.sql",
+                include_str!("../postgres/migrations/20261101150000_create_brand_phone_number.sql"),
+            ),
+            (
+                "20261101160000_create_billed_call.sql",
+                include_str!("../postgres/migrations/20261101160000_create_billed_call.sql"),
+            ),
+            (
                 "20261101170000_create_ssh_public_key.sql",
                 include_str!("../postgres/migrations/20261101170000_create_ssh_public_key.sql"),
+            ),
+            (
+                "20261101190000_create_inbox_attachment_receipt.sql",
+                include_str!("../postgres/migrations/20261101190000_create_inbox_attachment_receipt.sql"),
+            ),
+            (
+                "20261101200000_create_inbox_triage.sql",
+                include_str!("../postgres/migrations/20261101200000_create_inbox_triage.sql"),
             ),
             (
                 "20261101210000_create_notation_transition.sql",
                 include_str!("../postgres/migrations/20261101210000_create_notation_transition.sql"),
             ),
             (
-                "20261102000000_add_message_nef_outcome.sql",
-                include_str!("../postgres/migrations/20261102000000_add_message_nef_outcome.sql"),
+                "20261102000000_allow_x_inbox_channel.sql",
+                include_str!("../postgres/migrations/20261102000000_allow_x_inbox_channel.sql"),
+            ),
+            (
+                "20261102010000_allow_voice_inbox_channel.sql",
+                include_str!("../postgres/migrations/20261102010000_allow_voice_inbox_channel.sql"),
+            ),
+            (
+                "20261102020000_linkedin_channel_and_raw_storage.sql",
+                include_str!("../postgres/migrations/20261102020000_linkedin_channel_and_raw_storage.sql"),
+            ),
+            (
+                "20261103000000_add_message_nef_outcome.sql",
+                include_str!("../postgres/migrations/20261103000000_add_message_nef_outcome.sql"),
             ),
         ])
         .expect("timestamped migration assembles");
@@ -1757,6 +1820,24 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_constraint_parses_without_changing_parity_shape() {
+        let ddl = "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
+                   ALTER TABLE brand DROP CONSTRAINT brand_font_licence_check;";
+        let tables = parse_schema(ddl).expect("dropped constraint parses");
+        assert_eq!(tables["brand"].columns.len(), 1);
+        assert!(parse_schema(
+            "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
+             ALTER TABLE absent DROP CONSTRAINT x;"
+        )
+        .is_err());
+        assert!(parse_schema(
+            "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
+             ALTER TABLE brand DROP CONSTRAINT has space;"
+        )
+        .is_err());
+    }
+
+    #[test]
     fn an_added_column_joins_its_table_and_brand_carries_its_website_url() {
         let sql = "CREATE TABLE firm (\n id UUID PRIMARY KEY\n);\n\
                    CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
@@ -1924,6 +2005,19 @@ mod tests {
             render_parity_manifest().expect("manifest serializes"),
             render_parity_manifest().expect("manifest serializes again")
         );
+    }
+
+    #[test]
+    fn confidence_fields_are_numeric_in_both_schema_diagrams() {
+        let source = super::render_surreal_source_erd();
+        let target = super::render_erd().unwrap();
+        for field in ["project_confidence", "privilege_confidence"] {
+            let label = format!("number {field}");
+            let source_numeric = source.contains(&label);
+            let target_numeric = target.contains(&label);
+            assert!(source_numeric && target_numeric,
+                "{field} must be numeric in both diagrams: source={source_numeric}, target={target_numeric}");
+        }
     }
 
     #[test]

@@ -31,3 +31,23 @@ spec:
                       name: navigator-web-secrets
                       key: RESTATE_AUTH_TOKEN
                       optional: true
+                # Flip the switch to submit through the worker's DBOS
+                # ingress instead of Restate; the submit joins the slot run
+                # the worker's internal reconciler schedule already owns.
+                # Default off: Restate stays the active engine until the
+                # cutover. The ingress URL and bearer come from the same
+                # secret the worker reads.
+                - name: NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED
+                  value: "false"
+                - name: NAVIGATOR_DBOS_INGRESS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_DBOS_INGRESS_URL
+                      optional: true
+                - name: NAVIGATOR_DBOS_INGRESS_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_DBOS_INGRESS_TOKEN
+                      optional: true

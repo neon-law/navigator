@@ -7,8 +7,10 @@ use serde_json::Value;
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::{changed, MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
-use crate::{postgres::PostgresDb, surreal::SurrealDb};
+use super::{changed, micros, MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
+use crate::postgres::PostgresDb;
+use crate::postgres_shadow::{compare_row, Comparison, ShadowKey};
+use crate::surreal::SurrealDb;
 
 struct Table {
     name: &'static str,
@@ -17,7 +19,7 @@ struct Table {
     immutable: bool,
 }
 
-// The same five table names and columns are declared in the Inbox migration.
+// Inbox row images follow their canonical SQL migrations.
 // `references` names only RecordId columns; every other value retains its
 // source type through jsonb_populate_record.
 const TABLES: &[Table] = &[
@@ -29,7 +31,7 @@ const TABLES: &[Table] = &[
     },
     Table {
         name: "message",
-        columns: "id,conversation_id,parent_message_id,visibility,direction,body,author_person_id,provider_message_id,provider_ref,delivery_state,purpose,attachment_asset_id,communication_id,occurred_at,alert_state,alert_channel_id,alert_timestamp,route,processed_at,nef_outcome,inserted_at,updated_at",
+        columns: "id,conversation_id,parent_message_id,visibility,direction,body,author_person_id,provider_message_id,provider_ref,delivery_state,purpose,attachment_asset_id,raw_storage_key,communication_id,occurred_at,alert_state,alert_channel_id,alert_timestamp,route,processed_at,nef_outcome,inserted_at,updated_at",
         references: "id,conversation_id,parent_message_id,author_person_id,attachment_asset_id,communication_id",
         immutable: false,
     },
@@ -56,6 +58,12 @@ const TABLES: &[Table] = &[
         columns: "id,message_id,state,provider_ref,detail,inserted_at",
         references: "id,message_id",
         immutable: true,
+    },
+    Table {
+        name: "inbox_triage",
+        columns: "id,message_id,firm_id,suggested_project_id,project_confidence,privilege,privilege_confidence,rationale,model_id,prompt_version,raw_output,disposition,labeled_example,inserted_at,updated_at",
+        references: "id,message_id,firm_id,suggested_project_id",
+        immutable: false,
     },
 ];
 
@@ -89,6 +97,7 @@ fn key(name: &str, id: Uuid) -> Result<MirrorKey, MirrorError> {
         "inbox_message_asset" => MirrorKey::InboxMessageAsset(id),
         "inbox_assignment" => MirrorKey::InboxAssignment(id),
         "inbox_delivery_attempt" => MirrorKey::InboxDeliveryAttempt(id),
+        "inbox_triage" => MirrorKey::InboxTriage(id),
         _ => return Err(MirrorError::Source),
     })
 }
@@ -193,15 +202,60 @@ fn upsert_sql(table: &Table) -> String {
 fn parent(column: &str, id: Uuid) -> Option<MirrorKey> {
     Some(match column {
         "firm_id" => MirrorKey::Firm(id),
-        "project_id" | "from_project_id" | "to_project_id" => MirrorKey::Project(id),
+        "project_id" | "from_project_id" | "to_project_id" | "suggested_project_id" => {
+            MirrorKey::Project(id)
+        }
         "email_conversation_id" => MirrorKey::EmailConversation(id),
         "conversation_id" => MirrorKey::InboxConversation(id),
         "parent_message_id" | "message_id" => MirrorKey::InboxMessage(id),
         "author_person_id" | "actor_person_id" => MirrorKey::Person(id),
-        "attachment_asset_id" => MirrorKey::Asset(id),
+        "attachment_asset_id" | "asset_id" => MirrorKey::Asset(id),
         "communication_id" => MirrorKey::Communication(id),
         _ => return None,
     })
+}
+
+// No Source row is deletion or overwrite evidence after native Inbox cutover.
+fn native_inbox_authority_selected() -> Result<bool, MirrorError> {
+    let setting = match std::env::var(crate::postgres::inbox::AUTHORITY_ENV) {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => return Err(MirrorError::InboxAuthority),
+    };
+    crate::postgres::inbox::enabled_from(setting.as_deref())
+        .map_err(|_| MirrorError::InboxAuthority)
+}
+
+fn require_source_authority() -> Result<(), MirrorError> {
+    if native_inbox_authority_selected()? {
+        Err(MirrorError::InboxAuthority)
+    } else {
+        Ok(())
+    }
+}
+
+async fn require_native_triage_parent(pg: &PostgresDb, row: &Value) -> Result<(), MirrorError> {
+    let message = row
+        .get("message_id")
+        .and_then(uuid_in)
+        .ok_or(MirrorError::Source)?;
+    let firm = row
+        .get("firm_id")
+        .and_then(uuid_in)
+        .ok_or(MirrorError::Source)?;
+    let valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM message m JOIN inbox_conversation c \
+         ON c.id=m.conversation_id WHERE m.id=$1 AND c.firm_id=$2)",
+    )
+    .bind(message)
+    .bind(firm)
+    .fetch_one(&pg.0)
+    .await?;
+    if valid {
+        Ok(())
+    } else {
+        Err(MirrorError::Source)
+    }
 }
 
 /// Match one source Inbox row in PostgreSQL. Missing mutable rows remove their
@@ -211,23 +265,84 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    // Keep the row writer's provider/store futures off callers' stack frames.
+    Box::pin(mirror_inner(surreal, pg, key)).await
+}
+
+async fn mirror_inner(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    key: &MirrorKey,
+) -> Result<Mirrored, MirrorError> {
+    let native_triage = if matches!(key, MirrorKey::InboxTriage(_)) {
+        native_inbox_authority_selected()?
+    } else {
+        require_source_authority()?;
+        false
+    };
     let table = table(key.table())?;
     let id = match key {
         MirrorKey::InboxConversation(id)
         | MirrorKey::InboxMessage(id)
         | MirrorKey::InboxIngress(id)
+        | MirrorKey::InboxMessageAsset(id)
         | MirrorKey::InboxAssignment(id)
-        | MirrorKey::InboxDeliveryAttempt(id) => *id,
+        | MirrorKey::InboxDeliveryAttempt(id)
+        | MirrorKey::InboxTriage(id) => *id,
         _ => return Err(MirrorError::Source),
     };
     if let Some(row) = source_one(surreal, table, id).await? {
+        if native_triage {
+            require_native_triage_parent(pg, &row).await?;
+        }
         for column in table.references.split(',').filter(|column| *column != "id") {
             if let Some(parent) = row
                 .get(column)
                 .and_then(uuid_in)
                 .and_then(|id| parent(column, id))
             {
+                if native_triage && matches!(parent, MirrorKey::InboxMessage(_)) {
+                    continue;
+                }
                 Box::pin(super::mirror(surreal, pg, &parent)).await?;
+            }
+        }
+        if matches!(key, MirrorKey::InboxMessageAsset(_)) {
+            let message_id = row
+                .get("message_id")
+                .and_then(uuid_in)
+                .ok_or(MirrorError::Source)?;
+            let firm_id = row
+                .get("firm_id")
+                .and_then(uuid_in)
+                .ok_or(MirrorError::Source)?;
+            let asset_id = row
+                .get("asset_id")
+                .and_then(uuid_in)
+                .ok_or(MirrorError::Source)?;
+            let sha = row
+                .get("sha256")
+                .and_then(Value::as_str)
+                .ok_or(MirrorError::Source)?;
+            let message = crate::inbox::message_by_id(surreal, message_id)
+                .await
+                .map_err(|_| MirrorError::Source)?
+                .ok_or(MirrorError::Source)?;
+            let conversation = crate::inbox::conversation_by_id(surreal, message.conversation_id)
+                .await
+                .map_err(|_| MirrorError::Source)?
+                .ok_or(MirrorError::Source)?;
+            let asset = crate::assets::find_by_id(surreal, asset_id)
+                .await
+                .map_err(|_| MirrorError::Source)?
+                .ok_or(MirrorError::Source)?;
+            if conversation.firm_id != firm_id || asset.sha256_hex != sha {
+                return Err(MirrorError::Source);
+            }
+            if asset.project_id.is_none() {
+                crate::postgres::inbox::record_attachment_receipt_on(pg, firm_id, asset_id, sha)
+                    .await
+                    .map_err(|_| MirrorError::Source)?;
             }
         }
         let result = sqlx::query(sqlx::AssertSqlSafe(upsert_sql(table)))
@@ -274,6 +389,7 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
 /// Repair mutable projections and insert missing audit rows. Changed or extra
 /// audit rows remain drift; mutable target-only rows delete in reverse order.
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    require_source_authority()?;
     let report = parity(surreal, pg).await?;
     let mut deletes: Vec<&TableParity> = Vec::new();
     for table_report in &report.tables {
@@ -294,6 +410,210 @@ pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityRep
         }
     }
     parity(surreal, pg).await
+}
+
+// ---------------------------------------------------------------------------
+// Shadow reads (crate::postgres_shadow) — one row per lookup
+// ---------------------------------------------------------------------------
+
+const CONVERSATION_BY_ID: &str = "SELECT id, firm_id, brand_key, interaction_type, \
+     provider_post_id, project_id, channel, external_address, external_name, subject, \
+     unread, provider_account, provider_thread_ref, source_page, source_channel, \
+     matter_consent, promotional_opt_in, promotional_opt_out, email_conversation_id, \
+     inserted_at, updated_at FROM inbox_conversation WHERE id = $1";
+
+const MESSAGE_BY_ID: &str = "SELECT id, conversation_id, parent_message_id, visibility, \
+     direction, body, author_person_id, provider_message_id, provider_ref, delivery_state, \
+     purpose, attachment_asset_id, communication_id, occurred_at, alert_state, \
+     alert_channel_id, alert_timestamp, inserted_at, updated_at FROM message WHERE id = $1";
+
+// Independent mirrored flags — mirrors Conversation's own flag columns.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConversationImage {
+    id: Uuid,
+    firm_id: Uuid,
+    brand_key: Option<String>,
+    interaction_type: String,
+    provider_post_id: Option<String>,
+    project_id: Option<Uuid>,
+    channel: String,
+    external_address: String,
+    external_name: Option<String>,
+    subject: Option<String>,
+    unread: bool,
+    provider_account: String,
+    provider_thread_ref: Option<String>,
+    source_page: Option<String>,
+    source_channel: Option<String>,
+    matter_consent: bool,
+    promotional_opt_in: bool,
+    promotional_opt_out: bool,
+    email_conversation_id: Option<Uuid>,
+    inserted_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl ConversationImage {
+    fn from_source(row: &crate::inbox::Conversation) -> Self {
+        Self {
+            id: row.id,
+            firm_id: row.firm_id,
+            brand_key: row.brand_key.clone(),
+            interaction_type: row.interaction_type.clone(),
+            provider_post_id: row.provider_post_id.clone(),
+            project_id: row.project_id,
+            channel: row.channel.clone(),
+            external_address: row.external_address.clone(),
+            external_name: row.external_name.clone(),
+            subject: row.subject.clone(),
+            unread: row.unread,
+            provider_account: row.provider_account.clone(),
+            provider_thread_ref: row.provider_thread_ref.clone(),
+            source_page: row.source_page.clone(),
+            source_channel: row.source_channel.clone(),
+            matter_consent: row.matter_consent,
+            promotional_opt_in: row.promotional_opt_in,
+            promotional_opt_out: row.promotional_opt_out,
+            email_conversation_id: row.email_conversation_id,
+            inserted_at: micros(row.inserted_at),
+            updated_at: micros(row.updated_at),
+        }
+    }
+
+    fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            firm_id: row.try_get("firm_id")?,
+            brand_key: row.try_get("brand_key")?,
+            interaction_type: row.try_get("interaction_type")?,
+            provider_post_id: row.try_get("provider_post_id")?,
+            project_id: row.try_get("project_id")?,
+            channel: row.try_get("channel")?,
+            external_address: row.try_get("external_address")?,
+            external_name: row.try_get("external_name")?,
+            subject: row.try_get("subject")?,
+            unread: row.try_get("unread")?,
+            provider_account: row.try_get("provider_account")?,
+            provider_thread_ref: row.try_get("provider_thread_ref")?,
+            source_page: row.try_get("source_page")?,
+            source_channel: row.try_get("source_channel")?,
+            matter_consent: row.try_get("matter_consent")?,
+            promotional_opt_in: row.try_get("promotional_opt_in")?,
+            promotional_opt_out: row.try_get("promotional_opt_out")?,
+            email_conversation_id: row.try_get("email_conversation_id")?,
+            inserted_at: row.try_get("inserted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessageImage {
+    id: Uuid,
+    conversation_id: Uuid,
+    parent_message_id: Option<Uuid>,
+    visibility: Option<String>,
+    direction: String,
+    body: String,
+    author_person_id: Option<Uuid>,
+    provider_message_id: Option<String>,
+    provider_ref: Option<String>,
+    delivery_state: String,
+    purpose: String,
+    attachment_asset_id: Option<Uuid>,
+    communication_id: Option<Uuid>,
+    occurred_at: String,
+    alert_state: Option<String>,
+    alert_channel_id: Option<String>,
+    alert_timestamp: Option<String>,
+    inserted_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl MessageImage {
+    fn from_source(row: &crate::inbox::Message) -> Self {
+        Self {
+            id: row.id,
+            conversation_id: row.conversation_id,
+            parent_message_id: row.parent_message_id,
+            visibility: row.visibility.clone(),
+            direction: row.direction.clone(),
+            body: row.body.clone(),
+            author_person_id: row.author_person_id,
+            provider_message_id: row.provider_message_id.clone(),
+            provider_ref: row.provider_ref.clone(),
+            delivery_state: row.delivery_state.clone(),
+            purpose: row.purpose.clone(),
+            attachment_asset_id: row.attachment_asset_id,
+            communication_id: row.communication_id,
+            occurred_at: row.occurred_at.clone(),
+            alert_state: None,
+            alert_channel_id: None,
+            alert_timestamp: None,
+            inserted_at: micros(row.inserted_at),
+            updated_at: micros(row.updated_at),
+        }
+    }
+
+    fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            conversation_id: row.try_get("conversation_id")?,
+            parent_message_id: row.try_get("parent_message_id")?,
+            visibility: row.try_get("visibility")?,
+            direction: row.try_get("direction")?,
+            body: row.try_get("body")?,
+            author_person_id: row.try_get("author_person_id")?,
+            provider_message_id: row.try_get("provider_message_id")?,
+            provider_ref: row.try_get("provider_ref")?,
+            delivery_state: row.try_get("delivery_state")?,
+            purpose: row.try_get("purpose")?,
+            attachment_asset_id: row.try_get("attachment_asset_id")?,
+            communication_id: row.try_get("communication_id")?,
+            occurred_at: row.try_get("occurred_at")?,
+            alert_state: row.try_get("alert_state")?,
+            alert_channel_id: row.try_get("alert_channel_id")?,
+            alert_timestamp: row.try_get("alert_timestamp")?,
+            inserted_at: row.try_get("inserted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
+}
+
+/// Compare one Conversation read with PostgreSQL's row for the same lookup.
+pub(crate) async fn shadow_conversation(
+    pg: &PostgresDb,
+    id: Uuid,
+    source: Option<&crate::inbox::Conversation>,
+) -> Result<Comparison, MirrorError> {
+    compare_row(
+        pg,
+        CONVERSATION_BY_ID,
+        ShadowKey::Id(id),
+        source.map(ConversationImage::from_source),
+        ConversationImage::from_row,
+        |image| image.id,
+    )
+    .await
+}
+
+/// Compare one Message read with PostgreSQL's row for the same lookup. The
+/// model carries no alert fields, so the source side compares them as absent.
+pub(crate) async fn shadow_message(
+    pg: &PostgresDb,
+    id: Uuid,
+    source: Option<&crate::inbox::Message>,
+) -> Result<Comparison, MirrorError> {
+    compare_row(
+        pg,
+        MESSAGE_BY_ID,
+        ShadowKey::Id(id),
+        source.map(MessageImage::from_source),
+        MessageImage::from_row,
+        |image| image.id,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -327,6 +647,7 @@ mod tests {
             email_conversation_id: None,
             attachments: Vec::new(),
             occurred_at: "2026-10-20T00:00:00Z",
+            raw_storage_key: None,
         }
     }
 
@@ -403,19 +724,99 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn five_inbox_tables_mirror_and_mutable_drift_reconciles() {
+    async fn a_voice_transcript_preserves_its_channel_in_postgres() {
         use crate::postgres_mirror::{self, MirrorKey};
-        use crate::surreal::record_id;
-
         let Some((options, database)) = postgres_mirror::tests::fresh_schema().await else {
             return;
         };
         let pg = postgres_mirror::tests::connect(&options, &database).await;
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        let saved = crate::inbox::ingest_inbound(&db, &inbound(firm))
+        let mut input = inbound(firm);
+        input.channel = crate::inbox::channel::VOICE;
+        let saved = crate::inbox::ingest_inbound(&db, &input).await.unwrap();
+        let entity = crate::firms::find_by_id(&db, firm)
             .await
+            .unwrap()
+            .unwrap()
+            .entity_id
             .unwrap();
+        postgres_mirror::tests::mirror_identity(&pg, &[entity], &[]).await;
+        for key in [
+            MirrorKey::InboxConversation(saved.conversation_id),
+            MirrorKey::InboxMessage(saved.message_id),
+        ] {
+            postgres_mirror::mirror(&db, &pg, &key).await.unwrap();
+        }
+        let channel: String =
+            sqlx::query_scalar("SELECT channel FROM inbox_conversation WHERE id=$1")
+                .bind(saved.conversation_id)
+                .fetch_one(pg.pool())
+                .await
+                .unwrap();
+        assert_eq!(channel, crate::inbox::channel::VOICE);
+    }
+
+    /// Seed one Suggested triage row for a mirrored message with model
+    /// fields filled — the classifier-lane shape the mirror must carry.
+    async fn seed_triage(
+        db: &crate::surreal::SurrealDb,
+        message_id: Uuid,
+        firm: Uuid,
+        project_id: Uuid,
+    ) -> Uuid {
+        crate::inbox_triage::record(
+            db,
+            &crate::inbox_triage::NewInboxTriage {
+                message_id,
+                firm_id: firm,
+                suggested_project_id: Some(project_id),
+                project_confidence: Some(0.8),
+                privilege: crate::inbox_triage::PrivilegeLabel::Privileged,
+                privilege_confidence: Some(0.95),
+                rationale: Some("mentions a closing".into()),
+                model_id: Some("gemini-flash-lite".into()),
+                prompt_version: "triage-v1".into(),
+                raw_output: Some("{\"privileged\":true}".into()),
+                disposition: crate::inbox_triage::TriageDisposition::Suggested,
+                labeled_example: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    struct InboxImageFixture {
+        db: crate::surreal::SurrealDb,
+        saved: crate::inbox::IngestedInbound,
+        assets: [Uuid; 2],
+        assignment: Uuid,
+        attempt: Uuid,
+        triage: Uuid,
+    }
+
+    async fn seed_inbox_image_fixture(pg: &crate::postgres::PostgresDb) -> InboxImageFixture {
+        use crate::postgres_mirror;
+        use crate::surreal::record_id;
+
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let asset = crate::test_support::seed_body_asset(&db, b"Synthetic attachment").await;
+        let mut input = inbound(firm);
+        input.attachments.push(crate::inbox::IngestAttachment {
+            asset_id: asset,
+            filename: "synthetic.md".into(),
+            sha256: crate::assets::sha256_hex(b"Synthetic attachment"),
+        });
+        let second_asset =
+            crate::test_support::seed_body_asset(&db, b"Second synthetic attachment").await;
+        input.attachments.push(crate::inbox::IngestAttachment {
+            asset_id: second_asset,
+            filename: "second.md".into(),
+            sha256: crate::assets::sha256_hex(b"Second synthetic attachment"),
+        });
+        let saved = crate::inbox::ingest_inbound(&db, &input).await.unwrap();
         let project = crate::projects::create(
             &db,
             &crate::projects::NewProject {
@@ -451,6 +852,7 @@ mod tests {
             .unwrap()
             .check()
             .unwrap();
+        let triage = seed_triage(&db, saved.message_id, firm, project.id).await;
 
         let firm_entity = crate::firms::find_by_id(&db, firm)
             .await
@@ -458,8 +860,73 @@ mod tests {
             .unwrap()
             .entity_id
             .unwrap();
-        postgres_mirror::tests::mirror_identity(&pg, &[firm_entity, project.entity_id], &[]).await;
+        postgres_mirror::tests::mirror_identity(pg, &[firm_entity, project.entity_id], &[]).await;
 
+        InboxImageFixture {
+            db,
+            saved,
+            assets: [asset, second_asset],
+            assignment,
+            attempt,
+            triage,
+        }
+    }
+
+    async fn assert_inbox_image_rows(pg: &crate::postgres::PostgresDb, assets: &[Uuid; 2]) {
+        for table in super::TABLES {
+            let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM {}",
+                table.name
+            )))
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+            assert_eq!(
+                rows,
+                if table.name == "inbox_message_asset" {
+                    2
+                } else {
+                    1
+                },
+                "the {} parity proof needs persisted fixture rows",
+                table.name
+            );
+        }
+        let mirrored_assets: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM asset WHERE id = ANY($1)")
+                .bind(assets.to_vec())
+                .fetch_one(&pg.0)
+                .await
+                .unwrap();
+        assert_eq!(
+            mirrored_assets, 2,
+            "both attachment parents must mirror automatically"
+        );
+    }
+
+    #[tokio::test]
+    async fn seven_inbox_tables_mirror_and_mutable_drift_reconciles() {
+        use crate::postgres_mirror::{self, MirrorKey};
+
+        let Some((options, database)) = postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = postgres_mirror::tests::connect(&options, &database).await;
+        let InboxImageFixture {
+            db,
+            saved,
+            assets,
+            assignment,
+            attempt,
+            triage,
+        } = seed_inbox_image_fixture(&pg).await;
+        let links = source(&db, table("inbox_message_asset").unwrap())
+            .await
+            .unwrap();
+        let MirrorKey::InboxMessageAsset(attachment) = links.keys().next().unwrap() else {
+            panic!("expected an Inbox attachment link");
+        };
+        let attachment = *attachment;
         let ingress = source(&db, table("inbox_ingress").unwrap()).await.unwrap();
         let ingress = ingress.keys().next().unwrap().clone();
         for key in [
@@ -468,11 +935,16 @@ mod tests {
             ingress,
             MirrorKey::InboxAssignment(assignment),
             MirrorKey::InboxDeliveryAttempt(attempt),
-        ] {
+            MirrorKey::InboxTriage(triage),
+        ]
+        .into_iter()
+        .chain(links.keys().cloned())
+        {
             postgres_mirror::mirror(&db, &pg, &key)
                 .await
                 .unwrap_or_else(|error| panic!("{key}: {error}"));
         }
+        assert_inbox_image_rows(&pg, &assets).await;
         assert!(postgres_mirror::inbox::parity(&db, &pg)
             .await
             .unwrap()
@@ -484,6 +956,18 @@ mod tests {
                 .await
                 .is_err()
         );
+        assert!(
+            sqlx::query("UPDATE inbox_message_asset SET filename='drifted' WHERE id=$1")
+                .bind(attachment)
+                .execute(&pg.0)
+                .await
+                .is_err()
+        );
+        sqlx::query("UPDATE inbox_triage SET rationale='drifted' WHERE id=$1")
+            .bind(triage)
+            .execute(&pg.0)
+            .await
+            .unwrap();
         sqlx::query("UPDATE message SET body='drifted' WHERE id=$1")
             .bind(saved.message_id)
             .execute(&pg.0)
@@ -502,5 +986,39 @@ mod tests {
             .unwrap()
             .is_clean());
         pg.0.close().await;
+    }
+
+    #[tokio::test]
+    async fn x_conversations_mirror_with_the_same_channel() {
+        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let mut input = inbound(firm);
+        input.channel = crate::inbox::channel::X;
+        let saved = crate::inbox::ingest_inbound(&db, &input).await.unwrap();
+        let entity = crate::firms::find_by_id(&db, firm)
+            .await
+            .unwrap()
+            .unwrap()
+            .entity_id
+            .unwrap();
+        crate::postgres_mirror::tests::mirror_identity(&pg, &[entity], &[]).await;
+        crate::postgres_mirror::mirror(
+            &db,
+            &pg,
+            &crate::postgres_mirror::MirrorKey::InboxConversation(saved.conversation_id),
+        )
+        .await
+        .unwrap();
+        let channel: String =
+            sqlx::query_scalar("SELECT channel FROM inbox_conversation WHERE id = $1")
+                .bind(saved.conversation_id)
+                .fetch_one(&pg.0)
+                .await
+                .unwrap();
+        assert_eq!(channel, "x");
     }
 }
