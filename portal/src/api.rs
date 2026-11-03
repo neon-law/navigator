@@ -959,6 +959,12 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/inbox/import/fi",
+            post(crate::inbox_import_api::fi_import_door)
+                .layer(DefaultBodyLimit::max(store::fi_import::MAX_CSV_BYTES * 2)),
+        ),
+        (
+            "POST",
             "/app/api/inbox/import",
             // Carries base64 payloads up to the document upload ceiling, so
             // its request cap is derived rather than applied globally.

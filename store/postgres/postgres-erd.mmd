@@ -122,6 +122,17 @@ erDiagram
         string role
         datetime updated_at
     }
+    billed_call {
+        string call_sid
+        datetime call_started_at
+        uuid conversation_id
+        int duration_seconds
+        uuid firm_id
+        datetime inserted_at
+        uuid project_id
+        int tenths
+        datetime updated_at
+    }
     blog_video {
         string brand_key
         int height
@@ -149,6 +160,15 @@ erDiagram
         string typeface
         datetime updated_at
         string website_url
+    }
+    brand_phone_number {
+        uuid auth_token_secret_ref
+        string brand_key
+        string channel_kinds
+        datetime inserted_at
+        string number_e164
+        string twilio_account_sid
+        datetime updated_at
     }
     cap_table_holding {
         json holder_id

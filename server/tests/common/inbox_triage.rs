@@ -9,6 +9,95 @@ use features::webdriver::{
 use store::inbox_triage::{NewInboxTriage, PrivilegeLabel, TriageDisposition, RULES_ONLY_PROMPT};
 
 #[tokio::test]
+async fn assigned_voice_call_offers_notes_without_an_external_reply_form() {
+    let Some(browser) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&browser).await;
+    let db = store::surreal::connect_from_env()
+        .await
+        .expect("local store");
+    let firm = store::firms::firm_id_for_brand_key(&db, "neon")
+        .await
+        .unwrap()
+        .unwrap();
+    let project = store::projects::find_by_code(&db, "sample-litigation")
+        .await
+        .unwrap()
+        .unwrap();
+    let provider_id = format!("voice-review-{}", uuid::Uuid::now_v7());
+    let message = store::inbox::ingest_inbound(
+        &db,
+        &store::inbox::IngestInbound {
+            firm_id: firm,
+            brand_key: Some("neon"),
+            interaction_type: None,
+            provider_post_id: None,
+            parent_provider_message_id: None,
+            visibility: Some("private"),
+            channel: "voice",
+            provider_account: "synthetic-browser-call",
+            provider_message_id: &provider_id,
+            provider_thread_ref: None,
+            external_address: "synthetic-caller",
+            external_name: Some("Synthetic browser caller"),
+            subject: Some("Synthetic browser voice call"),
+            body: "Synthetic browser call transcript.",
+            raw_storage_key: None,
+            source_page: None,
+            source_channel: None,
+            matter_consent: false,
+            promotional_opt_in: false,
+            email_conversation_id: None,
+            attachments: Vec::new(),
+            project_id: Some(project.id),
+            occurred_at: "2026-11-02T05:00:00Z",
+        },
+    )
+    .await
+    .expect("synthetic assigned call");
+    browser
+        .goto(&format!(
+            "{}/app/projects/sample-litigation/inbox/{}",
+            base_url(),
+            message.conversation_id
+        ))
+        .await
+        .unwrap();
+    wait_for_text(
+        &browser,
+        "Synthetic browser call transcript.",
+        Duration::from_secs(15),
+    )
+    .await;
+    assert!(browser
+        .find_all(Locator::Css("form[action$='/reply']"))
+        .await
+        .unwrap()
+        .is_empty());
+    browser
+        .find(Locator::Css("form[action$='/notes'] textarea[name='body']"))
+        .await
+        .expect("internal note form")
+        .send_keys("Synthetic browser call note.")
+        .await
+        .unwrap();
+    scroll_and_js_click(&browser, "form[action$='/notes'] button").await;
+    wait_for_text(
+        &browser,
+        "Synthetic browser call note.",
+        Duration::from_secs(15),
+    )
+    .await;
+    assert!(browser
+        .find_all(Locator::Css("form[action$='/reply']"))
+        .await
+        .unwrap()
+        .is_empty());
+    browser.close().await.unwrap();
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn private_social_assignment_waits_for_human_privilege_review() {
     let Some(browser) = new_client_or_skip().await else {

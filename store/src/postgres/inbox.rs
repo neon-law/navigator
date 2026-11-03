@@ -237,7 +237,7 @@ pub(crate) async fn ingest_message_on(
 ) -> Result<IngestedInbound, InboxError> {
     let channel_supported = matches!(
         inbound.channel,
-        channel::EMAIL | channel::SMS | channel::SCRAPER
+        channel::EMAIL | channel::SMS | channel::SCRAPER | channel::VOICE
     ) || inbox::is_social_channel(inbound.channel);
     if !channel_supported
         || !matches!(
@@ -376,6 +376,180 @@ pub(crate) async fn ingest_message_on(
         message_id,
         deduped: false,
     })
+}
+
+/// Fi imports reserve destination and immutable history in the caller's transaction.
+pub(crate) async fn ingest_fi_message_in(
+    connection: &mut sqlx::PgConnection,
+    scope: &crate::fi_import::Scope,
+    row: &crate::fi_import::Row,
+) -> Result<IngestedInbound, crate::fi_import::FiImportError> {
+    use crate::fi_import::FiImportError as Error;
+    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT DISTINCT message_id FROM inbox_ingress WHERE firm_id=$1 AND provider_account=$2 AND provider_message_id=$3")
+        .bind(scope.firm).bind(&scope.account).bind(&row.provider_message_id)
+        .fetch_all(&mut *connection).await.map_err(|_|Error::Storage)?;
+    if ids.len() > 1 {
+        return Err(Error::Conflict);
+    }
+    let existing = ids.first().copied();
+    let inbound = row.ingest(scope.firm, &scope.brand, &scope.account);
+    let conversation_id = if let Some(id) = existing {
+        sqlx::query_scalar("SELECT conversation_id FROM message WHERE id=$1")
+            .bind(id)
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(|_| Error::Storage)?
+    } else {
+        fi_conversation_id_in(connection, &inbound, scope.project)
+            .await
+            .map_err(|_| Error::Storage)?
+    };
+    let acquired: bool =
+        sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1,168))")
+            .bind(conversation_id.to_string())
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(|_| Error::Storage)?;
+    if !acquired {
+        return Err(Error::Busy);
+    }
+    let saved = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {CONVERSATION_COLUMNS} FROM inbox_conversation WHERE id=$1 FOR UPDATE"
+    )))
+    .bind(conversation_id)
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|_| Error::Storage)?;
+    let conversation = conversation(&saved).map_err(|_| Error::Storage)?;
+    if conversation.firm_id != scope.firm
+        || conversation.brand_key.as_deref() != Some(scope.brand.as_str())
+        || conversation.provider_account != scope.account
+        || conversation.channel != inbound.channel
+        || scope.project.is_some_and(|project| {
+            conversation
+                .project_id
+                .is_some_and(|actual| actual != project)
+        })
+    {
+        return Err(Error::Conflict);
+    }
+    if let Some(id) = existing {
+        let saved = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {MESSAGE_COLUMNS} FROM message WHERE id=$1"
+        )))
+        .bind(id)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|_| Error::Storage)?;
+        let message = message(&saved).map_err(|_| Error::Storage)?;
+        if !crate::fi_import::matches_facts(scope, row, &message, &conversation)? {
+            return Err(Error::Conflict);
+        }
+    }
+    pin_fi_project_in(connection, scope, &conversation).await?;
+    let message_id = if let Some(id) = existing {
+        id
+    } else {
+        insert_fi_history_in(
+            connection,
+            &inbound,
+            row.metadata.direction.as_str(),
+            conversation_id,
+        )
+        .await?
+    };
+    if existing.is_none() {
+        sqlx::query("UPDATE inbox_conversation SET unread=true,updated_at=now() WHERE id=$1")
+            .bind(conversation_id)
+            .execute(&mut *connection)
+            .await
+            .map_err(|_| Error::Storage)?;
+    }
+    Ok(IngestedInbound {
+        conversation_id,
+        message_id,
+        deduped: existing.is_some(),
+    })
+}
+
+async fn fi_conversation_id_in(
+    connection: &mut sqlx::PgConnection,
+    inbound: &IngestInbound<'_>,
+    project: Option<Uuid>,
+) -> Result<Uuid, InboxError> {
+    if let Some(project) = project {
+        let mut selected = inbound.clone();
+        selected.project_id = Some(project);
+        if let Some(conversation) = find_open_thread_on(&mut *connection, &selected).await? {
+            return Ok(conversation.id);
+        }
+    }
+    match find_open_thread_on(&mut *connection, inbound).await? {
+        Some(conversation) => Ok(conversation.id),
+        // Start unassigned so pin_fi_project_in records the initial None-to-Project audit.
+        None => Ok(create_conversation_on(&mut *connection, inbound).await?.id),
+    }
+}
+
+async fn pin_fi_project_in(
+    connection: &mut sqlx::PgConnection,
+    scope: &crate::fi_import::Scope,
+    conversation: &crate::inbox::Conversation,
+) -> Result<(), crate::fi_import::FiImportError> {
+    use crate::fi_import::FiImportError as Error;
+    let Some(project) = scope.project else {
+        return Ok(());
+    };
+    let valid: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM project WHERE id=$1 AND firm_id=$2)")
+            .bind(project)
+            .bind(scope.firm)
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(|_| Error::Storage)?;
+    if !valid {
+        return Err(Error::Conflict);
+    }
+    if conversation.project_id.is_none() {
+        sqlx::query("UPDATE inbox_conversation SET project_id=$2,unread=true,updated_at=now() WHERE id=$1 AND project_id IS NULL")
+            .bind(conversation.id).bind(project).execute(&mut *connection).await.map_err(|_|Error::Storage)?;
+        sqlx::query("INSERT INTO inbox_assignment(id,conversation_id,firm_id,from_project_id,to_project_id,actor_person_id,inserted_at) VALUES($1,$2,$3,NULL,$4,$5,now())")
+            .bind(Uuid::now_v7()).bind(conversation.id).bind(scope.firm).bind(project).bind(scope.actor)
+            .execute(&mut *connection).await.map_err(|_|Error::Storage)?;
+    }
+    Ok(())
+}
+
+async fn insert_fi_history_in(
+    connection: &mut sqlx::PgConnection,
+    inbound: &IngestInbound<'_>,
+    direction_value: &str,
+    conversation_id: Uuid,
+) -> Result<Uuid, crate::fi_import::FiImportError> {
+    use crate::fi_import::FiImportError as Error;
+    let id = insert_message(
+        &mut *connection,
+        &MessageInsert {
+            conversation_id,
+            direction: direction_value,
+            body: inbound.body,
+            author_person_id: None,
+            provider_message_id: Some(inbound.provider_message_id),
+            provider_ref: None,
+            delivery_state: delivery::RECEIVED,
+            purpose: purpose::MATTER,
+            visibility: inbound.visibility,
+            attachment_asset_id: None,
+            raw_storage_key: None,
+            occurred_at: inbound.occurred_at,
+        },
+    )
+    .await
+    .map_err(|_| Error::Storage)?;
+    sqlx::query("INSERT INTO inbox_ingress(id,firm_id,channel,provider_account,provider_message_id,message_id,inserted_at) VALUES($1,$2,$3,$4,$5,$6,now())")
+        .bind(Uuid::now_v7()).bind(inbound.firm_id).bind(inbound.channel).bind(inbound.provider_account)
+        .bind(inbound.provider_message_id).bind(id).execute(&mut *connection).await.map_err(|_|Error::Storage)?;
+    Ok(id)
 }
 
 async fn deduped_ingest(pg: &PostgresDb, message_id: Uuid) -> Result<IngestedInbound, InboxError> {
@@ -586,22 +760,11 @@ pub(crate) async fn assign_on(
     conversation_id: Uuid,
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
-    let actor = inbox::load_person(db, actor_id).await?;
+    let _fi_guard = fi_assignment_guard_on(pg, conversation_id).await?;
     let conversation = conversation_by_id_on(pg, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
-    let project = crate::projects::find_by_id(db, project_id)
-        .await?
-        .ok_or(InboxError::NotFound)?;
-    if project.firm_id != Some(conversation.firm_id) {
-        return Err(InboxError::CrossFirm);
-    }
-    if !matches!(actor.role, Role::Owner)
-        && (!matches!(actor.role, Role::Lawyer | Role::Clerk)
-            || !inbox::sees_project(db, actor_id, actor.role, project_id).await?)
-    {
-        return Err(InboxError::Denied);
-    }
+    inbox::require_assignment_authorization(db, actor_id, conversation.firm_id, project_id).await?;
     assign_write_on(pg, db, actor_id, &conversation, project_id).await
 }
 
@@ -615,6 +778,7 @@ pub(crate) async fn assign_for_triage_review_on(
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
     let actor = inbox::load_person(db, actor_id).await?;
+    let _fi_guard = fi_assignment_guard_on(pg, conversation_id).await?;
     let conversation = conversation_by_id_on(pg, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
@@ -635,6 +799,27 @@ pub(crate) async fn assign_for_triage_review_on(
         }
     }
     assign_write_on(pg, db, actor_id, &conversation, project_id).await
+}
+
+async fn fi_assignment_guard_on(
+    pg: &PostgresDb,
+    conversation_id: Uuid,
+) -> Result<Option<sqlx::Transaction<'_, sqlx::Postgres>>, InboxError> {
+    let conversation = conversation_by_id_on(pg, conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if !crate::fi_import::is_account(&conversation.provider_account) {
+        return Ok(None);
+    }
+    crate::fi_import::lock_on(pg)
+        .await
+        .map(Some)
+        .map_err(|error| match error {
+            crate::fi_import::FiImportError::Busy => InboxError::Invalid(
+                "Fi import or assignment is in progress; retry assignment".into(),
+            ),
+            _ => InboxError::Db("Fi assignment coordination is unavailable".into()),
+        })
 }
 
 async fn assign_write_on(
@@ -810,6 +995,9 @@ pub(crate) async fn queue_reply_on(
     let conversation = conversation_by_id_on(pg, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
+    if !inbox::allows_external_reply(&conversation) {
+        return Err(InboxError::Denied);
+    }
     let Some(project_id) = conversation.project_id else {
         return Err(InboxError::Denied);
     };
@@ -1028,6 +1216,9 @@ async fn queue_sms_message_on(
     actor_id: Uuid,
     body: &str,
 ) -> Result<Uuid, InboxError> {
+    if crate::fi_import::is_account(&conversation.provider_account) {
+        return Err(InboxError::Denied);
+    }
     let message_id = create_message_on(
         pg,
         conversation.id,
@@ -1097,14 +1288,22 @@ pub(crate) async fn dispatch_queued_on(
             }
             None => false,
         };
-        if !allowed {
+        if !allowed || !inbox::allows_external_reply(&conversation) {
             set_delivery_on(pg, message.id, delivery::SUPPRESSED, None).await?;
             journal_attempt_on(
                 pg,
                 message.id,
                 delivery::SUPPRESSED,
                 None,
-                Some("participation revoked"),
+                Some(
+                    if crate::fi_import::is_account(&conversation.provider_account) {
+                        "import source is read-only"
+                    } else if conversation.channel == channel::VOICE {
+                        "voice replies are unsupported"
+                    } else {
+                        "participation revoked"
+                    },
+                ),
             )
             .await?;
             report.suppressed += 1;
@@ -1387,7 +1586,7 @@ pub(crate) async fn set_attachment_asset_on(
     Ok(())
 }
 
-async fn messages_for_on(
+pub(crate) async fn messages_for_on(
     pg: &PostgresDb,
     conversation_id: Uuid,
 ) -> Result<Vec<Message>, InboxError> {
@@ -1527,6 +1726,7 @@ pub(crate) async fn intake_detail_on(
     let can_social_reply = inbox::is_social_channel(&conversation.channel)
         && inbox::social_reply_actor_still_authorized(db, actor_id, &conversation).await?;
     let can_sms_reply = conversation.channel == channel::SMS
+        && !crate::fi_import::is_account(&conversation.provider_account)
         && inbox::social_reply_actor_still_authorized(db, actor_id, &conversation).await?;
     let bodies_visible =
         conversation.project_id.is_none() || participates || can_social_reply || can_sms_reply;
@@ -1591,7 +1791,7 @@ async fn intake_rows(
                 role,
                 assigned || conversation.project_id.is_some(),
                 &delivery_state,
-                can_send_default,
+                can_send_default && inbox::allows_external_reply(&conversation),
             )
             .to_string(),
             delivery: delivery_state,
@@ -1676,7 +1876,8 @@ pub(crate) async fn project_thread_on(
         return Err(InboxError::NotFound);
     }
     let can_note = matches!(actor.role, Role::Lawyer | Role::Clerk);
-    let can_send = matches!(actor.role, Role::Lawyer | Role::Clerk);
+    let can_send = matches!(actor.role, Role::Lawyer | Role::Clerk)
+        && inbox::allows_external_reply(&conversation);
     let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
     let messages = messages_for_on(pg, conversation.id).await?;
     mark_read_on(pg, conversation.id).await?;

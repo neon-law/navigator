@@ -501,3 +501,173 @@ async fn file_import_attachment(
     }
     Ok(asset_id)
 }
+
+fn fi_preview_default() -> bool {
+    true
+}
+
+/// Explicitly mapped metadata only. The default request is a read-only preview.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FiImportRequest {
+    account: String,
+    brand: String,
+    project: Option<String>,
+    mapping: store::fi_import::Mapping,
+    payload_base64: String,
+    #[serde(default = "fi_preview_default")]
+    dry_run: bool,
+}
+
+/// `POST /app/api/inbox/import/fi`: both historical directions, never a send.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one bounded batch boundary keeps prevalidation before every write and reports partial commits"
+)]
+pub(crate) async fn fi_import_door(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Json(input): Json<FiImportRequest>,
+) -> Result<Response, ApiError> {
+    use store::fi_import::{self, Existing};
+    let actor = lawyer.0.person_id.ok_or(ApiError::NotFound)?;
+    let (firm, project) =
+        match resolve_firm_and_project(&state, &lawyer, actor, input.project.as_deref()).await {
+            Ok(scope) => scope,
+            Err(response) => return Ok(response),
+        };
+    if let Some(project_id) = project {
+        store::inbox::require_assignment_authorization(&state.surreal, actor, firm, project_id)
+            .await
+            .map_err(|error| inbox_error(&error))?;
+    }
+    let brand = store::brands::find_by_key(&state.surreal, input.brand.trim())
+        .await
+        .map_err(|_| ApiError::NotFound)?
+        .ok_or(ApiError::NotFound)?;
+    if store::firms::firm_id_for_brand_key(&state.surreal, &brand.key)
+        .await
+        .map_err(|_| ApiError::NotFound)?
+        != Some(firm)
+    {
+        return Err(ApiError::NotFound);
+    }
+    let account = match fi_import::account(&input.account) {
+        Ok(account) => account,
+        Err(error) => return Ok(bad_request("fi_mapping", &error.to_string())),
+    };
+    if input.payload_base64.len() > fi_import::MAX_CSV_BYTES * 4 / 3 + 8 {
+        return Ok(bad_request("fi_limit", "Fi CSV exceeds the import limit."));
+    }
+    let bytes = match decode_payload(&input.payload_base64) {
+        Ok(bytes) => bytes,
+        Err(response) => return Ok(response),
+    };
+    let rows = match fi_import::parse(&input.mapping, &input.account, &bytes) {
+        Ok(rows) => rows,
+        Err(error) => return Ok(bad_request("fi_parse", &error.to_string())),
+    };
+    let pg = fi_import::native_pool()
+        .await
+        .map_err(|_| ApiError::Db("native Inbox authority is required for Fi imports".into()))?;
+    let scope = fi_import::Scope {
+        actor,
+        firm,
+        brand: brand.key.clone(),
+        account,
+        project,
+    };
+    let mut previews = Vec::with_capacity(rows.len());
+    let mut new = 0;
+    let mut existing = 0;
+    let mut conflicts = 0;
+    for row in &rows {
+        let status = fi_import::preview_on(&pg, &scope, row)
+            .await
+            .map_err(|_| ApiError::Db("Fi duplicate preflight unavailable".into()))?;
+        match status {
+            Existing::New => new += 1,
+            Existing::Identical => existing += 1,
+            Existing::Conflict => conflicts += 1,
+        }
+        previews.push(
+            serde_json::json!({"row":row.number,"status":status,"kind":row.metadata.kind,
+            "direction":row.metadata.direction,"occurred_at":row.metadata.occurred_at,
+            "duration_seconds":row.metadata.duration_seconds}),
+        );
+    }
+    if input.dry_run || conflicts > 0 {
+        let status = if conflicts > 0 {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::OK
+        };
+        return Ok((
+            status,
+            Json(
+                serde_json::json!({"dry_run":input.dry_run,"new":new,"existing":existing,
+            "conflicts":conflicts,"rows":previews,"imported":[]}),
+            ),
+        )
+            .into_response());
+    }
+    // Only after complete parse, scope and conflict validation: required
+    // source-authoritative parents, with no raw-payload archive or provider call.
+    let mut parents = vec![
+        store::postgres_mirror::MirrorKey::Firm(firm),
+        store::postgres_mirror::MirrorKey::Person(actor),
+        store::postgres_mirror::MirrorKey::Brand(brand.id),
+    ];
+    if let Some(project) = project {
+        parents.push(store::postgres_mirror::MirrorKey::Project(project));
+    }
+    for key in parents {
+        store::postgres_mirror::mirror(&state.surreal, &pg, &key)
+            .await
+            .map_err(|_| ApiError::Db("Fi import dependency projection failed".into()))?;
+    }
+    let mut imported = Vec::new();
+    for row in &rows {
+        let saved = match fi_import::ingest_on(&pg, &scope, row).await {
+            Ok(saved) => saved,
+            Err(error) => {
+                let status = if error == fi_import::FiImportError::Conflict {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                };
+                return Ok((status,Json(serde_json::json!({"dry_run":false,"failed_row":row.number,
+                    "error":error.to_string(),"imported":imported,"outcome_may_be_committed":error==fi_import::FiImportError::Storage,
+                    "reconcile":"Rerun the unchanged batch to reconcile committed source identities."}))).into_response());
+            }
+        };
+        // Report persistence before the separate source-authoritative Project
+        // projection; a failed attribution remains visible and safe to re-run.
+        imported.push(
+            serde_json::json!({"row":row.number,"message_id":saved.message_id,
+            "conversation_id":saved.conversation_id,"deduped":saved.deduped}),
+        );
+        if let Some(project) = project {
+            if store::inbox::assign(&state.surreal, actor, saved.conversation_id, project)
+                .await
+                .is_err()
+            {
+                return Ok((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({"dry_run":false,
+                    "failed_row":row.number,"error":"Project attribution requires reconciliation",
+                    "imported":imported,"reconcile":"Rerun the same batch and Project."})),
+                )
+                    .into_response());
+            }
+        }
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            serde_json::json!({"dry_run":false,"new":new,"existing":existing,
+        "conflicts":0,"imported":imported}),
+        ),
+    )
+        .into_response())
+}

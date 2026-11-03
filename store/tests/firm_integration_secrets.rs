@@ -44,6 +44,112 @@ async fn firm_with_dri(
     (firm, admin)
 }
 
+fn twilio_request(firm_id: Uuid, actor: Uuid, value: &str) -> SecretPutRequest<'_> {
+    SecretPutRequest {
+        actor_role: Role::Admin,
+        actor_person_id: Some(actor),
+        firm_id,
+        provider: IntegrationProvider::Twilio,
+        kind: IntegrationSecretKind::TwilioAuthToken,
+        value,
+    }
+}
+
+#[tokio::test]
+async fn pinned_twilio_tokens_retain_other_numbers_and_revoke_individually() {
+    use store::firm_secrets::{
+        put_twilio_auth_token, resolve_twilio_auth_token_by_ref, revoke_twilio_auth_token_by_ref,
+    };
+    let db = mem_surreal().await;
+    let (firm, dri) = firm_with_dri(&db, "twilio").await;
+    let kms = FakeKms::new("synthetic-twilio");
+    let first = put_twilio_auth_token(&db, twilio_request(firm.id, dri.id, "token-one"), &kms)
+        .await
+        .unwrap();
+    let second = put_twilio_auth_token(&db, twilio_request(firm.id, dri.id, "token-two"), &kms)
+        .await
+        .unwrap();
+    assert_ne!(first, second);
+    // The settings write uses the generic put door and must retain both pins too.
+    put(&db, twilio_request(firm.id, dri.id, "token-three"), &kms)
+        .await
+        .unwrap();
+    for (id, value) in [(first, "token-one"), (second, "token-two")] {
+        let (resolved, owner) = resolve_twilio_auth_token_by_ref(&db, id, &kms)
+            .await
+            .unwrap();
+        assert_eq!(owner, firm.id);
+        assert_eq!(resolved.expose_for_provider_call(), value);
+    }
+    let metadata = list_metadata_for_firm(&db, Role::Admin, Some(dri.id), firm.id)
+        .await
+        .unwrap();
+    assert_eq!(metadata.len(), 3);
+    assert!(!serde_json::to_string(&metadata)
+        .unwrap()
+        .contains("token-one"));
+    revoke_twilio_auth_token_by_ref(&db, Role::Admin, Some(dri.id), firm.id, first)
+        .await
+        .unwrap();
+    assert!(matches!(
+        resolve_twilio_auth_token_by_ref(&db, first, &kms).await,
+        Err(SecretStoreError::MissingRef(id)) if id == first
+    ));
+    let (remaining, _) = resolve_twilio_auth_token_by_ref(&db, second, &kms)
+        .await
+        .unwrap();
+    assert_eq!(remaining.expose_for_provider_call(), "token-two");
+}
+
+#[tokio::test]
+async fn pinned_twilio_writes_and_revocations_require_the_owning_firm_manager() {
+    use store::firm_secrets::{
+        put_twilio_auth_token, resolve_twilio_auth_token_by_ref, revoke_twilio_auth_token_by_ref,
+    };
+    let db = mem_surreal().await;
+    let (firm, dri) = firm_with_dri(&db, "twilio-owner").await;
+    let (other, other_dri) = firm_with_dri(&db, "twilio-other").await;
+    let kms = FakeKms::new("synthetic-twilio");
+    let request = twilio_request(firm.id, dri.id, "own-token");
+    let id = put_twilio_auth_token(&db, request, &kms).await.unwrap();
+    assert!(matches!(
+        put_twilio_auth_token(
+            &db,
+            SecretPutRequest {
+                actor_person_id: Some(other_dri.id),
+                ..request
+            },
+            &kms
+        )
+        .await,
+        Err(SecretStoreError::NotAuthorized)
+    ));
+    assert!(matches!(
+        revoke_twilio_auth_token_by_ref(&db, Role::Admin, Some(other_dri.id), firm.id, id).await,
+        Err(SecretStoreError::NotAuthorized)
+    ));
+    assert!(matches!(
+        revoke_twilio_auth_token_by_ref(&db, Role::Admin, Some(other_dri.id), other.id, id).await,
+        Err(SecretStoreError::MissingRef(missing)) if missing == id
+    ));
+    assert!(matches!(
+        put_twilio_auth_token(
+            &db,
+            SecretPutRequest {
+                kind: IntegrationSecretKind::NotionToken,
+                ..request
+            },
+            &kms
+        )
+        .await,
+        Err(SecretStoreError::InvalidKind)
+    ));
+    let (resolved, _) = resolve_twilio_auth_token_by_ref(&db, id, &kms)
+        .await
+        .unwrap();
+    assert_eq!(resolved.expose_for_provider_call(), "own-token");
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn typed_secret_rotation_is_metadata_only_and_resolves_by_project_firm() {
@@ -329,7 +435,9 @@ async fn list_metadata_for_firm_lists_every_configured_kind_and_is_firm_scoped()
 /// unreachable from any write door.
 #[test]
 fn all_kinds_covers_the_closed_vocabulary_with_no_duplicates() {
-    assert_eq!(ALL_KINDS.len(), 11);
+    assert_eq!(ALL_KINDS.len(), 12);
+    assert!(ALL_KINDS.contains(&IntegrationSecretKind::PortalLogin));
+    assert!(ALL_KINDS.contains(&IntegrationSecretKind::TwilioAuthToken));
     let mut slugs: Vec<&str> = ALL_KINDS.iter().map(|kind| kind.as_str()).collect();
     slugs.sort_unstable();
     slugs.dedup();

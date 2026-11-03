@@ -494,9 +494,13 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // + 4 for historical message import admission, denied tiers, and exact routes.
     // + 3 for Message attachment downloads: Lawyer admission, denied tiers, exact route.
     // 658 + 4 + 3 = 665.
+    // + 2 for call-queue and Brand-report role admission.
+    // 665 + 2 = 667.
+    // + 3 for mapped Fi history: Lawyer admission, denied tiers, and exact shape.
+    // 667 + 3 = 670.
     assert_eq!(
         test_names.len(),
-        665,
+        670,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

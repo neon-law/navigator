@@ -1017,7 +1017,10 @@ mod tests {
                 "20261010120000_create_core_tenancy.sql",
                 initial_migration(),
             ),
-            ("20261010130000_create_post.sql", post_migration()),
+            (
+                "20261010130000_create_post.sql",
+                post_migration(),
+            ),
             (
                 "20261011120000_create_social_handle_and_publication.sql",
                 social_migration(),
@@ -1110,7 +1113,10 @@ mod tests {
                 "20261017110000_create_mailrooms_letters.sql",
                 mailrooms_letters_migration(),
             ),
-            ("20261017120000_create_leads.sql", leads_migration()),
+            (
+                "20261017120000_create_leads.sql",
+                leads_migration(),
+            ),
             (
                 "20261018120000_create_matter_pages_and_captions.sql",
                 matter_pages_captions_migration(),
@@ -1118,10 +1124,6 @@ mod tests {
             (
                 "20261018150000_create_project_archive.sql",
                 include_str!("../postgres/migrations/20261018150000_create_project_archive.sql"),
-            ),
-            (
-                "20261021130000_create_social_account_selection.sql",
-                include_str!("../postgres/migrations/20261021130000_create_social_account_selection.sql"),
             ),
             (
                 "20261018160000_create_project_source_import.sql",
@@ -1143,7 +1145,10 @@ mod tests {
                     "../postgres/migrations/20261018190000_create_project_handoff_acknowledgment.sql"
                 ),
             ),
-            ("20261020010000_create_inbox.sql", inbox_migration()),
+            (
+                "20261020010000_create_inbox.sql",
+                inbox_migration(),
+            ),
             (
                 "20261020100000_create_firm_integration_secret.sql",
                 firm_integration_secret_migration(),
@@ -1161,6 +1166,10 @@ mod tests {
                 attestation_migration(),
             ),
             (
+                "20261021130000_create_social_account_selection.sql",
+                include_str!("../postgres/migrations/20261021130000_create_social_account_selection.sql"),
+            ),
+            (
                 "20261021140000_create_project_records.sql",
                 include_str!("../postgres/migrations/20261021140000_create_project_records.sql"),
             ),
@@ -1176,7 +1185,14 @@ mod tests {
                 "20261021160000_create_mirror_backfill.sql",
                 include_str!("../postgres/migrations/20261021160000_create_mirror_backfill.sql"),
             ),
-            ("20261021170000_create_blog_video.sql", blog_video_migration()),
+            (
+                "20261021170000_create_blog_video.sql",
+                blog_video_migration(),
+            ),
+            (
+                "20261022120000_create_source_domain_records.sql",
+                SOURCE_DOMAIN_RECORDS_MIGRATION,
+            ),
             (
                 "20261022140000_create_dbos_workflow_request.sql",
                 dbos_workflow_request_migration(),
@@ -1184,10 +1200,6 @@ mod tests {
             (
                 "20261022200000_add_tenancy_authority_constraints.sql",
                 tenancy_authority_migration(),
-            ),
-            (
-                "20261022120000_create_source_domain_records.sql",
-                SOURCE_DOMAIN_RECORDS_MIGRATION,
             ),
             (
                 "20261022210000_enforce_project_code.sql",
@@ -1206,14 +1218,14 @@ mod tests {
                 include_str!("../postgres/migrations/20261026130000_add_deadline_description.sql"),
             ),
             (
-                "20261029010000_add_communication_receipts.sql",
-                include_str!("../postgres/migrations/20261029010000_add_communication_receipts.sql"),
-            ),
-            (
                 "20261027120000_add_project_calendar_and_booking_url.sql",
                 include_str!(
                     "../postgres/migrations/20261027120000_add_project_calendar_and_booking_url.sql"
                 ),
+            ),
+            (
+                "20261029010000_add_communication_receipts.sql",
+                include_str!("../postgres/migrations/20261029010000_add_communication_receipts.sql"),
             ),
             (
                 "20261030010000_add_template_firm.sql",
@@ -1248,6 +1260,10 @@ mod tests {
                 include_str!(
                     "../postgres/migrations/20261031025000_graph_conflict_names_and_runtime_grants.sql"
                 ),
+            ),
+            (
+                "20261031090000_extend_identity_systems.sql",
+                include_str!("../postgres/migrations/20261031090000_extend_identity_systems.sql"),
             ),
             (
                 "20261031120000_add_project_onboarding_jurisdiction.sql",
@@ -1302,40 +1318,51 @@ mod tests {
                 include_str!("../postgres/migrations/20261101110000_add_deadline_category.sql"),
             ),
             (
-                "20261102020000_linkedin_channel_and_raw_storage.sql",
-                include_str!("../postgres/migrations/20261102020000_linkedin_channel_and_raw_storage.sql"),
-            ),
-            (
                 "20261101130000_create_firm_forgejo_organization.sql",
                 include_str!(
                     "../postgres/migrations/20261101130000_create_firm_forgejo_organization.sql"
                 ),
             ),
             (
+                "20261101140000_create_notation_machine_state.sql",
+                include_str!("../postgres/migrations/20261101140000_create_notation_machine_state.sql"),
+            ),
+            (
+                "20261101150000_create_brand_phone_number.sql",
+                include_str!("../postgres/migrations/20261101150000_create_brand_phone_number.sql"),
+            ),
+            (
+                "20261101160000_create_billed_call.sql",
+                include_str!("../postgres/migrations/20261101160000_create_billed_call.sql"),
+            ),
+            (
                 "20261101170000_create_ssh_public_key.sql",
                 include_str!("../postgres/migrations/20261101170000_create_ssh_public_key.sql"),
+            ),
+            (
+                "20261101190000_create_inbox_attachment_receipt.sql",
+                include_str!("../postgres/migrations/20261101190000_create_inbox_attachment_receipt.sql"),
             ),
             (
                 "20261101200000_create_inbox_triage.sql",
                 include_str!("../postgres/migrations/20261101200000_create_inbox_triage.sql"),
             ),
             (
+                "20261101210000_create_notation_transition.sql",
+                include_str!("../postgres/migrations/20261101210000_create_notation_transition.sql"),
+            ),
+            (
                 "20261102000000_allow_x_inbox_channel.sql",
                 include_str!("../postgres/migrations/20261102000000_allow_x_inbox_channel.sql"),
             ),
             (
-                "20261031090000_extend_identity_systems.sql",
-                include_str!("../postgres/migrations/20261031090000_extend_identity_systems.sql"),
+                "20261102010000_allow_voice_inbox_channel.sql",
+                include_str!("../postgres/migrations/20261102010000_allow_voice_inbox_channel.sql"),
             ),
             (
-                "20261101140000_create_notation_machine_state.sql",
-                include_str!("../postgres/migrations/20261101140000_create_notation_machine_state.sql"),
+                "20261102020000_linkedin_channel_and_raw_storage.sql",
+                include_str!("../postgres/migrations/20261102020000_linkedin_channel_and_raw_storage.sql"),
             ),
-            (
-                "20261101210000_create_notation_transition.sql",
-                include_str!("../postgres/migrations/20261101210000_create_notation_transition.sql"),
-            ),
-            ("20261101190000_create_inbox_attachment_receipt.sql",include_str!("../postgres/migrations/20261101190000_create_inbox_attachment_receipt.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
