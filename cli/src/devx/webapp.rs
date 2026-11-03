@@ -87,7 +87,7 @@ pub fn build(release: bool) -> Result<()> {
 }
 
 /// Recursively copy `src` into `dst`, creating `dst` and any parents.
-fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+pub(super) fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst).with_context(|| format!("creating {}", dst.display()))?;
     for entry in fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
         let entry = entry?;

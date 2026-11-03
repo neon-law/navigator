@@ -84,6 +84,7 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
             "journal",
             "lsp",
             "mail",
+            "nautilus",
             "notation",
             "ops",
             "person",
@@ -361,6 +362,7 @@ fn dev_help_lists_local_loop_members() {
         command_names(&output),
         vec![
             "browser-e2e",
+            "build-nautilus",
             "build-webapp",
             "deploy",
             "down",
