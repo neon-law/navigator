@@ -3401,6 +3401,8 @@ async fn fi_project_destination_is_reserved_before_any_history_commit() {
             "replay_sms",
             "race_call",
             "race_sms",
+            "group_call",
+            "group_sms",
         ] {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", &name, "--nocapture"])
@@ -3424,7 +3426,9 @@ async fn fi_project_destination_is_reserved_before_any_history_commit() {
     };
     configure_native_triage_fixture(&f).await;
     let kind = if case.ends_with("sms") { "S" } else { "C" };
-    if case.starts_with("race") {
+    if case.starts_with("group") {
+        assert_fi_project_batches_reuse_the_selected_thread(&f, kind).await;
+    } else if case.starts_with("race") {
         assert_fi_assignment_cannot_cross_commit(&f, kind).await;
     } else {
         assert_fi_project_is_pinned_before_return(&f, kind, case.starts_with("replay")).await;
@@ -3620,5 +3624,118 @@ async fn assert_fi_assignment_cannot_cross_commit(f: &Fixture, kind: &str) {
             .unwrap()
             .project_id,
         Some(destination)
+    );
+}
+
+async fn assert_fi_project_batches_reuse_the_selected_thread(f: &Fixture, kind: &str) {
+    let mut scope = fi_scope(f).await;
+    scope.project = Some(f.project);
+    let duration = if kind == "C" { "61" } else { "" };
+    let csv = (0..7)
+        .map(|index| {
+            format!("{kind},I,+15555550456,2026-10-30T18:0{index}:00Z,{duration},group-{index}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let rows = fi_rows(&csv);
+    let first = crate::fi_import::ingest_on(&f.pg, &scope, &rows[0])
+        .await
+        .unwrap();
+    let second = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+        .await
+        .unwrap();
+    assert_eq!(
+        second.conversation_id, first.conversation_id,
+        "new Fi events for the selected Project, phone and channel must share one thread"
+    );
+    assert_ne!(second.message_id, first.message_id);
+    let replay = crate::fi_import::ingest_on(&f.pg, &scope, &rows[1])
+        .await
+        .unwrap();
+    assert!(replay.deduped);
+    assert_eq!(replay.message_id, second.message_id);
+    scope.project = None;
+    let parked = crate::fi_import::ingest_on(&f.pg, &scope, &rows[2])
+        .await
+        .unwrap();
+    assert_ne!(
+        parked.conversation_id, first.conversation_id,
+        "unscoped new history cannot join a Project thread"
+    );
+    let other = seed_project(
+        &f.pg,
+        &f.db,
+        f.entity,
+        f.firm,
+        "fi-group-other",
+        "Fi group other",
+    )
+    .await;
+    scope.project = Some(other);
+    let other_saved = crate::fi_import::ingest_on(&f.pg, &scope, &rows[3])
+        .await
+        .unwrap();
+    assert_eq!(
+        other_saved.conversation_id, parked.conversation_id,
+        "targeted ingestion can still claim an existing parked thread"
+    );
+    assert_ne!(
+        other_saved.conversation_id, first.conversation_id,
+        "another Project cannot capture the selected thread"
+    );
+    scope.project = Some(f.project);
+    let third = crate::fi_import::ingest_on(&f.pg, &scope, &rows[4])
+        .await
+        .unwrap();
+    assert_eq!(third.conversation_id, first.conversation_id);
+    scope.project = None;
+    let still_parked = crate::fi_import::ingest_on(&f.pg, &scope, &rows[5])
+        .await
+        .unwrap();
+    scope.project = Some(f.project);
+    let fourth = crate::fi_import::ingest_on(&f.pg, &scope, &rows[6])
+        .await
+        .unwrap();
+    assert_eq!(
+        fourth.conversation_id, first.conversation_id,
+        "prefer the selected Project over an unrelated parked thread"
+    );
+    assert_eq!(
+        pg_inbox::conversation_by_id_on(&f.pg, still_parked.conversation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id,
+        None
+    );
+    assert_fi_group_audit_and_messages(f, first.conversation_id).await;
+}
+
+async fn assert_fi_group_audit_and_messages(f: &Fixture, conversation: Uuid) {
+    for _ in 0..2 {
+        let assignment = crate::inbox::assign(&f.db, f.owner, conversation, f.project)
+            .await
+            .unwrap();
+        assert_eq!(assignment.from_project_id, None);
+        assert_eq!(assignment.actor_person_id, f.owner);
+    }
+    let audits: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM inbox_assignment WHERE conversation_id=$1")
+            .bind(conversation)
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        audits, 1,
+        "grouping and projection repair keep one initial assignment audit"
+    );
+    let messages: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM message WHERE conversation_id=$1")
+        .bind(conversation)
+        .fetch_one(f.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        messages, 4,
+        "all distinct events remain separate Messages in the same thread"
     );
 }

@@ -400,18 +400,9 @@ pub(crate) async fn ingest_fi_message_in(
             .await
             .map_err(|_| Error::Storage)?
     } else {
-        match find_open_thread_on(&mut *connection, &inbound)
+        fi_conversation_id_in(connection, &inbound, scope.project)
             .await
             .map_err(|_| Error::Storage)?
-        {
-            Some(conversation) => conversation.id,
-            None => {
-                create_conversation_on(&mut *connection, &inbound)
-                    .await
-                    .map_err(|_| Error::Storage)?
-                    .id
-            }
-        }
     };
     let acquired: bool =
         sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1,168))")
@@ -477,6 +468,25 @@ pub(crate) async fn ingest_fi_message_in(
         message_id,
         deduped: existing.is_some(),
     })
+}
+
+async fn fi_conversation_id_in(
+    connection: &mut sqlx::PgConnection,
+    inbound: &IngestInbound<'_>,
+    project: Option<Uuid>,
+) -> Result<Uuid, InboxError> {
+    if let Some(project) = project {
+        let mut selected = inbound.clone();
+        selected.project_id = Some(project);
+        if let Some(conversation) = find_open_thread_on(&mut *connection, &selected).await? {
+            return Ok(conversation.id);
+        }
+    }
+    match find_open_thread_on(&mut *connection, inbound).await? {
+        Some(conversation) => Ok(conversation.id),
+        // Start unassigned so pin_fi_project_in records the initial None-to-Project audit.
+        None => Ok(create_conversation_on(&mut *connection, inbound).await?.id),
+    }
 }
 
 async fn pin_fi_project_in(
