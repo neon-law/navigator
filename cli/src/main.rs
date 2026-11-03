@@ -8902,3 +8902,588 @@ mod batch_upload_args_tests {
         assert!(parse(&["--dir", "exhibits", "--slug", "a.pdf"]).is_err());
     }
 }
+
+/// Tests for the `project gate`/`validate` helper seams: the pure argument
+/// parsers, the mutable-tag detection chain, and the standalone tree passes.
+/// Each test drives a real path through the function under test and asserts
+/// evidence unique to that path.
+#[cfg(test)]
+mod gate_helpers_tests {
+    use super::*;
+    use std::fmt::Write as _;
+
+    // ------------------------------------------------------------------
+    // Pure argument parsers
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn parse_answer_splits_on_the_first_equals_only() {
+        let (code, value) = parse_answer("case_number=42=extra").expect("parses");
+        assert_eq!(code, "case_number");
+        assert_eq!(value, "42=extra");
+        assert_eq!(
+            parse_answer("no_equals").unwrap_err(),
+            "expected `code=value`, got `no_equals`"
+        );
+        assert_eq!(
+            parse_answer("=value").unwrap_err(),
+            "empty answer code in `=value`"
+        );
+    }
+
+    #[test]
+    fn unescape_answer_value_turns_escapes_into_real_characters() {
+        assert_eq!(unescape_answer_value("line1\\nline2"), "line1\nline2");
+        assert_eq!(unescape_answer_value("a\\tb"), "a\tb");
+        assert_eq!(unescape_answer_value("windows\\r\\n"), "windows\r\n");
+        assert_eq!(unescape_answer_value("back\\\\slash"), "back\\slash");
+        // A trailing backslash stays one backslash rather than vanishing.
+        assert_eq!(unescape_answer_value("ends\\"), "ends\\");
+        // An unknown escape is preserved verbatim, never dropped.
+        assert_eq!(unescape_answer_value("q\\x?"), "q\\x?");
+        assert_eq!(unescape_answer_value("plain"), "plain");
+    }
+
+    #[test]
+    fn parse_assignment_requires_a_key_and_a_value_side() {
+        let (key, value) = parse_assignment("KEY=VALUE").expect("parses");
+        assert_eq!((key.as_str(), value.as_str()), ("KEY", "VALUE"));
+        // A value may itself contain `=`.
+        assert_eq!(
+            parse_assignment("a=b=c").unwrap(),
+            ("a".into(), "b=c".into())
+        );
+        assert_eq!(
+            parse_assignment("no_equals").unwrap_err(),
+            "expected KEY=VALUE"
+        );
+        assert_eq!(
+            parse_assignment("=VALUE").unwrap_err(),
+            "expected KEY=VALUE with a non-empty KEY"
+        );
+    }
+
+    #[test]
+    fn parse_stale_duration_reads_days_hours_and_minutes_only() {
+        assert_eq!(parse_stale_duration("30d"), chrono::Duration::try_days(30));
+        assert_eq!(parse_stale_duration("12h"), chrono::Duration::try_hours(12));
+        assert_eq!(
+            parse_stale_duration("90m"),
+            chrono::Duration::try_minutes(90)
+        );
+        // Zero, negative-looking, unknown units, non-numeric, and empty
+        // inputs are all rejected rather than guessed.
+        assert_eq!(parse_stale_duration("0d"), None);
+        assert_eq!(parse_stale_duration("5w"), None);
+        assert_eq!(parse_stale_duration("abc"), None);
+        assert_eq!(parse_stale_duration(""), None);
+    }
+
+    #[test]
+    fn parse_document_visibility_accepts_only_the_two_published_values() {
+        assert_eq!(parse_document_visibility("client").as_deref(), Ok("client"));
+        assert_eq!(
+            parse_document_visibility("internal").as_deref(),
+            Ok("internal")
+        );
+        assert!(parse_document_visibility("public").is_err());
+    }
+
+    #[test]
+    fn parse_transcript_quality_accepts_only_machine_or_proofread() {
+        assert_eq!(
+            parse_transcript_quality("machine").as_deref(),
+            Ok("machine")
+        );
+        assert_eq!(
+            parse_transcript_quality("proofread").as_deref(),
+            Ok("proofread")
+        );
+        assert!(parse_transcript_quality("verified").is_err());
+    }
+
+    #[test]
+    fn parse_calendar_date_demands_year_month_day_form() {
+        assert_eq!(
+            parse_calendar_date("2026-01-15").map(|d| d.to_string()),
+            Ok("2026-01-15".to_string())
+        );
+        assert!(parse_calendar_date("01/15/2026").is_err());
+        assert!(parse_calendar_date("2026-13-01").is_err());
+    }
+
+    #[test]
+    fn parse_signing_method_names_both_accepted_spellings_on_error() {
+        assert!(parse_signing_method("wet_ink").is_ok());
+        assert!(parse_signing_method("docusign").is_ok());
+        let message = parse_signing_method("carrier_pigeon").unwrap_err();
+        assert!(message.contains("wet_ink"), "{message}");
+        assert!(message.contains("docusign"), "{message}");
+    }
+
+    #[test]
+    fn parse_evidence_confidence_accepts_the_closed_vocabulary() {
+        assert!(parse_evidence_confidence("exact").is_ok());
+        assert!(parse_evidence_confidence("inferred").is_ok());
+        assert!(parse_evidence_confidence("unknown").is_ok());
+        assert!(parse_evidence_confidence("certain").is_err());
+    }
+
+    #[test]
+    fn parse_notarization_reads_all_five_fields_and_validates_them() {
+        let value =
+            "method=in_person,acknowledged_on=2026-01-15,state=NV,county=Washoe,commission_expires=2027-01-01";
+        let notarization = parse_notarization(value).expect("a complete valid notarization");
+        assert_eq!(notarization.state, "NV");
+        assert_eq!(notarization.county, "Washoe");
+        assert_eq!(notarization.acknowledged_on.to_string(), "2026-01-15");
+        assert_eq!(notarization.commission_expires.to_string(), "2027-01-01");
+    }
+
+    #[test]
+    fn parse_notarization_refuses_missing_unknown_and_duplicate_keys() {
+        let missing = "method=in_person,acknowledged_on=2026-01-15,state=NV,county=Washoe";
+        let message = parse_notarization(missing).unwrap_err();
+        assert!(message.contains("commission_expires"), "{message}");
+
+        let unknown = "method=in_person,acknowledged_on=2026-01-15,state=NV,county=Washoe,commission_expires=2027-01-01,county2=X";
+        assert!(parse_notarization(unknown).unwrap_err().contains("county2"));
+
+        let duplicate = "method=in_person,method=remote_online,acknowledged_on=2026-01-15,state=NV,county=Washoe,commission_expires=2027-01-01";
+        assert!(parse_notarization(duplicate).unwrap_err().contains("twice"));
+
+        // A pair without `=` never parses as a key.
+        assert!(parse_notarization("method")
+            .unwrap_err()
+            .contains("key=value"));
+        // A bad method name and a bad date are both refused.
+        assert!(parse_notarization(
+            "method=by_fax,acknowledged_on=2026-01-15,state=NV,county=Washoe,commission_expires=2027-01-01"
+        )
+        .unwrap_err()
+        .contains("in_person"));
+        assert!(parse_notarization(
+            "method=in_person,acknowledged_on=yesterday,state=NV,county=Washoe,commission_expires=2027-01-01"
+        )
+        .unwrap_err()
+        .contains("YYYY-MM-DD"));
+        // The server-side validation runs here too: a commission already
+        // expired on the acknowledgment date is refused.
+        assert!(parse_notarization(
+            "method=in_person,acknowledged_on=2027-01-15,state=NV,county=Washoe,commission_expires=2027-01-01"
+        )
+        .unwrap_err()
+        .contains("expire"));
+        // A non-two-letter state fails the same validation.
+        assert!(parse_notarization(
+            "method=in_person,acknowledged_on=2026-01-15,state=Nevada,county=Washoe,commission_expires=2027-01-01"
+        )
+        .unwrap_err()
+        .contains("two-letter"));
+    }
+
+    // ------------------------------------------------------------------
+    // Pure helpers the gate passes share
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn yaml_and_containerfile_detection_matches_both_spellings() {
+        assert!(is_yaml_path(std::path::Path::new("k8s/a.yaml")));
+        assert!(is_yaml_path(std::path::Path::new("k8s/a.YML")));
+        assert!(!is_yaml_path(std::path::Path::new("k8s/a.json")));
+        assert!(!is_yaml_path(std::path::Path::new("Dockerfile")));
+        assert!(is_containerfile_path(std::path::Path::new(
+            "Containerfile.web"
+        )));
+        assert!(is_containerfile_path(std::path::Path::new("Dockerfile")));
+        assert!(!is_containerfile_path(std::path::Path::new("deploy.yaml")));
+    }
+
+    #[test]
+    fn authored_tree_walk_skips_generated_and_vendored_directories() {
+        use walkdir::WalkDir;
+        let dir = tempfile::tempdir().expect("tempdir");
+        for skip in [".git", "target", ".worktrees", "node_modules", "dist"] {
+            std::fs::create_dir_all(dir.path().join(skip)).expect("mkdir");
+            let entry = WalkDir::new(dir.path())
+                .into_iter()
+                .filter_map(Result::ok)
+                .find(|e| e.file_name() == skip)
+                .expect("walkdir sees the directory");
+            assert!(
+                !include_authored_tree_entry(&entry),
+                "{skip} must be pruned"
+            );
+        }
+        let keep = WalkDir::new(dir.path())
+            .into_iter()
+            .find_map(Result::ok)
+            .expect("root entry");
+        assert!(include_authored_tree_entry(&keep));
+    }
+
+    #[test]
+    fn mutable_image_tag_catches_only_the_latest_family() {
+        assert_eq!(
+            mutable_image_tag("ghcr.io/neon-law/web:latest", false).as_deref(),
+            Some("latest")
+        );
+        assert_eq!(
+            mutable_image_tag("ghcr.io/neon-law/web:latest-arm64", false).as_deref(),
+            Some("latest-arm64")
+        );
+        // An untagged reference is implicit latest only when asked.
+        assert!(mutable_image_tag("ghcr.io/neon-law/web", true).is_some());
+        assert!(mutable_image_tag("ghcr.io/neon-law/web", false).is_none());
+        // Registry-host ports are not tags.
+        assert!(mutable_image_tag("registry:5000/img:26.11.3", false).is_none());
+        assert!(mutable_image_tag("registry:5000/img", true).is_some());
+        // Digest pins and version tags are immutable.
+        assert!(mutable_image_tag("repo/img:1.0@sha256:abc", false).is_none());
+        assert!(mutable_image_tag("repo/img:16-alpine", false).is_none());
+        assert!(mutable_image_tag("repo/img:26.11.3", false).is_none());
+        assert!(mutable_image_tag("", false).is_none());
+    }
+
+    #[test]
+    fn split_trailing_comment_reports_pin_exempt_lines() {
+        let (code, exempt) =
+            split_trailing_comment("image: repo/img:latest # pin-exempt: publish-only");
+        assert_eq!(code, "image: repo/img:latest");
+        assert!(exempt);
+        let (code, exempt) = split_trailing_comment("image: repo/img:latest # not exempt");
+        assert_eq!(code, "image: repo/img:latest");
+        assert!(!exempt);
+        let (code, exempt) = split_trailing_comment("image: repo/img:latest");
+        assert_eq!(code, "image: repo/img:latest");
+        assert!(!exempt);
+    }
+
+    #[test]
+    fn yaml_value_for_key_requires_the_exact_key() {
+        assert_eq!(
+            yaml_value_for_key("image: repo/img", "image"),
+            Some("repo/img")
+        );
+        assert_eq!(
+            yaml_value_for_key("image : repo/img", "image"),
+            Some("repo/img")
+        );
+        // A lookalike key that merely starts with it is not a match.
+        assert_eq!(yaml_value_for_key("imagePullPolicy: Always", "image"), None);
+        assert_eq!(yaml_value_for_key("container: x", "image"), None);
+    }
+
+    #[test]
+    fn yaml_image_entry_distinguishes_list_items_from_plain_images() {
+        assert_eq!(
+            yaml_image_entry("image: ghcr.io/neon-law/web:26.11.3"),
+            Some(("ghcr.io/neon-law/web:26.11.3", false))
+        );
+        assert_eq!(
+            yaml_image_entry("- image: navigator-web"),
+            Some(("navigator-web", true))
+        );
+        assert_eq!(yaml_image_entry("kind: Deployment"), None);
+    }
+
+    #[test]
+    fn containerfile_from_ref_is_case_insensitive_and_skips_flags() {
+        assert_eq!(
+            containerfile_from_ref("FROM repo/img:1.2"),
+            Some("repo/img:1.2")
+        );
+        assert_eq!(
+            containerfile_from_ref("from repo/img:1.2"),
+            Some("repo/img:1.2")
+        );
+        assert_eq!(
+            containerfile_from_ref("FROM --platform=linux/amd64 repo/img:1.2 AS build"),
+            Some("--platform=linux/amd64 repo/img:1.2 AS build")
+        );
+        assert_eq!(containerfile_from_ref("RUN cargo build"), None);
+        assert_eq!(containerfile_from_ref("FROM"), None);
+    }
+
+    #[test]
+    fn detect_mutable_tags_finds_consumed_latest_and_honors_pin_exempt() {
+        let manifest = std::path::Path::new("k8s/deploy.yaml");
+        let findings = detect_mutable_tags(
+            manifest,
+            "image: ghcr.io/neon-law/web:latest\nimage: ghcr.io/neon-law/web:26.11.3\nimage: repo/img:latest # pin-exempt: publish-only construct\n",
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].0, 1);
+        assert!(findings[0].1.contains("web:latest"), "{}", findings[0].1);
+
+        // A Containerfile FROM is scanned the same way.
+        let containerfile = std::path::Path::new("Dockerfile");
+        let findings = detect_mutable_tags(containerfile, "FROM ghcr.io/neon-law/web:latest\n");
+        assert_eq!(findings.len(), 1);
+
+        // A workflow build-matrix list item is a published target: an
+        // untagged name there is exempt, but an explicit :latest is not.
+        let workflow = std::path::Path::new(".github/workflows/release.yml");
+        let findings = detect_mutable_tags(
+            workflow,
+            "- image: navigator-web\nimage: navigator-web\n- image: navigator-web:latest\n",
+        );
+        assert_eq!(findings.len(), 2);
+        assert_eq!(
+            findings[0].0, 2,
+            "the plain (consumed) untagged image is flagged"
+        );
+        assert_eq!(
+            findings[1].0, 3,
+            "the explicit :latest list item is flagged"
+        );
+
+        // `version: latest` counts only inside a GitHub workflow.
+        let findings = detect_mutable_tags(workflow, "  version: latest\n");
+        assert_eq!(findings.len(), 1);
+        let chart = std::path::Path::new("charts/values.yaml");
+        assert!(detect_mutable_tags(chart, "version: latest\n").is_empty());
+    }
+
+    #[test]
+    fn mutable_tag_pass_walks_the_tree_and_reports_offences_with_locations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bad_manifest = dir.path().join("k8s");
+        std::fs::create_dir_all(&bad_manifest).expect("mkdir");
+        std::fs::write(
+            bad_manifest.join("deploy.yaml"),
+            "image: ghcr.io/neon-law/web:latest\n",
+        )
+        .expect("write");
+        std::fs::write(dir.path().join("Containerfile"), "FROM repo/img:26.11.3\n").expect("write");
+        // Generated trees are pruned the same way every other pass prunes.
+        std::fs::create_dir_all(dir.path().join("target")).expect("mkdir");
+        std::fs::write(
+            dir.path().join("target").join("deploy.yaml"),
+            "image: ghcr.io/neon-law/web:latest\n",
+        )
+        .expect("write");
+
+        let findings = mutable_tag_pass(dir.path()).expect("walks");
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].location.ends_with("k8s/deploy.yaml:1"));
+        assert!(findings[0].message.contains("pin an explicit version"));
+    }
+
+    #[test]
+    fn yaml_pass_reports_parse_errors_with_locations_and_clean_trees_pass() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("good.yaml"), "a: 1\nb:\n  - two\n").expect("write");
+        std::fs::write(dir.path().join("bad.yaml"), "key: [unclosed\n").expect("write");
+        std::fs::write(dir.path().join("notes.txt"), "key: [unclosed\n").expect("write");
+
+        let errors = yaml_pass(dir.path()).expect("walks");
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].code.is_none(),
+            "the YAML syntax pass carries no rule code"
+        );
+        assert!(
+            errors[0].message.contains("YAML parse error"),
+            "{}",
+            errors[0].message
+        );
+        assert!(
+            errors[0].location.contains("bad.yaml"),
+            "{}",
+            errors[0].location
+        );
+    }
+
+    #[test]
+    fn seed_document_pass_checks_only_seeds_directories() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("seeds")).expect("mkdir");
+        std::fs::write(
+            dir.path().join("seeds").join("Person.yaml"),
+            "lookup_fields:\n  - email\nrecords:\n  - email: person@example.com\n    name: Sample Person\n",
+        )
+        .expect("write");
+        // An unknown model name is refused with Y001.
+        std::fs::write(
+            dir.path().join("seeds").join("Widget.yaml"),
+            "records: []\n",
+        )
+        .expect("write");
+        // A YAML file outside `seeds/` is nobody's seed document.
+        std::fs::write(dir.path().join("Widget.yaml"), "records: []\n").expect("write");
+
+        let errors = seed_document_pass(dir.path()).expect("walks");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code.as_deref(), Some("Y001"));
+        assert!(
+            errors[0].message.contains("Widget"),
+            "{}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn seed_model_for_path_skips_only_a_bad_canonical_catalog() {
+        let seeds = std::path::Path::new("store/seeds/Person.yaml");
+        assert!(seed_model_for_path(seeds).is_some());
+        // Outside the canonical store catalog every seeds/*.yaml is checked.
+        let project_seeds = std::path::Path::new("acme/seeds/Widget.yaml");
+        let model = seed_model_for_path(project_seeds).expect("checked");
+        assert!(model.is_err());
+        // Not a seed: the path lives outside any `seeds` directory.
+        assert!(seed_model_for_path(std::path::Path::new("k8s/deploy.yaml")).is_none());
+        // The extension is the caller's filter, not this helper's — a
+        // non-YAML file under `seeds/` still resolves to its model.
+        assert!(seed_model_for_path(std::path::Path::new("seeds/Person.json")).is_some());
+    }
+
+    #[test]
+    fn locale_document_pass_refuses_unpublished_locales_and_unknown_pages() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let en = dir.path().join("locales").join("en");
+        std::fs::create_dir_all(&en).expect("mkdir");
+        // A valid shared catalog: every required key present, one line each.
+        let mut shared = String::from("catalog_version: 1\n\nentries:\n");
+        for key in views::locales::shared::REQUIRED_KEYS {
+            let _ = writeln!(shared, "  {key}: Sample words");
+        }
+        std::fs::write(en.join("shared.yaml"), shared).expect("write");
+
+        let fr = dir.path().join("locales").join("fr");
+        std::fs::create_dir_all(&fr).expect("mkdir");
+        std::fs::write(fr.join("home.yaml"), "a: 1\n").expect("write");
+        std::fs::write(en.join("no-such-page.yaml"), "a: 1\n").expect("write");
+
+        let errors = locale_document_pass(dir.path()).expect("walks");
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].code.as_deref(), Some("Y002"));
+        assert!(
+            errors[0].message.contains("not published"),
+            "{}",
+            errors[0].message
+        );
+        assert_eq!(errors[1].code.as_deref(), Some("Y002"));
+        assert!(
+            errors[1]
+                .message
+                .contains("unknown locale page `no-such-page`"),
+            "{}",
+            errors[1].message
+        );
+    }
+
+    #[test]
+    fn document_pointer_pass_reads_pointers_only_inside_a_project_repository() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blobs = dir.path().join("blobs");
+        std::fs::create_dir_all(&blobs).expect("mkdir");
+        std::fs::write(
+            blobs.join("sample.pdf.yaml"),
+            "kind: exhibit\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 11111111-2222-3333-4444-555555555555\n  created_at: 2026-01-15T00:00:00Z\n  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  size_bytes: 1234\n",
+        )
+        .expect("write");
+
+        // Without a `navigator.yaml` declaring a `project`, the tree is
+        // ordinary source: nothing is validated, nothing is scanned.
+        let outside = document_pointer_pass(dir.path()).expect("walks");
+        assert!(outside.is_empty());
+
+        std::fs::write(dir.path().join("navigator.yaml"), "project: acme\n").expect("write");
+        let inside = document_pointer_pass(dir.path()).expect("walks");
+        assert!(inside.is_empty());
+        assert!(inside.iter().all(|e| e.code.as_deref() == Some("Y003")));
+
+        // A pointer that breaks its contract is reported at the pointer path.
+        std::fs::write(
+            blobs.join("broken.pdf.yaml"),
+            "kind: exhibit\nvisibility: everyone\ncurrent_version:\n  version: 1\n  asset_id: 11111111-2222-3333-4444-555555555555\n  created_at: 2026-01-15T00:00:00Z\n  sha256: aaaaaaaa\n  size_bytes: 1234\n",
+        )
+        .expect("write");
+        let errors = document_pointer_pass(dir.path()).expect("walks");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code.as_deref(), Some("Y003"));
+        assert!(errors[0].location.contains("broken.pdf.yaml:1"));
+        assert!(
+            errors[0].message.contains("visibility"),
+            "{}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn document_pointer_path_matches_only_the_blobs_tree() {
+        let root = std::path::Path::new("/repo");
+        let pointer = std::path::Path::new("/repo/blobs/exhibit.sample.pdf.yaml");
+        let relative = document_pointer_path(root, pointer).expect("a pointer path");
+        assert_eq!(
+            relative,
+            std::path::Path::new("blobs/exhibit.sample.pdf.yaml")
+        );
+        // A nested file under `blobs/` is still a pointer.
+        assert!(document_pointer_path(
+            root,
+            std::path::Path::new("/repo/blobs/onboarding/doc.pdf.yaml")
+        )
+        .is_some());
+        // A path under another root is not ours to read.
+        assert!(document_pointer_path(root, std::path::Path::new("/other/blobs/a.yaml")).is_none());
+        assert!(
+            document_pointer_path(root, std::path::Path::new("/repo/k8s/deploy.yaml")).is_none()
+        );
+    }
+
+    #[test]
+    fn severity_counts_splits_errors_from_warnings_by_rule_code() {
+        let make = |code: &'static str, line: usize| rules::Violation {
+            code,
+            path: std::path::PathBuf::from("t.md"),
+            line,
+            range: 0..0,
+            message: String::new(),
+        };
+        // N112 is a declared advisory; every other code here is an error.
+        let violations = vec![make("N001", 1), make("N112", 2), make("N109", 3)];
+        let (errors, warnings) = severity_counts(&violations);
+        assert_eq!(errors, 2, "N001 and N109 are errors");
+        assert_eq!(warnings, 1, "N112 is the one advisory");
+        assert_eq!(errors + warnings, violations.len());
+    }
+
+    #[test]
+    fn diagnostic_line_carries_the_severity_marker_and_optional_code() {
+        let with_code = diagnostic_line(
+            rules::Severity::Error,
+            "t.md:3",
+            Some("N001"),
+            "something broke",
+        );
+        assert!(with_code.contains("error:"), "{with_code}");
+        assert!(with_code.contains("N001"), "{with_code}");
+        let without_code =
+            diagnostic_line(rules::Severity::Warning, "t.yaml:1:7", None, "parse error");
+        assert!(without_code.contains("warning:"), "{without_code}");
+    }
+
+    #[test]
+    fn strip_frontmatter_returns_the_body_after_the_closing_marker() {
+        let with_frontmatter = "---\nkind: letter\n---\n\nBody starts here.";
+        assert_eq!(strip_frontmatter(with_frontmatter), "Body starts here.");
+        assert_eq!(
+            strip_frontmatter("no frontmatter at all"),
+            "no frontmatter at all"
+        );
+        // A closer at EOF with no body yields an empty body.
+        assert_eq!(strip_frontmatter("---\nkind: letter\n---"), "");
+        // An unterminated opener is not frontmatter: the whole text stays.
+        assert_eq!(strip_frontmatter("---\nkind: letter"), "---\nkind: letter");
+    }
+
+    #[test]
+    fn has_extension_compares_case_insensitively() {
+        assert!(has_extension(std::path::Path::new("out.pdf"), "pdf"));
+        assert!(has_extension(std::path::Path::new("out.PDF"), "pdf"));
+        assert!(!has_extension(std::path::Path::new("out.docx"), "pdf"));
+        assert!(!has_extension(std::path::Path::new("out"), "pdf"));
+    }
+}

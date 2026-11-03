@@ -1008,4 +1008,205 @@ mod tests {
             calendar_sequence: Some(0),
         }
     }
+
+    use super::MirrorReport;
+    use super::{event_description, recorded_calendar_id, MirrorOutcome};
+
+    /// The ICS description stacks the row's description, then the authority,
+    /// the source document, the deadline id, and — only when a base URL is
+    /// configured — the matter-page link, in that order, newline-joined.
+    #[test]
+    fn event_description_stacks_identity_lines_in_a_stable_order() {
+        let mut row = stored(sample(Uuid::now_v7()));
+        row.description = Some("Briefing schedule attached.".into());
+        row.source_document_id = Some(Uuid::now_v7());
+        let description = event_description(&row, "ACME", Some("https://www.example.com/"));
+        let lines: Vec<&str> = description.lines().collect();
+        assert_eq!(lines[0], "Briefing schedule attached.");
+        assert_eq!(lines[1], "Authority: Order setting briefing");
+        assert_eq!(
+            lines[2],
+            format!("Source document: {}", row.source_document_id.unwrap())
+        );
+        assert_eq!(lines[3], format!("Deadline: {}", row.id));
+        assert_eq!(
+            lines[4],
+            "Matter page: https://www.example.com/app/projects/ACME"
+        );
+
+        // A trailing slash on the base URL is trimmed once, not duplicated.
+        assert!(
+            event_description(&row, "ACME", Some("https://www.example.com//"))
+                .lines()
+                .last()
+                .unwrap()
+                .starts_with("Matter page: https://www.example.com/app/projects/")
+        );
+        // No base URL: no matter-page line at all.
+        let without_base = event_description(&row, "ACME", None);
+        assert!(!without_base.contains("Matter page:"));
+        // A blank base URL is treated like an unset one.
+        assert_eq!(event_description(&row, "ACME", Some("   ")), without_base);
+        // A row with no description starts straight at its first line.
+        let mut bare = stored(sample(Uuid::now_v7()));
+        bare.description = None;
+        bare.authority = String::new();
+        assert!(event_description(&bare, "ACME", None).starts_with("Deadline: "));
+    }
+
+    /// A Project row with only its calendar id varied — the one field
+    /// `recorded_calendar_id` reads.
+    fn project_row(calendar_id: Option<&str>) -> crate::projects::Project {
+        crate::projects::Project {
+            id: Uuid::now_v7(),
+            code: "ACME".into(),
+            name: "Mirror matter".into(),
+            status: "open".into(),
+            brand: "neon".into(),
+            entity_id: Uuid::now_v7(),
+            firm_id: None,
+            jurisdiction_id: None,
+            onboarding_jurisdiction: None,
+            description: None,
+            drive_folder_id: None,
+            repository_url: None,
+            git_initialized_at: None,
+            forge_provisioned_at: None,
+            closed_at: None,
+            closure_reason: None,
+            internal_slack_channel_url: None,
+            external_slack_channel_url: None,
+            internal_slack_channel_id: None,
+            private_notion_page_url: None,
+            shared_notion_page_url: None,
+            calendar_id: calendar_id.map(str::to_string),
+            booking_url: None,
+            inserted_at: "2026-10-30T00:00:00+00:00".into(),
+            updated_at: "2026-10-30T00:00:00+00:00".into(),
+        }
+    }
+
+    /// A Project's recorded calendar id is read back only when it names a
+    /// real calendar: unset stays unset and whitespace is not a calendar.
+    #[test]
+    fn recorded_calendar_id_refuses_blank_ids() {
+        assert_eq!(
+            recorded_calendar_id(&project_row(Some("  cal-123  "))).as_deref(),
+            Some("cal-123")
+        );
+        assert_eq!(recorded_calendar_id(&project_row(Some("   "))), None);
+        assert_eq!(recorded_calendar_id(&project_row(None)), None);
+    }
+
+    /// The door's one journal line reports counts, never matter content;
+    /// failures and dry runs change the line's shape.
+    #[test]
+    fn report_line_reports_counts_and_flags_without_matter_content() {
+        let mut report = MirrorReport::empty(MirrorOutcome::Mirrored, false);
+        report.upserted.push(Uuid::now_v7());
+        report.in_sync = 2;
+        report.deleted.push("calendar-event-1".into());
+        assert_eq!(
+            report_line(&report),
+            "mirrored upserted=1 in_sync=2 deleted=1"
+        );
+
+        report.failures.push("opaque-failure".into());
+        assert!(report_line(&report).ends_with(" failed=1"));
+        assert!(!report_line(&report).contains("opaque-failure"));
+
+        let dry = MirrorReport::empty(MirrorOutcome::SkippedClosed, true);
+        assert_eq!(
+            report_line(&dry),
+            "skipped_closed upserted=0 in_sync=0 deleted=0 (dry run)"
+        );
+    }
+
+    /// The sequence an open deadline carries is its internal lead days as a
+    /// popup; a closed or cancelled row stays silent, and an oversized lead
+    /// fails the mirror rather than overflowing.
+    #[test]
+    fn reminder_minutes_follow_the_rows_status_and_limits() {
+        let mut row = stored(sample(Uuid::now_v7()));
+        row.internal_lead_days = Some(3);
+        let event = super::deadline_event(&row, "ACME", None).unwrap();
+        assert_eq!(event.reminder_minutes, Some(3 * 24 * 60));
+
+        row.status = project_deadlines::STATUS_COMPLETE.into();
+        assert_eq!(
+            super::deadline_event(&row, "ACME", None)
+                .unwrap()
+                .reminder_minutes,
+            None
+        );
+
+        row.status = project_deadlines::STATUS_OPEN.into();
+        row.internal_lead_days = Some(i64::MAX);
+        assert!(super::deadline_event(&row, "ACME", None)
+            .unwrap_err()
+            .to_string()
+            .contains("too large"));
+    }
+
+    /// A row written before sequences were recorded falls back to its updated
+    /// instant, and a sequence outside the RFC 5545 integer range fails the
+    /// mirror instead of wrapping.
+    #[test]
+    fn event_sequence_falls_back_to_the_updated_instant_and_rejects_overflow() {
+        let mut row = stored(sample(Uuid::now_v7()));
+        row.calendar_sequence = Some(7);
+        assert_eq!(event_sequence(&row).unwrap(), 7);
+
+        row.calendar_sequence = None;
+        row.updated_at = "2026-10-30T00:00:30Z".into();
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-10-30T00:00:30Z")
+            .unwrap()
+            .timestamp();
+        assert_eq!(
+            event_sequence(&row).unwrap(),
+            i32::try_from(expected).unwrap()
+        );
+
+        // An unparseable updated_at falls back to the ICS default of 0.
+        row.updated_at = "not-a-timestamp".into();
+        assert_eq!(event_sequence(&row).unwrap(), 0);
+
+        row.calendar_sequence = Some(i64::MAX);
+        assert!(event_sequence(&row)
+            .unwrap_err()
+            .to_string()
+            .contains("outside the RFC 5545"));
+    }
+
+    /// The content digest covers exactly what the event renders — the same
+    /// row renders the same sha, and any rendered field moves it.
+    #[test]
+    fn body_sha_changes_with_any_rendered_field_and_ignores_a_blank_base_url() {
+        let row = stored(sample(Uuid::now_v7()));
+        let base = body_sha(&row, "ACME", Some("https://www.example.com"));
+        assert_eq!(
+            base,
+            body_sha(&row, "ACME", Some("https://www.example.com"))
+        );
+        // A real base URL is part of the digest; a blank one normalizes to
+        // the unset case.
+        assert_eq!(
+            body_sha(&row, "ACME", Some("  ")),
+            body_sha(&row, "ACME", None)
+        );
+        assert_ne!(base, body_sha(&row, "ACME", None));
+
+        let mut retitled = stored(sample(Uuid::now_v7()));
+        retitled.id = row.id;
+        retitled.title = Some("Reply brief due".into());
+        assert_ne!(body_sha(&retitled, "ACME", None), base);
+
+        // A different matter code changes the digest.
+        assert_ne!(body_sha(&row, "OTHER", None), base);
+        // The digest is a 64-character lowercase hex string.
+        assert_eq!(base.len(), 64);
+        assert!(base
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
+    }
 }
