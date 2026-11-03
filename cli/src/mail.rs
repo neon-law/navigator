@@ -481,11 +481,17 @@ fn header<'a>(message: &'a GmailMessage, name: &str) -> Option<&'a str> {
         .map(|header| header.value.as_str())
 }
 
+/// URL-safe base64 that accepts Gmail's payloads with or without `=`
+/// padding: the API omits it on some messages and keeps it on others.
+const GMAIL_BASE64URL: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::URL_SAFE,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+);
+
 fn decoded_body(part: &MessagePart) -> Option<String> {
     let data = part.body.as_ref()?.data.as_deref()?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(data)
-        .ok()?;
+    let bytes = GMAIL_BASE64URL.decode(data.trim()).ok()?;
     String::from_utf8(bytes).ok()
 }
 
@@ -1014,13 +1020,15 @@ fn communication_request(
 }
 
 /// Gmail returns `format=raw` messages URL-safe base64 encoded.
+/// Whether the `=` padding is present varies by caller and message, so
+/// decoding accepts both forms.
 ///
 /// # Errors
 ///
 /// [`anyhow::Error`] when the response carries no raw field or it does not
 /// decode.
 fn decode_gmail_raw(raw: &str) -> Result<Vec<u8>> {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
+    GMAIL_BASE64URL
         .decode(raw.trim())
         .context("decode Gmail raw message")
 }
@@ -2259,6 +2267,29 @@ mod tests {
             b"From: client@example.test\r\n\r\nHello".to_vec()
         );
         assert!(decode_gmail_raw("not base64!").is_err());
+    }
+
+    #[test]
+    fn gmail_raw_copies_decode_whether_or_not_they_carry_padding() {
+        // A length that is not a multiple of three, so the padded form ends in `=`.
+        let message = b"From: court@example.test\r\nSubject: Notice\r\n\r\nHi?>";
+        let padded = base64::engine::general_purpose::URL_SAFE.encode(message);
+        assert!(padded.ends_with('='), "fixture must exercise padding");
+        assert_eq!(decode_gmail_raw(&padded).unwrap(), message.to_vec());
+        let unpadded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(message);
+        assert_eq!(decode_gmail_raw(&unpadded).unwrap(), message.to_vec());
+    }
+
+    #[test]
+    fn gmail_body_parts_decode_whether_or_not_they_carry_padding() {
+        let padded = base64::engine::general_purpose::URL_SAFE.encode(b"Hello there");
+        assert!(padded.ends_with('='));
+        let part: MessagePart = serde_json::from_value(json!({
+            "mimeType": "text/plain",
+            "body": { "data": padded }
+        }))
+        .unwrap();
+        assert_eq!(decoded_body(&part).as_deref(), Some("Hello there"));
     }
 
     #[test]
