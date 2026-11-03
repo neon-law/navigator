@@ -657,10 +657,19 @@ async fn recover_notice_step(
                         workflows::trigger::start_dbos_inbound_message_alert(
                             &ingress,
                             &token,
+                            // Recovery lane: a per-tick id, not the plain
+                            // per-message one. An alert that completed with a
+                            // `pending` send owns that id's completed run —
+                            // re-submitting under it would join the run and
+                            // never try Slack again. A fresh id per tick gives
+                            // the recovery its own execution, the same
+                            // semantics as the Restate `{message_id}:{tick}`
+                            // key this lane replaces.
                             &serde_json::json!({
                                 "workflow_id":
-                                    workflows::trigger::inbound_message_alert_workflow_id(
+                                    workflows::trigger::inbound_message_alert_recovery_workflow_id(
                                         message_id,
+                                        &tick,
                                     ),
                                 "request": {
                                     "message_id": message_id,

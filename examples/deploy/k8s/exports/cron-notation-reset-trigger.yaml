@@ -46,6 +46,12 @@ spec:
                       name: navigator-web-secrets
                       key: RESTATE_AUTH_TOKEN
                       optional: true
+                # Flip the switch to hand the job to the DBOS engine's
+                # standalone schedule; the trigger binary then exits without
+                # submitting to Restate. Default off: Restate stays the
+                # active engine until the cutover.
+                - name: NAVIGATOR_DBOS_NOTATION_RESET_ENABLED
+                  value: "false"
                 - name: RUST_LOG
                   value: info
               envFrom:

@@ -323,6 +323,18 @@ pub fn inbound_message_alert_workflow_id(message_id: uuid::Uuid) -> String {
     format!("InboundMessageAlert:{message_id}")
 }
 
+/// The `InboundMessageAlert` recovery id for one attempt: a fresh id per
+/// recovery tick, the DBOS counterpart of Restate's `{message_id}:{tick}`
+/// invocation key. The plain per-message id deduplicates *deliveries*; a
+/// recovery re-attempt of an alert that already completed (e.g. a Slack send
+/// left `pending` by a rate limit) must NOT join that completed run — it
+/// needs a new execution, one per recovery tick, so the two id formats
+/// deliberately differ.
+#[must_use]
+pub fn inbound_message_alert_recovery_workflow_id(message_id: uuid::Uuid, tick: &str) -> String {
+    format!("InboundMessageAlert:{message_id}:recover:{tick}")
+}
+
 /// The `ProjectSlack` client-view lane's workflow id for one Project: one
 /// stable id per Project, so repeated views join the first run.
 #[must_use]
@@ -517,6 +529,25 @@ pub fn trigger_target(
             auth_token: lookup(RESTATE_AUTH_TOKEN_ENV),
         })
     }
+}
+
+#[cfg(feature = "dbos")]
+/// Whether the DBOS engine's standalone schedule owns a CronJob trigger's
+/// cadence. The route-less engines (the digests, the nag, the notation reset,
+/// the archives) expose no worker ingress route to submit to: when their
+/// switch is on the engine fires them itself, and the trigger binary must
+/// exit without submitting to Restate. The switch follows
+/// [`crate::dbos_engine::flag_enabled`]'s strict contract.
+///
+/// # Errors
+///
+/// [`TriggerTargetError::Switch`] for a switch other than `true` / `false`.
+pub fn dbos_owns_schedule(
+    flag: &'static str,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<bool, TriggerTargetError> {
+    crate::dbos_engine::flag_enabled(flag, lookup(flag).as_deref())
+        .map_err(TriggerTargetError::Switch)
 }
 
 async fn start_dbos_at<B: Serialize + ?Sized>(
@@ -947,7 +978,7 @@ mod tests {
 
 #[cfg(all(test, feature = "dbos"))]
 mod target_tests {
-    use super::{trigger_target, TriggerTarget, TriggerTargetError};
+    use super::{dbos_owns_schedule, trigger_target, TriggerTarget, TriggerTargetError};
     use crate::dbos_engine::SettingsError;
 
     const FLAG: &str = "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED";
@@ -1058,6 +1089,19 @@ mod target_tests {
                 .unwrap_err()
                 .to_string(),
             "RESTATE_INGRESS_URL must be set for the selected workflow ingress"
+        );
+    }
+
+    #[test]
+    fn dbos_owns_schedule_uses_the_strict_switch_contract() {
+        let flag = "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED";
+        assert_eq!(dbos_owns_schedule(flag, env(&[(flag, "true")])), Ok(true));
+        assert_eq!(dbos_owns_schedule(flag, env(&[(flag, "false")])), Ok(false));
+        // An absent or blank switch leaves the job on the Restate trigger.
+        assert_eq!(dbos_owns_schedule(flag, env(&[])), Ok(false));
+        assert_eq!(
+            dbos_owns_schedule(flag, env(&[(flag, "yes")])),
+            Err(TriggerTargetError::Switch(SettingsError::Invalid(flag)))
         );
     }
 }

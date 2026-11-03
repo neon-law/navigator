@@ -257,6 +257,8 @@ async fn main() -> anyhow::Result<()> {
             || inbound_message_alert_enabled
             || project_slack_enabled
             || notation_enabled
+            || social_publisher_enabled
+            || social_reconciler_enabled
         {
             let token = lookup("NAVIGATOR_DBOS_INGRESS_TOKEN")
                 .filter(|token| !token.trim().is_empty())

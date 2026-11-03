@@ -1068,13 +1068,30 @@ fn validate_email_summary_request(request: &EmailSummaryStart) -> Result<(), Sta
 }
 
 fn validate_alert_request(request: &AlertStart) -> Result<(), StatusCode> {
-    if request.workflow_id.len() > MAX_WORKFLOW_ID_BYTES
-        || request.workflow_id
-            != crate::dbos_inbound_message_alert::workflow_id(request.request.message_id)
-    {
+    if request.workflow_id.len() > MAX_WORKFLOW_ID_BYTES {
         return Err(StatusCode::BAD_REQUEST);
     }
-    Ok(())
+    // Two id lanes name this route: the plain per-message id (delivery
+    // dedupe) and the recovery lane's per-tick id, which re-attempts an
+    // alert that already completed. Both must bind the id to the payload's
+    // message_id so a caller cannot split one from the other.
+    if request.workflow_id
+        == crate::dbos_inbound_message_alert::workflow_id(request.request.message_id)
+    {
+        return Ok(());
+    }
+    let recovery = format!(
+        "InboundMessageAlert:{}:recover:",
+        request.request.message_id
+    );
+    let tick = request
+        .workflow_id
+        .strip_prefix(&recovery)
+        .filter(|tick| !tick.trim().is_empty());
+    if tick.is_some() {
+        return Ok(());
+    }
+    Err(StatusCode::BAD_REQUEST)
 }
 
 fn validate_request(request: &FinanceRequest) -> Result<(), StatusCode> {
@@ -1479,6 +1496,33 @@ mod tests {
         };
         assert_eq!(
             validate_alert_request(&mismatched),
+            Err(StatusCode::BAD_REQUEST)
+        );
+
+        // The recovery lane re-attempts an alert that already completed:
+        // a per-tick id, still bound to the payload's message_id.
+        let tick = "2026-11-03-04-11";
+        let recovered = AlertStart {
+            workflow_id: workflows::trigger::inbound_message_alert_recovery_workflow_id(
+                message_id, tick,
+            ),
+            request: workflows::InboundMessageAlertRequest { message_id },
+        };
+        assert!(validate_alert_request(&recovered).is_ok());
+        let split = AlertStart {
+            workflow_id: workflows::trigger::inbound_message_alert_recovery_workflow_id(
+                uuid::Uuid::now_v7(),
+                tick,
+            ),
+            request: workflows::InboundMessageAlertRequest { message_id },
+        };
+        assert_eq!(validate_alert_request(&split), Err(StatusCode::BAD_REQUEST));
+        let malformed = AlertStart {
+            workflow_id: format!("InboundMessageAlert:{message_id}:recover:"),
+            request: workflows::InboundMessageAlertRequest { message_id },
+        };
+        assert_eq!(
+            validate_alert_request(&malformed),
             Err(StatusCode::BAD_REQUEST)
         );
     }
