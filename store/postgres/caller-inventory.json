@@ -4716,6 +4716,7 @@
       "archives/src/postgres.rs",
       "cli/src/document_sync.rs",
       "cli/src/document_sync_interactive_tests.rs",
+      "cli/src/inbox.rs",
       "cli/src/mail/attachments.rs",
       "cli/src/main.rs",
       "cli/src/notation_kinds.rs",
