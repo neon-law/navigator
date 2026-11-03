@@ -209,7 +209,7 @@ async fn seed_notice(
             promotional_opt_in: false,
             email_conversation_id,
             attachments,
-            raw_storage_key: None,
+            raw_storage_key: raw.map(|(key, _)| key),
             occurred_at: &chrono::Utc::now().to_rfc3339(),
         },
     )
@@ -690,11 +690,11 @@ async fn a_later_notice_files_its_original_when_the_entry_is_already_recorded() 
     let final_notice = seed_notice(
         &fixture,
         Some(project_id),
-        None,
+        Some(("inbound/final.eml", &raw)),
         &text,
         vec![store::inbox::IngestAttachment {
             asset_id: attachment,
-            filename: "court-document.pdf".into(),
+            filename: "motion-to-dismiss.pdf".into(),
             sha256: store::assets::sha256_hex(b"%PDF-1.4 synthetic later court document"),
         }],
     )
@@ -866,4 +866,151 @@ async fn an_archived_mail_slot_refuses_changed_bytes() {
         .unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].id, first.asset_id);
+}
+
+#[tokio::test]
+async fn only_a_unique_notice_filename_links_the_court_document() {
+    for (index, filenames, matches) in [
+        (0, vec!["signature.png", "motion-to-dismiss.pdf"], true),
+        (1, vec!["signature.png", "unrelated.pdf"], false),
+        (
+            2,
+            vec!["motion-to-dismiss.pdf", "motion-to-dismiss.pdf"],
+            false,
+        ),
+    ] {
+        let fixture = fixture().await;
+        let code = format!("syn-nef-match-{index}");
+        let project = seed_matter(&fixture.surreal, fixture.firm_id, &code).await;
+        let mut attachments = Vec::new();
+        for (part, filename) in filenames.into_iter().enumerate() {
+            let bytes = format!("synthetic part {part}: {filename}").into_bytes();
+            let asset = store::assets::ingest_content(
+                &fixture.surreal,
+                &fixture.storage,
+                &bytes,
+                if filename == "signature.png" {
+                    "image/png"
+                } else {
+                    "application/pdf"
+                },
+            )
+            .await
+            .unwrap();
+            attachments.push(store::inbox::IngestAttachment {
+                asset_id: asset,
+                filename: filename.into(),
+                sha256: store::assets::sha256_hex(&bytes),
+            });
+        }
+        let raw = district_notice();
+        let message = seed_notice(
+            &fixture,
+            Some(project),
+            Some(("inbound/match.eml", &raw)),
+            "Notice of Electronic Filing",
+            attachments,
+        )
+        .await;
+        let (status, applied) = request(
+            &fixture.app,
+            "POST",
+            "/app/api/inbox/process",
+            Some(&fixture.lawyer_session),
+            Some(json!({"message": message, "apply": true})),
+        )
+        .await;
+        assert_eq!(status, 200, "{applied}");
+        assert_eq!(applied["nef"]["filed_documents"], 3);
+        let case = store::cases::for_project(&fixture.surreal, project)
+            .await
+            .unwrap()
+            .remove(0);
+        let entries = store::cases::docket(&fixture.surreal, case.id)
+            .await
+            .unwrap();
+        assert_eq!(entries[0].document_asset_id.is_some(), matches);
+        if let Some(id) = entries[0].document_asset_id {
+            let asset = store::assets::find_by_id(&fixture.surreal, id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(asset.filename.as_deref(), Some("motion-to-dismiss.pdf"));
+        }
+        assert_eq!(
+            store::assets::for_project(&fixture.surreal, project)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_later_notice_retains_a_corrected_document_link() {
+    let fixture = fixture().await;
+    let project = seed_matter(&fixture.surreal, fixture.firm_id, "syn-nef-corrected").await;
+    let raw = district_notice();
+    let first = seed_notice(
+        &fixture,
+        Some(project),
+        Some(("inbound/first.eml", &raw)),
+        "Notice of Electronic Filing",
+        Vec::new(),
+    )
+    .await;
+    let (status, _) = request(
+        &fixture.app,
+        "POST",
+        "/app/api/inbox/process",
+        Some(&fixture.lawyer_session),
+        Some(json!({"message": first, "apply": true})),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let case = store::cases::for_project(&fixture.surreal, project)
+        .await
+        .unwrap()
+        .remove(0);
+    let entry = store::cases::docket(&fixture.surreal, case.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let corrected = Uuid::now_v7();
+    store::cases::link_document(&fixture.surreal, entry.id, corrected)
+        .await
+        .unwrap();
+    let bytes = b"%PDF-1.4 synthetic later notice";
+    let asset =
+        store::assets::ingest_content(&fixture.surreal, &fixture.storage, bytes, "application/pdf")
+            .await
+            .unwrap();
+    let later = seed_notice(
+        &fixture,
+        Some(project),
+        Some(("inbound/later.eml", &raw)),
+        "Notice of Electronic Filing",
+        vec![store::inbox::IngestAttachment {
+            asset_id: asset,
+            filename: "motion-to-dismiss.pdf".into(),
+            sha256: store::assets::sha256_hex(bytes),
+        }],
+    )
+    .await;
+    let (status, result) = request(
+        &fixture.app,
+        "POST",
+        "/app/api/inbox/process",
+        Some(&fixture.lawyer_session),
+        Some(json!({"message": later, "apply": true})),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(result["nef"]["outcome"], "already_recorded");
+    let entries = store::cases::docket(&fixture.surreal, case.id)
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].document_asset_id, Some(corrected));
 }

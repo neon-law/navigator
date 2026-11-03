@@ -122,31 +122,19 @@ pub(crate) async fn process_nef(
 
     let kind = store::nef::suggested_kind(&notice.docket_text, None);
     let (filed_documents, document_asset_id) =
-        file_notice_documents(state, row, project_id, kind, raw.as_deref()).await?;
+        file_notice_documents(state, row, project_id, kind, &notice, raw.as_deref()).await?;
 
     // Each message keeps its own original and attachments even when its
     // docket entry already exists. Stable slugs make a replay converge.
-    if let Some(doc_no) = notice.doc_no.as_deref() {
-        let existing = store::cases::docket(&state.surreal, case.id)
+    let existing = if let Some(doc_no) = notice.doc_no.as_deref() {
+        store::cases::docket(&state.surreal, case.id)
             .await
             .map_err(|error| case_error(&error))?
             .into_iter()
-            .find(|entry| entry.entry_number == doc_no);
-        if let Some(entry) = existing {
-            if entry.document_asset_id.is_none() {
-                if let Some(asset_id) = document_asset_id {
-                    store::cases::link_document(&state.surreal, entry.id, asset_id)
-                        .await
-                        .map_err(|error| case_error(&error))?;
-                }
-            }
-            return Ok(NefOutcome::AlreadyRecorded {
-                case_id: case.id,
-                entry_id: entry.id,
-                entry_number: entry.entry_number,
-            });
-        }
-    }
+            .any(|entry| entry.entry_number == doc_no)
+    } else {
+        false
+    };
 
     // A notice with no document number names no ordinal — record nothing
     // on the docket rather than guess one. The filed original is the
@@ -186,12 +174,20 @@ pub(crate) async fn process_nef(
     .await
     .map_err(|error| case_error(&error))?;
 
+    if existing {
+        return Ok(NefOutcome::AlreadyRecorded {
+            case_id: case.id,
+            entry_id: entry.id,
+            entry_number: entry.entry_number,
+        });
+    }
+
     Ok(NefOutcome::Filed {
         case_id: case.id,
         entry_id: entry.id,
         entry_number: entry.entry_number,
         filed_documents,
-        document_asset_id,
+        document_asset_id: entry.document_asset_id,
     })
 }
 
@@ -218,13 +214,14 @@ fn parse_notice(raw: Option<&[u8]>, body: &str) -> Result<store::nef::Notice, Ne
 
 /// File the notice's attachment assets and, when its raw source survived
 /// the ingest, the original. Returns how many documents were filed and
-/// the asset the docket entry links — the first filed attachment when
-/// one exists. The email original is provenance, not the court document.
+/// the asset the docket entry links — an attachment uniquely matching the
+/// notice's main filename. The email original is provenance, not the court document.
 async fn file_notice_documents(
     state: &crate::api::ApiState,
     row: &store::inbox::UnprocessedRow,
     project_id: Uuid,
     kind: &'static str,
+    notice: &store::nef::Notice,
     raw: Option<&[u8]>,
 ) -> Result<(usize, Option<Uuid>), ApiError> {
     let mut filed_documents = 0usize;
@@ -235,7 +232,7 @@ async fn file_notice_documents(
     // `mail/<message id>/<index>` — the inbox lane's own provenance path.
     let attachments = attachment_bytes(state, row).await?;
     if !attachments.is_empty() {
-        if let Some(first) = crate::api::file_mail_attachments(
+        let filed = crate::api::file_mail_attachments(
             state,
             project_id,
             kind,
@@ -249,11 +246,19 @@ async fn file_notice_documents(
             },
             &attachments,
         )
-        .await?
-        .first()
-        .map(|pointer| pointer.current_version.asset_id)
-        {
-            document_asset_id = Some(first);
+        .await?;
+        if let Some(filename) = notice.original_filename.as_deref() {
+            let mut matches = attachments
+                .iter()
+                .enumerate()
+                .filter(|(_, attachment)| attachment.filename == filename);
+            if let Some((index, _)) = matches.next() {
+                if matches.next().is_none() {
+                    document_asset_id = filed
+                        .get(index)
+                        .map(|pointer| pointer.current_version.asset_id);
+                }
+            }
         }
         filed_documents += attachments.len();
     }
