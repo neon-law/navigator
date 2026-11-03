@@ -85,6 +85,14 @@ with carved capitals in bright sun along the facade of a federal courthouse in D
 `views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY` includes it in publication checks and orphan protection. The photograph
 illustrates public architecture and does not imply that a pictured institution provides or endorses the services.
 
+## Guieb & Shook membership badge
+
+The user-supplied Greater Vancouver Chamber membership badge lives at `img/guieb-shook/proud-member-gvc.png`.
+`views::assets::GUIEB_SHOOK_GVC_BADGE_KEY` includes it in restoration, publication checks, and orphan protection. The
+shared public footer renders it beneath the platform credit for Guieb & Shook PC, with alt text "Proud member of Greater
+Vancouver Chamber". Other Firms do not inherit this membership when a Brand moves. The PNG stays outside Git and is
+published through `navigator site asset upload`.
+
 ## Brand uploads
 
 Brand logo and font uploads share one UUID-scoped prefix in the public bucket: `brand-<Brand UUID>/logo.png` or

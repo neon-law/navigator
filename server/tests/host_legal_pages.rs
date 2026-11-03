@@ -214,8 +214,8 @@ async fn the_registration_links_to_the_uspto_record_on_the_page_and_in_the_terms
         footer.contains("Neon Law is a trademark of Neon Law IP LLC."),
         "{footer}"
     );
-    assert!(footer.contains("Legal services prepared by"), "{footer}");
-    assert!(footer.contains("https://www.lextecnica.com/"), "{footer}");
+    assert!(!footer.contains("Legal services prepared by"), "{footer}");
+    assert!(!footer.contains("https://www.lextecnica.com/"), "{footer}");
     // Check the Terms body and footer independently.
     assert!(
         flat.contains("is a registered trademark of Neon Law IP LLC, "),

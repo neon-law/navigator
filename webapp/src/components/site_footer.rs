@@ -330,6 +330,9 @@ pub fn SiteFooterLegal(
     /// cannot claim this repository's affiliations.
     #[props(default)]
     memberships: Vec<FooterMembership>,
+    /// Firm-verified public membership badge, resolved by the server.
+    #[props(default)]
+    membership_badge_href: String,
     /// The registered word mark the site trades under, spelled the way the
     /// register spells it, and the registration that proves it. Renders one
     /// notice under the copyright line — the site's two ownership facts read
@@ -782,6 +785,16 @@ pub fn SiteFooterLegal(
                                 repo: crate::source_repository::SOURCE_REPO.to_string(),
                                 version: navigator_version.clone(),
                                 stars: github_stars,
+                            }
+                        }
+                        if !membership_badge_href.is_empty() {
+                            img {
+                                class: "site-footer__gvc-badge",
+                                src: membership_badge_href,
+                                alt: "Proud member of Greater Vancouver Chamber",
+                                width: "1500",
+                                height: "1050",
+                                loading: "lazy",
                             }
                         }
                     }

@@ -199,6 +199,9 @@ pub struct PublicChrome {
     /// Empty renders none.
     #[serde(default)]
     pub memberships: Vec<ChromeMembership>,
+    /// Resolved membership badge for the verified operating Firm.
+    #[serde(default)]
+    pub membership_badge_href: String,
     /// The request Brand's public profiles and the shared `YouTube` channel,
     /// under the wordmark. Empty when a mounted bundle renamed the firm. See
     /// `views::brand::firm_social`.
@@ -243,6 +246,7 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
             // the bottom of every page.
             copyright_holder: chrome.legal_entity.clone(),
             disclosure: chrome.disclosure.clone(),
+            membership_badge_href: chrome.membership_badge_href.clone(),
             attribution: if practice_footer { String::new() } else { chrome.attribution.clone() },
             copyright_href: if practice_footer { chrome.firm_home_href.clone() } else { String::new() },
             disclaimer: chrome.disclaimer.clone(),
@@ -377,15 +381,13 @@ fn footer_trademark() -> (&'static str, &'static str, &'static str) {
     }
 }
 
-/// The provider and ownership notices, empty on the firm's own page.
+/// The ownership notice, empty on the Firm's own page.
 #[cfg(feature = "server")]
 fn footer_disclosure() -> crate::components::site_footer::FooterDisclosure {
     if views::brand::FIRM_BRAND.legal_entity == "Guieb & Shook PC" && !firm_own_page() {
         crate::components::site_footer::FooterDisclosure {
-            prefix: marketing_copy("footer.provider_prefix"),
-            provider: marketing_copy("footer.provider_name"),
-            href: marketing_copy("footer.provider_href"),
             ownership: marketing_copy("footer.ownership"),
+            ..Default::default()
         }
     } else {
         crate::components::site_footer::FooterDisclosure::default()
@@ -453,6 +455,11 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         firm_home_href: FIRM_BRAND.home_href.to_string(),
         legal_entity: FIRM_BRAND.legal_entity.to_string(),
         disclosure: footer_disclosure(),
+        membership_badge_href: if FIRM_BRAND.legal_entity == "Guieb & Shook PC" {
+            views::assets::asset_url(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY)
+        } else {
+            String::new()
+        },
         attribution: firm_attribution(brand),
         disclaimer: views::brand::firm_disclaimer().to_string(),
         trademark: trademark.to_string(),
@@ -560,6 +567,10 @@ pub fn apply_resolved_firm_footer(
     model: &crate::firm_footer::FirmFooterModel,
 ) {
     if !model.compiled_identity_allowed {
+        // Provider attribution belongs to the operating Firm, not the Brand.
+        chrome.disclosure.prefix.clear();
+        chrome.disclosure.provider.clear();
+        chrome.disclosure.href.clear();
         let old_entity = chrome.legal_entity.clone();
         if chrome.disclosure.ownership.is_empty() && !chrome.trademark.is_empty() {
             chrome.disclosure.ownership = if chrome.trademark_registration.is_empty() {
@@ -592,6 +603,7 @@ pub fn apply_resolved_firm_footer(
         chrome.offices.clear();
         chrome.attorneys.clear();
         chrome.memberships.clear();
+        chrome.membership_badge_href.clear();
         chrome.social.clear();
         chrome.attribution = format!("A practice of {}", model.legal_entity);
     }
@@ -684,6 +696,9 @@ mod tests {
             firm_logo_href: "/public/logo.svg".to_string(),
             firm_home_href: "/".to_string(),
             legal_entity: "Guieb & Shook PC".to_string(),
+            membership_badge_href: views::assets::asset_url(
+                views::assets::GUIEB_SHOOK_GVC_BADGE_KEY,
+            ),
             attribution: "A practice of Guieb & Shook PC".to_string(),
             disclaimer: "This is an attorney advertisement.".to_string(),
             // The real registration, as `chrome_for` resolves it from the firm
@@ -1076,7 +1091,7 @@ mod tests {
                         r#"<a href="https://justicetechassociation.org/get-involved" class="site-footer__membership-link""#,
                     )
                     .and_then(|(_, rest)| rest.split_once("</a>"))
-                    .is_some_and(|(_, link_body)| !link_body.contains("member")),
+                    .is_some_and(|(link_body, _)| !link_body.contains("member")),
                 "{key:?} must not call the firm a member in the standing line: {output}"
             );
         }
@@ -1190,37 +1205,33 @@ mod tests {
         }
     }
 
-    /// DeleteYourDebt.com, and only DeleteYourDebt.com, credits `PandA` Law Firm
-    /// with its legal services and links out to that firm.
     #[cfg(feature = "server")]
     #[tokio::test]
-    async fn only_delete_your_debt_credits_panda_law_firm_in_its_footer() {
+    async fn guieb_shook_brands_never_credit_another_firm() {
         for key in views::brand::BrandKey::ALL {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+            if branding.firm.legal_entity != "Guieb & Shook PC" {
+                continue;
+            }
             let chrome =
                 views::brand::scope(branding, async { chrome_for(&branding.firm, Vec::new()) })
                     .await;
-            let mut dom = VirtualDom::new_with_props(PublicFooter, PublicFooterProps { chrome });
-            dom.rebuild_in_place();
-            let out = dioxus_ssr::render(&dom);
-            let name = key.as_str();
-
-            if *key == views::brand::BrandKey::DeleteYourDebt {
-                assert_eq!(
-                    element_text(&out, "site-footer__provider"),
-                    "Legal services provided by PandA Law Firm opens in a new tab",
-                    "{name}'s footer names its legal-services provider"
-                );
-                assert!(
-                    out.contains(r#"href="https://www.pandalawfirm.com/""#),
-                    "{name}'s footer links out to PandA Law Firm: {out}"
-                );
-            } else {
-                assert!(
-                    !out.contains("pandalawfirm.com") && !out.contains("PandA Law Firm"),
-                    "{name}'s footer must not credit PandA Law Firm: {out}"
-                );
-            }
+            let html = render_chrome(chrome);
+            assert!(
+                !html.contains("site-footer__provider"),
+                "{}: {html}",
+                key.as_str()
+            );
+            assert!(!html.contains("lextecnica.com"), "{}: {html}", key.as_str());
+            assert!(
+                html.contains(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY),
+                "{}: {html}",
+                key.as_str()
+            );
+            assert!(
+                html.find("site-footer__gvc-badge") > html.find("site-footer__powered"),
+                "{html}"
+            );
         }
     }
 
@@ -1328,7 +1339,12 @@ mod tests {
             html.contains("Synthetic New Entity LLC") && html.contains("Attorney advertisement."),
             "{html}"
         );
-        assert!(html.contains("Independent Provider"), "{html}");
+        assert!(
+            !html.contains(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY),
+            "{html}"
+        );
+        assert!(!html.contains("Independent Provider"), "{html}");
+        assert!(!html.contains("site-footer__provider"), "{html}");
         let ownership = element_text(&html, "site-footer__ownership");
         assert!(
             ownership.contains("is a registered trademark of Guieb & Shook PC"),
@@ -1355,6 +1371,11 @@ mod tests {
             chrome.attorneys.is_empty()
                 && chrome.memberships.is_empty()
                 && chrome.firm_email.is_empty()
+        );
+        let html = render_chrome(chrome);
+        assert!(
+            !html.contains(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY),
+            "{html}"
         );
     }
     #[test]

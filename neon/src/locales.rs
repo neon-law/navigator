@@ -1962,9 +1962,6 @@ mod tests {
         // Footer and account copy is read directly by the shared SSR components.
         referenced.extend(
             [
-                "footer.provider_prefix",
-                "footer.provider_name",
-                "footer.provider_href",
                 "footer.ownership",
                 "signup.title",
                 "signup.body",
