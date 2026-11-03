@@ -420,9 +420,9 @@
 {"file":"cloud/src/calendar.rs","line":916,"function":"insert_event","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cloud/src/calendar.rs","line":1423,"function":"the_fake_finds_patches_and_deletes_mirrored_events","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cloud/src/calendar.rs","line":1437,"function":"the_fake_finds_patches_and_deletes_mirrored_events","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cloud/src/contacts.rs","line":193,"function":"find_contact","operation":"query","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cloud/src/contacts.rs","line":325,"function":"set_phone","operation":"query","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cloud/src/contacts.rs","line":350,"function":"with_contact","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cloud/src/contacts.rs","line":203,"function":"find_contact","operation":"query","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cloud/src/contacts.rs","line":328,"function":"set_phone","operation":"query","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cloud/src/contacts.rs","line":353,"function":"with_contact","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cloud/src/drive.rs","line":464,"function":"folder_parents","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cloud/src/drive.rs","line":495,"function":"move_folder","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cloud/src/drive.rs","line":518,"function":"permission","operation":"query","sql_operations":[],"tables":[],"transaction":false}
