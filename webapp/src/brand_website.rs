@@ -84,7 +84,7 @@ const COMPILED_SITES: &[CompiledSite] = &[
     },
     CompiledSite {
         key: "guieb-shook",
-        www: "www.guiebandshook.com",
+        www: "www.guiebshook.com",
         live: true,
     },
     // Lex Tecnica's brands are served on `neonlaw.com` subdomains.

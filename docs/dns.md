@@ -58,7 +58,7 @@ is served by the redirect service, which sends both its apex and `www` host to t
 | `www.neonlaw.com` / `workflows.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
 | `staging.neonlaw.com` / `workflows-staging.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `staging.deleteyourdata.com` | the staging deployment | its `<prefix>-gateway-ip` |
-| `staging.guiebandshook.com` | the staging deployment | its `<prefix>-gateway-ip` |
+| `staging.guiebshook.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `iep.neonlaw.com` / `lex-tecnica.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
 | `staging-iep.neonlaw.com` / `staging-lex-tecnica.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `neonlaw.org` / `www.neonlaw.org` | the redirect service | `https://www.neonlaw.com` (path-preserving 301) |
