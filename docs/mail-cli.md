@@ -20,19 +20,27 @@ Save the Gmail address and OAuth client id once:
 
 ```bash
 navigator mail setup --account lawyer@example.test --client-id <oauth-client-id>
+navigator mail setup --project <mail-project> --secret <secret-name>
 ```
 
-Both flags are required together. The command saves these settings, then checks the draft-only path. Settings are
-written atomically with owner-only permissions to `~/.navigator.mail.json`. The file contains no refresh token. The
-location follows the credential-path overrides: `NAVIGATOR_CREDENTIALS_FILE` first, then `NAVIGATOR_CONFIG_DIR`, with
-the credential file's extension replaced by `.mail.json`. Nonblank `NAVIGATOR_GMAIL_ACCOUNT` and
-`NAVIGATOR_GMAIL_CLIENT_ID` override the saved values independently.
+The account and client-id flags are required together. The command saves these settings, then checks the draft-only
+path. Settings are written atomically with owner-only permissions to `~/.navigator.mail.json`. The file contains no
+refresh token. The location follows the credential-path overrides: `NAVIGATOR_CREDENTIALS_FILE` first, then
+`NAVIGATOR_CONFIG_DIR`, with the credential file's extension replaced by `.mail.json`. Nonblank
+`NAVIGATOR_GMAIL_ACCOUNT` and `NAVIGATOR_GMAIL_CLIENT_ID` override the saved values independently.
 
 `navigator mail setup` checks the saved settings and environment overrides and prints the fix for each gap. It reports
 `ok` or `MISSING` for the account, client id, and Keychain refresh token, and fails until all three are present. It
 reports the client secret as `ok` or `optional`; the secret never blocks readiness. Saved settings remain available even
 when the token check fails. Output contains fixed text only, never the account, client id, secret, or token. When the
 token is missing, it points to `navigator mail login`.
+
+For a shared OAuth client in Secret Manager, save `--project` and optionally `--secret`. The default secret name is
+`navigator-mail-oauth-client-secret`. These settings contain only resource identifiers. Saving account/client settings
+preserves the GCP source. With a saved GCP project, `navigator mail login` fetches the latest secret version using the
+current `gcloud` account and writes it directly to Keychain before opening Google sign-in. Install `gcloud` and run
+`gcloud auth login` first. A permission denial directs the lawyer to check the lawyers group and its Secret Manager
+permissions; a missing secret/version gets a separate error. Provider output and secret bytes are never printed.
 
 ## Authorize Gmail
 
@@ -41,14 +49,18 @@ token is missing, it points to `navigator mail login`.
 ```bash
 navigator mail login
 navigator mail login --client-secret-file ~/Downloads/client_secret_<id>.json
+navigator mail login --client-secret-from-gcp --project <mail-project> --secret <secret-name>
 ```
 
 - **Settings.** It uses the account and client id saved by `navigator mail setup`, or their environment overrides.
 - **Client secret.** Google's Desktop-app clients require a client secret at the token endpoint. The CLI reads it from
   the Keychain item whose service is `com.neonlaw.navigator.gmail.client-secret` and whose account is the client id.
   `--client-secret-file` reads `installed.client_secret` from Google's downloaded client JSON, refuses a file for a
-  different client id, and stores the secret. With neither, the CLI prompts on the terminal with echo off and stores
-  what you type. The secret is never printed or logged.
+  different client id, and stores the secret. An explicit client file selects that source even when GCP settings are
+  saved. `--client-secret-from-gcp` selects Secret Manager; `--project` and `--secret` override its saved identifiers. A
+  saved GCP project also selects Secret Manager without flags. A failed GCP lookup stops login without falling back to a
+  stored secret. With no file or GCP source, the CLI uses Keychain, then prompts with echo off when none is stored. The
+  secret is never printed or logged.
 - **Browser.** A one-shot listener binds `127.0.0.1` on a random port as the redirect. The CLI opens the Google
   consent page with `open` and prints the URL too. The request uses PKCE (S256), a random `state` the redirect must
   echo, `access_type=offline`, `prompt=consent`, and `login_hint` set to the configured account. A `state` mismatch
