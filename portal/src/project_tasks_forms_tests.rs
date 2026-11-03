@@ -88,10 +88,54 @@ async fn participant(db: &store::surreal::SurrealDb, project_id: Uuid) -> Uuid {
     person.id
 }
 
+async fn source_project(db: &store::surreal::SurrealDb, name: &str) -> store::projects::Project {
+    let unique = Uuid::new_v4();
+    let jurisdiction = store::jurisdictions::create(
+        db,
+        &store::jurisdictions::NewJurisdiction::new(
+            format!("Synthetic task jurisdiction {unique}"),
+            format!("TASK-{unique}"),
+            "state",
+        ),
+    )
+    .await
+    .unwrap();
+    let entity_type =
+        store::entity_types::create(db, &format!("Synthetic task entity type {unique}"))
+            .await
+            .unwrap();
+    let entity = store::entities::create(
+        db,
+        &store::entities::NewEntity {
+            name: format!("Synthetic task entity {unique}"),
+            entity_type_id: entity_type.id,
+            jurisdiction_id: jurisdiction.id,
+            phone: None,
+            url: None,
+            xero_id: None,
+            firm_anchor_key: None,
+        },
+    )
+    .await
+    .unwrap();
+    store::projects::create(
+        db,
+        &store::projects::NewProject {
+            code: store::projects::code_from_name(name, unique),
+            name: name.into(),
+            entity_id: entity.id,
+            status: "open".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+}
+
 async fn cross_matter_actions() {
     let db = store::test_support::mem_surreal().await;
-    let own = store::test_support::seed_project(&db, "Synthetic allowed matter").await;
-    let foreign = store::test_support::seed_project(&db, "Synthetic other matter").await;
+    let own = source_project(&db, "Synthetic allowed matter").await;
+    let foreign = source_project(&db, "Synthetic other matter").await;
     let actor = participant(&db, own.id).await;
     let other = participant(&db, foreign.id).await;
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
@@ -150,6 +194,7 @@ async fn transition_form_accepts_the_rendered_forward_action_fields() {
     use axum::extract::FromRequest;
     for state in ["in_progress", "done"] {
         let request = axum::http::Request::builder()
+            .method(axum::http::Method::POST)
             .header("content-type", "application/x-www-form-urlencoded")
             .body(axum::body::Body::from(format!(
                 "_csrf=synthetic&next_state={state}"
