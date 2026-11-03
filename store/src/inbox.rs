@@ -981,6 +981,24 @@ async fn recover_deduped_ingress(
     Err(error)
 }
 
+/// Check the authoritative Person and participation before an Inbox assignment.
+/// Owners may assign across Projects; Lawyers and Clerks require participation.
+///
+/// # Errors
+/// Returns an error when the Person or participation cannot be read.
+pub async fn can_assign_project(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<bool, InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    match actor.role {
+        Role::Owner => Ok(true),
+        Role::Lawyer | Role::Clerk => sees_project(db, actor_id, actor.role, project_id).await,
+        Role::Admin | Role::Client => Ok(false),
+    }
+}
+
 /// Attribute or reassign a conversation to a Project in the same Firm.
 ///
 /// # Errors
@@ -1035,7 +1053,7 @@ pub(crate) async fn assign_unbilled(
         ))
         .await;
     }
-    let actor = load_person(db, actor_id).await?;
+    let can_assign = can_assign_project(db, actor_id, project_id).await?;
     let conversation = conversation_by_id(db, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
@@ -1045,10 +1063,7 @@ pub(crate) async fn assign_unbilled(
     if project.firm_id != Some(conversation.firm_id) {
         return Err(InboxError::CrossFirm);
     }
-    if !matches!(actor.role, Role::Owner)
-        && (!matches!(actor.role, Role::Lawyer | Role::Clerk)
-            || !sees_project(db, actor_id, actor.role, project_id).await?)
-    {
+    if !can_assign {
         return Err(InboxError::Denied);
     }
     assign_write(db, actor_id, &conversation, project_id).await

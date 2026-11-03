@@ -536,6 +536,14 @@ pub(crate) async fn fi_import_door(
             Ok(scope) => scope,
             Err(response) => return Ok(response),
         };
+    if let Some(project) = project {
+        let allowed = store::inbox::can_assign_project(&state.surreal, actor, project)
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+        if !allowed {
+            return Err(ApiError::Forbidden);
+        }
+    }
     let brand = store::brands::find_by_key(&state.surreal, input.brand.trim())
         .await
         .map_err(|_| ApiError::NotFound)?

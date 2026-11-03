@@ -1190,6 +1190,7 @@ async fn assert_fi_lifecycle(
     )
     .await;
     let csv="type,way,phone,at,length,id,content\nC,I,+15555550456,2026-10-30T18:00:00Z,61,fi-call,never archive me\nS,O,+15555550789,2026-10-30T18:01:00Z,,fi-sms,never archive me\n";
+    assert_fi_assignment_rights_before_writes(&app, pg, csv).await;
     let before = fi_counts(pg).await;
     let (status, _) = post_fi_json(&app.app, None, fi_body(csv, &json!({}))).await;
     assert_eq!(status, 401);
@@ -1444,6 +1445,44 @@ async fn assert_fi_lifecycle(
         "Fi SMS attribution creates no BilledCall rows"
     );
     assert_call_coordinators_do_not_starve_the_native_pool(&app, pg, actor, firm, project_id).await;
+}
+
+async fn assert_fi_assignment_rights_before_writes(
+    fixture: &Fixture,
+    pg: &store::postgres::PostgresDb,
+    csv: &str,
+) {
+    let admin = store::persons::create(
+        &fixture.surreal,
+        &NewPerson {
+            name: "Synthetic Unrelated Admin".into(),
+            email: "fi-outsider-admin@example.test".into(),
+            role: Role::Admin,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut session = portal::SessionData::fresh("fi-outsider-admin", Role::Admin);
+    session.person_id = Some(admin.id);
+    let before = fi_counts(pg).await;
+    for dry_run in [true, false] {
+        let (status, _) = post_fi_json(
+            &fixture.app,
+            Some(&session),
+            fi_body(csv, &json!({"project":"alpha-matter", "dry_run":dry_run})),
+        )
+        .await;
+        assert_eq!(
+            status, 403,
+            "Admin cannot assign imported history to a Project"
+        );
+        assert_eq!(
+            fi_counts(pg).await,
+            before,
+            "denied assignment must not persist a conversation, message, ingress, or audit"
+        );
+    }
 }
 
 /// More independent coordinators than the actual ten-connection cached pool.

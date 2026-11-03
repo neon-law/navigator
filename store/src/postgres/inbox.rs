@@ -758,7 +758,7 @@ pub(crate) async fn assign_on(
     conversation_id: Uuid,
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
-    let actor = inbox::load_person(db, actor_id).await?;
+    let can_assign = inbox::can_assign_project(db, actor_id, project_id).await?;
     let _fi_guard = fi_assignment_guard_on(pg, conversation_id).await?;
     let conversation = conversation_by_id_on(pg, conversation_id)
         .await?
@@ -769,10 +769,7 @@ pub(crate) async fn assign_on(
     if project.firm_id != Some(conversation.firm_id) {
         return Err(InboxError::CrossFirm);
     }
-    if !matches!(actor.role, Role::Owner)
-        && (!matches!(actor.role, Role::Lawyer | Role::Clerk)
-            || !inbox::sees_project(db, actor_id, actor.role, project_id).await?)
-    {
+    if !can_assign {
         return Err(InboxError::Denied);
     }
     assign_write_on(pg, db, actor_id, &conversation, project_id).await
