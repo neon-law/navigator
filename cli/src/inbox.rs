@@ -569,7 +569,7 @@ mod tests {
         let _lock = CREDENTIALS_LOCK.lock().await;
         let previous = credentials_previous();
         let apply_json = applied_response().to_string();
-        let base = serve_once("200 OK", apply_json.to_owned()).await;
+        let base = serve_once("200 OK", apply_json.clone()).await;
         stored_login(&base);
 
         let exit = run(InboxAction::Process {
