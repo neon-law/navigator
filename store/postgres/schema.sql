@@ -3658,7 +3658,7 @@ END $$;
 ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'linkedin', 'scraper', 'x', 'voice'));
 ALTER TABLE message ADD COLUMN raw_storage_key TEXT;
 
--- Migration: 20261103000000_create_matter_billing_batch.sql
+-- Migration: 20261103010000_create_matter_billing_batch.sql
 -- A Matter Billing Batch is one invoice intent: the frozen request (line
 -- items, reference, consumed row ids) persisted BEFORE the provider call, so
 -- a retry resumes the same batch under the same idempotency key — the batch

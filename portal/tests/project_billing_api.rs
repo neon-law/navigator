@@ -502,7 +502,7 @@ async fn run_flat_fee() {
     // Work consumed under the fee is never billed again: the repeat is the
     // zero-unbilled no-op, not a second invoice.
     let repeat = generate(&fixture.app, &fixture).await;
-    assert_eq!(repeat.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(repeat.status(), StatusCode::CONFLICT);
     assert_eq!(fixture.provider.create_keys().len(), 1);
 }
 
@@ -691,6 +691,138 @@ async fn run_refusal_and_retry() {
             "invoiced".to_string()
         ]
     );
+}
+
+#[tokio::test]
+async fn uncertain_invoices_require_reconciliation_and_a_consumed_fee_cannot_race() {
+    if std::env::var("NAV_BILLING_API_CHILD").as_deref() == Ok("1") {
+        Box::pin(run_recovery_safety()).await;
+        return;
+    }
+    let Some((port, database)) = isolated_database().await else {
+        return;
+    };
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "uncertain_invoices_require_reconciliation_and_a_consumed_fee_cannot_race",
+            "--nocapture",
+        ])
+        .env("NAV_BILLING_API_CHILD", "1")
+        .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
+        .env("NAVIGATOR_POSTGRES_PORT", &port)
+        .env("NAVIGATOR_POSTGRES_USER", "postgres")
+        .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
+        .env("NAVIGATOR_POSTGRES_DATABASE", &database)
+        .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
+        .status()
+        .unwrap();
+    remove_isolated_database(&port, &database).await;
+    assert!(status.success());
+}
+
+async fn run_recovery_safety() {
+    let fixture = fixture().await;
+    store::attorney_rates::set_flat_fee(&fixture.pg, fixture.project_id, 100_000)
+        .await
+        .unwrap();
+    seed_entry(&fixture, 60, "Synthetic recovery work").await;
+    seed_confirmed_cost(&fixture, 5_000).await;
+    fixture.provider.fail_next();
+    assert_eq!(
+        generate(&fixture.app, &fixture).await.status(),
+        StatusCode::BAD_GATEWAY
+    );
+    let batch = pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .unwrap();
+    let financials =
+        store::matter_financials::for_project(&fixture.surreal, &fixture.pg, fixture.project_id)
+            .await
+            .unwrap();
+    assert_eq!(financials.wip_cents, 20_000, "refused work stays visible");
+    assert_eq!(financials.outstanding_cents, 0);
+
+    // Simulate a response lost beyond Xero's idempotency retention window.
+    sqlx::query(
+        "UPDATE matter_billing_batch SET inserted_at=now()-interval '25 hours' WHERE id=$1",
+    )
+    .bind(batch.id)
+    .execute(fixture.pg.pool())
+    .await
+    .unwrap();
+    let refused = generate(&fixture.app, &fixture).await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    let reason: Value = serde_json::from_slice(
+        &axum::body::to_bytes(refused.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(reason["reason"], "invoice_reconciliation_required");
+    assert_eq!(fixture.provider.create_keys(), vec![batch.id]);
+
+    // Reconciliation found the real invoice. A mirrored but unsettled batch
+    // contributes outstanding balance, never that same work to WIP as well.
+    store::billing_batches::attach_invoice(&fixture.pg, batch.id, "synthetic-recovered")
+        .await
+        .unwrap();
+    store::xero_invoices::upsert(
+        &fixture.surreal,
+        &store::xero_invoices::UpsertXeroInvoice {
+            project_id: fixture.project_id,
+            xero_invoice_id: "synthetic-recovered".into(),
+            reference: batch.reference.clone(),
+            status: "AUTHORISED".into(),
+            amount_cents: batch.total_cents,
+            currency: "USD".into(),
+            issued_at: chrono::Utc::now(),
+            due_at: None,
+        },
+    )
+    .await
+    .unwrap();
+    let financials =
+        store::matter_financials::for_project(&fixture.surreal, &fixture.pg, fixture.project_id)
+            .await
+            .unwrap();
+    assert_eq!(financials.wip_cents, 0);
+    assert_eq!(financials.outstanding_cents, 105_000);
+    assert_eq!(
+        generate(&fixture.app, &fixture).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        fixture.provider.create_keys(),
+        vec![batch.id],
+        "saved ids never create again"
+    );
+
+    assert_eq!(
+        store::billing_batches::complete(&fixture.pg, batch.id)
+            .await
+            .unwrap()
+            .status,
+        "completed",
+        "concurrent settlement retries remain idempotent"
+    );
+
+    // A slower request composed while fee_billed was false. Its earlier
+    // read must be checked again inside the reservation transaction, even
+    // if the first batch completed and released the pending unique index.
+    let stale = store::billing_batches::MatterBillingBatch {
+        id: Uuid::new_v4(),
+        entry_ids: vec![],
+        cost_ids: vec![],
+        ..batch
+    };
+    assert!(matches!(
+        store::billing_batches::insert_with_reservations(&fixture.pg, &stale).await,
+        Err(store::billing_batches::BillingBatchError::FlatFeeAlreadyBilled)
+    ));
+    assert!(pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .is_none());
 }
 
 #[tokio::test]

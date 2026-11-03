@@ -16,9 +16,8 @@
 //! honours the `Idempotency-Key` for 24h). This command keys it on a **billing
 //! batch**: the composed request and the row ids it consumes are persisted —
 //! and their rows reserved — BEFORE the provider call, so a retry resumes the
-//! same batch under the same key and re-mints the same invoice instead of a
-//! second one, while a later generation — new work after an earlier invoice —
-//! composes a new batch and raises a new invoice. Reservation closes the
+//! same batch under the same key within the safe retry window. New work
+//! after an earlier invoice composes a new batch and raises a new invoice. Reservation closes the
 //! write-off race: a reserved entry cannot be written off and a reserved cost
 //! cannot be resolved or re-confirmed, so the work the provider bills is the
 //! work the lawyer saw on the confirmation step. On a provider refusal
@@ -197,6 +196,8 @@ pub(crate) enum InvoiceGenerationError {
     FutureDatedCost(NaiveDate),
     #[error("the matter's flat fee is already billed — amend the fee for additional work")]
     FlatFeeAlreadyBilled,
+    #[error("the pending invoice requires reconciliation before another provider attempt")]
+    ReconciliationRequired,
     #[error(transparent)]
     Batch(#[from] billing_batches::BillingBatchError),
     #[error(transparent)]
@@ -233,7 +234,8 @@ pub(crate) enum InvoiceGenerationError {
 /// the store or provider refuses. Refusals before the batch is persisted
 /// change nothing; afterwards the work stays reserved under the pending
 /// batch and the retry resumes it — the provider call is keyed on the batch
-/// id, so a retry re-mints the same invoice and never double-bills.
+/// id within a bounded retry window; older uncertain attempts require
+/// reconciliation.
 pub(crate) async fn generate_invoice(
     surreal: &store::surreal::SurrealDb,
     pg: &store::postgres::PostgresDb,
@@ -263,9 +265,8 @@ pub(crate) async fn generate_invoice(
         .collect::<Vec<_>>();
     let flat_fee_cents = attorney_rates::flat_fee_cents(pg, project_id).await?;
     // A flat fee is consumed by its first invoice: a completed batch that
-    // billed it makes the repeat a no-op for the fee. New time and costs
-    // still compose the next batch, and a quiet matter lands in the
-    // nothing-to-invoice branch below instead of charging the fee again.
+    // billed it makes a quiet repeat a no-op. Additional work under the
+    // consumed agreement refuses below until the fee is amended.
     let fee_billed = match flat_fee_cents {
         Some(fee) => billing_batches::flat_fee_billed(pg, project_id, fee).await?,
         None => false,
@@ -342,9 +343,9 @@ pub(crate) async fn generate_invoice(
 
 /// Raise the invoice for a persisted batch — fresh or resumed — and settle
 /// it: mirror, mark, link, complete. The provider call is keyed on the
-/// batch's own id, so a resumed batch re-mints the first attempt's invoice
-/// id and never a second one. The billed party re-derives from the matter so
-/// a resume bills whoever the client is now; the amounts stay frozen.
+/// batch's own id within a bounded retry window; a saved invoice id resumes
+/// local settlement without another create call. The billed party derives
+/// from the current matter; the amounts stay frozen.
 async fn raise_batch(
     surreal: &store::surreal::SurrealDb,
     pg: &store::postgres::PostgresDb,
@@ -374,6 +375,12 @@ async fn raise_batch(
     let invoice_id = if let Some(saved) = &batch.xero_invoice_id {
         billing::InvoiceId(saved.clone())
     } else {
+        // A lost response or failed attach can leave a real invoice without
+        // a saved id. Never create again after the provider's 24-hour key
+        // retention; an operator must reconcile that uncertain outcome.
+        if now.signed_duration_since(batch.inserted_at) >= chrono::Duration::hours(23) {
+            return Err(InvoiceGenerationError::ReconciliationRequired);
+        }
         let invoice = provider
             .create_invoice(
                 batch.id,
@@ -447,8 +454,12 @@ fn refused(status: StatusCode, reason: &'static str) -> Response {
 fn error(error: &InvoiceGenerationError, project_id: Uuid) -> Response {
     let (status, reason) = match error {
         InvoiceGenerationError::NothingToInvoice => (StatusCode::CONFLICT, "nothing_to_invoice"),
-        InvoiceGenerationError::FlatFeeAlreadyBilled => {
+        InvoiceGenerationError::FlatFeeAlreadyBilled
+        | InvoiceGenerationError::Batch(billing_batches::BillingBatchError::FlatFeeAlreadyBilled) => {
             (StatusCode::CONFLICT, "flat_fee_already_billed")
+        }
+        InvoiceGenerationError::ReconciliationRequired => {
+            (StatusCode::CONFLICT, "invoice_reconciliation_required")
         }
         InvoiceGenerationError::CurrencyMismatch(_) => {
             (StatusCode::UNPROCESSABLE_ENTITY, "currency_mismatch")

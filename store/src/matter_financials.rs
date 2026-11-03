@@ -17,6 +17,7 @@
 //! in PostgreSQL and the invoice mirror, and derives the two sums. Xero is
 //! the books; the projection never touches it.
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{postgres::PostgresDb, surreal::SurrealDb};
@@ -29,6 +30,8 @@ pub enum MatterFinancialsError {
     Cost(#[from] crate::project_costs::ProjectCostError),
     #[error("invoice lookup failed")]
     Invoice(#[from] Box<crate::xero_invoices::XeroInvoiceError>),
+    #[error("billing batch lookup failed")]
+    Database(#[from] sqlx::Error),
 }
 
 /// The two projections, plus the parts each is composed from so a surface can
@@ -128,11 +131,32 @@ pub async fn for_project(
     pg: &PostgresDb,
     project_id: Uuid,
 ) -> Result<MatterFinancials, MatterFinancialsError> {
-    let entries = crate::time_entries::wip_billable(pg, project_id).await?;
-    let costs = crate::project_costs::list_for_project(pg, project_id).await?;
+    let mut entries = crate::time_entries::wip_billable(pg, project_id).await?;
+    let mut costs = crate::project_costs::list_for_project(pg, project_id).await?;
     let invoices = crate::xero_invoices::for_projects(surreal, &[project_id])
         .await
         .map_err(Box::new)?;
+    // A partially settled batch can already have a mirrored invoice while
+    // its work remains reserved. That invoice accounts for the work: keep
+    // it out of WIP without hiding reservations from refused creates.
+    let invoice_ids = invoices
+        .iter()
+        .map(|invoice| invoice.xero_invoice_id.as_str())
+        .collect::<Vec<_>>();
+    let batches = sqlx::query(
+        "SELECT entry_ids,cost_ids FROM matter_billing_batch \
+         WHERE project_id=$1 AND xero_invoice_id=ANY($2)",
+    )
+    .bind(project_id)
+    .bind(&invoice_ids)
+    .fetch_all(&pg.0)
+    .await?;
+    for batch in batches {
+        let entry_ids: Vec<Uuid> = batch.try_get("entry_ids")?;
+        let cost_ids: Vec<Uuid> = batch.try_get("cost_ids")?;
+        entries.retain(|entry| !entry_ids.contains(&entry.id));
+        costs.retain(|cost| !cost_ids.contains(&cost.id));
+    }
     Ok(MatterFinancials::from_parts(&entries, &costs, &invoices))
 }
 

@@ -821,8 +821,7 @@ async fn a_provider_refusal_marks_nothing() {
     };
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
     let entry = seed_entry(&pg, project_id, lawyer.id, 90, true).await;
-    // A confirmed cost rides along: the refusal leaves it exactly where it
-    // was, too.
+    // A confirmed cost rides along and remains reserved for the retry.
     seed_cost(&fx.surreal, &pg, project_id, lawyer.id, 1_250, true).await;
 
     let resp = generate(&fx, &fx.lawyer, project_id).await;
@@ -837,30 +836,41 @@ async fn a_provider_refusal_marks_nothing() {
         "nothing is mirrored from a refused raise"
     );
 
-    // The entry is exactly where it started: unbilled and billable. The
-    // whole command is retryable — nothing was half-marked.
-    assert_eq!(
-        store::time_entries::unbilled_billable(&pg, project_id)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    let entry = store::time_entries::find_by_id(&pg, entry).await.unwrap();
-    assert_eq!(entry.billing_status.as_str(), "unbilled");
+    let batch_id = assert_reserved_batch(&fx, &pg, entry).await;
 
     // A retry crosses the seam again — the refusal is not sticky — and
     // still marks nothing.
     let retry = generate(&fx, &fx.lawyer, project_id).await;
     assert_eq!(retry.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(*raises.lock().unwrap(), 2, "a retry crosses the seam again");
-    assert_eq!(
-        store::time_entries::unbilled_billable(&pg, project_id)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
+    assert_eq!(assert_reserved_batch(&fx, &pg, entry).await, batch_id);
+}
+
+// A refused create preserves one reserved batch without an invoice; a
+// retry must neither release its work nor compose a different intent.
+async fn assert_reserved_batch(
+    fx: &Fixture,
+    pg: &store::postgres::PostgresDb,
+    entry_id: Uuid,
+) -> Uuid {
+    assert!(store::time_entries::unbilled_billable(pg, fx.project_id)
+        .await
+        .unwrap()
+        .is_empty());
+    let entry = store::time_entries::find_by_id(pg, entry_id).await.unwrap();
+    assert_eq!(entry.billing_status.as_str(), "reserved");
+    let costs = store::project_costs::list_for_project(pg, fx.project_id)
+        .await
+        .unwrap();
+    assert_eq!(costs.len(), 1);
+    assert_eq!(costs[0].billing_status, "reserved");
+    let batch = store::billing_batches::pending_for_project(pg, fx.project_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(batch.xero_invoice_id.is_none());
+    assert!(mirror_rows(&fx.surreal, fx.project_id).await.is_empty());
+    batch.id
 }
 
 #[tokio::test]

@@ -414,6 +414,13 @@
     "scope": "address",
     "through": "address_id -> Address; no Firm ownership inferred"
   },
+  "matter_billing_batch": {
+    "migration_slice": "matter-invoice-generation",
+    "parity_scenario": "reserved work and frozen invoice request survive retry; consumed flat fees cannot be raised twice",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id; born in PostgreSQL with no Surreal source"
+  },
   "matter_caption": {
     "migration_slice": "matter-storage",
     "parity_scenario": "one caption per Project with nested parties and counsel; an explicit empty block removes it; replay writes nothing; cross-Firm refusal",

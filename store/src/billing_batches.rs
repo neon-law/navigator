@@ -20,6 +20,8 @@ pub enum BillingBatchError {
     Invalid(&'static str),
     #[error("a pending batch already exists for this matter")]
     PendingExists,
+    #[error("the matter's flat fee has already been billed")]
+    FlatFeeAlreadyBilled,
     #[error("billing batch was not found")]
     NotFound,
     #[error("time entry store failed: {0}")]
@@ -163,6 +165,26 @@ pub async fn insert_with_reservations(
         return Err(BillingBatchError::Invalid("status"));
     }
     let mut tx = pg.0.begin().await?;
+    // Serialize even fee-only batches, which have no work rows to lock.
+    // Recheck under this lock: an earlier request may have completed since
+    // the caller composed its invoice.
+    sqlx::query("SELECT id FROM project WHERE id=$1 FOR UPDATE")
+        .bind(batch.project_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if let Some(fee) = batch.flat_fee_cents {
+        let billed: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM matter_billing_batch \
+             WHERE project_id=$1 AND status='completed' AND flat_fee_cents=$2)",
+        )
+        .bind(batch.project_id)
+        .bind(fee)
+        .fetch_one(&mut *tx)
+        .await?;
+        if billed {
+            return Err(BillingBatchError::FlatFeeAlreadyBilled);
+        }
+    }
     if !batch.entry_ids.is_empty() {
         crate::time_entries::reserve_in_tx(&mut tx, &batch.entry_ids, batch.actor_id)
             .await
@@ -215,14 +237,27 @@ pub async fn pending_for_project(
 /// Complete a batch: its invoice exists in Xero, its mirror row is written,
 /// and its rows are invoiced. The next generation composes a new batch.
 pub async fn complete(pg: &PostgresDb, id: Uuid) -> Result<MatterBillingBatch, BillingBatchError> {
+    let mut tx = pg.0.begin().await?;
+    // Completion releases the pending unique index, so it participates in
+    // the same matter lock as insertion. Otherwise a stale fee composition
+    // could recheck before completion and insert just after it.
+    sqlx::query(
+        "SELECT project.id FROM project JOIN matter_billing_batch batch \
+         ON batch.project_id=project.id WHERE batch.id=$1 FOR UPDATE OF project",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(BillingBatchError::NotFound)?;
     let row = sqlx::query(
         "UPDATE matter_billing_batch SET status='completed',updated_at=$2 \
-         WHERE id=$1 AND status='pending' RETURNING *",
+         WHERE id=$1 RETURNING *",
     )
     .bind(id)
     .bind(chrono::Utc::now())
-    .fetch_optional(&pg.0)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(BillingBatchError::NotFound)?;
+    tx.commit().await?;
     from_row(&row).map_err(BillingBatchError::Database)
 }
