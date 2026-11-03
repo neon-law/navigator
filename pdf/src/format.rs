@@ -28,9 +28,9 @@ use crate::{PdfError, LOGO_PATH};
 /// identical marks and differ only below it.
 ///
 /// The `pdf` crate is brand-agnostic: the caller supplies these lines.
-/// [`Default`] is the firm's canonical identity, and the CLI renders that
-/// default rather than assembling one per render — see the note at the
-/// `run_render` call site for why that trade was made deliberately.
+/// [`Default`] is the default Brand's identity. A render inside a Project
+/// builds its letterhead from the Project's Brand instead (see
+/// [`Letterhead::from_brand`] and `cli::letterhead`).
 ///
 /// Beneath the wordmark and the rule sits **one** line holding every way
 /// to reach the firm — voice line, mailbox, website — so a reader finds
@@ -44,7 +44,7 @@ use crate::{PdfError, LOGO_PATH};
 ///
 /// An empty field drops cleanly rather than printing a gap, so a
 /// deployment that publishes no phone still renders a correct letterhead.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Letterhead {
     /// Firm display name, e.g. `Neon Law` — the trading brand alone. A
     /// wordmark is read at a glance across the top of the page, so it
@@ -60,6 +60,15 @@ pub struct Letterhead {
     /// The firm's website as a reader would type it, e.g.
     /// `www.neonlaw.com` — also where a client reads their own files.
     pub web: String,
+    /// The Firm's legal name, printed small beneath the wordmark so the
+    /// letter names the legal person behind the Brand. Empty, or the same
+    /// as [`Letterhead::name`], prints nothing.
+    pub entity: String,
+    /// Whether the compiled mark ([`crate::firm_logo_png`]) heads the page.
+    /// It is the default Brand's mark, so another Brand's letter sets this
+    /// `false` and opens on its wordmark rather than on a mark it does not
+    /// wear.
+    pub logo: bool,
 }
 
 impl Default for Letterhead {
@@ -69,6 +78,11 @@ impl Default for Letterhead {
             phone: "+1 510 800 2090".to_string(),
             email: "contact@neonlaw.com".to_string(),
             web: "www.neonlaw.com".to_string(),
+            // The Firm's legal name comes from the Brand registry, which
+            // this brand-agnostic crate does not read; a Project's letter
+            // names it through `cli::letterhead`.
+            entity: String::new(),
+            logo: true,
         }
     }
 }
@@ -108,7 +122,9 @@ impl Letterhead {
     /// The letterhead a Brand wears: the wordmark is its display name,
     /// the web line is its `host`, and the mailbox is always `contact@`
     /// the host's registrable domain. The phone is the Brand's, falling
-    /// back to the Firm's; an empty field prints nothing.
+    /// back to the Firm's; an empty field prints nothing. It names no
+    /// entity and draws no mark: the caller sets [`Letterhead::entity`] and
+    /// [`Letterhead::logo`] for the Brand it resolved.
     ///
     /// # Errors
     /// [`InvalidHost`] when `host` is empty or invalid.
@@ -129,6 +145,8 @@ impl Letterhead {
             phone: phone.to_string(),
             email: format!("contact@{domain}"),
             web: host.trim().to_string(),
+            entity: String::new(),
+            logo: false,
         })
     }
 }
@@ -609,12 +627,17 @@ fn letter_continuation_prefix(blocks: &LetterBlocks) -> String {
 /// exactly one place and a new format only chooses how much air sits
 /// beneath it via `below`.
 fn letterhead_block(letterhead: &Letterhead, below: &str) -> String {
+    let logo = if letterhead.logo {
+        format!("  #align(center)[#image(\"{LOGO_PATH}\", width: 0.34in)]\n  #v(0.45em)\n")
+    } else {
+        String::new()
+    };
     format!(
         concat!(
             "#block(below: {below})[\n",
-            "  #align(center)[#image(\"{logo}\", width: 0.34in)]\n",
-            "  #v(0.45em)\n",
+            "{logo}",
             "  #align(center)[#text(size: 9.5pt, tracking: 0.22em)[#upper[{name}]]]\n",
+            "{entity_line}",
             "  #v(0.6em)\n",
             "  #line(length: 100%, stroke: 0.5pt + luma(35%))\n",
             "  #v(0.4em)\n",
@@ -622,9 +645,26 @@ fn letterhead_block(letterhead: &Letterhead, below: &str) -> String {
             "]\n\n",
         ),
         below = below,
-        logo = LOGO_PATH,
+        logo = logo,
         name = esc(&letterhead.name),
+        entity_line = entity_line(letterhead),
         reach_line = contact_line(&[&letterhead.phone, &letterhead.email, &letterhead.web]),
+    )
+}
+
+/// The Firm's legal name, small and grey beneath the wordmark, or nothing
+/// when the letterhead names no entity or the wordmark already is it.
+fn entity_line(letterhead: &Letterhead) -> String {
+    let entity = letterhead.entity.trim();
+    if entity.is_empty() || entity.eq_ignore_ascii_case(letterhead.name.trim()) {
+        return String::new();
+    }
+    // A shade apart from the contact line's `luma(40%)`, which stays the
+    // one place that fill appears.
+    format!(
+        "  #v(0.3em)\n  #align(center)[#text(size: 7pt, tracking: 0.07em, \
+         fill: luma(30%))[{}]]\n",
+        esc(entity)
     )
 }
 
@@ -1683,7 +1723,9 @@ mod tests {
     }
 
     mod from_brand {
-        use super::super::{registrable_domain, InvalidHost, Letterhead};
+        use super::super::{
+            registrable_domain, InvalidHost, LetterBlocks, Letterhead, OutputFormat,
+        };
 
         #[test]
         fn the_neon_law_host_wears_the_neon_law_identity() {
@@ -1749,6 +1791,41 @@ mod tests {
                 assert_eq!(registrable_domain(bad), Err(InvalidHost), "{bad:?}");
                 assert!(Letterhead::from_brand("X", bad, "", "").is_err(), "{bad:?}");
             }
+        }
+
+        #[test]
+        fn the_letterhead_names_the_firm_beneath_the_wordmark() {
+            let mut lh = Letterhead::from_brand("Example Brand", "examplefirm.test", "", "")
+                .expect("valid host");
+            lh.entity = "Example Firm PC".to_string();
+            let preamble = OutputFormat::Letter(LetterBlocks::default()).preamble(&lh);
+            let wordmark = preamble.find("#upper[Example Brand]").expect("wordmark");
+            let entity = preamble.find("Example Firm PC").expect("entity line");
+            assert!(wordmark < entity, "the Firm sits beneath the wordmark");
+        }
+
+        #[test]
+        fn an_entity_the_wordmark_already_spells_prints_once() {
+            let mut lh = Letterhead::from_brand("Example Firm", "examplefirm.test", "", "")
+                .expect("valid host");
+            lh.entity = "Example Firm".to_string();
+            let preamble = OutputFormat::Letter(LetterBlocks::default()).preamble(&lh);
+            assert_eq!(preamble.matches("Example Firm").count(), 1, "{preamble}");
+        }
+
+        #[test]
+        fn a_brand_without_the_compiled_mark_draws_no_image() {
+            let lh = Letterhead::from_brand("Example Brand", "examplefirm.test", "", "")
+                .expect("valid host");
+            assert!(!lh.logo);
+            let preamble = OutputFormat::Letter(LetterBlocks::default()).preamble(&lh);
+            assert!(!preamble.contains("#image("), "{preamble}");
+            let default =
+                OutputFormat::Letter(LetterBlocks::default()).preamble(&Letterhead::default());
+            assert!(
+                default.contains("#image("),
+                "the default Brand keeps its mark"
+            );
         }
     }
 }

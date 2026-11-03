@@ -2995,9 +2995,11 @@ fn substitute_template_body(body: &str, ctx: &BTreeMap<String, String>) -> Strin
 /// frontmatter (`store::templates::Template::kind`); an unset or
 /// unrecognized kind renders plain, same as a preview render of a
 /// kind-less template. The firm's identity is pinned to source
-/// ([`pdf::Letterhead::default`]), the same choice `cli::run_render` makes
-/// and for the same reason: a rendered, binding document reads identically
-/// regardless of which brand bundle happens to be mounted.
+/// ([`pdf::Letterhead::default`]), so a rendered, binding document reads
+/// identically regardless of which brand bundle happens to be mounted. It
+/// is the default Brand's letterhead; `cli::run_render` instead frames a
+/// Project's letter with the Project's Brand (`cli::letterhead`), and this
+/// preview does not yet (ENG-1148).
 ///
 /// Notation bodies are authored in Markdown, so the [`pdf::to_typst`]
 /// conversion is what escapes the prose sigils Typst reads as syntax — most
