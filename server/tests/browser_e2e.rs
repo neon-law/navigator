@@ -529,7 +529,7 @@ async fn astrology_design_controls_update_the_chart_and_map() {
             .await
             .unwrap()
             .len(),
-        4
+        48
     );
     c.find(Locator::Css("#astrocartography input[type='checkbox']"))
         .await
@@ -539,7 +539,7 @@ async fn astrology_design_controls_update_the_chart_and_map() {
         .unwrap();
     wait_for_text(
         &c,
-        "This illustrative line is hidden.",
+        "This body’s lines are hidden. Enable its checkbox to show them.",
         Duration::from_secs(5),
     )
     .await;
@@ -548,7 +548,7 @@ async fn astrology_design_controls_update_the_chart_and_map() {
             .await
             .unwrap()
             .len(),
-        3
+        44
     );
     c.close().await.unwrap();
 }
