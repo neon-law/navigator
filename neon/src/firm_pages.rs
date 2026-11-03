@@ -1565,10 +1565,7 @@ fn resolve_world_content(branding: &views::brand::Branding) -> webapp::world_pag
         ),
         page_title: "World".to_string(),
         aster_asset_href: views::assets::asset_url(views::assets::ASTER_BOARD_KEY),
-        country_names: geotime::countries()
-            .iter()
-            .map(|country| country.name.to_string())
-            .collect(),
+        country_names: webapp::world_page::country_names(),
     }
 }
 

@@ -56,6 +56,15 @@ pub struct WorldContent {
 #[derive(Clone, Default)]
 pub struct InjectedWorld(pub WorldContent);
 
+/// Country options for the world page, resolved from the offline index.
+#[cfg(feature = "server")]
+pub fn country_names() -> Vec<String> {
+    geotime::countries()
+        .iter()
+        .map(|country| country.name.to_string())
+        .collect()
+}
+
 /// Everything the page renders, plus whether the request matched the world
 /// route at all. The `matched` flag is the hydration-safe discriminator
 /// `webapp::App` branches on — the same pattern as
@@ -336,7 +345,7 @@ fn unresolved(display_name: String, field_label: &str, message: &str) -> PersonO
 
 /// The wording for a country that resolved but had no matching city, with the
 /// country named and the suggestions carried separately.
-#[cfg(feature = "server")]
+#[cfg(any(feature = "server", test))]
 fn format_unresolved_city(city: &str, country: &str) -> String {
     format!(
         "We could not find {city} in {country}. Check the spelling, or pick a nearby \
