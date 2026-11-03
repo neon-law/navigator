@@ -70,14 +70,13 @@ GKE `ManagedCertificate`: the name does not resolve to the load balancer, and a 
 `Provisioning` until every listed name validates. The `neonlaw.org` zone has its own host-dispatched redirect service so
 deep links survive the domain migration.
 
-A **moved brand** — a key whose `views::brand::BrandKey::moved_to` names the brand it moved to — is no longer
-served by the cluster. Lawyer Shook moved to Guieb & Shook, and the `lawyershook.com` zone is retired: it carries
-no web or mail records. The release inventory
-(`views::brand::release_brand_hosts()`) leaves a moved brand out, so none of its hosts reaches a `ManagedCertificate`
-or an Ingress rule in either environment, and every roll deletes its old `navigator-web-<key>` certificate.
-That matters because the brand hosts share one certificate, `navigator-firm`: Google issues it only once every listed
-name validates, and GKE recreates it whenever its domain list changes, so a name that no longer resolves to the load
-balancer would hold TLS off every brand on it.
+A **moved brand** — a key whose `views::brand::BrandKey::moved_to` names the brand it moved to — is no longer served by
+the cluster. Lawyer Shook moved to Guieb & Shook, and the `lawyershook.com` zone is retired: it carries no web or mail
+records. The release inventory (`views::brand::release_brand_hosts()`) leaves a moved brand out, so none of its hosts
+reaches a `ManagedCertificate` or an Ingress rule in either environment, and every roll deletes its old
+`navigator-web-<key>` certificate. That matters because the brand hosts share one certificate, `navigator-firm`: Google
+issues it only once every listed name validates, and GKE recreates it whenever its domain list changes, so a name that
+no longer resolves to the load balancer would hold TLS off every brand on it.
 
 Lex Tecnica's two brands, Lex Tecnica and IEP Defenders, are served on `neonlaw.com` subdomains rather than domains of
 their own: `lex-tecnica` and `iep` in production, `staging-lex-tecnica` and `staging-iep` on staging. They have no apex
