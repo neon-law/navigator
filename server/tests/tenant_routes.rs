@@ -85,6 +85,7 @@ async fn no_first_party_brand_page_is_published() {
         "/team",
         "/team/jacob",
         "/team/nick",
+        "/team/waleed",
         "/blog",
         "/foundation",
         "/foundation/transparency",

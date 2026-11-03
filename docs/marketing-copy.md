@@ -33,7 +33,7 @@ Neon Law (`neon/`):
 | `neon/locales/en/neon/legal-aid.yaml` | `/legal-aid` workshop and self-hosting paths |
 | `neon/locales/en/neon/notations.yaml` | `/notations` format introduction |
 | `neon/locales/en/neon/services.yaml` | `/services` |
-| `neon/locales/en/neon/team.yaml` | `/team` and Nick's short `/team/nick` profile |
+| `neon/locales/en/neon/team.yaml` | `/team` and short individual profiles |
 | `neon/locales/en/neon/gateway-delete-your-debt.yaml` | `/delete-your-debt` — Neon-only gateway to DeleteYourDebt.com |
 
 The shared catalog sits beside the brand directories rather than inside one, because it is shared across brands:
@@ -106,8 +106,9 @@ Lawyer Shook's `/` combines the firm notice and client sign-in written in Rust
 the shared footer treatment used by Neon Law and Vesta, including the link to Guieb & Shook PC and the common closing
 line.
 
-Neon's `team.yaml` keeps the directory to one name and link; Nick's profile holds a two-sentence introduction and his
-LinkedIn link. The profile does not repeat the directory's heading or copy a full service biography.
+Neon's `team.yaml` lists Nick Shook and Waleed Amer, each linked to a short individual profile with a LinkedIn link. The
+`profiles` map keys each biography by its public route. Profiles do not repeat the directory heading or copy a full
+service biography.
 
 Vesta's `home.yaml` leads with support in life and death and welcomes the person's values and spiritual beliefs. It
 explains that Nevada Asset Protection Trust planning may fit after reviewing the person's circumstances and applicable
