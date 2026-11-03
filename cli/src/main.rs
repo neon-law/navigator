@@ -9357,19 +9357,26 @@ mod gate_helpers_tests {
 
         let errors = locale_document_pass(dir.path()).expect("walks");
         assert_eq!(errors.len(), 2);
-        assert_eq!(errors[0].code.as_deref(), Some("Y002"));
+        // WalkDir yields entries in no defined order, so match the two
+        // rejections as a set rather than assuming which came first.
+        let messages: Vec<&str> = errors.iter().map(|error| error.message.as_str()).collect();
         assert!(
-            errors[0].message.contains("not published"),
-            "{}",
-            errors[0].message
+            errors
+                .iter()
+                .all(|error| error.code.as_deref() == Some("Y002")),
+            "both rejections carry the locale-document code: {messages:?}"
         );
-        assert_eq!(errors[1].code.as_deref(), Some("Y002"));
         assert!(
-            errors[1]
+            errors.iter().any(|error| error
                 .message
-                .contains("unknown locale page `no-such-page`"),
-            "{}",
-            errors[1].message
+                .contains("locale directory `fr` is not published")),
+            "the unpublished locale is rejected: {messages:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("unknown locale page `no-such-page`")),
+            "the unknown page is rejected: {messages:?}"
         );
     }
 
