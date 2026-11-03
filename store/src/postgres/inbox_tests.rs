@@ -3514,10 +3514,13 @@ async fn assert_fi_project_is_pinned_before_return(f: &Fixture, kind: &str, park
     let mut scope = fi_scope(f).await;
     scope.project = Some(f.project);
     let duration = if kind == "C" { "61" } else { "" };
-    let row = fi_rows(&format!(
+    let Some(row) = fi_rows(&format!(
         "{kind},I,+15555550456,2026-10-30T18:00:00Z,{duration},pin-one"
     ))
-    .remove(0);
+    .into_iter()
+    .next() else {
+        panic!("the synthetic Fi fixture must contain a row");
+    };
     if parked {
         scope.project = None;
         crate::fi_import::ingest_on(&f.pg, &scope, &row)
