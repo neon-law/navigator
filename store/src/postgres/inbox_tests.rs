@@ -1971,19 +1971,24 @@ async fn native_processing_and_acknowledgment_lifecycles_are_replay_safe() {
         .await
         .unwrap()
         .is_empty());
+    assert_acknowledgment_lifecycle(&fixture, &ingested).await;
+}
+
+async fn assert_acknowledgment_lifecycle(
+    fixture: &Fixture,
+    ingested: &crate::inbox::IngestedInbound,
+) {
     let acknowledgment =
-        pg_inbox::reserve_acknowledgment_on(&fixture.pg, &ingested, "Synthetic acknowledgment")
+        pg_inbox::reserve_acknowledgment_on(&fixture.pg, ingested, "Synthetic acknowledgment")
             .await
             .unwrap()
             .unwrap();
-    assert!(pg_inbox::reserve_acknowledgment_on(
-        &fixture.pg,
-        &ingested,
-        "Synthetic acknowledgment"
-    )
-    .await
-    .unwrap()
-    .is_none());
+    assert!(
+        pg_inbox::reserve_acknowledgment_on(&fixture.pg, ingested, "Synthetic acknowledgment")
+            .await
+            .unwrap()
+            .is_none()
+    );
     pg_inbox::acknowledgment_submitted_on(
         &fixture.pg,
         acknowledgment,
