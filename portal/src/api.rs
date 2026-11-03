@@ -12380,6 +12380,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            billing_provider: app.billing_provider.clone(),
         }
     }
 

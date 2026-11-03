@@ -195,6 +195,8 @@ pub(crate) enum InvoiceGenerationError {
     NoBilledParty,
     #[error("an unbilled cost is dated {0}, after today's invoice")]
     FutureDatedCost(NaiveDate),
+    #[error("the matter's flat fee is already billed — amend the fee for additional work")]
+    FlatFeeAlreadyBilled,
     #[error(transparent)]
     Batch(#[from] billing_batches::BillingBatchError),
     #[error(transparent)]
@@ -264,10 +266,11 @@ pub(crate) async fn generate_invoice(
     // billed it makes the repeat a no-op for the fee. New time and costs
     // still compose the next batch, and a quiet matter lands in the
     // nothing-to-invoice branch below instead of charging the fee again.
-    let flat_fee_cents = match flat_fee_cents {
-        Some(fee) if billing_batches::flat_fee_billed(pg, project_id, fee).await? => None,
-        other => other,
+    let fee_billed = match flat_fee_cents {
+        Some(fee) => billing_batches::flat_fee_billed(pg, project_id, fee).await?,
+        None => false,
     };
+    let flat_fee_cents = if fee_billed { None } else { flat_fee_cents };
 
     // The zero-unbilled no-op: with no fee agreed and nothing unbilled there
     // is nothing to compose, and the provider is never called — a repeat of a
@@ -275,6 +278,13 @@ pub(crate) async fn generate_invoice(
     // bills, even on a matter that tracks no time.
     if flat_fee_cents.is_none() && entries.is_empty() && unbilled_costs.is_empty() {
         return Err(InvoiceGenerationError::NothingToInvoice);
+    }
+    // Under a consumed fee agreement the matter's work is covered by the
+    // fee: billing later time at hourly rates would charge the client twice
+    // for the same agreement. The firm amends the fee for additional work;
+    // generation refuses until then.
+    if fee_billed {
+        return Err(InvoiceGenerationError::FlatFeeAlreadyBilled);
     }
     // A cost dated after the invoice composes fine but would refuse at
     // link_invoice — after Xero already holds the invoice. The same rule
@@ -319,6 +329,7 @@ pub(crate) async fn generate_invoice(
             currency: INVOICE_CURRENCY.to_string(),
             entry_ids,
             cost_ids,
+            xero_invoice_id: None,
             flat_fee_cents,
             actor_id,
             inserted_at: now,
@@ -355,18 +366,30 @@ async fn raise_batch(
     // The frozen request comes off the batch, never off the live pool: the
     // retry presents exactly what the first attempt presented.
     let line_items: Vec<InvoiceLine> = serde_json::from_value(batch.line_items.clone())?;
-    let invoice = provider
-        .create_invoice(
-            batch.id,
-            &InvoiceRequest {
-                contact_name: party.name,
-                contact_email: party.email,
-                reference: batch.reference.clone(),
-                line_items: line_items.clone(),
-                due_date: None,
-            },
-        )
-        .await?;
+    // A batch that already holds the provider's invoice id re-raises
+    // nothing — the saved id IS the invoice. A fresh raise saves the id the
+    // moment it returns, before any local flip, so a crash or refusal
+    // mid-settle leaves the resume holding the exact invoice instead of
+    // relying on the provider's own idempotency window.
+    let invoice_id = match &batch.xero_invoice_id {
+        Some(saved) => billing::InvoiceId(saved.clone()),
+        None => {
+            let invoice = provider
+                .create_invoice(
+                    batch.id,
+                    &InvoiceRequest {
+                        contact_name: party.name.clone(),
+                        contact_email: party.email.clone(),
+                        reference: batch.reference.clone(),
+                        line_items: line_items.clone(),
+                        due_date: None,
+                    },
+                )
+                .await?;
+            billing_batches::attach_invoice(pg, batch.id, &invoice.0).await?;
+            invoice
+        }
+    };
 
     // Mirror first (the costs' link validates against it), then flip the
     // consumed work through its own audited transitions — reserved rows
@@ -377,7 +400,7 @@ async fn raise_batch(
         surreal,
         &xero_invoices::UpsertXeroInvoice {
             project_id,
-            xero_invoice_id: invoice.0.clone(),
+            xero_invoice_id: invoice_id.0.clone(),
             reference: batch.reference.clone(),
             status: "AUTHORISED".to_string(),
             amount_cents: batch.total_cents,
@@ -389,15 +412,15 @@ async fn raise_batch(
     .await
     .map_err(Box::new)?;
     if !batch.entry_ids.is_empty() {
-        time_entries::mark_invoiced(pg, &batch.entry_ids, actor_id, &invoice.0, true).await?;
+        time_entries::mark_invoiced(pg, &batch.entry_ids, actor_id, &invoice_id.0, true).await?;
     }
     for cost_id in &batch.cost_ids {
-        costs::link_invoice(surreal, pg, *cost_id, actor_id, &invoice.0, true).await?;
+        costs::link_invoice(surreal, pg, *cost_id, actor_id, &invoice_id.0, true).await?;
     }
     billing_batches::complete(pg, batch.id).await?;
 
     Ok(InvoiceReceipt {
-        xero_invoice_id: invoice.0,
+        xero_invoice_id: invoice_id.0,
         reference: batch.reference.clone(),
         currency: batch.currency.clone(),
         total_cents: batch.total_cents,
@@ -425,6 +448,9 @@ fn refused(status: StatusCode, reason: &'static str) -> Response {
 fn error(error: &InvoiceGenerationError, project_id: Uuid) -> Response {
     let (status, reason) = match error {
         InvoiceGenerationError::NothingToInvoice => (StatusCode::CONFLICT, "nothing_to_invoice"),
+        InvoiceGenerationError::FlatFeeAlreadyBilled => {
+            (StatusCode::CONFLICT, "flat_fee_already_billed")
+        }
         InvoiceGenerationError::CurrencyMismatch(_) => {
             (StatusCode::UNPROCESSABLE_ENTITY, "currency_mismatch")
         }

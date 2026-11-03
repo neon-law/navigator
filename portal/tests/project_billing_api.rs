@@ -350,7 +350,7 @@ async fn seed_confirmed_cost(fixture: &Fixture, amount_cents: i64) -> Uuid {
             amount_status: "estimated".into(),
             receipt_document_id: receipt.asset_id,
             idempotency_key: format!("synthetic-{}", Uuid::new_v4()),
-            source_reference: format!("mercury::synthetic-{}", Uuid::new_v4()),
+            source_reference: format!("mercury::{}", Uuid::new_v4()),
         },
     )
     .await
@@ -544,9 +544,10 @@ async fn run_hourly_split() {
             .unwrap(),
     )
     .unwrap();
-    // 90 min at 150.00/h + 60 min at 150.00/h + the cost, integer cents.
+    // 90 min at 150.00/h + 60 min at 150.00/h + the cost, integer cents:
+    // 22_500 + 15_000 + 12_340.
     assert_eq!(receipt["flat_fee"], json!(false));
-    assert_eq!(receipt["total_cents"], json!(34_840));
+    assert_eq!(receipt["total_cents"], json!(49_840));
     assert_eq!(receipt["line_items"].as_array().unwrap().len(), 3);
     let first_invoice = receipt["xero_invoice_id"].as_str().unwrap().to_string();
     assert_eq!(time_entry_status(&fixture.pg, first.id).await, "invoiced");
@@ -675,8 +676,11 @@ async fn run_refusal_and_retry() {
     assert!(pending_batch(&fixture.pg, fixture.project_id)
         .await
         .is_none());
+    // Both crossings — the refusal and the retry — went to the seam under
+    // the same key: the failed attempt is recorded too, so two calls, one
+    // matter key.
     let keys = fixture.provider.create_keys();
-    assert_eq!(keys, vec![batch.id]);
+    assert_eq!(keys, vec![batch.id, batch.id]);
     // The audited transitions tell the whole story: reserved on the failed
     // attempt, invoiced on the retry — nothing was ever unbilled again.
     assert_eq!(
@@ -720,14 +724,14 @@ async fn an_empty_matter_never_reaches_the_provider() {
 async fn run_noop() {
     let fixture = fixture().await;
     let response = generate(&fixture.app, &fixture).await;
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response.status(), StatusCode::CONFLICT);
     let body: Value = serde_json::from_slice(
         &axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(body["error"], json!("nothing_to_invoice"));
+    assert_eq!(body["reason"], json!("nothing_to_invoice"));
     assert!(fixture.provider.create_keys().is_empty());
     assert!(pending_batch(&fixture.pg, fixture.project_id)
         .await
