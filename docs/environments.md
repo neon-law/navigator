@@ -169,7 +169,7 @@ See [DBOS durability](dbos-durability.md#several-replicas).
 brand this repository registers — the deployment config selects one allow-listed image name, and `navigator ops ship`
 pins all runtime images to one immutable release tag. There is no runtime *image* switch, but there is a runtime *host*
 switch: which house brand a request renders is resolved per request from its `Host:` header against the compiled
-registry (`views::brand::BrandKey`, see [`glossary/`](glossary/brand.md)), not from a deployment-level flag. A
+registry (`views::brand::BrandKey`, see [House Brand](glossary/house-brand.md)), not from a deployment-level flag. A
 misconfigured deployment cannot serve one entity's pages under another entity's tag, because the served-host list for
 each key is compiled in rather than read from config.
 

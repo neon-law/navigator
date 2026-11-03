@@ -305,9 +305,10 @@ async fn a_firm_and_brand_update_writes_a_matching_pair() {
 }
 
 #[tokio::test]
-async fn a_firm_that_does_not_wear_the_selected_brand_is_refused_by_name() {
+async fn a_brand_worn_by_a_different_firm_is_refused_by_name() {
     let surreal = mem_surreal().await;
     let before = matter(&surreal).await;
+    firm_wearing_neon(&surreal).await;
 
     let error = update_project(
         &surreal,
@@ -321,10 +322,30 @@ async fn a_firm_that_does_not_wear_the_selected_brand_is_refused_by_name() {
     .await
     .expect_err("the pair must agree with firm_brand");
 
-    assert_eq!(
-        error.to_string(),
-        "That Firm does not wear the selected brand."
-    );
+    assert_eq!(error.to_string(), "That brand is worn by a different Firm.");
+}
+
+/// LAW-255: a key no `brand` row carries is named as unknown, not folded into
+/// the different-Firm refusal.
+#[tokio::test]
+async fn an_unknown_brand_key_is_refused_as_unknown() {
+    let surreal = mem_surreal().await;
+    let before = matter(&surreal).await;
+    let firm_id = firm_wearing_neon(&surreal).await;
+
+    let error = update_project(
+        &surreal,
+        before.id,
+        &UpdateProjectCommand {
+            firm_id: Some(firm_id),
+            brand: Some("no-such-brand".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("an unknown key must be refused");
+
+    assert_eq!(error.to_string(), "No Brand has that key.");
 }
 
 /// LAW-213: the Drive ingest folder id joins the sparse patch — one field

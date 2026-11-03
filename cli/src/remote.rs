@@ -4104,10 +4104,29 @@ pub(crate) async fn resolve_firm(
             "more than one visible Firm has that name; ask an administrator to disambiguate"
         ),
     };
-    if brand.is_some_and(|brand| !firm.brands.iter().any(|key| key == brand)) {
-        anyhow::bail!(
-            "the Firm does not wear that brand; read GET /app/api/firms for its brand keys"
-        );
+    if let Some(brand) = brand.filter(|brand| !firm.brands.iter().any(|key| key == brand)) {
+        // A brand key belongs to at most one Firm, so name which case this is
+        // rather than one undifferentiated refusal (LAW-255).
+        let worn = if firm.brands.is_empty() {
+            "no brand".to_string()
+        } else {
+            firm.brands.join(", ")
+        };
+        let wearer = firms
+            .iter()
+            .find(|other| other.brands.iter().any(|key| key == brand));
+        match wearer {
+            Some(other) => anyhow::bail!(
+                "brand `{brand}` is worn by a different Firm, `{}`; `{}` wears: {worn}",
+                other.name,
+                firm.name
+            ),
+            None => anyhow::bail!(
+                "no visible Firm wears brand `{brand}`: the key is unknown or belongs to a Firm \
+                 outside this caller's directory; `{}` wears: {worn}",
+                firm.name
+            ),
+        }
     }
     Ok(firm.id)
 }
@@ -5750,6 +5769,39 @@ mod tests {
             super::resolve_firm(&server.uri(), "test-token", "hidden", Some("sample"))
                 .await
                 .is_err()
+        );
+    }
+
+    /// LAW-255: a refused brand names its case — a key another visible Firm
+    /// wears, or a key no visible Firm wears — and lists the selected Firm's
+    /// own keys.
+    #[tokio::test]
+    async fn firm_resolution_names_why_a_brand_is_refused() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/app/api/firms"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id":"00000000-0000-0000-0000-000000000001", "name":"Example Practice", "brands":["sample", "second"]},
+                {"id":"00000000-0000-0000-0000-000000000002", "name":"Other Practice", "brands":["elsewhere"]}
+            ]))).mount(&server).await;
+        let refusal = |brand: &'static str| {
+            let base = server.uri();
+            async move {
+                super::resolve_firm(&base, "test-token", "Example Practice", Some(brand))
+                    .await
+                    .unwrap_err()
+                    .to_string()
+            }
+        };
+        assert_eq!(
+            refusal("elsewhere").await,
+            "brand `elsewhere` is worn by a different Firm, `Other Practice`; \
+             `Example Practice` wears: sample, second"
+        );
+        assert_eq!(
+            refusal("no-such-brand").await,
+            "no visible Firm wears brand `no-such-brand`: the key is unknown or belongs to a Firm \
+             outside this caller's directory; `Example Practice` wears: sample, second"
         );
     }
 
