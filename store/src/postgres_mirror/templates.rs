@@ -307,3 +307,7 @@ pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityRep
     }
     parity(surreal, pg).await
 }
+
+#[cfg(test)]
+#[path = "templates_tests.rs"]
+mod templates_tests;
