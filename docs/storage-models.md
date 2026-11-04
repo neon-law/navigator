@@ -14,7 +14,9 @@ cutover, including parent rows, parity, and unsupported operations.
 `store::persons` selects PostgreSQL when `NAVIGATOR_POSTGRES_PEOPLE_AUTHORITY` is `1` or `true`. Person and mailbox
 claims commit together through `store::postgres::people`; successful writes project compatibility rows for callers whose
 other records still use those links. A configured PostgreSQL failure returns an error. It does not fall back to another
-writer. Alias writes and Person merges are refused under PostgreSQL People authority.
+writer. Alias writes and Person merges are refused under PostgreSQL People authority. The people directory reads the
+`person_directory` and `firm_visible_person` views in one query; without the authority it reads people, memberships and
+Firms once each.
 
 ## Relationship graph
 

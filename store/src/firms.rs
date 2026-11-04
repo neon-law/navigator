@@ -1039,6 +1039,102 @@ pub async fn visible_person_ids(
     Ok(ids.into_iter().collect())
 }
 
+/// Whose rows the people directory lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectoryScope {
+    /// Every Person — the Owner's view.
+    Everyone,
+    /// Only the people [`visible_person_ids`] admits for this Admin.
+    VisibleToAdmin(Uuid),
+}
+
+/// One people-directory row: the Person and the names of the Firms they hold
+/// a membership on, in membership order.
+#[derive(Debug, Clone)]
+pub struct DirectoryEntry {
+    pub person: crate::persons::Person,
+    pub firm_names: Vec<String>,
+}
+
+/// The people directory (`/app/admin/people`) with each row's Firm names,
+/// filtered and sorted as [`crate::persons::list_directory`] is.
+///
+/// Under PostgreSQL People authority this is one query over the
+/// `person_directory` and `firm_visible_person` views. Otherwise it reads
+/// the people, the memberships, and the Firms once each and joins them here —
+/// never a membership lookup per Person.
+///
+/// # Errors
+///
+/// [`FirmError`] when any of the reads fails.
+pub async fn people_directory(
+    surreal: &SurrealDb,
+    filter_name: &str,
+    filter_email: &str,
+    sort: &[(String, bool)],
+    scope: DirectoryScope,
+) -> Result<Vec<DirectoryEntry>, FirmError> {
+    if let Some(pg) = crate::persons::postgres_authority().await? {
+        let firm_ids = match scope {
+            DirectoryScope::Everyone => None,
+            DirectoryScope::VisibleToAdmin(admin) => Some(
+                crate::firm_capability::allowed_firm_ids(
+                    surreal,
+                    Role::Admin,
+                    Some(admin),
+                    crate::firm_capability::FirmCapability::ViewDirectory,
+                )
+                .await?,
+            ),
+        };
+        let rows = Box::pin(crate::postgres::people::directory_entries(
+            &pg,
+            filter_name,
+            filter_email,
+            sort,
+            firm_ids.as_deref(),
+        ))
+        .await?;
+        return Ok(rows
+            .into_iter()
+            .map(|(person, firm_names)| DirectoryEntry { person, firm_names })
+            .collect());
+    }
+
+    let mut people =
+        crate::persons::list_directory(surreal, filter_name, filter_email, sort).await?;
+    if let DirectoryScope::VisibleToAdmin(admin) = scope {
+        let visible: std::collections::HashSet<Uuid> = visible_person_ids(surreal, admin)
+            .await?
+            .into_iter()
+            .collect();
+        people.retain(|person| visible.contains(&person.id));
+    }
+    let firm_names: HashMap<Uuid, String> = all(surreal)
+        .await?
+        .into_iter()
+        .map(|firm| (firm.id, firm.name))
+        .collect();
+    let mut memberships = all_memberships(surreal).await?;
+    memberships.sort_by(|a, b| (&a.inserted_at, a.id).cmp(&(&b.inserted_at, b.id)));
+    let mut names_by_person: HashMap<Uuid, Vec<String>> = HashMap::new();
+    for membership in memberships {
+        if let Some(name) = firm_names.get(&membership.firm_id) {
+            names_by_person
+                .entry(membership.person_id)
+                .or_default()
+                .push(name.clone());
+        }
+    }
+    Ok(people
+        .into_iter()
+        .map(|person| DirectoryEntry {
+            firm_names: names_by_person.remove(&person.id).unwrap_or_default(),
+            person,
+        })
+        .collect())
+}
+
 /// Attach one of the deployment's closed house-brand keys to a Firm.
 /// Owner only (`authorize_brand_ownership`): pointing the brand seat at a
 /// firm is the same ownership decision moving it is — an Admin-DRI may

@@ -369,7 +369,7 @@ pub enum PersonError {
 /// when PostgreSQL cannot serve it. The default keeps the current store path.
 pub const POSTGRES_PEOPLE_AUTHORITY_ENV: &str = "NAVIGATOR_POSTGRES_PEOPLE_AUTHORITY";
 
-fn postgres_authority(
+pub(crate) fn postgres_authority(
 ) -> Pin<Box<dyn Future<Output = Result<Option<crate::postgres::PostgresDb>, PersonError>> + Send>>
 {
     Box::pin(async move {
