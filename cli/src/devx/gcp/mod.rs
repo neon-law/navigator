@@ -436,12 +436,12 @@ fn resolve_offsite_archive<'a>(
     project_id: &str,
     config: &'a SetupConfig,
 ) -> SetupResult<Option<(&'a str, &'a str)>> {
-    match (
+    let resolved: Option<(&'a str, &'a str)> = match (
         &config.offsite_archives_project_id,
         &config.offsite_archives_bucket,
     ) {
         (Some(archive_project), Some(bucket)) if archive_project != project_id => {
-            Ok(Some((archive_project, bucket)))
+            Ok(Some((archive_project.as_str(), bucket.as_str())))
         }
         (Some(_), Some(_)) => Err(SetupError::InvalidFlag {
             flag: "--offsite-archives-project-id",
@@ -455,7 +455,21 @@ fn resolve_offsite_archive<'a>(
         (None, Some(_)) => Err(SetupError::MissingConfiguration(
             "--offsite-archives-project-id",
         )),
+    }?;
+    if let Some((_, bucket)) = &resolved {
+        if BucketNames::resolve(project_id, config)
+            .granted()
+            .contains(bucket)
+        {
+            return Err(SetupError::InvalidFlag {
+                flag: "--offsite-archives-bucket",
+                detail: "must not name a bucket the runtime identity is already granted on: \
+                         that grant carries objectAdmin, which would leave delete permission \
+                         on the archive the offsite lane exists to keep write-only",
+            });
+        }
     }
+    Ok(resolved)
 }
 
 /// Stage 13: the offsite Iceberg archive — a locked, write-only bucket in a
@@ -816,6 +830,25 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().contains("blast radius"), "{err}");
+    }
+
+    #[test]
+    fn offsite_archive_rejects_a_bucket_the_runtime_is_already_granted_on() {
+        let config = super::SetupConfig {
+            archives_bucket: Some("example-deployment-archives".into()),
+            offsite_archives_project_id: Some("example-archive".into()),
+            offsite_archives_bucket: Some("example-deployment-archives".into()),
+            ..super::SetupConfig::default()
+        };
+        // The runtime grant on the archives bucket carries objectAdmin; the
+        // offsite lane must not layer creator+viewer on top of a bucket the
+        // runtime can already delete from.
+        let err = super::resolve_offsite_archive("example-deploy", &config).unwrap_err();
+        assert!(
+            err.to_string().contains("--offsite-archives-bucket"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("objectAdmin"), "{err}");
     }
 
     #[tokio::test]

@@ -438,9 +438,9 @@ pub async fn ensure_offsite_archive(
     location: &str,
 ) -> SetupResult<EnsureOutcome> {
     let outcome = create_offsite_bucket(client, project_id, name, location).await?;
-    clear_offsite_lifecycle(client, name).await?;
 
     if client.mode() == Mode::DryRun {
+        clear_offsite_lifecycle(client, name).await?;
         client
             .post_json(
                 GcpService::Storage,
@@ -450,6 +450,13 @@ pub async fn ensure_offsite_archive(
             .await?;
         return Ok(outcome);
     }
+
+    // Ownership before any mutation: bucket names are global, so the 409 on
+    // create only means the name is taken. Every later call targets the name
+    // alone — confirm the bucket actually lives in the archive project before
+    // clearing its lifecycle or locking its policy.
+    verify_offsite_archive_project(client, name, project_id).await?;
+    clear_offsite_lifecycle(client, name).await?;
 
     let metadata = get_bucket_metadata(client, name).await?;
     verify_offsite_archive_policy(name, &metadata)?;
@@ -593,9 +600,11 @@ async fn get_bucket_metadata(client: &GcpClient, name: &str) -> SetupResult<serd
 
 /// Verify the live bucket carries exactly the policy the lock is about to
 /// make permanent: the intended retention period, public access prevention
-/// enforced, uniform bucket-level access enabled. Any mismatch refuses the
-/// run — the lock is irreversible, so the provisioner must never lock a
-/// policy it has not just asserted.
+/// enforced, uniform bucket-level access enabled, and an empty lifecycle —
+/// the desired rule set is empty, so a nonempty snapshot means another tool
+/// wrote a rule after the clear. Any mismatch refuses the run — the lock is
+/// irreversible, so the provisioner must never lock a policy it has not just
+/// asserted.
 fn verify_offsite_archive_policy(name: &str, metadata: &serde_json::Value) -> SetupResult<()> {
     let expected_period = OFFSITE_ARCHIVES_RETENTION_SECONDS.to_string();
     let period = metadata
@@ -630,7 +639,69 @@ fn verify_offsite_archive_policy(name: &str, metadata: &serde_json::Value) -> Se
             ),
         });
     }
+    let lifecycle_rules = metadata
+        .pointer("/lifecycle/rule")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    if lifecycle_rules != 0 {
+        return Err(SetupError::AmbiguousLiveState {
+            operation: format!("verify offsite archive bucket {name}"),
+            detail: format!(
+                "the bucket carries {lifecycle_rules} lifecycle rule(s), expected an \
+                 empty rule set; refusing to lock a policy this pipeline did not write"
+            ),
+        });
+    }
     Ok(())
+}
+
+/// Confirm the offsite bucket actually lives in the archive project. Bucket
+/// names are global, so a 409 on create only means the name is taken — it
+/// says nothing about which project owns the bucket — and every later call
+/// targets the name alone. Listing the archive project's buckets settles
+/// ownership with the same Storage API surface everything else here uses.
+async fn verify_offsite_archive_project(
+    client: &GcpClient,
+    name: &str,
+    archive_project: &str,
+) -> SetupResult<()> {
+    let resp = client
+        .get(
+            GcpService::Storage,
+            &format!("/storage/v1/b?project={archive_project}&prefix={name}"),
+        )
+        .await?;
+    let status = resp.status_u16();
+    if !(200..=299).contains(&status) {
+        return Err(SetupError::BadStatus {
+            operation: format!("list archive project buckets for {name}"),
+            status,
+            body: resp.into_text(),
+        });
+    }
+    let listed: serde_json::Value =
+        serde_json::from_str(&resp.into_text()).map_err(|source| SetupError::Json {
+            what: "archive project bucket listing",
+            source,
+        })?;
+    let owned = listed
+        .pointer("/items")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(|bucket| bucket.get("name").and_then(serde_json::Value::as_str) == Some(name))
+        });
+    if owned {
+        return Ok(());
+    }
+    Err(SetupError::AmbiguousLiveState {
+        operation: format!("verify offsite archive bucket {name}"),
+        detail: format!(
+            "bucket {name} does not appear in project {archive_project}; a bucket name \
+             is global, so refusing to clear or lock a bucket that lives in another project"
+        ),
+    })
 }
 
 /// Grant the deployment's workflows-service identity — the pod service
@@ -1319,9 +1390,27 @@ mod tests {
         assert_eq!(OFFSITE_ARCHIVES_RETENTION_SECONDS, 788_940_000);
     }
 
+    /// The ownership check lists the archive project's buckets; `owns`
+    /// selects whether the offsite bucket is among them.
+    async fn mount_archive_project_listing(server: &MockServer, owns: bool) {
+        let items = if owns {
+            json!({"items": [{"name": "example-deployment-archives-offsite"}]})
+        } else {
+            json!({"items": []})
+        };
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b"))
+            .and(query_param("project", "example-archive"))
+            .and(query_param("prefix", "example-deployment-archives-offsite"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(items))
+            .mount(server)
+            .await;
+    }
+
     #[tokio::test]
     async fn offsite_archive_is_created_verified_then_locked() {
         let server = MockServer::start().await;
+        mount_archive_project_listing(&server, true).await;
         Mock::given(method("POST"))
             .and(path("/storage/v1/b"))
             .and(query_param("project", "example-archive"))
@@ -1391,6 +1480,7 @@ mod tests {
     #[tokio::test]
     async fn already_locked_offsite_archive_skips_the_lock_call() {
         let server = MockServer::start().await;
+        mount_archive_project_listing(&server, true).await;
         Mock::given(method("POST"))
             .and(path("/storage/v1/b"))
             .respond_with(ResponseTemplate::new(409).set_body_json(json!({})))
@@ -1444,6 +1534,7 @@ mod tests {
     #[tokio::test]
     async fn offsite_archive_refuses_to_lock_a_policy_it_did_not_write() {
         let server = MockServer::start().await;
+        mount_archive_project_listing(&server, true).await;
         Mock::given(method("POST"))
             .and(path("/storage/v1/b"))
             .respond_with(ResponseTemplate::new(409).set_body_json(json!({})))
@@ -1498,6 +1589,102 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("788940000"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn offsite_archive_refuses_a_bucket_outside_the_archive_project() {
+        let server = MockServer::start().await;
+        // The name exists somewhere — the create 409s — but the archive
+        // project's own listing does not contain it, so the bucket lives in
+        // some other project. Nothing may be cleared or locked.
+        mount_archive_project_listing(&server, false).await;
+        Mock::given(method("POST"))
+            .and(path("/storage/v1/b"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/storage/v1/b/example-deployment-archives-offsite"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string("lifecycle must not be cleared"),
+            )
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/storage/v1/b/example-deployment-archives-offsite/lockRetentionPolicy",
+            ))
+            .respond_with(ResponseTemplate::new(500).set_body_string("lock must not be called"))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let err = ensure_offsite_archive(
+            &client_pointed_at(&server),
+            "example-archive",
+            "example-deployment-archives-offsite",
+            "us-west4",
+        )
+        .await
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("example-archive"), "{message}");
+        assert!(message.contains("another project"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn offsite_archive_refuses_to_lock_over_a_restored_lifecycle_rule() {
+        let server = MockServer::start().await;
+        mount_archive_project_listing(&server, true).await;
+        Mock::given(method("POST"))
+            .and(path("/storage/v1/b"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/storage/v1/b/example-deployment-archives-offsite"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"name": "b"})))
+            .mount(&server)
+            .await;
+        // The verified policy is right, but the metadata snapshot read for
+        // the lock carries a lifecycle rule another tool restored after the
+        // clear — the lock must refuse it.
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/example-deployment-archives-offsite"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "metageneration": "7",
+                "lifecycle": { "rule": [{ "action": { "type": "Delete" }, "condition": { "age": 30 } }] },
+                "retentionPolicy": {
+                    "retentionPeriod": "788940000",
+                    "isLocked": false
+                },
+                "iamConfiguration": {
+                    "uniformBucketLevelAccess": { "enabled": true },
+                    "publicAccessPrevention": "enforced"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/storage/v1/b/example-deployment-archives-offsite/lockRetentionPolicy",
+            ))
+            .respond_with(ResponseTemplate::new(500).set_body_string("lock must not be called"))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let err = ensure_offsite_archive(
+            &client_pointed_at(&server),
+            "example-archive",
+            "example-deployment-archives-offsite",
+            "us-west4",
+        )
+        .await
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("lifecycle rule"), "{message}");
     }
 
     #[tokio::test]
