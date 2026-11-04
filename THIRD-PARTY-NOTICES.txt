@@ -3000,7 +3000,7 @@ aws-smithy-observability 0.3.0
 aws-smithy-runtime 1.16.2
 aws-smithy-runtime-api 1.19.2
 aws-smithy-runtime-api-macros 1.2.0
-aws-smithy-schema 1.1.0
+aws-smithy-schema 1.1.2
 aws-smithy-types 1.9.1
 aws-smithy-xml 0.64.1
 aws-types 1.7.0
@@ -5915,7 +5915,7 @@ cmov 0.5.4
 crc-fast 1.10.0
 ctutils 0.4.2
 encode_unicode 1.0.0
-encoding_rs 0.8.42
+encoding_rs 0.8.44
 flume 0.12.0
 iceberg 0.10.1
 imgref 1.12.2
@@ -8019,7 +8019,7 @@ Apache License
    limitations under the License.
 
 ----------------------------------------------------------------------------------------
-aws-sdk-s3 1.156.0
+aws-sdk-s3 1.157.0
 
 Apache License
                            Version 2.0, January 2004
@@ -26715,7 +26715,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 ----------------------------------------------------------------------------------------
 charset 0.1.5
-encoding_rs 0.8.42
+encoding_rs 0.8.44
 multiversion_no_op 1.0.0
 utf16_iter 1.0.5
 utf8_iter 1.0.4
@@ -26850,7 +26850,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-encoding_rs 0.8.42
+encoding_rs 0.8.44
 
 Copyright © WHATWG (Apple, Google, Mozilla, Microsoft).
 
