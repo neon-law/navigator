@@ -23,7 +23,7 @@ use portal::{policy, AppState, AuthConfig, OAuthConfig, SessionStore};
 use serde_json::{json, Value};
 use store::test_support::mem_surreal;
 use tower::ServiceExt;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn b64url(bytes: &[u8]) -> String {
@@ -460,5 +460,85 @@ async fn unverified_password_sign_in_is_gated_and_confirmable() {
     assert_eq!(
         claimed.headers().get("location").unwrap(),
         "/auth/login?notice=email_confirmed"
+    );
+}
+
+#[tokio::test]
+async fn reset_for_a_person_without_a_sign_in_account_creates_a_verified_one() {
+    // A Person created inside a Project has a `persons` row but no
+    // Identity Platform account. The reset link is how they set their
+    // first password: finishing it creates the account, and because they
+    // clicked a link mailed to that address, it lands already verified.
+    let meta = mount_metadata().await;
+    let idp = MockServer::start().await;
+    // Lookups at request and at confirm find nobody; the one after the
+    // create finds the new password account.
+    Mock::given(method("POST"))
+        .and(path("/v1/projects/demo-project/accounts:lookup"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .up_to_n_times(2)
+        .with_priority(1)
+        .mount(&idp)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/projects/demo-project/accounts:lookup"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(password_user("ada@example.com")))
+        .with_priority(2)
+        .mount(&idp)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/projects/demo-project/accounts"))
+        .and(body_partial_json(json!({ "email": "ada@example.com" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "localId": "uid-1" })))
+        .expect(1)
+        .mount(&idp)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/projects/demo-project/accounts:update"))
+        .and(body_partial_json(
+            json!({ "localId": "uid-1", "emailVerified": true }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "localId": "uid-1" })))
+        .expect(1)
+        .mount(&idp)
+        .await;
+    let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
+    seed_person(&surreal, "ada@example.com").await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+
+    let form = get(&app, "/auth/password/reset").await;
+    let cookie = account_csrf_cookie(&form);
+    let (_, token) = csrf_pair(&cookie, &body_string(form).await);
+    let submit = post_form(
+        &app,
+        "/auth/password/reset",
+        &cookie,
+        format!("email=ada%40example.com&csrf_token={token}"),
+    )
+    .await;
+    assert_eq!(submit.status(), StatusCode::OK);
+    assert!(&body_string(submit).await.contains("Check your inbox"));
+    let reset_token = token_from_email(&email, "/auth/password/reset/new?token=");
+
+    let new_form = get(
+        &app,
+        &format!("/auth/password/reset/new?token={reset_token}"),
+    )
+    .await;
+    assert_eq!(new_form.status(), StatusCode::OK);
+    let cookie = account_csrf_cookie(&new_form);
+    let (_, csrf) = csrf_pair(&cookie, &body_string(new_form).await);
+
+    let confirm = post_form(
+        &app,
+        "/auth/password/reset/new",
+        &cookie,
+        format!("token={reset_token}&password=first-pass-1&confirm=first-pass-1&csrf_token={csrf}"),
+    )
+    .await;
+    assert_eq!(confirm.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        confirm.headers().get("location").unwrap(),
+        "/auth/login?notice=password_reset"
     );
 }

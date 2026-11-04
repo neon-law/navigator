@@ -160,44 +160,90 @@ async fn request_submit(
 
     // Best-effort side effect; the reply is always the same neutral page so
     // a caller can't tell a registered address from an unknown one.
-    if let Err(e) = try_send_reset(&s, form.email.trim()).await {
+    match try_send_reset(&s, form.email.trim()).await {
+        // The outcome is logged server-side only — the address is not — so
+        // an operator can tell why no email went out while the reply stays
+        // neutral.
+        Ok((outcome, person_id)) => tracing::info!(
+            outcome = outcome.as_str(),
+            person_id = person_id.map(|id| id.to_string()),
+            "password-reset: request handled"
+        ),
         // A failure here (DB, IdP, mail) is logged but never surfaced —
         // surfacing it would itself be an enumeration oracle.
-        tracing::warn!(error = %e, "password-reset: request side effect failed");
+        Err(e) => tracing::warn!(error = %e, "password-reset: request side effect failed"),
     }
     webapp::auth_pages::password_reset_sent().into_response()
+}
+
+/// What a reset request did. Every variant but [`Self::Sent`] and
+/// [`Self::GoogleNotice`] sends nothing, which the requester can't see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResetOutcome {
+    EmptyEmail,
+    NoAdminConfig,
+    NoPerson,
+    NoPasswordProvider,
+    GoogleNotice,
+    Throttled,
+    Sent,
+    SetupLinkSent,
+}
+
+impl ResetOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::EmptyEmail => "empty_email",
+            Self::NoAdminConfig => "no_admin_config",
+            Self::NoPerson => "no_person",
+            Self::NoPasswordProvider => "no_password_provider",
+            Self::GoogleNotice => "google_notice_sent",
+            Self::Throttled => "throttled",
+            Self::Sent => "reset_link_sent",
+            Self::SetupLinkSent => "setup_link_sent",
+        }
+    }
 }
 
 /// The side effect behind a reset request: if the email maps to a
 /// Neon Law Navigator person who is a password (non-Google) Identity Platform
 /// account, mint a token and email the link. Any "no account / not a
-/// password user / throttled" case is a silent no-op.
-async fn try_send_reset(s: &AuthState, email: &str) -> anyhow::Result<()> {
+/// password user / throttled" case sends nothing; the returned outcome
+/// says which.
+async fn try_send_reset(
+    s: &AuthState,
+    email: &str,
+) -> anyhow::Result<(ResetOutcome, Option<uuid::Uuid>)> {
     if email.is_empty() {
-        return Ok(());
+        return Ok((ResetOutcome::EmptyEmail, None));
     }
     let Some(admin) = s.identity_admin.as_ref() else {
         tracing::warn!("password-reset: no Identity Platform admin config; cannot send a link");
-        return Ok(());
+        return Ok((ResetOutcome::NoAdminConfig, None));
     };
     let Some(person) = find_person_by_email(&s.surreal, email).await? else {
-        return Ok(());
+        return Ok((ResetOutcome::NoPerson, None));
     };
+    let person_id = Some(person.id);
     // Only password accounts are resettable — never set a password on a
     // Google-federated identity (it would silently add a password door).
     // A Google account gets a truthful "you sign in with Google" notice
     // instead of silence, so the requester isn't left wondering why no
     // link arrived. Any other case (no account, an unknown federation) is
     // a silent no-op, preserving the no-enumeration property.
-    match admin.lookup_by_email(&person.email).await {
-        Ok(Some(info)) if info.has_password => {}
+    // A Person created inside a Project has no Identity Platform account
+    // yet; the same link lets them set a first password, and the confirm
+    // step creates the account.
+    let outcome = match admin.lookup_by_email(&person.email).await {
+        Ok(Some(info)) if info.has_password => ResetOutcome::Sent,
         Ok(Some(info)) if info.is_google => {
             send_google_sign_in_email(s, &person).await;
-            return Ok(());
+            return Ok((ResetOutcome::GoogleNotice, person_id));
         }
-        Ok(_) => return Ok(()),
+        Ok(Some(_)) => return Ok((ResetOutcome::NoPasswordProvider, person_id)),
+        Ok(None) => ResetOutcome::SetupLinkSent,
         Err(e) => return Err(e.into()),
-    }
+    };
 
     let now = Utc::now();
     // Throttle: a live link minted in the last THROTTLE_SECS suppresses a
@@ -211,7 +257,7 @@ async fn try_send_reset(s: &AuthState, email: &str) -> anyhow::Result<()> {
     )
     .await?
     {
-        return Ok(());
+        return Ok((ResetOutcome::Throttled, person_id));
     }
 
     let plaintext = random_token_32();
@@ -226,7 +272,7 @@ async fn try_send_reset(s: &AuthState, email: &str) -> anyhow::Result<()> {
     .await?;
 
     send_reset_email(s, &person, &plaintext).await;
-    Ok(())
+    Ok((outcome, person_id))
 }
 
 async fn send_reset_email(s: &AuthState, person: &store::persons::Person, plaintext: &str) {
@@ -381,7 +427,24 @@ async fn new_submit(
     // Resolve the Identity Platform user and write the new password.
     let local_id = match admin.lookup_by_email(&token_row.email).await {
         Ok(Some(info)) if info.has_password => info.local_id,
-        Ok(_) => {
+        // No account yet: this link is the Person's first password. It was
+        // mailed to this address, so the new account is created verified.
+        Ok(None) => match create_verified_account(admin, &token_row.email, &form.password).await {
+            Ok(()) => {
+                finish_reset(&s, &token_row, now).await;
+                tracing::info!(person_id = %token_row.person_id, "password-reset: sign-in account created");
+                return Redirect::to("/auth/login?notice=password_reset").into_response();
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "password-reset: account creation failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    webapp::error_pages::server_error(),
+                )
+                    .into_response();
+            }
+        },
+        Ok(Some(_)) => {
             // The account vanished or isn't a password user — treat the
             // link as dead rather than mint a password door.
             return webapp::auth_pages::invalid_link().into_response();
@@ -404,13 +467,37 @@ async fn new_submit(
             .into_response();
     }
 
-    // Spend the token last, so a failed IdP write leaves the link usable
-    // for a retry.
+    finish_reset(&s, &token_row, now).await;
+    tracing::info!(person_id = %token_row.person_id, "password-reset: password updated");
+    Redirect::to("/auth/login?notice=password_reset").into_response()
+}
+
+/// Spend the token last, so a failed IdP write leaves the link usable for
+/// a retry.
+async fn finish_reset(
+    s: &AuthState,
+    token_row: &store::email_tokens::EmailToken,
+    now: chrono::DateTime<Utc>,
+) {
     if let Err(e) = store::email_tokens::consume(&s.surreal, token_row.id, now).await {
         tracing::warn!(error = %e, "password-reset: token consume failed (password was set)");
     }
-    tracing::info!(person_id = %token_row.person_id, "password-reset: password updated");
-    Redirect::to("/auth/login?notice=password_reset").into_response()
+}
+
+/// Create the password account, then mark it verified: the caller proved
+/// the address by following a link mailed to it.
+async fn create_verified_account(
+    admin: &crate::idp_admin::IdentityAdminConfig,
+    email: &str,
+    password: &str,
+) -> anyhow::Result<()> {
+    admin.create_password_account(email, password).await?;
+    let info = admin
+        .lookup_by_email(email)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("account missing right after creation"))?;
+    admin.set_email_verified(&info.local_id).await?;
+    Ok(())
 }
 
 /// Validate the new password, returning a warm error message or `None`.
@@ -435,7 +522,27 @@ pub(crate) async fn find_person_by_email(
 
 #[cfg(test)]
 mod tests {
-    use super::{password_policy_error, MIN_PASSWORD_LEN};
+    use super::{password_policy_error, ResetOutcome, MIN_PASSWORD_LEN};
+
+    #[test]
+    fn every_reset_outcome_logs_a_distinct_label() {
+        let all = [
+            ResetOutcome::EmptyEmail,
+            ResetOutcome::NoAdminConfig,
+            ResetOutcome::NoPerson,
+            ResetOutcome::NoPasswordProvider,
+            ResetOutcome::GoogleNotice,
+            ResetOutcome::Throttled,
+            ResetOutcome::Sent,
+            ResetOutcome::SetupLinkSent,
+        ];
+        let labels: std::collections::HashSet<_> = all.iter().map(|o| o.as_str()).collect();
+        assert_eq!(
+            labels.len(),
+            all.len(),
+            "an operator must tell every branch apart"
+        );
+    }
 
     #[test]
     fn policy_rejects_short_passwords() {
