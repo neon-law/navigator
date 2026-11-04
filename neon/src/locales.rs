@@ -927,6 +927,25 @@ pub fn lead_capture(branding: &views::brand::Branding) -> LeadCaptureCopy {
     }
 }
 
+/// Resolve the world page's published copy and runtime assets.
+#[must_use]
+pub(crate) fn world(branding: &views::brand::Branding) -> webapp::world_page::WorldContent {
+    let copy = |key: &str| {
+        let raw = shared_catalog()
+            .lookup(branding.brand_key.as_str(), key)
+            .expect("invariant: the world keys are present in shared.yaml");
+        interpolate(raw, branding.firm.site_name, branding.firm_email)
+    };
+    webapp::world_page::WorldContent {
+        head_title: format!("{} | World", branding.firm.site_name),
+        meta_description: copy("world.description"),
+        intro: copy("world.intro"),
+        page_title: "World".to_string(),
+        aster_asset_href: views::assets::asset_url(views::assets::ASTER_BOARD_KEY),
+        country_names: webapp::world_page::country_names(),
+    }
+}
+
 /// The lifetime estate offer, mapped from the catalog onto the page type.
 ///
 /// `webapp::home::EstateContent` mirrors `views::locales::EstateCopy` because
@@ -1973,6 +1992,8 @@ mod tests {
                 "signup.invalid",
                 "signup.rejected",
                 "signup.signin_required",
+                "world.description",
+                "world.intro",
             ]
             .into_iter()
             .map(str::to_owned),

@@ -14,6 +14,8 @@
 catalog_version: 1
 
 entries:
+  world.description: Explore a calculated astrocartography specimen map and resolve birth places to map coordinates. Birth details are processed within your request.
+  world.intro: Explore the calculated specimen map, then find map coordinates for your birth details.
   footer.ownership: Neon Law is a trademark of Neon Law IP LLC.
   signup.password_label: Password
   signup.existing: Sign in to an existing account

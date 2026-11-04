@@ -62,6 +62,8 @@ COPY billing           billing
 COPY billing-workflows billing-workflows
 COPY gateway gateway
 COPY sandbox-skills sandbox-skills
+COPY ephemeris ephemeris
+COPY geotime geotime
 # `sandbox-skills` embeds the vendored legal-aid plugin's SKILL.md files with
 # include_str!("../../vendor/legal-aid-plugin/..."), outside the crate dir,
 # so that tree must be staged too (deploy run 41431655963 failed on it).

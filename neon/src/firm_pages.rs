@@ -1035,6 +1035,18 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
             },
         ));
     }
+    // The Vesta `/world` calculated astrocartography page: brand-specific
+    // content (title, Aster artwork, country options) baked per brand here,
+    // the route itself 404'd off Vesta by `reject_unpublished_firm_path`.
+    // The country options resolve from the bundled GeoNames index at
+    // router-build time; they carry no visitor data.
+    let world_copy = branded_map(branding, "/world", |resolved| {
+        webapp::world_page::InjectedWorld(resolve_world_content(resolved))
+    });
+    routers.push(with_branded(
+        dioxus_app::world_router("/world", resolve_world_content(branding)),
+        world_copy,
+    ));
     let deployment_host = state.canonical_host.host();
     let home = resolve_firm_home_content(branding, deployment_host);
     // The home page (`/`): static copy plus the store's approved testimonials.
@@ -1535,6 +1547,15 @@ fn resolve_firm_contact_content(
         firm_phone: branding.firm_phone.to_string(),
         lead_capture: locales::lead_capture(branding),
     }
+}
+
+/// Resolve the `/world` page's content from the mounted `branding` — the
+/// wasm-safe [`webapp::world_page::WorldContent`] the Dioxus world router
+/// injects. The country options resolve from the bundled `GeoNames` index at
+/// router-build time and carry no visitor data; the Aster board resolves
+/// through the `asset_url` seam, which the wasm client does not link.
+fn resolve_world_content(branding: &views::brand::Branding) -> webapp::world_page::WorldContent {
+    locales::world(branding)
 }
 
 /// Resolve the firm home page's static copy from the mounted `branding` — the

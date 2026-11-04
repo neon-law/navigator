@@ -44,6 +44,10 @@ const ALLOWED: &[&str] = &[
     // `templates/notations/neon_law/onboarding__letter.md` — personnel the firm may
     // use on a matter, not the retired role vocabulary.
     "paralegals, staff, and outside vendors",
+    // GeoNames city names in `geotime/data/cities.tsv`, not application roles.
+    "flagstaff",
+    "staffanstorp",
+    "stafford",
 ];
 
 /// Directories the walk never descends into: build output, VCS metadata, and

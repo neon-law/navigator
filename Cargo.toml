@@ -26,8 +26,10 @@ members = [
     "billing",
     "billing-workflows",
     "sandbox-skills",
+    "ephemeris",
     "telemetry",
     "word",
+    "geotime",
 ]
 
 [workspace.package]
@@ -137,6 +139,10 @@ bs58 = "0.5"
 # for `restate-jwt`. Encoding is feature-gated in 3.x.
 ed25519-dalek = { version = "3", features = ["alloc", "pkcs8"] }
 hmac = "0.13"
+# DE440 + small-body SPK reading for the astrocartography calculator:
+# UTC→TAI→TT→TDB conversion with the leap-second table pinned by hifitime,
+# so the dynamical-time input of every SPK lookup is reproducible.
+hifitime = "4.3"
 jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
 # P-256 ECDSA — verifies SendGrid's Signed Event Webhook signature. Already
 # compiled in the tree via `jsonwebtoken`'s ES256 support, so this direct dep
@@ -242,6 +248,8 @@ opentelemetry-appender-tracing = "0.33"
 tracing-opentelemetry = "0.34"
 telemetry = { path = "telemetry" }
 views = { path = "views" }
+ephemeris = { path = "ephemeris" }
+geotime = { path = "geotime" }
 walkdir = "2.5"
 webapp = { path = "webapp" }
 wiremock = "0.6"
@@ -255,6 +263,8 @@ dbos = { version = "=0.5.0", default-features = false, features = ["engine"] }
 restate-jwt = { package = "jsonwebtoken", version = "10.4", default-features = false, features = ["rust_crypto"] }
 serde_yaml = "0.9"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock", "std"] }
+# Historical IANA offsets for `geotime` — tzdata compiled into the crate, no
+# system tzdata dependency.
 chrono-tz = "0.10"
 cucumber = "0.23"
 # `dotenvy` loads `.env` files at process start in every binary main().
