@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use portal::signature::StubSignatureProvider;
+use portal::signature::FakeSignatureProvider;
 use portal::AppState;
 use store::seed;
 use store::test_support::mem_surreal;
@@ -55,7 +55,7 @@ async fn build_app(tag: &str) -> (axum::Router, store::surreal::SurrealDb) {
         email.clone(),
         storage.clone(),
     ));
-    let stub = Arc::new(StubSignatureProvider::new());
+    let stub = Arc::new(FakeSignatureProvider::new());
     let state = AppState {
         storage,
         workflow_runtime,

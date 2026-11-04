@@ -758,7 +758,7 @@ async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
         policy: portal::policy::PolicyClient::passthrough(),
         workflow_runtime: std::sync::Arc::new(workflows::InMemoryRuntime::new()),
         questionnaire_runtime: std::sync::Arc::new(workflows::InMemoryRuntime::new()),
-        signature_provider: std::sync::Arc::new(portal::signature::StubSignatureProvider::new()),
+        signature_provider: std::sync::Arc::new(portal::signature::FakeSignatureProvider::new()),
         billing_provider: std::sync::Arc::new(portal::billing::StubBillingProvider::new()),
         contract_reviewer: std::sync::Arc::new(portal::contract_review::StubContractReviewer),
         integration_providers: std::sync::Arc::new(

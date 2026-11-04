@@ -3,7 +3,7 @@
 //!
 //! Proves the CLI drives the **existing** matter-open routes over an
 //! `Authorization: Bearer <SessionData>` credential — the same blob the
-//! browser cookie carries. CI-safe: the `StubSignatureProvider` records the
+//! browser cookie carries. CI-safe: the `FakeSignatureProvider` records the
 //! send, so nothing reaches DocuSign.
 //!
 //! Covers:
@@ -26,7 +26,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use portal::session::{now_unix_secs, SessionData};
-use portal::signature::StubSignatureProvider;
+use portal::signature::FakeSignatureProvider;
 use portal::{AppState, AuthConfig, SessionStore};
 use store::persons::Role;
 use store::seed;
@@ -41,7 +41,7 @@ async fn build_app(
 ) -> (
     axum::Router,
     store::surreal::SurrealDb,
-    Arc<StubSignatureProvider>,
+    Arc<FakeSignatureProvider>,
 ) {
     let repo_root = std::env::temp_dir().join(format!(
         "navigator-cli-bearer-repos-{tag}-{}",
@@ -66,7 +66,7 @@ async fn build_app(
         email.clone(),
         storage.clone(),
     ));
-    let stub = Arc::new(StubSignatureProvider::new());
+    let stub = Arc::new(FakeSignatureProvider::new());
     let state = AppState {
         // Auth ENFORCED via HS256 so the Bearer path is exercised for
         // real: a session blob must reach the handler through

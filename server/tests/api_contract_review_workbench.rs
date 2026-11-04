@@ -55,7 +55,7 @@ async fn harness() -> Harness {
     let admin_state = portal::admin::AdminState {
         surreal: surreal.clone(),
         workflow_runtime: runtime.clone(),
-        signature_provider: Arc::new(portal::signature::StubSignatureProvider::new()),
+        signature_provider: Arc::new(portal::signature::FakeSignatureProvider::new()),
         retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
         questionnaire_runtime: inner.clone(),
         storage: storage.clone(),

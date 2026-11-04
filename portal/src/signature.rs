@@ -3,18 +3,28 @@
 //! Step 3 of the workflow sends the rendered retainer out for
 //! external signature. Google Workspace eSignature has no public
 //! API today, so the workflow targets this small trait rather than
-//! a concrete vendor. The shipped [`StubSignatureProvider`] is what
-//! dev and tests use — it records every call to an internal Mutex
-//! so tests can assert that the step fired with the right inputs.
+//! a concrete vendor.
 //!
-//! Production plugs in a real provider (DocuSign, Dropbox Sign, …)
-//! behind the same trait — no changes to the workflow or handler.
-//! [`DocuSignSignatureProvider`] is the shipped concrete impl: it
-//! POSTs an envelope-create request to the DocuSign eSignature REST
-//! API and returns the `envelopeId` as the [`SignatureRequestId`]. The
-//! provider's later "completed" callback is received by
-//! [`crate::esignature_webhook`], which resolves the envelope id back
-//! to a notation and signals `signature_received`.
+//! Which provider runs is a boot decision, not an accident of the
+//! environment: [`SignatureProviderKind::from_env`] reads
+//! `NAVIGATOR_SIGNATURE_PROVIDER` — `fake` or `docusign`, nothing else,
+//! no implicit default. Unset or misspelled refuses to boot (naming the
+//! two accepted values), and `fake` refuses to boot in a production
+//! environment, so a demo can never pass for the real thing. The
+//! [`FakeSignatureProvider`] is what dev and tests use — it closes the
+//! whole loop locally: it records every call so tests can assert the
+//! step fired with the right inputs, envelopes persist to disk, anchors
+//! are validated against the prepared PDF's text, each recipient signs
+//! a real local page, and completion is delivered as a
+//! DocuSign-Connect-shaped HMAC-signed webhook.
+//!
+//! Production plugs in a real provider behind the same trait — no
+//! changes to the workflow or handler. [`DocuSignSignatureProvider`] is
+//! the shipped concrete impl: it POSTs an envelope-create request to
+//! the DocuSign eSignature REST API and returns the `envelopeId` as the
+//! [`SignatureRequestId`]. The provider's later "completed" callback is
+//! received by [`crate::esignature_webhook`], which resolves the
+//! envelope id back to a notation and signals `signature_received`.
 
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -25,6 +35,92 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::docusign_auth::DocuSignJwtAuth;
+
+/// The one environment value that selects the signature provider. There
+/// is no default: an unset value fails boot, so no "send for signature"
+/// button can look real while writing fake envelopes.
+pub const SIGNATURE_PROVIDER_ENV: &str = "NAVIGATOR_SIGNATURE_PROVIDER";
+
+/// Why a signature provider could not be selected at boot. Every
+/// variant names the fix: the accepted values (and, for `fake` in
+/// production, why it can never be the answer there).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SignatureProviderSelectionError {
+    #[error(
+        "{SIGNATURE_PROVIDER_ENV} is not set — the signature provider must be selected \
+         explicitly: set `fake` for the local signature loop or `docusign` for DocuSign \
+         eSignature (docs/docusign-esignature.md)"
+    )]
+    Unset,
+    #[error(
+        "{SIGNATURE_PROVIDER_ENV} must be `fake` or `docusign`, got `{0}` — there is no \
+         implicit default (docs/docusign-esignature.md)"
+    )]
+    Unknown(String),
+    #[error(
+        "{SIGNATURE_PROVIDER_ENV}=fake refuses to boot in a production environment — the \
+         fake provider creates envelopes with no legal weight; production must select \
+         `docusign`"
+    )]
+    FakeInProduction,
+}
+
+/// Which [`SignatureProvider`] implementation this boot runs. Selected
+/// once, at boot, from [`SIGNATURE_PROVIDER_ENV`]; there is no default
+/// and no fallback — a missing or unknown value is a boot error, and the
+/// fake refuses a production environment outright.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureProviderKind {
+    /// The local signature loop: envelopes on disk, local sign pages,
+    /// Connect-shaped HMAC webhooks. Dev and CI only — never production.
+    Fake,
+    /// The real DocuSign eSignature REST API.
+    DocuSign,
+}
+
+impl SignatureProviderKind {
+    /// Read [`SIGNATURE_PROVIDER_ENV`] from the process environment.
+    ///
+    /// # Errors
+    ///
+    /// Unset or unknown values, and `fake` under a production
+    /// [`store::config::DeploymentEnvironment`], all refuse to boot.
+    pub fn from_env() -> Result<Self, SignatureProviderSelectionError> {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// Selection over an injectable lookup so tests never touch the
+    /// process environment. The production-profile check mirrors
+    /// `enforce_deployment_invariants` (which runs earlier in the same
+    /// boot): an unset `NAVIGATOR_ENVIRONMENT` means production, so
+    /// `fake` there refuses too.
+    ///
+    /// # Errors
+    ///
+    /// See [`SignatureProviderSelectionError`] — every refusal names the
+    /// accepted values or the production invariant.
+    pub fn from_lookup<F: Fn(&str) -> Option<String>>(
+        get: F,
+    ) -> Result<Self, SignatureProviderSelectionError> {
+        // An empty value is as good as unset — a blank line in an env
+        // file must not masquerade as a selection.
+        let Some(value) = get(SIGNATURE_PROVIDER_ENV).filter(|v| !v.is_empty()) else {
+            return Err(SignatureProviderSelectionError::Unset);
+        };
+        match value.as_str() {
+            "fake" => {
+                let environment = store::config::DeploymentEnvironment::from_lookup(get)
+                    .map_err(|_| SignatureProviderSelectionError::FakeInProduction)?;
+                if environment == store::config::DeploymentEnvironment::Production {
+                    return Err(SignatureProviderSelectionError::FakeInProduction);
+                }
+                Ok(Self::Fake)
+            }
+            "docusign" => Ok(Self::DocuSign),
+            other => Err(SignatureProviderSelectionError::Unknown(other.to_string())),
+        }
+    }
+}
 
 /// Opaque identifier returned by the signature provider for a sent
 /// document. Used to correlate webhook callbacks later.
@@ -42,7 +138,7 @@ pub struct CompletedDocuments {
 }
 
 /// One captured `send_for_signature` invocation. Tests assert on
-/// the contents of [`StubSignatureProvider::calls`].
+/// the contents of [`FakeSignatureProvider::calls`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureCall {
     pub notation_id: Uuid,
@@ -188,12 +284,12 @@ pub trait SignatureProvider: Send + Sync {
 /// In-process stub. Records every call and hands back synthetic
 /// `stub-<notation_id>-<seq>` ids that are unique within the process.
 #[derive(Default)]
-pub struct StubSignatureProvider {
+pub struct FakeSignatureProvider {
     calls: Mutex<Vec<SignatureCall>>,
     recipient_views: Mutex<Vec<RecipientView>>,
 }
 
-impl StubSignatureProvider {
+impl FakeSignatureProvider {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -203,7 +299,7 @@ impl StubSignatureProvider {
     /// hold onto it across `await` points.
     #[must_use]
     pub fn calls(&self) -> Vec<SignatureCall> {
-        self.calls.lock().expect("stub provider lock").clone()
+        self.calls.lock().expect("fake provider lock").clone()
     }
 
     /// Snapshot of every [`RecipientView`] requested so far.
@@ -217,20 +313,20 @@ impl StubSignatureProvider {
     pub fn recipient_views(&self) -> Vec<RecipientView> {
         self.recipient_views
             .lock()
-            .expect("stub provider lock")
+            .expect("fake provider lock")
             .clone()
     }
 }
 
 #[async_trait]
-impl SignatureProvider for StubSignatureProvider {
+impl SignatureProvider for FakeSignatureProvider {
     async fn send_for_signature(
         &self,
         notation_id: Uuid,
         pdf: &[u8],
         manifest: &SignatureManifest,
     ) -> Result<SignatureRequestId, SignatureError> {
-        let mut calls = self.calls.lock().expect("stub provider lock");
+        let mut calls = self.calls.lock().expect("fake provider lock");
         let seq = calls.len() + 1;
         calls.push(SignatureCall {
             notation_id,
@@ -247,7 +343,7 @@ impl SignatureProvider for StubSignatureProvider {
     ) -> Result<String, SignatureError> {
         self.recipient_views
             .lock()
-            .expect("stub provider lock")
+            .expect("fake provider lock")
             .push(view.clone());
         // A deterministic fake signing URL so dev / KIND can exercise the
         // embedded-signing route without a real DocuSign account.
@@ -692,9 +788,10 @@ impl SignatureProvider for DocuSignSignatureProvider {
 #[cfg(test)]
 mod tests {
     use super::{
-        CachedToken, DocuSignSignatureProvider, RecipientView, SignatureField, SignatureFieldKind,
-        SignatureManifest, SignatureProvider, SignatureRecipient, SignatureRequestId,
-        StubSignatureProvider,
+        CachedToken, DocuSignSignatureProvider, FakeSignatureProvider, RecipientView,
+        SignatureField, SignatureFieldKind, SignatureManifest, SignatureProvider,
+        SignatureProviderKind, SignatureProviderSelectionError, SignatureRecipient,
+        SignatureRequestId, SIGNATURE_PROVIDER_ENV,
     };
     use crate::docusign_auth::{test_priv_pem, DocuSignJwtAuth};
     use base64::Engine;
@@ -755,9 +852,106 @@ mod tests {
         }
     }
 
+    // --- Explicit, fail-closed selection ---------------------------------
+    //
+    // The trap these tests pin shut: a "send for signature" button that
+    // quietly wrote fake envelopes. Selection must be an explicit boot
+    // decision with no default, and the fake must refuse production.
+
+    fn selection(
+        get: &[(&str, &str)],
+    ) -> Result<SignatureProviderKind, SignatureProviderSelectionError> {
+        let owned: Vec<(String, String)> = get
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        SignatureProviderKind::from_lookup(move |name| {
+            owned
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.clone())
+        })
+    }
+
+    #[test]
+    fn an_unset_provider_refuses_to_boot_naming_the_accepted_values() {
+        let err = selection(&[]).unwrap_err();
+        assert_eq!(err, SignatureProviderSelectionError::Unset);
+        assert!(err.to_string().contains(SIGNATURE_PROVIDER_ENV));
+        assert!(err.to_string().contains("`fake`"));
+        assert!(err.to_string().contains("`docusign`"));
+    }
+
+    #[test]
+    fn an_empty_provider_value_is_as_good_as_unset() {
+        assert_eq!(
+            selection(&[(SIGNATURE_PROVIDER_ENV, "")]).unwrap_err(),
+            SignatureProviderSelectionError::Unset
+        );
+    }
+
+    #[test]
+    fn an_unknown_provider_value_refuses_to_boot_naming_what_arrived() {
+        let err = selection(&[(SIGNATURE_PROVIDER_ENV, "stub")]).unwrap_err();
+        assert_eq!(
+            err,
+            SignatureProviderSelectionError::Unknown("stub".to_string())
+        );
+        assert!(err.to_string().contains("stub"));
+        assert!(err.to_string().contains("no implicit default"));
+    }
+
+    #[test]
+    fn the_fake_refuses_a_production_environment() {
+        // An unset NAVIGATOR_ENVIRONMENT IS the production profile, so
+        // the fake refuses there too — no dev-only var gets a default.
+        assert_eq!(
+            selection(&[(SIGNATURE_PROVIDER_ENV, "fake")]).unwrap_err(),
+            SignatureProviderSelectionError::FakeInProduction
+        );
+        assert_eq!(
+            selection(&[
+                (SIGNATURE_PROVIDER_ENV, "fake"),
+                ("NAVIGATOR_ENVIRONMENT", "production"),
+            ])
+            .unwrap_err(),
+            SignatureProviderSelectionError::FakeInProduction
+        );
+    }
+
+    #[test]
+    fn the_fake_selects_in_a_dev_environment() {
+        assert_eq!(
+            selection(&[
+                (SIGNATURE_PROVIDER_ENV, "fake"),
+                ("NAVIGATOR_ENVIRONMENT", "dev"),
+            ])
+            .unwrap(),
+            SignatureProviderKind::Fake
+        );
+    }
+
+    #[test]
+    fn docusign_selects_without_checking_the_environment_profile() {
+        // The real provider is valid in every profile, production
+        // included — selection for it never inspects NAVIGATOR_ENVIRONMENT.
+        assert_eq!(
+            selection(&[(SIGNATURE_PROVIDER_ENV, "docusign")]).unwrap(),
+            SignatureProviderKind::DocuSign
+        );
+        assert_eq!(
+            selection(&[
+                (SIGNATURE_PROVIDER_ENV, "docusign"),
+                ("NAVIGATOR_ENVIRONMENT", "production"),
+            ])
+            .unwrap(),
+            SignatureProviderKind::DocuSign
+        );
+    }
+
     #[tokio::test]
-    async fn stub_records_each_call_with_notation_id_and_pdf_len() {
-        let stub = StubSignatureProvider::new();
+    async fn fake_records_each_call_with_notation_id_and_pdf_len() {
+        let stub = FakeSignatureProvider::new();
         let id1 = stub
             .send_for_signature(ID42, b"<pdf bytes>", &retainer_manifest())
             .await
@@ -783,8 +977,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stub_calls_snapshot_is_shareable_after_more_calls() {
-        let stub = StubSignatureProvider::new();
+    async fn fake_calls_snapshot_is_shareable_after_more_calls() {
+        let stub = FakeSignatureProvider::new();
         stub.send_for_signature(ID1, b"a", &no_manifest())
             .await
             .unwrap();
@@ -991,8 +1185,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stub_create_recipient_view_returns_a_deterministic_url() {
-        let stub = StubSignatureProvider::new();
+    async fn fake_create_recipient_view_returns_a_deterministic_url() {
+        let stub = FakeSignatureProvider::new();
         let url = stub
             .create_recipient_view(
                 &SignatureRequestId("env-9".into()),
@@ -1157,8 +1351,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stub_returns_canned_completed_documents() {
-        let stub = StubSignatureProvider::new();
+    async fn fake_returns_canned_completed_documents() {
+        let stub = FakeSignatureProvider::new();
         let docs = stub
             .fetch_completed_documents(&SignatureRequestId("stub-1".into()))
             .await

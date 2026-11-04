@@ -157,7 +157,7 @@ pub async fn app_state_with_email(
         policy: policy_client,
         workflow_runtime,
         questionnaire_runtime: runtime,
-        signature_provider: Arc::new(portal::signature::StubSignatureProvider::new()),
+        signature_provider: Arc::new(portal::signature::FakeSignatureProvider::new()),
         billing_provider: Arc::new(portal::billing::StubBillingProvider::new()),
         contract_reviewer: Arc::new(portal::contract_review::StubContractReviewer),
         integration_providers: Arc::new(portal::integrations::UnconfiguredIntegrations::default()),

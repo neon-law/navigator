@@ -54,7 +54,7 @@ struct Fixture {
     sessions: SessionStore,
     /// The same handle the router holds, so a test can read back the
     /// `RecipientView` the handler actually built.
-    provider: Arc<portal::signature::StubSignatureProvider>,
+    provider: Arc<portal::signature::FakeSignatureProvider>,
     notation_id: Uuid,
     template_id: Uuid,
     project_id: Uuid,
@@ -139,7 +139,7 @@ async fn build() -> Fixture {
     .unwrap()
     .id;
 
-    let provider = Arc::new(portal::signature::StubSignatureProvider::new());
+    let provider = Arc::new(portal::signature::FakeSignatureProvider::new());
     let state = AppState {
         storage,
         sessions: SessionStore::new(KEY),

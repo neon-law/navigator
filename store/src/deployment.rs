@@ -133,14 +133,16 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
     required!(integration "DASH0_TOKEN" if "DASH0_ENDPOINT"),
     // DocuSign is declared by `DOCUSIGN_BASE_URL` and is otherwise absent.
     //
-    // A deployment that executes no documents supplies none of these and runs
-    // `StubSignatureProvider`. The stub is reachable only through genuine
-    // absence: `portal::signature::DocuSignSignatureProvider::from_env`
-    // returns `Some` for any non-empty value, so a placeholder would boot the
-    // *real* provider holding a credential DocuSign will reject — a green
-    // deploy that fails on the first signature request. Requiring the keys
-    // unconditionally left a placeholder as the only way to ship, which is why
-    // this is a trigger rather than five plain requirements.
+    // A deployment that executes no documents supplies none of these and
+    // selects `NAVIGATOR_SIGNATURE_PROVIDER=fake` — the explicit local
+    // signature loop. Provider selection is a boot decision with no
+    // default (`portal::signature::SignatureProviderKind::from_env`): an
+    // unset or unknown value refuses to boot, and `fake` refuses a
+    // production environment, so a placeholder credential can never boot
+    // the *real* provider and fail on the first signature request.
+    // Requiring the keys unconditionally left a placeholder as the only
+    // way to ship, which is why this is a trigger rather than five plain
+    // requirements.
     //
     // Declaring the integration still demands every key the real provider
     // reads, so a half-configured DocuSign remains a hard failure. Both
@@ -437,7 +439,7 @@ mod tests {
     /// operator would reach for is worse than the absence:
     /// `DocuSignSignatureProvider::from_env` returns `Some` for any non-empty
     /// value, so the *real* provider boots holding a fake credential and the
-    /// first signature request fails at runtime. `StubSignatureProvider` only
+    /// first signature request fails at runtime. `FakeSignatureProvider` only
     /// engages when DocuSign is genuinely unset.
     #[test]
     fn a_deployment_that_declares_no_docusign_is_asked_for_none() {

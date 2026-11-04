@@ -274,22 +274,37 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         crate::policy::PolicyClient::embedded().context("compiling embedded Rego policy")?;
     tracing::info!("policy client configured");
 
-    // Real DocuSign provider when the env is configured; otherwise the
-    // stub (KIND / local dev). The inbound completion webhook
-    // (`crate::esignature_webhook`) closes the loop in both cases — the
-    // stub's synthetic ids still persist + correlate.
+    // Explicit, fail-closed selection: `NAVIGATOR_SIGNATURE_PROVIDER`
+    // must name `fake` or `docusign`. An unset or unknown value refuses
+    // to boot — a "send for signature" button that quietly wrote fake
+    // envelopes is the demo-shaped failure this exists to prevent — and
+    // `fake` refuses a production environment inside the selection
+    // itself. The inbound completion webhook (`crate::esignature_webhook`)
+    // closes the loop in both cases — the fake's local ids still
+    // persist + correlate.
+    let signature_kind = crate::signature::SignatureProviderKind::from_env()
+        .context("selecting the signature provider")?;
     let signature_provider: std::sync::Arc<dyn crate::signature::SignatureProvider> =
-        crate::signature::DocuSignSignatureProvider::from_env().map_or_else(
-            || {
-                tracing::info!("signature provider: StubSignatureProvider (DOCUSIGN_* unset)");
-                std::sync::Arc::new(crate::signature::StubSignatureProvider::new())
-                    as std::sync::Arc<dyn crate::signature::SignatureProvider>
-            },
-            |ds| {
+        match signature_kind {
+            crate::signature::SignatureProviderKind::Fake => {
+                tracing::info!(
+                    "signature provider: FakeSignatureProvider (local signature loop; no DocuSign credentials)"
+                );
+                std::sync::Arc::new(crate::signature::FakeSignatureProvider::new())
+            }
+            crate::signature::SignatureProviderKind::DocuSign => {
+                let ds =
+                    crate::signature::DocuSignSignatureProvider::from_env().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "NAVIGATOR_SIGNATURE_PROVIDER=docusign requires DOCUSIGN_BASE_URL \
+                         and DOCUSIGN_ACCOUNT_ID (+ DOCUSIGN_ACCESS_TOKEN or the JWT-grant \
+                         vars — docs/docusign-esignature.md)"
+                        )
+                    })?;
                 tracing::info!("signature provider: DocuSignSignatureProvider");
                 std::sync::Arc::new(ds)
-            },
-        );
+            }
+        };
 
     // Firm-private provider resolution: the real resolver when both a
     // runtime KMS key and a parent Notion database are configured, else a
