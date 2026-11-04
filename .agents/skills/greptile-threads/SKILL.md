@@ -72,7 +72,7 @@ or project name, and follow [public contributor safety](../../../docs/public-con
 ## 4. Confirm, then watch for the re-review
 
 ```bash
-gh api graphql --paginate -f query='
+if ids=$(gh api graphql --paginate -f query='
 query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
   repository(owner:$owner,name:$repo){ pullRequest(number:$pr){
     reviewThreads(first:100, after:$endCursor){
@@ -81,15 +81,20 @@ query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
 }' -F owner=<owner> -F repo=<repo> -F pr=<N> \
   --jq '.data.repository.pullRequest.reviewThreads.nodes[]
         | select(.isResolved|not)
-        | select(.comments.nodes[0].author.login|test("greptile")) | .id' | wc -l
+        | select(.comments.nodes[0].author.login|test("greptile")) | .id'); then
+  printf '%s' "$ids" | grep -c .
+else
+  echo 'thread lookup failed: this is not a count of 0' >&2
+fi
 gh pr view <N> --json mergeStateStatus,autoMergeRequest
 ```
 
 The command pages through every thread and counts only the unresolved threads Greptile opened. That count must be `0`. A
-human reviewer's thread you left open is not counted here, but it still holds the merge under
-`required_review_thread_resolution`, so name it in the report as a blocker for its reviewer. Greptile reviews again
-after each push and can open new threads on the fix itself, so check again once its check run on the new head completes.
-The PR is not done until that review is answered too.
+failed lookup prints an error and no count, so rerun it rather than reading silence as zero. A human reviewer's thread
+you left open is not counted here, but it still holds the merge under `required_review_thread_resolution`, so name it in
+the report as a blocker for its reviewer. Greptile reviews again after each push and can open new threads on the fix
+itself, so check again once its check run on the new head completes. The PR is not done until that review is answered
+too.
 
 ## Report
 
