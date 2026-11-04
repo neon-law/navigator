@@ -66,6 +66,9 @@ NAVIGATOR_WORKFLOWS_HOST = "workflows.example.invalid"
 NAVIGATOR_WORKFLOWS_URL = "https://workflows.example.invalid/"
 # Public Restate Cloud request-signing key; synthetic fixture value.
 RESTATE_IDENTITY_KEY = "publickeyv1_test-identity-key"
+# Restate Cloud admin endpoint. `ops ship` registers the worker against the
+# `restate` CLI environment whose admin_base_url matches; synthetic value.
+RESTATE_ADMIN_URL = "https://restate-admin.example.invalid:9070"
 SLACK_GENERAL_CHANNEL_ID = "C0000000002"
 SLACK_FINANCE_CHANNEL_ID = "C0000000001"
 SLACK_MESSAGES_CHANNEL_ID = "C0000000003"

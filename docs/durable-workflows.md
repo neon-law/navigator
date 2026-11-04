@@ -243,9 +243,11 @@ is reachable. Two design points:
   (operator-session credentials exported for a headless run — never repository coordinates), `restate_register` POSTs
   `{"uri":<worker>,"force":true}` straight to the admin REST API — headless, needs no `restate cloud env configure`
   (which requires a TTY) and works with a non-expiring admin-scoped API key. Otherwise it shells out to the pinned
-  `restate` CLI, which only reaches Restate Cloud when the operator has a selected environment in
-  `~/.config/restate/config.toml` and a fresh SSO token; with neither, the CLI defaults to the `local` environment
-  (`localhost:9070`) and the step fails. Wiring the two env vars is what makes an unattended ship re-register reliably.
+  `restate` CLI with a fresh SSO token. For a deployment row (`ops ship`, or `ops restate register --deployment`) every
+  CLI command carries `-e <environment>`, naming the section of `~/.config/restate/config.toml` whose `admin_base_url`
+  is the row's `RESTATE_ADMIN_URL` coordinate, never the CLI's current environment, which can be the other row. A row
+  with no `RESTATE_ADMIN_URL`, or one no CLI environment holds, is refused by name. Wiring the two env vars is what
+  makes an unattended ship re-register reliably.
 - **It warns and continues — it does not gate the ship (yet).** A `:9070` admin endpoint that is firewalled from the
   operator's network, or an expired SSO token, would otherwise block every ship. Re-register is therefore best-effort: a
   failure prints `WARN: Restate re-register failed (continuing)` and the ship completes. The cost of warn-and-continue

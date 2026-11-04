@@ -2087,6 +2087,10 @@ pub struct ShipConfig {
     /// Public worker URL Restate Cloud dials (`NAVIGATOR_WORKFLOWS_URL`).
     /// `None` → fall through to the `devx restate register` default.
     pub workflows_url: Option<String>,
+    /// Restate Cloud admin endpoint (`RESTATE_ADMIN_URL`). Picks the
+    /// `restate` CLI environment the 7d re-register targets when no admin
+    /// token is exported; `None` refuses that path rather than guess.
+    pub restate_admin_url: Option<String>,
     /// `kubectl` context to pin every prod call to. Override with
     /// `NAVIGATOR_GKE_CONTEXT`; otherwise the GKE convention
     /// `gke_<project>_<location>_<cluster>`.
@@ -2134,6 +2138,7 @@ impl ShipConfig {
             .unwrap_or_else(|| "navigator-web".into());
         let secret_name = required_coordinate(name, "NAVIGATOR_WEB_SECRET_NAME", &get)?;
         let workflows_url = non_empty_env("NAVIGATOR_WORKFLOWS_URL", &get);
+        let restate_admin_url = non_empty_env(super::RESTATE_ADMIN_URL_KEY, &get);
         let context = non_empty_env("NAVIGATOR_GKE_CONTEXT", &get)
             .unwrap_or_else(|| derived_context(&project_id, &location, &cluster));
         Ok(Self {
@@ -2152,6 +2157,7 @@ impl ShipConfig {
             primary_domain,
             secret_name,
             workflows_url,
+            restate_admin_url,
             context,
         })
     }
@@ -2191,6 +2197,17 @@ impl ShipConfig {
             self.workflows_url.as_deref(),
             Some(&self.primary_domain),
         )
+    }
+
+    /// This row as the owner of the 7d re-register: its name and its
+    /// `RESTATE_ADMIN_URL`, so the `restate` CLI path targets this row's
+    /// environment and not the CLI's current one.
+    #[must_use]
+    pub fn restate_register_target(&self) -> super::RegisterTarget<'_> {
+        super::RegisterTarget {
+            deployment: &self.name,
+            admin_url: self.restate_admin_url.as_deref(),
+        }
     }
 }
 
@@ -5045,7 +5062,11 @@ fn reregister(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
     // Pass every resolved URL explicitly so ship targets the same endpoints
     // it printed, independent of the workflows-only environment resolver.
     for deployment in &deployments {
-        apply_registration_result(deployment, super::restate_register(Some(&deployment.url)))?;
+        let target = cfg.restate_register_target();
+        apply_registration_result(
+            deployment,
+            super::restate_register(Some(&deployment.url), Some(&target)),
+        )?;
     }
     Ok(())
 }
@@ -6349,6 +6370,7 @@ mod tests {
             primary_domain: "example.com".into(),
             secret_name: "navigator-web-secrets".into(),
             workflows_url: None,
+            restate_admin_url: None,
             context: "gke_my-org-prod_example-region_navigator".into(),
         }
     }
@@ -9464,6 +9486,31 @@ mod tests {
                 panic!("{name} must resolve every manifest substitution: {error}")
             });
         }
+    }
+
+    #[test]
+    fn reregister_targets_the_rows_own_restate_admin_url() {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/deployment-tree");
+        let mut deployment =
+            super::super::deployments::Deployment::load(&root, "example-deployment").unwrap();
+        deployment.coordinates.insert(
+            super::super::RESTATE_ADMIN_URL_KEY.into(),
+            "https://restate-admin.example.invalid:9070".into(),
+        );
+        let cfg = ShipConfig::from_deployment(&deployment).unwrap();
+        let target = cfg.restate_register_target();
+        assert_eq!(target.deployment, "example-deployment");
+        assert_eq!(
+            target.admin_url,
+            Some("https://restate-admin.example.invalid:9070")
+        );
+
+        deployment
+            .coordinates
+            .remove(super::super::RESTATE_ADMIN_URL_KEY);
+        let cfg = ShipConfig::from_deployment(&deployment).unwrap();
+        assert_eq!(cfg.restate_register_target().admin_url, None);
     }
 
     #[test]

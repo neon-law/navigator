@@ -493,6 +493,7 @@ mod tests {
             primary_domain: "neonlaw.com".into(),
             secret_name: "navigator-web-secrets".into(),
             workflows_url: None,
+            restate_admin_url: None,
             context: "gke_test-project_example-region_navigator".into(),
         }
     }
