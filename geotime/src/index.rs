@@ -96,21 +96,15 @@ impl Index {
         })
     }
 
-    /// The closest cities to `query`, preferring the given country; falls
-    /// back to a global search when the country holds no close match.
+    /// The closest cities to `query` within the given country, or globally
+    /// when no country is selected. A country without bundled cities has no suggestions.
     pub(crate) fn closest_cities(
         &self,
         query: &str,
         country_code: Option<&str>,
         limit: usize,
     ) -> Vec<CitySuggestion> {
-        let normalized = normalize(query);
-        let mut suggestions = self.suggestions_in(&normalized, country_code, limit);
-        if suggestions.is_empty() {
-            suggestions = self.suggestions_in(&normalized, None, limit);
-        }
-        suggestions.truncate(limit);
-        suggestions
+        self.suggestions_in(&normalize(query), country_code, limit)
     }
 
     fn suggestions_in(

@@ -237,3 +237,19 @@ fn shipped_notice_carries_geodata_attribution_and_modification_notice() {
         assert!(notice.contains(required), "shipped notice omits {required}");
     }
 }
+
+#[test]
+fn countries_without_cities_do_not_suggest_another_country() {
+    let date = NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid date");
+    for country in ["Netherlands Antilles", "Serbia and Montenegro"] {
+        let Err(ResolveError::UnknownCity { suggestions, .. }) =
+            geotime::resolve("London", country, date, None)
+        else {
+            panic!("this historical country has no bundled cities");
+        };
+        assert!(
+            suggestions.is_empty(),
+            "no suggested city is valid in the selected country"
+        );
+    }
+}
