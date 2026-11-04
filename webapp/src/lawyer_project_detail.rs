@@ -168,10 +168,12 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     let trust_held = view.trust.held.clone();
     let wip = view.wip.clone();
     let outstanding = view.outstanding.clone();
+    let unread_inbox = view.unread_inbox;
     let has_facts = deadline_count > 0
         || document_count > 0
         || people_count > 0
         || open_tasks > 0
+        || unread_inbox > 0
         || view.trust.any
         || wip.is_some()
         || outstanding.is_some();
@@ -186,6 +188,15 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
                 if open_tasks > 0 {
                     FactCard { title: "Open tasks".to_string(),
                         span { class: "lawyer-detail__fact-value", "{open_tasks}" }
+                    }
+                }
+                if unread_inbox > 0 {
+                    FactCard { title: "Unread correspondence".to_string(),
+                        a {
+                            href: format!("/app/projects/{}/inbox", view.code),
+                            class: "lawyer-detail__fact-value lawyer-detail__fact-link",
+                            "{unread_inbox}",
+                        }
                     }
                 }
                 if deadline_count > 0 {
@@ -324,6 +335,12 @@ pub struct LawyerDetailView {
     /// emails without a call (LAW-230); this is that log's surface.
     #[serde(default)]
     pub correspondence: Vec<CommunicationRow>,
+    /// Unread Inbox conversations assigned to this matter — the summary
+    /// grid's correspondence tile, deep-linking the existing per-project
+    /// inbox. Firm-wide as the Inbox keeps its read-state (there is no
+    /// per-participant read flag to derive a per-reader count from).
+    #[serde(default)]
+    pub unread_inbox: i64,
     /// The matter's tasks — assignable work with a state and an assignee,
     /// deliberately not the docket's deadlines. Empty when the deployment
     /// has no PostgreSQL configured (the task store is PostgreSQL-native).
@@ -700,6 +717,14 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let (notes, correspondence) =
         crate::lawyer_project_communications::communication_views(&thread, &authors);
 
+    // The summary grid's correspondence tile: unread Inbox conversations on
+    // this matter, a read-only count over the Inbox's own read-state. The
+    // reader's participation is already resolved by the `matter_viewer` seam
+    // above.
+    let unread_inbox = store::inbox::unread_count_for_project(&surreal, id)
+        .await
+        .map_err(server_error)?;
+
     let code_for_resources = project.code.clone();
     let page_tabs = crate::sections::page::stored_page_tabs(
         &surreal,
@@ -764,6 +789,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         past_deadlines: deadline_groups.past,
         notes,
         correspondence,
+        unread_inbox,
         tasks,
         task_assignees,
         stage,
@@ -1329,6 +1355,41 @@ mod tests {
         assert!(html.contains("$4,210"), "{html}");
         assert!(html.contains("Outstanding balance"), "{html}");
         assert!(html.contains("$1,850"), "{html}");
+    }
+
+    #[test]
+    fn fact_grid_renders_the_unread_correspondence_count_deep_linked() {
+        let view = LawyerDetailView {
+            code: "acme".to_string(),
+            unread_inbox: 2,
+            ..Default::default()
+        };
+
+        let html = dioxus_ssr::render_element(matter_fact_grid(&view));
+        assert!(html.contains("lawyer-detail__summary"), "{html}");
+        assert!(html.contains("Unread correspondence"), "{html}");
+        // The tile deep-links the matter's own inbox — the existing
+        // per-project surface, not a re-built one.
+        assert!(
+            html.contains(r#"href="/app/projects/acme/inbox""#),
+            "{html}"
+        );
+        assert!(html.contains(">2<"), "{html}");
+    }
+
+    #[test]
+    fn a_zero_unread_count_leaves_no_correspondence_tile() {
+        // Zero unread is a fact the matter does not have — no tile, like
+        // every other absent fact in the grid.
+        let view = LawyerDetailView {
+            code: "acme".to_string(),
+            unread_inbox: 0,
+            ..Default::default()
+        };
+
+        let html = dioxus_ssr::render_element(matter_fact_grid(&view));
+        assert!(!html.contains("Unread correspondence"), "{html}");
+        assert!(!html.contains("/app/projects/acme/inbox"), "{html}");
     }
 
     #[test]
