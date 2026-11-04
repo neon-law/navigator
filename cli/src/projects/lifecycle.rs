@@ -888,6 +888,32 @@ The Firm will represent the client.
     }
 
     #[test]
+    fn a_migrated_letter_passes_the_gate_rules_and_questionnaire_paths() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("drafts")).unwrap();
+        std::fs::write(
+            root.path().join("drafts/engagement__letter.md"),
+            legacy_letter(),
+        )
+        .unwrap();
+        super::migrate_letter(root.path()).unwrap();
+        let contents =
+            std::fs::read_to_string(root.path().join("drafts/onboarding__letter.md")).unwrap();
+        let rule_set =
+            rules::navigator_default_rules_with_codes(&rules::canonical_question_codes());
+        let source = rules::SourceFile {
+            path: "onboarding__letter.md".into(),
+            contents,
+        };
+        let errors: Vec<_> = rule_set
+            .iter()
+            .flat_map(|rule| rule.lint(&source))
+            .filter(|violation| rules::severity_for_code(violation.code) == rules::Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
     fn migration_replaces_an_unedited_canonical_stub() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("drafts")).unwrap();
