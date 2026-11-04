@@ -625,6 +625,56 @@ async fn stock_local_personas_reach_the_litigation_matter_through_their_own_lens
     client_browser.close().await.unwrap();
 }
 
+/// The Billing tab on the stock KIND deployment (which carries no app-side
+/// PostgreSQL): the tab opens from `?tab=billing` and its empty sections
+/// explain themselves instead of rendering blank regions. Captured time,
+/// fee structures, and the mirror's invoices need a PostgreSQL-backed
+/// deployment, so their rows are asserted by the store, API, and SSR
+/// suites; this test pins the tab's presence and its empty-state contract
+/// in a real browser.
+#[tokio::test]
+async fn the_billing_tab_opens_and_its_empty_sections_explain_themselves() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+    let url = format!(
+        "{}/app/projects/{}?tab=billing",
+        base_url(),
+        store::seed::SAMPLE_LITIGATION_CODE
+    );
+    // The reload-aware wait rides out a workbench that is still settling
+    // after the deploy's rollout; the empty time section is the deepest
+    // assertion below it, so wait on it rather than the tab heading.
+    wait_for_text_reloading(
+        &c,
+        &url,
+        "No time logged on this matter yet",
+        Duration::from_secs(30),
+    )
+    .await;
+    let source = c.source().await.expect("the billing page source");
+    assert!(
+        c.find_all(Locator::Css(".error-page"))
+            .await
+            .unwrap()
+            .is_empty(),
+        "the billing tab landed on an error page: {source}"
+    );
+    assert!(source.contains("<h2>Billing</h2>"), "{source}");
+    for text in [
+        "No hourly rate is on file",
+        "Nothing to invoice yet",
+        "No expenses on this matter yet",
+    ] {
+        assert!(
+            source.contains(text),
+            "the billing tab should explain its absence: {text:?} — {source}"
+        );
+    }
+    c.close().await.unwrap();
+}
+
 /// Run the shared synthetic portfolio scenarios through the real local
 /// Rauthy login and browser renderer. The same table drives the API runner;
 /// every visible and absent fact, route, actor, and screenshot path is read
