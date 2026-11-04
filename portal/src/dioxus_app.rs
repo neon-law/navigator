@@ -4908,6 +4908,9 @@ pub const APP_BRAND_WEBSITE_PATH: &str = "/app/admin/brands/{key}/website";
 /// (`store::firms::attach_own_brand`).
 pub const APP_BRAND_ATTACH_PATH: &str = "/app/admin/brands/{key}/attach";
 
+/// Save the Brand's Letterhead (`store::brand_letterheads::save_for_actor`).
+pub const APP_BRAND_LETTERHEAD_PATH: &str = "/app/admin/brands/{key}/letterhead";
+
 /// Native POST twin of `PATCH /app/api/brands/{key}` so the edit form stays
 /// a classic navigation, plus the website and attach forms on the same page.
 pub fn app_brands_edit_post_router(
@@ -4928,6 +4931,10 @@ pub fn app_brands_edit_post_router(
         .route(
             APP_BRAND_ATTACH_PATH,
             axum::routing::post(crate::brand_edit::post_brand_attach),
+        )
+        .route(
+            APP_BRAND_LETTERHEAD_PATH,
+            axum::routing::post(crate::brand_edit::post_brand_letterhead),
         )
         .with_state(surreal)
         .layer(from_fn_with_state(

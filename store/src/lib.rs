@@ -84,6 +84,7 @@ pub mod authorities;
 pub mod billed_calls;
 pub mod billing_batches;
 pub mod brand_domains;
+pub mod brand_letterheads;
 pub mod brand_phone_numbers;
 pub mod brands;
 pub mod cap_table_holdings;
