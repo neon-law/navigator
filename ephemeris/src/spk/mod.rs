@@ -406,12 +406,21 @@ impl Ephemeris {
         // Later files take precedence over earlier ones. Only ICRF/J2000
         // (frame 1) segments can serve barycentric positions; DE440 and the
         // Horizons Chiron SPK are entirely frame 1.
+        let mut coverage: Option<(f64, f64)> = None;
         for file in self.files.iter().rev() {
-            if let Some(segment) = file
+            for segment in file
                 .segments
                 .iter()
-                .find(|s| s.target == target && s.frame == 1)
+                .filter(|s| s.target == target && s.frame == 1)
             {
+                coverage = Some(
+                    coverage.map_or((segment.start, segment.end), |(start, end)| {
+                        (start.min(segment.start), end.max(segment.end))
+                    }),
+                );
+                if t < segment.start || t > segment.end {
+                    continue;
+                }
                 let relative = file.evaluate(target, segment.center, t)?;
                 let anchor = self.position_bary(segment.center, t, depth + 1)?;
                 return Ok([
@@ -421,7 +430,15 @@ impl Ephemeris {
                 ]);
             }
         }
-        Err(EphemerisError::UnknownBody { naif_id: target })
+        match coverage {
+            Some((coverage_start, coverage_end)) => Err(EphemerisError::OutsideCoverage {
+                naif_id: target,
+                tdb_seconds: t,
+                coverage_start,
+                coverage_end,
+            }),
+            None => Err(EphemerisError::UnknownBody { naif_id: target }),
+        }
     }
 }
 
@@ -683,6 +700,51 @@ mod tests {
         let t = TdbSeconds(DAY / 2.0);
         let position = ephemeris.barycentric_position_id(399, t).expect("covered");
         assert_eq!(position, [11.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn later_kernels_only_override_dates_they_cover() {
+        let constant = |target, center, start, duration, value| {
+            synthetic_type2(
+                target,
+                center,
+                start,
+                duration,
+                &[(
+                    start + duration / 2.0,
+                    duration / 2.0,
+                    &[value, 0.0],
+                    &[0.0, 0.0],
+                    &[0.0, 0.0],
+                )],
+            )
+        };
+        let ephemeris = Ephemeris::new(vec![
+            constant(3, 0, 0.0, 10.0, 1.0),
+            constant(10, 0, 0.0, 10.0, 100.0),
+            constant(3, 10, 4.0, 2.0, 2.0),
+        ]);
+        for (time, expected) in [(0.0, 1.0), (4.0, 102.0), (6.0, 102.0), (10.0, 1.0)] {
+            assert_eq!(
+                ephemeris
+                    .barycentric_position_id(3, TdbSeconds(time))
+                    .expect("covered date"),
+                [expected, 0.0, 0.0]
+            );
+        }
+        for time in [-1.0, 11.0] {
+            assert!(
+                matches!(
+                    ephemeris.barycentric_position_id(3, TdbSeconds(time)),
+                    Err(EphemerisError::OutsideCoverage {
+                        coverage_start: 0.0,
+                        coverage_end: 10.0,
+                        ..
+                    })
+                ),
+                "only dates outside every matching segment are uncovered"
+            );
+        }
     }
 
     #[test]
