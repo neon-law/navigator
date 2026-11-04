@@ -1371,6 +1371,10 @@ mod tests {
                 "20261103010000_create_matter_billing_batch.sql",
                 include_str!("../postgres/migrations/20261103010000_create_matter_billing_batch.sql"),
             ),
+            (
+                "20261103120000_create_brand_letterhead.sql",
+                include_str!("../postgres/migrations/20261103120000_create_brand_letterhead.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

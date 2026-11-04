@@ -4,7 +4,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Card, Field, FormCard, Heading, Icon, IconName, SocialMarkGlyph};
+use crate::components::{Card, Choice, Field, FormCard, Heading, Icon, IconName, SocialMarkGlyph};
 use crate::people::ViewerRole;
 
 /// Everything the edit page renders.
@@ -32,6 +32,10 @@ pub struct BrandsEditView {
     /// Whether the Firm that owns this row wears it (`firm_brand`).
     #[serde(default)]
     pub worn_by_firm: bool,
+    /// The Brand's Letterhead form, or `None` when its PostgreSQL store is
+    /// not reachable on this deployment.
+    #[serde(default)]
+    pub letterhead: Option<LetterheadView>,
     pub csrf_token: String,
     #[serde(default)]
     pub error: Option<String>,
@@ -69,6 +73,42 @@ impl SocialAccountView {
     }
 }
 
+/// Prefill for the Letterhead form: what an admin set (blank when unset), and
+/// what each blank line falls back to, shown as help.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct LetterheadView {
+    pub wordmark: String,
+    /// `wordmark` or `logo`.
+    pub mark: String,
+    pub phone: String,
+    pub email: String,
+    pub site_url: String,
+    pub postal_address: String,
+    pub font_family: String,
+    /// The Brand's uploaded font families a letterhead may be set in.
+    #[serde(default)]
+    pub font_choices: Vec<String>,
+    /// Whether the Brand has an uploaded logo to head the letterhead.
+    #[serde(default)]
+    pub has_logo: bool,
+    /// The Brand's name, the wordmark's fallback.
+    #[serde(default)]
+    pub default_wordmark: String,
+    /// `contact@<brand host>`, the email's fallback, when the Brand has a site.
+    #[serde(default)]
+    pub default_email: Option<String>,
+    /// The Brand's approved website, the site's fallback.
+    #[serde(default)]
+    pub default_site_url: Option<String>,
+    /// The legal name of the Firm that owns the Brand, printed as-is.
+    #[serde(default)]
+    pub firm_legal_name: Option<String>,
+    /// The face a letter wears when no font is chosen: the Brand's own
+    /// uploaded face, or `None` for the renderer's default.
+    #[serde(default)]
+    pub default_font_family: Option<String>,
+}
+
 /// Prefill for the presentation form and the read-only upload status.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct BrandPresentationFields {
@@ -103,6 +143,8 @@ pub struct BrandsEditQuery {
     pub website_saved: bool,
     #[serde(default)]
     pub attached: bool,
+    #[serde(default)]
+    pub saved: Option<String>,
 }
 
 /// Load the edit form for `{key}`.
@@ -146,9 +188,12 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
         social_selections: std::collections::BTreeMap::default(),
         website_url: None,
         worn_by_firm: false,
+        letterhead: None,
         csrf_token,
         error: query.error.clone(),
-        notice: if query.website_saved {
+        notice: if query.saved.as_deref() == Some("letterhead") {
+            Some("The letterhead is saved.".to_string())
+        } else if query.website_saved {
             Some("The website is saved.".to_string())
         } else if query.attached {
             Some("The Firm now wears this Brand.".to_string())
@@ -254,7 +299,18 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
         None => false,
     };
 
+    // The pool is cached once connected, so an outage after that surfaces
+    // from `find`, not `from_env`: either way the Letterhead section says it
+    // is unavailable and every other Brand setting stays editable.
+    let letterhead = match store::postgres::PostgresDb::from_env().await {
+        Ok(pg) => {
+            letterhead_or_unavailable(&brand, store::brand_letterheads::find(&pg, brand.id).await)
+        }
+        Err(_) => None,
+    };
+
     Ok(BrandsEditView {
+        letterhead,
         fields: Some(BrandPresentationFields {
             name: brand.name,
             typeface: brand.typeface.unwrap_or_default(),
@@ -277,6 +333,65 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
         worn_by_firm,
         ..base
     })
+}
+
+/// The Letterhead form for a stored-row read, or `None` (the unavailable
+/// section) when the read failed.
+#[cfg(feature = "server")]
+fn letterhead_or_unavailable(
+    brand: &store::brands::Brand,
+    read: Result<
+        Option<store::brand_letterheads::LetterheadFields>,
+        store::brand_letterheads::LetterheadError,
+    >,
+) -> Option<LetterheadView> {
+    match read {
+        Ok(stored) => Some(letterhead_view(brand, stored.as_ref())),
+        Err(error) => {
+            tracing::error!(%error, brand = %brand.key, "brand letterhead read failed");
+            None
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+fn letterhead_view(
+    brand: &store::brands::Brand,
+    stored: Option<&store::brand_letterheads::LetterheadFields>,
+) -> LetterheadView {
+    let fallback = store::brand_letterheads::resolve(brand, None);
+    let stored = stored.cloned().unwrap_or_default();
+    // A blank email falls back to `contact@` the letterhead's own site, so
+    // the help resolves with the stored site and the email cleared.
+    let default_email = store::brand_letterheads::resolve(
+        brand,
+        Some(&store::brand_letterheads::LetterheadFields {
+            email: None,
+            ..stored.clone()
+        }),
+    )
+    .email;
+    LetterheadView {
+        wordmark: stored.wordmark.unwrap_or_default(),
+        mark: stored.mark.as_str().to_string(),
+        phone: stored.phone.unwrap_or_default(),
+        email: stored.email.unwrap_or_default(),
+        site_url: stored.site_url.unwrap_or_default(),
+        postal_address: stored.postal_address.unwrap_or_default(),
+        font_family: stored.font_family.unwrap_or_default(),
+        font_choices: brand
+            .font_family
+            .clone()
+            .filter(|_| brand.font_object_key.is_some())
+            .into_iter()
+            .collect(),
+        has_logo: brand.logo_object_key.is_some(),
+        default_wordmark: fallback.wordmark,
+        default_email,
+        default_font_family: fallback.font_family,
+        default_site_url: brand.website_url.clone(),
+        firm_legal_name: fallback.firm_legal_name,
+    }
 }
 
 #[cfg(feature = "server")]
@@ -552,6 +667,95 @@ fn website_section(view: &BrandsEditView) -> Element {
     }
 }
 
+fn letterhead_fields(letterhead: &LetterheadView) -> Vec<Field> {
+    let mut marks = vec![Choice::new("wordmark", "Wordmark")];
+    if letterhead.has_logo || letterhead.mark == "logo" {
+        marks.push(Choice::new("logo", "Uploaded logo"));
+    }
+    let mut fonts = vec![Choice::new(
+        "",
+        match &letterhead.default_font_family {
+            Some(family) => format!("The Brand's face, {family}"),
+            None => "The letter's default face".to_string(),
+        },
+    )];
+    fonts.extend(
+        letterhead
+            .font_choices
+            .iter()
+            .map(|family| Choice::new(family, family)),
+    );
+    vec![
+        Field::select("Mark", "mark", marks, Some(letterhead.mark.clone()))
+            .help("What heads the letter: the wordmark, or the Brand's uploaded logo."),
+        Field::text("Wordmark", "wordmark", letterhead.wordmark.clone()).help(format!(
+            "Leave blank to use the Brand name, {}.",
+            letterhead.default_wordmark
+        )),
+        Field::input("Contact phone", "phone", letterhead.phone.clone(), "tel")
+            .help("As a reader dials it, for example +1 555 010 0000. Leave blank to print none."),
+        Field::email("Contact email", "email", letterhead.email.clone()).help(
+            match &letterhead.default_email {
+                Some(default) => format!("Leave blank to use {default}."),
+                None => {
+                    "Leave blank to print none until the Brand has an approved website.".to_string()
+                }
+            },
+        ),
+        Field::input("Site URL", "site_url", letterhead.site_url.clone(), "url").help(
+            match &letterhead.default_site_url {
+                Some(default) => format!("https only. Leave blank to use {default}."),
+                None => "https only, for example https://www.example.com.".to_string(),
+            },
+        ),
+        Field::textarea(
+            "Postal address",
+            "postal_address",
+            letterhead.postal_address.clone(),
+            3,
+        )
+        .help("One line per row. Leave blank to print none."),
+        Field::select(
+            "Letterhead font",
+            "font_family",
+            fonts,
+            Some(letterhead.font_family.clone()),
+        )
+        .help("One of this Brand's uploaded fonts."),
+    ]
+}
+
+fn letterhead_section(view: &BrandsEditView) -> Element {
+    rsx! {
+        section { id: "brand-letterhead",
+            match &view.letterhead {
+                Some(letterhead) => rsx! {
+                    FormCard {
+                        title: "Letterhead".to_string(),
+                        action: format!("/app/admin/brands/{}/letterhead", view.key),
+                        submit_label: "Save letterhead".to_string(),
+                        heading: Heading::H2,
+                        csrf_token: Some(view.csrf_token.clone()),
+                        fields: letterhead_fields(letterhead),
+                    }
+                    p { class: "muted",
+                        match &letterhead.firm_legal_name {
+                            Some(name) => rsx! { "Letters name the Firm as {name}." },
+                            None => rsx! { "Letters name no Firm until this Brand belongs to one." },
+                        }
+                    }
+                },
+                None => rsx! {
+                    Card {
+                        header: rsx! { h2 { "Letterhead" } },
+                        p { class: "muted", "Letterhead storage is unavailable on this deployment." }
+                    }
+                },
+            }
+        }
+    }
+}
+
 fn firm_section(view: &BrandsEditView) -> Element {
     rsx! {
         section { id: "brand-firm",
@@ -604,6 +808,7 @@ pub fn brands_edit_body(view: &BrandsEditView) -> Element {
                     {social_accounts(view)}
                     {presentation_form(view, fields)}
                     {website_section(view)}
+                    {letterhead_section(view)}
                     {firm_section(view)}
                     {logo_status(fields)}
                     {font_status(view, fields)}
@@ -638,9 +843,151 @@ mod tests {
             social_selections: std::collections::BTreeMap::default(),
             website_url: None,
             worn_by_firm: false,
+            letterhead: None,
             error: None,
             notice: None,
         }
+    }
+
+    fn letterhead() -> LetterheadView {
+        LetterheadView {
+            wordmark: String::new(),
+            mark: "wordmark".into(),
+            phone: "+1 555 010 0000".into(),
+            email: String::new(),
+            site_url: String::new(),
+            postal_address: "1 Main St\nSpringfield".into(),
+            font_family: "Custom Sans".into(),
+            font_choices: vec!["Custom Sans".into()],
+            has_logo: false,
+            default_wordmark: "Neon Law".into(),
+            default_email: Some("contact@example.com".into()),
+            default_site_url: Some("https://www.example.com".into()),
+            firm_legal_name: Some("Example Law PC".into()),
+            default_font_family: None,
+        }
+    }
+
+    #[test]
+    fn the_blank_font_choice_names_the_face_a_letter_actually_wears() {
+        let mut view = view(Some(fields()));
+        view.letterhead = Some(letterhead());
+        let html = dioxus_ssr::render_element(brands_edit_body(&view));
+        assert!(html.contains("default face"), "{html}");
+
+        view.letterhead.as_mut().unwrap().default_font_family = Some("Custom Sans".into());
+        let html = dioxus_ssr::render_element(brands_edit_body(&view));
+        assert!(html.contains("face, Custom Sans"), "{html}");
+        assert!(!html.contains("default face"), "{html}");
+    }
+
+    #[cfg(feature = "server")]
+    fn store_brand() -> store::brands::Brand {
+        store::brands::Brand {
+            id: uuid::Uuid::from_u128(7),
+            name: "Example Law".into(),
+            key: "example".into(),
+            firm_id: None,
+            primary_color: None,
+            accent_color: None,
+            typeface: Some("uploaded".into()),
+            is_law_firm: true,
+            legal_entity: Some("Example Law PC".into()),
+            logo_object_key: None,
+            logo_content_type: None,
+            font_family: Some("Example Serif".into()),
+            font_object_key: Some("fonts/brands/example/abc.woff2".into()),
+            font_licence: None,
+            website_url: Some("https://www.example.com".into()),
+            inserted_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn the_email_help_follows_the_letterheads_own_site() {
+        let stored = store::brand_letterheads::LetterheadFields {
+            email: Some("hello@example.net".into()),
+            site_url: Some("https://www.example.org".into()),
+            ..store::brand_letterheads::LetterheadFields::default()
+        };
+        let view = letterhead_view(&store_brand(), Some(&stored));
+        assert_eq!(view.default_email.as_deref(), Some("contact@example.org"));
+        assert_eq!(view.default_font_family.as_deref(), Some("Example Serif"));
+        let unset = letterhead_view(&store_brand(), None);
+        assert_eq!(unset.default_email.as_deref(), Some("contact@example.com"));
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn a_failed_letterhead_read_shows_the_unavailable_section() {
+        let failed = letterhead_or_unavailable(
+            &store_brand(),
+            // Any read error; a down pool reports `Database`, which this crate
+            // cannot build without `sqlx`.
+            Err(store::brand_letterheads::LetterheadError::NotFound),
+        );
+        assert!(failed.is_none());
+        assert!(letterhead_or_unavailable(&store_brand(), Ok(None)).is_some());
+    }
+
+    #[test]
+    fn the_letterhead_form_posts_every_line_and_names_its_fallbacks() {
+        let mut view = view(Some(fields()));
+        view.letterhead = Some(letterhead());
+        let html = dioxus_ssr::render_element(brands_edit_body(&view));
+        assert_forms_accessible(&html, "brand letterhead");
+        assert!(
+            html.contains(r#"action="/app/admin/brands/neon/letterhead""#),
+            "{html}"
+        );
+        for name in [
+            "mark",
+            "wordmark",
+            "phone",
+            "email",
+            "site_url",
+            "postal_address",
+            "font_family",
+        ] {
+            assert!(
+                html.contains(&format!(r#"name="{name}""#)),
+                "{name}: {html}"
+            );
+        }
+        assert!(html.contains(r#"value="+1 555 010 0000""#), "{html}");
+        assert!(html.contains("1 Main St"), "{html}");
+        assert!(
+            html.contains("Leave blank to use contact@example.com."),
+            "{html}"
+        );
+        assert!(
+            html.contains("Leave blank to use the Brand name, Neon Law."),
+            "{html}"
+        );
+        assert!(html.contains(r#"value="Custom Sans""#), "{html}");
+        assert!(
+            html.contains("Letters name the Firm as Example Law PC."),
+            "{html}"
+        );
+        assert!(
+            !html.contains(r#"value="logo""#),
+            "no logo, no logo mark: {html}"
+        );
+
+        let mut with_logo = view.clone();
+        with_logo.letterhead.as_mut().unwrap().has_logo = true;
+        let html = dioxus_ssr::render_element(brands_edit_body(&with_logo));
+        assert!(html.contains(r#"value="logo""#), "{html}");
+    }
+
+    #[test]
+    fn an_unreachable_letterhead_store_says_so() {
+        let html = dioxus_ssr::render_element(brands_edit_body(&view(Some(fields()))));
+        assert!(html.contains("id=\"brand-letterhead\""), "{html}");
+        assert!(html.contains("Letterhead storage is unavailable"), "{html}");
+        assert!(!html.contains("/letterhead\""), "{html}");
     }
 
     #[test]

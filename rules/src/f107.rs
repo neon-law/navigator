@@ -320,6 +320,12 @@ fn scan_placeholders(
         if questionnaire_states.contains(ph.signer.as_str()) || loops.contains(ph.signer.as_str()) {
             continue;
         }
+        // The Firm's legal name is a render binding, filled from the Project's
+        // Brand. It shares the `firm.` prefix with the signature anchors and
+        // is not itself a signature field.
+        if ph.signer == "firm" && ph.field == "legal_name" {
+            continue;
+        }
         scan.saw_relevant = true;
         let signer_ok = set.contains(&ph.signer);
         let field_ok = F107SignaturePlaceholders::FIELDS.contains(&ph.field.as_str());
@@ -519,6 +525,12 @@ mod tests {
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].code, "N107");
         assert!(v[0].message.contains("unknown signer role `spouse`"));
+    }
+
+    #[test]
+    fn a_firm_legal_name_binding_is_not_a_signature_field() {
+        let body = "---\nkind: letter\ntitle: Letter\n---\n\n{{firm.legal_name}}\n";
+        assert!(F107SignaturePlaceholders.lint(&file(body)).is_empty());
     }
 
     #[test]

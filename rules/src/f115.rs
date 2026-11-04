@@ -354,6 +354,10 @@ fn handle_path(
     if head == "project" && tail == "onboarding_jurisdiction" {
         return;
     }
+    // The Firm's legal name is filled from the Project's Brand at render.
+    if head == "firm" && tail == "legal_name" {
+        return;
+    }
     // A loop variable resolves against its aggregate row shape.
     if let Some((_, agg)) = loops.iter().find(|(v, _)| v == head) {
         if agg.is_empty() {
@@ -490,6 +494,15 @@ mod tests {
         );
         let findings = F115PathResolution.lint(&file(&unknown));
         assert!(findings.iter().any(|finding| finding.code == "N115"),);
+    }
+
+    #[test]
+    fn a_firm_legal_name_path_resolves_from_the_brand() {
+        let body = tmpl(
+            "  BEGIN:\n    _: person__trustor\n  person__trustor:\n    _: END\n  END: {}\n",
+            "Sincerely, {{firm.legal_name}}.",
+        );
+        assert!(F115PathResolution.lint(&file(&body)).is_empty());
     }
 
     #[test]

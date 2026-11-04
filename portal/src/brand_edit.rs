@@ -137,3 +137,141 @@ pub async fn post_brand_attach(
         Err(error) => back_to_edit(&key, Some(("error", &error.user_message()))),
     }
 }
+
+/// The Letterhead form. Blank fields clear back to the Brand's own fallback.
+#[derive(Debug, Deserialize)]
+pub struct BrandLetterheadForm {
+    #[serde(default)]
+    pub wordmark: String,
+    #[serde(default)]
+    pub mark: String,
+    #[serde(default)]
+    pub phone: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub site_url: String,
+    #[serde(default)]
+    pub postal_address: String,
+    #[serde(default)]
+    pub font_family: String,
+}
+
+impl BrandLetterheadForm {
+    fn into_fields(self) -> Result<store::brand_letterheads::LetterheadFields, String> {
+        let mark = match self.mark.trim() {
+            "" => store::brand_letterheads::LetterheadMark::default(),
+            value => store::brand_letterheads::LetterheadMark::parse(value).ok_or_else(|| {
+                "The letterhead mark must be the wordmark or the logo.".to_string()
+            })?,
+        };
+        Ok(store::brand_letterheads::LetterheadFields {
+            wordmark: Some(self.wordmark),
+            mark,
+            phone: Some(self.phone),
+            email: Some(self.email),
+            site_url: Some(self.site_url),
+            postal_address: Some(self.postal_address),
+            font_family: Some(self.font_family),
+        })
+    }
+}
+
+/// `POST /app/admin/brands/{key}/letterhead` — an Owner, or the Admin DRI of
+/// the Brand's own Firm, sets the Brand's Letterhead. Every other caller gets
+/// the same 404 an unknown Brand does.
+pub async fn post_brand_letterhead(
+    State(surreal): State<store::surreal::SurrealDb>,
+    Path(key): Path<String>,
+    session: Option<Extension<SessionData>>,
+    Form(form): Form<BrandLetterheadForm>,
+) -> Response {
+    let Some(Extension(session)) = session else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    // Authorize before anything else is said, so a caller who may not edit
+    // this Brand gets the non-disclosing 404 whatever the form or storage.
+    // `save_for_actor` repeats the gate on the write itself.
+    match store::brands::find_by_key_for_actor(&surreal, session.role, session.person_id, &key)
+        .await
+    {
+        Ok(_) => {}
+        Err(
+            store::brands::BrandError::NotAuthorized
+            | store::brands::BrandError::NoSuchBrand(_)
+            | store::brands::BrandError::NoSuchFirm(_),
+        ) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, "brand letterhead lookup failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+    let fields = match form.into_fields() {
+        Ok(fields) => fields,
+        Err(message) => return back_to_edit(&key, Some(("error", &message))),
+    };
+    let Ok(pg) = store::postgres::PostgresDb::from_env().await else {
+        return back_to_edit(
+            &key,
+            Some((
+                "error",
+                "Letterhead storage is unavailable on this deployment.",
+            )),
+        );
+    };
+    match store::brand_letterheads::save_for_actor(
+        &surreal,
+        &pg,
+        session.role,
+        session.person_id,
+        &key,
+        &fields,
+    )
+    .await
+    {
+        Ok(_) => back_to_edit(&key, Some(("saved", "letterhead"))),
+        Err(store::brand_letterheads::LetterheadError::NotFound) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(store::brand_letterheads::LetterheadError::Invalid(message)) => {
+            back_to_edit(&key, Some(("error", &message)))
+        }
+        Err(error) => {
+            tracing::error!(error = %error, "brand letterhead save failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod letterhead_form_tests {
+    use super::*;
+
+    fn form(mark: &str) -> BrandLetterheadForm {
+        BrandLetterheadForm {
+            wordmark: "Example".into(),
+            mark: mark.into(),
+            phone: String::new(),
+            email: String::new(),
+            site_url: String::new(),
+            postal_address: String::new(),
+            font_family: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_blank_mark_is_the_wordmark_and_an_unknown_one_is_refused() {
+        assert_eq!(
+            form("").into_fields().unwrap().mark,
+            store::brand_letterheads::LetterheadMark::Wordmark
+        );
+        assert_eq!(
+            form("logo").into_fields().unwrap().mark,
+            store::brand_letterheads::LetterheadMark::Logo
+        );
+        assert!(form("seal")
+            .into_fields()
+            .unwrap_err()
+            .contains("wordmark or the logo"));
+    }
+}

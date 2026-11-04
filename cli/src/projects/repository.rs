@@ -420,6 +420,7 @@ pub(crate) fn validate_gate(
     validate_automerge_workflow(root, write_fixes, &mut errors);
     validate_tracked_files(root, write_fixes, &mut errors, &mut warnings);
     validate_client_visibility(root, &mut warnings);
+    validate_firm_role_prose(root, write_fixes, &mut warnings);
     validate_skills(root, &mut errors);
     validate_documented_cli(root, &mut errors);
     let blueprints = blueprint_selection(root, &mut errors, &mut warnings);
@@ -429,6 +430,7 @@ pub(crate) fn validate_gate(
                 root,
                 directory,
                 engagement_executed(root),
+                write_fixes,
                 &mut errors,
                 &mut warnings,
             )
@@ -1915,6 +1917,7 @@ fn validate_templates(
     root: &Path,
     blueprint_directory: rules::project_blueprints::BlueprintDirectory,
     engagement_executed: bool,
+    write_fixes: bool,
     errors: &mut Vec<Finding>,
     warnings: &mut Vec<Finding>,
 ) -> usize {
@@ -1966,7 +1969,14 @@ fn validate_templates(
     let rules = templates_rule_set(engagement_executed);
     let mut declared_codes = BTreeMap::new();
     for path in &paths {
-        lint_project_template(path, &rules, &mut declared_codes, errors, warnings);
+        lint_project_template(
+            path,
+            &rules,
+            write_fixes,
+            &mut declared_codes,
+            errors,
+            warnings,
+        );
     }
     paths.len()
 }
@@ -2600,9 +2610,193 @@ fn entity_suffix(rest: &str) -> Option<String> {
     })
 }
 
+/// `Y027` — contract prose names the Firm by role. A compiled Brand's legal
+/// name in a skill, `README.md`, `AGENTS.md`, or a Draft is a warning, and a
+/// local gate rewrites it. A signature or From line becomes
+/// `{{firm.legal_name}}`, which render fills from the Brand declared in
+/// `navigator.yaml`. A sentence that states a fact about a named entity is
+/// left as written.
+pub const FIRM_ROLE_NAME_CODE: &str = "Y027";
+
+/// Legal names the compiled Brand registry publishes. Longer names precede
+/// shorter ones so one name is not rewritten inside another.
+fn compiled_firm_legal_names() -> Vec<&'static str> {
+    let mut names: Vec<&str> = views::brand::BrandKey::ALL
+        .iter()
+        .copied()
+        .map(|key| {
+            key.resolve_branding(&views::brand::DEFAULT_BRANDING)
+                .firm
+                .legal_entity
+        })
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+    names.dedup();
+    names
+}
+
+fn states_named_entity_fact(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    [
+        "conversion",
+        "converted",
+        "sharehold",
+        "services agreement",
+        "trademark",
+        "common-law mark",
+        "common law mark",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn line_prints_only_the_name(line: &str, name: &str) -> bool {
+    let stripped = line
+        .trim()
+        .trim_matches(|character| matches!(character, '*' | '_' | '`' | '"' | '\'' | '“' | '”'));
+    stripped == name
+}
+
+fn from_line(line: &str) -> bool {
+    line.trim_start()
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("from:"))
+}
+
+/// One flag per line of `contents`: whether the line sits in a paragraph
+/// that states a fact about a named entity. A fact can wrap, so the whole
+/// paragraph is protected, not only the line carrying the fact's verb.
+fn named_entity_fact_lines(contents: &str) -> Vec<bool> {
+    let lines: Vec<&str> = contents.lines().collect();
+    let mut flags = vec![false; lines.len()];
+    let mut start = 0;
+    while start < lines.len() {
+        let end = lines[start..]
+            .iter()
+            .position(|line| line.trim().is_empty())
+            .map_or(lines.len(), |offset| start + offset);
+        if lines[start..end]
+            .iter()
+            .any(|line| states_named_entity_fact(line))
+        {
+            flags[start..end].fill(true);
+        }
+        start = end + 1;
+    }
+    flags
+}
+
+fn rewrite_firm_role_line(line: &str, names: &[&str], in_fact: bool) -> String {
+    if in_fact {
+        return line.to_string();
+    }
+    let mut rewritten = line.to_string();
+    for name in names {
+        if !rewritten.contains(name) {
+            continue;
+        }
+        let replacement = if line_prints_only_the_name(line, name) || from_line(line) {
+            "{{firm.legal_name}}"
+        } else {
+            "the Firm"
+        };
+        rewritten = rewritten.replace(name, replacement);
+    }
+    rewritten
+}
+
+/// Rewritten prose when a compiled Firm name appears as a role, or `None`
+/// when every such line is already by role or is a named-entity fact.
+fn rewrite_firm_role_prose(contents: &str, names: &[&str]) -> Option<String> {
+    let facts = named_entity_fact_lines(contents);
+    let mut changed = false;
+    let mut out = String::with_capacity(contents.len());
+    for (index, line) in contents.split_inclusive('\n').enumerate() {
+        let (body, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |body| (body, "\n"));
+        let in_fact = facts.get(index).copied().unwrap_or(false);
+        let rewritten = rewrite_firm_role_line(body, names, in_fact);
+        if rewritten != body {
+            changed = true;
+        }
+        out.push_str(&rewritten);
+        out.push_str(newline);
+    }
+    changed.then_some(out)
+}
+
+fn firm_role_findings(path: &Path, contents: &str, names: &[&str]) -> Vec<Finding> {
+    let facts = named_entity_fact_lines(contents);
+    let mut findings = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        if rewrite_firm_role_line(line, names, facts[index]) != line {
+            findings.push(Finding::at(
+                path,
+                format!(
+                    "{FIRM_ROLE_NAME_CODE}: line {} spells a Firm's legal name; name the Firm by role (\"the Firm\"), or `{{{{firm.legal_name}}}}` where the letter must print it. A local gate rewrites it",
+                    index + 1
+                ),
+            ));
+        }
+    }
+    findings
+}
+
+fn apply_firm_role_prose(
+    path: &Path,
+    contents: &str,
+    write_fixes: bool,
+    warnings: &mut Vec<Finding>,
+) {
+    let names = compiled_firm_legal_names();
+    let Some(rewritten) = rewrite_firm_role_prose(contents, &names) else {
+        return;
+    };
+    if write_fixes {
+        match fs::write(path, rewritten) {
+            Ok(()) => println!(
+                "fixed {}: rewrote a Firm's legal name to the role or `{{{{firm.legal_name}}}}`; commit the rewrite",
+                path.display()
+            ),
+            Err(error) => warnings.push(Finding::at(
+                path,
+                format!("{FIRM_ROLE_NAME_CODE}: could not rewrite the Firm's legal name: {error}"),
+            )),
+        }
+        return;
+    }
+    warnings.extend(firm_role_findings(path, contents, &names));
+}
+
+fn validate_firm_role_prose(root: &Path, write_fixes: bool, warnings: &mut Vec<Finding>) {
+    let mut paths = Vec::new();
+    for relative in ["AGENTS.md", "README.md"] {
+        let path = root.join(relative);
+        if path.is_file() {
+            paths.push(path);
+        }
+    }
+    if let Ok(entries) = walkdir(&root.join(".agents/skills")) {
+        for path in entries {
+            if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
+                paths.push(path);
+            }
+        }
+    }
+    for path in paths {
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        apply_firm_role_prose(&path, &contents, write_fixes, warnings);
+    }
+}
+
 fn lint_project_template(
     path: &Path,
     rules: &[Box<dyn rules::Rule>],
+    write_fixes: bool,
     declared_codes: &mut BTreeMap<String, PathBuf>,
     errors: &mut Vec<Finding>,
     warnings: &mut Vec<Finding>,
@@ -2667,6 +2861,7 @@ fn lint_project_template(
             ),
         ));
     }
+    apply_firm_role_prose(path, &contents, write_fixes, warnings);
     let stem = path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -3052,18 +3247,18 @@ mod tests {
 
     use super::{
         blueprint_selection, california_law_firm_entity_claims, cd_workflow, cd_workflow_for,
-        emit_scaffold, firm_trade_name_claims, gate_workflow_prefix, is_release_tag,
-        lint_project_template, misnamed_firm_entities, missing_root_gitignore_lines,
-        publish_workflow_prefix, repair_root_gitignore, repair_skills, repository_name,
-        retired_workflow_refused, validate_agent_contract, validate_cd_workflow,
-        validate_client_visibility, validate_documents_gitignore, validate_gate,
-        validate_github_path, validate_layout, validate_skills, validate_templates,
-        validate_workflow, workflow, workflow_for, Finding, LayoutOutcome, AGENT_CONTRACT_BASE,
-        ALLOWED_ROOTS, AUTOMERGE_WORKFLOW_CONTENTS, CD_WORKFLOW, CLAUDE_SETTINGS,
-        CLAUDE_SETTINGS_CONTENTS, DEFAULT_WORKFLOW_HOME, DRAFT_DIRECTORY, ENTITY_CODE,
-        FINAL_RETIRED_WORKFLOW_RELEASE, FIRM_TRADE_NAME_CODE, PROJECT_MANIFEST,
-        RETIRED_CD_WORKFLOW, RETIRED_SYNCED_SKILLS, RETIRED_WORKFLOW, ROOT_GITIGNORE,
-        SYNCED_SKILLS, TEMPLATE_DIRECTORY, WORKFLOW,
+        compiled_firm_legal_names, emit_scaffold, firm_trade_name_claims, gate_workflow_prefix,
+        is_release_tag, lint_project_template, misnamed_firm_entities,
+        missing_root_gitignore_lines, publish_workflow_prefix, repair_root_gitignore,
+        repair_skills, repository_name, retired_workflow_refused, rewrite_firm_role_prose,
+        validate_agent_contract, validate_cd_workflow, validate_client_visibility,
+        validate_documents_gitignore, validate_gate, validate_github_path, validate_layout,
+        validate_skills, validate_templates, validate_workflow, workflow, workflow_for, Finding,
+        LayoutOutcome, AGENT_CONTRACT_BASE, ALLOWED_ROOTS, AUTOMERGE_WORKFLOW_CONTENTS,
+        CD_WORKFLOW, CLAUDE_SETTINGS, CLAUDE_SETTINGS_CONTENTS, DEFAULT_WORKFLOW_HOME,
+        DRAFT_DIRECTORY, ENTITY_CODE, FINAL_RETIRED_WORKFLOW_RELEASE, FIRM_TRADE_NAME_CODE,
+        PROJECT_MANIFEST, RETIRED_CD_WORKFLOW, RETIRED_SYNCED_SKILLS, RETIRED_WORKFLOW,
+        ROOT_GITIGNORE, SYNCED_SKILLS, TEMPLATE_DIRECTORY, WORKFLOW,
     };
     use super::{
         tracked_file_admitted, validate_tracked_files, CANONICAL_GITATTRIBUTES, CODEOWNERS,
@@ -5704,6 +5899,52 @@ jobs:
     }
 
     #[test]
+    fn firm_role_prose_rewrites_a_role_and_leaves_a_named_entity_fact() {
+        let names = compiled_firm_legal_names();
+        let name = names
+            .iter()
+            .copied()
+            .find(|name| name.contains('&'))
+            .expect("a compiled Firm legal name");
+        let role = format!("Prepared by {name}.\nOwned by {name}\n{name}\nFrom: {name}\n");
+        let rewritten = rewrite_firm_role_prose(&role, &names).expect("role mentions rewrite");
+        assert_eq!(
+            rewritten,
+            "Prepared by the Firm.\nOwned by the Firm\n{{firm.legal_name}}\nFrom: {{firm.legal_name}}\n"
+        );
+        let fact = format!("{name} converted from a PLLC, and its shareholding is unchanged.\n");
+        assert!(rewrite_firm_role_prose(&fact, &names).is_none());
+        let mark = format!("A common-law mark of {name}.\n");
+        assert!(rewrite_firm_role_prose(&mark, &names).is_none());
+        let wrapped = format!("{name}\nconverted from a PLLC.\n\nPrepared by {name}.\n");
+        assert_eq!(
+            rewrite_firm_role_prose(&wrapped, &names).expect("the role paragraph rewrites"),
+            format!("{name}\nconverted from a PLLC.\n\nPrepared by the Firm.\n")
+        );
+    }
+
+    #[test]
+    fn the_shared_contract_and_letter_templates_name_the_firm_by_role() {
+        let names = compiled_firm_legal_names();
+        assert!(AGENT_CONTRACT_BASE.contains("the Firm"));
+        assert!(AGENT_CONTRACT_BASE.contains("{{firm.legal_name}}"));
+        assert!(rewrite_firm_role_prose(AGENT_CONTRACT_BASE, &names).is_none());
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../templates/notations");
+        for relative in [
+            "neon_law/onboarding__letter.md",
+            "neon_law/offboarding__letter.md",
+            "neon_law/engagement_letter__nevada.md",
+            "neon_law/estate_signing_preparation__letter.md",
+        ] {
+            let contents = fs::read_to_string(root.join(relative)).unwrap();
+            assert!(
+                rewrite_firm_role_prose(&contents, &names).is_none(),
+                "{relative} still spells a Firm legal name as a role"
+            );
+        }
+    }
+
+    #[test]
     fn california_templates_accept_the_firm_of_record_and_the_individual_lawyer() {
         let template = |body: &str| {
             format!("---\nkind: onboarding\ntitle: Letter\njurisdiction: CA\n---\n{body}\n")
@@ -5753,7 +5994,7 @@ jobs:
         let mut errors: Vec<Finding> = Vec::new();
         let mut warnings: Vec<Finding> = Vec::new();
         let mut declared = std::collections::BTreeMap::new();
-        lint_project_template(&path, &[], &mut declared, &mut errors, &mut warnings);
+        lint_project_template(&path, &[], false, &mut declared, &mut errors, &mut warnings);
         let message = errors
             .iter()
             .map(|error| error.message.as_str())
@@ -5800,6 +6041,7 @@ jobs:
             root,
             rules::project_blueprints::BlueprintDirectory::Templates,
             executed,
+            false,
             &mut errors,
             &mut warnings,
         );
@@ -5887,7 +6129,7 @@ jobs:
         let mut errors: Vec<Finding> = Vec::new();
         let mut warnings: Vec<Finding> = Vec::new();
         let mut declared = std::collections::BTreeMap::new();
-        lint_project_template(&path, &[], &mut declared, &mut errors, &mut warnings);
+        lint_project_template(&path, &[], false, &mut declared, &mut errors, &mut warnings);
         let messages: Vec<String> = errors.into_iter().map(|error| error.message).collect();
         assert!(
             messages.iter().any(|message| {
@@ -5938,7 +6180,7 @@ jobs:
         let mut errors: Vec<Finding> = Vec::new();
         let mut warnings: Vec<Finding> = Vec::new();
         let mut declared = std::collections::BTreeMap::new();
-        lint_project_template(&path, &[], &mut declared, &mut errors, &mut warnings);
+        lint_project_template(&path, &[], false, &mut declared, &mut errors, &mut warnings);
         let messages: Vec<String> = errors.into_iter().map(|error| error.message).collect();
         assert!(
             messages.iter().any(|message| {
@@ -5948,7 +6190,13 @@ jobs:
             }),
             "{messages:?}"
         );
-        assert!(warnings.is_empty(), "{warnings:?}");
+        // The spelled legal name also draws the name-the-Firm-by-role warning.
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| warning.message.starts_with(super::FIRM_ROLE_NAME_CODE)),
+            "{warnings:?}"
+        );
     }
 
     /// The generated CD caller passes its own structural validation, the same

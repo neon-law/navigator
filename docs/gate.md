@@ -428,6 +428,7 @@ literally and the columns disappear.
 | `Y016` | Error | Valid DRIs and surface handles; declared Firm/brand pairs need a UUID and key. | No |
 | `Y017` | Error | Onboarding/offboarding templates cannot name Neon Law as the Firm's trade name or party. | No |
 | `Y018` | Error | California onboarding/offboarding templates cannot name an LLC as the law firm. | No |
+| `Y027` | Warning | Contract prose names the Firm by role. A local gate rewrites a compiled legal name. | Locally |
 | `Y019` | Error | A `matter:` block and each pleading's `caption_title` and `footer_title` must be complete. | No |
 | `Y020` | Error | A Project manifest `dockets:` must be a list of non-empty case numbers. | No |
 | `Y021` | Error | A Project manifest `pages:` must be a list of entries with unique, URL-safe slugs. | No |
@@ -480,6 +481,12 @@ as the Firm's trade name or contracting party. References to the Neon Law contac
 `Y018` also applies to those template kinds, but only when `jurisdiction: CA`. California does not let an LLC render
 professional services, so it rejects an LLC named as the law firm, in a greeting or as a bare signature heading. The
 firm of record and the individual California lawyer both pass, and ordinary references to an LLC are untouched.
+
+`Y027` applies to `AGENTS.md`, `README.md`, `.agents/skills/**/*.md`, and each Draft. A compiled Brand's legal name in
+that prose is a warning. A local gate rewrites a role mention to "the Firm", and a line that only prints the name, or a
+From line, to `{{firm.legal_name}}`. Render fills that placeholder from the Firm behind `project.brand`. A sentence
+about a conversion, a shareholding, a services agreement, or a trademark keeps the entity's name. `--ci` reports the
+warning and does not rewrite.
 
 `Y014` runs in the same Project-repository check whenever `documents/` exists. The root `.gitignore` ignores the whole
 folder, so a pointer left there drops out of the next `git add`. Local `project gate`, `project sync`, and `project gate
