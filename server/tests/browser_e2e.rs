@@ -4584,12 +4584,7 @@ async fn nautilus_home_links_to_separate_business_counsel() {
         .click()
         .await
         .unwrap();
-    wait_for_text(
-        &c,
-        "Your retainer at work.",
-        Duration::from_secs(10),
-    )
-    .await;
+    wait_for_text(&c, "Your retainer at work.", Duration::from_secs(10)).await;
     assert_eq!(c.current_url().await.unwrap().path(), "/business");
     assert!(c
         .find_all(Locator::Css("[data-nautilus-intake]"))
