@@ -96,11 +96,14 @@ pub(crate) fn project(longitude: f64, latitude: f64) -> Option<(f64, f64)> {
     ))
 }
 
-/// Wrap a longitude into [−180, 180). The engine's polylines run continuously
+/// Wrap a longitude into [−180, 180], preserving the positive seam endpoint. The engine's polylines run continuously
 /// through the seam (e.g. a horizon curve may carry 190° rather than −170°);
 /// mirroring the engine's `GeoJSON` per-point wrapping keeps every vertex on the
 /// map while the engine's split segments prevent tears.
 fn wrap_longitude(longitude: f64) -> f64 {
+    if (0.0..=180.0).contains(&longitude) {
+        return longitude;
+    }
     let wrapped = longitude.rem_euclid(360.0);
     if wrapped >= 180.0 {
         wrapped - 360.0
@@ -310,13 +313,15 @@ struct IslandCollection<'a> {
 fn island_geojson(lines: &[AngularLine], provenance: &IslandProvenance) -> Result<String, String> {
     let mut features = Vec::with_capacity(lines.len());
     for line in lines {
+        for point in &line.points {
+            if !point.0.is_finite() || !point.1.is_finite() {
+                return Err(format!("non-finite coordinate ({}, {})", point.0, point.1));
+            }
+        }
         let mut coordinates = Vec::new();
         for segment in line.segments() {
             let mut member = Vec::with_capacity(segment.len());
             for point in segment {
-                if !point.0.is_finite() || !point.1.is_finite() {
-                    return Err(format!("non-finite coordinate ({}, {})", point.0, point.1));
-                }
                 member.push([wrap_longitude(point.0), point.1]);
             }
             coordinates.push(member);
@@ -612,7 +617,7 @@ mod tests {
     use ephemeris::lines::{Angle, AngularLine, LineBody, Point};
 
     #[test]
-    fn longitude_wraps_into_half_open_range() {
+    fn longitude_wraps_and_preserves_seam_endpoints() {
         fn assert_wrap(input: f64, expected: f64) {
             let wrapped = wrap_longitude(input);
             assert!(
@@ -625,7 +630,26 @@ mod tests {
         assert_wrap(531.6, 171.6);
         assert_wrap(-179.2, -179.2);
         assert_wrap(-180.0, -180.0);
+        assert_wrap(180.0, 180.0);
         assert_wrap(359.9, -0.1);
+    }
+
+    #[test]
+    fn split_overlays_reach_both_map_edges() {
+        let crossing = line(
+            LineBody::Sun,
+            Angle::Dsc,
+            vec![Point(179.75, 10.0), Point(-179.75, 10.0)],
+        );
+        let rendered = overlays(&[crossing]);
+        assert!(
+            rendered[0].path.contains("L960.00,"),
+            "east segment reaches the right edge"
+        );
+        assert!(
+            rendered[0].path.contains("M0.00,"),
+            "west segment starts at the left edge"
+        );
     }
 
     #[test]
@@ -693,7 +717,11 @@ mod tests {
         let rendered = overlays(&[crossing]);
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].path.matches('M').count(), 2);
-        assert_eq!(rendered[0].path.matches('L').count(), 2);
+        assert_eq!(
+            rendered[0].path.matches('L').count(),
+            4,
+            "both seam endpoints are drawn"
+        );
         assert_eq!(rendered[0].style_index, 2);
         assert!(!rendered[0].selected);
     }
@@ -816,7 +844,9 @@ mod tests {
         // the seam.
         assert_eq!(geometry["coordinates"].as_array().map(Vec::len), Some(2));
         assert_eq!(geometry["coordinates"][0][0][0], 170.0);
-        assert_eq!(geometry["coordinates"][1][0][0], -179.0);
+        assert_eq!(geometry["coordinates"][0][2][0], 180.0);
+        assert_eq!(geometry["coordinates"][1][0][0], -180.0);
+        assert_eq!(geometry["coordinates"][1][1][0], -179.0);
         assert_eq!(value["features"][0]["properties"]["body"], "sun");
         assert_eq!(value["features"][0]["properties"]["angle"], "asc");
         assert_eq!(value["features"][1]["properties"]["body"], "moon");

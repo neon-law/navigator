@@ -388,9 +388,24 @@ mod tests {
                 assert!(dot.abs() < 1e-9);
             }
         }
-        // The split points are distinct vertices; nothing was dropped.
+        // Original vertices remain, with one matching endpoint on each edge.
         let total: usize = segments.iter().map(Vec::len).sum();
-        assert_eq!(total, dsc.points.len());
+        assert!(
+            (dsc.points.len()..=dsc.points.len() + 2).contains(&total),
+            "only seam endpoints are inserted"
+        );
+        for point in &dsc.points {
+            assert!(
+                segments
+                    .iter()
+                    .flatten()
+                    .any(
+                        |vertex| (wrap_longitude(vertex.0) - wrap_longitude(point.0)).abs() < 1e-9
+                            && (vertex.1 - point.1).abs() < 1e-9
+                    ),
+                "every sampled vertex remains"
+            );
+        }
         assert_eq!(split_antimeridian(&dsc.points).len(), 2);
     }
 }

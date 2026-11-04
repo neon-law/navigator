@@ -3,7 +3,7 @@
 //! RFC 7946 `FeatureCollection`: one `Feature` per line, each a
 //! `MultiLineString` of the [`AngularLine::segments`] pieces with
 //! `[longitude, latitude]` coordinates and longitude wrapped into
-//! [−180, 180) — the domain every map renderer expects. The segments are
+//! [−180, 180] — the domain every map renderer expects. The segments are
 //! already split at the antimeridian, so per-point wrapping cannot tear a
 //! segment across the seam.
 //!
@@ -160,6 +160,9 @@ struct Geometry {
 ///
 /// [`EphemerisError::Serialization`] when any coordinate is not finite.
 fn feature(line: &AngularLine) -> Result<Feature, EphemerisError> {
+    for point in &line.points {
+        point_coordinates(point)?;
+    }
     let mut coordinates = Vec::with_capacity(line.points.len());
     for segment in line.segments() {
         coordinates.push(
@@ -183,7 +186,7 @@ fn feature(line: &AngularLine) -> Result<Feature, EphemerisError> {
 }
 
 /// A vertex as an RFC 7946 `[longitude, latitude]` pair, longitude wrapped
-/// into [−180, 180).
+/// into [−180, 180].
 ///
 /// # Errors
 ///
@@ -195,7 +198,14 @@ fn point_coordinates(point: &Point) -> Result<[f64; 2], EphemerisError> {
             problem: format!("non-finite coordinate ({lon}, {lat})"),
         });
     }
-    Ok([wrap_longitude(lon), lat])
+    Ok([
+        if (0.0..=180.0).contains(&lon) {
+            lon
+        } else {
+            wrap_longitude(lon)
+        },
+        lat,
+    ])
 }
 
 #[cfg(test)]
@@ -252,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn coordinates_wrap_into_half_open_range() {
+    fn coordinates_wrap_and_preserve_both_seam_edges() {
         let mut lines = Vec::new();
         lines.push(super::super::vertical::vertical_line(
             LineBody::Sun,
@@ -281,10 +291,54 @@ mod tests {
             for pair in member.as_array().expect("coordinates") {
                 let lon = pair[0].as_f64().expect("longitude");
                 assert!(
-                    (-180.0..180.0).contains(&lon),
+                    (-180.0..=180.0).contains(&lon),
                     "longitude {lon} out of range"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn seam_crossings_reach_both_edges_with_valid_members() {
+        for points in [
+            vec![Point(179.75, 10.0), Point(-179.75, 10.0)],
+            vec![Point(-179.75, 10.0), Point(179.75, 10.0)],
+        ] {
+            let line = AngularLine {
+                body: LineBody::Sun,
+                angle: Angle::Dsc,
+                points,
+            };
+            let json = feature_collection_json(
+                &[line],
+                &LineProvenance::new(&test_manifest(), test_epoch()),
+            )
+            .expect("finite geometry");
+            let value: Value = serde_json::from_str(&json).expect("valid JSON");
+            let members = value["features"][0]["geometry"]["coordinates"]
+                .as_array()
+                .expect("members");
+            assert_eq!(members.len(), 2);
+            let mut edges = Vec::new();
+            for member in members {
+                let points = member.as_array().expect("points");
+                assert!(points.len() >= 2, "GeoJSON line members need two vertices");
+                for pair in points.windows(2) {
+                    assert!(
+                        (pair[0][0].as_f64().unwrap() - pair[1][0].as_f64().unwrap()).abs()
+                            <= 180.0,
+                        "no member crosses the seam"
+                    );
+                }
+                for point in points {
+                    let lon = point[0].as_f64().unwrap();
+                    if (lon.abs() - 180.0).abs() < f64::EPSILON {
+                        edges.push(lon);
+                    }
+                }
+            }
+            edges.sort_by(f64::total_cmp);
+            assert_eq!(edges, vec![-180.0, 180.0]);
         }
     }
 
