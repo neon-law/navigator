@@ -134,6 +134,10 @@ pub struct ProvenancePillar {
 /// injected into the render context.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct HomeContent {
+    /// The path this page is mounted at, for its canonical and `og:url`
+    /// tags. Empty means the root, `/`; `/business` sets its own.
+    #[serde(default)]
+    pub path: String,
     /// A home surface composed from the shared marketing bands.
     #[serde(default)]
     pub marketing_page: Option<crate::marketing_page::PageContent>,
@@ -189,6 +193,18 @@ pub struct HomeContent {
     /// OATH hearing practice.
     #[serde(default)]
     pub summons: Option<SummonsContent>,
+}
+
+impl HomeContent {
+    /// The mounted path: [`Self::path`], or `/` when unset.
+    #[must_use]
+    pub fn page_path(&self) -> &str {
+        if self.path.is_empty() {
+            "/"
+        } else {
+            &self.path
+        }
+    }
 }
 
 /// Shared account invitation copy supplied by the public catalog.
@@ -472,7 +488,7 @@ fn HomePageBody(
                 content: page,
                 lead_capture: lead_context,
                 query: String::new(),
-                path: "/".to_string(),
+                path: content.page_path().to_string(),
             }
         };
     }
@@ -503,7 +519,7 @@ fn HomePageBody(
                 og_description: content.og_description.clone(),
                 site_name: chrome.brand_name.clone(),
                 image: chrome.social_image.clone(),
-                url: crate::components::canonical_url(&chrome.canonical_origin, "/"),
+                url: crate::components::canonical_url(&chrome.canonical_origin, content.page_path()),
             }
             BrandFavicon { logo_href: chrome.logo_href.clone() }
             // The base theme (background/text from tokens) and the resolved
@@ -603,7 +619,7 @@ fn HomePageBody(
             og_description: content.og_description.clone(),
             site_name: chrome.brand_name.clone(),
             image: chrome.social_image.clone(),
-            url: crate::components::canonical_url(&chrome.canonical_origin, "/"),
+            url: crate::components::canonical_url(&chrome.canonical_origin, content.page_path()),
         }
         document::Stylesheet { href: crate::brand_style::BRAND_STYLESHEET_HREF }
         document::Stylesheet { href: HOME_STYLESHEET_HREF }
@@ -1177,6 +1193,7 @@ mod tests {
                     chrome: PublicChrome::default(),
                     content: HomeContent {
                         signup: None,
+                        path: String::new(),
                         marketing_page: None,
                         head_title: "Home".to_string(),
                         meta_description: "AI enablement for law firms.".to_string(),

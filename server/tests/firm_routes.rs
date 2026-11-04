@@ -908,6 +908,15 @@ async fn business_publishes_the_contract_fee_daily_rate_and_simulator() {
         );
     }
     assert!(!body.contains("data-nautilus-intake"));
+    // The page names its own address, not the subscription homepage's.
+    assert!(
+        body.contains(r#"rel="canonical" href="https://www.neonlaw.com/business""#),
+        "{body}"
+    );
+    assert!(
+        body.contains(r#"content="https://www.neonlaw.com/business" property="og:url""#),
+        "{body}"
+    );
 }
 
 #[tokio::test]

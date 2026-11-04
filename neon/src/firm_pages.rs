@@ -1991,6 +1991,7 @@ pub(crate) fn resolve_business_content(
 ) -> webapp::home::HomeContent {
     let mut content = locales::home_for_host(branding, deployment_host);
     content.head_title = content.head_title.replace("| Home", "| Business");
+    content.path = "/business".to_string();
     content
 }
 

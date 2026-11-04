@@ -1254,6 +1254,7 @@ pub fn home_for_host(
 ) -> webapp::home::HomeContent {
     let copy: HomeCopy = load_page(branding, "home");
     webapp::home::HomeContent {
+        path: String::new(),
         marketing_page: None,
         head_title: copy.head_title,
         meta_description: copy.meta_description,
