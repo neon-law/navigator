@@ -3776,6 +3776,14 @@
 {"file":"store/src/postgres_mirror/templates.rs","line":199,"function":"mirror","operation":"query","sql_operations":["DELETE"],"tables":["template"],"transaction":false}
 {"file":"store/src/postgres_mirror/templates.rs","line":281,"function":"reconcile","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/postgres_mirror/templates.rs","line":282,"function":"reconcile","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/postgres_mirror/templates_tests.rs","line":48,"function":"mirror_writes_a_shared_template_then_reports_unchanged","operation":"query_as","sql_operations":["SELECT"],"tables":["template"],"transaction":false}
+{"file":"store/src/postgres_mirror/templates_tests.rs","line":78,"function":"mirror_deletes_the_postgres_row_once_the_source_row_is_gone","operation":"bind","sql_operations":[],"tables":["template"],"transaction":false}
+{"file":"store/src/postgres_mirror/templates_tests.rs","line":78,"function":"mirror_deletes_the_postgres_row_once_the_source_row_is_gone","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
+{"file":"store/src/postgres_mirror/templates_tests.rs","line":93,"function":"mirror_deletes_the_postgres_row_once_the_source_row_is_gone","operation":"query_scalar","sql_operations":["SELECT"],"tables":["template"],"transaction":false}
+{"file":"store/src/postgres_mirror/templates_tests.rs","line":117,"function":"reconcile_repairs_a_drifted_template_row","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/postgres_mirror/templates_tests.rs","line":117,"function":"reconcile_repairs_a_drifted_template_row","operation":"query","sql_operations":["UPDATE"],"tables":["template"],"transaction":false}
+{"file":"store/src/postgres_mirror/templates_tests.rs","line":126,"function":"reconcile_repairs_a_drifted_template_row","operation":"query_scalar","sql_operations":["SELECT"],"tables":["template"],"transaction":false}
+{"file":"store/src/postgres_mirror/templates_tests.rs","line":184,"function":"mirror_follows_a_project_parent_on_demand","operation":"query_scalar","sql_operations":["SELECT"],"tables":["project"],"transaction":false}
 {"file":"store/src/postgres_mirror/tenancy.rs","line":585,"function":"mirror","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/postgres_mirror/tenancy.rs","line":585,"function":"mirror","operation":"query","sql_operations":["DELETE"],"tables":["firm_brand"],"transaction":false}
 {"file":"store/src/postgres_mirror/tenancy.rs","line":614,"function":"mirror","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
