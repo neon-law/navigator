@@ -366,6 +366,43 @@ mod tests {
         );
     }
 
+    /// LAW-200 regression: opening a notation on a matter that does not
+    /// exist is a typed `404` at the command boundary, not a `500` — the
+    /// original report answered `500 internal` before the typed errors
+    /// landed. The matter lookup fails first, so the runtime and storage
+    /// are never reached; they are present only to satisfy the signature.
+    #[tokio::test]
+    async fn a_missing_matter_reaches_the_lawyer_as_a_typed_404() {
+        let surreal = store::test_support::mem_surreal().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage: Arc<dyn cloud::StorageService> = Arc::new(
+            cloud::FsStorage::new(tmp.path().to_path_buf())
+                .await
+                .expect("storage"),
+        );
+        let runtime = workflows::InMemoryRuntime::new();
+
+        let error = create_project_notation(
+            &surreal,
+            &runtime,
+            &storage,
+            None,
+            Role::Lawyer,
+            Uuid::new_v4(), // no such matter
+            "retainer",
+            "client@example.com",
+        )
+        .await
+        .expect_err("a missing matter must refuse");
+
+        assert!(
+            matches!(error, CreateProjectNotationError::ProjectNotFound),
+            "the refusal must be the typed matter-miss, not a store fault: {error:?}"
+        );
+        let response = error.into_lawyer_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
     /// LAW-200: a questionnaire that fails the engine's runtime parse names
     /// the offending shape instead of answering `500 internal`.
     #[tokio::test]
