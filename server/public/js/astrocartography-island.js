@@ -78,6 +78,7 @@
   }
 
   function showFailure(mount, text) {
+    delete mount.dataset.live;
     statusMessage(mount, text);
     console.error("astrocartography island:", text);
   }
@@ -179,6 +180,7 @@
   function boot(mount, payload, maplibregl) {
     statusMessage(mount, "Loading the interactive map…");
     var map;
+    var failed = false;
     try {
       map = new maplibregl.Map({
         container: mount,
@@ -194,10 +196,11 @@
     map.on("error", function () {
       // Tile or source errors degrade the basemap, not the lines; say so
       // once and leave the static map untouched as the alternative.
-      statusMessage(mount, "Some map tiles failed to load. The static map below remains available.");
+      failed = true;
+      showFailure(mount, "Some map tiles failed to load. The static map below remains available.");
     });
     map.on("load", function () {
-      statusMessage(mount, "");
+      if (!failed) statusMessage(mount, "");
       var persons = payload.persons || [];
       persons.forEach(function (person) { addLines(map, person); });
       var visibility = {
@@ -208,7 +211,7 @@
       buildPersonControls(mount, map, persons, visibility);
       buildAngleControls(mount, map, persons, visibility);
       wireBodyToggles(map, persons, visibility);
-      mount.dataset.live = "true";
+      if (!failed) mount.dataset.live = "true";
     });
   }
 

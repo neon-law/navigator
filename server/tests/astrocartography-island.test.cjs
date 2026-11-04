@@ -18,7 +18,7 @@ class Element {
   descendants() { return this.children.flatMap(child => [child, ...child.descendants()]); }
 }
 
-async function boot(payload) {
+async function boot(payload, errorBeforeLoad = false) {
   let ready;
   const mount = new Element();
   mount.dataset.moduleSrc = "test-map-module";
@@ -27,8 +27,14 @@ async function boot(payload) {
   sun.checked = true;
   const maps = [];
   class Map {
-    constructor() { this.layers = new globalThis.Map(); this.sources = []; maps.push(this); }
-    on(event, handler) { if (event === "load") queueMicrotask(handler); }
+    constructor() { this.layers = new globalThis.Map(); this.sources = []; this.handlers = {}; maps.push(this); }
+    on(event, handler) {
+      this.handlers[event] = handler;
+      if (event === "load") queueMicrotask(() => {
+        if (errorBeforeLoad) this.handlers.error();
+        handler();
+      });
+    }
     addSource(id, source) { this.sources.push(source); }
     addLayer(layer) {
       assert.equal(layer.layout["line-dasharray"], undefined, "dash arrays are paint properties");
@@ -105,4 +111,17 @@ test("hydration wrappers do not alter comment-like text inside JSON values", asy
   assert.equal(mount.dataset.live, "true");
   assert.equal(map.layers.size, 8);
   assert.ok(mount.descendants().some(el => el.textContent === "<!-- preserved data -->"));
+});
+
+test("tile errors restore the static fallback before and after map load", async () => {
+  for (const early of [false, true]) {
+    const { mount, map } = await boot(JSON.stringify({ persons: persons() }), early);
+    if (!early) {
+      assert.equal(mount.dataset.live, "true");
+      map.handlers.error();
+    }
+    assert.notEqual(mount.dataset.live, "true", "CSS must reveal the SVG fallback");
+    assert.match(mount.querySelector(".astro-map-island__status").textContent, /static map below remains available/);
+    assert.equal(map.layers.size, 8, "calculated layers remain available in the degraded map");
+  }
 });
