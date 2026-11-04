@@ -499,7 +499,7 @@ fn body_reflection(body: LineBody) -> &'static str {
 }
 
 /// A self-contained design specimen: one real calculated chart, embedded.
-/// No birth details or external data are used.
+/// The specimen lines use fixed inputs; the interactive basemap downloads tiles.
 #[component]
 pub fn AstrocartographyDesign() -> Element {
     let Ok(lines) = &*SPECIMEN else {
@@ -530,7 +530,7 @@ pub fn AstrocartographyDesign() -> Element {
             }
             p { class: "astro-demo-notice", role: "note",
                 strong { "Calculated specimen chart. " }
-                "The lines are the ephemeris line engine's output for {SPECIMEN_INSTANT} — a real chart cast for that fixed instant, not your birth data. The map and its lines render entirely on the server: no script computes them, and no network request is made."
+                "These specimen lines were calculated for {SPECIMEN_INSTANT}. The static map and lines are included in the page. The interactive map downloads tiles from OpenStreetMap without sending birth details."
                 if let Ok((generator, gate)) = &*SPECIMEN_PROVENANCE {
                     span { class: "astro-map-provenance", " Snapshot: {generator}, verified against Swiss Ephemeris to within {gate}." }
                 }
@@ -803,6 +803,22 @@ mod tests {
         let html = dioxus_ssr::render(&dom);
         assert_eq!(html.matches("astro-map-line astro-map-line-").count(), 48);
         assert!(html.contains("Calculated specimen chart"), "{html}");
+        assert!(
+            html.contains("static map and lines are included in the page"),
+            "static geometry disclosure"
+        );
+        assert!(
+            html.contains("interactive map downloads tiles from OpenStreetMap"),
+            "tile provider disclosure"
+        );
+        assert!(
+            html.contains("without sending birth details"),
+            "birth-data privacy disclosure"
+        );
+        assert!(
+            !html.contains("no network request is made"),
+            "do not promise that the interactive map is offline"
+        );
         assert!(html.contains("2000-01-01T12:00:00Z"), "{html}");
         assert!(
             html.contains("World map with planetary line overlays"),

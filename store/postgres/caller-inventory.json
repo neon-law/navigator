@@ -2916,6 +2916,7 @@
       "views/src/brand_presentation.rs",
       "views/src/locales.rs",
       "views/src/locales/services.rs",
+      "webapp/src/astrocartography.rs",
       "webapp/src/brand_blog_posts.rs",
       "webapp/src/catalog_step.rs",
       "webapp/src/clerk.rs",
