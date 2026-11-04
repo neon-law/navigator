@@ -188,12 +188,26 @@ async fn cyber_injury_home_no_longer_links_to_delete_your_data() {
     for host in HOSTS {
         let (status, html) = page(host, "/").await;
         assert_eq!(status, StatusCode::OK, "{host}");
+        let document = scraper::Html::parse_document(&html);
+        let main = document
+            .select(&scraper::Selector::parse("main").expect("main selector"))
+            .next()
+            .expect("home content")
+            .html();
         for banned in ["DeleteYourData.com", "MAKE YOUR DATA HARDER TO FIND."] {
             assert!(
-                !html.contains(banned),
+                !main.contains(banned),
                 "{host} still carries the retired DeleteYourData card copy {banned:?}"
             );
         }
+        let family =
+            scraper::Selector::parse("footer .site-footer__family").expect("family selector");
+        assert!(
+            document
+                .select(&family)
+                .any(|row| row.html().contains("DeleteYourData.com")),
+            "{host} retains the sibling in the shared firm directory"
+        );
     }
 }
 
