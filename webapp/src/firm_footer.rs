@@ -209,7 +209,7 @@ pub fn compiled_firm_footer_model(
 
 /// Resolve [`FirmFooterModel`] for `current`: the Firm wearing that brand
 /// key, its Entity's legal name, and every brand key it wears (in registry
-/// order, current first), each named from its live `brand` row — a
+/// order with the current Brand flagged), each named from its live `brand` row — a
 /// runtime-created brand is listed exactly like a compiled one, never
 /// silently dropped. No Firm wearing `current` (or no live rows at all)
 /// falls back to [`compiled_firm_footer_model`].
@@ -246,7 +246,23 @@ pub async fn resolve_firm_footer_model(
         return fallback();
     }
 
-    let mut brands = Vec::with_capacity(keys.len());
+    let compiled_identity_allowed = entity.firm_anchor_key.as_deref()
+        == Some(
+            compiled_site_brand(current)
+                .legal_entity
+                .trim()
+                .to_lowercase()
+                .as_str(),
+        );
+    // The canonical Firm's public family is complete even when only some
+    // of its Brand rows have been attached. Other operators list their own
+    // rows exclusively; a matching display name is not proof of identity.
+    let complete_family = compiled_identity_allowed && current.is_guieb_shook();
+    let mut brands = if complete_family {
+        compiled_family_brands(current)
+    } else {
+        Vec::with_capacity(keys.len())
+    };
     for key in &keys {
         let Ok(Some(brand)) = store::brands::find_by_key(surreal, key).await else {
             continue;
@@ -254,12 +270,7 @@ pub async fn resolve_firm_footer_model(
         let compiled = views::brand::BrandKey::ALL
             .iter()
             .find(|candidate| candidate.as_str() == key);
-        // Daybridge's public family row intentionally omits the Lawyer Shook
-        // holding page, whether the compiled fallback or live Firm rows feed
-        // the footer.
-        if current == views::brand::BrandKey::Daybridge
-            && compiled == Some(&views::brand::BrandKey::LawyerShook)
-        {
+        if complete_family && compiled.is_some_and(|key| key.is_guieb_shook()) {
             continue;
         }
         // Same reachability rule the compiled fallback applies: a row in the
@@ -297,27 +308,18 @@ pub async fn resolve_firm_footer_model(
         return fallback();
     }
 
-    // The resolved Firm's home: the production home of the firm's own brand
-    // when the Firm wears it. A Firm with no compiled firm brand publishes
-    // no home yet — its entity name then renders unlinked on the public pages
-    // rather than linked to some other firm's site.
-    let firm_home_href = if keys
-        .iter()
-        .any(|key| key == views::brand::BrandKey::GuiebShook.as_str())
+    // The canonical Firm's home is part of its compiled family. Other
+    // operators link it only when they wear that compiled firm Brand.
+    let firm_home_href = if complete_family
+        || keys
+            .iter()
+            .any(|key| key == views::brand::BrandKey::GuiebShook.as_str())
     {
         views::brand::BrandKey::GuiebShook.public_home_href()
     } else {
         String::new()
     };
 
-    let compiled_identity_allowed = entity.firm_anchor_key.as_deref()
-        == Some(
-            compiled_site_brand(current)
-                .legal_entity
-                .trim()
-                .to_lowercase()
-                .as_str(),
-        );
     FirmFooterModel {
         compiled_identity_allowed,
         legal_entity: entity.name,
@@ -565,6 +567,10 @@ mod tests {
         let canonical =
             resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
         assert!(canonical.compiled_identity_allowed);
+        assert_eq!(
+            canonical.brands.len(),
+            views::brand::BrandKey::GUIEB_SHOOK_FAMILY.len()
+        );
 
         assert_eq!(model.legal_entity, "Guieb & Shook PC");
         assert_eq!(model.brands.len(), 2);

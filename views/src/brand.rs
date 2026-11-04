@@ -934,16 +934,7 @@ pub static DAYBRIDGE_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: &[
-        BrandKey::Neon,
-        BrandKey::DeleteYourData,
-        BrandKey::DeleteYourDebt,
-        BrandKey::Vesta,
-        BrandKey::Misericordia,
-        BrandKey::Abhaya,
-        BrandKey::Summons,
-        BrandKey::Daybridge,
-    ],
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -2309,8 +2300,8 @@ pub fn firm_footer_nav() -> Vec<NavLink> {
     if !branding.firm_family.is_empty() {
         let shared = shared_footer_hrefs();
         nav.extend(FIRM_FOOTER_NAV.iter().map(|link| match link.href {
-            // Every registered Brand serves its own `/blog` route.
-            "/blog" => NavLink::leaf(link.label, link.href),
+            // Every Brand publishes its own content and design reference.
+            "/blog" | "/design" => NavLink::leaf(link.label, link.href),
             // Neon's own pages stay on its own host: only another brand,
             // borrowing the shared row, leaves the site for them.
             path if path.starts_with('/') && branding.brand_key == BrandKey::Neon => {
@@ -3133,7 +3124,21 @@ mod tests {
                     .iter()
                     .find(|n| n.label == "Design")
                     .unwrap_or_else(|| panic!("{} footer links Design", key.as_str()));
-                assert!(design.href.ends_with("/design"), "{}", design.href);
+                assert_eq!(design.href, "/design", "{}", key.as_str());
+                for (label, path) in [("Privacy", "/privacy"), ("Testimonials", "/testimonials")] {
+                    assert_eq!(
+                        nav.iter().find(|link| link.label == label).unwrap().href,
+                        path,
+                        "{} {label} stays on its own host",
+                        key.as_str()
+                    );
+                }
+                assert_eq!(
+                    branding.firm_family,
+                    super::BrandKey::GUIEB_SHOOK_FAMILY,
+                    "{} lists the complete Guieb & Shook family",
+                    key.as_str()
+                );
             })
             .await;
         }
@@ -3191,7 +3196,7 @@ mod tests {
     }
 
     /// Neon's own footer links its pages relatively. On any other brand only
-    /// Contact, Testimonials, Blog, Privacy, and Terms are local routes;
+    /// Contact, Testimonials, Blog, Design, Privacy, and Terms are local routes;
     /// Neon's unique pages link to their published destinations.
     #[tokio::test]
     async fn contact_testimonials_and_blog_are_internal_footer_links() {
@@ -3212,7 +3217,7 @@ mod tests {
             for link in super::firm_footer_nav() {
                 if !matches!(
                     link.label,
-                    "Contact" | "Testimonials" | "Blog" | "Privacy" | "Terms"
+                    "Contact" | "Testimonials" | "Blog" | "Design" | "Privacy" | "Terms"
                 ) {
                     assert!(
                         link.href.starts_with("https://www.neonlaw.com/"),

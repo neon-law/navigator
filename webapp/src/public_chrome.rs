@@ -307,7 +307,6 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
             brands: chrome
                 .brands
                 .iter()
-                .filter(|_| !practice_footer)
                 .map(|brand| FooterBrandLink {
                     label: brand.label.clone(),
                     href: brand.href.clone(),
