@@ -25,6 +25,31 @@ fn map_inbox(error: store::inbox::InboxError) -> ApiError {
     }
 }
 
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
+
+/// One message's apply, serialized. The NEF pipeline files documents with a
+/// read-then-write over the revision chain — `file_revision_with_provenance`
+/// reads the slug's head before inserting — so two overlapping applies of
+/// one message can both observe an empty chain and each file the original
+/// and the attachments. The lock keeps the second apply behind the first:
+/// the replay then converges on identical bytes (a no-op revision) and the
+/// recorded idempotency truth. A single-process guarantee, the same boundary
+/// the integration ensure-lane documents; a multi-replica deployment needs
+/// the store lane's own converging slugs.
+static APPLY_LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+async fn apply_lock(message: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
+    let lock = APPLY_LOCKS
+        .lock()
+        .expect("apply-lock registry poisoned")
+        .entry(message.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone();
+    lock.lock_owned().await
+}
+
 /// The process view: classification metadata for one inbox message, plus
 /// what a previous process run recorded. Every door serves this same shape,
 /// so the CLI prints one plan from either a backlog listing, a status read,
@@ -126,6 +151,15 @@ pub(crate) async fn process(
     Json(request): Json<ProcessRequest>,
 ) -> Result<Response, ApiError> {
     let actor_id = actor_id(&session)?;
+    // The apply path is serialized per message (see `apply_lock`): a
+    // second waiter re-reads the recorded truth only after the first
+    // apply has finished. The plan path reads only and never takes
+    // the lock.
+    let _apply_guard = if request.apply {
+        Some(apply_lock(request.message).await)
+    } else {
+        None
+    };
     let context = store::inbox::process_context(&state.surreal, actor_id, request.message)
         .await
         .map_err(map_inbox)?;
