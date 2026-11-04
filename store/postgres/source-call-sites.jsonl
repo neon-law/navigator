@@ -1143,8 +1143,8 @@
 {"file":"store/src/brand_domains.rs","line":343,"function":"the_upgrade_backfill_runs_once_from_the_compiled_registry","operation":"bind","sql_operations":[],"tables":["brand"],"transaction":false}
 {"file":"store/src/brand_domains.rs","line":343,"function":"the_upgrade_backfill_runs_once_from_the_compiled_registry","operation":"bind","sql_operations":[],"tables":["firm"],"transaction":false}
 {"file":"store/src/brand_domains.rs","line":343,"function":"the_upgrade_backfill_runs_once_from_the_compiled_registry","operation":"query","sql_operations":["CREATE","UPDATE","UPSERT"],"tables":["brand","schema_version"],"transaction":false}
-{"file":"store/src/brand_letterheads.rs","line":285,"function":"find","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"store/src/brand_letterheads.rs","line":302,"function":"put","operation":"query","sql_operations":["INSERT","UPDATE"],"tables":[],"transaction":false}
+{"file":"store/src/brand_letterheads.rs","line":320,"function":"find","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"store/src/brand_letterheads.rs","line":337,"function":"put","operation":"query","sql_operations":["INSERT","UPDATE"],"tables":[],"transaction":false}
 {"file":"store/src/brand_phone_numbers.rs","line":148,"function":"put","operation":"begin","sql_operations":[],"tables":[],"transaction":true}
 {"file":"store/src/brand_phone_numbers.rs","line":149,"function":"put","operation":"query","sql_operations":["INSERT"],"tables":[],"transaction":false}
 {"file":"store/src/brand_phone_numbers.rs","line":162,"function":"put","operation":"query","sql_operations":["SELECT","UPDATE"],"tables":[],"transaction":false}
@@ -4968,8 +4968,8 @@
 {"file":"webapp/src/app_chrome.rs","line":604,"function":"resolve_app_brand_mark_prefers_an_uploaded_logo","operation":"bind","sql_operations":[],"tables":["brand"],"transaction":false}
 {"file":"webapp/src/app_chrome.rs","line":604,"function":"resolve_app_brand_mark_prefers_an_uploaded_logo","operation":"bind","sql_operations":[],"tables":["firm"],"transaction":false}
 {"file":"webapp/src/app_chrome.rs","line":604,"function":"resolve_app_brand_mark_prefers_an_uploaded_logo","operation":"query","sql_operations":["UPDATE"],"tables":[],"transaction":false}
-{"file":"webapp/src/brands_edit.rs","line":950,"function":"social_account_cards_offer_connect_and_disconnect","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/brands_edit.rs","line":990,"function":"saved_destinations_are_read_only_with_an_explicit_update_toggle","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/brands_edit.rs","line":1055,"function":"social_account_cards_offer_connect_and_disconnect","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/brands_edit.rs","line":1095,"function":"saved_destinations_are_read_only_with_an_explicit_update_toggle","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/components.rs","line":377,"function":"nav_names","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/document_link.rs","line":93,"function":"from_secret","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/document_link.rs","line":145,"function":"verify","operation":"update","sql_operations":[],"tables":[],"transaction":false}

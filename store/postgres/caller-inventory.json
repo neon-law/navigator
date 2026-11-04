@@ -5193,6 +5193,7 @@
       "store/src/authorities.rs",
       "store/src/billed_calls_attribution_tests.rs",
       "store/src/brand_domains.rs",
+      "store/src/brand_letterheads.rs",
       "store/src/brands.rs",
       "store/src/case_stages.rs",
       "store/src/cases.rs",
