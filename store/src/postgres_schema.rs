@@ -156,6 +156,13 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
             index_continuation = true;
             continue;
         }
+        // A view adds no table or column; skip its body through the `;`.
+        if current.is_none()
+            && (line.starts_with("CREATE VIEW ") || line.starts_with("CREATE OR REPLACE VIEW "))
+        {
+            index_continuation = !line.ends_with(';');
+            continue;
+        }
         if line.is_empty() || line.starts_with("--") || line == ")" || line == ");" {
             if line == ");" {
                 if let Some(table) = current.take() {
@@ -1374,6 +1381,10 @@ mod tests {
             (
                 "20261103120000_create_brand_letterhead.sql",
                 include_str!("../postgres/migrations/20261103120000_create_brand_letterhead.sql"),
+            ),
+            (
+                "20261104000000_create_person_directory_views.sql",
+                include_str!("../postgres/migrations/20261104000000_create_person_directory_views.sql"),
             ),
         ])
         .expect("timestamped migration assembles");
