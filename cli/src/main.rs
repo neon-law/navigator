@@ -8412,13 +8412,19 @@ fn fill_firm_legal_name(
 }
 
 /// The Firm legal name behind the Project's declared Brand, when `file` sits
-/// in a Project whose `navigator.yaml` resolves to one.
+/// in a Project whose `navigator.yaml` resolves to one. A template outside
+/// any Project names the default Brand's Firm, the same Brand whose
+/// letterhead frames it; a Project that resolves to no Brand names none.
 fn project_firm_legal_name(file: &Path) -> Option<String> {
-    let path = projects::matter::find_manifest(file)?;
-    let contents = std::fs::read_to_string(&path).ok()?;
-    let manifest = projects::manifest::parse(&contents).ok()?;
-    let letterhead =
-        cli::letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref()).ok()?;
+    let letterhead = match projects::matter::find_manifest(file) {
+        Some(path) => {
+            let contents = std::fs::read_to_string(&path).ok()?;
+            let manifest = projects::manifest::parse(&contents).ok()?;
+            cli::letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref())
+                .ok()?
+        }
+        None => cli::letterhead::for_brand(views::brand::BrandKey::Neon).ok()?,
+    };
     let name = letterhead.entity.trim();
     if name.is_empty() {
         None

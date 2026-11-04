@@ -2664,8 +2664,31 @@ fn from_line(line: &str) -> bool {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("from:"))
 }
 
-fn rewrite_firm_role_line(line: &str, names: &[&str]) -> String {
-    if states_named_entity_fact(line) {
+/// One flag per line of `contents`: whether the line sits in a paragraph
+/// that states a fact about a named entity. A fact can wrap, so the whole
+/// paragraph is protected, not only the line carrying the fact's verb.
+fn named_entity_fact_lines(contents: &str) -> Vec<bool> {
+    let lines: Vec<&str> = contents.lines().collect();
+    let mut flags = vec![false; lines.len()];
+    let mut start = 0;
+    while start < lines.len() {
+        let end = lines[start..]
+            .iter()
+            .position(|line| line.trim().is_empty())
+            .map_or(lines.len(), |offset| start + offset);
+        if lines[start..end]
+            .iter()
+            .any(|line| states_named_entity_fact(line))
+        {
+            flags[start..end].fill(true);
+        }
+        start = end + 1;
+    }
+    flags
+}
+
+fn rewrite_firm_role_line(line: &str, names: &[&str], in_fact: bool) -> String {
+    if in_fact {
         return line.to_string();
     }
     let mut rewritten = line.to_string();
@@ -2686,13 +2709,15 @@ fn rewrite_firm_role_line(line: &str, names: &[&str]) -> String {
 /// Rewritten prose when a compiled Firm name appears as a role, or `None`
 /// when every such line is already by role or is a named-entity fact.
 fn rewrite_firm_role_prose(contents: &str, names: &[&str]) -> Option<String> {
+    let facts = named_entity_fact_lines(contents);
     let mut changed = false;
     let mut out = String::with_capacity(contents.len());
-    for line in contents.split_inclusive('\n') {
+    for (index, line) in contents.split_inclusive('\n').enumerate() {
         let (body, newline) = line
             .strip_suffix('\n')
             .map_or((line, ""), |body| (body, "\n"));
-        let rewritten = rewrite_firm_role_line(body, names);
+        let in_fact = facts.get(index).copied().unwrap_or(false);
+        let rewritten = rewrite_firm_role_line(body, names, in_fact);
         if rewritten != body {
             changed = true;
         }
@@ -2703,9 +2728,10 @@ fn rewrite_firm_role_prose(contents: &str, names: &[&str]) -> Option<String> {
 }
 
 fn firm_role_findings(path: &Path, contents: &str, names: &[&str]) -> Vec<Finding> {
+    let facts = named_entity_fact_lines(contents);
     let mut findings = Vec::new();
     for (index, line) in contents.lines().enumerate() {
-        if rewrite_firm_role_line(line, names) != line {
+        if rewrite_firm_role_line(line, names, facts[index]) != line {
             findings.push(Finding::at(
                 path,
                 format!(
@@ -5890,6 +5916,11 @@ jobs:
         assert!(rewrite_firm_role_prose(&fact, &names).is_none());
         let mark = format!("A common-law mark of {name}.\n");
         assert!(rewrite_firm_role_prose(&mark, &names).is_none());
+        let wrapped = format!("{name}\nconverted from a PLLC.\n\nPrepared by {name}.\n");
+        assert_eq!(
+            rewrite_firm_role_prose(&wrapped, &names).expect("the role paragraph rewrites"),
+            format!("{name}\nconverted from a PLLC.\n\nPrepared by the Firm.\n")
+        );
     }
 
     #[test]

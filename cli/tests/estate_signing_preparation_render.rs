@@ -59,9 +59,6 @@ fn estate_signing_preparation_validates_and_renders_with_synthetic_answers() {
             "custom_datetime__signing_start=2026-11-10 10:00 AM",
             "--answer",
             "custom_datetime__signing_end=2026-11-10 11:30 AM",
-            // Outside a Project no Brand names the Firm, so the render takes it as an answer.
-            "--answer",
-            "firm.legal_name=Example Firm PC",
         ])
         .output()
         .expect("run navigator notation pdf");
