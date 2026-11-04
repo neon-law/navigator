@@ -258,7 +258,6 @@ fn wait_serving<C: Cluster>(
             desired.iter().map(String::as_str).collect()
         };
         if untrusted.is_empty() {
-            eprintln!("==> {certificate} is Active and serves trusted TLS for every host");
             return Ok(());
         }
         if waited >= timeout {
@@ -327,8 +326,7 @@ pub(crate) fn reconcile_with<C: Cluster>(
         }
         eprintln!(
             "DRY-RUN wait for {NEXT_CERTIFICATE_NAME}, patch {FIRM_CERTIFICATE_NAME}, wait again \
-             (up to {} minutes each)",
-            timeout.as_secs() / 60
+             (each wait bounded by the timeout)"
         );
         return Ok(Outcome::Planned { add, remove });
     }
@@ -346,9 +344,11 @@ pub(crate) fn reconcile_with<C: Cluster>(
         cluster.annotate_ingress(INGRESS_NAME, MANAGED_CERTIFICATES_ANNOTATION, &value)?;
     }
     wait_serving(cluster, NEXT_CERTIFICATE_NAME, &target, timeout)?;
+    eprintln!("==> {NEXT_CERTIFICATE_NAME} is Active and serves trusted TLS for every host");
 
     cluster.patch_domains(FIRM_CERTIFICATE_NAME, desired)?;
     wait_serving(cluster, FIRM_CERTIFICATE_NAME, &target, timeout)?;
+    eprintln!("==> {FIRM_CERTIFICATE_NAME} is Active and serves trusted TLS for every host");
     Ok(Outcome::Rolled { add, remove })
 }
 
@@ -384,20 +384,18 @@ pub fn pre_roll_for_deployment(
     match reconcile(&cfg, timeout_minutes, dry_run)? {
         Outcome::NoLiveCertificate => {
             eprintln!(
-                "==> no live {FIRM_CERTIFICATE_NAME} on {deployment}; ops ship provisions it"
+                "==> no live {FIRM_CERTIFICATE_NAME} on this deployment; ops ship provisions it"
             );
         }
         Outcome::Unchanged => {
-            eprintln!(
-                "==> {FIRM_CERTIFICATE_NAME} on {deployment} already carries this build's hosts"
-            );
+            eprintln!("==> {FIRM_CERTIFICATE_NAME} already carries this build's hosts");
         }
         Outcome::Planned { .. } => {
-            eprintln!("==> rerun without --dry-run to pre-roll {deployment}");
+            eprintln!("==> rerun without --dry-run to pre-roll this deployment");
         }
         Outcome::Rolled { .. } => {
             eprintln!(
-                "==> {FIRM_CERTIFICATE_NAME} on {deployment} pre-rolled; the next ops ship drops \
+                "==> {FIRM_CERTIFICATE_NAME} pre-rolled; the next ops ship drops \
                  {NEXT_CERTIFICATE_NAME}"
             );
         }
