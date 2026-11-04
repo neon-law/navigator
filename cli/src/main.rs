@@ -8346,28 +8346,15 @@ fn run_render(
         }
     }
 
-    // The firm's own letterhead, hard-coded in one place: `pdf::Letterhead`'s
-    // `Default`. A letter that goes out over a lawyer's signature says the
-    // same thing every time, so the identity is a constant rather than
-    // something assembled per render from brand accessors.
-    //
-    // This deliberately trades away the white-label seam rather than
-    // forgetting it: `views::brand_bundle::BrandManifest` carries
-    // `support_email`, `firm_phone`, `firm_address`, and `primary_domain`,
-    // so a mounted bundle *could* re-sign this letterhead the way it
-    // re-signs the website footer. It does not, by choice — a rendered
-    // letter is a binding artifact, and its identity is pinned to source
-    // rather than to whatever bundle happens to be mounted at render time.
-    // Restore the plumbing here, not somewhere new, if that call changes.
-    let letterhead = pdf::Letterhead::default();
+    let Ok(letterhead) =
+        project_letterhead(file, &format).map_err(|message| eprintln!("navigator: {message}"))
+    else {
+        return ExitCode::from(2);
+    };
     // A memo is the Firm's analysis for its client, so every page of it
     // says it is privileged, whatever its author typed (LAW-224).
     let privileged = field("kind").as_deref() == Some("memo");
-    let body = if preview {
-        flag_open_markers(&body)
-    } else {
-        body
-    };
+    let body = flag_open_markers_in_preview(body, preview);
     let format_debug = format!("{format:?}");
     let bytes = match render_notation_artifact(
         file,
@@ -8401,9 +8388,42 @@ fn run_render(
     ExitCode::SUCCESS
 }
 
+/// The letterhead for a render of `file` framed as `format`.
+///
+/// The Project's Brand frames the letter (LAW-265): `cli::letterhead`
+/// resolves `project.brand`, else `project.host`, from the nearest
+/// `navigator.yaml` against the compiled Brand registry — source, not
+/// whatever brand bundle is mounted, so a re-render of a sent letter prints
+/// the same letterhead. A Brand the registry does not know is a refusal,
+/// never the default letterhead. Only the letter frame carries one, so no
+/// other frame reads the manifest; a template outside any Project renders
+/// on the default Brand's letterhead.
+fn project_letterhead(file: &Path, format: &pdf::OutputFormat) -> Result<pdf::Letterhead, String> {
+    if !matches!(format, pdf::OutputFormat::Letter(_)) {
+        return Ok(pdf::Letterhead::default());
+    }
+    let Some(path) = projects::matter::find_manifest(file) else {
+        return Ok(pdf::Letterhead::default());
+    };
+    let contents = std::fs::read_to_string(&path)
+        .map_err(|error| format!("read {}: {error}", projects::manifest::FILE))?;
+    let manifest = projects::manifest::parse(&contents)?;
+    cli::letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref())
+        .map_err(|error| error.to_string())
+}
+
 /// A preview's drafting markers, rewritten as visible flags (LAW-183): each
 /// bracketed marker such as `[CONFIRM: amount and purpose]` becomes
 /// `«OPEN: amount and purpose»`, which the PDF render washes yellow.
+fn flag_open_markers_in_preview(body: String, preview: bool) -> String {
+    if preview {
+        flag_open_markers(&body)
+    } else {
+        body
+    }
+}
+
+/// [`flag_open_markers_in_preview`]'s rewrite, applied unconditionally.
 fn flag_open_markers(body: &str) -> String {
     let mut flagged = body.to_string();
     for finding in rules::final_document::drafting_markers(body) {
@@ -8492,10 +8512,15 @@ fn render_notation_artifact(
         let word_letterhead =
             matches!(&format, pdf::OutputFormat::Letter(_)).then(|| word::RenderLetterhead {
                 name: &letterhead.name,
+                entity: &letterhead.entity,
                 phone: &letterhead.phone,
                 email: &letterhead.email,
                 web: &letterhead.web,
-                logo_png: pdf::firm_logo_png(),
+                logo_png: if letterhead.logo {
+                    pdf::firm_logo_png()
+                } else {
+                    &[]
+                },
             });
         // A pleading's Word render takes the same calibrated court-paper
         // geometry as its PDF, so both carry the same frame and rail.
