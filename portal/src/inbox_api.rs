@@ -26,28 +26,28 @@ fn map_inbox(error: store::inbox::InboxError) -> ApiError {
 }
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
-/// One message's apply, serialized. The NEF pipeline files documents with a
-/// read-then-write over the revision chain — `file_revision_with_provenance`
-/// reads the slug's head before inserting — so two overlapping applies of
-/// one message can both observe an empty chain and each file the original
-/// and the attachments. The lock keeps the second apply behind the first:
-/// the replay then converges on identical bytes (a no-op revision) and the
-/// recorded idempotency truth. A single-process guarantee, the same boundary
-/// the integration ensure-lane documents; a multi-replica deployment needs
-/// the store lane's own converging slugs.
-static APPLY_LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Serialize local applies while store transactions and immutable source
+/// identities provide cross-replica convergence. Weak entries retain no
+/// completed message locks and are pruned on the next apply.
+type ApplyLocks = Mutex<HashMap<Uuid, Weak<tokio::sync::Mutex<()>>>>;
+static APPLY_LOCKS: LazyLock<ApplyLocks> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-async fn apply_lock(message: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
-    let lock = APPLY_LOCKS
+fn message_lock(
+    registry: &ApplyLocks,
+    message: Uuid,
+) -> Result<Arc<tokio::sync::Mutex<()>>, ApiError> {
+    let mut locks = registry
         .lock()
-        .expect("apply-lock registry poisoned")
-        .entry(message.to_string())
-        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-        .clone();
-    lock.lock_owned().await
+        .map_err(|_| ApiError::Db("inbox apply-lock registry unavailable".into()))?;
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&message).and_then(Weak::upgrade) {
+        return Ok(lock);
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(message, Arc::downgrade(&lock));
+    Ok(lock)
 }
 
 /// The process view: classification metadata for one inbox message, plus
@@ -151,21 +151,20 @@ pub(crate) async fn process(
     Json(request): Json<ProcessRequest>,
 ) -> Result<Response, ApiError> {
     let actor_id = actor_id(&session)?;
-    // The apply path is serialized per message (see `apply_lock`): a
-    // second waiter re-reads the recorded truth only after the first
-    // apply has finished. The plan path reads only and never takes
-    // the lock.
-    let _apply_guard = if request.apply {
-        Some(apply_lock(request.message).await)
-    } else {
-        None
-    };
     let context = store::inbox::process_context(&state.surreal, actor_id, request.message)
         .await
         .map_err(map_inbox)?;
     if !request.apply {
         return Ok(Json(view(context.row, context.state)).into_response());
     }
+    // Admit the caller before allocating a lock, then read the recorded
+    // truth again after any preceding apply has finished.
+    let _apply_guard = message_lock(&APPLY_LOCKS, request.message)?
+        .lock_owned()
+        .await;
+    let context = store::inbox::process_context(&state.surreal, actor_id, request.message)
+        .await
+        .map_err(map_inbox)?;
     let decision = classify_inbound_facts(
         &context.row.external_address,
         context.row.subject.as_deref().unwrap_or_default(),
@@ -315,5 +314,29 @@ async fn notify_inbox_routed(state: &ApiState, project_id: Uuid) -> SlackNotice 
             tracing::warn!(error = %error, "inbox process: post the Slack notice");
             SlackNotice::ProviderUnavailable
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{message_lock, ApplyLocks};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use uuid::Uuid;
+
+    #[test]
+    fn apply_registry_reuses_active_locks_and_prunes_completed_messages() {
+        let registry: ApplyLocks = Mutex::new(HashMap::new());
+        let message = Uuid::now_v7();
+        let first = message_lock(&registry, message).unwrap();
+        let second = message_lock(&registry, message).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        let other = message_lock(&registry, Uuid::now_v7()).unwrap();
+        assert!(!Arc::ptr_eq(&first, &other));
+        drop(first);
+        drop(second);
+        drop(other);
+        let _next = message_lock(&registry, Uuid::now_v7()).unwrap();
+        assert_eq!(registry.lock().unwrap().len(), 1);
     }
 }
