@@ -72,6 +72,14 @@ pub fn page_links(code: &str, pages: &[rules::pages::PageEntry], lens: PageLens)
     pages
         .iter()
         .filter(|page| page.lenses.contains_key(lens.as_str()))
+        // A page synced before its slug became a built-in section's path is
+        // shadowed by that route; linking it would open the wrong section.
+        // The next sync's `Y021` names it to the author.
+        .filter(|page| {
+            !MatterTab::ROUTED
+                .iter()
+                .any(|tab| tab.segment() == page.slug)
+        })
         .map(|page| PageTab {
             label: page.title.clone(),
             href: format!("/app/projects/{code}/{}", page.slug),
@@ -1008,7 +1016,7 @@ mod tests {
                 PageEntry {
                     slug: "engagement".into(),
                     kind: "engagement_billing_records".into(),
-                    title: "Billing".into(),
+                    title: "Engagement and billing".into(),
                     draft: None,
                     lenses: billing,
                 },
@@ -1090,7 +1098,7 @@ mod tests {
             assert_eq!(client, ["/app/projects/m", "/app/projects/m/timeline"]);
             let lawyer = page_tabs("m", &pages(), PageLens::Lawyer);
             assert_eq!(lawyer.len(), 3);
-            assert_eq!(lawyer[2].label, "Billing");
+            assert_eq!(lawyer[2].label, "Engagement and billing");
         }
 
         #[test]
@@ -1135,10 +1143,37 @@ mod tests {
         }
 
         #[test]
-        fn the_overview_tab_is_the_title_y021_reserves() {
+        fn the_tab_labels_are_the_titles_y021_reserves() {
+            use super::super::MatterTab;
+            assert_eq!(MatterTab::Overview.label(), rules::pages::SHOW_PAGE_TITLE);
+            let builtins: Vec<&str> = MatterTab::ROUTED.iter().map(|tab| tab.label()).collect();
+            assert_eq!(builtins, rules::pages::BUILTIN_TAB_TITLES);
+        }
+
+        #[test]
+        fn a_page_shadowed_by_a_built_in_route_is_left_out_of_the_strip() {
+            use super::super::matter_tabs;
+            let mut pages = pages();
+            pages[1].slug = "billing".into();
+            let hrefs: Vec<String> = matter_tabs("m", &pages, store::access::MatterViewer::Lawyer)
+                .into_iter()
+                .map(|tab| tab.href)
+                .collect();
             assert_eq!(
-                super::super::MatterTab::Overview.label(),
-                rules::pages::SHOW_PAGE_TITLE
+                hrefs
+                    .iter()
+                    .filter(|href| href.as_str() == "/app/projects/m/billing")
+                    .count(),
+                1,
+                "only the built-in Billing tab: {hrefs:?}"
+            );
+            let labels: Vec<String> = matter_tabs("m", &pages, store::access::MatterViewer::Lawyer)
+                .into_iter()
+                .map(|tab| tab.label)
+                .collect();
+            assert!(
+                !labels.contains(&"Engagement and billing".to_string()),
+                "{labels:?}"
             );
         }
 

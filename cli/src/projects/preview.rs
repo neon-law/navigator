@@ -1088,7 +1088,7 @@ mod tests {
             "      client: [package_manifest, download_list, boundary_note, provenance_statement]",
             "  - slug: engagement",
             "    kind: engagement_billing_records",
-            "    title: Billing",
+            "    title: Engagement and billing",
             "    lenses:",
             "      lawyer: [engagement_letter, invoice, prebill_review, boundary_note, \
              provenance_statement]",
