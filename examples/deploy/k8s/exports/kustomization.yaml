@@ -32,10 +32,11 @@ namespace: navigator
 # `cli/src/devx/ship.rs` fails the build if any trigger inlines a key this
 # Secret projects.
 #
-# The `general-nag`, `dri-digest-trigger`, and `notation-reset-trigger` lines
-# are also placeholders: `ops ship` drops each one when its
-# `NAVIGATOR_DBOS_*_ENABLED` switch moves that daily workflow onto the DBOS
-# executor in `web`, and deletes the live CronJob in the same roll.
+# The `archives-trigger`, `general-nag`, `billing-digest-trigger`,
+# `dri-digest-trigger`, and `notation-reset-trigger` lines are also
+# placeholders: `ops ship` drops each one when its `NAVIGATOR_DBOS_*_ENABLED`
+# switch moves that workflow onto the DBOS executor in `web`, and deletes the
+# live CronJob in the same roll.
 resources:
   - cron-archives-trigger.yaml
   - cron-surreal-archive.yaml

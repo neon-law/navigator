@@ -133,6 +133,14 @@ const POSTGRES_DBOS_KEYS: &[&str] = &["NAVIGATOR_POSTGRES_DBOS_PASSWORD"];
 /// The mounted-file Secret holding the DBOS login's `password` and `ca.crt`.
 const POSTGRES_DBOS_SECRET: &str = "navigator-postgres-dbos";
 
+/// The read-only Iceberg archive login (`navigator_archive`), which the DBOS
+/// Archives schedule in `web` uses to export the whole database. Optional in
+/// the PostgreSQL service file; it shares the client logins' CA bundle.
+const POSTGRES_ARCHIVE_KEYS: &[&str] = &["NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD"];
+
+/// The mounted-file Secret holding the archive login's `password` and `ca.crt`.
+const POSTGRES_ARCHIVE_SECRET: &str = "navigator-postgres-archive";
+
 /// Forgejo's `OpenID` Connect client secret at the installation's issuer.
 /// Optional as a set: without it Forgejo has no external sign-in. Its public
 /// client id is the `NAVIGATOR_FORGEJO_OIDC_CLIENT_ID` coordinate.
@@ -239,7 +247,11 @@ impl ServiceSecrets {
     /// or absent, so a file written before the set existed stays valid.
     fn optional_key_sets(self) -> &'static [&'static [&'static str]] {
         match self {
-            Self::Postgres => &[POSTGRES_CLIENT_KEYS, POSTGRES_DBOS_KEYS],
+            Self::Postgres => &[
+                POSTGRES_CLIENT_KEYS,
+                POSTGRES_DBOS_KEYS,
+                POSTGRES_ARCHIVE_KEYS,
+            ],
             Self::Forgejo => &[FORGEJO_OIDC_KEYS, FORGEJO_SIGNING_KEYS],
         }
     }
@@ -261,6 +273,9 @@ impl ServiceSecrets {
                 }
                 if keys.contains(POSTGRES_DBOS_KEYS[0]) {
                     targets.push(POSTGRES_DBOS_SECRET);
+                }
+                if keys.contains(POSTGRES_ARCHIVE_KEYS[0]) {
+                    targets.push(POSTGRES_ARCHIVE_SECRET);
                 }
                 targets
             }
@@ -1270,8 +1285,8 @@ fn service_payloads(
 }
 
 /// One Secret per PostgreSQL login present in `payloads` — the client set and
-/// the optional DBOS login — each with its own `password` and the shared
-/// `ca.crt`.
+/// the optional DBOS and archive logins — each with its own `password` and the
+/// shared `ca.crt`.
 fn postgres_login_secrets(
     payloads: &BTreeMap<String, String>,
 ) -> Result<Vec<KubernetesSecretPayload>> {
@@ -1281,6 +1296,9 @@ fn postgres_login_secrets(
     }
     if payloads.contains_key(POSTGRES_DBOS_KEYS[0]) {
         logins.push((POSTGRES_DBOS_SECRET, POSTGRES_DBOS_KEYS[0]));
+    }
+    if payloads.contains_key(POSTGRES_ARCHIVE_KEYS[0]) {
+        logins.push((POSTGRES_ARCHIVE_SECRET, POSTGRES_ARCHIVE_KEYS[0]));
     }
     if logins.is_empty() {
         return Ok(Vec::new());
@@ -2744,6 +2762,45 @@ sops:
                 .targets(&keys)
                 .contains(&POSTGRES_DBOS_SECRET),
             "a file without the DBOS login projects no DBOS Secret"
+        );
+    }
+
+    #[test]
+    fn postgres_archive_login_projects_its_own_secret_with_the_ca_bundle() {
+        let (mut deployment, mut payloads) = postgres_with_client_logins();
+        for key in POSTGRES_ARCHIVE_KEYS {
+            deployment.postgres_encrypted_keys.insert((*key).to_owned());
+            payloads.insert((*key).to_owned(), format!("synthetic-{key}"));
+        }
+        let keys = service_plan(&deployment, ServiceSecrets::Postgres).unwrap();
+        assert_eq!(
+            ServiceSecrets::Postgres.targets(&keys).last(),
+            Some(&POSTGRES_ARCHIVE_SECRET)
+        );
+        let values = service_payloads(ServiceSecrets::Postgres, &keys, &payloads).unwrap();
+        let secrets =
+            build_service_secrets(ServiceSecrets::Postgres, &deployment, "navigator", &values)
+                .unwrap();
+        let secret = secrets
+            .iter()
+            .find(|secret| secret.name == POSTGRES_ARCHIVE_SECRET)
+            .expect("the archive login is projected");
+        assert_eq!(
+            secret.data["password"],
+            payloads["NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD"]
+        );
+        assert_eq!(
+            secret.data["ca.crt"],
+            payloads["NAVIGATOR_POSTGRES_CA_CERT"]
+        );
+
+        let (deployment, _) = postgres_with_client_logins();
+        let keys = service_plan(&deployment, ServiceSecrets::Postgres).unwrap();
+        assert!(
+            !ServiceSecrets::Postgres
+                .targets(&keys)
+                .contains(&POSTGRES_ARCHIVE_SECRET),
+            "a file without the archive login projects no archive Secret"
         );
     }
 

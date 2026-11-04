@@ -1,0 +1,3069 @@
+{
+  "navigator": {
+    "relations": [
+      {
+        "action": "export",
+        "schema": "ag_catalog",
+        "name": "ag_graph",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "ag_catalog",
+        "name": "ag_label",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "application_versions",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "dbos_migrations",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "event_dispatch_kv",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "notifications",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "operation_outputs",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "queues",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "streams",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "workflow_events",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "workflow_events_history",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "workflow_schedules",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "workflow_status",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "Entity",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "Entity_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "Firm",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "Firm_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "HANDLES",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "HANDLES_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "HAS_ROLE",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "HAS_ROLE_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "MEMBER_OF",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "MEMBER_OF_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "Person",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "Person_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "Project",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "Project_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "RELATIONSHIP",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "RELATIONSHIP_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "WORKS_ON",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "WORKS_ON_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "_ag_label_edge",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "_ag_label_edge_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "_ag_label_vertex",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "_ag_label_vertex_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "navigator_graph",
+        "name": "_label_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "pg_catalog",
+        "name": "pg_largeobject",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "pg_catalog",
+        "name": "pg_largeobject_metadata",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "_sqlx_migrations",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "address",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "answer",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "archived_object_purge",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "asset",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "assistant_turn",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "attestation",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "attorney_rate",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "authority",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "authority_use",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "billed_call",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "blog_video",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "brand",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "brand_letterhead",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "brand_phone_number",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "cap_table_holding",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "case",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "case_docket_entry",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "citation",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "clause",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "communication",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "contract_review",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "credential",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "dbos_workflow_request",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "deployment_secret_change",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "disclosure",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "discovery_item",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "discovery_request",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "document_chain_archive",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "document_chain_archive_item",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "document_comment",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "document_upload_session",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "efiling_transactions",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "email_conversation",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "email_conversation_message",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "email_delivery",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "email_delivery_attempt",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "email_receipt",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "email_token",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "entity",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "entity_role",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "entity_type",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "estate_asset",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "expunge_record",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "expunge_request",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "fiduciary_role",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "filing",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "finance_aggregate",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "firm",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "firm_anchor",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "firm_brand",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "firm_forgejo_organization",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "firm_integration_secret",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "git_access_token",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "git_repository",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "glossary_term",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "inbox_assignment",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "inbox_attachment_receipt",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "inbox_conversation",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "inbox_delivery_attempt",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "inbox_ingress",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "inbox_message_asset",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "inbox_triage",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "iolta_account",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "iolta_allocation",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "iolta_withdrawal",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "journal_entry",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "journal_entry_source",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "journal_posting",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "journal_reconciliation",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "journal_reconciliation_signal",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "journal_reconciliation_signal_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "journal_source_reference",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "journal_source_snapshot",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "jurisdiction",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "lead",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "lead_consent",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "letter",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "mailroom",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "matter_billing_batch",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "matter_caption",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "matter_flat_fee",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "matter_page",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "message",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "mirror_backfill_checkpoint",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "mirror_backfill_failure",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "mirror_backfill_run",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notarization",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_clause",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_document",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_document_comment",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_document_version",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_draft",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_event",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_machine_state",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_meter_entry",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_package",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_package_template",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_rate",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_source",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_transition",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "person",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "person_delegate",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "person_external_identity",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "person_firm_role",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "person_mailbox",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "person_phone",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "person_project_role",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "playbook",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "post",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_archive_generation",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_archive_item",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_cost_events",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_costs",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_deadlines",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_folder",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_handoff",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_handoff_acknowledgment",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_module",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_reference",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_service",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_source_import",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_task",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_task_events",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "purchase",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "question",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "relationship",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "relationship_log",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "retention_purge",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "review_document",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "sandbox_usage",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "sent_email",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "signature",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "social_account",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "social_account_selection",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "social_handle",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "social_oauth_attempt",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "social_publication",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "ssh_public_key",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "stage_definition",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "stage_event",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "statutory_deadline",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "summary_sender_approval",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "summary_sender_approval_event",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "template",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "testimonial",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "time_entry",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "time_entry_events",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "timer",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "verification",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "visitor_route_count",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "xero_invoice",
+        "kind": "table",
+        "accessible": true
+      }
+    ]
+  },
+  "forgejo": {
+    "relations": [
+      {
+        "action": "export",
+        "schema": "pg_catalog",
+        "name": "pg_largeobject",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "pg_catalog",
+        "name": "pg_largeobject_metadata",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "abuse_report",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "abuse_report_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "abuse_report_shadow_copy",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "abuse_report_shadow_copy_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "access",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "access_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "access_token",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "access_token_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "access_token_resource_repo",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "access_token_resource_repo_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_artifact",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_artifact_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_run",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_run_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_run_index",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_run_job",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_run_job_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_runner",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_runner_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_runner_token",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_runner_token_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_schedule",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_schedule_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_schedule_spec",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_schedule_spec_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_task",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_task_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_task_output",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_task_output_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_task_step",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_task_step_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_tasks_version",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_tasks_version_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_user",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_user_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_variable",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "action_variable_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "app_state",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "attachment",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "attachment_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "badge",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "badge_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "branch",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "branch_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "collaboration",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "collaboration_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "comment",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "comment_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "commit_status",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "commit_status_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "commit_status_index",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "commit_status_index_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "commit_status_summary",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "commit_status_summary_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "dbfs_data",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "dbfs_data_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "dbfs_meta",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "dbfs_meta_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "deploy_key",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "deploy_key_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "email_address",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "email_address_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "email_hash",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "external_login_user",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "federated_user",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "federated_user_activity",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "federated_user_activity_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "federated_user_follower",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "federated_user_follower_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "federated_user_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "federation_host",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "federation_host_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "follow",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "follow_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "following_repo",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "following_repo_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_auth_token",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_auth_token_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_blocked_user",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_blocked_user_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_migration",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_repo_flag",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_repo_flag_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_sem_ver",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_version",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_version_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "gpg_key",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "gpg_key_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "gpg_key_import",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "hook_task",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "hook_task_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_assignees",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_assignees_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_content_history",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_content_history_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_dependency",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_dependency_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_index",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_label",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_label_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_user",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_user_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_watch",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "issue_watch_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "label",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "label_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "language_stat",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "language_stat_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "lfs_lock",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "lfs_lock_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "lfs_meta_object",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "lfs_meta_object_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "login_source",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "login_source_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "milestone",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "milestone_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "mirror",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "mirror_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notice",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notice_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notification",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notification_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "oauth2_application",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "oauth2_application_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "oauth2_authorization_code",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "oauth2_authorization_code_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "oauth2_grant",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "oauth2_grant_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "org_user",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "org_user_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_blob",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_blob_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_blob_upload",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_cleanup_rule",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_cleanup_rule_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_file",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_file_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_property",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_property_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_version",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "package_version_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_board",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_board_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_issue",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_issue_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "protected_branch",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "protected_branch_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "protected_tag",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "protected_tag_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "public_key",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "public_key_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "pull_auto_merge",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "pull_auto_merge_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "pull_request",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "pull_request_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "push_mirror",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "push_mirror_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "quota_group",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "quota_group_mapping",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "quota_group_mapping_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "quota_group_rule_mapping",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "quota_group_rule_mapping_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "quota_rule",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "reaction",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "reaction_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "release",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "release_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "renamed_branch",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "renamed_branch_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_archive_download_count",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_archive_download_count_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_archiver",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_archiver_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_indexer_status",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_indexer_status_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_redirect",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_redirect_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_topic",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_transfer",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_transfer_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_unit",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repo_unit_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repository",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "repository_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "review",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "review_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "review_state",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "review_state_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "secret",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "secret_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "session",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "star",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "star_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "stopwatch",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "stopwatch_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "system_setting",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "system_setting_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "task",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "task_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "team",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "team_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "team_invite",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "team_invite_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "team_repo",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "team_repo_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "team_unit",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "team_unit_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "team_user",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "team_user_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "topic",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "topic_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "tracked_time",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "tracked_time_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "two_factor",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "two_factor_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "upload",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "upload_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "user",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "user_badge",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "user_badge_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "user_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "user_open_id",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "user_open_id_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "user_redirect",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "user_redirect_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "user_setting",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "user_setting_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "version",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "version_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "watch",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "watch_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "webauthn_credential",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "webauthn_credential_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "webhook",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "webhook_id_seq",
+        "kind": "sequence",
+        "accessible": true
+      }
+    ]
+  }
+}
