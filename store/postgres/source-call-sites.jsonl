@@ -500,9 +500,9 @@
 {"file":"features/src/webdriver.rs","line":132,"function":"new_client_with","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"features/src/webdriver.rs","line":162,"function":"assert_color_scheme","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"features/src/webdriver.rs","line":221,"function":"scroll_and_js_click","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"features/src/webdriver.rs","line":430,"function":"fill_login_field_from_script","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"features/src/webdriver.rs","line":624,"function":"chrome_options","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"features/src/webdriver.rs","line":626,"function":"chrome_options","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"features/src/webdriver.rs","line":429,"function":"fill_text_field_from_script","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"features/src/webdriver.rs","line":623,"function":"chrome_options","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"features/src/webdriver.rs","line":625,"function":"chrome_options","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"forms/src/notation.rs","line":52,"function":"with_signer_boxes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"forms/src/reauthor.rs","line":325,"function":"plan","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"forms/src/reauthor.rs","line":352,"function":"plan","operation":"insert","sql_operations":[],"tables":["answer"],"transaction":false}
