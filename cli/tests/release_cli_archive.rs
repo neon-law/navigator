@@ -443,7 +443,11 @@ fn releases_build_and_attach_a_linux_cli_archive() {
 
     for required in [
         "release-cli-build-linux:",
-        "install -m 0755 target/release/navigator dist/navigator-linux/navigator",
+        // Static musl (ENG-1228): the Forgejo gate runs inside the Alpine
+        // `forgejo/runner` image, where a glibc binary cannot start.
+        "sudo apt-get install -y --no-install-recommends musl-tools",
+        "cargo build --locked --release --target x86_64-unknown-linux-musl -p cli --bin navigator",
+        "install -m 0755 target/x86_64-unknown-linux-musl/release/navigator dist/navigator-linux/navigator",
         "install -m 0644 LICENSE dist/navigator-linux/LICENSE",
         "-C dist/navigator-linux navigator LICENSE",
         "name: navigator-linux-cli",
@@ -452,6 +456,32 @@ fn releases_build_and_attach_a_linux_cli_archive() {
         assert!(
             workflow.contains(required),
             "deploy.yml must retain the Linux CLI release contract `{required}`"
+        );
+    }
+
+    // Check the proof step's own script, not just its name: dropping the
+    // static-link check or the in-image run must fail here.
+    let job = deploy_job("release-cli-build-linux");
+    let proof = job_step(
+        &job,
+        "prove the CLI runs in the pinned Forgejo runner image",
+    )
+    .and_then(|step| step.get("run"))
+    .and_then(|run| run.as_str())
+    .expect("release-cli-build-linux must prove the CLI in the pinned runner image");
+    for required in [
+        "file \"${bin}\" | grep -q 'static-pie linked\\|statically linked'",
+        "cli/src/devx/forgejo/runner.rs",
+        "docker run --rm --entrypoint /b/navigator",
+        "test \"${got}\" = \"navigator ${TAG}\"",
+        // `--version` falls back to the Cargo version, so only the published
+        // release proves build.rs saw NAVIGATOR_RELEASE_TAG.
+        "ops github setup --help",
+        "grep -qF \"[default: ${TAG}]\"",
+    ] {
+        assert!(
+            proof.contains(required),
+            "the runner-image proof must retain `{required}`"
         );
     }
 }
