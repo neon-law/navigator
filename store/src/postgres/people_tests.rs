@@ -667,10 +667,25 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
     );
 
     // Flag, contact, and edit writes move the authoritative row and project.
-    super::set_flag(&pg, &surreal, owner.id, "email_confirmed", true)
+    let flagged = super::set_flag(&pg, &surreal, owner.id, "email_confirmed", true)
         .await
         .unwrap()
         .unwrap();
+    assert!(flagged.email_confirmed);
+    assert!(
+        super::by_id(&pg, owner.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .email_confirmed
+    );
+    assert!(
+        crate::persons::find_by_id(&surreal, owner.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .email_confirmed
+    );
     let contacted = super::update_contact(
         &pg,
         &surreal,

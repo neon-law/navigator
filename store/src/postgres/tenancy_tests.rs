@@ -1025,9 +1025,35 @@ async fn brand_wrappers_authorize_and_guard_the_brand_seams() {
             .unwrap_err();
             assert!(matches!(ghost_edit, BrandError::NoSuchBrand(_)));
 
-            // Logo and font writes are the only writers for their object keys.
+            // An admin who is not the firm's DRI is refused: non-owner
+            // actors run the DRI check, and a bare admin membership lacks
+            // the appointment.
+            tenancy::add_membership_on(
+                &pg,
+                &NewPersonFirmRole {
+                    person_id: seed.second_admin,
+                    firm_id: firm.id,
+                    membership: FirmMembership::Admin,
+                    is_dri: false,
+                },
+            )
+            .await
+            .unwrap();
+            let non_dri = tenancy::set_brand_logo(
+                crate::persons::Role::Admin,
+                Some(seed.second_admin),
+                created.id,
+                "logos/refused.png",
+                "image/png",
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(non_dri, BrandError::NotAuthorized));
+
+            // Logo and font writes are the only writers for their object
+            // keys, and the acting firm DRI admin passes the DRI check.
             let logged = tenancy::set_brand_logo(
-                crate::persons::Role::Owner,
+                crate::persons::Role::Admin,
                 Some(seed.dri),
                 created.id,
                 "logos/wrapper.png",
@@ -1037,7 +1063,7 @@ async fn brand_wrappers_authorize_and_guard_the_brand_seams() {
             .unwrap();
             assert_eq!(logged.logo_object_key.as_deref(), Some("logos/wrapper.png"));
             let fonted = tenancy::set_brand_font(
-                crate::persons::Role::Owner,
+                crate::persons::Role::Admin,
                 Some(seed.dri),
                 created.id,
                 "Wrapper Serif",
