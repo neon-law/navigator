@@ -264,3 +264,64 @@ async fn concurrent_different_first_registrations_conflict_without_overwriting_t
         "the losing registration cannot change the winning content or timestamps"
     );
 }
+
+// The Brand letterhead (LAW-266) is the other Brand-scoped table born in
+// PostgreSQL; it shares this binary's lane rather than adding a test binary.
+
+/// A Brand's letterhead round-trips, a second save replaces the first, and
+/// one Brand's row never answers for another.
+#[tokio::test]
+async fn a_saved_letterhead_round_trips_and_a_resave_replaces_it() {
+    use store::brand_letterheads::{self, LetterheadFields, LetterheadMark};
+    let Some(pg) = postgres().await else {
+        return;
+    };
+    let (first, second) = (Uuid::now_v7(), Uuid::now_v7());
+    assert_eq!(brand_letterheads::find(&pg, first).await.unwrap(), None);
+
+    let fields = LetterheadFields {
+        wordmark: Some("Example".into()),
+        mark: LetterheadMark::Wordmark,
+        phone: Some("+1 555 010 0000".into()),
+        email: Some("hello@example.com".into()),
+        site_url: Some("https://www.example.com".into()),
+        postal_address: Some("1 Main St\nSpringfield".into()),
+        font_family: None,
+    };
+    let saved = brand_letterheads::put(&pg, first, &fields).await.unwrap();
+    assert_eq!(saved, fields);
+    assert_eq!(
+        brand_letterheads::find(&pg, first).await.unwrap(),
+        Some(fields.clone())
+    );
+    assert_eq!(brand_letterheads::find(&pg, second).await.unwrap(), None);
+
+    let cleared = LetterheadFields {
+        phone: None,
+        ..fields
+    };
+    brand_letterheads::put(&pg, first, &cleared).await.unwrap();
+    assert_eq!(
+        brand_letterheads::find(&pg, first).await.unwrap(),
+        Some(cleared)
+    );
+}
+
+/// The table refuses what validation would: a non-https site.
+#[tokio::test]
+async fn the_letterhead_table_refuses_an_unvalidated_site() {
+    use store::brand_letterheads::{self, LetterheadFields};
+    let Some(pg) = postgres().await else {
+        return;
+    };
+    let refused = brand_letterheads::put(
+        &pg,
+        Uuid::now_v7(),
+        &LetterheadFields {
+            site_url: Some("http://www.example.com".into()),
+            ..LetterheadFields::default()
+        },
+    )
+    .await;
+    assert!(refused.is_err());
+}

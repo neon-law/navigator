@@ -719,6 +719,32 @@ pub enum GcpCmd {
         /// purge's decision, never bucket age. Omit to skip the lane.
         #[arg(long, env = "NAVIGATOR_ARCHIVED_PROJECTS_BUCKET")]
         archived_projects_bucket: Option<String>,
+        /// GCP project id that holds the offsite Iceberg archive bucket —
+        /// a different project than the deployment's, so the live workload's
+        /// blast radius cannot reach the archive. The bucket is created with a
+        /// locked 25-year retention policy and public access prevention
+        /// enforced; the deployment's workflows-service identity gets create
+        /// and read roles on it and nothing else. Requires
+        /// `--offsite-archives-bucket`. Falls back to
+        /// `NAVIGATOR_OFFSITE_ARCHIVES_PROJECT_ID`.
+        #[arg(
+            long,
+            env = "NAVIGATOR_OFFSITE_ARCHIVES_PROJECT_ID",
+            requires_all = ["offsite_archives_bucket"]
+        )]
+        offsite_archives_project_id: Option<String>,
+        /// Offsite Iceberg archive bucket name, created in the project
+        /// `--offsite-archives-project-id` names with a locked 25-year
+        /// retention policy and no lifecycle rule. No derived default: the
+        /// name is an operator choice in another project. Requires
+        /// `--offsite-archives-project-id`. Falls back to
+        /// `NAVIGATOR_OFFSITE_ARCHIVES_BUCKET`.
+        #[arg(
+            long,
+            env = "NAVIGATOR_OFFSITE_ARCHIVES_BUCKET",
+            requires_all = ["offsite_archives_project_id"]
+        )]
+        offsite_archives_bucket: Option<String>,
         /// Telemetry landing zone (`<deployment>-telemetry`), where the `OTel`
         /// collector writes Parquet before the nightly lane promotes it into
         /// the archive. Provisioned with a flat 90-day object expiry. Omit to
@@ -1068,6 +1094,8 @@ fn dispatch_with_dns_provider(
             archives_bucket,
             archived_projects_bucket,
             telemetry_bucket,
+            offsite_archives_project_id,
+            offsite_archives_bucket,
             google_service_account_id,
             drive_service_account_id,
             kubernetes_namespace,
@@ -1101,6 +1129,8 @@ fn dispatch_with_dns_provider(
                 archives_bucket,
                 archived_projects_bucket,
                 telemetry_bucket,
+                offsite_archives_project_id,
+                offsite_archives_bucket,
                 ..gcp::SetupConfig::default()
             };
             if let Some(v) = google_service_account_id {

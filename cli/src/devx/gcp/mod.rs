@@ -80,7 +80,7 @@ pub use error::{SetupError, SetupResult};
 
 use self::client::GcpClient;
 
-const SETUP_STAGE_COUNT: usize = 19;
+const SETUP_STAGE_COUNT: usize = 20;
 
 fn progress_line(project_id: &str, stage: usize, stage_count: usize, detail: &str) -> String {
     format!("gcp setup [{project_id}] {stage:02}/{stage_count:02} {detail}")
@@ -118,6 +118,11 @@ pub const ARCHIVED_PROJECTS_BUCKET_SUFFIX: &str = "-archived-projects";
 /// archive family first and the deployment second, matching the existing
 /// `neon-law-archives-neon-law-420305`.
 pub const ARCHIVES_BUCKET_PREFIX: &str = "neon-law-archives-";
+/// The offsite Iceberg archive bucket, `<deployment>-archives-offsite`, created
+/// in a different GCP project than the deployment and carrying a locked 25-year
+/// retention policy. The suffix lets `buckets::from_name` classify the lane
+/// even though the bucket itself is operator-named and cross-project.
+pub const OFFSITE_ARCHIVES_BUCKET_SUFFIX: &str = "-archives-offsite";
 
 /// Default Artifact Registry repository name that holds every image.
 pub const DEFAULT_ARTIFACT_REGISTRY_REPO: &str = "navigator";
@@ -202,6 +207,14 @@ pub struct SetupConfig {
     /// Private Project Recovery Archive bucket. Absent means the deployment
     /// declines the lane; archive commands then fail closed.
     pub archived_projects_bucket: Option<String>,
+    /// The offsite Iceberg archive: a bucket in a different GCP project,
+    /// carrying a locked 25-year retention policy, written by the deployment's
+    /// workflows-service identity with create and read roles only. Both fields
+    /// are set together or both absent — a bucket without the project id would
+    /// provision in-project, defeating the lane's whole purpose — and the
+    /// archive project must differ from the deployment project.
+    pub offsite_archives_project_id: Option<String>,
+    pub offsite_archives_bucket: Option<String>,
     /// Google service-account id used by the web and workflows Kubernetes
     /// service accounts through GKE Workload Identity. Deployments sharing a
     /// GCP project set this explicitly so their principals stay isolated.
@@ -246,6 +259,8 @@ impl Default for SetupConfig {
             archives_bucket: None,
             telemetry_bucket: None,
             archived_projects_bucket: None,
+            offsite_archives_project_id: None,
+            offsite_archives_bucket: None,
             google_service_account_id: "navigator-web".to_string(),
             drive_service_account_id: "navigator-drive".to_string(),
             kubernetes_namespace: "navigator".to_string(),
@@ -410,8 +425,94 @@ async fn ensure_buckets(
     .await
 }
 
-/// Stage 17: logs, not backups — the backups bucket's window is set with its
-/// bucket in stage 8. Last because nothing depends on it, and an expiry that
+/// Resolve and validate the offsite archive lane: both names supplied
+/// together, and the archive in a different project than the deployment.
+/// `None` means the deployment declines the lane — a first-class answer, like
+/// the archive and telemetry buckets. A half-configured pair or an in-project
+/// archive refuses the run: a bucket provisioned inside the deployment
+/// project shares its blast radius, which is exactly what the lane exists to
+/// avoid.
+fn resolve_offsite_archive<'a>(
+    project_id: &str,
+    config: &'a SetupConfig,
+) -> SetupResult<Option<(&'a str, &'a str)>> {
+    let resolved: Option<(&'a str, &'a str)> = match (
+        &config.offsite_archives_project_id,
+        &config.offsite_archives_bucket,
+    ) {
+        (Some(archive_project), Some(bucket)) if archive_project != project_id => {
+            Ok(Some((archive_project.as_str(), bucket.as_str())))
+        }
+        (Some(_), Some(_)) => Err(SetupError::InvalidFlag {
+            flag: "--offsite-archives-project-id",
+            detail: "must differ from the deployment project: the offsite archive exists \
+                     so the deployment project's blast radius cannot reach it",
+        }),
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(SetupError::MissingConfiguration(
+            "--offsite-archives-bucket",
+        )),
+        (None, Some(_)) => Err(SetupError::MissingConfiguration(
+            "--offsite-archives-project-id",
+        )),
+    }?;
+    if let Some((_, bucket)) = &resolved {
+        if BucketNames::resolve(project_id, config)
+            .granted()
+            .contains(bucket)
+        {
+            return Err(SetupError::InvalidFlag {
+                flag: "--offsite-archives-bucket",
+                detail: "must not name a bucket the runtime identity is already granted on: \
+                         that grant carries objectAdmin, which would leave delete permission \
+                         on the archive the offsite lane exists to keep write-only",
+            });
+        }
+    }
+    Ok(resolved)
+}
+
+/// Stage 13: the offsite Iceberg archive — a locked, write-only bucket in a
+/// different GCP project, plus the workflows-service grant that may write it
+/// but never administer it. The bucket is created with its retention policy
+/// already in place, verified against the live bucket, and only then locked:
+/// the lock is irreversible.
+async fn ensure_offsite_archive(
+    client: &GcpClient,
+    project_id: &str,
+    config: &SetupConfig,
+) -> SetupResult<()> {
+    match resolve_offsite_archive(project_id, config)? {
+        Some((archive_project, bucket)) => {
+            progress(
+                project_id,
+                13,
+                &format!(
+                    "offsite Iceberg archive bucket {bucket} in project {archive_project} \
+                     (locked 25-year retention)"
+                ),
+            );
+            buckets::ensure_offsite_archive(client, archive_project, bucket, &config.region)
+                .await?;
+            buckets::ensure_offsite_archive_writer(
+                client,
+                project_id,
+                &config.google_service_account_id,
+                bucket,
+            )
+            .await?;
+        }
+        None => progress(
+            project_id,
+            13,
+            "offsite Iceberg archive (not configured; skipped)",
+        ),
+    }
+    Ok(())
+}
+
+/// Stage 18: logs, not backups — the backups bucket's window is set with its
+/// bucket in stage 8. Late because nothing depends on it, and an expiry that
 /// lands after the first objects still governs them.
 async fn ensure_log_retention(
     client: &GcpClient,
@@ -420,7 +521,7 @@ async fn ensure_log_retention(
 ) -> SetupResult<()> {
     progress(
         project_id,
-        17,
+        18,
         &format!(
             "log retention ({}-day expiry) on {logs_bucket} and Cloud Logging _Default",
             logging::LOG_RETENTION_DAYS
@@ -470,6 +571,10 @@ pub async fn run(client: &GcpClient, project_id: &str, config: &SetupConfig) -> 
     if let Some(images_project_id) = config.images_project_id.as_deref() {
         tenants::validate_images_project(project_id, images_project_id)?;
     }
+    // Offsite archive lane validated before any cloud call, like every other
+    // early check: a misconfigured pair must fail the plan, not a
+    // half-provisioned project.
+    resolve_offsite_archive(project_id, config)?;
     let public_base_url = config
         .public_base_url
         .as_deref()
@@ -528,9 +633,15 @@ pub async fn run(client: &GcpClient, project_id: &str, config: &SetupConfig) -> 
     workload_identity::ensure_runtime_identity(client, project_id, config, &names.granted())
         .await?;
 
+    // Offsite archive after runtime identity: its cross-project grant names
+    // the deployment's workflows-service GSA, which stage 12 just ensured
+    // exists. Never part of `names.granted()` — that grant is
+    // `objectAdmin`, and the offsite bucket must never carry it.
+    ensure_offsite_archive(client, project_id, config).await?;
+
     // Registry before the cluster: GKE nodes pull the app images from
     // it, and the reader binding must exist before the first pull.
-    progress(project_id, 13, "container registry access");
+    progress(project_id, 14, "container registry access");
     // The provider admits the deployment's one Project-repository owner.
     artifact_registry::ensure(
         client,
@@ -542,14 +653,14 @@ pub async fn run(client: &GcpClient, project_id: &str, config: &SetupConfig) -> 
 
     progress(
         project_id,
-        14,
+        15,
         &format!("GKE Autopilot cluster {}", config.cluster_name),
     );
     gke::ensure_autopilot_cluster_foundation(client, project_id, config).await?;
 
     progress(
         project_id,
-        15,
+        16,
         "Kubernetes workload identity and cluster integrations",
     );
     workload_identity::bind_kubernetes_accounts(client, project_id, config).await?;
@@ -562,7 +673,7 @@ pub async fn run(client: &GcpClient, project_id: &str, config: &SetupConfig) -> 
     // Printed in full: this is the exact string that must appear as `kms_key`
     // in this deployment's `config.toml` and in its `.sops.yaml` creation
     // rule, so an operator can compare the three without deriving anything.
-    progress(project_id, 16, &kms::key_name(project_id, &config.region));
+    progress(project_id, 17, &kms::key_name(project_id, &config.region));
     kms::ensure(client, project_id, &config.region).await?;
     if let Some(member) = &config.kms_operator {
         kms::ensure_operator(client, project_id, &config.region, member).await?;
@@ -575,7 +686,7 @@ pub async fn run(client: &GcpClient, project_id: &str, config: &SetupConfig) -> 
     Ok(())
 }
 
-/// Stages 18-19: the release-ship identity (only when its flags name it) and
+/// Stages 19-20: the release-ship identity (only when its flags name it) and
 /// the backup-target `ConfigMap` the ship requires.
 async fn ensure_release_ship(
     client: &GcpClient,
@@ -587,7 +698,7 @@ async fn ensure_release_ship(
         Some(ship) => {
             progress(
                 project_id,
-                18,
+                19,
                 &format!(
                     "release ship identity for {} ({} / {})",
                     ship.deployment, ship.repository, ship.environment
@@ -597,14 +708,14 @@ async fn ensure_release_ship(
         }
         None => progress(
             project_id,
-            18,
+            19,
             "release ship identity (not configured; skipped)",
         ),
     }
 
     progress(
         project_id,
-        19,
+        20,
         &format!(
             "{} ConfigMap in {}",
             release_ship::POSTGRES_BACKUP_TARGET_CONFIGMAP,
@@ -655,9 +766,89 @@ mod tests {
         );
         assert_eq!(
             line,
-            "gcp setup [neon-law-test] 05/19 private assets bucket example-a-assets"
+            "gcp setup [neon-law-test] 05/20 private assets bucket example-a-assets"
         );
         assert!(!line.contains("password"));
+    }
+
+    #[test]
+    fn offsite_archive_requires_both_names_and_a_different_project() {
+        let config = |project: Option<&str>, bucket: Option<&str>| super::SetupConfig {
+            offsite_archives_project_id: project.map(ToString::to_string),
+            offsite_archives_bucket: bucket.map(ToString::to_string),
+            ..super::SetupConfig::default()
+        };
+        // The lane declined is a first-class answer.
+        assert_eq!(
+            super::resolve_offsite_archive("example-deploy", &config(None, None)).unwrap(),
+            None
+        );
+        // Both names, different projects: resolved.
+        assert_eq!(
+            super::resolve_offsite_archive(
+                "example-deploy",
+                &config(
+                    Some("example-archive"),
+                    Some("example-deployment-archives-offsite")
+                )
+            )
+            .unwrap(),
+            Some(("example-archive", "example-deployment-archives-offsite"))
+        );
+        // Half-configured in either direction refuses — a bucket without the
+        // project id would provision in-project.
+        let err = super::resolve_offsite_archive(
+            "example-deploy",
+            &config(Some("example-archive"), None),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("--offsite-archives-bucket"),
+            "{err}"
+        );
+        let err = super::resolve_offsite_archive(
+            "example-deploy",
+            &config(None, Some("example-deployment-archives-offsite")),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("--offsite-archives-project-id"),
+            "{err}"
+        );
+        // An archive inside the deployment project defeats the lane's whole
+        // purpose: same blast radius as the live workload.
+        let err = super::resolve_offsite_archive(
+            "example-deploy",
+            &config(
+                Some("example-deploy"),
+                Some("example-deployment-archives-offsite"),
+            ),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("--offsite-archives-project-id"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("blast radius"), "{err}");
+    }
+
+    #[test]
+    fn offsite_archive_rejects_a_bucket_the_runtime_is_already_granted_on() {
+        let config = super::SetupConfig {
+            archives_bucket: Some("example-deployment-archives".into()),
+            offsite_archives_project_id: Some("example-archive".into()),
+            offsite_archives_bucket: Some("example-deployment-archives".into()),
+            ..super::SetupConfig::default()
+        };
+        // The runtime grant on the archives bucket carries objectAdmin; the
+        // offsite lane must not layer creator+viewer on top of a bucket the
+        // runtime can already delete from.
+        let err = super::resolve_offsite_archive("example-deploy", &config).unwrap_err();
+        assert!(
+            err.to_string().contains("--offsite-archives-bucket"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("objectAdmin"), "{err}");
     }
 
     #[tokio::test]

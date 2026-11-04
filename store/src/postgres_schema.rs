@@ -1379,6 +1379,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261103010000_create_matter_billing_batch.sql"),
             ),
             (
+                "20261103120000_create_brand_letterhead.sql",
+                include_str!("../postgres/migrations/20261103120000_create_brand_letterhead.sql"),
+            ),
+            (
                 "20261104000000_create_person_directory_views.sql",
                 include_str!("../postgres/migrations/20261104000000_create_person_directory_views.sql"),
             ),
