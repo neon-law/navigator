@@ -8498,10 +8498,7 @@ impl IntoResponse for ApiError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(serde_json::json!({
                     "error": "template_invalid",
-                    "message": format!(
-                        "Template `{code}` has {} blocking rule violation(s); fix it in the repo and retry.",
-                        violations.len()
-                    )
+                    "message": crate::project_notation::invalid_template_message(&code, &violations),
                 })),
             )
                 .into_response(),
@@ -8569,6 +8566,17 @@ impl IntoResponse for ApiError {
             Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
                 e,
             )) => {
+                if let Some(message) = e.lawyer_fault() {
+                    tracing::warn!(error = %e, "api: lawyer-fixable create notation failure");
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(serde_json::json!({
+                            "error": "template_invalid",
+                            "message": message,
+                        })),
+                    )
+                        .into_response();
+                }
                 tracing::error!(error = %e, "api: create notation failed");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
