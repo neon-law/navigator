@@ -94,7 +94,7 @@ pub fn load_answers_file(path: &Path) -> Result<SavedAnswers> {
 }
 
 /// The scalar text of a saved answer, as the step route's `value` field
-/// accepts. Non-scalar saved values (a people_list row set or a schedule
+/// accepts. Non-scalar saved values (a `people_list` row set or a schedule
 /// table) have no single form field and are refused — prefill walks scalar
 /// questions; an aggregate question must be answered interactively.
 ///
