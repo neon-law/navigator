@@ -39,6 +39,7 @@ use uuid::Uuid;
 #[derive(Clone, Default)]
 struct FlakyProvider {
     inner: Arc<StubBillingProvider>,
+    available: Arc<Mutex<bool>>,
     fail_next: Arc<Mutex<bool>>,
     create_calls: Arc<Mutex<Vec<Uuid>>>,
     create_requests: Arc<Mutex<Vec<InvoiceRequest>>>,
@@ -57,6 +58,9 @@ impl FlakyProvider {
 
 #[async_trait::async_trait]
 impl BillingProvider for FlakyProvider {
+    fn invoices_available(&self) -> bool {
+        *self.available.lock().unwrap()
+    }
     async fn ensure_contact(&self, request: &ContactRequest) -> Result<ContactId, BillingError> {
         let resolved = self.inner.ensure_contact(request).await?;
         Ok(self
@@ -181,6 +185,7 @@ async fn fixture() -> Fixture {
     mirror_project(&surreal, &pg, project_id).await;
 
     let provider = FlakyProvider::default();
+    *provider.available.lock().unwrap() = true;
     let state = portal::test_support::app_state(surreal).await;
     let app = portal::api::routes().with_state(ApiState {
         surreal: state.surreal.clone(),
@@ -1309,7 +1314,37 @@ async fn assert_zero_rate_work_is_a_noop(fixture: &Fixture) {
         .is_empty());
 }
 
+async fn assert_unavailable_billing_preserves_work() {
+    let fixture = fixture().await;
+    let entry = seed_entry(&fixture, 60, "Synthetic unavailable billing").await;
+    let cost = seed_confirmed_cost(&fixture, 5_000).await;
+    *fixture.provider.available.lock().unwrap() = false;
+    let response = generate(&fixture.app, &fixture).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body["reason"], "billing_unavailable");
+    assert_eq!(time_entry_status(&fixture.pg, entry.id).await, "unbilled");
+    assert_eq!(
+        cost_status(&fixture.pg, fixture.project_id, cost).await,
+        "unbilled"
+    );
+    assert!(pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .is_none());
+    assert!(mirror_rows(&fixture.surreal, fixture.project_id)
+        .await
+        .is_empty());
+    assert!(fixture.provider.inner.contact_calls().is_empty());
+    assert!(fixture.provider.create_keys().is_empty());
+}
+
 async fn run_noop() {
+    Box::pin(assert_unavailable_billing_preserves_work()).await;
     let fixture = fixture().await;
     let response = generate(&fixture.app, &fixture).await;
     assert_eq!(response.status(), StatusCode::CONFLICT);

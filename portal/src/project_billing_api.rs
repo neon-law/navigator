@@ -218,6 +218,8 @@ pub(crate) struct InvoiceReceipt {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum InvoiceGenerationError {
+    #[error("invoice generation is unavailable without a billing provider")]
+    BillingUnavailable,
     #[error("nothing is unbilled on this matter")]
     NothingToInvoice,
     #[error("an unbilled cost is in {0}; a matter invoice bills in USD")]
@@ -278,6 +280,9 @@ pub(crate) async fn generate_invoice(
     actor_id: Uuid,
     now: DateTime<Utc>,
 ) -> Result<InvoiceReceipt, InvoiceGenerationError> {
+    if !provider.invoices_available() {
+        return Err(InvoiceGenerationError::BillingUnavailable);
+    }
     let project = projects::find_by_id(surreal, project_id)
         .await?
         .ok_or(InvoiceGenerationError::NoMatter)?;
@@ -547,6 +552,10 @@ fn refused(status: StatusCode, reason: &'static str) -> Response {
 /// the matter's own state speaking.
 fn error(error: &InvoiceGenerationError, project_id: Uuid) -> Response {
     let (status, reason) = match error {
+        InvoiceGenerationError::BillingUnavailable => {
+            tracing::warn!(event = "invoice_generation_billing_unavailable", outcome = "unavailable", project_id = %project_id);
+            return refused(StatusCode::SERVICE_UNAVAILABLE, "billing_unavailable");
+        }
         InvoiceGenerationError::NothingToInvoice => (StatusCode::CONFLICT, "nothing_to_invoice"),
         InvoiceGenerationError::FlatFeeAlreadyBilled
         | InvoiceGenerationError::Batch(billing_batches::BillingBatchError::FlatFeeAlreadyBilled) => {

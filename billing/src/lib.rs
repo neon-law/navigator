@@ -250,6 +250,12 @@ pub enum BillingError {
 
 #[async_trait]
 pub trait BillingProvider: Send + Sync {
+    /// Whether matter invoices may be issued by this provider. Providers
+    /// fail closed unless backed by billing or explicitly simulated matters.
+    fn invoices_available(&self) -> bool {
+        false
+    }
+
     /// Resolve the billed party to a provider contact id, creating the
     /// contact when it does not yet exist. Idempotent: a contact with the
     /// same email is returned, never duplicated.
@@ -304,6 +310,7 @@ pub trait BillingProvider: Send + Sync {
 /// `stub-invoice-<matter_id>-<seq>` ids unique within the process.
 #[derive(Default)]
 pub struct StubBillingProvider {
+    simulated_matters: bool,
     calls: Mutex<Vec<BillingCall>>,
     contact_calls: Mutex<Vec<ContactRequest>>,
     /// Canned `get_invoice` responses, keyed on invoice id. Unset ids
@@ -324,6 +331,15 @@ impl StubBillingProvider {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Enable synthetic invoice generation only for explicitly simulated matters.
+    #[must_use]
+    pub fn for_simulated_matters() -> Self {
+        Self {
+            simulated_matters: true,
+            ..Self::default()
+        }
     }
 
     /// Pre-seed what `get_invoice` returns for an id, so a reconcile test
@@ -387,6 +403,10 @@ impl StubBillingProvider {
 
 #[async_trait]
 impl BillingProvider for StubBillingProvider {
+    fn invoices_available(&self) -> bool {
+        self.simulated_matters
+    }
+
     async fn ensure_contact(&self, request: &ContactRequest) -> Result<ContactId, BillingError> {
         self.contact_calls
             .lock()
@@ -995,6 +1015,10 @@ struct RepeatingInvoiceSummary {
 
 #[async_trait]
 impl BillingProvider for XeroBillingProvider {
+    fn invoices_available(&self) -> bool {
+        true
+    }
+
     async fn online_invoice_url(&self, invoice_id: &str) -> Result<Option<String>, BillingError> {
         let url = format!(
             "{}/Invoices/{}/OnlineInvoice",
@@ -1439,6 +1463,13 @@ mod tests {
                 .unwrap()["DueDate"],
             "2026-11-03"
         );
+    }
+
+    #[test]
+    fn invoice_generation_requires_real_or_explicitly_simulated_billing() {
+        assert!(!StubBillingProvider::new().invoices_available());
+        assert!(StubBillingProvider::for_simulated_matters().invoices_available());
+        assert!(xero("http://synthetic.invalid".into()).invoices_available());
     }
 
     #[tokio::test]

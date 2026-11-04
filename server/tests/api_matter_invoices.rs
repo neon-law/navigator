@@ -327,7 +327,7 @@ async fn build_fixture() -> Fixture {
     .unwrap();
 
     // The fixture holds the stub so the tests can count actual seam calls.
-    let provider = Arc::new(billing::StubBillingProvider::new());
+    let provider = Arc::new(billing::StubBillingProvider::for_simulated_matters());
     mirror_matters(&surreal, &[project_id, other_project_id]).await;
     let base = portal::test_support::app_state(surreal.clone()).await;
     let state = AppState {
@@ -558,8 +558,9 @@ async fn hourly_billing_refuses_under_a_consumed_flat_fee() {
     // rates would charge the client twice for the same agreement.
     seed_entry(&pg, fx.project_id, fx.lawyer_id, 30, true).await;
     let resp = generate(&fx, &fx.lawyer, fx.project_id).await;
-    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let status = resp.status();
     let again = body_json(resp).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{again}");
     assert_eq!(again["reason"], "flat_fee_already_billed");
 }
 
@@ -663,7 +664,7 @@ async fn a_matter_with_no_client_to_bill_is_refused() {
     let base = portal::test_support::app_state(surreal.clone()).await;
     // One shared stub: the app's provider IS the fixture's, so the
     // create-call assertions below verify what the application did.
-    let provider = Arc::new(billing::StubBillingProvider::new());
+    let provider = Arc::new(billing::StubBillingProvider::for_simulated_matters());
     let state = AppState {
         sessions: SessionStore::new(KEY),
         billing_provider: provider.clone(),
@@ -810,7 +811,7 @@ async fn a_provider_refusal_marks_nothing() {
     let fx = Fixture {
         app,
         surreal,
-        provider: Arc::new(billing::StubBillingProvider::new()),
+        provider: Arc::new(billing::StubBillingProvider::for_simulated_matters()),
         project_id,
         other_project_id: project_id,
         lawyer: bearer(lawyer.id, Role::Lawyer),
@@ -929,6 +930,9 @@ struct FailingProvider {
 
 #[async_trait]
 impl BillingProvider for FailingProvider {
+    fn invoices_available(&self) -> bool {
+        true
+    }
     async fn ensure_contact(&self, _request: &ContactRequest) -> Result<ContactId, BillingError> {
         Ok(ContactId(format!("contact-{}", Uuid::now_v7().simple())))
     }
