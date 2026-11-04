@@ -908,8 +908,13 @@ jobs:
           # this floor to 92.7 and held instead (increment 5, PR #388, tenancy
           # wrapper + people helper DB-harness tests, 278 missed lines
           # converted) — is 92.40% line coverage (36385 missed of 478995) on
-          # 2026-11-04, from PR #388's workspace job. The 92.2 floor is the
-          # merge gate from this change onward.
+          # 2026-11-04, from PR #388's workspace job. The 92.7 raise was then
+          # attempted again under the enlarged-batch plan (increment 6,
+          # PR #373: pure decision seams in cli/store) and its workspace job
+          # printed 92.36% line coverage (36312 missed of 475292) on
+          # 2026-11-03 — short of the floor — so the constants held at 92.2 and
+          # the campaign falls back to re-scoping the target. The 92.2 floor is
+          # the merge gate from this change onward.
           #
           # Raising the floor means moving three constants together — here,
           # `docs/agent-workflows.md`, and `docs/oss-install.md` — so raise it
