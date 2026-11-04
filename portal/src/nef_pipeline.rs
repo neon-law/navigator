@@ -232,6 +232,10 @@ async fn file_notice_documents(
     // `mail/<message id>/<index>` — the inbox lane's own provenance path.
     let attachments = attachment_bytes(state, row).await?;
     if !attachments.is_empty() {
+        let kinds: Vec<_> = attachments
+            .iter()
+            .map(|attachment| attachment_kind(notice, &attachment.filename))
+            .collect();
         let filed = crate::api::file_mail_attachments(
             state,
             project_id,
@@ -239,6 +243,7 @@ async fn file_notice_documents(
             store::documents::visibility::INTERNAL,
             &crate::api::MailAttachmentSource {
                 exactly_once: true,
+                attachment_kinds: Some(&kinds),
                 message_id: &row.id.to_string(),
                 sender: &row.external_address,
                 received_at: &row.occurred_at,
@@ -405,4 +410,21 @@ fn map_email(error: &store::email_conversations::EmailConversationError) -> ApiE
 
 fn case_error(error: &store::cases::CaseError) -> ApiError {
     ApiError::Db(error.to_string())
+}
+
+/// Use only an unambiguous named notice attachment's description.
+fn attachment_kind(notice: &store::nef::Notice, filename: &str) -> &'static str {
+    let description = if notice.original_filename.as_deref() == Some(filename) {
+        None
+    } else {
+        let mut matches = notice
+            .attachments
+            .iter()
+            .filter(|attachment| attachment.original_filename.as_deref() == Some(filename));
+        matches
+            .next()
+            .filter(|_| matches.next().is_none())
+            .map(|attachment| attachment.description.as_str())
+    };
+    store::nef::suggested_kind(&notice.docket_text, description)
 }

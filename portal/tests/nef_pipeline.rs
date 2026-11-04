@@ -1015,3 +1015,75 @@ async fn a_later_notice_retains_a_corrected_document_link() {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].document_asset_id, Some(corrected));
 }
+
+#[tokio::test]
+async fn named_exhibits_keep_their_own_document_kind() {
+    let fixture = fixture().await;
+    let project = seed_matter(&fixture.surreal, fixture.firm_id, "syn-nef-kinds").await;
+    let mut attachments = Vec::new();
+    for filename in ["motion-to-dismiss.pdf", "exhibit-a.pdf", "unrelated.pdf"] {
+        let bytes = format!("%PDF-1.4 synthetic {filename}");
+        let asset = store::assets::ingest_content(
+            &fixture.surreal,
+            &fixture.storage,
+            bytes.as_bytes(),
+            "application/pdf",
+        )
+        .await
+        .unwrap();
+        attachments.push(store::inbox::IngestAttachment {
+            asset_id: asset,
+            filename: filename.into(),
+            sha256: store::assets::sha256_hex(bytes.as_bytes()),
+        });
+    }
+    let raw = district_notice();
+    let message = seed_notice(
+        &fixture,
+        Some(project),
+        Some(("inbound/kinds.eml", &raw)),
+        "Notice of Electronic Filing",
+        attachments,
+    )
+    .await;
+    let (status, result) = request(
+        &fixture.app,
+        "POST",
+        "/app/api/inbox/process",
+        Some(&fixture.lawyer_session),
+        Some(json!({"message": message, "apply": true})),
+    )
+    .await;
+    assert_eq!(status, 200, "{result}");
+    let assets = store::assets::for_project(&fixture.surreal, project)
+        .await
+        .unwrap();
+    assert_eq!(assets.len(), 4);
+    for (filename, kind) in [
+        ("motion-to-dismiss.pdf", "pleading"),
+        ("exhibit-a.pdf", "exhibit"),
+        ("unrelated.pdf", "pleading"),
+    ] {
+        let asset = assets
+            .iter()
+            .find(|asset| asset.filename.as_deref() == Some(filename))
+            .unwrap();
+        assert_eq!(asset.kind.as_deref(), Some(kind));
+    }
+    let (_, replay) = request(
+        &fixture.app,
+        "POST",
+        "/app/api/inbox/process",
+        Some(&fixture.lawyer_session),
+        Some(json!({"message": message, "apply": true})),
+    )
+    .await;
+    assert_eq!(replay["nef"]["outcome"], "already_recorded");
+    assert_eq!(
+        store::assets::for_project(&fixture.surreal, project)
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
+}

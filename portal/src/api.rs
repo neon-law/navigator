@@ -6011,6 +6011,7 @@ async fn mail_file_door(
         visibility,
         &MailAttachmentSource {
             exactly_once: false,
+            attachment_kinds: None,
             message_id: &input.message_id.to_string(),
             sender: &message.from_addr,
             received_at: &message.inserted_at.to_rfc3339(),
@@ -6041,6 +6042,8 @@ async fn mail_file_door(
 pub(crate) struct MailAttachmentSource<'a> {
     /// Source-message artifacts retain one immutable row across overlapping applies.
     pub(crate) exactly_once: bool,
+    /// Optional per-part classifications; absent parts use the filing kind.
+    pub(crate) attachment_kinds: Option<&'a [&'a str]>,
     /// Slug component. A UUID for a stored message; a sanitized `.eml`
     /// message reference for an upload.
     pub(crate) message_id: &'a str,
@@ -6068,6 +6071,11 @@ pub(crate) async fn file_mail_attachments(
     let received_at = source.received_at.to_string();
     let mut filed = Vec::with_capacity(attachments.len());
     for (index, attachment) in attachments.iter().enumerate() {
+        let kind = source
+            .attachment_kinds
+            .and_then(|kinds| kinds.get(index))
+            .copied()
+            .unwrap_or(kind);
         let slug = format!("mail/{message_id_str}/{index}");
         let args = store::documents::IngestArgs {
             project_id,
@@ -6338,6 +6346,7 @@ async fn file_parsed_eml(
             visibility,
             &MailAttachmentSource {
                 exactly_once: false,
+                attachment_kinds: None,
                 message_id: &message_id_slug,
                 sender: &parsed.from,
                 received_at: &parsed.at,

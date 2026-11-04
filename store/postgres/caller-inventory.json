@@ -8111,7 +8111,6 @@
       "webapp/src/inbox_triage.rs",
       "webapp/src/lawyer_dashboard.rs",
       "webapp/src/lawyer_project_communications.rs",
-      "webapp/src/lawyer_project_detail.rs",
       "webapp/src/people.rs",
       "webapp/src/person_show.rs",
       "webapp/src/playbooks.rs",
@@ -8119,7 +8118,6 @@
       "webapp/src/project_list.rs",
       "webapp/src/retainer_start.rs",
       "webapp/src/schedules.rs",
-      "webapp/src/sections/page.rs",
       "webapp/src/source_repository.rs",
       "workflows-service/src/dbos_email_summary.rs",
       "workflows-service/src/dbos_inbound_message_alert.rs",
@@ -14141,6 +14139,7 @@
       "archives/src/postgres.rs",
       "portal/src/admin.rs",
       "portal/src/api.rs",
+      "portal/src/dioxus_app.rs",
       "portal/src/openapi.rs",
       "rules/src/pages.rs",
       "store/src/person_merge.rs",
@@ -14158,7 +14157,9 @@
       "webapp/src/home.rs",
       "webapp/src/lawyer_project_detail.rs",
       "webapp/src/lawyer_project_testimonial.rs",
+      "webapp/src/matter_surface.rs",
       "webapp/src/portal_project_detail.rs",
+      "webapp/src/sections/page.rs",
       "webapp/src/testimonials_page.rs"
     ],
     "query_call_ids": [
