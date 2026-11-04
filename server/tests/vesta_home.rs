@@ -202,7 +202,7 @@ async fn vesta_and_lawyer_shook_omit_the_lawyer_shook_trademark_notice() {
     ] {
         let footer = html.split("<footer").nth(1).expect("shared footer");
         assert!(footer.contains("https://www.guiebshook.com"));
-        assert!(!footer.contains("Made with"));
+        assert!(footer.contains("Everyone deserves access to justice."));
         assert!(!footer.contains("Our family"));
         assert!(!footer.contains("LAWYER SHOOK"));
         assert!(!footer.contains("common-law mark of Guieb &#38; Shook PC"));
