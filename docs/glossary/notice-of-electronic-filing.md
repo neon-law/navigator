@@ -18,4 +18,4 @@ A text-only entry, such as a minute order, carries no document. Its notice reads
 document's bytes to disk before it does anything else, then files them into that Project, and records the Service List
 for conflicts. See [Project repositories](../project-repositories.md#court-notices).
 
-- Parser: [`cli::projects::docket::nef`](../../cli/src/projects/docket/nef.rs)
+- Parser: [`store::nef`](../../store/src/nef.rs)

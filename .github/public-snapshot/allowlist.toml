@@ -87,7 +87,7 @@ class = "email"
 match = '''[^@]+@(?:[a-z0-9-]+\.)*(?:stretto\.com|kroll\.com|epiq11\.com|epiq\.com|notkroll\.com)'''
 paths = [
   "cli/src/projects/docket/claims_agent.rs",
-  "cli/tests/fixtures/nef/claims-agent-notice.eml",
+  "store/tests/fixtures/nef/claims-agent-notice.eml",
 ]
 reason = "Claims-agent vendors' public notice-sender domains are the behaviour under test in the docket ingest sender matcher; the mailboxes are invented. notkroll.com is the near-miss negative."
 
@@ -139,7 +139,7 @@ reason = "Invented cloud coordinates each `gcp` detector must refuse; no such pr
 [[allow]]
 class = "email"
 match = '''[A-Za-z0-9._-]+@(?:[a-z0-9-]+\.)*uscourts\.gov'''
-paths = ["portal/src/inbound_email.rs", "portal/tests/inbox_api.rs"]
+paths = ["portal/src/inbound_email.rs", "portal/tests/inbox_api.rs", "portal/tests/nef_pipeline.rs"]
 reason = "The court noticing and chambers domains are the behaviour under test in the inbox classifier; the mailboxes are invented."
 
 [[allow]]

@@ -1364,6 +1364,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261102020000_linkedin_channel_and_raw_storage.sql"),
             ),
             (
+                "20261103000000_add_message_nef_outcome.sql",
+                include_str!("../postgres/migrations/20261103000000_add_message_nef_outcome.sql"),
+            ),
+            (
                 "20261103010000_create_matter_billing_batch.sql",
                 include_str!("../postgres/migrations/20261103010000_create_matter_billing_batch.sql"),
             ),

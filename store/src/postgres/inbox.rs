@@ -2199,13 +2199,13 @@ pub(crate) async fn process_state_on(
     pg: &PostgresDb,
     message_id: Uuid,
 ) -> Result<Option<inbox::ProcessState>, InboxError> {
-    let row: Option<(Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT route, processed_at FROM message WHERE id = $1")
+    let row: Option<(Option<String>, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT route, processed_at, nef_outcome FROM message WHERE id = $1")
             .bind(message_id)
             .fetch_optional(&pg.0)
             .await
             .map_err(db_error)?;
-    row.map(|(route, processed_at)| {
+    row.map(|(route, processed_at, nef_outcome)| {
         let processed_at = processed_at
             .map(|value| {
                 chrono::DateTime::parse_from_rfc3339(&value)
@@ -2216,6 +2216,7 @@ pub(crate) async fn process_state_on(
         Ok(inbox::ProcessState {
             route,
             processed_at,
+            nef_outcome,
         })
     })
     .transpose()
@@ -2226,13 +2227,15 @@ pub(crate) async fn mark_processed_on(
     message_id: Uuid,
     route: &str,
     processed_at: chrono::DateTime<Utc>,
+    outcome: Option<&str>,
 ) -> Result<(), InboxError> {
     sqlx::query(
-        "UPDATE message SET route = $2, processed_at = $3, updated_at = now() WHERE id = $1",
+        "UPDATE message SET route = $2, processed_at = $3, nef_outcome = $4, updated_at = now() WHERE id = $1",
     )
     .bind(message_id)
     .bind(route)
     .bind(processed_at.to_rfc3339())
+    .bind(outcome)
     .execute(&pg.0)
     .await
     .map_err(db_error)?;
@@ -2244,7 +2247,7 @@ pub(crate) async fn unprocessed_inbox_on(
     visible_firms: Option<&[Uuid]>,
 ) -> Result<Vec<inbox::UnprocessedRow>, InboxError> {
     use sqlx::Row;
-    let rows = sqlx::query("SELECT m.id, m.conversation_id, c.firm_id, c.project_id, c.channel, m.provider_message_id, c.external_address, c.external_name, c.subject, m.body, m.occurred_at, m.inserted_at FROM message m JOIN inbox_conversation c ON c.id = m.conversation_id WHERE m.direction = 'inbound' AND m.processed_at IS NULL AND ($1::uuid[] IS NULL OR c.firm_id = ANY($1)) ORDER BY m.inserted_at, m.id")
+    let rows = sqlx::query("SELECT m.id, m.conversation_id, c.firm_id, c.project_id, c.channel, m.provider_message_id, c.external_address, c.external_name, c.subject, m.body, m.occurred_at, m.inserted_at FROM message m JOIN inbox_conversation c ON c.id = m.conversation_id WHERE m.direction = 'inbound' AND (m.processed_at IS NULL OR m.nef_outcome IN ('no_project', 'not_a_notice', 'no_case_number')) AND ($1::uuid[] IS NULL OR c.firm_id = ANY($1)) ORDER BY m.inserted_at, m.id")
         .bind(visible_firms).fetch_all(&pg.0).await.map_err(db_error)?;
     rows.iter()
         .map(|row| {

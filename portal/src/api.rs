@@ -6010,6 +6010,8 @@ async fn mail_file_door(
         kind,
         visibility,
         &MailAttachmentSource {
+            exactly_once: false,
+            attachment_kinds: None,
             message_id: &input.message_id.to_string(),
             sender: &message.from_addr,
             received_at: &message.inserted_at.to_rfc3339(),
@@ -6035,22 +6037,29 @@ async fn mail_file_door(
 /// slug and the stamped [`store::documents::MailProvenance`] derive from,
 /// shared by both filing doors — a stored inbound hop (`mail_file_door`) and
 /// a raw `.eml` upload (`eml_upload_door`).
-struct MailAttachmentSource<'a> {
+/// The provenance a mail-lane filing stamps. Shared with the NEF pipeline
+/// (`nef_pipeline`), which files a notice's attachments the same way.
+pub(crate) struct MailAttachmentSource<'a> {
+    /// Source-message artifacts retain one immutable row across overlapping applies.
+    pub(crate) exactly_once: bool,
+    /// Optional per-part classifications; absent parts use the filing kind.
+    pub(crate) attachment_kinds: Option<&'a [&'a str]>,
     /// Slug component. A UUID for a stored message; a sanitized `.eml`
     /// message reference for an upload.
-    message_id: &'a str,
-    sender: &'a str,
-    received_at: &'a str,
-    subject: &'a str,
+    pub(crate) message_id: &'a str,
+    pub(crate) sender: &'a str,
+    pub(crate) received_at: &'a str,
+    pub(crate) subject: &'a str,
 }
 
-/// File every parsed attachment as its own slugged revision
+/// File every parsed attachment under its message-part slug
 /// (`mail/<message_id>/<index>`), stamping [`store::documents::MailProvenance`]
 /// onto each, and return one pointer per attachment in message-part order.
+/// Source-message callers can require one immutable row per slug.
 /// Each attachment is filed as its own independent write, so a failure here
 /// leaves every earlier attachment filed and no pointer or partial asset for
 /// the one that failed.
-async fn file_mail_attachments(
+pub(crate) async fn file_mail_attachments(
     state: &ApiState,
     project_id: Uuid,
     kind: &str,
@@ -6062,6 +6071,11 @@ async fn file_mail_attachments(
     let received_at = source.received_at.to_string();
     let mut filed = Vec::with_capacity(attachments.len());
     for (index, attachment) in attachments.iter().enumerate() {
+        let kind = source
+            .attachment_kinds
+            .and_then(|kinds| kinds.get(index))
+            .copied()
+            .unwrap_or(kind);
         let slug = format!("mail/{message_id_str}/{index}");
         let args = store::documents::IngestArgs {
             project_id,
@@ -6089,16 +6103,29 @@ async fn file_mail_attachments(
             received_at: &received_at,
             subject: source.subject,
         };
-        store::assets::file_revision_with_provenance(
-            &state.surreal,
-            &state.storage,
-            &args,
-            &identity,
-            &provenance,
-            &attachment.bytes,
-        )
-        .await
-        .map_err(ApiError::Revision)?;
+        if source.exactly_once {
+            store::documents::ingest_bytes_with_mail_provenance_once(
+                &state.surreal,
+                &state.storage,
+                &args,
+                &identity,
+                &provenance,
+                &attachment.bytes,
+            )
+            .await
+            .map_err(|error| ApiError::Revision(store::assets::RevisionError::Ingest(error)))?;
+        } else {
+            store::assets::file_revision_with_provenance(
+                &state.surreal,
+                &state.storage,
+                &args,
+                &identity,
+                &provenance,
+                &attachment.bytes,
+            )
+            .await
+            .map_err(ApiError::Revision)?;
+        }
         filed.push(document_pointer(&state.surreal, project_id, &slug, kind).await?);
     }
     Ok(filed)
@@ -6318,6 +6345,8 @@ async fn file_parsed_eml(
             kind,
             visibility,
             &MailAttachmentSource {
+                exactly_once: false,
+                attachment_kinds: None,
                 message_id: &message_id_slug,
                 sender: &parsed.from,
                 received_at: &parsed.at,

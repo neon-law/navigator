@@ -25,6 +25,31 @@ fn map_inbox(error: store::inbox::InboxError) -> ApiError {
     }
 }
 
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex, Weak};
+
+/// Serialize local applies while store transactions and immutable source
+/// identities provide cross-replica convergence. Weak entries retain no
+/// completed message locks and are pruned on the next apply.
+type ApplyLocks = Mutex<HashMap<Uuid, Weak<tokio::sync::Mutex<()>>>>;
+static APPLY_LOCKS: LazyLock<ApplyLocks> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn message_lock(
+    registry: &ApplyLocks,
+    message: Uuid,
+) -> Result<Arc<tokio::sync::Mutex<()>>, ApiError> {
+    let mut locks = registry
+        .lock()
+        .map_err(|_| ApiError::Db("inbox apply-lock registry unavailable".into()))?;
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&message).and_then(Weak::upgrade) {
+        return Ok(lock);
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(message, Arc::downgrade(&lock));
+    Ok(lock)
+}
+
 /// The process view: classification metadata for one inbox message, plus
 /// what a previous process run recorded. Every door serves this same shape,
 /// so the CLI prints one plan from either a backlog listing, a status read,
@@ -45,6 +70,8 @@ pub(crate) struct ProcessView {
     /// The route a previous process run recorded, if any.
     pub recorded_route: Option<String>,
     pub recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The NEF-pipeline outcome a previous run recorded, if any.
+    pub recorded_nef_outcome: Option<String>,
     /// The matter the conversation is assigned to, for the plan's context.
     pub project_id: Option<Uuid>,
     pub occurred_at: String,
@@ -69,6 +96,7 @@ fn view(row: store::inbox::UnprocessedRow, state: store::inbox::ProcessState) ->
         reason: decision.reason,
         recorded_route: state.route,
         recorded_at: state.processed_at,
+        recorded_nef_outcome: state.nef_outcome,
         project_id: row.project_id,
         occurred_at: row.occurred_at,
         inserted_at: row.inserted_at,
@@ -89,18 +117,14 @@ pub(crate) async fn unprocessed(
     let rows = store::inbox::unprocessed_inbox(&state.surreal, actor_id)
         .await
         .map_err(map_inbox)?;
-    let views = rows
-        .into_iter()
-        .map(|row| {
-            view(
-                row,
-                store::inbox::ProcessState {
-                    route: None,
-                    processed_at: None,
-                },
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut views = Vec::with_capacity(rows.len());
+    for row in rows {
+        let saved = store::inbox::process_state(&state.surreal, row.id)
+            .await
+            .map_err(map_inbox)?
+            .ok_or(ApiError::NotFound)?;
+        views.push(view(row, saved));
+    }
     Ok(Json(views).into_response())
 }
 
@@ -133,6 +157,14 @@ pub(crate) async fn process(
     if !request.apply {
         return Ok(Json(view(context.row, context.state)).into_response());
     }
+    // Admit the caller before allocating a lock, then read the recorded
+    // truth again after any preceding apply has finished.
+    let _apply_guard = message_lock(&APPLY_LOCKS, request.message)?
+        .lock_owned()
+        .await;
+    let context = store::inbox::process_context(&state.surreal, actor_id, request.message)
+        .await
+        .map_err(map_inbox)?;
     let decision = classify_inbound_facts(
         &context.row.external_address,
         context.row.subject.as_deref().unwrap_or_default(),
@@ -140,11 +172,39 @@ pub(crate) async fn process(
     );
     let already_recorded = context.state.processed_at.is_some();
     let recorded_at = Utc::now();
+    // LAW-171: a NEF-classified message on an attributed matter is not
+    // merely routed — the pipeline files the notice onto the matter. Its
+    // outcome rides beside the recording; a triage outcome (no matter, an
+    // unparseable notice, no case number) keeps the message in the backlog
+    // through the recorded `nef_outcome`.
+    let nef_outcome = if decision.route == crate::inbound_email::InboxRoute::Nef {
+        if let Some(project_id) = context.row.project_id {
+            let viewer = store::access::matter_viewer(
+                &state.surreal,
+                session.person_id,
+                session.role,
+                project_id,
+            )
+            .await
+            .map_err(ApiError::Db)?;
+            if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
+                return Err(ApiError::NotFound);
+            }
+        }
+        let outcome = crate::nef_pipeline::process_nef(&state, &context.row).await?;
+        let spelling = outcome.spelling();
+        Some((outcome, spelling))
+    } else {
+        None
+    };
+    // LAW-166: apply always records the route and the processing time, so
+    // a re-run reports idempotency instead of duplicating work.
     store::inbox::mark_processed(
         &state.surreal,
         request.message,
         decision.route.as_str(),
         recorded_at,
+        nef_outcome.as_ref().map(|(_, spelling)| *spelling),
     )
     .await
     .map_err(map_inbox)?;
@@ -158,6 +218,9 @@ pub(crate) async fn process(
             store::inbox::ProcessState {
                 route: Some(decision.route.as_str().to_owned()),
                 processed_at: Some(recorded_at),
+                nef_outcome: nef_outcome
+                    .as_ref()
+                    .map(|(_, spelling)| (*spelling).to_owned()),
             },
         ),
         route: decision.route.as_str(),
@@ -165,6 +228,7 @@ pub(crate) async fn process(
         reason: decision.reason,
         recorded_at,
         already_recorded,
+        nef: nef_outcome.map(|(outcome, _)| outcome),
         slack_notice,
     })
     .into_response())
@@ -182,6 +246,9 @@ pub(crate) struct ProcessApplyView {
     pub recorded_at: chrono::DateTime<chrono::Utc>,
     /// Whether a previous run had already recorded this message.
     pub already_recorded: bool,
+    /// What the NEF pipeline filed, when the message classified as a
+    /// CM/ECF notice (LAW-171). `None` for every other route.
+    pub nef: Option<crate::nef_pipeline::NefOutcome>,
     /// The best-effort Slack notice outcome.
     pub slack_notice: SlackNotice,
 }
@@ -247,5 +314,29 @@ async fn notify_inbox_routed(state: &ApiState, project_id: Uuid) -> SlackNotice 
             tracing::warn!(error = %error, "inbox process: post the Slack notice");
             SlackNotice::ProviderUnavailable
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{message_lock, ApplyLocks};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use uuid::Uuid;
+
+    #[test]
+    fn apply_registry_reuses_active_locks_and_prunes_completed_messages() {
+        let registry: ApplyLocks = Mutex::new(HashMap::new());
+        let message = Uuid::now_v7();
+        let first = message_lock(&registry, message).unwrap();
+        let second = message_lock(&registry, message).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        let other = message_lock(&registry, Uuid::now_v7()).unwrap();
+        assert!(!Arc::ptr_eq(&first, &other));
+        drop(first);
+        drop(second);
+        drop(other);
+        let _next = message_lock(&registry, Uuid::now_v7()).unwrap();
+        assert_eq!(registry.lock().unwrap().len(), 1);
     }
 }
