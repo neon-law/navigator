@@ -3658,6 +3658,13 @@ END $$;
 ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'linkedin', 'scraper', 'x', 'voice'));
 ALTER TABLE message ADD COLUMN raw_storage_key TEXT;
 
+-- Migration: 20261103000000_add_message_nef_outcome.sql
+-- The NEF pipeline's recorded outcome beside the route: filed, a text-only
+-- filing, a rerun over an already-recorded entry, or one of the triage
+-- results that leaves the message in the backlog. NULL for messages that
+-- were never processed through the NEF pipeline.
+ALTER TABLE message ADD COLUMN nef_outcome TEXT CHECK (nef_outcome IS NULL OR nef_outcome IN ('filed', 'text_only', 'already_recorded', 'no_project', 'not_a_notice', 'no_case_number'));
+
 -- Migration: 20261103010000_create_matter_billing_batch.sql
 -- A Matter Billing Batch is one invoice intent: the frozen request (line
 -- items, reference, consumed row ids) persisted BEFORE the provider call, so

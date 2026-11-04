@@ -21,7 +21,7 @@ use anyhow::{anyhow, Context, Result};
 
 use super::case_timeline;
 use super::claims_agent::{self, AgentFetch, ClaimsNotice};
-use super::nef::{self, Notice};
+use super::nef::{self, entry_kind, Notice};
 use crate::projects::manifest;
 
 /// Where every docket document lands below `documents/`.
@@ -341,24 +341,6 @@ pub(super) fn docket_key(filename: &str) -> Option<(String, Option<u32>)> {
     Some((doc_no.to_string(), attachment))
 }
 
-/// The kind a docket document most likely is. The operator overrides it with
-/// `--kind`.
-fn suggested_kind(docket_text: &str, attachment_description: Option<&str>) -> &'static str {
-    if let Some(description) = attachment_description {
-        if description.to_ascii_lowercase().contains("exhibit") {
-            return "exhibit";
-        }
-    }
-    if docket_text
-        .split_whitespace()
-        .next()
-        .is_some_and(|word| word.eq_ignore_ascii_case("transcript"))
-    {
-        return "transcript";
-    }
-    "pleading"
-}
-
 /// What this checkout already files, read from its committed pointers.
 #[derive(Default)]
 struct Filed {
@@ -475,7 +457,7 @@ fn items_for(notice: &Notice, docket: &str, kind_override: Option<&str>) -> Vec<
         filename: document_filename(&doc_no, None, &notice.docket_text),
         title: notice.docket_text.clone(),
         kind: kind_override
-            .unwrap_or_else(|| suggested_kind(&notice.docket_text, None))
+            .unwrap_or_else(|| nef::suggested_kind(&notice.docket_text, None))
             .to_string(),
         free_look_url: notice.free_look_url.clone(),
         agent_url: None,
@@ -496,7 +478,7 @@ fn items_for(notice: &Notice, docket: &str, kind_override: Option<&str>) -> Vec<
             title: attachment.description.clone(),
             kind: kind_override
                 .unwrap_or_else(|| {
-                    suggested_kind(&notice.docket_text, Some(&attachment.description))
+                    nef::suggested_kind(&notice.docket_text, Some(&attachment.description))
                 })
                 .to_string(),
             free_look_url: attachment.free_look_url.clone(),
@@ -538,7 +520,7 @@ fn items_for_claims(claims: &ClaimsNotice, docket: &str, kind_override: Option<&
                 filename: document_filename(&doc_no, None, &title),
                 title: title.clone(),
                 kind: kind_override
-                    .unwrap_or_else(|| suggested_kind(&title, None))
+                    .unwrap_or_else(|| nef::suggested_kind(&title, None))
                     .to_string(),
                 free_look_url: None,
                 agent_url: Some(link.url.clone()),
@@ -976,29 +958,6 @@ fn free_look_index(notice: &Notice) -> Vec<(String, String)> {
     index
 }
 
-/// The docket entry kind a notice's text names: its first word, when that
-/// word is a kind the spine knows; `other` when it is not. A hearing or
-/// trial is never recorded from a notice, because the notice does not carry
-/// the date the court set.
-fn entry_kind(docket_text: &str) -> &'static str {
-    let first = docket_text
-        .split(|c: char| !c.is_ascii_alphabetic())
-        .find(|word| !word.is_empty())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    match first.as_str() {
-        "motion" => "motion",
-        "opposition" | "response" => "opposition",
-        "reply" => "reply",
-        "order" => "order",
-        "notice" => "notice",
-        "stipulation" => "stipulation",
-        "subpoena" => "subpoena",
-        "complaint" | "answer" | "petition" | "counterclaim" => "pleading",
-        _ => "other",
-    }
-}
-
 /// Record each planned entry through `POST /app/api/projects/{id}/docket`.
 /// The door answers an entry number already on the case with the existing
 /// row, so a re-run records nothing twice.
@@ -1337,10 +1296,10 @@ async fn file_one(
 #[cfg(test)]
 mod tests {
     use super::claims_agent::AgentFetchError;
+    use super::nef::{entry_kind, suggested_kind};
     use super::{
-        case_folder, docket_for, docket_key, document_filename, embedded_document, entry_kind,
-        filing_slug, ingest, is_pdf, suggested_kind, text_slug, AgentFetch, FreeLook, Options,
-        Report,
+        case_folder, docket_for, docket_key, document_filename, embedded_document, filing_slug,
+        ingest, is_pdf, text_slug, AgentFetch, FreeLook, Options, Report,
     };
 
     use std::path::{Path, PathBuf};
@@ -1449,7 +1408,7 @@ mod tests {
 
     fn fixture(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/nef")
+            .join("../store/tests/fixtures/nef")
             .join(name)
     }
 

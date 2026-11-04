@@ -33,6 +33,7 @@ cloud.workspace = true
 # RFC 4180 reader for the LinkedIn data-export `messages.csv` (LAW-238
 # D1): quoted CONTENT fields with embedded newlines are the export's norm.
 csv.workspace = true
+# `nef` shares MIME parsing between docket ingestion and Inbox processing.
 mail-parser.workspace = true
 # `source_pages` locates a quote in a stored PDF asset and lifts the pages
 # it falls on, through `pdf::passage` (#893).

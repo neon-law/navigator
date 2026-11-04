@@ -1919,7 +1919,7 @@ async fn native_processing_and_acknowledgment_lifecycles_are_replay_safe() {
             .is_empty()
     );
     let now = chrono::Utc::now();
-    pg_inbox::mark_processed_on(&fixture.pg, ingested.message_id, "other", now)
+    pg_inbox::mark_processed_on(&fixture.pg, ingested.message_id, "other", now, None)
         .await
         .unwrap();
     let processed = pg_inbox::process_state_on(&fixture.pg, ingested.message_id)
@@ -1932,19 +1932,63 @@ async fn native_processing_and_acknowledgment_lifecycles_are_replay_safe() {
         .await
         .unwrap()
         .is_empty());
+    pg_inbox::mark_processed_on(
+        &fixture.pg,
+        ingested.message_id,
+        "nef",
+        now,
+        Some(crate::inbox::nef_outcome::NO_PROJECT),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pg_inbox::process_state_on(&fixture.pg, ingested.message_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .nef_outcome
+            .as_deref(),
+        Some(crate::inbox::nef_outcome::NO_PROJECT),
+    );
+    assert_eq!(
+        pg_inbox::unprocessed_inbox_on(&fixture.pg, None)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "triage outcomes remain in the native backlog"
+    );
+    pg_inbox::mark_processed_on(
+        &fixture.pg,
+        ingested.message_id,
+        "nef",
+        now,
+        Some(crate::inbox::nef_outcome::FILED),
+    )
+    .await
+    .unwrap();
+    assert!(pg_inbox::unprocessed_inbox_on(&fixture.pg, None)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_acknowledgment_lifecycle(&fixture, &ingested).await;
+}
+
+async fn assert_acknowledgment_lifecycle(
+    fixture: &Fixture,
+    ingested: &crate::inbox::IngestedInbound,
+) {
     let acknowledgment =
-        pg_inbox::reserve_acknowledgment_on(&fixture.pg, &ingested, "Synthetic acknowledgment")
+        pg_inbox::reserve_acknowledgment_on(&fixture.pg, ingested, "Synthetic acknowledgment")
             .await
             .unwrap()
             .unwrap();
-    assert!(pg_inbox::reserve_acknowledgment_on(
-        &fixture.pg,
-        &ingested,
-        "Synthetic acknowledgment"
-    )
-    .await
-    .unwrap()
-    .is_none());
+    assert!(
+        pg_inbox::reserve_acknowledgment_on(&fixture.pg, ingested, "Synthetic acknowledgment")
+            .await
+            .unwrap()
+            .is_none()
+    );
     pg_inbox::acknowledgment_submitted_on(
         &fixture.pg,
         acknowledgment,

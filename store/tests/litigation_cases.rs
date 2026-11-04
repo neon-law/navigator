@@ -813,3 +813,128 @@ async fn an_entry_is_recorded_linked_and_superseded_through_the_project_docket()
     );
     assert!(link_document(db, Uuid::now_v7(), asset_id).await.is_err());
 }
+
+#[tokio::test]
+async fn docket_lookup_ignores_judge_suffixes_on_either_side() {
+    let db = mem().await;
+    let project_id = open_matter(&db, "docket-judge-suffix").await;
+    let new = NewCase {
+        docket_number: Some("9:26-cv-00042-XYZ"),
+        ..a_case(project_id, "Alpha v. Beta")
+    };
+    let case = open_case(&db, &new).await.unwrap();
+    for number in [
+        "9:26-cv-00042",
+        "9:26-CV-00042-ABC",
+        "9:26-cv-00042-XYZ-DEF",
+    ] {
+        assert_eq!(
+            store::cases::find_case_by_docket_number(&db, project_id, number)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            case.id
+        );
+    }
+    assert!(
+        store::cases::find_case_by_docket_number(&db, project_id, "9:26-cv-00043-XYZ")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+async fn assert_concurrent_intake_converges(
+    first: &SurrealDb,
+    second: &SurrealDb,
+    project_id: Uuid,
+) {
+    let gate = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+    let document_id = Uuid::now_v7();
+    let mut tasks = tokio::task::JoinSet::new();
+    for index in 0..8 {
+        let db = if index % 2 == 0 {
+            first.clone()
+        } else {
+            second.clone()
+        };
+        let gate = gate.clone();
+        tasks.spawn(async move {
+            gate.wait().await;
+            let case = store::cases::ensure_case(&db, &a_case(project_id, "Alpha v. Beta"))
+                .await
+                .unwrap();
+            let mut new = an_entry(case.id, "12", EntryKind::Motion, "Motion to dismiss");
+            new.document_asset_id = (index % 2 == 0).then_some(document_id);
+            let entry = store::cases::ensure_entry(&db, &new).await.unwrap();
+            (case.id, entry.id)
+        });
+    }
+    let mut ids = std::collections::HashSet::new();
+    while let Some(result) = tasks.join_next().await {
+        ids.insert(result.unwrap());
+    }
+    assert_eq!(
+        ids.len(),
+        1,
+        "overlapping requests converge on one case and entry"
+    );
+    let cases = for_project(first, project_id).await.unwrap();
+    assert_eq!(cases.len(), 1);
+    let entries = docket(first, cases[0].id).await.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].document_asset_id, Some(document_id));
+}
+
+#[tokio::test]
+async fn reusing_an_entry_fills_only_its_missing_document() {
+    let db = mem().await;
+    let project = open_matter(&db, "pending-source-intake").await;
+    let case = open_case(&db, &a_case(project, "Alpha v. Beta"))
+        .await
+        .unwrap();
+    let mut new = an_entry(case.id, "12", EntryKind::Motion, "Motion to dismiss");
+    let original = store::cases::ensure_entry(&db, &new).await.unwrap();
+    assert!(original.document_asset_id.is_none());
+    let document = Uuid::now_v7();
+    new.document_asset_id = Some(document);
+    let repaired = store::cases::ensure_entry(&db, &new).await.unwrap();
+    assert_eq!(repaired.id, original.id);
+    assert_eq!(repaired.document_asset_id, Some(document));
+    new.document_asset_id = Some(Uuid::now_v7());
+    let retained = store::cases::ensure_entry(&db, &new).await.unwrap();
+    assert_eq!(retained.document_asset_id, Some(document));
+}
+
+#[tokio::test]
+async fn concurrent_intake_reuses_a_case_and_its_numbered_entry() {
+    let db = mem().await;
+    let project_id = open_matter(&db, "concurrent-intake").await;
+    assert_concurrent_intake_converges(&db, &db, project_id).await;
+}
+
+#[tokio::test]
+async fn independent_server_connections_share_the_intake_idempotency_boundary() {
+    let database = format!("case_overlap_{}", Uuid::now_v7().simple());
+    let Some(server) = store::test_support::server_surreal(&database).await else {
+        return;
+    };
+    let peer = store::surreal::connect(&server.config).await.unwrap();
+    // Match the minimal compiled-Brand fixture used by the embedded test engine.
+    server
+        .db
+        .query(
+            "CREATE $id SET name = 'Fixture Brand', brand_key = 'neon', \
+        firm_id = $firm, inserted_at = $now, updated_at = $now",
+        )
+        .bind(("id", store::surreal::record_id("brand", Uuid::now_v7())))
+        .bind(("firm", store::surreal::record_id("firm", Uuid::now_v7())))
+        .bind(("now", Utc::now().to_rfc3339()))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    let project_id = open_matter(&server.db, "server-concurrent-intake").await;
+    assert_concurrent_intake_converges(&server.db, &peer, project_id).await;
+}

@@ -75,6 +75,44 @@ pub mod purpose {
     pub const PROMOTIONAL: &str = "promotional";
 }
 
+/// The NEF pipeline's recorded outcome spellings. A triage outcome marks a
+/// processed message that stays in the lawyer's backlog because nothing was
+/// filed — never guess what a notice means.
+pub mod nef_outcome {
+    /// The notice's documents and docket entry were filed on a matter.
+    pub const FILED: &str = "filed";
+    /// Available notice documents were filed without a numbered docket entry.
+    pub const TEXT_ONLY: &str = "text_only";
+    /// A rerun over an entry the pipeline already filed.
+    pub const ALREADY_RECORDED: &str = "already_recorded";
+    /// The notice names no Project the pipeline could resolve.
+    pub const NO_PROJECT: &str = "no_project";
+    /// The message is not a notice the pipeline recognizes.
+    pub const NOT_A_NOTICE: &str = "not_a_notice";
+    /// A recognized NEF without a resolvable case number.
+    pub const NO_CASE_NUMBER: &str = "no_case_number";
+
+    /// Outcomes that leave the message in the unprocessed backlog after a
+    /// process run records them.
+    pub const TRIAGE: &[&str] = &[NO_PROJECT, NOT_A_NOTICE, NO_CASE_NUMBER];
+
+    /// Every outcome spelling, in pipeline order.
+    pub const ALL: &[&str] = &[
+        FILED,
+        TEXT_ONLY,
+        ALREADY_RECORDED,
+        NO_PROJECT,
+        NOT_A_NOTICE,
+        NO_CASE_NUMBER,
+    ];
+
+    /// Whether a recorded outcome keeps the message in the backlog.
+    #[must_use]
+    pub fn is_triage(outcome: &str) -> bool {
+        TRIAGE.contains(&outcome)
+    }
+}
+
 /// The inbox-process route vocabulary: the strings a process run records on
 /// a message's `route` field, and the schema's ASSERT vocabulary. Portal
 /// classification (`portal::inbound_email`) maps its verdict onto these
@@ -141,8 +179,8 @@ pub struct Message {
     pub attachment_asset_id: Option<Uuid>,
     /// Object-storage key of the verbatim payload this Message was ingested
     /// from — the raw `.eml`, or the member data-export CSV for an imported
-    /// LinkedIn thread (LAW-238 D1). `None` for webhook-delivered mail, which
-    /// archives under the email-thread model instead.
+    /// LinkedIn thread (LAW-238 D1). Webhook-delivered mail retains its raw
+    /// source here independently of optional email threading.
     pub raw_storage_key: Option<String>,
     pub communication_id: Option<Uuid>,
     pub occurred_at: String,
@@ -199,8 +237,8 @@ pub struct IngestInbound<'a> {
     pub email_conversation_id: Option<Uuid>,
     pub attachments: Vec<IngestAttachment>,
     pub occurred_at: &'a str,
-    /// Object-storage key of the verbatim import payload (LAW-238 D1); see
-    /// [`Message::raw_storage_key`]. `None` for every webhook-shaped caller.
+    /// Object-storage key of the archived source, including raw email and
+    /// import payloads; see [`Message::raw_storage_key`]. Absent when unavailable.
     pub raw_storage_key: Option<&'a str>,
 }
 
@@ -796,6 +834,7 @@ async fn ingest_inbound_surreal(
             .first()
             .map(|attachment| attachment.asset_id),
         inbound.occurred_at,
+        inbound.raw_storage_key,
     )
     .await?;
     link_message_assets(db, inbound.firm_id, message_id, &inbound.attachments).await?;
@@ -1362,6 +1401,7 @@ pub async fn post_note(
         None,
         None,
         &Utc::now().to_rfc3339(),
+        None,
     )
     .await?;
     let message = message_by_id(db, message_id)
@@ -1433,6 +1473,7 @@ pub async fn queue_reply(
         None,
         None,
         &Utc::now().to_rfc3339(),
+        None,
     )
     .await
 }
@@ -1507,6 +1548,7 @@ pub async fn queue_social_reply(
         Some(visibility),
         None,
         &Utc::now().to_rfc3339(),
+        None,
     )
     .await?;
     let message = message_by_id(db, message_id)
@@ -1781,6 +1823,7 @@ async fn queue_sms_message(
         None,
         None,
         &Utc::now().to_rfc3339(),
+        None,
     )
     .await?;
     let message = message_by_id(db, message_id)
@@ -2259,6 +2302,9 @@ pub struct ProcessState {
     pub route: Option<String>,
     /// When the process run recorded it.
     pub processed_at: Option<DateTime<Utc>>,
+    /// The recorded NEF-pipeline outcome (`nef_outcome::*`), when the route
+    /// ran the pipeline.
+    pub nef_outcome: Option<String>,
 }
 
 #[derive(SurrealValue)]
@@ -2277,6 +2323,7 @@ struct ProcessStateRow {
     /// The writer stores an RFC 3339 string, matching the message table's
     /// string-timestamp convention (`occurred_at`); parse on the way out.
     processed_at: Option<String>,
+    nef_outcome: Option<String>,
 }
 
 /// Parse the stored `processed_at` back into a UTC instant. Anything the
@@ -2321,8 +2368,11 @@ pub async fn unprocessed_inbox(
     let mut response = db
         .query(format!(
             "SELECT id, conversation_id, provider_message_id, body, occurred_at, inserted_at \
-             FROM {MESSAGE} WHERE direction = 'inbound' AND processed_at IS NONE \
-             ORDER BY inserted_at ASC"
+             FROM {MESSAGE} WHERE direction = 'inbound' AND (processed_at IS NONE \
+             OR nef_outcome IN ['{}', '{}', '{}']) ORDER BY inserted_at ASC",
+            crate::inbox::nef_outcome::NO_PROJECT,
+            crate::inbox::nef_outcome::NOT_A_NOTICE,
+            crate::inbox::nef_outcome::NO_CASE_NUMBER
         ))
         .await?
         .check()?;
@@ -2377,7 +2427,7 @@ pub async fn process_state(
         return crate::postgres::inbox::process_state_on(&pg, message_id).await;
     }
     let mut response = db
-        .query("SELECT route, processed_at FROM ONLY $id")
+        .query("SELECT route, processed_at, nef_outcome FROM ONLY $id")
         .bind(("id", record_id(MESSAGE, message_id)))
         .await?
         .check()?;
@@ -2389,37 +2439,53 @@ pub async fn process_state(
                 .processed_at
                 .map(|stored| parse_processed_at(&stored))
                 .transpose()?,
+            nef_outcome: row.nef_outcome,
         })
     })
     .transpose()
 }
 
-/// Record the route and processing time on one message. Idempotent: a
-/// re-run overwrites with the same truth, and the Postgres mirror write
-/// follows.
+/// Record the route, processing time, and — when the route ran the NEF
+/// pipeline — its outcome on one message. Idempotent: a re-run overwrites
+/// with the same truth, and the Postgres mirror write follows.
 ///
 /// # Errors
 ///
-/// An unknown route spelling, a store failure, or a mirror-write failure.
+/// An unknown route or outcome spelling, a store failure, or a mirror-write
+/// failure.
 pub async fn mark_processed(
     db: &SurrealDb,
     message_id: Uuid,
     route: &str,
     processed_at: DateTime<Utc>,
+    outcome: Option<&str>,
 ) -> Result<(), InboxError> {
     if !route::is_valid(route) {
         return Err(InboxError::InvalidRoute(route.to_owned()));
     }
+    if let Some(spelling) = outcome {
+        if !crate::inbox::nef_outcome::ALL.contains(&spelling) {
+            return Err(InboxError::InvalidRoute(spelling.to_owned()));
+        }
+    }
     if let Some(pg) = inbox_authority().await? {
-        return crate::postgres::inbox::mark_processed_on(&pg, message_id, route, processed_at)
-            .await;
+        return crate::postgres::inbox::mark_processed_on(
+            &pg,
+            message_id,
+            route,
+            processed_at,
+            outcome,
+        )
+        .await;
     }
     db.query(
-        "UPDATE $id SET route = $route, processed_at = $processed_at, updated_at = time::now()",
+        "UPDATE $id SET route = $route, processed_at = $processed_at, \
+         nef_outcome = $nef_outcome, updated_at = time::now()",
     )
     .bind(("id", record_id(MESSAGE, message_id)))
     .bind(("route", route))
     .bind(("processed_at", processed_at.to_rfc3339()))
+    .bind(("nef_outcome", outcome))
     .await?
     .check()?;
     after_write(db, MirrorKey::InboxMessage(message_id)).await;
@@ -2467,6 +2533,7 @@ pub async fn process_context(
         .unwrap_or(ProcessState {
             route: None,
             processed_at: None,
+            nef_outcome: None,
         });
     Ok(ProcessContext {
         row: UnprocessedRow {
@@ -3253,6 +3320,7 @@ async fn create_message(
     visibility: Option<&str>,
     attachment_asset_id: Option<Uuid>,
     occurred_at: &str,
+    raw_storage_key: Option<&str>,
 ) -> Result<Uuid, InboxError> {
     let id = Uuid::now_v7();
     db.query(
@@ -3260,7 +3328,8 @@ async fn create_message(
          visibility = $visibility, alert_state = $alert_state, \
          author_person_id = $author, provider_message_id = $provider_message, \
          provider_ref = $provider_ref, delivery_state = $delivery, purpose = $purpose, \
-         attachment_asset_id = $attachment, communication_id = NONE, occurred_at = $occurred, \
+         attachment_asset_id = $attachment, raw_storage_key = $raw_storage_key, \
+         communication_id = NONE, occurred_at = $occurred, \
          inserted_at = time::now(), updated_at = time::now()",
     )
     .bind(("id", record_id(MESSAGE, id)))
@@ -3282,6 +3351,7 @@ async fn create_message(
         attachment_asset_id.map(|id| record_id("asset", id)),
     ))
     .bind(("occurred", occurred_at.to_string()))
+    .bind(("raw_storage_key", raw_storage_key.map(str::to_string)))
     .await?
     .check()?;
     after_write(db, MirrorKey::InboxMessage(id)).await;
@@ -5899,7 +5969,7 @@ mod tests {
         let world = world(&db).await;
         let first = ingest_for(&db, world.firm, "process-list-1").await;
         let second = ingest_for(&db, world.firm, "process-list-2").await;
-        mark_processed(&db, first, route::NEF, Utc::now())
+        mark_processed(&db, first, route::NEF, Utc::now(), None)
             .await
             .unwrap();
 
@@ -5933,7 +6003,7 @@ mod tests {
         let world = world(&db).await;
         let message_id = ingest_for(&db, world.firm, "process-mark-1").await;
         let at = Utc::now();
-        mark_processed(&db, message_id, route::NEF, at)
+        mark_processed(&db, message_id, route::NEF, at, None)
             .await
             .unwrap();
 
@@ -5942,14 +6012,14 @@ mod tests {
         assert_eq!(state.processed_at, Some(at));
 
         // A re-run overwrites with the same truth instead of failing.
-        mark_processed(&db, message_id, route::CHAMBERS, at)
+        mark_processed(&db, message_id, route::CHAMBERS, at, None)
             .await
             .unwrap();
         let state = process_state(&db, message_id).await.unwrap().unwrap();
         assert_eq!(state.route.as_deref(), Some(route::CHAMBERS));
 
         assert!(matches!(
-            mark_processed(&db, message_id, "garbage", at).await,
+            mark_processed(&db, message_id, "garbage", at, None).await,
             Err(InboxError::InvalidRoute(_))
         ));
     }
@@ -5959,8 +6029,8 @@ mod tests {
         let db = mem_surreal().await;
         let world = world(&db).await;
         let message_id = ingest_for(&db, world.firm, "process-historical-1").await;
-        // A row written before the process fields existed carries neither.
-        db.query("UPDATE $id UNSET route, processed_at")
+        // A row written before the process fields existed carries none.
+        db.query("UPDATE $id UNSET route, processed_at, nef_outcome")
             .bind(("id", record_id(MESSAGE, message_id)))
             .await
             .unwrap()
@@ -5970,9 +6040,10 @@ mod tests {
         let state = process_state(&db, message_id).await.unwrap().unwrap();
         assert_eq!(state.processed_at, None);
         assert_eq!(state.route, None);
+        assert_eq!(state.nef_outcome, None);
 
         // And the tolerant read still lets a process run record the route.
-        mark_processed(&db, message_id, route::OTHER, Utc::now())
+        mark_processed(&db, message_id, route::OTHER, Utc::now(), None)
             .await
             .unwrap();
         let state = process_state(&db, message_id).await.unwrap().unwrap();
@@ -5991,7 +6062,7 @@ mod tests {
         let world = world(&db).await;
         let firm_message = ingest_for(&db, world.firm, "process-ctx-1").await;
         let foreign_message = ingest_for(&db, world.other_firm, "process-ctx-2").await;
-        mark_processed(&db, firm_message, route::NEF, Utc::now())
+        mark_processed(&db, firm_message, route::NEF, Utc::now(), None)
             .await
             .unwrap();
 
@@ -6137,6 +6208,7 @@ mod tests {
                     None,
                     None,
                     "2026-11-02T00:00:00Z",
+                    None,
                 )
                 .await
                 .unwrap(),

@@ -898,9 +898,15 @@ async fn assert_pg_process_reads(fixture: &Fixture, firm_id: Uuid, message_id: U
         (state.is_some(), links.len(), pending.len())
     );
     let at = chrono::Utc::now();
-    store::inbox::mark_processed(&fixture.surreal, message_id, store::inbox::route::NEF, at)
-        .await
-        .unwrap();
+    store::inbox::mark_processed(
+        &fixture.surreal,
+        message_id,
+        store::inbox::route::NEF,
+        at,
+        None,
+    )
+    .await
+    .unwrap();
     let state = store::inbox::process_state(&fixture.surreal, message_id)
         .await
         .unwrap()

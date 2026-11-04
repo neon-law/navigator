@@ -537,6 +537,50 @@ pub async fn open_case(db: &SurrealDb, new: &NewCase<'_>) -> Result<Case, CaseEr
         .ok_or(CaseError::WriteReturnedNothing("case"))
 }
 
+/// Resolve or open a numbered case without duplicating overlapping intake.
+/// The owning Project row serializes lookup/create in the database; every
+/// optimistic conflict reruns the lookup under the shared write policy.
+///
+/// # Errors
+/// Propagates database failures or a write that returns no usable case.
+pub async fn ensure_case(db: &SurrealDb, new: &NewCase<'_>) -> Result<Case, CaseError> {
+    let Some(number) = new.docket_number else {
+        return open_case(db, new).await;
+    };
+    if let Some(existing) = find_case_by_docket_number(db, new.project_id, number).await? {
+        return Ok(existing);
+    }
+    let number = canonical_docket_number(number);
+    let id = Uuid::now_v7();
+    crate::surreal::retry::writing(|| {
+        db.query(format!(
+            "BEGIN; UPDATE $project SET updated_at = $now; \
+             LET $existing = (SELECT VALUE id FROM {CASE_TABLE} \
+                 WHERE project_id = $project AND docket_number = $number LIMIT 1)[0]; \
+             IF $existing = NONE {{ CREATE $id SET project_id = $project, \
+                 caption = $caption, forum = $forum, jurisdiction = $jurisdiction, \
+                 docket_number = $number, judge = $judge, posture = $posture, status = 'open'; }}; \
+             COMMIT;"
+        ))
+        .bind((
+            "project",
+            record_id(crate::projects::PROJECT_TABLE, new.project_id),
+        ))
+        .bind(("id", record_id(CASE_TABLE, id)))
+        .bind(("number", number.clone()))
+        .bind(("now", Utc::now().to_rfc3339()))
+        .bind(("caption", new.caption.to_owned()))
+        .bind(("forum", new.forum.map(str::to_owned)))
+        .bind(("jurisdiction", new.jurisdiction.map(str::to_owned)))
+        .bind(("judge", new.judge.map(str::to_owned)))
+        .bind(("posture", new.posture.to_owned()))
+    })
+    .await?;
+    find_case_by_docket_number(db, new.project_id, &number)
+        .await?
+        .ok_or(CaseError::WriteReturnedNothing("case"))
+}
+
 /// Every case on `project_id`, oldest first.
 ///
 /// # Errors
@@ -556,10 +600,8 @@ pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Case>, 
     Ok(rows.into_iter().filter_map(CaseRow::into_case).collect())
 }
 
-/// The case on `project_id` whose docket number is `docket_number`, compared
-/// without regard to case. A notice prints the judge's initials after the
-/// number (`9:26-cv-00042-XYZ`) where a manifest leaves them off, so a
-/// docket number that starts with the stored one followed by `-` matches too.
+/// The case on `project_id` with the same docket number, ignoring case
+/// and trailing judge initials on either number.
 ///
 /// # Errors
 /// Propagates any database error.
@@ -568,13 +610,29 @@ pub async fn find_case_by_docket_number(
     project_id: Uuid,
     docket_number: &str,
 ) -> Result<Option<Case>, CaseError> {
-    let wanted = docket_number.trim().to_ascii_lowercase();
+    let wanted = canonical_docket_number(docket_number);
     Ok(for_project(db, project_id).await?.into_iter().find(|case| {
-        case.docket_number.as_deref().is_some_and(|stored| {
-            let stored = stored.trim().to_ascii_lowercase();
-            stored == wanted || wanted.starts_with(&format!("{stored}-"))
-        })
+        case.docket_number
+            .as_deref()
+            .is_some_and(|stored| canonical_docket_number(stored) == wanted)
     }))
+}
+
+/// A docket's identity excludes trailing judge initials. Single-letter
+/// case-type codes (such as Nevada's `-C`) remain part of the number.
+fn canonical_docket_number(number: &str) -> String {
+    let mut number = number.trim().to_ascii_lowercase();
+    while let Some((base, suffix)) = number.rsplit_once('-') {
+        let has_serial = base
+            .split('-')
+            .any(|part| part.len() >= 4 && part.bytes().all(|byte| byte.is_ascii_digit()));
+        if !has_serial || suffix.len() < 2 || !suffix.bytes().all(|byte| byte.is_ascii_alphabetic())
+        {
+            break;
+        }
+        number.truncate(base.len());
+    }
+    number
 }
 
 /// Every docket entry on every case of `project_id`, case by case in the
@@ -786,47 +844,88 @@ pub async fn record_entry(
     db: &SurrealDb,
     new: &NewDocketEntry<'_>,
 ) -> Result<DocketEntry, CaseError> {
+    persist_entry(db, new, false).await
+}
+
+/// Reuse a numbered entry or create it atomically across concurrent callers.
+/// The Case row serializes the decision, including callers on other servers.
+///
+/// # Errors
+/// Propagates database failures or a write that returns no usable entry.
+pub async fn ensure_entry(
+    db: &SurrealDb,
+    new: &NewDocketEntry<'_>,
+) -> Result<DocketEntry, CaseError> {
+    persist_entry(db, new, true).await
+}
+
+async fn persist_entry(
+    db: &SurrealDb,
+    new: &NewDocketEntry<'_>,
+    reuse: bool,
+) -> Result<DocketEntry, CaseError> {
     let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
+    let create = format!(
+        "CREATE $id SET \
              case_id = $case_id, entry_number = $entry_number, kind = $kind, title = $title, \
              party = $party, filed_or_served_on = $filed_or_served_on, \
              scheduled_on = $scheduled_on, supersedes = $supersedes, \
              document_asset_id = $document_asset_id, notation_id = $notation_id \
              RETURN {DOCKET_ENTRY_SELECT}"
-        ))
-        .bind(("id", record_id(DOCKET_ENTRY_TABLE, id)))
-        .bind(("case_id", record_id(CASE_TABLE, new.case_id)))
-        .bind(("entry_number", new.entry_number.to_string()))
-        .bind(("kind", new.kind.as_str().to_string()))
-        .bind(("title", new.title.to_string()))
-        .bind(("party", new.party.map(str::to_string)))
-        .bind((
-            "filed_or_served_on",
-            new.filed_or_served_on.map(str::to_string),
-        ))
-        .bind((
-            "scheduled_on",
-            new.scheduled_on.map(surrealdb::types::Datetime::from),
-        ))
-        .bind((
-            "supersedes",
-            new.supersedes
-                .map(|prior| record_id(DOCKET_ENTRY_TABLE, prior)),
-        ))
-        .bind((
-            "document_asset_id",
-            new.document_asset_id
-                .map(|a| record_id(crate::assets::TABLE, a)),
-        ))
-        .bind((
-            "notation_id",
-            new.notation_id
-                .map(|n| record_id(crate::notations::TABLE, n)),
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
+    );
+    let query = if reuse {
+        format!(
+            "BEGIN; UPDATE $case_id SET updated_at = time::now(); \
+            LET $existing = (SELECT VALUE id FROM {DOCKET_ENTRY_TABLE} \
+                WHERE case_id = $case_id AND entry_number = $entry_number LIMIT 1)[0]; \
+            IF $existing = NONE {{ {create}; }} ELSE {{ \
+                UPDATE $existing SET document_asset_id = $document_asset_id, updated_at = time::now() \
+                WHERE document_asset_id = NONE AND $document_asset_id != NONE; \
+            }}; COMMIT;"
+        )
+    } else {
+        create
+    };
+    let mut response = crate::surreal::retry::writing(|| {
+        db.query(query.clone())
+            .bind(("id", record_id(DOCKET_ENTRY_TABLE, id)))
+            .bind(("case_id", record_id(CASE_TABLE, new.case_id)))
+            .bind(("entry_number", new.entry_number.to_string()))
+            .bind(("kind", new.kind.as_str().to_string()))
+            .bind(("title", new.title.to_string()))
+            .bind(("party", new.party.map(str::to_string)))
+            .bind((
+                "filed_or_served_on",
+                new.filed_or_served_on.map(str::to_string),
+            ))
+            .bind((
+                "scheduled_on",
+                new.scheduled_on.map(surrealdb::types::Datetime::from),
+            ))
+            .bind((
+                "supersedes",
+                new.supersedes
+                    .map(|prior| record_id(DOCKET_ENTRY_TABLE, prior)),
+            ))
+            .bind((
+                "document_asset_id",
+                new.document_asset_id
+                    .map(|a| record_id(crate::assets::TABLE, a)),
+            ))
+            .bind((
+                "notation_id",
+                new.notation_id
+                    .map(|n| record_id(crate::notations::TABLE, n)),
+            ))
+    })
+    .await?;
+    if reuse {
+        return docket(db, new.case_id)
+            .await?
+            .into_iter()
+            .find(|entry| entry.entry_number == new.entry_number)
+            .ok_or(CaseError::WriteReturnedNothing("docket entry"));
+    }
     let row: Option<DocketEntryRow> = response.take(0)?;
     row.and_then(DocketEntryRow::into_entry)
         .ok_or(CaseError::WriteReturnedNothing("docket entry"))

@@ -1420,6 +1420,87 @@ pub async fn ingest_bytes_with_mail_provenance(
     ingest_bytes_as_inner(db, storage, args, identity, Some(provenance), None, bytes).await
 }
 
+/// File an immutable message original or attachment once per Project and slug.
+/// A deterministic asset id elects one database writer across overlapping
+/// requests. Existing mail provenance, bytes, and metadata must agree.
+/// The document's current sharing visibility is retained on replay.
+/// This is for source messages; editable documents use the revision boundary.
+///
+/// # Errors
+/// Storage/database failures, a missing slug, or a changed archived source.
+pub async fn ingest_bytes_with_mail_provenance_once(
+    db: &SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    args: &IngestArgs<'_>,
+    identity: &DocumentIdentity<'_>,
+    provenance: &MailProvenance<'_>,
+    bytes: &[u8],
+) -> Result<IngestedDocument, IngestError> {
+    let slug = identity
+        .slug
+        .ok_or_else(|| IngestError::IdempotencyConflict(args.filename.into()))?;
+    let sha = sha256_hex(bytes);
+    if let Some(existing) =
+        crate::assets::current(db, args.project_id, slug, crate::assets::Lens::Lawyer).await?
+    {
+        return existing_mail_document(existing, args, identity, provenance, &sha);
+    }
+    let id = stable_asset_id(args.project_id, slug, "immutable-mail-source/v1");
+    match ingest_bytes_as_inner(
+        db,
+        storage,
+        args,
+        identity,
+        Some(provenance),
+        Some(id),
+        bytes,
+    )
+    .await
+    {
+        Ok(document) => Ok(document),
+        Err(error) => {
+            if let Some(existing) = crate::assets::find_by_id(db, id).await? {
+                return existing_mail_document(existing, args, identity, provenance, &sha);
+            }
+            Err(error)
+        }
+    }
+}
+
+fn existing_mail_document(
+    existing: crate::assets::Asset,
+    args: &IngestArgs<'_>,
+    identity: &DocumentIdentity<'_>,
+    provenance: &MailProvenance<'_>,
+    sha: &str,
+) -> Result<IngestedDocument, IngestError> {
+    if existing.slug.as_deref() != identity.slug
+        || existing.published_at.as_deref() != identity.published_at
+        || existing.metadata != identity.metadata
+        || existing.derived_from != identity.derived_from
+        || existing.transcript_quality.as_deref() != identity.transcript_quality
+        || existing.signing != identity.signing
+        || existing.notarization != identity.notarization
+        || existing.evidence != identity.evidence
+        || existing.source_message_id.as_deref() != Some(provenance.message_id)
+        || existing.source_sender.as_deref() != Some(provenance.sender)
+        || existing.source_received_at.as_deref() != Some(provenance.received_at)
+        || existing.source_subject.as_deref() != Some(provenance.subject)
+        || existing.deleted_at.is_some()
+    {
+        return Err(IngestError::IdempotencyConflict(args.filename.into()));
+    }
+    // Sharing changes the document's audience, not its archived source.
+    // A replay must preserve that choice while still verifying the bytes
+    // and mail identity above.
+    let visibility = existing.visibility.clone();
+    let args = IngestArgs {
+        visibility: &visibility,
+        ..args.clone()
+    };
+    existing_document(existing, &args, sha)
+}
+
 async fn ingest_bytes_as_inner(
     db: &SurrealDb,
     storage: &Arc<dyn StorageService>,

@@ -193,6 +193,21 @@ async fn ingest_support_email_for_firm(
         }
     }
     let provider_message_id = provider_message_id(email);
+    // Keep the source on this normalized message even without optional
+    // threading or an RFC Message-ID. The content key also survives replay.
+    let raw_storage_key = if email.raw.is_empty() {
+        None
+    } else {
+        let key = format!(
+            "inbound/inbox/{firm_id}/{}.eml",
+            store::assets::sha256_hex(&email.raw)
+        );
+        storage
+            .put(&key, &email.raw, "message/rfc822")
+            .await
+            .map_err(|error| error.to_string())?;
+        Some(key)
+    };
     let email_conversation_id = linked_email_conversation(db, email, &from).await?;
     let attachments = ingest_attachments(db, storage, email, firm_id, None).await?;
     let account = std::env::var("NAVIGATOR_EMAIL_PROVIDER_ACCOUNT")
@@ -224,7 +239,7 @@ async fn ingest_support_email_for_firm(
             email_conversation_id,
             attachments,
             occurred_at: &chrono::Utc::now().to_rfc3339(),
-            raw_storage_key: None,
+            raw_storage_key: raw_storage_key.as_deref(),
         },
     )
     .await

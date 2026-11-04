@@ -15819,8 +15819,20 @@ async fn summary_intake_uses_envelope_and_dedupes_archive_letter_and_receipt() {
     let letters = store::letters::list_all(&surreal).await.unwrap();
     assert_eq!(letters[0].recipient, "staging@neonlaw.com");
     let objects = state.storage.list("inbound/").await.unwrap();
-    assert_eq!(objects.len(), 1);
-    assert_eq!(state.storage.get(&objects[0].key).await.unwrap().bytes, raw);
+    let inbox_source_key = format!(
+        "inbound/inbox/{firm_id}/{}.eml",
+        store::assets::sha256_hex(raw)
+    );
+    assert_eq!(
+        objects.len(),
+        2,
+        "receipt archive and immutable inbox source"
+    );
+    assert!(objects.iter().any(|object| object.key == inbox_source_key));
+    assert_eq!(
+        state.storage.get(&inbox_source_key).await.unwrap().bytes,
+        raw
+    );
 
     let (retry_content_type, retry_body) = build_inbound_multipart_with_envelope_boundary(
         "aries@example.com",
@@ -15872,6 +15884,15 @@ async fn summary_intake_uses_envelope_and_dedupes_archive_letter_and_receipt() {
         .await
         .unwrap()
         .unwrap();
+    assert_ne!(receipt.archive_key, inbox_source_key);
+    assert!(objects
+        .iter()
+        .any(|object| object.key == receipt.archive_key));
+    assert_eq!(
+        state.storage.list("inbound/").await.unwrap().len(),
+        2,
+        "retry reuses both archive identities"
+    );
     let archived = state.storage.get(&receipt.archive_key).await.unwrap().bytes;
     let worker_digest =
         workflows::scoped_email_digest(&receipt.deployment, &receipt.receiving_mailbox, &archived);

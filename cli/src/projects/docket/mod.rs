@@ -10,6 +10,7 @@ pub mod case_timeline;
 pub mod claims_agent;
 pub mod entries;
 pub mod ingest;
-pub mod nef;
+// CLI docket ingestion and Inbox processing share one notice parser.
+pub use store::nef;
 pub mod renumber;
 pub mod timeline_write;
