@@ -4438,3 +4438,160 @@ mod kms_operator_cli_tests {
         assert!(dry_run);
     }
 }
+
+/// Tests for the pure KIND-tier render and argv helpers: the secret-set
+/// newline strip, assignment folding, the Rauthy patch shapes, and the
+/// kind-config port rewrite. Each test asserts evidence unique to the path.
+#[cfg(test)]
+mod devx_render_tests {
+    use super::*;
+
+    /// `ops secrets set` strips exactly one trailing newline (LF or CRLF)
+    /// from the piped value and leaves every other byte alone.
+    #[test]
+    fn strip_one_trailing_newline_strips_lf_crlf_and_nothing_else() {
+        let mut value = b"secret\n".to_vec();
+        strip_one_trailing_newline(&mut value);
+        assert_eq!(value, b"secret");
+
+        let mut crlf = b"secret\r\n".to_vec();
+        strip_one_trailing_newline(&mut crlf);
+        assert_eq!(crlf, b"secret");
+
+        // A blank line is not "no value": one LF is stripped, one byte stays.
+        let mut blank = b"\n".to_vec();
+        strip_one_trailing_newline(&mut blank);
+        assert_eq!(blank, b"");
+
+        // No trailing newline: nothing is stripped.
+        let mut bare = b"secret".to_vec();
+        strip_one_trailing_newline(&mut bare);
+        assert_eq!(bare, b"secret");
+
+        // Only ONE newline is stripped — a deliberate trailing blank line stays.
+        let mut double = b"secret\n\n".to_vec();
+        strip_one_trailing_newline(&mut double);
+        assert_eq!(double, b"secret\n");
+
+        let mut empty = Vec::new();
+        strip_one_trailing_newline(&mut empty);
+        assert!(empty.is_empty());
+    }
+
+    /// Assignments fold into a map and refuse a duplicate key — the caller
+    /// gets an error naming the key instead of a silently-won overwrite.
+    #[test]
+    fn assignments_fold_pairs_and_reject_duplicates() {
+        let folded = assignments(vec![("B".into(), "2".into()), ("A".into(), "1".into())]).unwrap();
+        let keys: Vec<&str> = folded.keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["A", "B"], "BTreeMap orders the output");
+        assert_eq!(folded["A"], "1");
+
+        let duplicate = assignments(vec![("A".into(), "1".into()), ("A".into(), "2".into())])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            duplicate.contains("A is assigned more than once"),
+            "{duplicate}"
+        );
+        // The first assignment wins nothing — the whole call fails.
+        assert_eq!(assignments(vec![]).unwrap().len(), 0);
+    }
+
+    /// The Rauthy loopback patch is a `ConfigMap` patch whose nginx.conf
+    /// proxies this tier's port to the in-cluster Rauthy.
+    #[test]
+    fn rauthy_loopback_patch_names_the_tiers_port() {
+        let patch = rauthy_loopback_config_patch(31080);
+        let parsed: serde_json::Value = serde_json::from_str(&patch).expect("valid JSON patch");
+        let conf = parsed["data"]["nginx.conf"].as_str().expect("nginx.conf");
+        assert!(conf.contains("listen 127.0.0.1:31080;"), "{conf}");
+        assert!(
+            conf.contains("proxy_set_header Host localhost:31080;"),
+            "{conf}"
+        );
+        assert!(conf.contains("proxy_pass http://rauthy:8080;"), "{conf}");
+    }
+
+    /// The web patch pins `OAUTH_ISSUER_URL` to this tier's browser-reachable
+    /// issuer so redirects land on the port the host actually forwarded.
+    #[test]
+    fn navigator_web_patch_pins_the_issuer_to_the_tiers_port() {
+        let patch = navigator_web_rauthy_patch(31080);
+        let parsed: serde_json::Value = serde_json::from_str(&patch).expect("valid JSON patch");
+        let env = parsed["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_array()
+            .expect("env array");
+        assert_eq!(env[0]["name"], "OAUTH_ISSUER_URL");
+        assert_eq!(env[0]["value"], "http://localhost:31080/auth/v1/");
+    }
+
+    /// The kind-config rewrite swaps only the three ingress host ports for
+    /// this tier's values and is byte-identical at the defaults.
+    #[test]
+    fn render_kind_config_rewrites_this_tiers_ports_and_keeps_the_rest() {
+        let template = "- containerPort: 80\n  hostPort: 80\n- containerPort: 443\n  hostPort: 443\n- containerPort: 30080\n  hostPort: 30080\n- containerPort: 9999\n  hostPort: 9999";
+        let mut cfg = super::tests::default_cfg();
+        cfg.ingress_http_port = 8000;
+        cfg.ingress_https_port = 8443;
+        cfg.rauthy_port = 31080;
+
+        let rendered = render_kind_config(template, &cfg);
+        // Every mapped host port is rewritten, the container ports and the
+        // unmapped entry are left alone, and the line structure is exact.
+        assert_eq!(
+            rendered,
+            "- containerPort: 80\n  hostPort: 8000\n- containerPort: 443\n  hostPort: 8443\n- containerPort: 30080\n  hostPort: 31080\n- containerPort: 9999\n  hostPort: 9999"
+        );
+
+        // At the true defaults the rewrite is a no-op, byte for byte.
+        let defaults_template = "- containerPort: 80\n  hostPort: 8080\n- containerPort: 443\n  hostPort: 8443\n- containerPort: 30080\n  hostPort: 30080\n- containerPort: 9999\n  hostPort: 9999";
+        let defaults = render_kind_config(defaults_template, &super::tests::default_cfg());
+        assert_eq!(defaults, defaults_template);
+    }
+
+    /// Nested-Docker clusters get kube-proxy switched to nftables — but only
+    /// when the config does not already choose a mode, and only when the body
+    /// really is a KIND config.
+    #[test]
+    fn inject_kube_proxy_nftables_inserts_once_and_respects_an_existing_mode() {
+        let without = "apiVersion: kind.x-k8s.io/v1alpha4\nnodes:\n- role: control-plane\n";
+        let injected = inject_kube_proxy_nftables(without);
+        assert_eq!(
+            injected,
+            "apiVersion: kind.x-k8s.io/v1alpha4\nnetworking:\n  kubeProxyMode: nftables\nnodes:\n- role: control-plane\n"
+        );
+        // An existing mode is never overridden.
+        assert_eq!(
+            inject_kube_proxy_nftables(
+                "apiVersion: kind.x-k8s.io/v1alpha4\nnetworking:\n  kubeProxyMode: iptables\n"
+            ),
+            "apiVersion: kind.x-k8s.io/v1alpha4\nnetworking:\n  kubeProxyMode: iptables\n"
+        );
+        // Not a KIND config: untouched.
+        assert_eq!(
+            inject_kube_proxy_nftables("random: yaml\n"),
+            "random: yaml\n"
+        );
+    }
+
+    /// The use-context argv pins every kubectl call to this tier's context.
+    #[test]
+    fn use_context_args_target_the_named_context() {
+        assert_eq!(
+            use_context_args("wt-7"),
+            vec!["config", "use-context", "wt-7"]
+        );
+        assert_eq!(
+            undeploy_args("wt-7", "navigator"),
+            vec![
+                "--context",
+                "wt-7",
+                "delete",
+                "--ignore-not-found",
+                "namespace",
+                "navigator"
+            ]
+        );
+    }
+}

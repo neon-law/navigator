@@ -4273,3 +4273,139 @@ mod drive_placement_tests {
         );
     }
 }
+
+/// Tests for the folder-keyed pointer rules (ENG-859): which staged paths
+/// count as signed-engagement or invoice captures, and what each rule
+/// demands of the pointer beside them.
+#[cfg(test)]
+mod folder_pointer_rule_tests {
+    use super::*;
+
+    /// Only the two onboarding/offboarding folders get the signed-copy rule,
+    /// at any depth beneath them.
+    #[test]
+    fn signed_engagement_folders_are_onboarding_and_offboarding_at_any_depth() {
+        assert!(is_signed_engagement_folder(std::path::Path::new(
+            "onboarding/retainer.pdf"
+        )));
+        assert!(is_signed_engagement_folder(std::path::Path::new(
+            "offboarding/nested/closing.pdf"
+        )));
+        assert!(!is_signed_engagement_folder(std::path::Path::new(
+            "documents/retainer.pdf"
+        )));
+        assert!(!is_signed_engagement_folder(std::path::Path::new(
+            "invoices/INV-1.pdf"
+        )));
+        // The rule keys on the first path component: the bare folder name
+        // matches, though the pass only ever hands it staged file paths.
+        assert!(is_signed_engagement_folder(std::path::Path::new(
+            "onboarding"
+        )));
+    }
+
+    /// The signed-copy suffix demands a name before it: `_signed.pdf` alone
+    /// is not a signed copy.
+    #[test]
+    fn signed_pdf_filenames_require_a_stem() {
+        assert!(is_signed_pdf_filename("retainer_signed.pdf"));
+        assert!(!is_signed_pdf_filename("_signed.pdf"));
+        assert!(!is_signed_pdf_filename("retainer.pdf"));
+        assert!(!is_signed_pdf_filename("retainer_signed.docx"));
+        assert!(!is_signed_pdf_filename("retainer_signed.pdf.exe"));
+    }
+
+    /// The folder rule ties the signed filename to the `DocuSign` envelope
+    /// both ways: one without the other is refused, naming the file.
+    #[test]
+    fn folder_pointer_rules_tie_signed_names_to_envelope_ids() {
+        let pointer = |envelope: Option<Uuid>| store::document_pointers::DocumentPointer {
+            checkout_path: None,
+            kind: "engagement_letter".into(),
+            visibility: "internal".into(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: Uuid::now_v7(),
+                created_at: "2026-01-15T00:00:00Z".into(),
+                sha256: "a".repeat(64),
+                size_bytes: 1,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: envelope,
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+            evidence: None,
+        };
+
+        let signed = std::path::Path::new("onboarding/retainer_signed.pdf");
+        let unsigned = std::path::Path::new("onboarding/retainer.pdf");
+
+        // A signed name without an envelope id is refused.
+        let error = validate_folder_pointer_keys(signed, &pointer(None)).unwrap_err();
+        assert!(
+            error.to_string().contains("no docusign_envelope_id"),
+            "{error}"
+        );
+        // An envelope id on an unsigned name is refused too.
+        let error =
+            validate_folder_pointer_keys(unsigned, &pointer(Some(Uuid::now_v7()))).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("is not named `<name>_signed.pdf`"),
+            "{error}"
+        );
+        // Both together pass.
+        assert!(validate_folder_pointer_keys(signed, &pointer(Some(Uuid::now_v7()))).is_ok());
+        // An unsigned, envelope-less file in the folder carries no rule.
+        assert!(validate_folder_pointer_keys(unsigned, &pointer(None)).is_ok());
+        // The rule does not reach files outside the signed folders.
+        assert!(validate_folder_pointer_keys(
+            std::path::Path::new("exhibits/retainer_signed.pdf"),
+            &pointer(None)
+        )
+        .is_ok());
+    }
+
+    /// Every staged invoice capture must name the Xero invoice it came from.
+    #[test]
+    fn invoice_captures_demand_their_xero_invoice_id() {
+        let pointer = store::document_pointers::DocumentPointer {
+            checkout_path: None,
+            kind: "invoice".into(),
+            visibility: "internal".into(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: Uuid::now_v7(),
+                created_at: "2026-01-15T00:00:00Z".into(),
+                sha256: "a".repeat(64),
+                size_bytes: 1,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: None,
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+            evidence: None,
+        };
+        let invoice = std::path::Path::new("invoices/INV-1.pdf");
+        let error = validate_folder_pointer_keys(invoice, &pointer).unwrap_err();
+        assert!(error.to_string().contains("no xero_invoice_id"), "{error}");
+        // The same pointer outside invoices/ is nobody's invoice capture.
+        assert!(
+            validate_folder_pointer_keys(std::path::Path::new("exhibits/INV-1.pdf"), &pointer)
+                .is_ok()
+        );
+    }
+}

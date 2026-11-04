@@ -6164,6 +6164,86 @@ mod tests {
         }
     }
 
+    /// An inbound message's acknowledgment receipt is its ID with the
+    /// sign bit flipped: always distinct from the inbound ID, and
+    /// involutive, so a reply to the receipt resolves to the original.
+    #[test]
+    fn acknowledgment_ids_are_involutive_and_distinct() {
+        let inbound = Uuid::now_v7();
+        let receipt = acknowledgment_id(inbound);
+        assert_ne!(inbound, receipt);
+        assert_eq!(acknowledgment_id(receipt), inbound);
+    }
+
+    #[test]
+    fn e164_requires_a_plus_an_eligible_length_and_no_leading_zero() {
+        assert!(is_e164("+15551234567"));
+        assert!(is_e164("+33123456789"));
+        // Too short, too long, missing `+`, a leading zero, non-digits.
+        assert!(!is_e164("+1555123"));
+        assert!(!is_e164("+1555123456789012345"));
+        assert!(!is_e164("15551234567"));
+        assert!(!is_e164("+05551234567"));
+        assert!(!is_e164("+1555-1234567"));
+        assert!(!is_e164(""));
+    }
+
+    #[test]
+    fn social_channels_exclude_the_direct_channels() {
+        for name in [
+            channel::FACEBOOK,
+            channel::INSTAGRAM,
+            channel::THREADS,
+            channel::YOUTUBE,
+            channel::TIKTOK,
+            channel::X,
+            channel::LINKEDIN,
+        ] {
+            assert!(is_social_channel(name), "{name}");
+        }
+        for name in [
+            channel::SMS,
+            channel::VOICE,
+            channel::EMAIL,
+            channel::SCRAPER,
+        ] {
+            assert!(!is_social_channel(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn processed_at_rejects_a_non_timestamp_with_the_stored_value_named() {
+        let parsed = parse_processed_at("2026-01-15T12:30:00Z").expect("rfc3339");
+        assert_eq!(parsed.to_rfc3339(), "2026-01-15T12:30:00+00:00");
+        let error = parse_processed_at("yesterday-ish").expect_err("invalid");
+        assert!(error.to_string().contains("yesterday-ish"), "{error}");
+    }
+
+    #[test]
+    fn terminal_delivery_states_stay_terminal_and_the_last_signal_wins() {
+        use super::delivery;
+        // A terminal state never regresses, whatever arrives later.
+        assert_eq!(
+            advance_delivery(delivery::FAILED, delivery::DELIVERED),
+            delivery::FAILED
+        );
+        assert_eq!(
+            advance_delivery(delivery::SUPPRESSED, delivery::SUBMITTED),
+            delivery::SUPPRESSED
+        );
+        // A non-terminal state adopts the incoming signal, unknown stays
+        // unknown while only a submit is known, and an unrecognized signal
+        // reads as unknown rather than inventing a state.
+        assert_eq!(
+            advance_delivery(delivery::SUBMITTED, "carrier-pigeon"),
+            delivery::UNKNOWN
+        );
+        assert_eq!(
+            advance_delivery(delivery::RECEIVED, delivery::FAILED),
+            delivery::FAILED
+        );
+    }
+
     #[tokio::test]
     async fn unread_count_for_project_counts_only_that_matters_unread_threads() {
         let db = mem_surreal().await;
