@@ -2901,6 +2901,14 @@
 {"file":"store/src/postgres/tenancy_tests.rs","line":287,"function":"postgres_tenancy_crud_lists_and_guards_preserve_scope","operation":"query","sql_operations":["INSERT"],"tables":["person"],"transaction":false}
 {"file":"store/src/postgres/tenancy_tests.rs","line":318,"function":"postgres_tenancy_crud_lists_and_guards_preserve_scope","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/postgres/tenancy_tests.rs","line":318,"function":"postgres_tenancy_crud_lists_and_guards_preserve_scope","operation":"query","sql_operations":["INSERT"],"tables":["brand"],"transaction":false}
+{"file":"store/src/postgres/tenancy_tests.rs","line":488,"function":"seed_entity_and_people","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/postgres/tenancy_tests.rs","line":488,"function":"seed_entity_and_people","operation":"query","sql_operations":["INSERT"],"tables":["jurisdiction"],"transaction":false}
+{"file":"store/src/postgres/tenancy_tests.rs","line":493,"function":"seed_entity_and_people","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/postgres/tenancy_tests.rs","line":493,"function":"seed_entity_and_people","operation":"query","sql_operations":["INSERT"],"tables":["entity_type"],"transaction":false}
+{"file":"store/src/postgres/tenancy_tests.rs","line":502,"function":"seed_entity_and_people","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/postgres/tenancy_tests.rs","line":502,"function":"seed_entity_and_people","operation":"query","sql_operations":["INSERT"],"tables":["entity"],"transaction":false}
+{"file":"store/src/postgres/tenancy_tests.rs","line":517,"function":"seed_entity_and_people","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/postgres/tenancy_tests.rs","line":517,"function":"seed_entity_and_people","operation":"query","sql_operations":["INSERT"],"tables":["person"],"transaction":false}
 {"file":"store/src/postgres_backfill.rs","line":133,"function":"verify_asset_objects","operation":"query","sql_operations":["SELECT"],"tables":["asset"],"transaction":false}
 {"file":"store/src/postgres_backfill.rs","line":140,"function":"verify_asset_objects","operation":"query","sql_operations":["SELECT"],"tables":["asset"],"transaction":false}
 {"file":"store/src/postgres_backfill.rs","line":256,"function":"non_asset_object_references","operation":"query","sql_operations":["SELECT"],"tables":["brand"],"transaction":false}
