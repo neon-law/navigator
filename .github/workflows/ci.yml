@@ -906,8 +906,8 @@ jobs:
           # (35732 missed of 472409) on 2026-11-03, from PR #358's workspace
           # job. The latest published print — the increment that tried to move
           # this floor to 92.7 and held instead (increment 5, PR #388, tenancy
-          # wrapper + people helper DB-harness tests, 281 missed lines
-          # converted) — is 92.40% line coverage (36382 missed of 478995) on
+          # wrapper + people helper DB-harness tests, 278 missed lines
+          # converted) — is 92.40% line coverage (36385 missed of 478995) on
           # 2026-11-04, from PR #388's workspace job. The 92.2 floor is the
           # merge gate from this change onward.
           #
