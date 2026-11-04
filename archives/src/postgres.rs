@@ -75,6 +75,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "project_folder",
     "project_costs",
     "project_cost_events",
+    "matter_billing_batch",
     "project_deadlines",
     "project_service",
     "project_task",
@@ -508,7 +509,10 @@ impl Kind {
             "date" => Self::Date,
             "timestamptz" => Self::Timestamptz,
             "timestamp" => Self::Timestamp,
-            "_text" | "_varchar" | "_bpchar" | "_citext" => Self::TextArray,
+            // A UUID array projects as its text form — the pg type is
+            // preserved in the field metadata; dropping the column entirely
+            // would hide batch entry and cost id lists from the archive.
+            "_text" | "_varchar" | "_bpchar" | "_citext" | "_uuid" => Self::TextArray,
             _ => return None,
         })
     }
@@ -1029,6 +1033,7 @@ mod tests {
         assert_eq!(Kind::from_pg("uuid"), Some(Kind::Uuid));
         assert_eq!(Kind::from_pg("jsonb"), Some(Kind::Json));
         assert_eq!(Kind::from_pg("_text"), Some(Kind::TextArray));
+        assert_eq!(Kind::from_pg("_uuid"), Some(Kind::TextArray));
         assert_eq!(Kind::from_pg("agtype"), Some(Kind::Text));
         assert_eq!(Kind::from_pg("graphid"), Some(Kind::Text));
         assert_eq!(Kind::from_pg("label_id"), Some(Kind::Text));

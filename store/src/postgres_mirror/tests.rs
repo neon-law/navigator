@@ -2022,7 +2022,7 @@ async fn assert_invoice_link_contract(
         ),
     ] {
         assert!(matches!(
-            crate::project_costs::link_invoice(surreal, pg, cost_id, actor_id, id).await,
+            crate::project_costs::link_invoice(surreal, pg, cost_id, actor_id, id, false).await,
             Err(crate::project_costs::ProjectCostError::Invalid(message)) if message == expected
         ));
     }
@@ -2038,10 +2038,44 @@ async fn assert_invoice_link_contract(
         cost_id,
         actor_id,
         "synthetic-valid-invoice",
+        false,
     )
     .await
     .unwrap();
     assert_eq!(linked.billing_status, "invoiced");
+    assert_single_connection_cost_replay(surreal, pg, cost_id, actor_id).await;
+}
+
+async fn assert_single_connection_cost_replay(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    cost_id: Uuid,
+    actor_id: Uuid,
+) {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_millis(100))
+        .connect_with(pg.pool().connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    let single = PostgresDb(pool);
+    let replay = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        crate::project_costs::link_invoice(
+            surreal,
+            &single,
+            cost_id,
+            actor_id,
+            "synthetic-valid-invoice",
+            false,
+        ),
+    )
+    .await
+    .expect("cost replay uses only the transaction connection")
+    .unwrap();
+    assert_eq!(replay.id, cost_id);
+    assert_eq!(replay.billing_status, "invoiced");
+    single.0.close().await;
 }
 
 async fn assert_receipt_visibility_and_audit(

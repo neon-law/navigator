@@ -875,6 +875,27 @@ erDiagram
         string name
         datetime updated_at
     }
+    matter_billing_batch {
+        uuid actor_id
+        string contact_email
+        string contact_name
+        string cost_ids
+        string currency
+        datetime due_date
+        string entry_ids
+        datetime first_attempted_at
+        int flat_fee_cents
+        uuid id
+        datetime inserted_at
+        json line_items
+        uuid project_id
+        string reference
+        string status
+        int total_cents
+        datetime updated_at
+        string xero_contact_id
+        string xero_invoice_id
+    }
     matter_caption {
         string case_number
         json counsel
@@ -1852,6 +1873,8 @@ erDiagram
     journal_source_reference }o--|| journal_source_snapshot : references
     mailroom }o--|| letter : references
     address }o--|| mailroom : references
+    person }o--|| matter_billing_batch : references
+    project }o--|| matter_billing_batch : references
     firm }o--|| matter_caption : references
     project }o--|| matter_caption : references
     project }o--|| matter_flat_fee : references

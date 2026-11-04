@@ -118,6 +118,10 @@ pub struct ApiState {
     /// stored credential, for the `/app/api/integrations/*` doors. Refuses on
     /// a deployment with no runtime KMS key — see [`crate::integrations`].
     pub integration_providers: Arc<dyn crate::integrations::IntegrationProviders>,
+    /// The billing provider seam — the only door a matter invoice goes
+    /// through to Xero ("Xero is the books"). The stub in dev/tests; Xero in
+    /// production. See [`crate::project_billing_api`].
+    pub billing_provider: Arc<dyn crate::billing::BillingProvider>,
     /// The deployment's canonical host, for links rendered beside stored
     /// rows — the Deadline mirror's matter-page line. `None` locally.
     pub canonical_base_url: Option<String>,
@@ -483,6 +487,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "GET",
             "/app/api/projects/{id}/costs/{cost_id}/events",
             get(crate::project_costs_api::events),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/invoices",
+            post(crate::project_billing_api::generate),
         ),
         (
             "GET",
@@ -9073,6 +9082,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            billing_provider: app.billing_provider.clone(),
         };
         let client = |person_id| {
             AuthedSession(crate::SessionData {
@@ -9450,6 +9460,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            billing_provider: app.billing_provider.clone(),
         };
         let lawyer = integrity_participant(
             &db,
@@ -9886,6 +9897,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            billing_provider: app.billing_provider.clone(),
         };
         let session = crate::SessionData {
             person_id: Some(mixed_role_person.id),
@@ -9944,6 +9956,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            billing_provider: app.billing_provider.clone(),
         };
         // Owner/Admin bypass project-scoping only at route admission; a
         // matter-content route like this one still applies the participation
@@ -10036,6 +10049,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            billing_provider: app.billing_provider.clone(),
         };
         let session_data = crate::SessionData {
             person_id: Some(lawyer_person.id),
@@ -10354,6 +10368,7 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            billing_provider: app.billing_provider.clone(),
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),
@@ -10442,6 +10457,7 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            billing_provider: app.billing_provider.clone(),
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),
@@ -10551,6 +10567,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            billing_provider: app.billing_provider.clone(),
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),
@@ -12363,6 +12380,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            billing_provider: app.billing_provider.clone(),
         }
     }
 

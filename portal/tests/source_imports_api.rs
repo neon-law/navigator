@@ -76,6 +76,7 @@ async fn fixture() -> Fixture {
         signature_provider: state.signature_provider.clone(),
         contract_reviewer: state.contract_reviewer.clone(),
         integration_providers: state.integration_providers.clone(),
+        billing_provider: state.billing_provider.clone(),
         canonical_base_url: None,
     });
     let session = |person: &store::persons::Person| portal::SessionData {
