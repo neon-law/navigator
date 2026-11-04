@@ -135,12 +135,9 @@ pub(crate) async fn by_role(pg: &PostgresDb, role: Role) -> Result<Vec<Person>, 
         .map_err(database)
 }
 
-pub(crate) async fn directory(
-    pg: &PostgresDb,
-    filter_name: &str,
-    filter_email: &str,
-    sort: &[(String, bool)],
-) -> Result<Vec<Person>, PersonError> {
+/// The directory's `ORDER BY`: only `name` and `email` are honored, never
+/// the caller's string, and an empty sort falls back to name.
+fn directory_order(sort: &[(String, bool)]) -> String {
     let order = sort
         .iter()
         .filter_map(|(key, desc)| match key.as_str() {
@@ -149,11 +146,53 @@ pub(crate) async fn directory(
             _ => None,
         })
         .collect::<Vec<_>>();
-    let order = if order.is_empty() {
+    if order.is_empty() {
         "name ASC".to_string()
     } else {
         order.join(", ")
-    };
+    }
+}
+
+/// The people directory in one query over the `person_directory` view: each
+/// Person with their Firm names. `visible_to_firms` narrows the rows to those
+/// the `firm_visible_person` view admits for any of those Firms; `None` lists
+/// everyone.
+pub(crate) async fn directory_entries(
+    pg: &PostgresDb,
+    filter_name: &str,
+    filter_email: &str,
+    sort: &[(String, bool)],
+    visible_to_firms: Option<&[Uuid]>,
+) -> Result<Vec<(Person, Vec<String>)>, PersonError> {
+    let order = directory_order(sort);
+    let sql = format!(
+        "SELECT {COLUMNS}, firm_names FROM person_directory \
+         WHERE ($1 = '' OR strpos(lower(name), $1) > 0) \
+           AND ($2 = '' OR strpos(email_lower, $2) > 0) \
+           AND ($3::uuid[] IS NULL OR id IN \
+                (SELECT person_id FROM firm_visible_person WHERE firm_id = ANY($3))) \
+         ORDER BY {order}"
+    );
+    let rows = sqlx::query(AssertSqlSafe(sql))
+        .bind(filter_name.to_lowercase())
+        .bind(filter_email.to_lowercase())
+        .bind(visible_to_firms)
+        .fetch_all(&pg.0)
+        .await
+        .map_err(database)?;
+    rows.iter()
+        .map(|row| Ok((person(row)?, row.try_get("firm_names")?)))
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(database)
+}
+
+pub(crate) async fn directory(
+    pg: &PostgresDb,
+    filter_name: &str,
+    filter_email: &str,
+    sort: &[(String, bool)],
+) -> Result<Vec<Person>, PersonError> {
+    let order = directory_order(sort);
     let sql = format!("SELECT {COLUMNS} FROM person WHERE ($1 = '' OR strpos(lower(name), $1) > 0) AND ($2 = '' OR strpos(email_lower, $2) > 0) ORDER BY {order}");
     let rows = sqlx::query(AssertSqlSafe(sql))
         .bind(filter_name.to_lowercase())

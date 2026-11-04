@@ -186,10 +186,7 @@ pub async fn list_admin_people() -> Result<PeopleView, ServerFnError> {
         .unwrap_or_default();
 
     let surreal = consume_context::<store::surreal::SurrealDb>();
-    let mut people =
-        store::persons::list_directory(&surreal, &filter_name, &filter_email, &parse_sort(&sort))
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let mut scope = store::firms::DirectoryScope::Everyone;
     if role == ViewerRole::Admin {
         let crate::portal_project_list::PersonId(person_id) =
             dioxus_fullstack_core::FullstackContext::extract::<
@@ -203,7 +200,6 @@ pub async fn list_admin_people() -> Result<PeopleView, ServerFnError> {
             .as_deref()
             .and_then(|id| uuid::Uuid::parse_str(id).ok())
         else {
-            people.clear();
             return Ok(PeopleView {
                 tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
                 firm_name: crate::app_chrome::firm_name_from_context().await,
@@ -216,34 +212,31 @@ pub async fn list_admin_people() -> Result<PeopleView, ServerFnError> {
                 csrf_token,
             });
         };
-        let visible = store::firms::visible_person_ids(&surreal, viewer_id)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-        people.retain(|person| visible.contains(&person.id));
+        scope = store::firms::DirectoryScope::VisibleToAdmin(viewer_id);
     }
 
-    // One lookup for the whole page rather than a query per row: every
-    // Firm's name, keyed by id, so each person's memberships resolve to
-    // names without re-reading the Firm table per person.
-    let firm_names: std::collections::HashMap<uuid::Uuid, String> = store::firms::all(&surreal)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?
-        .into_iter()
-        .map(|firm| (firm.id, firm.name))
-        .collect();
+    // One directory read for the whole page — never a membership lookup per
+    // row, which timed the page out on a large directory.
+    let entries = store::firms::people_directory(
+        &surreal,
+        &filter_name,
+        &filter_email,
+        &parse_sort(&sort),
+        scope,
+    )
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let mut rows = Vec::with_capacity(people.len());
-    for p in people {
+    let mut rows = Vec::with_capacity(entries.len());
+    for store::firms::DirectoryEntry {
+        person: p,
+        firm_names: firms,
+    } in entries
+    {
         let is_client = p.role == store::persons::Role::Client;
         let is_bootstrap_owner = bootstrap_owner_email
             .as_deref()
             .is_some_and(|configured| configured.eq_ignore_ascii_case(&p.email));
-        let firms = store::firms::memberships_for_person(&surreal, p.id)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?
-            .into_iter()
-            .filter_map(|membership| firm_names.get(&membership.firm_id).cloned())
-            .collect();
         rows.push(PersonRow {
             id: p.id.to_string(),
             name: p.name,

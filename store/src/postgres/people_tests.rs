@@ -771,3 +771,65 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
     );
     pg.0.close().await;
 }
+
+#[tokio::test]
+async fn directory_views_join_firm_names_and_scope_to_visible_people() {
+    let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+        return;
+    };
+    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let surreal = crate::test_support::mem_surreal().await;
+    let person = |name: &str| NewPerson::new(name, format!("{}@example.test", Uuid::now_v7()));
+    let member = super::create(&pg, &surreal, &person("Ada Member"))
+        .await
+        .unwrap();
+    let participant = super::create(&pg, &surreal, &person("Bo Participant"))
+        .await
+        .unwrap();
+    let stranger = super::create(&pg, &surreal, &person("Cy Stranger"))
+        .await
+        .unwrap();
+
+    let (jurisdiction, entity_type, entity) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let (first, second, project) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    sqlx::raw_sql(AssertSqlSafe(format!(
+        "INSERT INTO jurisdiction (id,name,code) VALUES ('{jurisdiction}','Synthetic Jurisdiction','TST');
+         INSERT INTO entity_type (id,name) VALUES ('{entity_type}','Synthetic Entity');
+         INSERT INTO entity (id,name,entity_type_id,jurisdiction_id) VALUES ('{entity}','Synthetic Entity','{entity_type}','{jurisdiction}');
+         INSERT INTO firm (id,name,slug,status) VALUES ('{first}','First Firm','first-firm','active'), ('{second}','Second Firm','second-firm','active');
+         INSERT INTO person_firm_role (person_id,firm_id,membership,inserted_at) VALUES
+             ('{}','{second}','lawyer',now() - interval '1 day'), ('{}','{first}','lawyer',now());
+         INSERT INTO project (id,code,name,status,entity_id,firm_id) VALUES ('{project}','synthetic-matter','Synthetic Matter','open','{entity}','{first}');
+         INSERT INTO person_project_role (person_id,project_id,participation) VALUES ('{}','{project}','client');",
+        member.id, member.id, participant.id
+    )))
+    .execute(&pg.0)
+    .await
+    .unwrap();
+
+    // Everyone, name order, each with Firm names in membership order.
+    let everyone = super::directory_entries(&pg, "", "", &[], None)
+        .await
+        .unwrap();
+    let names: Vec<_> = everyone.iter().map(|(p, _)| p.id).collect();
+    assert_eq!(names, vec![member.id, participant.id, stranger.id]);
+    assert_eq!(everyone[0].1, vec!["Second Firm", "First Firm"]);
+    assert!(everyone[1].1.is_empty());
+
+    // An Admin of the first Firm sees its member and its matter's participant.
+    let scoped = super::directory_entries(&pg, "", "", &[("name".into(), true)], Some(&[first]))
+        .await
+        .unwrap();
+    let ids: Vec<_> = scoped.iter().map(|(p, _)| p.id).collect();
+    assert_eq!(ids, vec![participant.id, member.id]);
+
+    // Filters still apply, and no Firm admits nobody.
+    let filtered = super::directory_entries(&pg, "bo", "", &[], Some(&[first]))
+        .await
+        .unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert!(super::directory_entries(&pg, "", "", &[], Some(&[]))
+        .await
+        .unwrap()
+        .is_empty());
+}
