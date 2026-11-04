@@ -105,6 +105,7 @@ pub(crate) mod matter_caption_api;
 pub(crate) mod module_records_api;
 pub(crate) mod pages_api;
 pub(crate) mod project_billing_api;
+pub(crate) mod project_billing_forms;
 pub(crate) mod project_costs_api;
 pub(crate) mod project_stage_forms;
 pub(crate) mod project_stages_api;

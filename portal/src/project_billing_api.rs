@@ -59,7 +59,7 @@ use crate::billing::{self, InvoiceLine, InvoiceRequest};
 /// unbilled cost in another currency refuses the whole generation (before
 /// anything is raised) rather than silently dropping reimbursable money or
 /// mixing currencies on one Xero invoice.
-const INVOICE_CURRENCY: &str = "USD";
+const INVOICE_CURRENCY: &str = store::billing_batches::INVOICE_CURRENCY;
 
 /// The Xero chart-of-accounts code the revenue posts to — the same sales code
 /// the services catalog copy and the sandbox-reset fixture bill against.
@@ -230,6 +230,8 @@ pub(crate) enum InvoiceGenerationError {
     FutureDatedCost(NaiveDate),
     #[error("the matter's flat fee is already billed — amend the fee for additional work")]
     FlatFeeAlreadyBilled,
+    #[error("the compose changed since the preview — review it again")]
+    PreviewChanged,
     #[error("the pending invoice requires reconciliation before another provider attempt")]
     ReconciliationRequired,
     #[error("the provider invoice is not authorised or paid; reconciliation is required")]
@@ -279,6 +281,7 @@ pub(crate) async fn generate_invoice(
     project_id: Uuid,
     actor_id: Uuid,
     now: DateTime<Utc>,
+    expected_preview_digest: Option<&str>,
 ) -> Result<InvoiceReceipt, InvoiceGenerationError> {
     if !provider.invoices_available() {
         return Err(InvoiceGenerationError::BillingUnavailable);
@@ -333,6 +336,15 @@ pub(crate) async fn generate_invoice(
     let compose = compose_lines(&entries, &unbilled_costs, flat_fee_cents)?;
     if compose.total_cents == 0 {
         return Err(InvoiceGenerationError::NothingToInvoice);
+    }
+    // The confirm step's binding: the digest the attorney reviewed must be
+    // the digest of THIS fresh compose — work logged or edited since the
+    // preview re-opens the review instead of billing charges nobody saw. The
+    // pending-batch resume above never recomposes, so the binding cannot
+    // strand an already-frozen batch.
+    let preview_digest = billing_batches::preview_digest(&entries, &unbilled_costs, flat_fee_cents);
+    if expected_preview_digest.is_some_and(|expected| expected != preview_digest) {
+        return Err(InvoiceGenerationError::PreviewChanged);
     }
 
     let Some(party) = billed_party(surreal, project_id).await? else {
@@ -557,6 +569,9 @@ fn error(error: &InvoiceGenerationError, project_id: Uuid) -> Response {
             return refused(StatusCode::SERVICE_UNAVAILABLE, "billing_unavailable");
         }
         InvoiceGenerationError::NothingToInvoice => (StatusCode::CONFLICT, "nothing_to_invoice"),
+        InvoiceGenerationError::PreviewChanged => {
+            (StatusCode::CONFLICT, "compose_changed_under_review")
+        }
         InvoiceGenerationError::FlatFeeAlreadyBilled
         | InvoiceGenerationError::Batch(billing_batches::BillingBatchError::FlatFeeAlreadyBilled) => {
             (StatusCode::CONFLICT, "flat_fee_already_billed")
@@ -722,6 +737,7 @@ pub(crate) async fn generate(
         project_id,
         actor_id,
         Utc::now(),
+        None,
     )
     .await
     {

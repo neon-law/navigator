@@ -60,6 +60,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "graph",
     "inbox",
     "intake",
+    "invoices",
     "notations",
     "participants",
     "people",
@@ -68,6 +69,8 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "stages",
     "tasks",
     "testimonial",
+    "time-entries",
+    "timer",
     "view-as-client",
 ];
 

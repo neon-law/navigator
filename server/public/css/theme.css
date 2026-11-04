@@ -4095,6 +4095,26 @@ a.lawyer-detail__fact-value:focus-visible {
   color: var(--nav-color-text-muted);
 }
 
+/* Matter billing chart: the same total-against-paid convention as the firm
+   invoice chart — primary fill for the total, the same fill at reduced
+   opacity for paid-to-date, and a legend swatch per series. */
+.matter-billing-invoice-bar--total {
+  fill: var(--nav-color-primary);
+}
+
+.matter-billing-invoice-bar--paid {
+  fill-opacity: 0.55;
+}
+
+.matter-billing-swatch--invoiced {
+  background: var(--nav-color-primary);
+}
+
+.matter-billing-swatch--paid {
+  background: var(--nav-color-primary);
+  opacity: 0.55;
+}
+
 .project-kpi-empty {
   margin: 0;
 }
