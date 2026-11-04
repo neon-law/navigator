@@ -520,3 +520,254 @@ async fn authoritative_facade_uses_postgres_and_keeps_the_compatibility_projecti
     assert_eq!(projected_holder, None);
     pg.0.close().await;
 }
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario drives every PostgreSQL People helper and its guard rails"
+)]
+async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
+    let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+        return;
+    };
+    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let surreal = crate::test_support::mem_surreal().await;
+
+    let owner = super::create(
+        &pg,
+        &surreal,
+        &NewPerson::new(
+            "Helper Owner",
+            format!("helper-owner-{}@example.test", Uuid::now_v7()),
+        ),
+    )
+    .await
+    .unwrap();
+    let lawyer = super::create(
+        &pg,
+        &surreal,
+        &NewPerson::new(
+            "Helper Lawyer",
+            format!("helper-lawyer-{}@example.test", Uuid::now_v7()),
+        ),
+    )
+    .await
+    .unwrap();
+    let client = super::create(
+        &pg,
+        &surreal,
+        &NewPerson::new(
+            "Helper Client",
+            format!("helper-client-{}@example.test", Uuid::now_v7()),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(client.role, Role::Client);
+    super::set_role(&pg, &surreal, owner.id, Role::Owner)
+        .await
+        .unwrap()
+        .unwrap();
+    super::set_role(&pg, &surreal, lawyer.id, Role::Lawyer)
+        .await
+        .unwrap()
+        .unwrap();
+    // The client keeps the default role; give the owner and lawyer phones.
+    super::set_text(&pg, &surreal, owner.id, "phone", Some("+15555550001"))
+        .await
+        .unwrap()
+        .unwrap();
+    super::set_text(&pg, &surreal, lawyer.id, "phone", Some("+15555550002"))
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Reads: case-insensitive email, subject lookup, id batch, phone filter,
+    // and role filter all agree with what was written.
+    let mixed_case = owner.email.to_uppercase();
+    assert_eq!(
+        super::by_email(&pg, &mixed_case).await.unwrap().unwrap().id,
+        owner.id
+    );
+    assert!(super::by_email(&pg, "missing-helper@example.test")
+        .await
+        .unwrap()
+        .is_none());
+    super::link_subject(
+        &pg,
+        &surreal,
+        owner.id,
+        "oidc_subject",
+        "helper-owner-subject",
+        false,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        super::by_subject(&pg, "oidc_subject", "helper-owner-subject")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        owner.id
+    );
+    let many = super::many_by_ids(&pg, &[owner.id, lawyer.id, Uuid::new_v4()])
+        .await
+        .unwrap();
+    assert_eq!(many.len(), 2);
+    let with_phone = super::all_with_phone(&pg).await.unwrap();
+    assert_eq!(with_phone.len(), 2);
+    assert_eq!(super::by_role(&pg, Role::Owner).await.unwrap().len(), 1);
+    assert_eq!(super::by_role(&pg, Role::Client).await.unwrap().len(), 1);
+
+    // The directory filters on name and email substrings with explicit sort.
+    let owner_email_suffix = owner.email.split('@').next().unwrap().to_string();
+    let directory = super::directory(&pg, "helper", &owner_email_suffix, &[])
+        .await
+        .unwrap();
+    assert_eq!(directory.len(), 1);
+    assert_eq!(directory[0].id, owner.id);
+    let sorted_desc = super::directory(&pg, "", "", &[("name".into(), true)])
+        .await
+        .unwrap();
+    assert_eq!(sorted_desc.len(), 3);
+    assert!(sorted_desc[0].name > sorted_desc[1].name);
+    let unknown_sort_key = super::directory(&pg, "nobody-matches", "", &[("bogus".into(), false)])
+        .await
+        .unwrap();
+    assert!(unknown_sort_key.is_empty());
+    let limited = super::search(&pg, Some("helper"), None, 2).await.unwrap();
+    assert_eq!(limited.len(), 2);
+
+    // The default DRI prefers the highest authority tier, tie-broken by id.
+    assert_eq!(super::default_firm_dri(&pg).await.unwrap(), Some(owner.id));
+
+    // The mailbox holder reads the authoritative claim; a missing row and a
+    // missing person both fail open for admission.
+    assert_eq!(
+        super::mailbox_holder(&pg, &owner.email).await.unwrap(),
+        Some(owner.id)
+    );
+    assert!(super::is_admitted(&pg, Uuid::new_v4()).await.unwrap());
+
+    // Guard rails: unsupported columns and subjects are refused, not written.
+    assert!(
+        super::set_text(&pg, &surreal, owner.id, "name", Some("Nope"))
+            .await
+            .is_err()
+    );
+    assert!(super::set_flag(&pg, &surreal, owner.id, "bogus_flag", true)
+        .await
+        .is_err());
+    assert!(
+        super::link_subject(&pg, &surreal, owner.id, "bogus_subject", "x", false)
+            .await
+            .is_err()
+    );
+
+    // Flag, contact, and edit writes move the authoritative row and project.
+    let flagged = super::set_flag(&pg, &surreal, owner.id, "email_confirmed", true)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(flagged.email_confirmed);
+    assert!(
+        super::by_id(&pg, owner.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .email_confirmed
+    );
+    assert!(
+        crate::persons::find_by_id(&surreal, owner.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .email_confirmed
+    );
+    let contacted = super::update_contact(
+        &pg,
+        &surreal,
+        lawyer.id,
+        &crate::persons::ContactUpdate {
+            name: "Helper Lawyer Renamed".into(),
+            title: Some("Senior Partner".into()),
+            phone: Some("+15555550003".into()),
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(contacted.name, "Helper Lawyer Renamed");
+    assert_eq!(contacted.title.as_deref(), Some("Senior Partner"));
+    let edited = super::edit(
+        &pg,
+        &surreal,
+        lawyer.id,
+        &PersonEdit {
+            given_name: Some(Some("Helper".into())),
+            family_name: Some(Some("Lawyer".into())),
+            linkedin_url: Some(Some("https://www.linkedin.com/in/helper-lawyer".into())),
+            ..PersonEdit::default()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(edited.given_name.as_deref(), Some("Helper"));
+    assert_eq!(edited.family_name.as_deref(), Some("Lawyer"));
+
+    // The adopt-legacy subject link migrates an OIDC subject to a provider
+    // column and clears the legacy claim in the same statement.
+    let adopted = super::link_subject(
+        &pg,
+        &surreal,
+        owner.id,
+        "microsoft_subject",
+        "helper-owner-subject",
+        true,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        adopted.microsoft_subject.as_deref(),
+        Some("helper-owner-subject")
+    );
+    assert_eq!(adopted.oidc_subject, None);
+
+    // find_or_create is a no-op on an existing email and creates otherwise.
+    let found = super::find_or_create(
+        &pg,
+        &surreal,
+        &NewPerson::new("Helper Owner Again", &owner.email),
+    )
+    .await
+    .unwrap();
+    assert_eq!(found.id, owner.id);
+    let created_again = super::find_or_create(
+        &pg,
+        &surreal,
+        &NewPerson::new(
+            "Helper Second",
+            format!("helper-second-{}@example.test", Uuid::now_v7()),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_ne!(created_again.id, owner.id);
+
+    // Delete removes the row and its mailbox claim; the projection runs.
+    super::delete(&pg, &surreal, created_again.id)
+        .await
+        .unwrap();
+    assert!(super::by_id(&pg, created_again.id).await.unwrap().is_none());
+    assert_eq!(
+        super::mailbox_holder(&pg, &created_again.email)
+            .await
+            .unwrap(),
+        None
+    );
+    pg.0.close().await;
+}
