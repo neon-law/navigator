@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn a_firm_legal_name_binding_is_not_a_signature_field() {
         let body = "---\nkind: letter\ntitle: Letter\n---\n\n{{firm.legal_name}}\n";
-        assert!(F107SignaturePlaceholders.lint(&file(&body)).is_empty());
+        assert!(F107SignaturePlaceholders.lint(&file(body)).is_empty());
     }
 
     #[test]
