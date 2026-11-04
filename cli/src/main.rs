@@ -3137,7 +3137,7 @@ enum OpsCmd {
         /// certificate's domains, the roll stages `navigator-firm-next`,
         /// waits for it, patches `navigator-firm`, and waits again. This
         /// bounds each wait, in minutes.
-        #[arg(long, default_value_t = devx::DEFAULT_CERTIFICATE_TIMEOUT_MINUTES)]
+        #[arg(long, default_value_t = devx::DEFAULT_CERTIFICATE_TIMEOUT_MINUTES, value_parser = clap::value_parser!(u32).range(1..))]
         certificate_timeout_minutes: u32,
     },
     /// Read a saved ship transcript under the operator's own credentials.

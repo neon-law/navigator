@@ -75,14 +75,17 @@ pub(crate) trait Cluster {
     fn annotate_ingress(&mut self, ingress: &str, key: &str, value: &str) -> Result<()>;
     fn patch_domains(&mut self, certificate: &str, domains: &[String]) -> Result<()>;
     /// A trusted TLS handshake to `https://<host>/` through the ordinary
-    /// trust store. Never insecure.
-    fn tls_trusted(&mut self, host: &str) -> bool;
+    /// trust store, given at most `max`. Never insecure.
+    fn tls_trusted(&mut self, host: &str, max: Duration) -> bool;
     fn sleep(&mut self, duration: Duration);
+    /// Time since the transition began, reads and checks included.
+    fn elapsed(&self) -> Duration;
 }
 
 /// The live cluster through `kubectl`, and `curl` for the TLS check.
 pub(crate) struct KubectlCluster<'a> {
     pub cfg: &'a ShipConfig,
+    pub started: std::time::Instant,
 }
 
 impl Cluster for KubectlCluster<'_> {
@@ -149,9 +152,10 @@ impl Cluster for KubectlCluster<'_> {
         Ok(())
     }
 
-    fn tls_trusted(&mut self, host: &str) -> bool {
+    fn tls_trusted(&mut self, host: &str, max: Duration) -> bool {
         std::process::Command::new("curl")
-            .args(["--silent", "--output", "/dev/null", "--max-time", "15"])
+            .args(["--silent", "--output", "/dev/null", "--max-time"])
+            .arg(max.as_secs().max(1).to_string())
             .arg(format!("https://{host}/"))
             .status()
             .is_ok_and(|status| status.success())
@@ -159,6 +163,10 @@ impl Cluster for KubectlCluster<'_> {
 
     fn sleep(&mut self, duration: Duration) {
         std::thread::sleep(duration);
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.started.elapsed()
     }
 }
 
@@ -233,44 +241,51 @@ fn issued_for(certificate: &serde_json::Value, desired: &BTreeSet<String>) -> Re
     Ok(active && domains == *desired)
 }
 
+/// The most one host's TLS check may take.
+const TLS_CHECK_LIMIT: Duration = Duration::from_secs(15);
+
 /// Poll until `certificate` is issued for `desired` and every host answers
-/// trusted TLS, or `timeout` elapses.
+/// trusted TLS, or `timeout` elapses. The bound is wall time: reads and host
+/// checks count, and each check gets no more than the time left.
 fn wait_serving<C: Cluster>(
     cluster: &mut C,
     certificate: &str,
     desired: &BTreeSet<String>,
     timeout: Duration,
 ) -> Result<()> {
-    let mut waited = Duration::ZERO;
+    let deadline = cluster.elapsed() + timeout;
     loop {
         let live = cluster
             .get_json("managedcertificate", certificate)?
             .ok_or_else(|| {
                 anyhow!("managedcertificate {certificate} disappeared mid-transition")
             })?;
-        let untrusted: Vec<&str> = if issued_for(&live, desired)? {
-            desired
-                .iter()
-                .map(String::as_str)
-                .filter(|host| !cluster.tls_trusted(host))
-                .collect()
-        } else {
-            desired.iter().map(String::as_str).collect()
-        };
+        let mut untrusted: Vec<&str> = Vec::new();
+        let issued = issued_for(&live, desired)?;
+        for host in desired {
+            let remaining = deadline.saturating_sub(cluster.elapsed());
+            if !issued
+                || remaining.is_zero()
+                || !cluster.tls_trusted(host, remaining.min(TLS_CHECK_LIMIT))
+            {
+                untrusted.push(host);
+            }
+        }
         if untrusted.is_empty() {
             return Ok(());
         }
-        if waited >= timeout {
+        let remaining = deadline.saturating_sub(cluster.elapsed());
+        if remaining.is_zero() {
             bail!(
-                "{certificate} did not serve trusted TLS within {} minutes; pending: {}. The \
-                 serving certificates are untouched. A pending host must resolve to the \
-                 Ingress; rerun once it does, or raise --certificate-timeout-minutes.",
+                "{certificate} did not serve trusted TLS within {} minutes; pending: {}. \
+                 {NEXT_CERTIFICATE_NAME} stays attached and a rerun resumes the transition. A \
+                 pending host must resolve to the Ingress; rerun once it does, or raise the \
+                 timeout.",
                 timeout.as_secs() / 60,
                 untrusted.join(", ")
             );
         }
-        cluster.sleep(POLL_INTERVAL);
-        waited += POLL_INTERVAL;
+        cluster.sleep(remaining.min(POLL_INTERVAL));
     }
 }
 
@@ -290,6 +305,20 @@ pub(crate) fn reconcile_with<C: Cluster>(
         .with_context(|| format!("read the live {FIRM_CERTIFICATE_NAME} domains"))?;
     let target: BTreeSet<String> = desired.iter().cloned().collect();
     if live == target {
+        // A run that patched `navigator-firm` and then stopped leaves the
+        // domains matching while `navigator-firm-next` may still be the only
+        // certificate serving some host. The ship deletes `-next` next, so
+        // confirm `navigator-firm` serves first.
+        if !dry_run
+            && cluster
+                .get_json("managedcertificate", NEXT_CERTIFICATE_NAME)?
+                .is_some()
+        {
+            wait_serving(cluster, FIRM_CERTIFICATE_NAME, &target, timeout)?;
+            eprintln!(
+                "==> {FIRM_CERTIFICATE_NAME} is Active and serves trusted TLS for every host"
+            );
+        }
         return Ok(Outcome::Unchanged);
     }
     let add: Vec<String> = target.difference(&live).cloned().collect();
@@ -355,7 +384,10 @@ pub(crate) fn reconcile_with<C: Cluster>(
 /// [`reconcile_with`] against the live cluster `cfg` names.
 pub(crate) fn reconcile(cfg: &ShipConfig, timeout_minutes: u32, dry_run: bool) -> Result<Outcome> {
     reconcile_with(
-        &mut KubectlCluster { cfg },
+        &mut KubectlCluster {
+            cfg,
+            started: std::time::Instant::now(),
+        },
         &cfg.namespace,
         &firm_certificate_hosts(&cfg.public_host),
         Duration::from_secs(u64::from(timeout_minutes) * 60),
@@ -417,6 +449,9 @@ mod tests {
         untrusted: BTreeSet<String>,
         log: Vec<String>,
         slept: Duration,
+        /// How long each TLS check takes, capped by the limit it is given.
+        tls_cost: Duration,
+        spent: Duration,
     }
 
     impl Cluster for FakeCluster {
@@ -462,12 +497,18 @@ mod tests {
             Ok(())
         }
 
-        fn tls_trusted(&mut self, host: &str) -> bool {
+        fn tls_trusted(&mut self, host: &str, max: Duration) -> bool {
+            self.spent += self.tls_cost.min(max);
             !self.untrusted.contains(host)
         }
 
         fn sleep(&mut self, duration: Duration) {
             self.slept += duration;
+            self.spent += duration;
+        }
+
+        fn elapsed(&self) -> Duration {
+            self.spent
         }
     }
 
@@ -692,6 +733,57 @@ mod tests {
             .to_string();
         assert!(error.contains("at most 15"), "{error}");
         assert!(fake.log.is_empty());
+    }
+
+    /// Slow or unreachable hosts count against the bound: the wait ends at
+    /// the configured timeout, not at the timeout plus every host check.
+    #[test]
+    fn the_wait_bound_is_wall_time_including_host_checks() {
+        let target = ["a.test", "b.test", "c.test"];
+        let mut fake = cluster(&["a.test"], ATTACHED);
+        fake.statuses.insert(
+            NEXT_CERTIFICATE_NAME.into(),
+            VecDeque::from([active(&target)]),
+        );
+        fake.untrusted.extend(hosts(&target));
+        fake.tls_cost = Duration::from_secs(15);
+        let timeout = Duration::from_secs(60);
+        let error = reconcile_with(&mut fake, "navigator", &hosts(&target), timeout, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("did not serve trusted TLS"), "{error}");
+        assert_eq!(fake.elapsed(), timeout);
+    }
+
+    /// A run that patched `navigator-firm` and stopped during the second wait
+    /// leaves the domains matching. The rerun must not report `Unchanged`
+    /// (letting the ship delete `-next`) until `navigator-firm` serves.
+    #[test]
+    fn a_rerun_after_the_second_wait_failed_waits_before_cleanup() {
+        let target = ["a.test", "new.test"];
+        let attached = format!("{ATTACHED},{NEXT_CERTIFICATE_NAME}");
+        let mut fake = cluster(&target, &attached);
+        fake.objects.insert(
+            ("managedcertificate".into(), NEXT_CERTIFICATE_NAME.into()),
+            certificate(NEXT_CERTIFICATE_NAME, &target),
+        );
+        fake.statuses.insert(
+            FIRM_CERTIFICATE_NAME.into(),
+            VecDeque::from(vec![provisioning(&target); 100]),
+        );
+        let timeout = Duration::from_secs(5);
+        let error = reconcile_with(&mut fake, "navigator", &hosts(&target), timeout, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(FIRM_CERTIFICATE_NAME), "{error}");
+
+        fake.statuses.insert(
+            FIRM_CERTIFICATE_NAME.into(),
+            VecDeque::from([active(&target)]),
+        );
+        let outcome = reconcile_with(&mut fake, "navigator", &hosts(&target), timeout, false);
+        assert_eq!(outcome.unwrap(), Outcome::Unchanged);
+        assert!(fake.log.is_empty(), "{:?}", fake.log);
     }
 
     #[test]

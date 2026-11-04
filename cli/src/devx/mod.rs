@@ -464,7 +464,7 @@ pub enum CertificatesCmd {
         #[arg(long, conflicts_with = "deployments_dir")]
         project_id: Option<String>,
         /// The bound on each of the two waits, in minutes.
-        #[arg(long, default_value_t = DEFAULT_CERTIFICATE_TIMEOUT_MINUTES)]
+        #[arg(long, default_value_t = DEFAULT_CERTIFICATE_TIMEOUT_MINUTES, value_parser = clap::value_parser!(u32).range(1..))]
         timeout_minutes: u32,
         /// Read the live certificate and print the plan; write nothing.
         #[arg(long)]
