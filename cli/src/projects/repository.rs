@@ -6159,7 +6159,13 @@ jobs:
             }),
             "{messages:?}"
         );
-        assert!(warnings.is_empty(), "{warnings:?}");
+        // The spelled legal name also draws the name-the-Firm-by-role warning.
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| warning.message.starts_with(super::FIRM_ROLE_NAME_CODE)),
+            "{warnings:?}"
+        );
     }
 
     /// The generated CD caller passes its own structural validation, the same

@@ -7,11 +7,11 @@ fn clause_extraction_preserves_the_existing_body_bytes() {
     for (source, expected) in [
         (
             include_str!("../../templates/notations/neon_law/onboarding__letter.md"),
-            "4adb979a33d124ae916e99ad6501c414b15dba2eb7845049e7e5169f8775c82a",
+            "7f225ebe2ca99284dae4ec69b8049fa546e3be16871f81626f751f166754b54e",
         ),
         (
             include_str!("../../templates/notations/neon_law/engagement_letter__nevada.md"),
-            "85724fe43756ef26739a5d304da3f6ae52955fc2f28708a63cdb248725ea03d2",
+            "6e9fe493afc9080af2388b56f1251aaf7653acf44f7e5c49f12c5559d1143875",
         ),
         (
             include_str!("../../templates/notations/neon_law/mutual_nda.md"),
@@ -172,7 +172,7 @@ fn nevada_engagement_signature_line_names_the_firm_alone() {
     assert!(
         signature
             .lines()
-            .any(|line| line.trim() == "Guieb & Shook PC"),
+            .any(|line| line.trim() == "{{firm.legal_name}}"),
         "{signature}"
     );
     assert!(!body.contains("Neon Law, by"));
