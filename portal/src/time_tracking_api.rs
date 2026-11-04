@@ -156,7 +156,7 @@ async fn ensure_firm_side(
     }
 }
 
-async fn postgres(
+pub(crate) async fn postgres(
     operation: &'static str,
     project_id: Option<Uuid>,
 ) -> Result<store::postgres::PostgresDb, Response> {
@@ -176,26 +176,27 @@ async fn postgres(
 /// the attorney's participation in PostgreSQL, so a Project or participant
 /// added before the mirror was enabled would otherwise be wrongly refused
 /// there.
-async fn prepared_store(
-    state: &ApiState,
+/// Shared with the form doors in `crate::project_billing_forms`, so the JSON
+/// and browser entry points prepare the same mirror state before any write.
+pub(crate) async fn prepared_store(
+    surreal: &store::surreal::SurrealDb,
     operation: &'static str,
     project_id: Uuid,
 ) -> Result<store::postgres::PostgresDb, Response> {
     let pg = postgres(operation, Some(project_id)).await?;
     let mirrored = async {
         postgres_mirror::mirror(
-            &state.surreal,
+            surreal,
             &pg,
             &postgres_mirror::MirrorKey::Project(project_id),
         )
         .await?;
-        let participations =
-            store::projects::participations_for_project(&state.surreal, project_id)
-                .await
-                .map_err(|_| postgres_mirror::MirrorError::Source)?;
+        let participations = store::projects::participations_for_project(surreal, project_id)
+            .await
+            .map_err(|_| postgres_mirror::MirrorError::Source)?;
         for role in participations {
             postgres_mirror::mirror(
-                &state.surreal,
+                surreal,
                 &pg,
                 &postgres_mirror::MirrorKey::ProjectParticipation(role.id),
             )
@@ -233,7 +234,9 @@ pub(crate) struct NewEntryInput {
 /// for `performed_on` when the work is billable — a matter override over the
 /// firm default, and no rate at all is a refusal, never a silent $0 — and
 /// zero for non-billable work, which never carries a price.
-async fn snapshot_rate(
+/// Shared with the form doors in `crate::project_billing_forms` — the rate
+/// is resolved once, in one place, for both entry points.
+pub(crate) async fn snapshot_rate(
     pg: &store::postgres::PostgresDb,
     attorney_id: Uuid,
     project_id: Uuid,
@@ -284,7 +287,7 @@ pub(crate) async fn create_entry(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state, "create_entry", project_id).await {
+    let pg = match prepared_store(&state.surreal, "create_entry", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
@@ -389,7 +392,10 @@ pub(crate) async fn write_off(
 /// The calling attorney's open Timer when it runs on this matter. A Timer
 /// running on another matter is not named here — the caller stops or discards
 /// it from its own matter, and this door discloses nothing about it.
-fn timer_on_matter(running: Option<timers::Timer>, project_id: Uuid) -> Option<timers::Timer> {
+pub(crate) fn timer_on_matter(
+    running: Option<timers::Timer>,
+    project_id: Uuid,
+) -> Option<timers::Timer> {
     running.filter(|timer| timer.project_id == project_id)
 }
 
@@ -434,7 +440,7 @@ pub(crate) async fn start_timer(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state, "start_timer", project_id).await {
+    let pg = match prepared_store(&state.surreal, "start_timer", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
@@ -464,7 +470,7 @@ pub(crate) async fn stop_timer(
 ) -> Result<Response, ApiError> {
     let actor_id = session.person_id.ok_or(ApiError::Forbidden)?;
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state, "stop_timer", project_id).await {
+    let pg = match prepared_store(&state.surreal, "stop_timer", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
@@ -673,7 +679,7 @@ pub(crate) async fn set_flat_fee(
     Json(input): Json<FlatFeeInput>,
 ) -> Result<Response, ApiError> {
     ensure_firm_side(&state, session.person_id, session.role, project_id).await?;
-    let pg = match prepared_store(&state, "set_flat_fee", project_id).await {
+    let pg = match prepared_store(&state.surreal, "set_flat_fee", project_id).await {
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };

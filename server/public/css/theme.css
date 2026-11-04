@@ -1518,8 +1518,11 @@ a.nav-pagination__link:hover {
    footer's muted fine print with the link underlined in the same primary, so
    a reader sees it is a link without it shouting. */
 .site-footer__memberships {
-  display: grid;
-  gap: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem 1.25rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1930,6 +1933,7 @@ a.nav-pagination__link:hover {
 
   .site-footer__memberships {
     justify-self: start;
+    justify-content: flex-start;
   }
 }
 
@@ -4095,6 +4099,26 @@ a.lawyer-detail__fact-value:focus-visible {
   color: var(--nav-color-text-muted);
 }
 
+/* Matter billing chart: the same total-against-paid convention as the firm
+   invoice chart — primary fill for the total, the same fill at reduced
+   opacity for paid-to-date, and a legend swatch per series. */
+.matter-billing-invoice-bar--total {
+  fill: var(--nav-color-primary);
+}
+
+.matter-billing-invoice-bar--paid {
+  fill-opacity: 0.55;
+}
+
+.matter-billing-swatch--invoiced {
+  background: var(--nav-color-primary);
+}
+
+.matter-billing-swatch--paid {
+  background: var(--nav-color-primary);
+  opacity: 0.55;
+}
+
 .project-kpi-empty {
   margin: 0;
 }
@@ -6003,12 +6027,12 @@ a.nav-steps__step:focus-visible {
 }
 
 
+/* Guieb & Shook's chamber badge, beside the association badge and as tall
+   as its tile. */
 .site-footer__gvc-badge {
   display: block;
-  width: 240px;
-  max-width: 100%;
-  height: auto;
-  margin: 1.5rem auto 0;
+  height: 2.4rem;
+  width: auto;
 }
 /* Aster perches on the /world map section's top-right corner: absolute over
    the card, decorative, and pointer-transparent so map interactions pass

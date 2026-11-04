@@ -1254,6 +1254,7 @@ pub fn home_for_host(
 ) -> webapp::home::HomeContent {
     let copy: HomeCopy = load_page(branding, "home");
     webapp::home::HomeContent {
+        path: String::new(),
         marketing_page: None,
         head_title: copy.head_title,
         meta_description: copy.meta_description,
@@ -1388,7 +1389,10 @@ pub fn litigation(branding: &views::brand::Branding) -> webapp::litigation_page:
     }
 }
 
-/// The `/business` page, resolved from this brand's `fractional-gc.yaml`.
+/// The authored Business plan copy, resolved from this brand's
+/// `fractional-gc.yaml`. Parked: `/business` serves the retainer-simulator
+/// page from `home.yaml` instead.
+#[allow(dead_code)]
 pub fn fractional_gc(
     branding: &views::brand::Branding,
 ) -> webapp::transactional_page::TransactionalContent {
@@ -1881,12 +1885,12 @@ mod tests {
         let copy: serde_yaml::Value = serde_yaml::from_str(NEON_HOME_YAML).unwrap();
         let company = &copy["company"];
         assert_eq!(company["membership_prefix"].as_str(), Some("From"));
-        assert_eq!(company["membership_price"].as_str(), Some("$100"));
+        assert_eq!(company["membership_price"].as_str(), Some("$50"));
         assert_eq!(company["membership_unit"].as_str(), Some("/ day"));
         assert!(!company["membership_body"]
             .as_str()
             .unwrap()
-            .contains("$100/day"));
+            .contains("$50/day"));
         assert!(company["membership_body"]
             .as_str()
             .unwrap()

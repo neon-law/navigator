@@ -102,7 +102,7 @@ Feature: Public routing on the firm's own host
     When a visitor opens /business
     Then the response status is 200
     And the page is branded "Neon Law"
-    And the response body contains "contract-library access"
+    And the response body contains "company-simulator"
     And the response body does not contain "data-nautilus-intake"
 
   Scenario Outline: A path with no firm page answers 404

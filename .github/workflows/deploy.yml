@@ -2522,10 +2522,15 @@ jobs:
     # cannot install the CLI in ANY consuming repository, which is why no
     # content or Project repository has a working `ci` job today.
     #
-    # Deliberately a plain glibc build rather than static musl: the consumer is
-    # an `ubuntu-latest` runner, and importing musl-tools plus its ring/openssl
-    # consequences buys portability nothing here needs. Static, signed,
-    # human-facing artifacts are ENG-115's lane.
+    # The CLI is a static musl build (ENG-1228). The Forgejo Project gate runs
+    # its steps inside the pinned `forgejo/runner` image, which is Alpine, and
+    # `navigator project gate` re-executes the pinned `-linux.tar.gz` release
+    # from its cache, so a glibc binary exits 127 there with "required file
+    # not found". A static-pie binary runs on Alpine and on `ubuntu-latest`
+    # alike, and the `FROM scratch` CLI image below needs one too. The
+    # surreal-archive trigger image already builds this same `cli` crate for
+    # musl with nothing beyond `musl-tools`. The LSP stays glibc: only editors
+    # on a desktop consume it.
     timeout-minutes: 90
     permissions:
       contents: read
@@ -2551,7 +2556,42 @@ jobs:
         timeout-minutes: 90
         env:
           NAVIGATOR_RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
-        run: cargo build --locked --release -p cli -p lsp
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --locked --release --target x86_64-unknown-linux-musl -p cli --bin navigator
+          cargo build --locked --release -p lsp
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-cli-build-linux"
+          step: "prove the CLI runs in the pinned Forgejo runner image"
+      - name: prove the CLI runs in the pinned Forgejo runner image
+        timeout-minutes: 90
+        env:
+          TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bin=target/x86_64-unknown-linux-musl/release/navigator
+          file "${bin}" | grep -q 'static-pie linked\|statically linked' \
+            || { file "${bin}"; echo "::error::the Linux CLI must be statically linked (ENG-1228)"; exit 1; }
+          image="$(grep -o 'data\.forgejo\.org/forgejo/runner@sha256:[0-9a-f]\{64\}' cli/src/devx/forgejo/runner.rs | head -n 1)"
+          test -n "${image}" || { echo "::error::no pinned runner image in cli/src/devx/forgejo/runner.rs"; exit 1; }
+          got="$(docker run --rm --entrypoint /b/navigator -v "${PWD}/$(dirname "${bin}"):/b:ro" "${image}" --version)"
+          test "${got}" = "navigator ${TAG}" \
+            || { echo "::error::${image} ran the CLI as '${got}', not 'navigator ${TAG}'"; exit 1; }
+          # `--version` falls back to the Cargo version, which a release
+          # commit stamps to the tag, so it cannot prove the tag was baked.
+          # The gate compares the pin against the published release, empty
+          # unless build.rs saw NAVIGATOR_RELEASE_TAG; without it every pinned
+          # gate re-runs itself. `--action-version` defaults to that value.
+          docker run --rm --entrypoint /b/navigator -v "${PWD}/$(dirname "${bin}"):/b:ro" "${image}" ops github setup --help \
+            | grep -qF "[default: ${TAG}]" \
+            || { echo "::error::the Linux CLI was built without NAVIGATOR_RELEASE_TAG; its published release is empty"; exit 1; }
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -2566,7 +2606,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/navigator-linux
-          install -m 0755 target/release/navigator dist/navigator-linux/navigator
+          install -m 0755 target/x86_64-unknown-linux-musl/release/navigator dist/navigator-linux/navigator
           # LICENSE and NOTICE travel with the archive: whoever unpacks it
           # holds the binary and not the repository, and the dual MIT /
           # Apache-2.0 grant asks recipients to retain both license texts

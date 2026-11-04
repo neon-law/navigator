@@ -36,6 +36,7 @@ mod e2e;
 mod email_summary_delivery;
 mod email_summary_e2e;
 mod email_summary_redrive;
+mod firm_certificate_roll;
 mod flake_hunt;
 mod forgejo;
 mod gcp;
@@ -433,6 +434,42 @@ fn env_port(key: &str, default: u16) -> u16 {
         .ok()
         .and_then(|v| v.trim().parse::<u16>().ok())
         .unwrap_or(default)
+}
+
+/// The default bound on each wait of a shared-certificate transition.
+pub const DEFAULT_CERTIFICATE_TIMEOUT_MINUTES: u32 =
+    firm_certificate_roll::DEFAULT_ISSUANCE_TIMEOUT_MINUTES;
+
+/// `navigator ops certificates`: shared-certificate maintenance.
+#[derive(Debug, Clone, clap::Subcommand)]
+pub enum CertificatesCmd {
+    /// Move the shared `navigator-firm` certificate onto this build's brand
+    /// host inventory ahead of the release that changes it: stage
+    /// `navigator-firm-next` with the target domains, attach it to the
+    /// Ingress, wait until it is Active and every host serves trusted TLS,
+    /// then patch `navigator-firm` and wait again. Run it with the navigator
+    /// build of the release you are about to ship, staging first. A no-op
+    /// when the domains already match; `--dry-run` reads the live
+    /// certificate and prints the plan without writing.
+    PreRoll {
+        /// Deployment directory under `deployments/`, such as `neon-law-stg`.
+        #[arg(long)]
+        deployment: String,
+        /// The directory CONTAINING `deployments/`. Defaults to
+        /// `NAVIGATOR_DEPLOYMENTS_DIR`, then to the discovered workspace root.
+        #[arg(long, value_name = "DIR")]
+        deployments_dir: Option<std::path::PathBuf>,
+        /// Read the deployment's configuration from this explicit GCP project
+        /// instead of a local tree. Requires ADC.
+        #[arg(long, conflicts_with = "deployments_dir")]
+        project_id: Option<String>,
+        /// The bound on each of the two waits, in minutes.
+        #[arg(long, default_value_t = DEFAULT_CERTIFICATE_TIMEOUT_MINUTES, value_parser = clap::value_parser!(u32).range(1..))]
+        timeout_minutes: u32,
+        /// Read the live certificate and print the plan; write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// `navigator ops host`: bring one registered brand host online.
@@ -1173,6 +1210,7 @@ fn dispatch_with_dns_provider(
             assert_signing_iam,
             quiet,
             log_sink,
+            certificate_timeout_minutes,
         }) => {
             let opts = ship::ShipOpts {
                 deployment,
@@ -1186,6 +1224,7 @@ fn dispatch_with_dns_provider(
                 assert_signing_iam,
                 quiet,
                 log_sink,
+                certificate_timeout_minutes,
             };
             if opts.quiet {
                 ship_log::run_quiet(&opts)
@@ -1350,6 +1389,19 @@ fn dispatch_with_dns_provider(
             deployments_dir.as_deref(),
             project_id.as_deref(),
             timeout_seconds,
+        ),
+        crate::Command::Ops(crate::OpsCmd::Certificates(CertificatesCmd::PreRoll {
+            deployment,
+            deployments_dir,
+            project_id,
+            timeout_minutes,
+            dry_run,
+        })) => firm_certificate_roll::pre_roll_for_deployment(
+            &deployment,
+            deployments_dir.as_deref(),
+            project_id.as_deref(),
+            timeout_minutes,
+            dry_run,
         ),
         crate::Command::Ops(crate::OpsCmd::Rebrand(cmd)) => brand::run(cmd),
         crate::Command::Ops(crate::OpsCmd::Observability {

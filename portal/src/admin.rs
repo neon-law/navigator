@@ -913,6 +913,30 @@ fn register_project_routes(r: Router<AdminState>) -> Router<AdminState> {
             &format!("{prefix}/{{project_code}}/stages/set"),
             post(crate::project_stage_forms::set),
         )
+        // The matter dashboard's Billing tab — native-form doors for the
+        // same commands the time-tracking and invoice-generation JSON APIs
+        // serve. The handlers redirect (303) back to the Billing tab's path
+        // on the workbench; the confirm step rides `?confirm=1`.
+        .route(
+            &format!("{prefix}/{{project_code}}/time-entries"),
+            post(crate::project_billing_forms::log_time),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/timer/start"),
+            post(crate::project_billing_forms::start_timer),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/timer/stop"),
+            post(crate::project_billing_forms::stop_timer),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/timer/discard"),
+            post(crate::project_billing_forms::discard_timer),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/invoices"),
+            post(crate::project_billing_forms::generate_invoice),
+        )
 }
 
 #[derive(Debug, Deserialize)]

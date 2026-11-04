@@ -88,6 +88,15 @@ with a line saying staging passed and production begins.
 `ship-production` needs `ship-staging` and carries no status function in its `if:`, so a failed, cancelled, or skipped
 staging run blocks it. It rolls `needs.ship-staging.outputs.tag` — exactly the tag staging served.
 
+### Brand host changes wait for certificate issuance
+
+When a tag changes the brand host inventory, `ops ship` stages `navigator-firm-next`, waits for it, patches the shared
+`navigator-firm` certificate, and waits again before it applies the release. Each wait is bounded at 45 minutes
+(`--certificate-timeout-minutes`), so both ship jobs carry a `timeout-minutes: 130` cap, and a test pins that cap above
+both waits plus the roll. To keep the waits out of the release, run `navigator ops certificates pre-roll` against
+staging and then production before the tag ships. The ship then finds the domains already matching. See [Changing shared
+certificate domains](dns.md#changing-shared-certificate-domains).
+
 ### Prereleases stay on staging
 
 A tag is a prerelease when `ops release check` reports `prerelease=true` for it — any semver prerelease, such as `-rc.N`
