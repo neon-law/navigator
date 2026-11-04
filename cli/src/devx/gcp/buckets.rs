@@ -16,6 +16,16 @@
 //!   [`POSTGRES_BACKUPS_RETENTION_DAYS`]-day expiry. Only the
 //!   `navigator-postgres-backup` Kubernetes service account is granted on it.
 //!
+//! One more exists only when the deployment names it, and in a different
+//! project from every bucket above:
+//!
+//! - the **offsite** Iceberg archive — a bucket in a different GCP project
+//!   than the deployment that writes it, carrying a **locked**
+//!   [`OFFSITE_ARCHIVES_RETENTION_SECONDS`] retention policy (25 years).
+//!   Enforced-private, no lifecycle rule: the locked policy is the retention
+//!   decision, and nothing in the archive path may ever delete a backup. See
+//!   [`ensure_offsite_archive`].
+//!
 //! Two more exist only when the deployment names them:
 //!
 //! - `neon-law-archives-<deployment>` — the long-term Iceberg archive of that
@@ -48,8 +58,9 @@
 use serde::Serialize;
 use url::Url;
 
-use super::client::{GcpClient, GcpService};
+use super::client::{GcpClient, GcpService, Mode};
 use super::error::{SetupError, SetupResult};
+use super::workload_identity::classify;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BucketKind {
@@ -62,6 +73,7 @@ pub enum BucketKind {
     Archives,
     Telemetry,
     ArchivedProjects,
+    OffsiteArchives,
 }
 
 impl BucketKind {
@@ -82,6 +94,7 @@ impl BucketKind {
             | Self::Applications
             | Self::Archives
             | Self::ArchivedProjects
+            | Self::OffsiteArchives
             | Self::Telemetry => "STANDARD",
             Self::Logs => "NEARLINE",
         }
@@ -120,6 +133,7 @@ impl BucketKind {
             Self::Applications
             | Self::Archives
             | Self::ArchivedProjects
+            | Self::OffsiteArchives
             | Self::Telemetry
             | Self::PostgresBackups => Some("enforced"),
             _ => None,
@@ -151,6 +165,8 @@ impl BucketKind {
             Self::Telemetry
         } else if name.ends_with(super::ARCHIVED_PROJECTS_BUCKET_SUFFIX) {
             Self::ArchivedProjects
+        } else if name.ends_with(super::OFFSITE_ARCHIVES_BUCKET_SUFFIX) {
+            Self::OffsiteArchives
         } else if name.starts_with(super::ARCHIVES_BUCKET_PREFIX) {
             Self::Archives
         } else {
@@ -194,6 +210,22 @@ pub const POSTGRES_BACKUPS_RETENTION_DAYS: u32 = 30;
 /// bucket any more: Portal publishing is retired.
 pub const APPLICATIONS_RETENTION_DAYS: u32 = 3650;
 
+/// Retention on the offsite Iceberg archive: 25 years, in seconds — the unit
+/// GCS retention policies are expressed in (25 × 365.25 days). Set at bucket
+/// creation and then **locked**: a locked policy cannot be shortened, removed,
+/// or replaced, by the deployment's credential, an operator, or a project
+/// owner. Locking is irreversible, which is the point.
+pub const OFFSITE_ARCHIVES_RETENTION_SECONDS: u64 = 788_940_000;
+
+/// The exact roles the deployment's workflows-service identity holds on the
+/// offsite archive bucket, and nothing else: create and read, with no
+/// delete, overwrite, or administration anywhere in the grant. The writer
+/// path in `archives/` never deletes — but even if code changed, IAM has no
+/// delete permission to grant, and GCS's locked retention rejects deletion
+/// regardless.
+const OFFSITE_ARCHIVE_ROLES: &[&str] =
+    &["roles/storage.objectCreator", "roles/storage.objectViewer"];
+
 #[derive(Serialize)]
 struct CreateBucketBody<'a> {
     name: &'a str,
@@ -202,6 +234,21 @@ struct CreateBucketBody<'a> {
     storage_class: &'a str,
     #[serde(rename = "iamConfiguration")]
     iam_configuration: IamConfig,
+    /// Set only by the offsite archive: a retention policy is fixed at
+    /// creation there and locked once verified. Omitted everywhere else —
+    /// no other bucket kind carries one, and inserting a policy a lane
+    /// never asked for would be unrecoverable on exactly the buckets that
+    /// overwrite freely.
+    #[serde(rename = "retentionPolicy", skip_serializing_if = "Option::is_none")]
+    retention_policy: Option<RetentionPolicyBody>,
+}
+
+#[derive(Serialize)]
+struct RetentionPolicyBody {
+    /// GCS expresses the retention period as a count of seconds, serialized
+    /// as a JSON string.
+    #[serde(rename = "retentionPeriod")]
+    retention_period: String,
 }
 
 #[derive(Serialize)]
@@ -250,6 +297,7 @@ pub async fn ensure_bucket(
             uniform_bucket_level_access: UniformAccess { enabled: true },
             public_access_prevention: kind.public_access_prevention(),
         },
+        retention_policy: None,
     };
     let body_json = serde_json::to_value(&body).map_err(|source| SetupError::Json {
         what: "create bucket request body",
@@ -362,6 +410,263 @@ pub async fn ensure_lifecycle(client: &GcpClient, name: &str) -> SetupResult<()>
             body: resp.into_text(),
         }),
     }
+}
+
+/// Ensure the offsite Iceberg archive bucket exists in `project_id` — the
+/// **archive** project, never the deployment's — with a locked
+/// [`OFFSITE_ARCHIVES_RETENTION_SECONDS`] retention policy, public access
+/// prevention enforced, uniform bucket-level access, and no lifecycle rule.
+///
+/// Locking is irreversible: a locked policy cannot be shortened, removed, or
+/// replaced, and a mistaken object lives out the full 25 years. The sequence
+/// is therefore create → verify → lock — the policy is fixed at creation,
+/// verified against the live bucket, and only then locked. A bucket that
+/// already exists with anything but the exact intended policy is refused,
+/// never silently locked and never "fixed" by the provisioner: converging an
+/// archive bucket by overwriting it is the one write this pipeline must not
+/// perform.
+///
+/// Idempotent in the create (HTTP 409 = already exists) and in the lock (an
+/// already-locked bucket with the verified policy skips the lock call). In
+/// [`Mode::DryRun`] the synthesized responses carry no policy to verify and
+/// no metageneration to lock against, so the plan records the create, the
+/// lifecycle clear, and the lock intent without the verification sequence.
+pub async fn ensure_offsite_archive(
+    client: &GcpClient,
+    project_id: &str,
+    name: &str,
+    location: &str,
+) -> SetupResult<EnsureOutcome> {
+    let outcome = create_offsite_bucket(client, project_id, name, location).await?;
+    clear_offsite_lifecycle(client, name).await?;
+
+    if client.mode() == Mode::DryRun {
+        client
+            .post_json(
+                GcpService::Storage,
+                &format!("/storage/v1/b/{name}/lockRetentionPolicy"),
+                &serde_json::json!({}),
+            )
+            .await?;
+        return Ok(outcome);
+    }
+
+    let metadata = get_bucket_metadata(client, name).await?;
+    verify_offsite_archive_policy(name, &metadata)?;
+
+    if metadata.pointer("/retentionPolicy/isLocked") == Some(&serde_json::Value::Bool(true)) {
+        return Ok(outcome);
+    }
+    let metageneration = metadata
+        .pointer("/metageneration")
+        .and_then(serde_json::Value::as_str)
+        .expect("invariant: get_bucket_metadata returns a JSON object; a missing or non-string metageneration is a malformed bucket resource");
+    lock_offsite_policy(client, name, metageneration).await?;
+    Ok(outcome)
+}
+
+/// Create the offsite bucket with its retention policy already in place, or
+/// report that it exists. A pre-existing bucket is never rewritten — the
+/// verify step below judges the live resource instead.
+async fn create_offsite_bucket(
+    client: &GcpClient,
+    project_id: &str,
+    name: &str,
+    location: &str,
+) -> SetupResult<EnsureOutcome> {
+    let kind = BucketKind::OffsiteArchives;
+    let body = CreateBucketBody {
+        name,
+        location,
+        storage_class: kind.storage_class(),
+        iam_configuration: IamConfig {
+            uniform_bucket_level_access: UniformAccess { enabled: true },
+            public_access_prevention: kind.public_access_prevention(),
+        },
+        retention_policy: Some(RetentionPolicyBody {
+            retention_period: OFFSITE_ARCHIVES_RETENTION_SECONDS.to_string(),
+        }),
+    };
+    let body_json = serde_json::to_value(&body).map_err(|source| SetupError::Json {
+        what: "create offsite archive bucket request body",
+        source,
+    })?;
+    let resp = client
+        .post_json(
+            GcpService::Storage,
+            &format!("/storage/v1/b?project={project_id}"),
+            &body_json,
+        )
+        .await?;
+    match resp.status_u16() {
+        200..=299 => Ok(EnsureOutcome::Created),
+        409 => Ok(EnsureOutcome::AlreadyExists),
+        other => Err(SetupError::BadStatus {
+            operation: format!("create offsite archive bucket {name}"),
+            status: other,
+            body: resp.into_text(),
+        }),
+    }
+}
+
+/// A lifecycle rule must never coexist with the locked policy: while
+/// retention holds a Delete rule cannot fire, but carrying one is an
+/// accident waiting for the day the policy and the rule disagree. Clear
+/// unconditionally — the desired rule set is empty, so the write is
+/// already idempotent.
+async fn clear_offsite_lifecycle(client: &GcpClient, name: &str) -> SetupResult<()> {
+    let resp = client
+        .patch_json(
+            GcpService::Storage,
+            &format!("/storage/v1/b/{name}"),
+            &serde_json::json!({ "lifecycle": { "rule": [] } }),
+        )
+        .await?;
+    match resp.status_u16() {
+        200..=299 => Ok(()),
+        other => Err(SetupError::BadStatus {
+            operation: format!("clear lifecycle for offsite archive bucket {name}"),
+            status: other,
+            body: resp.into_text(),
+        }),
+    }
+}
+
+/// Lock the verified policy against the metageneration read from the live
+/// bucket, so a policy modified between verify and lock fails instead of
+/// locking the wrong terms. The lock is irreversible; the response must
+/// report the policy as locked.
+async fn lock_offsite_policy(
+    client: &GcpClient,
+    name: &str,
+    metageneration: &str,
+) -> SetupResult<()> {
+    let resp = client
+        .post_json(
+            GcpService::Storage,
+            &format!(
+                "/storage/v1/b/{name}/lockRetentionPolicy?ifMetagenerationMatch={metageneration}"
+            ),
+            &serde_json::json!({}),
+        )
+        .await?;
+    match resp.status_u16() {
+        200..=299 => {
+            let locked: serde_json::Value =
+                serde_json::from_str(&resp.into_text()).map_err(|source| SetupError::Json {
+                    what: "lock retention policy response",
+                    source,
+                })?;
+            if locked.pointer("/retentionPolicy/isLocked") != Some(&serde_json::Value::Bool(true)) {
+                return Err(SetupError::Malformed(
+                    "lock retention policy response does not report the policy as locked",
+                ));
+            }
+            Ok(())
+        }
+        other => Err(SetupError::BadStatus {
+            operation: format!("lock retention policy on offsite archive bucket {name}"),
+            status: other,
+            body: resp.into_text(),
+        }),
+    }
+}
+
+/// Read the live bucket resource for the verify-then-lock sequence.
+async fn get_bucket_metadata(client: &GcpClient, name: &str) -> SetupResult<serde_json::Value> {
+    let resp = client
+        .get(GcpService::Storage, &format!("/storage/v1/b/{name}"))
+        .await?;
+    let status = resp.status_u16();
+    if !(200..=299).contains(&status) {
+        return Err(SetupError::BadStatus {
+            operation: format!("read offsite archive bucket {name}"),
+            status,
+            body: resp.into_text(),
+        });
+    }
+    serde_json::from_str(&resp.into_text()).map_err(|source| SetupError::Json {
+        what: "offsite archive bucket metadata",
+        source,
+    })
+}
+
+/// Verify the live bucket carries exactly the policy the lock is about to
+/// make permanent: the intended retention period, public access prevention
+/// enforced, uniform bucket-level access enabled. Any mismatch refuses the
+/// run — the lock is irreversible, so the provisioner must never lock a
+/// policy it has not just asserted.
+fn verify_offsite_archive_policy(name: &str, metadata: &serde_json::Value) -> SetupResult<()> {
+    let expected_period = OFFSITE_ARCHIVES_RETENTION_SECONDS.to_string();
+    let period = metadata
+        .pointer("/retentionPolicy/retentionPeriod")
+        .and_then(serde_json::Value::as_str);
+    if period != Some(expected_period.as_str()) {
+        return Err(SetupError::AmbiguousLiveState {
+            operation: format!("verify offsite archive bucket {name}"),
+            detail: format!(
+                "retention period is {period:?}, expected {expected_period} seconds; \
+                 refusing to lock a policy this pipeline did not write"
+            ),
+        });
+    }
+    let pap = metadata.pointer("/iamConfiguration/publicAccessPrevention");
+    if pap != Some(&serde_json::Value::String("enforced".into())) {
+        return Err(SetupError::AmbiguousLiveState {
+            operation: format!("verify offsite archive bucket {name}"),
+            detail: format!(
+                "public access prevention is {pap:?}, expected \"enforced\"; \
+                 refusing to lock a policy this pipeline did not write"
+            ),
+        });
+    }
+    let ubla = metadata.pointer("/iamConfiguration/uniformBucketLevelAccess/enabled");
+    if ubla != Some(&serde_json::Value::Bool(true)) {
+        return Err(SetupError::AmbiguousLiveState {
+            operation: format!("verify offsite archive bucket {name}"),
+            detail: format!(
+                "uniform bucket-level access is {ubla:?}, expected enabled; \
+                 refusing to lock a policy this pipeline did not write"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Grant the deployment's workflows-service identity — the pod service
+/// account behind the archive writer — exactly [`OFFSITE_ARCHIVE_ROLES`]
+/// on the offsite bucket: create and read, with no administration and no
+/// delete permission anywhere in the grant. The member is named cross-project
+/// on the archive bucket itself; `gcloud` merges additive bindings, so
+/// re-running setup leaves an existing grant alone.
+pub async fn ensure_offsite_archive_writer(
+    client: &GcpClient,
+    deployment_project_id: &str,
+    account_id: &str,
+    bucket: &str,
+) -> SetupResult<()> {
+    let gsa = format!("{account_id}@{deployment_project_id}.iam.gserviceaccount.com");
+    for role in OFFSITE_ARCHIVE_ROLES {
+        classify(
+            client
+                .shell_out(
+                    "gcloud",
+                    &[
+                        "storage",
+                        "buckets",
+                        "add-iam-policy-binding",
+                        &format!("gs://{bucket}"),
+                        "--member",
+                        &format!("serviceAccount:{gsa}"),
+                        "--role",
+                        role,
+                    ],
+                )
+                .await?,
+            "bind offsite archive writer role",
+        )?;
+    }
+    Ok(())
 }
 
 /// Reject a `NAV_BASE_URL` that cannot become a CORS origin *before* the
