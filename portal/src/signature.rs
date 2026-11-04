@@ -26,6 +26,7 @@
 //! received by [`crate::esignature_webhook`], which resolves the
 //! envelope id back to a notation and signals `signature_received`.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -246,6 +247,11 @@ pub struct RecipientView {
 pub enum SignatureError {
     #[error("provider error: {0}")]
     Provider(String),
+    /// A missing `nlsig-` anchor, or an unreadable prepared PDF. Refused
+    /// before anything is sent or persisted — a document that goes out
+    /// without its declared fields is a silently unsigned page.
+    #[error("anchor validation failed: {0}")]
+    AnchorValidation(String),
 }
 
 #[async_trait]
@@ -281,18 +287,156 @@ pub trait SignatureProvider: Send + Sync {
     ) -> Result<CompletedDocuments, SignatureError>;
 }
 
-/// In-process stub. Records every call and hands back synthetic
-/// `stub-<notation_id>-<seq>` ids that are unique within the process.
-#[derive(Default)]
+/// Lifecycle of one fake envelope. The JSON on disk is the envelope's
+/// last true state: every state transition rewrites it, so a test that
+/// kills the loop mid-way can assert on exactly what happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EnvelopeStatus {
+    /// `send_for_signature` accepted it. Anchors validated, PDF stored.
+    Sent,
+    /// Every recipient signed; completed documents exist on disk.
+    Completed,
+}
+
+/// One persisted fake envelope — the durable record of a
+/// `send_for_signature` call. Serialized as JSON at
+/// `<root>/<envelope id>.json` under the provider's root directory, so
+/// the loop's later steps (sign page, webhook, filed documents) read the
+/// exact bytes the sender approved rather than anything held in memory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FakeEnvelope {
+    pub id: String,
+    pub notation_id: Uuid,
+    pub status: EnvelopeStatus,
+    pub recipients: Vec<SignatureRecipient>,
+    pub fields: Vec<SignatureField>,
+    /// The prepared PDF, base64-encoded. Anchors were validated against
+    /// this text before the envelope was accepted.
+    pub pdf_base64: String,
+    /// RFC 3339 timestamp of the send.
+    pub created_at: String,
+}
+
+impl FakeEnvelope {
+    /// The prepared PDF, decoded.
+    ///
+    /// # Errors
+    ///
+    /// [`SignatureError::Provider`] when the stored base64 does not
+    /// decode — a corrupted store, not a corrupt envelope.
+    pub fn pdf_bytes(&self) -> Result<Vec<u8>, SignatureError> {
+        Engine::decode(&base64::engine::general_purpose::STANDARD, &self.pdf_base64)
+            .map_err(|e| SignatureError::Provider(format!("stored pdf does not decode: {e}")))
+    }
+}
+
+/// Every declared field's anchor must appear in the prepared PDF's text.
+/// The renderer expands placeholders to invisible white `nlsig-…` text
+/// (`signature_render::anchor_string`), so an anchor absent from the
+/// document's text layer means the document went out without that field
+/// — a silently unsigned page. That is a hard error, before anything is
+/// sent or persisted.
+///
+/// The search goes through [`pdf::passage::occurrence_count`], which
+/// reads each font's `/ToUnicode` CMap — Typst's subset fonts carry
+/// glyph ids, so a naive content-stream extractor sees mojibake where
+/// the anchor lives.
+///
+/// # Errors
+///
+/// [`SignatureError::AnchorValidation`] when the PDF's text layer
+/// cannot be read or any anchor is missing.
+pub fn validate_anchors(pdf_bytes: &[u8], fields: &[SignatureField]) -> Result<(), SignatureError> {
+    let mut missing: Vec<String> = Vec::new();
+    for field in fields {
+        match pdf::passage::occurrence_count(pdf_bytes, &field.anchor) {
+            // Ok(0) is not reachable today (occurrence_count errors on
+            // zero), but treating it as missing keeps the contract total.
+            Ok(0) => missing.push(format!("{} (found 0 occurrences)", field.anchor)),
+            Ok(_) => {}
+            Err(pdf::PassageError::QuoteNotFound { quote }) => {
+                missing.push(quote);
+            }
+            Err(e) => {
+                return Err(SignatureError::AnchorValidation(format!(
+                    "searching the prepared PDF's text for {}: {e}",
+                    field.anchor
+                )));
+            }
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(SignatureError::AnchorValidation(format!(
+        "missing anchors (not present in the prepared PDF's text layer): {}",
+        missing.join(", ")
+    )))
+}
+
+/// The fake provider — what dev, KIND, and tests run. It closes the
+/// whole loop locally without any DocuSign account:
+///
+/// - envelopes persist as durable JSON under its root directory
+///   (`FakeSignatureProvider::from_dev_dir` → `~/.navigator/fake-signature`,
+///   overridable with `NAVIGATOR_FAKE_SIGNATURE_DIR`),
+/// - anchors are validated against the prepared PDF's text before an
+///   envelope is accepted ([`validate_anchors`]),
+/// - each recipient gets a real local sign page, and completion is
+///   delivered as a DocuSign-Connect-shaped HMAC-signed webhook.
+///
+/// Tests construct it directly — `new()` for an isolated throwaway root,
+/// `new_in` to name one — never through the environment.
 pub struct FakeSignatureProvider {
     calls: Mutex<Vec<SignatureCall>>,
     recipient_views: Mutex<Vec<RecipientView>>,
+    root: PathBuf,
 }
 
 impl FakeSignatureProvider {
+    /// A fake whose envelopes persist under a fresh throwaway directory.
+    /// For tests that do not care where envelopes land.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::new_in(
+            std::env::temp_dir().join(format!("navigator-fake-signature-{}", Uuid::new_v4())),
+        )
+    }
+
+    /// A fake persisting under `root` — the explicit constructor.
+    #[must_use]
+    pub fn new_in(root: impl Into<PathBuf>) -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            recipient_views: Mutex::new(Vec::new()),
+            root: root.into(),
+        }
+    }
+
+    /// The fake a dev boot runs: `NAVIGATOR_FAKE_SIGNATURE_DIR` when set,
+    /// else `$HOME/.navigator/fake-signature`. No silent fallback — a
+    /// boot that cannot name a home directory has no place to persist
+    /// envelopes and says so.
+    ///
+    /// # Errors
+    ///
+    /// When neither `NAVIGATOR_FAKE_SIGNATURE_DIR` nor `$HOME` is set.
+    pub fn from_dev_dir() -> Result<Self, std::env::VarError> {
+        if let Ok(dir) = std::env::var("NAVIGATOR_FAKE_SIGNATURE_DIR") {
+            if !dir.is_empty() {
+                return Ok(Self::new_in(dir));
+            }
+        }
+        let home = std::env::var("HOME")?;
+        Ok(Self::new_in(
+            Path::new(&home).join(".navigator").join("fake-signature"),
+        ))
+    }
+
+    /// Directory envelopes persist under, created on first send.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     /// Snapshot of every call so far. Cheap clone — callers can
@@ -304,7 +448,7 @@ impl FakeSignatureProvider {
 
     /// Snapshot of every [`RecipientView`] requested so far.
     ///
-    /// The synthetic signing URL the stub returns is built from the request
+    /// The synthetic signing URL the fake returns is built from the request
     /// id and the `clientUserId` alone, so without this the `return_url` and
     /// the `email`/`userName` legs would leave no trace and a test could not
     /// tell an absolute return URL from a relative one — which is exactly how
@@ -316,6 +460,82 @@ impl FakeSignatureProvider {
             .expect("fake provider lock")
             .clone()
     }
+
+    /// The persisted envelope for `request_id`, read back from disk.
+    ///
+    /// # Errors
+    ///
+    /// [`SignatureError::Provider`] when the envelope file exists but
+    /// does not parse — a corrupted store is surfaced, never swallowed.
+    pub fn envelope(
+        &self,
+        request_id: &SignatureRequestId,
+    ) -> Result<Option<FakeEnvelope>, SignatureError> {
+        let path = self.envelope_path(&request_id.0);
+        let Ok(json) = std::fs::read(&path) else {
+            return Ok(None);
+        };
+        serde_json::from_slice(&json).map(Some).map_err(|e| {
+            SignatureError::Provider(format!("envelope {} does not parse: {e}", path.display()))
+        })
+    }
+
+    /// Every persisted envelope, newest last. Envelopes whose files do
+    /// not parse are surfaced, not skipped.
+    ///
+    /// # Errors
+    ///
+    /// [`SignatureError::Provider`] when the root cannot be read or any
+    /// envelope file does not parse.
+    pub fn envelopes(&self) -> Result<Vec<FakeEnvelope>, SignatureError> {
+        let mut envelopes = Vec::new();
+        let entries = std::fs::read_dir(&self.root).map_err(|e| {
+            SignatureError::Provider(format!("reading {}: {e}", self.root.display()))
+        })?;
+        for entry in entries {
+            let path = entry
+                .map_err(|e| {
+                    SignatureError::Provider(format!("reading {}: {e}", self.root.display()))
+                })?
+                .path();
+            if path.extension().is_some_and(|ext| ext == "json") {
+                let json = std::fs::read(&path).map_err(|e| {
+                    SignatureError::Provider(format!("reading {}: {e}", path.display()))
+                })?;
+                let envelope: FakeEnvelope = serde_json::from_slice(&json).map_err(|e| {
+                    SignatureError::Provider(format!(
+                        "envelope {} does not parse: {e}",
+                        path.display()
+                    ))
+                })?;
+                envelopes.push(envelope);
+            }
+        }
+        envelopes.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+        Ok(envelopes)
+    }
+
+    /// Durable write: the JSON on disk is the envelope's last true state.
+    fn persist(&self, envelope: &FakeEnvelope) -> Result<(), SignatureError> {
+        std::fs::create_dir_all(&self.root).map_err(|e| {
+            SignatureError::Provider(format!("creating {}: {e}", self.root.display()))
+        })?;
+        let json = serde_json::to_vec_pretty(envelope)
+            .map_err(|e| SignatureError::Provider(format!("serializing envelope: {e}")))?;
+        let path = self.envelope_path(&envelope.id);
+        std::fs::write(&path, json)
+            .map_err(|e| SignatureError::Provider(format!("writing {}: {e}", path.display())))
+    }
+
+    fn envelope_path(&self, id: &str) -> PathBuf {
+        self.root.join(format!("{id}.json"))
+    }
+}
+
+impl Default for FakeSignatureProvider {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[async_trait]
@@ -326,14 +546,30 @@ impl SignatureProvider for FakeSignatureProvider {
         pdf: &[u8],
         manifest: &SignatureManifest,
     ) -> Result<SignatureRequestId, SignatureError> {
+        // Nothing is sent unsigned: validate every anchor against the
+        // prepared PDF's text first, and refuse the whole envelope on a
+        // miss — before anything is persisted or recorded.
+        validate_anchors(pdf, &manifest.fields)?;
+
         let mut calls = self.calls.lock().expect("fake provider lock");
         let seq = calls.len() + 1;
+        let id = format!("fake-{notation_id}-{seq}");
+        let envelope = FakeEnvelope {
+            id: id.clone(),
+            notation_id,
+            status: EnvelopeStatus::Sent,
+            recipients: manifest.recipients.clone(),
+            fields: manifest.fields.clone(),
+            pdf_base64: Engine::encode(&base64::engine::general_purpose::STANDARD, pdf),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        self.persist(&envelope)?;
         calls.push(SignatureCall {
             notation_id,
             pdf_bytes_len: pdf.len(),
             manifest: manifest.clone(),
         });
-        Ok(SignatureRequestId(format!("stub-{notation_id}-{seq}")))
+        Ok(SignatureRequestId(id))
     }
 
     async fn create_recipient_view(
@@ -788,10 +1024,11 @@ impl SignatureProvider for DocuSignSignatureProvider {
 #[cfg(test)]
 mod tests {
     use super::{
-        CachedToken, DocuSignSignatureProvider, FakeSignatureProvider, RecipientView,
-        SignatureField, SignatureFieldKind, SignatureManifest, SignatureProvider,
-        SignatureProviderKind, SignatureProviderSelectionError, SignatureRecipient,
-        SignatureRequestId, SIGNATURE_PROVIDER_ENV,
+        validate_anchors, CachedToken, DocuSignSignatureProvider, EnvelopeStatus,
+        FakeSignatureProvider, RecipientView, SignatureError, SignatureField, SignatureFieldKind,
+        SignatureManifest, SignatureProvider, SignatureProviderKind,
+        SignatureProviderSelectionError, SignatureRecipient, SignatureRequestId,
+        SIGNATURE_PROVIDER_ENV,
     };
     use crate::docusign_auth::{test_priv_pem, DocuSignJwtAuth};
     use base64::Engine;
@@ -807,6 +1044,23 @@ mod tests {
     /// Empty manifest — the pre-anchor fallback path.
     fn no_manifest() -> SignatureManifest {
         SignatureManifest::default()
+    }
+
+    /// A real Typst-rendered PDF whose text layer carries every anchor of
+    /// [`retainer_manifest`] — the same invisible-white-text expansion the
+    /// retainer walk produces (`signature_render::anchor_string`), so the
+    /// fake's anchor validation sees exactly what production sees.
+    fn rendered_anchor_pdf() -> Vec<u8> {
+        let anchors = retainer_manifest()
+            .fields
+            .iter()
+            .map(|f| f.anchor.as_str())
+            .collect::<Vec<_>>()
+            .join(" \\ ");
+        pdf::render(&format!(
+            "= Test retainer\n\n#text(fill: white, size: 4pt)[{anchors}]\n"
+        ))
+        .expect("anchor PDF renders")
     }
 
     /// A two-party retainer manifest: the client (routing 1) signs and
@@ -951,29 +1205,106 @@ mod tests {
 
     #[tokio::test]
     async fn fake_records_each_call_with_notation_id_and_pdf_len() {
-        let stub = FakeSignatureProvider::new();
-        let id1 = stub
-            .send_for_signature(ID42, b"<pdf bytes>", &retainer_manifest())
+        let fake = FakeSignatureProvider::new();
+        let pdf = rendered_anchor_pdf();
+        let id1 = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest())
             .await
-            .expect("stub never errors");
-        let id2 = stub
+            .expect("validated anchors pass");
+        let id2 = fake
             .send_for_signature(ID43, b"<longer pdf bytes here>", &no_manifest())
             .await
             .unwrap();
 
         assert_ne!(id1, id2, "each call gets a distinct id");
-        assert_eq!(id1.0, format!("stub-{ID42}-1"));
-        assert_eq!(id2.0, format!("stub-{ID43}-2"));
+        assert_eq!(id1.0, format!("fake-{ID42}-1"));
+        assert_eq!(id2.0, format!("fake-{ID43}-2"));
 
-        let calls = stub.calls();
+        let calls = fake.calls();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].notation_id, ID42);
-        assert_eq!(calls[0].pdf_bytes_len, b"<pdf bytes>".len());
+        assert_eq!(calls[0].pdf_bytes_len, pdf.len());
         // The manifest threads through verbatim so the step can assert it.
         assert_eq!(calls[0].manifest, retainer_manifest());
         assert_eq!(calls[1].notation_id, ID43);
         assert_eq!(calls[1].pdf_bytes_len, b"<longer pdf bytes here>".len());
         assert!(calls[1].manifest.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fake_persists_the_envelope_and_reads_it_back() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let fake = FakeSignatureProvider::new_in(temp.path());
+        let pdf = rendered_anchor_pdf();
+        let id = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .await
+            .expect("send succeeds");
+
+        // The envelope is durable JSON under the root, not just a call
+        // record: read it back from a fresh provider over the same root.
+        let reread = FakeSignatureProvider::new_in(temp.path())
+            .envelope(&id)
+            .expect("envelope parses")
+            .expect("envelope exists on disk");
+        assert_eq!(reread.id, id.0);
+        assert_eq!(reread.notation_id, ID42);
+        assert_eq!(reread.status, EnvelopeStatus::Sent);
+        assert_eq!(reread.recipients, retainer_manifest().recipients);
+        assert_eq!(reread.fields, retainer_manifest().fields);
+        assert_eq!(
+            reread.pdf_bytes().expect("decodes"),
+            pdf,
+            "the exact bytes the sender approved are stored"
+        );
+
+        // And the listing sees it too, newest last.
+        let all = FakeSignatureProvider::new_in(temp.path())
+            .envelopes()
+            .expect("listing reads");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, id.0);
+    }
+
+    #[tokio::test]
+    async fn a_missing_anchor_refuses_the_send_and_persists_nothing() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let fake = FakeSignatureProvider::new_in(temp.path());
+        // A real PDF whose text layer does NOT carry the manifest's
+        // anchors — exactly the silently-unsigned-document shape the
+        // validation exists to refuse.
+        let pdf = pdf::render("= No anchors here\n").expect("renders");
+
+        let err = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .await
+            .expect_err("missing anchors are a hard error");
+        let missing = match err {
+            SignatureError::AnchorValidation(message) => message,
+            other @ SignatureError::Provider(_) => {
+                panic!("expected AnchorValidation, got {other:?}")
+            }
+        };
+        assert!(missing.contains("nlsig-client-signature-1"), "{missing}");
+        assert!(missing.contains("nlsig-firm-signature-1"), "{missing}");
+
+        // Nothing was sent unsigned: no envelope on disk, no call record.
+        assert!(
+            fake.envelope(&SignatureRequestId(format!("fake-{ID42}-1")))
+                .expect("read succeeds")
+                .is_none(),
+            "no envelope may exist for a refused send"
+        );
+        assert!(fake.envelopes().expect("listing reads").is_empty());
+        assert!(fake.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn anchor_validation_passes_on_the_rendered_retainer() {
+        // The same expansion the retainer walk ships: every declared
+        // anchor is present in the rendered document's text layer.
+        let pdf = rendered_anchor_pdf();
+        validate_anchors(&pdf, &retainer_manifest().fields).expect("all anchors present");
     }
 
     #[tokio::test]
@@ -1296,6 +1627,9 @@ mod tests {
             super::SignatureError::Provider(msg) => {
                 assert!(msg.contains("401"), "expected 401 in error, got: {msg}");
             }
+            other @ super::SignatureError::AnchorValidation(_) => {
+                panic!("expected Provider, got {other:?}")
+            }
         }
     }
 
@@ -1346,6 +1680,9 @@ mod tests {
         match err {
             super::SignatureError::Provider(msg) => {
                 assert!(msg.contains("404"), "expected 404 in error, got: {msg}");
+            }
+            other @ super::SignatureError::AnchorValidation(_) => {
+                panic!("expected Provider, got {other:?}")
             }
         }
     }
