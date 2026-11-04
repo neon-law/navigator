@@ -15,8 +15,8 @@ pub(crate) use project_scaffold::{OFFBOARDING, ONBOARDING};
 
 /// Open the onboarding notation, deriving the matter and client from
 /// `navigator.yaml` in `root`.
-pub async fn onboard(host: Option<&str>, root: &Path) -> ExitCode {
-    run(root, host, ONBOARDING).await
+pub async fn onboard(host: Option<&str>, root: &Path, answers_from: Option<&Path>) -> ExitCode {
+    run(root, host, ONBOARDING, answers_from).await
 }
 
 /// Open the offboarding notation, or close and archive a matter whose signed
@@ -29,8 +29,13 @@ pub async fn offboard(
     run_offboard(root, host, effective_at).await
 }
 
-async fn run(root: &Path, host: Option<&str>, kind: &str) -> ExitCode {
-    match run_open(root, host, kind).await {
+async fn run(
+    root: &Path,
+    host: Option<&str>,
+    kind: &str,
+    answers_from: Option<&Path>,
+) -> ExitCode {
+    match run_open(root, host, kind, answers_from).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("navigator project {kind}: {error:#}");
@@ -39,7 +44,12 @@ async fn run(root: &Path, host: Option<&str>, kind: &str) -> ExitCode {
     }
 }
 
-async fn run_open(root: &Path, host: Option<&str>, kind: &str) -> Result<()> {
+async fn run_open(
+    root: &Path,
+    host: Option<&str>,
+    kind: &str,
+    answers_from: Option<&Path>,
+) -> Result<()> {
     let project = project_coordinates(root)?;
     let template = template_path(root, kind)?;
     let code = template
@@ -81,7 +91,14 @@ async fn run_open(root: &Path, host: Option<&str>, kind: &str) -> Result<()> {
         return Ok(());
     }
 
-    let created = remote::notation_create(host, code, &project.client_dri, &project.code).await;
+    let created = remote::notation_create(
+        host,
+        code,
+        &project.client_dri,
+        &project.code,
+        if kind == ONBOARDING { answers_from } else { None },
+    )
+    .await;
     if created != ExitCode::SUCCESS {
         return Err(anyhow!("could not open the {kind} notation"));
     }
@@ -123,7 +140,7 @@ async fn run_offboard(
                 );
                 return Ok(());
             }
-            if remote::notation_create(host, code, &project.client_dri, &project.code).await
+            if remote::notation_create(host, code, &project.client_dri, &project.code, None).await
                 != ExitCode::SUCCESS
             {
                 return Err(anyhow!("could not open the offboarding notation"));

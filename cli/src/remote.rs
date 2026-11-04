@@ -4213,11 +4213,19 @@ pub async fn patch_project_fields(
 /// (`POST /app/projects/<project-code>/notations/new`). The template is read
 /// from the Project's git repo when authored there, else from the bundled
 /// firm catalog. Leaves the questionnaire ready for the site intake flow.
+///
+/// `answers_from` names a saved answers file (`site notation answers
+/// --save-answers`): after the notation opens, every question the
+/// questionnaire reaches is answered from the file, so the notation's
+/// interpolated fields match the notation the file was saved from. A
+/// question the file does not answer fails the create — prefill is whole,
+/// never partial.
 pub async fn notation_create(
     host: Option<&str>,
     template: &str,
     client_email: &str,
     project_code: &str,
+    answers_from: Option<&Path>,
 ) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
@@ -4254,14 +4262,20 @@ pub async fn notation_create(
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        let notation_id = location
+        let notation_id: Uuid = location
             .trim_start_matches("/app/lawyer/notations/")
-            .trim_end_matches("/step");
+            .trim_end_matches("/step")
+            .parse()
+            .context("parse the notation id from the create redirect")?;
         println!(
             "{} {}",
             palette::dim("created notation; questionnaire ready — notation"),
-            palette::highlight(notation_id),
+            palette::highlight(notation_id.to_string()),
         );
+        if let Some(path) = answers_from {
+            let saved = crate::answers_file::load_answers_file(path)?;
+            prefill_from_saved_answers(&client, &base, &token, notation_id, &saved).await?;
+        }
         println!(
             "{}",
             palette::dim(format!(
@@ -4271,6 +4285,78 @@ pub async fn notation_create(
         Ok(())
     })
     .await
+}
+
+/// Answer a notation's questionnaire entirely from a saved answers file:
+/// walk the same `/app/lawyer/notations/:id/step` route the intake walker
+/// uses, posting each question's saved `state: value` as the answer.
+/// Scalar saved answers post as the `value` field; a candidate-backed
+/// question accepts its saved list number or row id. Aggregate questions
+/// (`people_list`, schedules) have no single scalar and are refused — they
+/// are answered interactively. A question the file does not answer fails
+/// the walk, so a prefilled notation is always whole.
+async fn prefill_from_saved_answers(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    notation_id: Uuid,
+    saved: &crate::answers_file::SavedAnswers,
+) -> Result<()> {
+    let mut answered = 0u32;
+    loop {
+        let step = fetch_step(client, base, token, notation_id).await?;
+        let Some(question) = step.question else {
+            println!(
+                "{} {} questions prefilled from the answers file",
+                palette::dim("prefilled"),
+                palette::highlight(answered.to_string()),
+            );
+            return Ok(());
+        };
+        let Some(value) = saved.get(&question.code) else {
+            return Err(anyhow!(
+                "the answers file has no answer for question `{}` ({}); prefill covers every \
+                 question — save a complete notation's answers or answer `{}` interactively",
+                question.code,
+                question.prompt,
+                question.code,
+            ));
+        };
+        let fields = if store::question_registry::answer_type_is_aggregate(&question.answer_type) {
+            return Err(anyhow!(
+                "question `{}` is an aggregate ({}); a saved answer cannot fill it — answer it \
+                 interactively",
+                question.code,
+                question.answer_type,
+            ));
+        } else if question.has_candidates() {
+            picker_selection_fields(&question, &crate::answers_file::saved_scalar(value)?)?
+        } else {
+            vec![("value".to_string(), crate::answers_file::saved_scalar(value)?)]
+        };
+        let resp = client
+            .post(format!("{base}/app/lawyer/notations/{notation_id}/step"))
+            .bearer_auth(token)
+            .form(&fields)
+            .send()
+            .await
+            .context("POST step")?;
+        let status = resp.status();
+        if !status.is_success() && !status.is_redirection() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "prefilling `{}` failed: {}",
+                question.code,
+                server_error(status, &body),
+            ));
+        }
+        println!(
+            "{} {}",
+            palette::dim("prefilled"),
+            palette::highlight(&question.code)
+        );
+        answered += 1;
+    }
 }
 
 /// Server response to a notation-draft POST: the draft's path on the
@@ -4502,7 +4588,16 @@ struct NotationAnswer {
 /// browser workbench. The door requires a firm-side participation row of every
 /// tier, so an operator holding Owner or Admin and no row on the matter is
 /// refused with the same `404` as anyone else.
-pub async fn notation_answers(host: Option<&str>, notation_id: Uuid, json: bool) -> ExitCode {
+///
+/// `save_answers` persists the filed answers to a `state: value` YAML file
+/// for `--answers-from` / `--answers-file` prefill — the save half of the
+/// answer round trip.
+pub async fn notation_answers(
+    host: Option<&str>,
+    notation_id: Uuid,
+    json: bool,
+    save_answers: Option<&Path>,
+) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
         let url = format!("{base}/app/api/notations/{notation_id}/answers");
@@ -4527,13 +4622,29 @@ pub async fn notation_answers(host: Option<&str>, notation_id: Uuid, json: bool)
         } else if answers.is_empty() {
             println!("{}", palette::dim("no filed answers"));
         } else {
-            for answer in answers {
+            for answer in &answers {
                 let state = answer.state_name.as_deref().unwrap_or("unscoped");
                 let author = answer
                     .authored_by_person_id
                     .map_or_else(|| "system".to_string(), |id| id.to_string());
                 println!("{state}: {} [{} by {author}]", answer.value, answer.source);
             }
+        }
+        if let Some(path) = save_answers {
+            let filed: Vec<crate::answers_file::FiledAnswer> = answers
+                .iter()
+                .map(|a| crate::answers_file::FiledAnswer {
+                    state_name: a.state_name.clone(),
+                    value: a.value.clone(),
+                })
+                .collect();
+            let saved = crate::answers_file::save_answers_file(path, &filed)?;
+            println!(
+                "{} {} answers to {}",
+                palette::dim("saved"),
+                palette::highlight(saved.to_string()),
+                path.display(),
+            );
         }
         Ok(())
     })
@@ -8639,7 +8750,8 @@ mod tests {
     async fn exercise_notation_commands(host: Option<&str>, server_uri: &str, ids: LawyerRouteIds) {
         assert_eq!(notation_list(host, "acme", true).await, ExitCode::SUCCESS);
         assert_eq!(
-            notation_create(host, "memo__contract_review", "libra@example.com", "acme",).await,
+            notation_create(host, "memo__contract_review", "libra@example.com", "acme", None)
+                .await,
             ExitCode::SUCCESS
         );
         let client = reqwest::Client::new();
@@ -8653,7 +8765,7 @@ mod tests {
             ExitCode::SUCCESS
         );
         assert_eq!(
-            notation_answers(host, ids.notation, true).await,
+            notation_answers(host, ids.notation, true, None).await,
             ExitCode::SUCCESS
         );
         let out = tempfile::NamedTempFile::new().unwrap();
@@ -8709,6 +8821,179 @@ mod tests {
                 .state,
             "lawyer_review"
         );
+    }
+
+    /// The answer round trip: save a notation's filed answers with
+    /// `--save-answers`, then prefill a second notation from that file with
+    /// `--answers-from` and assert the second notation's walk POSTed
+    /// exactly the saved values — a notation's interpolated fields are a
+    /// pure function of its filed answers, so the two notations render the
+    /// same fields.
+    #[tokio::test(flavor = "current_thread")]
+    async fn saved_answers_prefill_a_second_notation_with_the_same_fields() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let host = Some(server.uri().as_str());
+        let _env = CredentialsEnv::new(&server.uri());
+        let filed = Uuid::new_v4();
+        let second = Uuid::new_v4();
+
+        // The first notation's filed answers, as the answers door returns them.
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/notations/{filed}/answers")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": Uuid::new_v4(),
+                    "question_id": Uuid::new_v4(),
+                    "state_name": "client_full_name",
+                    "value": "Libra Example",
+                    "source": "client",
+                    "authored_by_person_id": null,
+                },
+                {
+                    "id": Uuid::new_v4(),
+                    "question_id": Uuid::new_v4(),
+                    "state_name": "matter_description",
+                    "value": "Estate plan for Example Co",
+                    "source": "client",
+                    "authored_by_person_id": null,
+                }
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Save half: persist the filed answers to disk.
+        let dir = tempfile::tempdir().unwrap();
+        let answers_path = dir.path().join("answers.yaml");
+        assert_eq!(
+            notation_answers(host, filed, false, Some(&answers_path)).await,
+            ExitCode::SUCCESS
+        );
+        let saved = crate::answers_file::load_answers_file(&answers_path).unwrap();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(
+            crate::answers_file::saved_scalar(&saved["client_full_name"]).unwrap(),
+            "Libra Example"
+        );
+        assert_eq!(
+            crate::answers_file::saved_scalar(&saved["matter_description"]).unwrap(),
+            "Estate plan for Example Co"
+        );
+
+        // Opening the second notation: the create 303s to the walker.
+        Mock::given(method("POST"))
+            .and(path("/app/projects/acme/notations/new"))
+            .respond_with(ResponseTemplate::new(303).append_header(
+                "location",
+                format!("/app/lawyer/notations/{second}/step"),
+            ))
+            .mount(&server)
+            .await;
+
+        // The prefill walk: the first step asks one text question the
+        // answers file covers; every step after that is the completed page.
+        // wiremock serves the first matching mock in registration order, so
+        // the one-shot question mock must be mounted before the completed
+        // fallback.
+        Mock::given(method("GET"))
+            .and(path(format!("/app/lawyer/notations/{second}/step")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "question": {
+                    "code": "client_full_name",
+                    "prompt": "What is the client's full name?",
+                    "answer_type": "text",
+                }
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/lawyer/notations/{second}/step")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/lawyer/notations/{second}/step")))
+            .respond_with(ResponseTemplate::new(303))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Prefill half: open the second notation from the saved file.
+        assert_eq!(
+            notation_create(
+                host,
+                "onboarding__letter",
+                "libra@example.com",
+                "acme",
+                Some(&answers_path),
+            )
+            .await,
+            ExitCode::SUCCESS
+        );
+
+        // The walk POSTed exactly the saved value as the answer field.
+        let posted: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| {
+                request.method == "POST"
+                    && request
+                        .url
+                        .path()
+                        == format!("/app/lawyer/notations/{second}/step")
+            })
+            .map(|request| String::from_utf8(request.body.bytes().to_vec()).unwrap())
+            .collect();
+        assert_eq!(posted, vec!["value=Libra+Example".to_string()]);
+    }
+
+    /// A malformed answers file stops the prefill with a failure exit — a
+    /// partial prefill would leave the notation half-answered while looking
+    /// complete.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_malformed_answers_file_fails_the_prefill_before_answering_anything() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let host = Some(server.uri().as_str());
+        let _env = CredentialsEnv::new(&server.uri());
+        let notation = Uuid::new_v4();
+
+        Mock::given(method("POST"))
+            .and(path("/app/projects/acme/notations/new"))
+            .respond_with(ResponseTemplate::new(303).append_header(
+                "location",
+                format!("/app/lawyer/notations/{notation}/step"),
+            ))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let malformed = dir.path().join("answers.yaml");
+        std::fs::write(&malformed, "just a string, not a map\n").unwrap();
+
+        assert_ne!(
+            notation_create(
+                host,
+                "onboarding__letter",
+                "libra@example.com",
+                "acme",
+                Some(&malformed),
+            )
+            .await,
+            ExitCode::SUCCESS
+        );
+        // Nothing was answered: the file failed before the walk began.
+        assert!(server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method != "POST"
+                || request.url.path() != format!("/app/lawyer/notations/{notation}/step")));
     }
 
     impl Drop for CredentialsEnv {
