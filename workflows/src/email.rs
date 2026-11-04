@@ -24,6 +24,7 @@ pub struct Template {
     pub raw: &'static str,
 }
 
+pub mod audit;
 pub mod certificate;
 pub mod dispatch;
 pub mod email_confirm;
@@ -35,6 +36,7 @@ pub(crate) mod sendgrid_openapi;
 pub mod service;
 pub mod welcome;
 
+pub use audit::LoggingEmail;
 pub use dispatch::{dispatch_state, parse_slug, DispatchError, EmailPayload};
 pub use layout::{base_url_from_env, brand_name, render_email_html, support_email};
 pub use service::{

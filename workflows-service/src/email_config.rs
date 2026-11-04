@@ -1,13 +1,12 @@
 //! Worker-side `EmailService` factory.
 //!
 //! Mirrors `portal::email::select_backend` in shape but returns a
-//! **bare** backend — no `RetryingEmail`, no `LoggingEmail`. The
-//! locked design for `email_send__*` dispatch is that Restate's
-//! invocation journal IS the retry layer (per-step backoff is
-//! built into the worker, not a Tokio-side decorator), and the
-//! audit logging happens via `ctx.run`-journaled side effects on
-//! the worker, not the in-process `sent_emails` decorator (which
-//! requires the `web` crate's store handle).
+//! **bare** backend — no `RetryingEmail`. The locked design for
+//! `email_send__*` dispatch is that Restate's invocation journal IS the
+//! retry layer (per-step backoff is built into the worker, not a
+//! Tokio-side decorator). `main` wraps the backend in
+//! `workflows::email::LoggingEmail`, so every worker send journals one
+//! `sent_email` row, as `web`'s sends do.
 //!
 //! Backend selection is driven by `NAVIGATOR_EMAIL_BACKEND`:
 //!

@@ -2,9 +2,10 @@
 
 Two halves of the outbound-email audit picture, joined in BigQuery.
 
-- **Request side** — `portal::email`'s `LoggingEmail` writes one `sent_emails` row per attempt. A SendGrid `202` proves
-  the message was *accepted*, not *delivered*. Each row now carries `sg_message_id` (SendGrid's `X-Message-Id`), the
-  join key to the delivery stream.
+- **Request side** — `workflows::email::LoggingEmail` writes one `sent_email` row per attempt, from both `web` and the
+  `workflows-service` worker. A SendGrid `202` proves the message was *accepted*, not *delivered*. Each row carries
+  `sg_message_id` (SendGrid's `X-Message-Id`, the join key to the delivery stream), `template_slug` and the addressee's
+  `person_id`. See [the request-side store](#the-request-side-store) below.
 - **Delivery side** — SendGrid's Event Webhook POSTs lifecycle events (`processed`, `delivered`, `open`, `click`,
   `bounce`, `dropped`, `deferred`, `spam_report`, `unsubscribe`). The `portal::email_events` handler lands each POST as
   one Snappy Parquet object on GCS — the same Parquet-on-GCS shape the [`archives`](../cloud/README.md) snapshot uses,
@@ -22,12 +23,70 @@ At send time `SendGridEmail::build_request_body` stamps top-level `custom_args` 
 rows carry `template_slug` / `person_id` directly and the analytics join needs no address parsing:
 
 ```text
-sent_emails.sg_message_id ── 1:N ── email_events.sg_message_id
-email_events.person_id    ─────────  persons.id
+sent_email.sg_message_id ── 1:N ── email_events.sg_message_id
+sent_email.person_id     ─────────  persons.id
+email_events.person_id   ─────────  persons.id
 ```
 
 The admin "Send welcome" path sets `person_id`; workflow-driven sends carry `template_slug` only until `EmailPayload`
 threads a person id (a follow-up).
+
+## The request-side store
+
+PostgreSQL is the system of record for `sent_email` whenever `NAVIGATOR_POSTGRES_HOST` is set (`store::sent_emails`); a
+configured but unreachable server fails the audit insert, never falls back. Without a host (a bare dev run, the
+in-memory tests) the same calls use SurrealDB. Historical SurrealDB rows reach PostgreSQL through `navigator ops
+postgres mirror reconcile`, which inserts only what PostgreSQL lacks.
+
+The table is **append-only in the database**. A trigger refuses every `UPDATE` and `TRUNCATE`, and refuses a `DELETE`
+unless all three hold: the session set `navigator.sent_email_purge`, the row is more than a year old, and its UTC day is
+in the `sent_email_export` ledger. Only the retention purge sets that flag. The application role keeps its ordinary
+grants, so the trigger is the guarantee.
+
+PostgreSQL keeps one year. The daily [Sent Email Export](glossary/sent-email-export.md) (DBOS workflow
+`SentEmailExport`, `archives::sent_email_export`, 02:41 UTC on `workflows-service`) runs three steps:
+
+1. **Find pending days.** These are closed UTC days with rows but no ledger entry, or with more rows than the ledger
+   counted (a late insert).
+2. **Export each day.** The day's rows become one Snappy Parquet file. The file is committed to an Iceberg v2 table
+   partitioned by `day(sent_at)`, and the day goes into the ledger with its row count and the SHA-256 of its row ids.
+3. **Purge.** Each exported day more than a year old is removed, but only after the day still matches its ledger row in
+   count and digest. Rows a `project_service` cites as evidence of service stay. The ledger stamps `purged_at`, so a
+   purged day is never exported again.
+
+```text
+gs://<NAVIGATOR_ARCHIVES_BUCKET>/email/sent_email/
+  metadata/version-hint.text, v<N>.metadata.json
+  metadata/snap-<snapshot-id>-<sha256>.avro     # manifest list: every day so far
+  metadata/day-<YYYY-MM-DD>-<sha256>-m0.avro     # one manifest per day
+  data/sent_at_day=<YYYY-MM-DD>/part-<sha256>.parquet
+```
+
+A re-run is idempotent. An unchanged day matches its ledger digest and writes nothing. A day that gained a row is
+written again under its new digest, and the new snapshot drops that day's old manifest (an Iceberg overwrite). A crash
+between the Iceberg commit and the ledger write finds the day already in the current snapshot and records the ledger
+without committing twice. Every snapshot carries earlier days forward, so the current snapshot holds the whole trail
+after PostgreSQL has purged a day. The table lives apart from the full-table `postgres/navigator/sent_email` coverage
+lineage and is never pruned.
+
+Enable it on `workflows-service` with `NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED=true` (only `true` opts in; any other
+non-empty value fails the boot). It needs the application's `NAVIGATOR_POSTGRES_*` login and
+`NAVIGATOR_ARCHIVES_BUCKET`. An enabled schedule fails the boot without either one. Until the flag is on, nothing is
+exported, so nothing is ever purged.
+
+Register the table in BigQuery once, as a BigLake Iceberg table over the current metadata file:
+
+```sql
+CREATE EXTERNAL TABLE `YOUR_PROJECT_ID.navigator_bi.sent_email`
+WITH CONNECTION `us-west4.exports`
+OPTIONS (
+  format = 'ICEBERG',
+  uris = ['gs://YOUR_ARCHIVES_BUCKET/email/sent_email/metadata/v<N>.metadata.json']
+);
+```
+
+A BigQuery Iceberg external table reads the snapshot that metadata file names, so re-point `uris` (or use a BigLake
+metastore) to see later days.
 
 ## Object layout
 
@@ -67,6 +126,9 @@ kubectl -n navigator create secret generic navigator-web-secrets \
 # In the SendGrid console, set the Event Webhook POST URL to:
 #   https://www.your-domain.example/webhook/email-events/<that-token>
 ```
+
+The path is `/webhook/email-events/`, not `/api/email-events/`. A URL under `/api/` returns 404 for every event, and
+SendGrid retries and then drops the events.
 
 `SENDGRID_EVENTS_SECRET` is a deployment boot invariant (`portal::config::enforce_deployment_invariants`), so a deploy
 without it fails fast rather than serving an unauthenticated endpoint. The ECDSA "Signed Event Webhook" is stronger: it
@@ -126,9 +188,9 @@ ORDER BY messages DESC;
 
 ## Non-goals
 
-- **Live dashboards.** The lake is for analytics; the `sent_emails` table (admin `/app/admin/email-log`) stays the
-  operational request-side view.
-- **Replacing `sent_emails`.** The store holds the request side; Parquet-on-GCS holds the delivery side; BigQuery joins
-  them.
-- **Iceberg-managed metadata.** Same deferral as `archives` — `format = 'ICEBERG'` with authored
-  `metadata/v<n>.metadata.json` is a later follow-up; the Parquet external table is the v1.
+- **Live dashboards.** The lake is for analytics; the `sent_email` table (admin `/app/admin/email-log`) stays the
+  operational request-side view for its year in PostgreSQL.
+- **Replacing `sent_email`.** PostgreSQL holds the request side for a year and the Sent Email Export's Iceberg table
+  keeps it after that. Parquet-on-GCS holds the delivery side, and BigQuery joins them.
+- **Iceberg metadata for the delivery side.** `email-events/` stays a Parquet external table; only the request side has
+  authored Iceberg metadata.

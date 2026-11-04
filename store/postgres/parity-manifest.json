@@ -155,6 +155,13 @@
       "table": "relationship"
     },
     {
+      "extra_column": "person_id",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "sent_email"
+    },
+    {
       "extra_column": null,
       "extra_table": "archived_object_purge",
       "missing_column": null,
@@ -402,6 +409,13 @@
     {
       "extra_column": null,
       "extra_table": "retention_purge",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "sent_email_export",
       "missing_column": null,
       "missing_table": null,
       "table": null
@@ -4957,6 +4971,7 @@
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
           "outcome": "TEXT",
+          "person_id": "UUID",
           "project_id": "UUID",
           "recipient": "TEXT",
           "sender": "TEXT",
@@ -4976,6 +4991,21 @@
         "references": [
           "project"
         ]
+      },
+      "sent_email_export": {
+        "columns": {
+          "content_sha256": "TEXT",
+          "data_file": "TEXT",
+          "day": "DATE",
+          "exported_at": "TIMESTAMPTZ",
+          "metadata_version": "BIGINT",
+          "purged_at": "TIMESTAMPTZ",
+          "row_count": "BIGINT",
+          "snapshot_id": "BIGINT"
+        },
+        "foreign_keys": [],
+        "name": "sent_email_export",
+        "references": []
       },
       "signature": {
         "columns": {
