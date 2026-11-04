@@ -252,6 +252,137 @@ pub(crate) fn is_unedited_stub(contents: &str) -> bool {
             || body.is_some_and(|body| body == template_placeholder(kind))
     })
 }
+/// The `kind:` value a legacy engagement letter declares: a Project-local
+/// agreement draft, not a shared-template kind. A letter is *legacy* when it
+/// declares this kind together with a [`LINEAGE_FIELD`] naming the shared
+/// template it was authored from — together they mark the draft that the
+/// migration verb moves onto the canonical onboarding path.
+const LEGACY_ONBOARDING_KIND: &str = "agreement";
+const LINEAGE_FIELD: &str = "derived_from";
+
+/// Move a legacy engagement letter onto the canonical onboarding path so
+/// `navigator project onboard` opens the notation it was drafted for.
+///
+/// A legacy letter is a non-stub `drafts/` document declaring
+/// `kind: {LEGACY_ONBOARDING_KIND}` and a [`LINEAGE_FIELD`] pointing at the
+/// shared template it descended from. Exactly one such letter is expected:
+/// the verb rewrites its `kind:` to `onboarding`, moves the file to
+/// `{draft_directory}/onboarding__letter.md`, and leaves the `derived_from`
+/// lineage and the rest of the document untouched. An unedited stub already
+/// sitting at the canonical path is replaced; an authored canonical draft
+/// refuses the migration so a lawyer's writing is never overwritten.
+///
+/// The migration rewrites frontmatter only; `Kind::opens_a_matter` and the
+/// rule engine are untouched, and `derived_from` stays documentation-only.
+pub(crate) fn migrate_letter(root: &Path) -> Result<()> {
+    let directory = super::repository::draft_directory(root);
+    let drafts = root.join(directory);
+    let mut legacy = Vec::new();
+    for entry in std::fs::read_dir(&drafts)
+        .with_context(|| format!("read the {directory}/ directory of {}", root.display()))?
+    {
+        let path = entry?.path();
+        if path.extension().is_none_or(|extension| extension != "md") || !path.is_file() {
+            continue;
+        }
+        let contents =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        if !is_unedited_stub(&contents) && is_legacy_letter(&contents) {
+            legacy.push(path);
+        }
+    }
+    match legacy.as_slice() {
+        [path] => migrate_letter_file(root, directory, path),
+        [] => Err(anyhow!(
+            "no legacy letter to migrate: a legacy letter declares `kind: \
+             {LEGACY_ONBOARDING_KIND}` and a `{LINEAGE_FIELD}` lineage in `{directory}/`; \
+             nothing there declares both"
+        )),
+        [first, rest @ ..] => Err(anyhow!(
+            "multiple legacy letters to migrate: {} and {}; retire or \
+             migrate all but one before running this again",
+            first.display(),
+            rest.iter()
+                .map(|path| format!("`{}`", path.display()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// Whether the document is a legacy letter: an agreement-kind draft that
+/// records a `derived_from` lineage with the shared template it came from.
+fn is_legacy_letter(contents: &str) -> bool {
+    let frontmatter = rules::frontmatter::extract(contents);
+    frontmatter
+        .and_then(|frontmatter| rules::frontmatter::field(frontmatter, "kind"))
+        .is_some_and(|kind| kind == LEGACY_ONBOARDING_KIND)
+        && frontmatter.is_some_and(|frontmatter| {
+            rules::frontmatter::field(frontmatter, LINEAGE_FIELD).is_some()
+        })
+}
+
+/// Move one legacy letter to the canonical onboarding path with its `kind:`
+/// retyped, replacing an unedited stub that occupies the destination.
+fn migrate_letter_file(root: &Path, directory: &str, source: &Path) -> Result<()> {
+    let contents =
+        std::fs::read_to_string(source).with_context(|| format!("read {}", source.display()))?;
+    let retyped = retyped_kind(&contents, ONBOARDING).ok_or_else(|| {
+        anyhow!(
+            "{} declares no `kind:` frontmatter field to retype",
+            source.display()
+        )
+    })?;
+    let target = root
+        .join(directory)
+        .join(format!("{}.md", template_code(ONBOARDING)));
+    if source != target && target.is_file() {
+        let existing = std::fs::read_to_string(&target)
+            .with_context(|| format!("read {}", target.display()))?;
+        if !is_unedited_stub(&existing) {
+            return Err(anyhow!(
+                "refusing to migrate {} onto the already authored {} — retire one of the \
+                 two letters first, then run this again",
+                source.display(),
+                target.display()
+            ));
+        }
+    }
+    std::fs::write(&target, &retyped).with_context(|| format!("write {}", target.display()))?;
+    if source != target {
+        std::fs::remove_file(source).with_context(|| format!("remove {}", source.display()))?;
+    }
+    println!("migrated {} -> {}", source.display(), target.display());
+    println!("next: review `git status`, commit the move, then run `navigator project onboard`");
+    Ok(())
+}
+
+/// The document with its frontmatter `kind:` line rewritten to `new_kind`,
+/// or `None` when no `kind:` line is declared. Only the frontmatter block is
+/// touched; the body is returned verbatim.
+fn retyped_kind(contents: &str, new_kind: &str) -> Option<String> {
+    let (frontmatter, body) = rules::frontmatter::split(contents)?;
+    let newline = if frontmatter.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut lines: Vec<String> = frontmatter.lines().map(ToString::to_string).collect();
+    let mut retyped = false;
+    for line in &mut lines {
+        if !retyped && line.trim_start().starts_with("kind:") {
+            *line = format!("kind: {new_kind}");
+            retyped = true;
+        }
+    }
+    if !retyped {
+        return None;
+    }
+    Some(format!(
+        "---{newline}{}{newline}---{newline}{body}",
+        lines.join(newline)
+    ))
+}
 
 fn require_template_matches_main(root: &Path, kind: &str) -> Result<()> {
     git(root, &["fetch", "origin", "main"])
@@ -698,6 +829,120 @@ mod tests {
         assert!(ahead
             .to_string()
             .contains("HEAD does not equal origin/main"));
+    }
+
+    fn legacy_letter() -> String {
+        "---
+kind: agreement
+title: Engagement letter
+respondent_type: person_and_entity
+confidential: true
+derived_from: onboarding__letter
+questionnaire:
+  BEGIN:
+    _: jurisdiction__governing_law
+  jurisdiction__governing_law:
+    _: jurisdiction__arbitration_seat
+  jurisdiction__arbitration_seat:
+    _: END
+clauses:
+  arbitration:
+    source: engagement_arbitration@1
+    inputs:
+      law: jurisdiction__governing_law
+      seat: jurisdiction__arbitration_seat
+workflow:
+  BEGIN:
+    created: lawyer_review
+  lawyer_review:
+    approved: END
+---
+
+{{> arbitration}}
+
+The Firm will represent the client.
+"
+        .to_string()
+    }
+
+    #[test]
+    fn a_legacy_agreement_letter_migrates_to_the_canonical_onboarding_path() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("drafts")).unwrap();
+        std::fs::write(
+            root.path().join("drafts/engagement__letter.md"),
+            legacy_letter(),
+        )
+        .unwrap();
+        super::migrate_letter(root.path()).unwrap();
+        assert!(!root.path().join("drafts/engagement__letter.md").exists());
+        assert_eq!(
+            template_relative(root.path(), ONBOARDING).unwrap(),
+            "drafts/onboarding__letter.md"
+        );
+        let migrated =
+            std::fs::read_to_string(root.path().join("drafts/onboarding__letter.md")).unwrap();
+        assert!(migrated.contains("kind: onboarding"), "{migrated}");
+        assert!(migrated.contains("derived_from: onboarding__letter"));
+        assert!(migrated.contains("The Firm will represent the client."));
+    }
+
+    #[test]
+    fn migration_replaces_an_unedited_canonical_stub() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("drafts")).unwrap();
+        std::fs::write(
+            root.path().join("drafts/engagement__letter.md"),
+            legacy_letter(),
+        )
+        .unwrap();
+        write_template_stub(&template_path(root.path(), ONBOARDING).unwrap(), ONBOARDING).unwrap();
+        super::migrate_letter(root.path()).unwrap();
+        assert!(!root.path().join("drafts/engagement__letter.md").exists());
+        let migrated =
+            std::fs::read_to_string(root.path().join("drafts/onboarding__letter.md")).unwrap();
+        assert!(migrated.contains("kind: onboarding"));
+    }
+
+    #[test]
+    fn migration_refuses_to_overwrite_an_authored_canonical_draft() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("drafts")).unwrap();
+        std::fs::write(
+            root.path().join("drafts/engagement__letter.md"),
+            legacy_letter(),
+        )
+        .unwrap();
+        let canonical = root.path().join("drafts/onboarding__letter.md");
+        std::fs::write(
+            &canonical,
+            "---\nkind: onboarding\n---\nAuthored canonical draft.\n",
+        )
+        .unwrap();
+        let error = super::migrate_letter(root.path()).unwrap_err();
+        assert!(error.to_string().contains("already authored"), "{error:#}");
+        assert_eq!(
+            std::fs::read_to_string(&canonical).unwrap(),
+            "---\nkind: onboarding\n---\nAuthored canonical draft.\n"
+        );
+        assert!(root.path().join("drafts/engagement__letter.md").exists());
+    }
+
+    #[test]
+    fn a_drafted_agreement_without_derived_from_is_not_a_legacy_letter() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("drafts")).unwrap();
+        std::fs::write(
+            root.path().join("drafts/engagement__letter.md"),
+            "---\nkind: agreement\ntitle: Agreement\n---\nAuthored agreement.\n",
+        )
+        .unwrap();
+        let error = super::migrate_letter(root.path()).unwrap_err();
+        assert!(error.to_string().contains("no legacy letter"), "{error:#}");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("drafts/engagement__letter.md")).unwrap(),
+            "---\nkind: agreement\ntitle: Agreement\n---\nAuthored agreement.\n"
+        );
     }
 
     #[tokio::test]

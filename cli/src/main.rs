@@ -1115,6 +1115,10 @@ enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Move a legacy engagement letter (`kind: agreement` with a `derived_from`
+    /// lineage) onto the canonical onboarding path, so `navigator project
+    /// onboard` opens the notation it was drafted for.
+    MigrateLetter {},
     /// Fill Project coordinates from the live matter or explicit values, and set
     /// the live Project's calendar and client booking link.
     Set {
@@ -6075,6 +6079,15 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
         }
         ProjectsCmd::Offboard { effective_at, host } => {
             projects::lifecycle::offboard(host.host.as_deref(), Path::new("."), effective_at).await
+        }
+        ProjectsCmd::MigrateLetter {} => {
+            match projects::lifecycle::migrate_letter(Path::new(".")) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("navigator project migrate-letter: {error:#}");
+                    ExitCode::FAILURE
+                }
+            }
         }
         ProjectsCmd::Set {
             project_code,
