@@ -232,8 +232,10 @@ impl NotationSessionError {
     /// A fault the lawyer can fix in the template or the matter.
     ///
     /// The notation-create door turns this into a 422 whose body is the
-    /// message. Infrastructure failures (the database, the durable runtime,
-    /// a missing person row) return [`None`] and stay an internal error.
+    /// message. A store failure — a project read, a question write, or a
+    /// template-row write — stays [`None`], because those include database
+    /// failures and the Draft may be valid. The durable runtime and a missing
+    /// person row stay internal the same way.
     #[must_use]
     pub fn lawyer_fault(&self) -> Option<String> {
         match self {
@@ -253,10 +255,6 @@ impl NotationSessionError {
             Self::SnapshotEncode(message) | Self::SnapshotDecode(message) => {
                 Some(format!("questionnaire snapshot: {message}"))
             }
-            Self::TemplateSource(store::template_source::TemplateSourceError::Store(message)) => {
-                Some(message.clone())
-            }
-            Self::Template(error) => Some(error.to_string()),
             _ => None,
         }
     }
@@ -1619,6 +1617,17 @@ mod tests {
             .into_iter()
             .map(|state| state.0)
             .collect()
+    }
+
+    #[test]
+    fn a_store_or_template_write_failure_is_not_a_lawyer_fault() {
+        let store = NotationSessionError::TemplateSource(
+            store::template_source::TemplateSourceError::Store("database: down".into()),
+        );
+        assert!(store.lawyer_fault().is_none());
+        let template =
+            NotationSessionError::Template(store::templates::TemplateError::MissingSourceCommit);
+        assert!(template.lawyer_fault().is_none());
     }
 
     #[test]

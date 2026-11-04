@@ -480,4 +480,15 @@ mod tests {
             "the cause must name the template: {text}"
         );
     }
+
+    /// A failed project read or question write is the store, not the Draft.
+    #[tokio::test]
+    async fn a_store_failure_stays_internal() {
+        let response = CreateProjectNotationError::Session(NotationSessionError::TemplateSource(
+            TemplateSourceError::Store("database: down".into()),
+        ))
+        .into_lawyer_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body_text(response).await, "internal");
+    }
 }
