@@ -1059,6 +1059,11 @@ async fn named_exhibits_keep_their_own_document_kind() {
         .await
         .unwrap();
     assert_eq!(assets.len(), 4);
+    for asset in &assets {
+        store::assets::set_visibility(&fixture.surreal, project, asset.id, "client")
+            .await
+            .unwrap();
+    }
     for (filename, kind) in [
         ("motion-to-dismiss.pdf", "pleading"),
         ("exhibit-a.pdf", "exhibit"),
@@ -1079,11 +1084,9 @@ async fn named_exhibits_keep_their_own_document_kind() {
     )
     .await;
     assert_eq!(replay["nef"]["outcome"], "already_recorded");
-    assert_eq!(
-        store::assets::for_project(&fixture.surreal, project)
-            .await
-            .unwrap()
-            .len(),
-        4
-    );
+    let shared = store::assets::for_project(&fixture.surreal, project)
+        .await
+        .unwrap();
+    assert_eq!(shared.len(), 4);
+    assert!(shared.iter().all(|asset| asset.visibility == "client"));
 }

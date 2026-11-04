@@ -1423,6 +1423,7 @@ pub async fn ingest_bytes_with_mail_provenance(
 /// File an immutable message original or attachment once per Project and slug.
 /// A deterministic asset id elects one database writer across overlapping
 /// requests. Existing mail provenance, bytes, and metadata must agree.
+/// The document's current sharing visibility is retained on replay.
 /// This is for source messages; editable documents use the revision boundary.
 ///
 /// # Errors
@@ -1489,7 +1490,15 @@ fn existing_mail_document(
     {
         return Err(IngestError::IdempotencyConflict(args.filename.into()));
     }
-    existing_document(existing, args, sha)
+    // Sharing changes the document's audience, not its archived source.
+    // A replay must preserve that choice while still verifying the bytes
+    // and mail identity above.
+    let visibility = existing.visibility.clone();
+    let args = IngestArgs {
+        visibility: &visibility,
+        ..args.clone()
+    };
+    existing_document(existing, &args, sha)
 }
 
 async fn ingest_bytes_as_inner(
