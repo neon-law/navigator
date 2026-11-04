@@ -1148,10 +1148,18 @@ fn dispatch_with_dns_provider(
             project_id,
         })) => match (project_id, deployment) {
             (Some(project), Some(deployment)) => {
-                let url = published_workflows_url(&project, &deployment)?;
-                restate_register(Some(&url))
+                let loaded = deployment_config::load(&project, &deployment)?;
+                let url = workflows_url_coordinate(&loaded)?;
+                let target = RegisterTarget {
+                    deployment: &loaded.name,
+                    admin_url: loaded
+                        .coordinates
+                        .get(RESTATE_ADMIN_URL_KEY)
+                        .map(String::as_str),
+                };
+                restate_register(Some(&url), Some(&target))
             }
-            _ => restate_register(url.as_deref()),
+            _ => restate_register(url.as_deref(), None),
         },
         crate::Command::Ops(crate::OpsCmd::Ship {
             deployment,
@@ -1749,31 +1757,9 @@ pub(crate) fn resolve_workflows_url(
         .unwrap_or_else(|| WORKFLOWS_PUBLIC_URL.to_string())
 }
 
-/// `devx restate register [--url <URL>]`: register the `workflows-service`
-/// worker with the caller's Restate Cloud environment. The URL is resolved
-/// by [`resolve_workflows_url`] (override → `NAVIGATOR_WORKFLOWS_URL` →
-/// `https://workflows.<brand.primary_domain>/` → placeholder).
-///
-/// Two transports, chosen by environment:
-/// - When `RESTATE_ADMIN_URL` **and** `RESTATE_ADMIN_TOKEN` are both set
-///   (operator-session credentials exported for a headless run — never
-///   repository coordinates), register via the
-///   admin REST API. This is headless: it needs no `restate cloud env
-///   configure` (which requires a TTY) and works with a non-expiring
-///   admin-scoped API key, so an unattended `ship` from a fresh
-///   machine re-registers without the SSO token or a configured CLI env.
-/// - Otherwise shell out to the pinned `restate` CLI (the KIND dev loop and
-///   operators who keep the `restate cloud login` SSO token fresh).
-///
-/// See [`docs/durable-workflows.md`] "step 7d".
 /// The row's own worker URL from its published configuration. Refuses rather
 /// than fall back to the brand default, which another row's Restate
 /// environment cannot sign for.
-fn published_workflows_url(project: &str, deployment: &str) -> Result<String> {
-    let loaded = deployment_config::load(project, deployment)?;
-    workflows_url_coordinate(&loaded)
-}
-
 fn workflows_url_coordinate(deployment: &deployments::Deployment) -> Result<String> {
     deployment
         .coordinates
@@ -1789,7 +1775,41 @@ fn workflows_url_coordinate(deployment: &deployments::Deployment) -> Result<Stri
         })
 }
 
-fn restate_register(url_override: Option<&str>) -> Result<()> {
+/// The deployment coordinate naming the row's Restate Cloud admin endpoint.
+pub(super) const RESTATE_ADMIN_URL_KEY: &str = "RESTATE_ADMIN_URL";
+
+/// The deployment row a registration belongs to: its name, for refusals, and
+/// its `RESTATE_ADMIN_URL` coordinate, which picks the `restate` CLI
+/// environment to register against.
+pub(super) struct RegisterTarget<'a> {
+    pub deployment: &'a str,
+    pub admin_url: Option<&'a str>,
+}
+
+/// `devx restate register [--url <URL>]`: register the `workflows-service`
+/// worker with the caller's Restate Cloud environment. The URL is resolved
+/// by [`resolve_workflows_url`] (override → `NAVIGATOR_WORKFLOWS_URL` →
+/// `https://workflows.<brand.primary_domain>/` → placeholder).
+///
+/// Two transports, chosen by environment:
+/// - When `RESTATE_ADMIN_URL` **and** `RESTATE_ADMIN_TOKEN` are both set
+///   (operator-session credentials exported for a headless run — never
+///   repository coordinates), register via the
+///   admin REST API. This is headless: it needs no `restate cloud env
+///   configure` (which requires a TTY) and works with a non-expiring
+///   admin-scoped API key, so an unattended `ship` from a fresh
+///   machine re-registers without the SSO token or a configured CLI env.
+/// - Otherwise shell out to the pinned `restate` CLI (the KIND dev loop and
+///   operators who keep the `restate cloud login` SSO token fresh). With a
+///   `target` row, every command names the CLI environment whose
+///   `admin_base_url` is the row's `RESTATE_ADMIN_URL`, never the CLI's
+///   current one, which can be the other row.
+///
+/// See [`docs/durable-workflows.md`] "step 7d".
+pub(super) fn restate_register(
+    url_override: Option<&str>,
+    target: Option<&RegisterTarget<'_>>,
+) -> Result<()> {
     let workflows_url_env = env::var("NAVIGATOR_WORKFLOWS_URL").ok();
     let primary_domain = brand::primary_domain()?;
     let url = resolve_workflows_url(
@@ -1815,17 +1835,97 @@ fn restate_register(url_override: Option<&str>) -> Result<()> {
 
     require_tools(&["restate"])?;
     check_restate_cli_version();
-    eprintln!("==> restate -y deployments register {url}");
-    run(Command::new("restate")
-        .arg("-y")
-        .arg("deployments")
-        .arg("register")
-        .arg(&url))?;
-    eprintln!("==> restate -y deployments list");
-    run(Command::new("restate")
-        .arg("-y")
-        .arg("deployments")
-        .arg("list"))
+    let environment = match target {
+        Some(target) => {
+            let path = restate_cli_config_path()?;
+            let config = std::fs::read_to_string(&path).with_context(|| {
+                format!(
+                    "read the restate CLI config {} to find deployment {}'s environment",
+                    path.display(),
+                    target.deployment
+                )
+            })?;
+            Some(restate_cli_environment(target, &config)?)
+        }
+        None => None,
+    };
+    for verb in [
+        &["deployments", "register", url.as_str()][..],
+        &["deployments", "list"],
+    ] {
+        let mut command = restate_cli_command(environment.as_deref(), verb);
+        eprintln!("==> restate {}", command_args(&command).join(" "));
+        run(&mut command)?;
+    }
+    Ok(())
+}
+
+/// `restate -y [-e <environment>] <verb…>`. A named environment also drops the
+/// two variables that outrank `-e` (`RESTATE_ENVIRONMENT`, `RESTATE_ADMIN_URL`).
+fn restate_cli_command(environment: Option<&str>, verb: &[&str]) -> Command {
+    let mut command = Command::new("restate");
+    command.arg("-y");
+    if let Some(environment) = environment {
+        command
+            .args(["-e", environment])
+            .env_remove("RESTATE_ENVIRONMENT")
+            .env_remove("RESTATE_ADMIN_URL");
+    }
+    command.args(verb);
+    command
+}
+
+fn command_args(command: &Command) -> Vec<String> {
+    command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// The `restate` CLI's config file: `$RESTATE_CLI_CONFIG_HOME/config.toml`,
+/// else `~/.config/restate/config.toml`.
+fn restate_cli_config_path() -> Result<std::path::PathBuf> {
+    let home = match env::var_os("RESTATE_CLI_CONFIG_HOME").filter(|v| !v.is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::path::PathBuf::from(env::var_os("HOME").context("HOME is not set")?)
+            .join(".config/restate"),
+    };
+    Ok(home.join("config.toml"))
+}
+
+/// The `restate` CLI environment (a top-level section of its `config.toml`)
+/// whose `admin_base_url` is the row's `RESTATE_ADMIN_URL`. Refuses, naming
+/// the deployment, when the row records no admin URL or no section holds it.
+fn restate_cli_environment(target: &RegisterTarget<'_>, config: &str) -> Result<String> {
+    let normalize = |url: &str| url.trim().trim_end_matches('/').to_owned();
+    let admin_url = target
+        .admin_url
+        .map(normalize)
+        .filter(|url| !url.is_empty())
+        .with_context(|| {
+            format!(
+                "deployment {} sets no {RESTATE_ADMIN_URL_KEY}; refusing to register against \
+                 the restate CLI's current environment",
+                target.deployment
+            )
+        })?;
+    let config: toml::Table = toml::from_str(config).context("parse the restate CLI config")?;
+    config
+        .iter()
+        .find(|(_, section)| {
+            section
+                .get("admin_base_url")
+                .and_then(toml::Value::as_str)
+                .is_some_and(|url| normalize(url) == admin_url)
+        })
+        .map(|(name, _)| name.clone())
+        .with_context(|| {
+            format!(
+                "no restate CLI environment has admin_base_url {admin_url} (deployment {}'s \
+                 {RESTATE_ADMIN_URL_KEY}); add one with `restate cloud env configure`",
+                target.deployment
+            )
+        })
 }
 
 /// Register a native worker against its private Restate server. This keeps the
@@ -2806,6 +2906,101 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("refusing to register the brand default"));
+    }
+
+    /// An operator's `restate` CLI config with production selected as current
+    /// (the selection lives in a separate file) and staging beside it.
+    const RESTATE_CLI_CONFIG: &str = r#"
+[global]
+
+[staging]
+environment_type = "cloud"
+ingress_base_url = "https://staging-env.example.invalid:8080"
+admin_base_url = "https://staging-env.example.invalid:9070"
+
+[staging.cloud]
+environment_id = "env_staging"
+
+[production]
+environment_type = "cloud"
+admin_base_url = "https://production-env.example.invalid:9070"
+"#;
+
+    #[test]
+    fn row_registration_names_its_restate_environment_on_every_command() {
+        for verb in [
+            &[
+                "deployments",
+                "register",
+                "https://workflows.example.invalid/",
+            ][..],
+            &["deployments", "list"][..],
+        ] {
+            let command = restate_cli_command(Some("staging"), verb);
+            assert_eq!(command.get_program(), "restate");
+            let mut expected = vec!["-y", "-e", "staging"];
+            expected.extend_from_slice(verb);
+            assert_eq!(command_args(&command), expected);
+            // Both variables outrank the config section `-e` names, so a stale
+            // export in the operator's shell cannot redirect the register.
+            let removed: Vec<_> = command
+                .get_envs()
+                .filter(|(_, value)| value.is_none())
+                .map(|(key, _)| key.to_string_lossy().into_owned())
+                .collect();
+            assert!(removed.contains(&"RESTATE_ENVIRONMENT".to_owned()));
+            assert!(removed.contains(&"RESTATE_ADMIN_URL".to_owned()));
+        }
+    }
+
+    #[test]
+    fn unscoped_registration_keeps_the_cli_default_environment() {
+        let command = restate_cli_command(None, &["deployments", "list"]);
+        assert_eq!(command_args(&command), ["-y", "deployments", "list"]);
+        assert_eq!(command.get_envs().count(), 0);
+    }
+
+    #[test]
+    fn the_rows_admin_url_selects_its_cli_environment_not_the_current_one() {
+        let target = RegisterTarget {
+            deployment: "neon-law-stg",
+            admin_url: Some(" https://staging-env.example.invalid:9070/ "),
+        };
+        assert_eq!(
+            restate_cli_environment(&target, RESTATE_CLI_CONFIG).unwrap(),
+            "staging"
+        );
+    }
+
+    #[test]
+    fn a_row_without_restate_admin_url_is_refused_by_name() {
+        for admin_url in [None, Some("  ")] {
+            let target = RegisterTarget {
+                deployment: "neon-law-stg",
+                admin_url,
+            };
+            let error = restate_cli_environment(&target, RESTATE_CLI_CONFIG)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("neon-law-stg"), "{error}");
+            assert!(error.contains("RESTATE_ADMIN_URL"), "{error}");
+        }
+    }
+
+    #[test]
+    fn an_admin_url_no_cli_environment_holds_is_refused() {
+        let target = RegisterTarget {
+            deployment: "neon-law-stg",
+            admin_url: Some("https://other-env.example.invalid:9070"),
+        };
+        let error = restate_cli_environment(&target, RESTATE_CLI_CONFIG)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("neon-law-stg"), "{error}");
+        assert!(
+            error.contains("https://other-env.example.invalid:9070"),
+            "{error}"
+        );
     }
 
     fn status(code: u16) -> reqwest::StatusCode {
