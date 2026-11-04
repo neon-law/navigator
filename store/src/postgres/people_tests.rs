@@ -780,13 +780,13 @@ async fn directory_views_join_firm_names_and_scope_to_visible_people() {
     let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
     let surreal = crate::test_support::mem_surreal().await;
     let person = |name: &str| NewPerson::new(name, format!("{}@example.test", Uuid::now_v7()));
-    let member = super::create(&pg, &surreal, &person("Ada Member"))
+    let member = super::create(&pg, &surreal, &person("Directory Member"))
         .await
         .unwrap();
-    let participant = super::create(&pg, &surreal, &person("Bo Participant"))
+    let participant = super::create(&pg, &surreal, &person("Directory Participant"))
         .await
         .unwrap();
-    let stranger = super::create(&pg, &surreal, &person("Cy Stranger"))
+    let stranger = super::create(&pg, &surreal, &person("Directory Stranger"))
         .await
         .unwrap();
 
@@ -824,7 +824,7 @@ async fn directory_views_join_firm_names_and_scope_to_visible_people() {
     assert_eq!(ids, vec![participant.id, member.id]);
 
     // Filters still apply, and no Firm admits nobody.
-    let filtered = super::directory_entries(&pg, "bo", "", &[], Some(&[first]))
+    let filtered = super::directory_entries(&pg, "participant", "", &[], Some(&[first]))
         .await
         .unwrap();
     assert_eq!(filtered.len(), 1);
