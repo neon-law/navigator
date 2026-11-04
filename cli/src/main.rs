@@ -8333,11 +8333,7 @@ fn run_render(
     // An unanswered Signer Box prints as an empty rule for the signer's
     // hand, in the preview and the final render alike.
     let mut answer_context = rendered_answers(&contents, answers);
-    if let Some(name) = project_firm_legal_name(file) {
-        answer_context
-            .entry("firm.legal_name".to_string())
-            .or_insert_with(|| pdf::markdown::bold_answer(&name));
-    }
+    fill_firm_legal_name(file, &mut answer_context);
     let Ok(body) = pleading_body(file, &contents, &profile, &answer_context, preview)
         .map_err(|message| eprintln!("navigator: {message}"))
     else {
@@ -8402,16 +8398,19 @@ fn run_render(
     ExitCode::SUCCESS
 }
 
-/// The letterhead for a render of `file` framed as `format`.
-///
-/// The Project's Brand frames the letter (LAW-265): `cli::letterhead`
-/// resolves `project.brand`, else `project.host`, from the nearest
-/// `navigator.yaml` against the compiled Brand registry — source, not
-/// whatever brand bundle is mounted, so a re-render of a sent letter prints
-/// the same letterhead. A Brand the registry does not know is a refusal,
-/// never the default letterhead. Only the letter frame carries one, so no
-/// other frame reads the manifest; a template outside any Project renders
-/// on the default Brand's letterhead.
+/// Binds `firm.legal_name` to the Project's Firm legal name unless the
+/// answers already supply one.
+fn fill_firm_legal_name(
+    file: &Path,
+    answer_context: &mut std::collections::BTreeMap<String, String>,
+) {
+    if let Some(name) = project_firm_legal_name(file) {
+        answer_context
+            .entry("firm.legal_name".to_string())
+            .or_insert_with(|| pdf::markdown::bold_answer(&name));
+    }
+}
+
 /// The Firm legal name behind the Project's declared Brand, when `file` sits
 /// in a Project whose `navigator.yaml` resolves to one.
 fn project_firm_legal_name(file: &Path) -> Option<String> {
@@ -8428,6 +8427,16 @@ fn project_firm_legal_name(file: &Path) -> Option<String> {
     }
 }
 
+/// The letterhead for a render of `file` framed as `format`.
+///
+/// The Project's Brand frames the letter (LAW-265): `cli::letterhead`
+/// resolves `project.brand`, else `project.host`, from the nearest
+/// `navigator.yaml` against the compiled Brand registry — source, not
+/// whatever brand bundle is mounted, so a re-render of a sent letter prints
+/// the same letterhead. A Brand the registry does not know is a refusal,
+/// never the default letterhead. Only the letter frame carries one, so no
+/// other frame reads the manifest; a template outside any Project renders
+/// on the default Brand's letterhead.
 fn project_letterhead(file: &Path, format: &pdf::OutputFormat) -> Result<pdf::Letterhead, String> {
     if !matches!(format, pdf::OutputFormat::Letter(_)) {
         return Ok(pdf::Letterhead::default());
