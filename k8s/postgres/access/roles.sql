@@ -9,6 +9,7 @@
 --   navigator_app     runtime login for `web`; row reads and writes only
 --   navigator_backup  REPLICATION login for base backups and WAL streaming only
 --   navigator_dbos    DBOS durable-execution login; owns only the `dbos` schema
+--   navigator_archive read-only Iceberg archive login; reads every relation
 --
 -- The DBOS login converges only once its password Secret is mounted, so the Job
 -- runs unchanged for a deployment that has not added it. It has no rights on
@@ -155,4 +156,29 @@ ALTER SCHEMA dbos OWNER TO navigator_dbos;
 REVOKE ALL ON SCHEMA dbos FROM PUBLIC;
 REVOKE ALL ON SCHEMA dbos FROM navigator_owner, navigator_app, navigator_backup;
 REVOKE ALL ON SCHEMA public FROM navigator_dbos;
+\endif
+
+-- The archive login, when its Secret is mounted. The DBOS Archives schedule in
+-- `web` signs in as it to export the whole `navigator` and `forgejo` databases
+-- to Iceberg: application tables, `dbos`, AGE's catalogs and graph, the
+-- migration ledger, sequences, and large objects. `pg_read_all_data` grants
+-- SELECT on every relation and USAGE on every schema without per-object grants,
+-- so a new migration or a DBOS or Forgejo upgrade never leaves a relation it
+-- cannot read. It writes nothing, owns nothing, and cannot run DDL.
+\set archive_password `cat /etc/navigator/postgres/archive/password 2>/dev/null`
+SELECT :'archive_password' <> '' AS archive_login \gset
+\if :archive_login
+SELECT 'CREATE ROLE navigator_archive'
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'navigator_archive')
+\gexec
+ALTER ROLE navigator_archive WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+  CONNECTION LIMIT 4 PASSWORD :'archive_password';
+GRANT pg_read_all_data TO navigator_archive;
+GRANT CONNECT ON DATABASE navigator TO navigator_archive;
+-- Forgejo's database lives on this server. When it exists, the archive reads
+-- it as the same login; `forgejo/database.sql` grants the same right when the
+-- Forgejo database is created after this login.
+SELECT 'GRANT CONNECT ON DATABASE forgejo TO navigator_archive'
+WHERE EXISTS (SELECT FROM pg_database WHERE datname = 'forgejo')
+\gexec
 \endif

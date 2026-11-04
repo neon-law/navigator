@@ -289,6 +289,7 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
     if host.is_none() {
         return if [
             "NAVIGATOR_ARCHIVE_COVERAGE",
+            "NAVIGATOR_ARCHIVE_POSTGRES_USER",
             "NAVIGATOR_ARCHIVE_FORGEJO_USER",
         ]
         .iter()
@@ -311,24 +312,34 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
             serde_json::from_str(&required("NAVIGATOR_ARCHIVE_COVERAGE")?)
                 .context("decode reviewed database coverage")?;
         let db = store::postgres::PostgresDb::from_env().await?;
-        let forge_options = db
-            .pool()
-            .connect_options()
-            .as_ref()
-            .clone()
-            .database("forgejo")
-            .username(&required("NAVIGATOR_ARCHIVE_FORGEJO_USER")?)
-            .password(&required("NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD")?);
-        let forgejo = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .acquire_timeout(std::time::Duration::from_secs(30))
-            .connect_with(forge_options)
-            .await?;
+        let server = db.pool().connect_options().as_ref().clone();
+        // The runtime login reads only `public`; a deployed archive signs in
+        // to Navigator as its own read-everything login instead.
+        let archive_reader =
+            match get("NAVIGATOR_ARCHIVE_POSTGRES_USER").filter(|user| !user.trim().is_empty()) {
+                Some(user) => Some(
+                    reader_pool(
+                        server
+                            .clone()
+                            .username(&user)
+                            .password(&required("NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD")?),
+                    )
+                    .await?,
+                ),
+                None => None,
+            };
+        let forgejo = reader_pool(
+            server
+                .database("forgejo")
+                .username(&required("NAVIGATOR_ARCHIVE_FORGEJO_USER")?)
+                .password(&required("NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD")?),
+        )
+        .await?;
         let base = format!("gs://{}", required("NAVIGATOR_ARCHIVES_BUCKET")?);
         crate::coverage::export_pair(
             crate::coverage::DatabaseSource {
                 name: "navigator",
-                pool: db.pool(),
+                pool: archive_reader.as_ref().unwrap_or(db.pool()),
                 coverage: &coverage.navigator,
             },
             crate::coverage::DatabaseSource {
@@ -351,6 +362,15 @@ pub async fn export_configured<F: Fn(&str) -> Option<String>>(
             }
         }
     })
+}
+
+/// One-connection pool for a coverage source, which reads in one transaction.
+async fn reader_pool(options: sqlx::postgres::PgConnectOptions) -> Result<PgPool> {
+    Ok(sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(30))
+        .connect_with(options)
+        .await?)
 }
 
 /// Read `tables` at one cutoff, upload one Parquet object per table, then

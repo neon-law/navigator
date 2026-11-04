@@ -16,7 +16,8 @@ path = "src/bin/tenant.rs"
 [dependencies]
 ammonia.workspace = true
 anyhow.workspace = true
-# The Sent Email Export's Iceberg writer, hosted by this process's DBOS executor.
+# The Archives workflow and the Sent Email Export's Iceberg writer, hosted by
+# this process's DBOS executor.
 archives.workspace = true
 arrow.workspace = true
 async-trait.workspace = true

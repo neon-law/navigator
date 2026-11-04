@@ -1,0 +1,19 @@
+# The reviewed archive coverage manifest, as the `navigator-archive-coverage`
+# ConfigMap the DBOS Archives schedule in `web` reads.
+#
+# `coverage.json` names every relation of the `navigator` and `forgejo`
+# databases this release creates. The archive refuses a generation when a
+# live database holds a relation the manifest does not name, so a migration
+# that adds a table, a DBOS upgrade, or a Forgejo upgrade updates this file in
+# the same change. `archives/tests/coverage_manifest.rs` holds the Navigator
+# half to the migrations; see docs/iceberg-archive.md for how each half is
+# captured and reviewed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: navigator
+configMapGenerator:
+  - name: navigator-archive-coverage
+    files:
+      - coverage.json
+    options:
+      disableNameSuffixHash: true

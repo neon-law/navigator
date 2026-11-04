@@ -21,6 +21,7 @@ kind: Kustomization
 
 resources:
   # NAVIGATOR_POSTGRES_MIRROR_RESOURCE
+  # NAVIGATOR_ARCHIVES_COVERAGE_RESOURCE
   - ../exports
   - ../../../../k8s/base
   - ../../../../k8s/base/web
@@ -55,6 +56,7 @@ patches:
       name: navigator-web
   # NAVIGATOR_POSTGRES_WEB_PATCH
   # NAVIGATOR_DBOS_WEB_PATCH
+  # NAVIGATOR_ARCHIVES_WEB_PATCH
   - path: patches/workflows-env.yaml
     target:
       kind: Deployment
