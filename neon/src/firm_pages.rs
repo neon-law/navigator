@@ -1087,9 +1087,13 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         "/disputes",
         resolve_litigation_content(branding),
     ));
-    routers.push(dioxus_app::transactional_router(
+    routers.push(dioxus_app::home_router(
         "/business",
-        resolve_transactional_content(branding),
+        resolve_business_content(branding, deployment_host),
+        state.surreal.clone(),
+        Some(home_lead_capture(branding)),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
     ));
     // The free court-form catalog: the registry's public surface. One
     // branded index, one branded page per jurisdiction the registry
@@ -1975,17 +1979,19 @@ pub(crate) fn resolve_litigation_content(
     locales::litigation(branding)
 }
 
-/// Resolve the firm `/business` page — the company counsel practice with
-/// its own published pricing, the published turnaround, and the work that
-/// sits outside the retainer.
+/// Resolve the firm `/business` page — the company counsel practice from
+/// Neon's `home.yaml`: the one-time contract fee, the daily rate, and the
+/// retainer simulator that shows earned fees leaving trust.
 ///
-/// Brand-safe like [`resolve_firm_home_content`]. The base fee is published on
-/// the page as flat-fee pricing cards (annual or daily cadence, plus the MSA
-/// flat fee) rather than quoted through the contact inbox.
-pub(crate) fn resolve_transactional_content(
+/// Brand-safe like [`resolve_firm_home_content`]; `/business` is a Neon-only
+/// path, so other brands never serve it.
+pub(crate) fn resolve_business_content(
     branding: &views::brand::Branding,
-) -> webapp::transactional_page::TransactionalContent {
-    locales::fractional_gc(branding)
+    deployment_host: Option<&str>,
+) -> webapp::home::HomeContent {
+    let mut content = locales::home_for_host(branding, deployment_host);
+    content.head_title = content.head_title.replace("| Home", "| Business");
+    content
 }
 
 #[cfg(test)]
@@ -2063,8 +2069,8 @@ mod formation_engagement_copy_tests {
     /// A published template is a fixed artifact, so any amount baked into one
     /// goes stale the moment the firm re-prices — which is what a former
     /// catalog list price did here. The bodies name where the fee lives and
-    /// publish no amount, matching the convention `resolve_transactional_content`
-    /// documents for the firm pages.
+    /// publish no amount, matching the firm pages' convention of publishing
+    /// fees in their locale copy.
     #[test]
     fn no_body_publishes_an_amount() {
         for (code, body) in BODIES {

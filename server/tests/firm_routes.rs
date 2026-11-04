@@ -890,15 +890,16 @@ async fn home_presents_nautilus_subscription_and_checks() {
 }
 
 #[tokio::test]
-async fn business_publishes_the_authored_counsel_offer() {
+async fn business_publishes_the_contract_fee_daily_rate_and_simulator() {
     let app = site_app().await;
     let response = anon_get(&app, "/business").await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_string(response).await;
     for text in [
+        "$5,000",
         "$50",
         "$10,000",
-        "contract-library access",
+        "company-simulator",
         "Additional flat fees may apply",
     ] {
         assert!(

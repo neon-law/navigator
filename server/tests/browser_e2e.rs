@@ -4586,7 +4586,7 @@ async fn nautilus_home_links_to_separate_business_counsel() {
         .unwrap();
     wait_for_text(
         &c,
-        "Access and work, priced separately",
+        "Your retainer at work.",
         Duration::from_secs(10),
     )
     .await;
