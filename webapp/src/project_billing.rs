@@ -162,6 +162,11 @@ pub struct GenerateInvoiceView {
     /// expense — rendered in place of the default empty-state copy.
     #[serde(default)]
     pub note: Option<String>,
+    /// The fingerprint of THIS compose. The confirm step carries it back,
+    /// and the command re-verifies it against a fresh compose before raising
+    /// — work logged or edited since the preview re-opens the review.
+    #[serde(default)]
+    pub digest: String,
 }
 
 /// The human word and chip tone for an entry's billing status. `Reserved`
@@ -248,12 +253,20 @@ pub fn MatterTimer(code: String, csrf: String, timer: TimerView) -> Element {
                 }
                 span { class: "matter-timer__note", "timer running" }
                 form {
-                    class: "lawyer-detail__inline-form",
+                    class: "lawyer-detail__inline-form matter-timer-stop-form",
                     method: "post",
                     action: "/app/projects/{code}/timer/stop",
                     input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
-                    input { r#type: "hidden", name: "description", value: "{note}" }
-                    input { r#type: "hidden", name: "billable", value: "on" }
+                    // Editable before capture: the stop creates the entry in
+                    // one transaction, so the description and billable choice
+                    // the attorney wants recorded ride the same submit — an
+                    // empty description can no longer reach the store, and
+                    // no-charge time stays possible.
+                    Field::text("Description", "description", "{note}")
+                        .required()
+                        .help("What the client's invoice will say.")
+                        .render(),
+                    Field::checkbox("Billable", "billable", "on", true).render(),
                     button {
                         class: "nav-btn nav-btn--secondary matter-timer-stop",
                         r#type: "submit",
@@ -368,7 +381,7 @@ pub fn BillingTab(
                         Field::text("Description", "description", "")
                             .required()
                             .help("The work in one line — what the client's invoice will say."),
-                        Field::input("Billable", "billable", "", "checkbox")
+                        Field::checkbox("Billable", "billable", "on", false)
                             .help("Checked bills the time at your rate on this matter; unchecked records it as no-charge work."),
                     ],
                 }
@@ -661,6 +674,10 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
             action: "/app/projects/{code}/invoices",
             input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
             input { r#type: "hidden", name: "confirm", value: "on" }
+            // The fingerprint of the compose the attorney just reviewed: the
+            // command re-verifies it before raising, so work logged or edited
+            // since this page rendered re-opens the review.
+            input { r#type: "hidden", name: "digest", value: "{generate.digest}" }
             button {
                 class: "nav-btn matter-billing-raise-button",
                 r#type: "submit",
@@ -691,6 +708,20 @@ fn invoice_bars(invoices: &[InvoiceRow]) -> Element {
     rsx! {
         figure { class: "matter-billing-invoice-bars",
             figcaption { class: "nav-muted", "Each bar is one invoice — total against paid." }
+            // Distinct fills with a legend naming them: without one, the paid
+            // bar's overlay disappears into the total bar and the chart says
+            // nothing. The fills mirror the firm invoice chart — primary for
+            // the total, the same fill at reduced opacity for paid-to-date.
+            ul { class: "nav-chart__legend",
+                li { class: "nav-chart__legend-item",
+                    span { class: "nav-chart__swatch matter-billing-swatch--invoiced", "aria-hidden": "true" }
+                    "Invoiced"
+                }
+                li { class: "nav-chart__legend-item",
+                    span { class: "nav-chart__swatch matter-billing-swatch--paid", "aria-hidden": "true" }
+                    "Paid to date"
+                }
+            }
             svg {
                 width: "360",
                 height: "{chart_height}",
@@ -777,22 +808,7 @@ pub(crate) async fn read_billing(
         })
         .collect();
 
-    let mirror_invoices = store::xero_invoices::for_projects(surreal, &[project_id])
-        .await
-        .map_err(crate::lawyer_project_detail::server_error)?;
-    let invoice_rows = mirror_invoices
-        .iter()
-        .map(|row| InvoiceRow {
-            reference: row.reference.clone(),
-            status: row.status.clone(),
-            amount: crate::portal_project_detail::format_usd(row.amount_cents),
-            paid: crate::portal_project_detail::format_usd(row.amount_paid_cents),
-            amount_cents: row.amount_cents,
-            paid_cents: row.amount_paid_cents,
-            issued_on: row.issued_at.format("%Y-%m-%d").to_string(),
-            settled: row.amount_paid_cents >= row.amount_cents && row.amount_cents > 0,
-        })
-        .collect();
+    let invoice_rows = mirrored_invoice_rows(surreal, project_id).await?;
 
     let costs = store::project_costs::list_for_project(pg, project_id)
         .await
@@ -814,7 +830,7 @@ pub(crate) async fn read_billing(
         Some(person_id) => {
             store::attorney_rates::resolve_hourly_rate_cents(pg, person_id, project_id, today)
                 .await
-                .ok()
+                .map_err(crate::lawyer_project_detail::server_error)?
                 .flatten()
                 .map(|rate| crate::portal_project_detail::format_usd(i64::from(rate)))
         }
@@ -822,7 +838,7 @@ pub(crate) async fn read_billing(
     };
     let flat_fee = store::attorney_rates::flat_fee_cents(pg, project_id)
         .await
-        .ok()
+        .map_err(crate::lawyer_project_detail::server_error)?
         .flatten()
         .map(crate::portal_project_detail::format_usd);
 
@@ -835,6 +851,34 @@ pub(crate) async fn read_billing(
             flat_fee,
         },
     })
+}
+
+/// The matter's invoices as the tab renders them, mapped straight from the
+/// Surreal `xero_invoice` mirror — Xero is never read live. Shared by the
+/// full billing read and by deployments without PostgreSQL, where the
+/// workbench still shows the mirror's rows even though the time and expense
+/// store is not configured.
+#[cfg(feature = "server")]
+pub(crate) async fn mirrored_invoice_rows(
+    surreal: &store::surreal::SurrealDb,
+    project_id: uuid::Uuid,
+) -> Result<Vec<InvoiceRow>, ServerFnError> {
+    let mirror_invoices = store::xero_invoices::for_projects(surreal, &[project_id])
+        .await
+        .map_err(crate::lawyer_project_detail::server_error)?;
+    Ok(mirror_invoices
+        .iter()
+        .map(|row| InvoiceRow {
+            reference: row.reference.clone(),
+            status: row.status.clone(),
+            amount: crate::portal_project_detail::format_usd(row.amount_cents),
+            paid: crate::portal_project_detail::format_usd(row.amount_paid_cents),
+            amount_cents: row.amount_cents,
+            paid_cents: row.amount_paid_cents,
+            issued_on: row.issued_at.format("%Y-%m-%d").to_string(),
+            settled: row.amount_paid_cents >= row.amount_cents && row.amount_cents > 0,
+        })
+        .collect())
 }
 
 /// The Billing tab's assembled rows and fee structures.
@@ -864,7 +908,6 @@ pub(crate) async fn read_timer(
         return Ok(None);
     };
     let now = chrono::Utc::now();
-    let elapsed = store::timers::elapsed_minutes(timer.started_at, now);
     let on_this_matter = timer.project_id == project_id;
     let (other_matter_code, other_matter_name) = if on_this_matter {
         (None, None)
@@ -878,7 +921,10 @@ pub(crate) async fn read_timer(
     };
     Ok(Some(TimerView {
         started_at_epoch_millis: timer.started_at.timestamp_millis(),
-        elapsed: format_elapsed(i64::from(elapsed) * 60),
+        // The stopwatch shows real elapsed seconds — a newly started timer
+        // must not open at 0:01:00. Billing minutes stay a capture-time
+        // computation (the store's, never the wire's).
+        elapsed: format_elapsed((now - timer.started_at).num_seconds()),
         note: timer.note,
         on_this_matter,
         other_matter_code,
@@ -931,6 +977,9 @@ pub(crate) async fn read_generate(
             total: crate::portal_project_detail::format_usd(batch.total_cents),
             lines,
             note: None,
+            // A pending batch is frozen: its lines and total are what the
+            // next raise sends, so there is nothing fresh to fingerprint.
+            digest: String::new(),
         });
     }
 
@@ -976,9 +1025,28 @@ pub(crate) async fn read_generate(
         });
     }
 
+    // Under a consumed fee agreement the matter's time is covered by the
+    // fee — the command empties the entries exactly here, so a cost-only
+    // batch is what the preview must show. Billing covered time at hourly
+    // rates would charge the client twice for the same agreement.
+    let entries = if fee_billed { Vec::new() } else { entries };
+
     // The compose, in the command's own order and wording: the fee as one
     // line covering the time when agreed; otherwise one line per time entry
-    // at its snapshot rate; expenses always itemized.
+    // at its snapshot rate; expenses always itemized — and never in a
+    // currency the invoice cannot bill, which the command refuses whole.
+    for cost in &unbilled_costs {
+        if cost.currency != store::billing_batches::INVOICE_CURRENCY {
+            return Ok(GenerateInvoiceView {
+                note: Some(format!(
+                    "An unbilled expense is in {}; matter invoices are raised in USD.",
+                    cost.currency
+                )),
+                ..GenerateInvoiceView::default()
+            });
+        }
+    }
+    let digest = store::billing_batches::preview_digest(&entries, &unbilled_costs, flat_fee_cents);
     let mut lines = Vec::new();
     let mut total_cents: i64 = 0;
     if let Some(fee_cents) = flat_fee_cents {
@@ -1013,6 +1081,7 @@ pub(crate) async fn read_generate(
         resuming: false,
         flat_fee: flat_fee_cents.is_some(),
         note: None,
+        digest,
     })
 }
 
@@ -1102,17 +1171,36 @@ mod tests {
         let html = dioxus_ssr::render_element(rsx! { {invoice_bars(&rows)} });
         // The larger invoice sets the scale: its total fills the track and
         // the smaller one is a quarter of it.
-        assert!(html.contains("width=\"280\""), "{html}");
-        assert!(html.contains("width=\"70\""), "{html}");
+        assert!(html.contains("width=\"280\""), "missing [width=\"280\"]");
+        assert!(html.contains("width=\"70\""), "missing [width=\"70\"]");
         // The paid overlay renders on the same rows.
-        assert!(html.contains("matter-billing-invoice-bar--paid"), "{html}");
+        assert!(
+            html.contains("matter-billing-invoice-bar--paid"),
+            "missing [matter-billing-invoice-bar--paid]"
+        );
+        // The legend names the two series — without it the paid bar's
+        // overlay reads as nothing.
+        assert!(
+            html.contains("nav-chart__legend"),
+            "missing [nav-chart__legend]"
+        );
+        assert!(html.contains("Invoiced"), "missing [Invoiced]");
+        assert!(html.contains("Paid to date"), "missing [Paid to date]");
+        assert!(
+            html.contains("matter-billing-swatch--invoiced"),
+            "missing [matter-billing-swatch--invoiced]"
+        );
+        assert!(
+            html.contains("matter-billing-swatch--paid"),
+            "missing [matter-billing-swatch--paid]"
+        );
     }
 
     #[test]
     fn a_chart_of_zero_amounts_draws_nothing() {
         let rows = [a_row_with_cents(0, 0)];
         let html = dioxus_ssr::render_element(rsx! { {invoice_bars(&rows)} });
-        assert!(!html.contains("<svg"), "{html}");
+        assert!(!html.contains("<svg"), "unexpectedly present: [<svg]");
     }
 
     #[test]
@@ -1134,17 +1222,37 @@ mod tests {
         });
         assert!(
             html.contains("data-timer-started-at=\"1730000000000\""),
-            "{html}"
+            "missing [data-timer-started-at=\"1730000000000\"]"
         );
-        assert!(html.contains("0:00:12"), "{html}");
+        assert!(html.contains("0:00:12"), "missing [0:00:12]");
         // The stop door captures the entry; the discard door records nothing.
-        assert!(html.contains("/app/projects/acme/timer/stop"), "{html}");
-        assert!(html.contains("/app/projects/acme/timer/discard"), "{html}");
+        assert!(
+            html.contains("/app/projects/acme/timer/stop"),
+            "missing [/app/projects/acme/timer/stop]"
+        );
+        assert!(
+            html.contains("/app/projects/acme/timer/discard"),
+            "missing [/app/projects/acme/timer/discard]"
+        );
         // The widget script is a document-head element — bare `dioxus_ssr`
         // renders it through the no-op document provider, so its presence is
         // the browser e2e's assertion, not this one.
-        // The note pre-fills the capture description.
-        assert!(html.contains("Drafting the motion"), "{html}");
+        // The note pre-fills the capture description — editable, since the
+        // stop's submit is what creates the entry.
+        assert!(
+            html.contains("Drafting the motion"),
+            "missing [Drafting the motion]"
+        );
+        assert!(
+            html.contains("name=\"description\""),
+            "missing [name=\"description\"]"
+        );
+        // The billable choice rides the same submit, checked by default.
+        assert!(
+            html.contains("name=\"billable\""),
+            "missing [name=\"billable\"]"
+        );
+        assert!(html.contains("checked"), "missing [checked]");
     }
 
     #[test]
@@ -1164,9 +1272,18 @@ mod tests {
                 timer,
             }
         });
-        assert!(html.contains("/app/projects/other/billing"), "{html}");
-        assert!(!html.contains("/app/projects/acme/timer/stop"), "{html}");
-        assert!(!html.contains("/app/projects/acme/timer/discard"), "{html}");
+        assert!(
+            html.contains("/app/projects/other/billing"),
+            "missing [/app/projects/other/billing]"
+        );
+        assert!(
+            !html.contains("/app/projects/acme/timer/stop"),
+            "unexpectedly present: [/app/projects/acme/timer/stop]"
+        );
+        assert!(
+            !html.contains("/app/projects/acme/timer/discard"),
+            "unexpectedly present: [/app/projects/acme/timer/discard]"
+        );
     }
 
     fn ssr_billing(entries: Vec<TimeEntryRow>, invoices: Vec<InvoiceRow>) -> String {
@@ -1244,25 +1361,34 @@ mod tests {
             },
         ];
         let html = ssr_billing(entries, Vec::new());
-        assert!(html.contains("Drafted the motion to compel"), "{html}");
-        assert!(html.contains("$375.00"), "{html}");
-        assert!(html.contains("Unbilled"), "{html}");
+        assert!(
+            html.contains("Drafted the motion to compel"),
+            "missing [Drafted the motion to compel]"
+        );
+        assert!(html.contains("$375.00"), "missing [$375.00]");
+        assert!(html.contains("Unbilled"), "missing [Unbilled]");
         // Non-billable work renders unpriced, not $0.
-        assert!(html.contains("Written off"), "{html}");
-        assert!(html.contains("—"), "{html}");
-        assert!(html.contains("Timer"), "{html}");
-        assert!(html.contains("Manual"), "{html}");
+        assert!(html.contains("Written off"), "missing [Written off]");
+        assert!(html.contains("—"), "missing [—]");
+        assert!(html.contains("Timer"), "missing [Timer]");
+        assert!(html.contains("Manual"), "missing [Manual]");
         // The log-time form posts to the matter's native door.
-        assert!(html.contains("/app/projects/acme/time-entries"), "{html}");
+        assert!(
+            html.contains("/app/projects/acme/time-entries"),
+            "missing [/app/projects/acme/time-entries]"
+        );
     }
 
     #[test]
     fn the_tab_renders_mirror_invoices_and_their_bars() {
         let invoices = vec![a_row_with_cents(40_000, 40_000)];
         let html = ssr_billing(Vec::new(), invoices);
-        assert!(html.contains("$400.00"), "{html}");
-        assert!(html.contains("AUTHORISED"), "{html}");
-        assert!(html.contains("matter-billing-invoice-bar--total"), "{html}");
+        assert!(html.contains("$400.00"), "missing [$400.00]");
+        assert!(html.contains("AUTHORISED"), "missing [AUTHORISED]");
+        assert!(
+            html.contains("matter-billing-invoice-bar--total"),
+            "missing [matter-billing-invoice-bar--total]"
+        );
     }
 
     #[test]
@@ -1274,17 +1400,32 @@ mod tests {
             GenerateInvoiceView::default(),
             false,
         );
-        assert!(html.contains("No time logged on this matter yet"), "{html}");
-        assert!(html.contains("Nothing billed yet"), "{html}");
-        assert!(html.contains("No expenses on this matter yet"), "{html}");
+        assert!(
+            html.contains("No time logged on this matter yet"),
+            "missing [No time logged on this matter yet]"
+        );
+        assert!(
+            html.contains("Nothing billed yet"),
+            "missing [Nothing billed yet]"
+        );
+        assert!(
+            html.contains("No expenses on this matter yet"),
+            "missing [No expenses on this matter yet]"
+        );
         // The fee copy covers both absences.
         assert!(
             html.contains("No hourly rate is on file for you on this matter"),
-            "{html}"
+            "missing [No hourly rate is on file for you on this matter]"
         );
-        assert!(html.contains("No flat fee is agreed"), "{html}");
+        assert!(
+            html.contains("No flat fee is agreed"),
+            "missing [No flat fee is agreed]"
+        );
         // A matter with no trust postings says nothing about trust.
-        assert!(!html.contains("Client trust"), "{html}");
+        assert!(
+            !html.contains("Client trust"),
+            "unexpectedly present: [Client trust]"
+        );
     }
 
     #[test]
@@ -1306,9 +1447,12 @@ mod tests {
                 today: "2026-11-04".to_string(),
             }
         });
-        assert!(html.contains("$325.00"), "{html}");
-        assert!(html.contains("$5,000.00"), "{html}");
-        assert!(html.contains("Flat fee agreed"), "{html}");
+        assert!(html.contains("$325.00"), "missing [$325.00]");
+        assert!(html.contains("$5,000.00"), "missing [$5,000.00]");
+        assert!(
+            html.contains("Flat fee agreed"),
+            "missing [Flat fee agreed]"
+        );
     }
 
     #[test]
@@ -1322,12 +1466,18 @@ mod tests {
             },
             false,
         );
-        assert!(html.contains("/app/projects/acme/invoices"), "{html}");
-        assert!(html.contains("Generate invoice"), "{html}");
+        assert!(
+            html.contains("/app/projects/acme/invoices"),
+            "missing [/app/projects/acme/invoices]"
+        );
+        assert!(
+            html.contains("Generate invoice"),
+            "missing [Generate invoice]"
+        );
         // The compose-before-raise promise is on the action's face.
         assert!(
             html.contains("the compose is shown before anything is raised"),
-            "{html}"
+            "missing [the compose is shown before anything is raised]"
         );
     }
 
@@ -1339,10 +1489,16 @@ mod tests {
             GenerateInvoiceView::default(),
             false,
         );
-        assert!(html.contains("Nothing to invoice yet"), "{html}");
+        assert!(
+            html.contains("Nothing to invoice yet"),
+            "missing [Nothing to invoice yet]"
+        );
         // The section heading names the action; the action itself — the
         // button — must not render when there is nothing to invoice.
-        assert!(!html.contains("matter-billing-generate-button"), "{html}");
+        assert!(
+            !html.contains("matter-billing-generate-button"),
+            "unexpectedly present: [matter-billing-generate-button]"
+        );
     }
 
     #[test]
@@ -1357,8 +1513,14 @@ mod tests {
             },
             false,
         );
-        assert!(html.contains("Resume the pending invoice"), "{html}");
-        assert!(html.contains("resumes that exact invoice"), "{html}");
+        assert!(
+            html.contains("Resume the pending invoice"),
+            "missing [Resume the pending invoice]"
+        );
+        assert!(
+            html.contains("resumes that exact invoice"),
+            "missing [resumes that exact invoice]"
+        );
     }
 
     #[test]
@@ -1382,22 +1544,39 @@ mod tests {
                 total: "$495.00".to_string(),
                 resuming: false,
                 flat_fee: false,
+                digest: "digest-of-the-reviewed-compose".to_string(),
             },
             true,
         );
         assert!(
             html.contains("Drafted the motion to compel — 2026-11-03"),
-            "{html}"
+            "missing [Drafted the motion to compel — 2026-11-03]"
         );
-        assert!(html.contains("$120.00"), "{html}");
-        assert!(html.contains("$495.00"), "{html}");
+        assert!(html.contains("$120.00"), "missing [$120.00]");
+        assert!(html.contains("$495.00"), "missing [$495.00]");
         // The one provider-boundary write, plus the way back that isn't one.
-        assert!(html.contains("matter-billing-raise-button"), "{html}");
-        assert!(html.contains("Raise in Xero"), "{html}");
-        assert!(html.contains("name=\"confirm\" value=\"on\""), "{html}");
-        assert!(html.contains("Not now"), "{html}");
+        assert!(
+            html.contains("matter-billing-raise-button"),
+            "missing [matter-billing-raise-button]"
+        );
+        assert!(html.contains("Raise in Xero"), "missing [Raise in Xero]");
+        assert!(
+            html.contains("name=\"confirm\" value=\"on\""),
+            "missing [name=\"confirm\" value=\"on\"]"
+        );
+        // The confirmation is bound to the compose the attorney reviewed:
+        // its fingerprint rides the form, and the command re-verifies it
+        // against a fresh compose before anything is raised.
+        assert!(
+            html.contains("name=\"digest\" value=\"digest-of-the-reviewed-compose\""),
+            "missing [name=\"digest\" value=\"digest-of-the-reviewed-compose\"]"
+        );
+        assert!(html.contains("Not now"), "missing [Not now]");
         // The escape-free substring: dioxus-ssr escapes apostrophes in text
         // nodes, so the assert avoids the possessive in "the Firm's ledger".
-        assert!(html.contains("This is what it composes"), "{html}");
+        assert!(
+            html.contains("This is what it composes"),
+            "missing [This is what it composes]"
+        );
     }
 }

@@ -160,7 +160,6 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     }
 }
 
-
 /// The rendered lawyer workbench — every field wasm-safe (plain scalars; no
 /// `store`/`SeaORM`/`cloud`/`repos` type crosses to the client build).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -548,7 +547,11 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         None => (
             Vec::new(),
             crate::project_billing::FeeStructureView::default(),
-            Vec::new(),
+            // Invoices mirror in Surreal, independent of PostgreSQL — the
+            // workbench keeps showing them (and their payment state) even in
+            // a deployment that has not configured the time and expense
+            // store. Only the PostgreSQL-only reads degrade to empty.
+            crate::project_billing::mirrored_invoice_rows(&surreal, id).await?,
             Vec::new(),
         ),
     };

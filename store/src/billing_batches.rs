@@ -294,3 +294,112 @@ pub async fn complete(pg: &PostgresDb, id: Uuid) -> Result<MatterBillingBatch, B
     tx.commit().await?;
     from_row(&row).map_err(BillingBatchError::Database)
 }
+
+/// The currency a generated matter invoice bills in — the deployment's
+/// receivables currency. An unbilled cost in any other currency refuses the
+/// generation before anything is raised, and the compose preview refuses it
+/// just as early, with the same sentence.
+pub const INVOICE_CURRENCY: &str = "USD";
+
+/// The reviewed compose, fingerprinted. The confirm step carries this digest,
+/// and the generation command verifies it against a fresh compose before
+/// anything is raised — a preview that changed re-opens the review instead of
+/// billing charges nobody saw. Inputs are the effective compose sets: the
+/// remaining fee, the covered-time-filtered entries, and the confirmed
+/// unbilled costs, each with the fields that shape the money.
+pub fn preview_digest(
+    entries: &[crate::time_entries::TimeEntry],
+    costs: &[crate::project_costs::ProjectCost],
+    flat_fee_cents: Option<i64>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+
+    let mut canonical = String::new();
+    if let Some(fee) = flat_fee_cents {
+        canonical.push_str(&format!("fee:{fee};"));
+    }
+    for entry in entries {
+        canonical.push_str(&format!(
+            "t:{};{};{};{};",
+            entry.id, entry.minutes, entry.rate_cents_per_hour, entry.description
+        ));
+    }
+    for cost in costs {
+        canonical.push_str(&format!(
+            "c:{};{};{};",
+            cost.id, cost.amount_cents, cost.description
+        ));
+    }
+    let digest = Sha256::digest(canonical.as_bytes());
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview_digest;
+    use crate::project_costs::ProjectCost;
+    use crate::time_entries::{BillingStatus, TimeEntry, TimeEntrySource};
+
+    fn an_entry(minutes: i32, description: &str) -> TimeEntry {
+        TimeEntry {
+            id: uuid::Uuid::nil(),
+            project_id: uuid::Uuid::nil(),
+            attorney_id: uuid::Uuid::nil(),
+            performed_on: chrono::NaiveDate::from_ymd_opt(2026, 11, 4).unwrap_or_default(),
+            minutes,
+            description: description.to_string(),
+            billable: true,
+            rate_cents_per_hour: 25_000,
+            source: TimeEntrySource::Timer,
+            billing_status: BillingStatus::Unbilled,
+            inserted_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn a_cost(amount_cents: i64, description: &str) -> ProjectCost {
+        ProjectCost {
+            id: uuid::Uuid::nil(),
+            project_id: uuid::Uuid::nil(),
+            occurred_on: chrono::NaiveDate::from_ymd_opt(2026, 11, 4).unwrap_or_default(),
+            payee: "Hamilton County".to_string(),
+            description: description.to_string(),
+            amount_cents,
+            currency: "USD".to_string(),
+            amount_status: "confirmed".to_string(),
+            billing_status: "unbilled".to_string(),
+            receipt_document_id: uuid::Uuid::nil(),
+            source_reference: None,
+            xero_invoice_id: None,
+            inserted_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn the_digest_is_stable_for_identical_composes_and_sensitive_to_inputs() {
+        let entries = [an_entry(90, "Drafted the motion to compel")];
+        let costs = [a_cost(12_000, "Filing fee")];
+        let composed = || preview_digest(&entries, &costs, Some(48_000));
+        assert_eq!(composed(), composed(), "identical composes share a digest");
+
+        // A different minute count, description, fee remainder, or cost
+        // amount is a different review — every one of them moves the digest.
+        let longer = [an_entry(120, "Drafted the motion to compel")];
+        assert_ne!(preview_digest(&longer, &costs, Some(48_000)), composed());
+
+        let renamed = [an_entry(90, "Drafted the motion to dismiss")];
+        assert_ne!(preview_digest(&renamed, &costs, Some(48_000)), composed());
+
+        let cheaper = [a_cost(11_000, "Filing fee")];
+        assert_ne!(preview_digest(&entries, &cheaper, Some(48_000)), composed());
+
+        assert_ne!(preview_digest(&entries, &costs, Some(47_000)), composed());
+        assert_ne!(preview_digest(&entries, &costs, None), composed());
+    }
+}

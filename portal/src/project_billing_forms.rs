@@ -31,12 +31,18 @@ use crate::session::SessionData;
 /// channels, because one names what happened and the other what to do next.
 fn back_to_billing(code: &str, flash: Option<&str>, error: Option<&str>) -> Response {
     let mut url = format!("/app/projects/{code}/billing");
+    // The first parameter opens the query with `?`; later ones continue it
+    // with `&` — an `&` before the first would break the path outright.
+    let mut separator = '?';
     if let Some(flash) = flash {
-        url.push_str("&flash=");
+        url.push(separator);
+        url.push_str("flash=");
         url.push_str(&encode_query_value(flash));
+        separator = '&';
     }
     if let Some(error) = error {
-        url.push_str("&error=");
+        url.push(separator);
+        url.push_str("error=");
         url.push_str(&encode_query_value(error));
     }
     Redirect::to(&url).into_response()
@@ -360,11 +366,16 @@ pub(crate) async fn discard_timer(
     }
 }
 
-/// The confirm form's one field: present when the raise was confirmed.
+/// The confirm form's two fields: `confirm` is present when the raise was
+/// confirmed; `digest` is the fingerprint of the compose the attorney
+/// reviewed — the command re-verifies it against a fresh compose before
+/// anything is raised.
 #[derive(Deserialize)]
 pub(crate) struct GenerateInvoiceForm {
     #[serde(default)]
     pub(crate) confirm: Option<String>,
+    #[serde(default)]
+    pub(crate) digest: Option<String>,
 }
 
 /// `POST /app/projects/{code}/invoices` — the generate-invoice action's two
@@ -400,8 +411,7 @@ pub(crate) async fn generate_invoice(
     // The first POST is the action's start: nothing provider-bound has run,
     // and the compose preview is a read rendered at `?confirm=1`.
     if input.confirm.is_none() {
-        return Redirect::to(&format!("/app/projects/{code}/billing?confirm=1"))
-            .into_response();
+        return Redirect::to(&format!("/app/projects/{code}/billing?confirm=1")).into_response();
     }
     let Ok(pg) = crate::time_tracking_api::postgres("generate_invoice", Some(project.id)).await
     else {
@@ -419,6 +429,7 @@ pub(crate) async fn generate_invoice(
         project.id,
         person_id,
         now,
+        input.digest.as_deref(),
     )
     .await
     {
@@ -464,6 +475,9 @@ fn flash_for_invoice(
         }
         InvoiceGenerationError::NothingToInvoice => {
             "There is nothing unbilled to invoice on this matter yet.".to_string()
+        }
+        InvoiceGenerationError::PreviewChanged => {
+            "The compose changed since the preview — review it again before raising.".to_string()
         }
         InvoiceGenerationError::FlatFeeAlreadyBilled
         | InvoiceGenerationError::Batch(
