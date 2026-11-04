@@ -212,6 +212,8 @@ pub(super) fn child_args(opts: &ShipOpts) -> Vec<String> {
         args.push("--image-digests".into());
         args.push(digests.display().to_string());
     }
+    args.push("--certificate-timeout-minutes".into());
+    args.push(opts.certificate_timeout_minutes.to_string());
     args
 }
 
@@ -437,6 +439,7 @@ mod tests {
         o.image_digests = Some(PathBuf::from("/tmp/image-digests.json"));
         o.log_sink = Some("gs://x".into());
         o.quiet = true;
+        o.certificate_timeout_minutes = 60;
         let args = child_args(&o);
         assert_eq!(
             args,
@@ -451,7 +454,9 @@ mod tests {
                 "--tag",
                 "26.10.11",
                 "--image-digests",
-                "/tmp/image-digests.json"
+                "/tmp/image-digests.json",
+                "--certificate-timeout-minutes",
+                "60"
             ]
         );
         assert!(!args
