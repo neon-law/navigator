@@ -121,7 +121,7 @@ test("tile errors restore the static fallback before and after map load", async 
       map.handlers.error();
     }
     assert.notEqual(mount.dataset.live, "true", "CSS must reveal the SVG fallback");
-    assert.match(mount.querySelector(".astro-map-island__status").textContent, /static map below remains available/);
+    assert.match(mount.querySelector(".astro-map-island__status").textContent, /static map remains available/);
     assert.equal(map.layers.size, 8, "calculated layers remain available in the degraded map");
   }
 });

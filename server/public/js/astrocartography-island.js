@@ -190,14 +190,14 @@
         attributionControl: { compact: false }
       });
     } catch (error) {
-      showFailure(mount, "The interactive map could not start. The static map below remains available.");
+      showFailure(mount, "The interactive map could not start. The static map remains available.");
       return;
     }
     map.on("error", function () {
       // Tile or source errors degrade the basemap, not the lines; say so
       // once and leave the static map untouched as the alternative.
       failed = true;
-      showFailure(mount, "Some map tiles failed to load. The static map below remains available.");
+      showFailure(mount, "Some map tiles failed to load. The static map remains available.");
     });
     map.on("load", function () {
       if (!failed) statusMessage(mount, "");
@@ -221,7 +221,7 @@
     var payload = readPayload();
     if (!payload || !payload.persons || !payload.persons.length) {
       Array.prototype.forEach.call(mounts, function (mount) {
-        showFailure(mount, "The interactive map payload is missing or unreadable. The static map below remains available.");
+        showFailure(mount, "The interactive map payload is missing or unreadable. The static map remains available.");
       });
       return;
     }
@@ -229,7 +229,7 @@
       import(mount.dataset.moduleSrc)
         .then(function (maplibregl) { boot(mount, payload, maplibregl); })
         .catch(function (error) {
-          showFailure(mount, "The interactive map module failed to load. The static map below remains available.");
+          showFailure(mount, "The interactive map module failed to load. The static map remains available.");
           console.error("astrocartography island:", error);
         });
     });
