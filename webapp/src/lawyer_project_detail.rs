@@ -31,7 +31,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Empty, FactCard, FactGrid, Field, FormCard, Heading};
+use crate::components::{FactCard, FactGrid, Field, FormCard, Heading, Toast, ToastTone};
 use crate::csrf::CsrfToken;
 use crate::lawyer_project_communications::{communications_tab, notes_tab, CommunicationRow};
 use crate::lawyer_project_documents::{documents_table, LawyerDocRow};
@@ -42,6 +42,7 @@ use crate::lawyer_project_participation::{
 };
 use crate::lawyer_project_testimonial::{admin_testimonial_card, AdminTestimonialView};
 use crate::people::ViewerRole;
+use crate::project_billing::{BillingTab, GenerateInvoiceView, MatterTimer, TimeEntryRow};
 use crate::project_stages::{MatterStageView, StageChip, StageSection};
 use crate::project_tasks::{AssigneeChoice, TaskRow, TasksTab};
 
@@ -58,11 +59,16 @@ use crate::lawyer_project_participation::to_participation_rows;
 pub struct ProjectRepositoryPointer(pub Option<String>);
 
 /// The workbench's read query: the `?error=` flash a refused write redirects
-/// back with.
+/// back with, the write forms' success flash, and the generate-invoice
+/// action's confirm step (`?confirm=1`).
 #[derive(Deserialize, Default)]
 pub struct MatterQuery {
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub flash: Option<String>,
+    #[serde(default)]
+    pub confirm: Option<String>,
 }
 
 pub use crate::sections::page::MatterTab;
@@ -154,37 +160,6 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     }
 }
 
-/// The Billing tab's position: Work in Progress, the Outstanding Balance, and
-/// the latest Xero invoice. "Nothing billed yet" is said only when it is true —
-/// a billing surface never reads empty over a balance the matter carries.
-fn billing_position(view: &LawyerDetailView) -> Element {
-    if view.wip.is_none() && view.outstanding.is_none() && view.xero_invoice_url.is_none() {
-        return rsx! {
-            section { class: "lawyer-detail__section",
-                Empty {
-                    title: "Nothing billed yet".to_string(),
-                    description: Some("Time, expenses, and invoices for this project will appear here.".to_string()),
-                }
-            }
-        };
-    }
-    rsx! {
-        section { class: "lawyer-detail__section",
-            h2 { "Billing" }
-            ul {
-                if let Some(wip) = view.wip.as_ref() {
-                    li { "Work in progress: {wip}" }
-                }
-                if let Some(outstanding) = view.outstanding.as_ref() {
-                    li { "Outstanding balance: {outstanding}" }
-                }
-                if let Some(url) = view.xero_invoice_url.as_ref() {
-                    li { a { class: "nav-link", href: "{url}", "Latest invoice in Xero" } }
-                }
-            }
-        }
-    }
-}
 
 /// The rendered lawyer workbench — every field wasm-safe (plain scalars; no
 /// `store`/`SeaORM`/`cloud`/`repos` type crosses to the client build).
@@ -306,6 +281,42 @@ pub struct LawyerDetailView {
     /// PostgreSQL-native).
     #[serde(default)]
     pub stage: MatterStageView,
+    /// The Billing tab's captured time — the time-entry table (PostgreSQL-
+    /// native; empty without a configured deployment, like the tasks above).
+    #[serde(default)]
+    pub billing_entries: Vec<TimeEntryRow>,
+    /// The Billing tab's resolved fee structure — the reader's hourly rate
+    /// on this matter and the matter's agreed flat fee, server-formatted.
+    #[serde(default)]
+    pub billing_fees: crate::project_billing::FeeStructureView,
+    /// The Billing tab's mirrored Xero invoice rows — the mirror, never Xero
+    /// live.
+    #[serde(default)]
+    pub billing_invoices: Vec<crate::project_billing::InvoiceRow>,
+    /// The Billing tab's expense rows — the same `project_cost` rows the
+    /// project-costs JSON API serves.
+    #[serde(default)]
+    pub billing_expenses: Vec<crate::project_billing::ExpenseRow>,
+    /// The reader's open Timer, if any — shown in the header on every tab.
+    /// One on another matter renders as a link to that matter's Billing tab,
+    /// because the timer's write doors are matter-scoped.
+    #[serde(default)]
+    pub running_timer: Option<crate::project_billing::TimerView>,
+    /// The generate-invoice action's composed state — the preview of the
+    /// exact composition the command would raise.
+    #[serde(default)]
+    pub invoice_generate: GenerateInvoiceView,
+    /// Today as `yyyy-mm-dd` — pre-fills the log-time form's date.
+    #[serde(default)]
+    pub today: String,
+    /// The write forms' success flash (`?flash=`) — rendered as a toast
+    /// naming what happened (e.g. the invoice just raised).
+    #[serde(default)]
+    pub flash: Option<String>,
+    /// `true` when the URL carries `?confirm=1` — the Billing tab shows the
+    /// generate-invoice compose and its confirm step.
+    #[serde(default)]
+    pub confirm_generate: bool,
     pub role: ViewerRole,
     /// The deploy's brand mark for the navbar. `None` when the mounted brand
     /// configures none.
@@ -364,12 +375,15 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         crate::project_calendar::MATTER_COLUMNS,
     );
     let calendar_dir = crate::project_calendar::sort_dir(calendar_query.dir.as_deref());
-    // The `?error=` flash a refused write's redirect carries.
-    let error =
+    // The `?error=` flash a refused write's redirect carries, the write
+    // forms' success flash, and the generate-invoice action's confirm step.
+    let query =
         dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<MatterQuery>, _>()
             .await
-            .map_or_else(|_| MatterQuery::default(), |axum::extract::Query(q)| q)
-            .error;
+            .map_or_else(|_| MatterQuery::default(), |axum::extract::Query(q)| q);
+    let error = query.error;
+    let flash = query.flash;
+    let confirm_generate = query.confirm.is_some();
     // The section is the request path's; the dispatcher already refused one
     // the workbench does not have (`matter_surface::serves`).
     let active_tab = crate::sections::page::request_tab()
@@ -514,6 +528,41 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         Some(pg) => crate::project_stages::read_stage(&surreal, pg, &project).await?,
         None => MatterStageView::default(),
     };
+
+    // The Billing tab's reads — captured time, resolved fee structures,
+    // mirrored invoices, expenses — plus the reader's open timer for the
+    // header and the generate-invoice action's composed preview. Same
+    // absence rule as the tasks and stage: a deployment without PostgreSQL
+    // renders the workbench without them; a read failure inside a configured
+    // deployment is a 500.
+    let (billing_entries, billing_fees, billing_invoices, billing_expenses) = match pg.as_ref() {
+        Some(pg) => {
+            let reads = crate::project_billing::read_billing(&surreal, pg, id, person_id).await?;
+            (
+                reads.entry_rows,
+                reads.fees,
+                reads.invoice_rows,
+                reads.expense_rows,
+            )
+        }
+        None => (
+            Vec::new(),
+            crate::project_billing::FeeStructureView::default(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    };
+    let running_timer = match (pg.as_ref(), person_id) {
+        (Some(pg), Some(person_id)) => {
+            crate::project_billing::read_timer(&surreal, pg, person_id, id).await?
+        }
+        _ => None,
+    };
+    let invoice_generate = match pg.as_ref() {
+        Some(pg) => crate::project_billing::read_generate(pg, id).await?,
+        None => GenerateInvoiceView::default(),
+    };
+    let today = chrono::Utc::now().date_naive().to_string();
 
     // The two DRIs — a read failure is a 500, never a silently-blank DRI on an
     // accountability surface.
@@ -734,6 +783,15 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         tasks,
         task_assignees,
         stage,
+        billing_entries,
+        billing_fees,
+        billing_invoices,
+        billing_expenses,
+        running_timer,
+        invoice_generate,
+        today,
+        flash,
+        confirm_generate,
         role,
         logo,
         tokens_href,
@@ -882,6 +940,16 @@ pub fn LawyerProjectDetail() -> Element {
                     action: "/app/projects/{view.code}/view-as-client",
                     input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
                     button { class: "nav-btn nav-btn--secondary", r#type: "submit", "View as Client" }
+                }
+                // The reader's open Timer — on every tab, because time runs
+                // while you work. The table row in PostgreSQL is the truth;
+                // the header just shows it (and ticks, when the ticker script
+                // loads).
+                if let Some(timer) = view.running_timer.as_ref() {
+                    MatterTimer { code: view.code.clone(), csrf: csrf.clone(), timer: timer.clone() }
+                }
+                if let Some(flash) = view.flash.as_ref() {
+                    Toast { message: flash.clone(), tone: ToastTone::Success }
                 }
                 // The Tasks panel renders its own refusal beside its forms.
                 if view.active_tab != MatterTab::Tasks {
@@ -1032,35 +1100,21 @@ pub fn LawyerProjectDetail() -> Element {
                         }
                     },
                     MatterTab::Billing => rsx! {
-                        if view.trust.any {
-                            section { class: "lawyer-detail__section",
-                                h2 { "Client trust" }
-                                p { class: "nav-muted",
-                                    "Held for this Project in the firm's pooled client trust account, \
-                                     mirrored from Xero. Xero is the books."
-                                }
-                                ul {
-                                    li { "Held: {view.trust.held}" }
-                                    li { "Paid in: {view.trust.deposited}" }
-                                    li { "Earned and drawn: {view.trust.drawn}" }
-                                    li { "Refunded: {view.trust.refunded}" }
-                                }
-                                if !view.trust.allocations.is_empty() {
-                                    p { class: "nav-muted",
-                                        "Drawn against this Project's invoices. The pooled transfer \
-                                         these lines were part of is not a Project-level fact."
-                                    }
-                                    ul {
-                                        for line in view.trust.allocations.iter() {
-                                            li {
-                                                "{line.amount} to {line.invoice_reference} on {line.occurred_on}"
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                        BillingTab {
+                            code: view.code.clone(),
+                            csrf: csrf.clone(),
+                            error: view.error.clone(),
+                            confirming: view.confirm_generate,
+                            timer: view.running_timer.clone(),
+                            entries: view.billing_entries.clone(),
+                            fees: view.billing_fees.clone(),
+                            invoices: view.billing_invoices.clone(),
+                            expenses: view.billing_expenses.clone(),
+                            trust: view.trust.clone(),
+                            generate: view.invoice_generate.clone(),
+                            today: view.today.clone(),
                         }
-                        {billing_position(&view)}
+
                     },
                     MatterTab::Participants => rsx! {
                         ParticipationTable {
@@ -1188,22 +1242,6 @@ mod tests {
         assert!(html.contains("$4,210"), "{html}");
         assert!(html.contains("Outstanding balance"), "{html}");
         assert!(html.contains("$1,850"), "{html}");
-    }
-
-    #[test]
-    fn billing_says_nothing_billed_only_when_nothing_is() {
-        let empty = dioxus_ssr::render_element(billing_position(&LawyerDetailView::default()));
-        assert!(empty.contains("Nothing billed yet"), "{empty}");
-
-        let view = LawyerDetailView {
-            wip: Some("$4,210".to_string()),
-            outstanding: Some("$1,850".to_string()),
-            ..Default::default()
-        };
-        let html = dioxus_ssr::render_element(billing_position(&view));
-        assert!(!html.contains("Nothing billed yet"), "{html}");
-        assert!(html.contains("Work in progress: $4,210"), "{html}");
-        assert!(html.contains("Outstanding balance: $1,850"), "{html}");
     }
 
     #[test]

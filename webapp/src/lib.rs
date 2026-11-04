@@ -123,6 +123,7 @@ pub mod playbooks;
 pub mod portal_project_detail;
 pub mod portal_project_list;
 pub mod profile;
+pub mod project_billing;
 pub mod project_calendar;
 pub mod project_deadlines;
 pub mod project_document_detail;
