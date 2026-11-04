@@ -5,6 +5,10 @@ use std::path::PathBuf;
 /// Everything that can go wrong while reading or evaluating ephemeris kernels.
 #[derive(Debug, thiserror::Error)]
 pub enum EphemerisError {
+    /// The observer cannot be a target for a geocentric direction.
+    #[error("Earth has no direction from the Earth's center")]
+    EarthAsGeocentricTarget,
+
     /// The kernel file could not be read from the store.
     #[error("reading kernel {path}: {source}")]
     Io {

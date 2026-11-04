@@ -43,6 +43,9 @@ pub(crate) fn direction_icrf(
     body: Body,
     t: TdbSeconds,
 ) -> Result<[f64; 3], EphemerisError> {
+    if body == Body::Earth {
+        return Err(EphemerisError::EarthAsGeocentricTarget);
+    }
     let earth_bary_km = ephemeris.barycentric_position(Body::Earth, t)?;
     let solution = light_time::light_time_corrected(ephemeris, body, t, &earth_bary_km)?;
     let earth_velocity_km_s = aberration::earth_velocity_km_s(ephemeris, t)?;
@@ -61,8 +64,9 @@ pub(crate) fn direction_icrf(
 ///
 /// # Errors
 ///
-/// Returns the same errors as [`direction_icrf`] — SPK lookup failures and
-/// light-time non-convergence.
+/// Rejects Earth with [`EphemerisError::EarthAsGeocentricTarget`], since the
+/// observer has no direction from itself. Also returns SPK lookup failures
+/// and light-time non-convergence from [`direction_icrf`].
 pub fn apparent_geocentric(
     ephemeris: &Ephemeris,
     body: Body,
@@ -192,6 +196,31 @@ mod tests {
                 && direction[1].abs() < 1e-15
                 && direction[2].abs() < 1e-15,
             "expected the unit +x direction, got {direction:?}"
+        );
+    }
+
+    #[test]
+    fn earth_has_no_geocentric_direction() {
+        let earth = synthetic_type2(
+            399,
+            0,
+            0.0,
+            DAY,
+            &[(
+                DAY / 2.0,
+                DAY / 2.0,
+                &[1000.0, 0.0],
+                &[0.0, 0.0],
+                &[0.0, 0.0],
+            )],
+        );
+        let ephemeris = Ephemeris::new(vec![earth]);
+        assert!(
+            matches!(
+                apparent_geocentric(&ephemeris, Body::Earth, TdbSeconds(DAY / 2.0)),
+                Err(EphemerisError::EarthAsGeocentricTarget)
+            ),
+            "the observer has no direction from itself"
         );
     }
 
