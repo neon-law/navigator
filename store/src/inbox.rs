@@ -2721,16 +2721,10 @@ pub async fn unread_count_for_project(db: &SurrealDb, project_id: Uuid) -> Resul
         .bind(("project", record_id(projects::PROJECT_TABLE, project_id)))
         .await?
         .check()?;
-    // `count()` under `GROUP ALL` yields a `{ count: n }` object — and no
-    // row at all when nothing matches, which is a count of zero.
-    let counts: Vec<UnreadCountRow> = response.take(0)?;
-    Ok(counts.first().map_or(0, |row| row.count))
-}
-
-/// The one-field shape `SELECT VALUE count() ... GROUP ALL` returns.
-#[derive(SurrealValue)]
-struct UnreadCountRow {
-    count: i64,
+    // `SELECT VALUE count()` yields bare numbers — one per GROUP ALL group,
+    // and no row at all when nothing matches, which is a count of zero.
+    let counts: Vec<i64> = response.take(0)?;
+    Ok(counts.first().copied().unwrap_or(0))
 }
 
 /// Whether a participating Lawyer or Clerk may relay this email thread now.
@@ -6168,5 +6162,40 @@ mod tests {
                 state
             );
         }
+    }
+
+    #[tokio::test]
+    async fn unread_count_for_project_counts_only_that_matters_unread_threads() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        // Two unread threads on the matter, one elsewhere, and the count
+        // read stays a bare-number decode (SELECT VALUE count()).
+        for thread in ["sms-a", "sms-b"] {
+            let ingested = ingest_inbound(
+                &db,
+                &inbound(
+                    world.firm,
+                    channel::SMS,
+                    "fixture-account",
+                    thread,
+                    "sms:fixture-sender",
+                ),
+            )
+            .await
+            .unwrap();
+            assign(&db, world.owner, ingested.conversation_id, world.project)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            unread_count_for_project(&db, world.project).await.unwrap(),
+            2
+        );
+        assert_eq!(
+            unread_count_for_project(&db, world.other_project)
+                .await
+                .unwrap(),
+            0
+        );
     }
 }
