@@ -26,6 +26,7 @@
 //! received by [`crate::esignature_webhook`], which resolves the
 //! envelope id back to a notation and signals `signature_received`.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -298,6 +299,17 @@ pub enum EnvelopeStatus {
     Completed,
 }
 
+impl std::fmt::Display for EnvelopeStatus {
+    /// The wire label the Connect payload and error messages carry —
+    /// identical to the serde kebab-case representation.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Sent => "sent",
+            Self::Completed => "completed",
+        })
+    }
+}
+
 /// One persisted fake envelope — the durable record of a
 /// `send_for_signature` call. Serialized as JSON at
 /// `<root>/<envelope id>.json` under the provider's root directory, so
@@ -315,6 +327,25 @@ pub struct FakeEnvelope {
     pub pdf_base64: String,
     /// RFC 3339 timestamp of the send.
     pub created_at: String,
+    /// Recipients who have signed, in signing order. A recipient appears
+    /// at most once — `sign` is idempotent per email.
+    #[serde(default)]
+    pub signed: Vec<SignedBy>,
+    /// Outcome of the last webhook delivery attempt: `None` when no
+    /// delivery is configured or none has run yet, otherwise
+    /// `delivered` or `failed: <why>`. A failed delivery never rolls the
+    /// envelope back — it stays in its last true state.
+    #[serde(default)]
+    pub webhook_status: Option<String>,
+}
+
+/// One recipient's signature on a fake envelope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignedBy {
+    /// The signer's email, as the manifest declared it.
+    pub email: String,
+    /// RFC 3339 timestamp of the signature.
+    pub at: String,
 }
 
 impl FakeEnvelope {
@@ -391,6 +422,20 @@ pub struct FakeSignatureProvider {
     calls: Mutex<Vec<SignatureCall>>,
     recipient_views: Mutex<Vec<RecipientView>>,
     root: PathBuf,
+    /// Where completion webhooks go, when configured. Tests and the local
+    /// loop point this at the portal's own esignature webhook route; the
+    /// delivery is HMAC-signed with the same scheme
+    /// [`crate::esignature_webhook`] verifies fail-closed.
+    webhook: Option<WebhookTarget>,
+}
+
+/// Where and how the fake delivers DocuSign-Connect-shaped webhooks.
+#[derive(Debug, Clone)]
+pub struct WebhookTarget {
+    /// Full URL of the receiver, path secret included.
+    pub url: String,
+    /// HMAC-SHA256 key; the receiver's `esignature_hmac_key`.
+    pub hmac_key: Vec<u8>,
 }
 
 impl FakeSignatureProvider {
@@ -410,7 +455,18 @@ impl FakeSignatureProvider {
             calls: Mutex::new(Vec::new()),
             recipient_views: Mutex::new(Vec::new()),
             root: root.into(),
+            webhook: None,
         }
+    }
+
+    /// Deliver DocuSign-Connect-shaped webhooks to `url`, HMAC-signed
+    /// with `hmac_key`. Without this the fake completes envelopes on
+    /// disk but notifies nobody — the loop then reads completion
+    /// directly from the provider.
+    #[must_use]
+    pub fn with_webhook(mut self, target: WebhookTarget) -> Self {
+        self.webhook = Some(target);
+        self
     }
 
     /// The fake a dev boot runs: `NAVIGATOR_FAKE_SIGNATURE_DIR` when set,
@@ -530,6 +586,253 @@ impl FakeSignatureProvider {
     fn envelope_path(&self, id: &str) -> PathBuf {
         self.root.join(format!("{id}.json"))
     }
+
+    /// Record `email`'s signature on the envelope. Idempotent per email.
+    /// The last signature completes the envelope: status flips to
+    /// `Completed` on disk, and — when a webhook target is configured —
+    /// a DocuSign-Connect-shaped, HMAC-signed callback is POSTed,
+    /// exactly the shape [`crate::esignature_webhook`] verifies
+    /// fail-closed. Intermediate signatures emit a `recipient-completed`
+    /// event naming the signer's routing order, like the real provider.
+    ///
+    /// The durable envelope never rolls back: a failed webhook delivery
+    /// is recorded on the envelope (`webhook_status`) and logged, and
+    /// `sign` still reports the envelope's true status.
+    ///
+    /// # Errors
+    ///
+    /// [`SignatureError::Provider`] when the envelope does not exist,
+    /// does not parse, or names no recipient with that email.
+    pub async fn sign(
+        &self,
+        request_id: &SignatureRequestId,
+        email: &str,
+    ) -> Result<EnvelopeStatus, SignatureError> {
+        let mut envelope = self.envelope(request_id)?.ok_or_else(|| {
+            SignatureError::Provider(format!("no such envelope {}", request_id.0))
+        })?;
+        let already = envelope.signed.iter().any(|s| s.email == email);
+        if !already {
+            let signer = envelope
+                .recipients
+                .iter()
+                .find(|r| r.email == email)
+                .ok_or_else(|| {
+                    SignatureError::Provider(format!("{} names no recipient {email}", request_id.0))
+                })?;
+            envelope.signed.push(SignedBy {
+                email: signer.email.clone(),
+                at: chrono::Utc::now().to_rfc3339(),
+            });
+            if envelope.signed.len() == envelope.recipients.len() {
+                envelope.status = EnvelopeStatus::Completed;
+            }
+            self.persist(&envelope)?;
+        }
+
+        // Event delivery mirrors DocuSign Connect: one
+        // `recipient-completed` per signature, `envelope-completed` when
+        // the last signer finishes. Both are HMAC-signed over the exact
+        // bytes POSTed.
+        if !already {
+            let recipient_id = envelope
+                .recipients
+                .iter()
+                .find(|r| r.email == email)
+                .map(|r| r.routing_order.to_string());
+            self.deliver_webhook(&envelope, "recipient-completed", recipient_id.as_deref())
+                .await;
+        }
+        if envelope.status == EnvelopeStatus::Completed {
+            self.deliver_webhook(&envelope, "envelope-completed", None)
+                .await;
+        }
+        Ok(envelope.status)
+    }
+
+    /// Build, sign, and POST one Connect-shaped callback; record the
+    /// outcome on the envelope. A failed or unconfigured delivery is
+    /// never fatal — the envelope's on-disk state is already true.
+    async fn deliver_webhook(
+        &self,
+        envelope: &FakeEnvelope,
+        event: &str,
+        recipient_id: Option<&str>,
+    ) {
+        let Some(target) = &self.webhook else {
+            return;
+        };
+        let body = serde_json::json!({
+            "event": event,
+            "data": {
+                "envelopeId": envelope.id,
+                "recipientId": recipient_id,
+                "envelopeSummary": { "status": format!("{}", envelope.status) },
+            },
+        });
+        let body = body.to_string().into_bytes();
+        let signature = crate::webhook_auth::sign_hmac_sha256_b64(&target.hmac_key, &body);
+        let outcome = reqwest::Client::new()
+            .post(&target.url)
+            .header("x-docusign-signature-1", signature)
+            .header("content-type", "application/json")
+            .body(body)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await;
+        let status = match outcome {
+            Ok(response) if response.status().is_success() => "delivered".to_string(),
+            Ok(response) => format!("failed: receiver answered {}", response.status()),
+            Err(e) => format!("failed: {e}"),
+        };
+        if !status.starts_with("delivered") {
+            tracing::warn!(envelope_id = %envelope.id, event, %status, "fake signature webhook delivery failed");
+        }
+        // Record the outcome on a fresh read: the envelope on disk may
+        // have changed since `sign` persisted it (it has not — sign is
+        // the only writer here — but the re-read keeps the record honest).
+        if let Some(mut latest) = self
+            .envelope(&SignatureRequestId(envelope.id.clone()))
+            .expect("reading back a just-persisted envelope")
+        {
+            latest.webhook_status = Some(status.clone());
+            if let Err(e) = self.persist(&latest) {
+                tracing::warn!(envelope_id = %envelope.id, error = %e, "could not record the webhook outcome on the envelope");
+            }
+        }
+    }
+
+    /// The local sign page for one recipient, as `create_recipient_view`
+    /// hands it out: a real file at a real path, so the URL the signer
+    /// opens exists.
+    fn signing_page_path(&self, envelope_id: &str, email: &str) -> PathBuf {
+        let recipient_slug: String = email
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        self.root
+            .join("signing")
+            .join(envelope_id)
+            .join(format!("{recipient_slug}.html"))
+    }
+
+    /// Write the per-recipient sign page and a copy of the document it
+    /// references. The page is plain HTML naming the envelope, the
+    /// signer, and every field they sign; the document link points at
+    /// the PDF stored beside it.
+    fn write_signing_page(
+        &self,
+        envelope: &FakeEnvelope,
+        email: &str,
+    ) -> Result<PathBuf, SignatureError> {
+        let path = self.signing_page_path(&envelope.id, email);
+        std::fs::create_dir_all(path.parent().expect("signing page has a parent")).map_err(
+            |e| {
+                SignatureError::Provider(format!(
+                    "creating {}: {e}",
+                    path.parent().expect("signing page has a parent").display()
+                ))
+            },
+        )?;
+        let signer = envelope
+            .recipients
+            .iter()
+            .find(|r| r.email == email)
+            .ok_or_else(|| SignatureError::Provider(format!("no recipient {email}")))?;
+        let mut field_rows = String::new();
+        for field in &envelope.fields {
+            if field.recipient_role == signer.role {
+                // Infallible: writing to a String never errors.
+                let _ = write!(
+                    field_rows,
+                    "<tr><td><code>{}</code></td><td>{:?}</td></tr>",
+                    field.anchor, field.kind
+                );
+            }
+        }
+        let page = format!(
+            "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
+<title>Sign here — {}</title>\
+<style>body{{font-family:system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#1a1a2e}}\
+table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ddd;padding:.4rem;text-align:left}}\
+code{{background:#f4f4f6;padding:.1rem .3rem}}</style></head><body>\
+<h1>Sign here</h1>\
+<p><strong>{}</strong> ({}), reviewing envelope <code>{}</code>.</p>\
+<p>The prepared document is available as <a href=\"document.pdf\">document.pdf</a>.</p>\
+<h2>Fields you sign</h2>\
+<table><tr><th>Anchor</th><th>Kind</th></tr>{field_rows}</table>\
+<p>This is Navigator's local signature page: signing is driven by the \
+local loop (<code>navigator dev</code> tooling or the running workflow), \
+which records your signature with the fake signature provider.</p>\
+</body></html>\n",
+            signer.name, signer.name, signer.email, envelope.id,
+        );
+        std::fs::write(&path, page)
+            .map_err(|e| SignatureError::Provider(format!("writing {}: {e}", path.display())))?;
+        // The document the page links to, stored beside it.
+        let document = path
+            .parent()
+            .expect("signing page has a parent")
+            .join("document.pdf");
+        if !document.exists() {
+            let pdf = envelope.pdf_bytes()?;
+            std::fs::write(&document, pdf).map_err(|e| {
+                SignatureError::Provider(format!("writing {}: {e}", document.display()))
+            })?;
+        }
+        Ok(path)
+    }
+
+    /// Render the certificate of completion that accompanies the filed
+    /// PDF: who signed, when, on which envelope. Every caller-supplied
+    /// value is escaped into a Typst string literal, never markup.
+    ///
+    /// # Errors
+    ///
+    /// [`SignatureError::Provider`] when the Typst engine fails — an
+    /// internal regression, not an envelope problem.
+    fn certificate_of_completion(envelope: &FakeEnvelope) -> Result<Vec<u8>, SignatureError> {
+        use pdf::escape_typst_markup as esc;
+        // Signer rows are pre-built in Rust with every value passed
+        // through the markup escape — this Typst build has no
+        // `json.decode`, and dynamic list markup in-template leaves a
+        // parse trap (`\` continuing into the closing bracket).
+        let mut signer_rows = String::new();
+        for signed in &envelope.signed {
+            let signer = envelope
+                .recipients
+                .iter()
+                .find(|r| r.email == signed.email)
+                .map_or_else(|| signed.email.clone(), |r| r.name.clone());
+            // Infallible: writing to a String never errors.
+            let _ = writeln!(
+                signer_rows,
+                "- {} — signed {} (_{}_) \\",
+                esc(&signer),
+                esc(&signed.at),
+                esc(&signed.email),
+            );
+        }
+        let source = format!(
+            "#set page(width: 8.5in, height: 11in, margin: 1in)\n\
+#set text(font: \"Noto Serif\", size: 11pt)\n\
+= Certificate of completion\n\n\
+Envelope *{}* completed on {}.\n\n\
+Rendered by Navigator's fake signature provider: every signature was \
+recorded locally, with no DocuSign account involved.\n\n\
+== Signers\n\n{signer_rows}\n\
+== Document\n\n\
+Notation {}.\n\n\
+The filed document is the exact PDF the sender approved; its declared \
+signature anchors were validated against the document's text layer \
+before the envelope was accepted.\n",
+            esc(&envelope.id),
+            esc(&envelope.created_at),
+            esc(&envelope.notation_id.to_string()),
+        );
+        pdf::render(&source)
+            .map_err(|e| SignatureError::Provider(format!("rendering the certificate: {e}")))
+    }
 }
 
 impl Default for FakeSignatureProvider {
@@ -562,8 +865,15 @@ impl SignatureProvider for FakeSignatureProvider {
             fields: manifest.fields.clone(),
             pdf_base64: Engine::encode(&base64::engine::general_purpose::STANDARD, pdf),
             created_at: chrono::Utc::now().to_rfc3339(),
+            signed: Vec::new(),
+            webhook_status: None,
         };
         self.persist(&envelope)?;
+        // Every recipient's sign page exists the moment the envelope
+        // does — the signer opens a URL that resolves, not a stub string.
+        for recipient in &envelope.recipients {
+            self.write_signing_page(&envelope, &recipient.email)?;
+        }
         calls.push(SignatureCall {
             notation_id,
             pdf_bytes_len: pdf.len(),
@@ -581,21 +891,39 @@ impl SignatureProvider for FakeSignatureProvider {
             .lock()
             .expect("fake provider lock")
             .push(view.clone());
-        // A deterministic fake signing URL so dev / KIND can exercise the
-        // embedded-signing route without a real DocuSign account.
-        Ok(format!(
-            "https://stub.docusign.local/signing/{}/{}",
-            request_id.0, view.client_user_id
-        ))
+        // A real local sign page for this recipient — the URL the
+        // signer opens exists on disk.
+        let page = self.signing_page_path(&request_id.0, &view.email);
+        if !page.exists() {
+            let envelope = self.envelope(request_id)?.ok_or_else(|| {
+                SignatureError::Provider(format!("no such envelope {}", request_id.0))
+            })?;
+            self.write_signing_page(&envelope, &view.email)?;
+        }
+        Ok(format!("file://{}", page.display()))
     }
 
     async fn fetch_completed_documents(
         &self,
-        _request_id: &SignatureRequestId,
+        request_id: &SignatureRequestId,
     ) -> Result<CompletedDocuments, SignatureError> {
+        // The real documents, read back from the durable envelope: the
+        // signed PDF is exactly the bytes the sender approved, and the
+        // certificate of completion accompanies it. Only a completed
+        // envelope hands out documents — a pending one has none.
+        let envelope = self.envelope(request_id)?.ok_or_else(|| {
+            SignatureError::Provider(format!("no such envelope {}", request_id.0))
+        })?;
+        if envelope.status != EnvelopeStatus::Completed {
+            return Err(SignatureError::Provider(format!(
+                "envelope {} is {:?} — no completed documents until every recipient signs",
+                request_id.0, envelope.status
+            )));
+        }
+        let certificate = Self::certificate_of_completion(&envelope)?;
         Ok(CompletedDocuments {
-            signed_pdf: b"%PDF-1.7 stub-signed".to_vec(),
-            certificate_pdf: b"%PDF-1.7 stub-certificate".to_vec(),
+            signed_pdf: envelope.pdf_bytes()?,
+            certificate_pdf: certificate,
         })
     }
 }
@@ -1027,7 +1355,7 @@ mod tests {
         validate_anchors, CachedToken, DocuSignSignatureProvider, EnvelopeStatus,
         FakeSignatureProvider, RecipientView, SignatureError, SignatureField, SignatureFieldKind,
         SignatureManifest, SignatureProvider, SignatureProviderKind,
-        SignatureProviderSelectionError, SignatureRecipient, SignatureRequestId,
+        SignatureProviderSelectionError, SignatureRecipient, SignatureRequestId, WebhookTarget,
         SIGNATURE_PROVIDER_ENV,
     };
     use crate::docusign_auth::{test_priv_pem, DocuSignJwtAuth};
@@ -1516,11 +1844,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fake_create_recipient_view_returns_a_deterministic_url() {
-        let stub = FakeSignatureProvider::new();
-        let url = stub
+    async fn a_recipient_view_is_a_local_page_that_exists() {
+        let fake = FakeSignatureProvider::new();
+        let id = fake
+            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest())
+            .await
+            .expect("send succeeds");
+        let url = fake
             .create_recipient_view(
-                &SignatureRequestId("env-9".into()),
+                &id,
                 &RecipientView {
                     return_url: "https://app.example/return".into(),
                     email: "libra@example.com".into(),
@@ -1529,11 +1861,17 @@ mod tests {
                 },
             )
             .await
-            .expect("stub view succeeds");
-        assert_eq!(
-            url,
-            "https://stub.docusign.local/signing/env-9/notation-client"
+            .expect("view succeeds");
+        // The URL the signer opens resolves to a real file on disk.
+        assert!(
+            url.starts_with("file://"),
+            "the fake hands out a local page, got: {url}"
         );
+        let page = url.strip_prefix("file://").expect("file URL");
+        let html = std::fs::read_to_string(page).expect("the sign page exists");
+        assert!(html.contains("Sign here"));
+        assert!(html.contains("libra@example.com"));
+        assert!(html.contains("nlsig-client-signature-1"));
     }
 
     #[tokio::test]
@@ -1688,13 +2026,147 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fake_returns_canned_completed_documents() {
-        let stub = FakeSignatureProvider::new();
-        let docs = stub
-            .fetch_completed_documents(&SignatureRequestId("stub-1".into()))
+    async fn signing_completes_the_envelope_and_documents_read_back() {
+        let fake = FakeSignatureProvider::new();
+        let pdf = rendered_anchor_pdf();
+        let id = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest())
             .await
-            .expect("stub never errors");
-        assert!(docs.signed_pdf.starts_with(b"%PDF"));
+            .expect("send succeeds");
+
+        // One signature leaves the envelope live with no documents.
+        let status = fake
+            .sign(&id, "libra@example.com")
+            .await
+            .expect("first signature records");
+        assert_eq!(status, EnvelopeStatus::Sent);
+        assert_eq!(fake.envelope(&id).expect("parses").unwrap().signed.len(), 1);
+
+        // The last signature completes it, and the filed documents are
+        // the real ones: the exact approved PDF plus a rendered
+        // certificate of completion.
+        let status = fake
+            .sign(&id, "attorney@neonlaw.com")
+            .await
+            .expect("final signature records");
+        assert_eq!(status, EnvelopeStatus::Completed);
+        let docs = fake
+            .fetch_completed_documents(&id)
+            .await
+            .expect("completed envelope hands out documents");
+        assert_eq!(docs.signed_pdf, pdf);
         assert!(docs.certificate_pdf.starts_with(b"%PDF"));
+        let certificate_text =
+            pdf::passage::occurrence_count(&docs.certificate_pdf, "Certificate of completion")
+                .expect("certificate parses");
+        assert!(certificate_text > 0, "the certificate names itself");
+        // An unsigned envelope hands out nothing.
+        assert!(fake
+            .fetch_completed_documents(&SignatureRequestId("fake-none".into()))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn completion_delivers_hmac_signed_connect_webhooks() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let key = b"loop-hmac-key".to_vec();
+        let fake = FakeSignatureProvider::new().with_webhook(WebhookTarget {
+            url: server.uri(),
+            hmac_key: key.clone(),
+        });
+        let pdf = rendered_anchor_pdf();
+        let id = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .await
+            .expect("send succeeds");
+        fake.sign(&id, "libra@example.com").await.expect("signs");
+        fake.sign(&id, "attorney@neonlaw.com")
+            .await
+            .expect("completes");
+
+        // Three deliveries: recipient-completed for each signature,
+        // envelope-completed when the last lands — every one HMAC-signed
+        // over its exact body with the receiver's own key.
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 3);
+        let mut events = Vec::new();
+        for request in &requests {
+            let payload: serde_json::Value = serde_json::from_slice(&request.body).expect("json");
+            events.push(payload["event"].as_str().expect("event").to_string());
+            let provided = request
+                .headers
+                .get("x-docusign-signature-1")
+                .and_then(|v| v.to_str().ok())
+                .expect("HMAC header present");
+            assert!(
+                crate::webhook_auth::verify_hmac_sha256_b64(&key, &request.body, provided),
+                "the receiver must verify the delivery fail-closed"
+            );
+        }
+        assert_eq!(
+            events,
+            vec![
+                "recipient-completed",
+                "recipient-completed",
+                "envelope-completed"
+            ]
+        );
+        // The receiver's own parser accepts the completion payload.
+        let completion: serde_json::Value =
+            serde_json::from_slice(&requests[2].body).expect("json");
+        assert_eq!(completion["data"]["envelopeSummary"]["status"], "completed");
+        assert_eq!(
+            completion["data"]["envelopeId"], id.0,
+            "the envelope id threads through the callback"
+        );
+        assert_eq!(
+            fake.envelope(&id)
+                .expect("parses")
+                .unwrap()
+                .webhook_status
+                .as_deref(),
+            Some("delivered")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_webhook_delivery_is_recorded_and_not_fatal() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let fake = FakeSignatureProvider::new().with_webhook(WebhookTarget {
+            url: server.uri(),
+            hmac_key: b"loop-hmac-key".to_vec(),
+        });
+        let pdf = rendered_anchor_pdf();
+        let id = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .await
+            .expect("send succeeds");
+
+        // The delivery fails; the signature still records and the
+        // envelope stays in its last true state.
+        let status = fake
+            .sign(&id, "libra@example.com")
+            .await
+            .expect("signing never depends on delivery");
+        assert_eq!(status, EnvelopeStatus::Sent);
+        let envelope = fake.envelope(&id).expect("parses").unwrap();
+        assert_eq!(envelope.signed.len(), 1);
+        assert!(
+            envelope
+                .webhook_status
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("failed"),
+            "the failed delivery is recorded on the envelope"
+        );
     }
 }

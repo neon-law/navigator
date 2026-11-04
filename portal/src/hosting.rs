@@ -290,7 +290,10 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
                 tracing::info!(
                     "signature provider: FakeSignatureProvider (local signature loop; no DocuSign credentials)"
                 );
-                std::sync::Arc::new(crate::signature::FakeSignatureProvider::new())
+                std::sync::Arc::new(
+                    crate::signature::FakeSignatureProvider::from_dev_dir()
+                        .context("locating the fake provider's envelope directory")?,
+                )
             }
             crate::signature::SignatureProviderKind::DocuSign => {
                 let ds =

@@ -209,6 +209,10 @@ spec:
             # NAVIGATOR_SIGNATURE_PROVIDER=docusign.
             - name: NAVIGATOR_SIGNATURE_PROVIDER
               value: fake
+            # The fake provider's durable envelope root. Explicit so the
+            # container never depends on HOME being set.
+            - name: NAVIGATOR_FAKE_SIGNATURE_DIR
+              value: /tmp/navigator/fake-signature
             - name: SENDGRID_API_KEY
               value: SG.kind-stub
             - name: SENDGRID_INBOUND_SECRET
