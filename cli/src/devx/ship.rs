@@ -1000,13 +1000,12 @@ fn brand_certificate_name(key: BrandKey) -> String {
 /// references. GKE Ingress attaches one per `ManagedCertificate` it names,
 /// and the limit is fixed, not a quota:
 /// <https://docs.cloud.google.com/load-balancing/docs/ssl-certificates>.
-#[cfg(test)]
-const TARGET_PROXY_CERTIFICATE_LIMIT: usize = 15;
+pub(crate) const TARGET_PROXY_CERTIFICATE_LIMIT: usize = 15;
 
 /// The one `ManagedCertificate` that carries every brand host of the
 /// environment: the Firm wears every brand, so its storefronts share a
 /// certificate instead of spending a target-proxy slot each.
-const FIRM_CERTIFICATE_NAME: &str = "navigator-firm";
+pub(crate) const FIRM_CERTIFICATE_NAME: &str = "navigator-firm";
 
 /// Brands served only by the Firm certificate. The rest keep their own
 /// certificate until the Firm certificate is `Active` on every deployment;
@@ -1035,7 +1034,9 @@ fn has_own_certificate(key: BrandKey) -> bool {
 ///
 /// A moved brand ([`BrandKey::moved_to`]) is retired the same way: it is out
 /// of the release inventory, so no render produces its certificate either,
-/// and its domain no longer resolves to the cluster.
+/// and its domain no longer resolves to the cluster. So is the staged
+/// replacement a shared-certificate transition leaves: once `navigator-firm`
+/// serves the new domain set, the rendered annotation no longer names it.
 fn retired_brand_certificates() -> Vec<String> {
     FIRM_CERTIFICATE_ONLY
         .iter()
@@ -1047,6 +1048,9 @@ fn retired_brand_certificates() -> Vec<String> {
                 .filter(|key| key.moved_to().is_some() && !FIRM_CERTIFICATE_ONLY.contains(key)),
         )
         .map(brand_certificate_name)
+        .chain(std::iter::once(
+            super::firm_certificate_roll::NEXT_CERTIFICATE_NAME.to_string(),
+        ))
         .collect()
 }
 
@@ -1067,7 +1071,7 @@ fn retire_firm_only_brand_certificates(cfg: &ShipConfig, dry_run: bool) -> Resul
 
 /// Every brand host of `public_host`'s environment: the default brand's
 /// public host, then each other registered brand's.
-fn firm_certificate_hosts(public_host: &str) -> Vec<String> {
+pub(crate) fn firm_certificate_hosts(public_host: &str) -> Vec<String> {
     std::iter::once(public_host.to_string())
         .chain(
             additional_brand_hosts(public_host)
@@ -1077,53 +1081,11 @@ fn firm_certificate_hosts(public_host: &str) -> Vec<String> {
         .collect()
 }
 
-/// Changing SANs recreates the shared certificate. Keep the serving certificate
-/// intact until an operator has staged and verified replacement TLS coverage.
-fn require_unchanged_firm_certificate_domains(
-    existing: &serde_json::Value,
-    desired: &[String],
-) -> Result<()> {
-    let domains = existing
-        .pointer("/spec/domains")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("the existing Firm certificate has no spec.domains"))?;
-    let current: std::collections::BTreeSet<&str> = domains
-        .iter()
-        .map(|domain| {
-            domain
-                .as_str()
-                .ok_or_else(|| anyhow!("the existing Firm certificate has a non-string domain"))
-        })
-        .collect::<Result<_>>()?;
-    let desired: std::collections::BTreeSet<&str> = desired.iter().map(String::as_str).collect();
-    ensure!(
-        current == desired,
-        "refusing to change {FIRM_CERTIFICATE_NAME} domains in place: GKE recreates the \
-         shared certificate and can interrupt HTTPS for other brands. Stage a replacement \
-         certificate alongside the serving one, verify it is Active and serves trusted TLS \
-         for every retained host, then reconcile the shared certificate domains and rerun. \
-         See docs/dns.md, Changing shared certificate domains."
-    );
-    Ok(())
-}
-
-fn ensure_unchanged_firm_certificate_domains(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
-    if dry_run {
-        eprintln!("==> live roll must verify the Firm certificate domains are unchanged");
-        return Ok(());
-    }
-    if let Some(existing) =
-        kubectl_json_if_present(cfg, "managedcertificate", FIRM_CERTIFICATE_NAME)?
-    {
-        require_unchanged_firm_certificate_domains(
-            &existing,
-            &firm_certificate_hosts(&cfg.public_host),
-        )?;
-    }
-    Ok(())
-}
-
-fn managed_certificate_document(namespace: &str, name: &str, domains: &[String]) -> String {
+pub(crate) fn managed_certificate_document(
+    namespace: &str,
+    name: &str,
+    domains: &[String],
+) -> String {
     use std::fmt::Write as _;
     let domains = domains.iter().fold(String::new(), |mut list, domain| {
         let _ = writeln!(list, "    - {domain}");
@@ -1797,7 +1759,7 @@ fn grow_postgres_volume(cfg: &ShipConfig, dry_run: bool, service: &Path) -> Resu
 }
 
 /// `kubectl get <kind> <name> -o json`, or `None` when the object is absent.
-fn kubectl_json_if_present(
+pub(crate) fn kubectl_json_if_present(
     cfg: &ShipConfig,
     kind: &str,
     name: &str,
@@ -2568,6 +2530,9 @@ pub struct ShipOpts {
     /// Where `--quiet` writes the transcript: `gs://BUCKET[/PREFIX]` or
     /// `file:///DIR`.
     pub log_sink: Option<String>,
+    /// The bound on each of the two waits a shared-certificate transition
+    /// makes, in minutes; see [`super::firm_certificate_roll`].
+    pub certificate_timeout_minutes: u32,
 }
 
 fn restart_deployments() -> &'static [&'static str] {
@@ -3159,6 +3124,10 @@ fn offline_ship_plan(
                     "delete the Restate CronJob {cronjob} now hosted by DBOS"
                 ));
             }
+            operations.push(format!(
+                "stage {} and reconcile {FIRM_CERTIFICATE_NAME} first when its domains change",
+                super::firm_certificate_roll::NEXT_CERTIFICATE_NAME
+            ));
             for name in retired_brand_certificates() {
                 operations.push(format!(
                     "delete the ManagedCertificate {name} now carried by \
@@ -3758,7 +3727,9 @@ fn roll(
     //     apply` can write.
     ensure_projected_objects_resolve(&manifests)?;
     ensure_ordered_service_objects(cfg, dry_run, dbos_enabled(deployment))?;
-    ensure_unchanged_firm_certificate_domains(cfg, dry_run)?;
+    // 4c. Move a changed shared certificate onto its new domain set before
+    //     the apply could patch it in place; see `firm_certificate_roll`.
+    super::firm_certificate_roll::reconcile(cfg, opts.certificate_timeout_minutes, dry_run)?;
 
     // 5. Reconcile services in dependency order, then apply the application.
     reconcile_ordered_services(cfg, dry_run, &rendered, opts, &tag, &target)?;
@@ -7850,7 +7821,8 @@ mod tests {
                 "navigator-web-guieb-shook",
                 "navigator-web-lex-tecnica",
                 "navigator-web-iep-defenders",
-                "navigator-web-lawyer-shook"
+                "navigator-web-lawyer-shook",
+                "navigator-firm-next"
             ]
         );
         for name in &retired {
@@ -8406,30 +8378,6 @@ mod tests {
             production.len() <= 100,
             "a managed certificate holds at most 100 names"
         );
-    }
-
-    #[test]
-    fn a_shared_certificate_domain_change_requires_staged_tls_coverage() {
-        let current = serde_json::json!({"spec":{"domains":["a.example", "b.example"]}});
-        require_unchanged_firm_certificate_domains(
-            &current,
-            &["b.example".to_string(), "a.example".to_string()],
-        )
-        .unwrap();
-        for domains in [
-            vec!["a.example".to_string()],
-            vec![
-                "a.example".to_string(),
-                "b.example".to_string(),
-                "c.example".to_string(),
-            ],
-        ] {
-            let error = require_unchanged_firm_certificate_domains(&current, &domains)
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("Stage a replacement"), "{error}");
-        }
-        assert!(require_unchanged_firm_certificate_domains(&serde_json::json!({}), &[]).is_err());
     }
 
     /// The Ingress host rule for `host`, as `(path, service, port)` triples.

@@ -67,7 +67,7 @@ mod video_prepare;
 
 use cli::import;
 use devx::brand::BrandCmd;
-use devx::{DnsCmd, GcpCmd, HostCmd, RestateCmd, StagingAction, WorktreeEnvCmd};
+use devx::{CertificatesCmd, DnsCmd, GcpCmd, HostCmd, RestateCmd, StagingAction, WorktreeEnvCmd};
 use projects::pinned_gate::GateMode;
 use projects::repository::is_project_repository;
 
@@ -3133,6 +3133,12 @@ enum OpsCmd {
         /// `NAVIGATOR_SHIP_LOG_SINK`.
         #[arg(long, env = "NAVIGATOR_SHIP_LOG_SINK", requires = "quiet")]
         log_sink: Option<String>,
+        /// When a brand host change alters the shared `navigator-firm`
+        /// certificate's domains, the roll stages `navigator-firm-next`,
+        /// waits for it, patches `navigator-firm`, and waits again. This
+        /// bounds each wait, in minutes.
+        #[arg(long, default_value_t = devx::DEFAULT_CERTIFICATE_TIMEOUT_MINUTES)]
+        certificate_timeout_minutes: u32,
     },
     /// Read a saved ship transcript under the operator's own credentials.
     /// Each deployment resolves its own private logs bucket from its row.
@@ -3262,6 +3268,9 @@ enum OpsCmd {
         #[arg(long, default_value_t = 15)]
         timeout_seconds: u32,
     },
+    /// Shared-certificate maintenance for brand host changes.
+    #[command(subcommand)]
+    Certificates(CertificatesCmd),
     /// Deprecated: use the white-label bundle workflow documented in
     /// `docs/oss-install.md`, whose worked manifest is
     /// `cli/tests/fixtures/navigator.example.yaml`.

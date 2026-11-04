@@ -212,6 +212,10 @@ pub(super) fn child_args(opts: &ShipOpts) -> Vec<String> {
         args.push("--image-digests".into());
         args.push(digests.display().to_string());
     }
+    if opts.certificate_timeout_minutes > 0 {
+        args.push("--certificate-timeout-minutes".into());
+        args.push(opts.certificate_timeout_minutes.to_string());
+    }
     args
 }
 
