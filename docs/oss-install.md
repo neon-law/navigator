@@ -47,7 +47,7 @@ cargo install cargo-nextest --locked --version 0.9.140   # pinned by .github/wor
 cargo install cargo-llvm-cov --locked --version 0.8.7    # pinned by .github/workflows/ci.yml
 ```
 
-The versions matter rather than being tidiness: the 92.7% workspace line floor is a merge gate, so a drifting version
+The versions matter rather than being tidiness: the 92.2% workspace line floor is a merge gate, so a drifting version
 measures against a different denominator than CI does. `--locked` is required, not advisable — `cargo-nextest` fails to
 compile without it.
 
