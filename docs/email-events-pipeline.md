@@ -44,7 +44,7 @@ in the `sent_email_export` ledger. Only the retention purge sets that flag. The 
 grants, so the trigger is the guarantee.
 
 PostgreSQL keeps one year. The daily [Sent Email Export](glossary/sent-email-export.md) (DBOS workflow
-`SentEmailExport`, `archives::sent_email_export`, 02:41 UTC on `workflows-service`) runs three steps:
+`SentEmailExport`, `archives::sent_email_export`, 02:41 UTC in `web`'s DBOS executor) runs three steps:
 
 1. **Find pending days.** These are closed UTC days with rows but no ledger entry, or with more rows than the ledger
    counted (a late insert).
@@ -69,10 +69,15 @@ without committing twice. Every snapshot carries earlier days forward, so the cu
 after PostgreSQL has purged a day. The table lives apart from the full-table `postgres/navigator/sent_email` coverage
 lineage and is never pruned.
 
-Enable it on `workflows-service` with `NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED=true` (only `true` opts in; any other
-non-empty value fails the boot). It needs the application's `NAVIGATOR_POSTGRES_*` login and
-`NAVIGATOR_ARCHIVES_BUCKET`. An enabled schedule fails the boot without either one. Until the flag is on, nothing is
-exported, so nothing is ever purged.
+Enable it on `web`, beside `NAVIGATOR_DBOS_ENABLED=true`, with `NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED=true` (only
+`true` opts in; any other non-empty value fails the boot). It runs in `web` because that is the process `ops ship` gives
+the `navigator_app` PostgreSQL login and the DBOS login, and it keeps the export off Restate. It also needs
+`NAVIGATOR_ARCHIVES_BUCKET` and write access to that bucket for `web`'s service account. An enabled schedule fails the
+boot without PostgreSQL or the bucket. Until the flag is on, nothing is exported, so nothing is ever purged.
+
+A `workflows-service` worker with no PostgreSQL login, as the GKE example ships it, journals its sends to SurrealDB.
+They reach PostgreSQL, and then the export, only when `navigator ops postgres mirror reconcile` or its recurring Job
+runs. Giving the worker the `navigator_app` login writes them to PostgreSQL directly.
 
 Register the table in BigQuery once, as a BigLake Iceberg table over the current metadata file:
 

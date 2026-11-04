@@ -798,6 +798,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     let host_dioxus = (brand.public_dioxus)(&rt.state);
     let lookup = |key: &str| std::env::var(key).ok();
     let dbos_schedules = dbos_schedules(&rt, host_dbos, lookup).await?;
+    let sent_email_export = sent_email_export_source(host_dbos, lookup).await?;
     let router = crate::bootstrap(
         rt.state,
         &rt.public_dir,
@@ -854,10 +855,20 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     };
     let served = if host_dbos {
         let lookup = |key: &str| std::env::var(key).ok();
-        with_dbos_hosting(
+        with_dbos_hosting_and_external(
             lookup,
             workflows::notify::notifier_from_lookup(lookup),
             dbos_schedules,
+            move |dbos| {
+                let mut starters: Vec<dbos_engine::ScheduleStarter> = Vec::new();
+                if let Some(source) = sent_email_export {
+                    let workflow = archives::sent_email_export::register(dbos, source)?;
+                    starters.push(Box::new(move |stop| {
+                        tokio::spawn(archives::sent_email_export::schedule(workflow, stop))
+                    }));
+                }
+                Ok(starters)
+            },
             serve,
         )
         .await
@@ -866,6 +877,30 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     };
     telemetry_guard.shutdown();
     served
+}
+
+/// The Sent Email Export's source, when this host runs DBOS and the schedule's
+/// own switch is on. The switch is read before PostgreSQL or the archive bucket
+/// is opened, and an enabled schedule fails the boot without either: the
+/// export is what lets the one-year purge run, so it never starts half-wired.
+async fn sent_email_export_source(
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<Option<Arc<dyn archives::sent_email_export::ExportSource>>> {
+    if !host_dbos || !dbos_engine::enabled(lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
+        return Ok(None);
+    }
+    if !archives::sent_email_export::enabled(lookup)
+        .map_err(anyhow::Error::msg)
+        .context("read NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED")?
+    {
+        return Ok(None);
+    }
+    Ok(Some(Arc::new(
+        archives::sent_email_export::StoreExportSource::from_env()
+            .await
+            .context("configure DBOS SentEmailExport")?,
+    )))
 }
 
 /// Build every optional DBOS schedule this host enabled. Each schedule has its
@@ -1249,8 +1284,33 @@ mod tests {
         bind_ports, should_host_billing_canary, should_host_billing_digest,
         should_host_deadline_mirror, should_host_dri_digest, should_host_general_nag,
         should_host_notation_reset, should_host_project_recovery, should_host_purchase_activation,
-        should_host_retention_purge, should_host_source_imports,
+        should_host_retention_purge, should_host_source_imports, sent_email_export_source,
     };
+
+    /// The export opens PostgreSQL and the archive bucket only when the
+    /// executor and its own switch are both on, and a malformed switch fails
+    /// the boot instead of leaving the trail unexported.
+    #[tokio::test]
+    async fn the_sent_email_export_needs_dbos_and_its_own_switch() {
+        let export = archives::sent_email_export::ENABLED_ENV;
+        let dbos = workflows::dbos_engine::ENABLED_ENV;
+        assert!(sent_email_export_source(false, |_| Some("true".into()))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(
+            sent_email_export_source(true, |key| (key == dbos).then(|| "true".into()))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let malformed = |key: &str| match key {
+            key if key == dbos => Some("true".into()),
+            key if key == export => Some("yes".into()),
+            _ => None,
+        };
+        assert!(sent_email_export_source(true, malformed).await.is_err());
+    }
 
     type Gate = fn(bool, &dyn Fn(&str) -> Option<String>) -> anyhow::Result<bool>;
 

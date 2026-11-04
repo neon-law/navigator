@@ -279,7 +279,7 @@ copies.
 
 ## SentEmailExport
 
-`SentEmailExport` is born on DBOS and hosted by `workflows-service`. Opt in with
+`SentEmailExport` is born on DBOS and hosted by `web`. Opt in with `NAVIGATOR_DBOS_ENABLED=true` and
 `NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED=true`. An enabled schedule fails the boot without the application's PostgreSQL
 login or `NAVIGATOR_ARCHIVES_BUCKET`. The daily run `SentEmailExport-<UTC date>` starts at 02:41 UTC and judges every
 step at that slot instant. Its `pending` step lists the closed UTC days not yet exported. Each day is committed to the

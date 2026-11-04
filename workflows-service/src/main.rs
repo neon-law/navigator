@@ -198,9 +198,6 @@ async fn main() -> anyhow::Result<()> {
         let archives_enabled = archives::workflow::dbos_enabled(lookup)
             .map_err(anyhow::Error::msg)
             .context("read NAVIGATOR_DBOS_ARCHIVES_ENABLED")?;
-        let sent_email_export_enabled = archives::sent_email_export::enabled(lookup)
-            .map_err(anyhow::Error::msg)
-            .context("read NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED")?;
         let reconcile_enabled = workflows_service::dbos_reconcile::enabled(lookup)
             .map_err(anyhow::Error::msg)
             .context("read NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED")?;
@@ -387,20 +384,6 @@ async fn main() -> anyhow::Result<()> {
         } else {
             None
         };
-        // The Sent Email Export rides in the Archives slot: both write the
-        // archive bucket. An enabled schedule fails the boot without
-        // PostgreSQL or the bucket rather than leaving the trail unexported.
-        let sent_email_export: Option<Arc<dyn archives::sent_email_export::ExportSource>> =
-            if sent_email_export_enabled {
-                Some(Arc::new(
-                    archives::sent_email_export::StoreExportSource::from_env()
-                        .await
-                        .context("configure DBOS SentEmailExport")?,
-                ))
-            } else {
-                None
-            };
-        let archives_context = (archives_context, sent_email_export);
         Some((
             settings,
             dbos_engine::Schedules {
@@ -772,13 +755,6 @@ async fn main() -> anyhow::Result<()> {
                                     ),
                                 );
                             }
-                    let (archives_context, sent_email_export) = archives_context;
-                    if let Some(source) = sent_email_export {
-                        let workflow = archives::sent_email_export::register(dbos, source)?;
-                        launchers.push(Box::new(move |stop| {
-                            tokio::spawn(archives::sent_email_export::schedule(workflow, stop))
-                        }));
-                    }
                     if let Some((slack, channel_id, slack_enabled)) = archives_context {
                         let workflow = archives::workflow::register_dbos(
                             dbos,
