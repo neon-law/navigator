@@ -182,6 +182,12 @@ pub fn validate(
         return invalid("The postal address must be at most 500 characters.");
     }
     let font_family = optional(input.font_family.as_deref());
+    if font_family
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 100)
+    {
+        return invalid("The letterhead font name must be at most 100 characters.");
+    }
     if let Some(family) = &font_family {
         let uploaded = brand
             .font_family
@@ -209,12 +215,32 @@ fn host_of(url: &str) -> Option<&str> {
         .filter(|host| !host.is_empty())
 }
 
-/// The last two labels of `host`, for the default `contact@` mailbox — the
-/// same naive rule the PDF letterhead applies to a Brand host.
+/// Second-level labels that, under a two-letter country code, are a public
+/// suffix of their own: `co.uk`, `com.au`, `ac.jp`, `org.nz`.
+const COUNTRY_SECOND_LEVELS: &[&str] = &[
+    "ac", "co", "com", "edu", "gen", "go", "gob", "gov", "ltd", "mil", "ne", "net", "nhs", "nom",
+    "or", "org", "plc", "sch",
+];
+
+/// The registrable domain of `host`, for the default `contact@` mailbox: its
+/// last two labels, or its last three when those two are a country-code
+/// second level such as `co.uk` (so `www.example.co.uk` mails `contact@` at
+/// `example.co.uk`, never at `co.uk`). A host that is only such a suffix has
+/// no registrable domain.
+///
+/// This is a short list, not the public-suffix list: it covers the
+/// country-code second levels a firm's site plausibly sits under, and an
+/// admin whose suffix it misses sets the email outright.
 fn registrable_domain(host: &str) -> Option<String> {
     let labels: Vec<&str> = host.split('.').collect();
-    (labels.len() >= 2 && labels.iter().all(|label| !label.is_empty()))
-        .then(|| labels[labels.len() - 2..].join("."))
+    if labels.len() < 2 || labels.iter().any(|label| label.is_empty()) {
+        return None;
+    }
+    let count = labels.len();
+    let country_suffix = labels[count - 1].len() == 2
+        && COUNTRY_SECOND_LEVELS.contains(&labels[count - 2].to_ascii_lowercase().as_str());
+    let keep = if country_suffix { 3 } else { 2 };
+    (count >= keep).then(|| labels[count - keep..].join("."))
 }
 
 /// Assemble the letterhead a renderer consumes from the Brand and its
@@ -232,13 +258,22 @@ pub fn resolve(brand: &Brand, stored: Option<&LetterheadFields>) -> BrandLetterh
         site.and_then(registrable_domain)
             .map(|domain| format!("contact@{domain}"))
     });
-    // The letterhead font is the chosen upload; with none chosen, the
-    // Brand's own uploaded face when it wears one.
-    let font_family = stored.font_family.clone().or_else(|| {
-        (brand.typeface.as_deref() == Some("uploaded"))
-            .then(|| brand.font_family.clone())
-            .flatten()
-    });
+    // The letterhead font is the chosen upload; with none chosen, or with a
+    // choice the Brand has since replaced by another upload, the Brand's own
+    // uploaded face when it wears one.
+    let uploaded = brand
+        .font_family
+        .as_ref()
+        .filter(|_| brand.font_object_key.is_some());
+    let font_family = stored
+        .font_family
+        .clone()
+        .filter(|family| uploaded == Some(family))
+        .or_else(|| {
+            (brand.typeface.as_deref() == Some("uploaded"))
+                .then(|| brand.font_family.clone())
+                .flatten()
+        });
     let font_object_key = font_family
         .as_ref()
         .and_then(|family| (brand.font_family.as_ref() == Some(family)).then_some(()))
@@ -504,6 +539,84 @@ mod tests {
             ..LetterheadFields::default()
         })
         .contains("wordmark"));
+    }
+
+    #[test]
+    fn the_default_mailbox_keeps_a_country_code_second_level() {
+        assert_eq!(
+            registrable_domain("www.example.co.uk").as_deref(),
+            Some("example.co.uk")
+        );
+        assert_eq!(
+            registrable_domain("example.com.au").as_deref(),
+            Some("example.com.au")
+        );
+        assert_eq!(
+            registrable_domain("letters.example.org").as_deref(),
+            Some("example.org")
+        );
+        assert_eq!(
+            registrable_domain("example.io").as_deref(),
+            Some("example.io")
+        );
+        assert_eq!(
+            registrable_domain("co.uk"),
+            None,
+            "a bare suffix names no one"
+        );
+        let mut brand = brand();
+        brand.website_url = Some("https://www.example.co.uk".into());
+        let email = resolve(&brand, None).email;
+        assert_eq!(
+            email
+                .as_deref()
+                .and_then(|email| email.strip_prefix("contact@")),
+            Some("example.co.uk")
+        );
+    }
+
+    #[test]
+    fn a_font_name_longer_than_its_column_is_refused_before_the_write() {
+        let mut brand = brand();
+        let long = "F".repeat(101);
+        brand.font_family = Some(long.clone());
+        let error = validate(
+            &brand,
+            &LetterheadFields {
+                font_family: Some(long),
+                ..LetterheadFields::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("at most 100 characters"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_replaced_upload_supersedes_the_stale_stored_font() {
+        let stored = LetterheadFields {
+            font_family: Some("Example Serif".into()),
+            ..LetterheadFields::default()
+        };
+        let mut brand = brand();
+        brand.font_family = Some("Example Grotesk".into());
+        brand.font_object_key = Some("fonts/brands/example/def.woff2".into());
+        let resolved = resolve(&brand, Some(&stored));
+        assert_eq!(resolved.font_family.as_deref(), Some("Example Grotesk"));
+        assert_eq!(
+            resolved.font_object_key.as_deref(),
+            Some("fonts/brands/example/def.woff2")
+        );
+
+        brand.typeface = Some("inter".into());
+        let resolved = resolve(&brand, Some(&stored));
+        assert_eq!(
+            resolved.font_family, None,
+            "the renderer's own default face"
+        );
+        assert_eq!(resolved.font_object_key, None);
     }
 
     #[test]

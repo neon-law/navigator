@@ -6189,7 +6189,9 @@ mod tests {
     /// a raw resolver error. `.invalid` never resolves (RFC 2606).
     #[tokio::test]
     async fn a_mint_against_an_unresolvable_host_names_the_host() {
-        let client = reqwest::Client::new();
+        // No proxy: a runner's `HTTPS_PROXY` would answer for the host and
+        // the test would stop exercising local DNS.
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let error = super::mint_ci_token(
             &client,
             "https://unpublished-brand-host.invalid",
