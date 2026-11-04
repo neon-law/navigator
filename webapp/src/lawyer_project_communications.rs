@@ -1,7 +1,7 @@
 //! The workbench's firm-internal notes and logged correspondence.
 //!
-//! The Overview tab renders the notes as a section; the Correspondence tab
-//! renders every logged email and call. Both surfaces read one firm-visible
+//! The Overview tab renders the notes as a section; the Communications tab
+//! renders every logged email, text, and call. Both surfaces read one firm-visible
 //! thread (`store::communications::for_project`) split once, server-side,
 //! into view rows — no `store` type crosses to the wasm client build.
 
@@ -111,14 +111,20 @@ pub fn notes_tab(view: &LawyerDetailView) -> Element {
     }
 }
 
-/// The Correspondence tab's body: every logged email and call on the
-/// Project, oldest first — the log emails write with or without a call.
+/// The Communications tab's body: every logged email, text, and call on the
+/// Project, oldest first — the log emails write with or without a call — and
+/// the way to the Project inbox, where new messages are triaged and answered.
 /// Direction prints as a plain word, never an icon or colour alone.
 pub fn communications_tab(view: &LawyerDetailView) -> Element {
     rsx! {
         section {
             class: "lawyer-detail__section detail-communications",
             h2 { "Communications" }
+            p { class: "nav-muted",
+                a { class: "nav-link", href: "/app/projects/{view.code}/inbox",
+                    "New email, texts, and calls for this project are triaged in the project inbox."
+                }
+            }
             if view.correspondence.is_empty() {
                 p {
                     class: "nav-muted",

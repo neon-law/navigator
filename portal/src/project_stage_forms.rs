@@ -3,7 +3,7 @@
 //! [`crate::project_stages_api`].
 //!
 //! The dashboard is a native-form surface: the set-stage control POSTs here
-//! and the handler redirects (303) back to `?tab=overview`, with an
+//! and the handler redirects (303) back to the matter's Overview, with an
 //! `?error=` flash when the command is refused. The authorization, mirroring,
 //! and store command are the JSON door's own — both doors call the same
 //! `prepared_store`, so the two entry points cannot drift. The flash copy
@@ -23,9 +23,9 @@ use crate::session::SessionData;
 /// Back to the Overview tab the control lives on, success or refusal alike —
 /// the flash parameter carries the outcome.
 fn back_to_overview(code: &str, flash: Option<&str>) -> Response {
-    let mut url = format!("/app/projects/{code}?tab=overview");
+    let mut url = webapp::sections::page::MatterTab::Overview.href(code);
     if let Some(flash) = flash {
-        url.push_str("&error=");
+        url.push_str("?error=");
         url.push_str(&encode_query_value(flash));
     }
     Redirect::to(&url).into_response()

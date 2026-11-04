@@ -1,6 +1,6 @@
 //! Assignable matter work: reads and commands over the PostgreSQL task store.
 //!
-//! The Tasks tab's write surface — create, assign, transition — beside the
+//! The matter's Task write surface — create, assign, transition — beside the
 //! project-costs doors. Route admission is lawyer tier (the `LawyerSession`
 //! extractor plus an embedded-Rego `route_allow` rule); the matter-scope
 //! question is asked once through [`store::access::matter_viewer`], so a
@@ -55,7 +55,7 @@ fn error(
 }
 
 /// The matter surface's own question, asked once: `store::access` requires the
-/// participation row of every tier (ENG-81), and the Tasks tab is a firm-side
+/// participation row of every tier (ENG-81), and Tasks are a firm-side
 /// surface, so only the Lawyer and LawyerDri viewers pass. Everyone else —
 /// including a client-side participant and an unassigned Owner — collapses to
 /// the non-disclosing 404.

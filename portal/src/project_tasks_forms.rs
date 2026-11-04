@@ -4,7 +4,7 @@
 //!
 //! The dashboard is a native-form surface: the Tasks tab's create, assign,
 //! and transition controls POST here, and every handler redirects (303) back
-//! to `?tab=tasks`, with an `?error=` flash when a command is refused. The
+//! to the Tasks tab (`/app/projects/{code}/tasks`), with an `?error=` flash when a command is refused. The
 //! authorization, mirroring, and store commands are the JSON door's own —
 //! both doors call the same `prepared_store`, so the two entry points cannot
 //! drift. The flash copy refuses in the user's vocabulary: never the wire's
@@ -24,9 +24,9 @@ use crate::session::SessionData;
 /// Back to the tab the write came from, success or refusal alike — the flash
 /// parameter carries the outcome.
 fn back_to_tasks(code: &str, flash: Option<&str>) -> Response {
-    let mut url = format!("/app/projects/{code}?tab=tasks");
+    let mut url = webapp::sections::page::MatterTab::Tasks.href(code);
     if let Some(flash) = flash {
-        url.push_str("&error=");
+        url.push_str("?error=");
         url.push_str(&encode_query_value(flash));
     }
     Redirect::to(&url).into_response()

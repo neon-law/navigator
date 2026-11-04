@@ -894,7 +894,7 @@ fn register_project_routes(r: Router<AdminState>) -> Router<AdminState> {
         )
         // The matter dashboard's Tasks tab — native-form doors for the same
         // commands the JSON API in `project_tasks_api` serves (LAW-186). The
-        // handlers redirect (303) back to `?tab=tasks` on the workbench.
+        // handlers redirect (303) back to the workbench's Tasks tab.
         .route(
             &format!("{prefix}/{{project_code}}/tasks"),
             post(crate::project_tasks_forms::create),
@@ -966,7 +966,7 @@ async fn project_testimonial_save(
         "private" => false,
         _ => {
             return Redirect::to(&format!(
-                "/app/projects/{code}?error={}",
+                "/app/projects/{code}/testimonial?error={}",
                 encode_query_value(
                     "Choose whether to keep the testimonial private or request public use."
                 )
@@ -987,7 +987,7 @@ async fn project_testimonial_save(
     )
     .await;
     match result {
-        Ok(_) => Redirect::to(&format!("/app/projects/{code}")).into_response(),
+        Ok(_) => Redirect::to(&format!("/app/projects/{code}/testimonial")).into_response(),
         Err(
             store::testimonials::TestimonialError::NotAuthorized
             | store::testimonials::TestimonialError::NotFound,
@@ -995,7 +995,7 @@ async fn project_testimonial_save(
         Err(error) => {
             tracing::error!(error = %error, "portal testimonial: save failed");
             Redirect::to(&format!(
-                "/app/projects/{code}?error={}",
+                "/app/projects/{code}/testimonial?error={}",
                 encode_query_value("Your testimonial could not be saved.")
             ))
             .into_response()
@@ -3976,9 +3976,9 @@ async fn project_participants_path(
     project_id: Uuid,
 ) -> String {
     format!(
-        "{}?tab={}",
+        "{}/{}",
         project_show_path(surreal, project_id).await,
-        webapp::lawyer_project_detail::MatterTab::Participants.query_value()
+        webapp::sections::page::MatterTab::Participants.segment()
     )
 }
 
@@ -4299,7 +4299,8 @@ async fn matter_dri_write(
     dri: store::participation::DriRequest,
     actor: store::participation::DriActor,
 ) -> Response {
-    let show_path = project_show_path(surreal, project_id).await;
+    // The DRI controls sit on the Participants tab, so both outcomes land there.
+    let show_path = project_participants_path(surreal, project_id).await;
     let result = store::participation::update_participant(
         surreal,
         &store::participation::UpdateParticipantCommand {
@@ -7103,7 +7104,7 @@ mod tests {
         let (lawyer, _, project) = open_coverage_matter(&db, "coverage-people").await;
         let admin = session_with_role(&db, Role::Admin).await;
         let code = project.code.clone();
-        let participants = format!("/app/projects/{code}?tab=");
+        let participants = format!("/app/projects/{code}/participants");
 
         assert_eq!(
             super::project_participation_create(
@@ -7323,7 +7324,7 @@ mod tests {
         )
         .await;
         assert!(
-            location(&last).starts_with(&format!("/app/projects/{code}?error=")),
+            location(&last).starts_with(&format!("/app/projects/{code}/participants?error=")),
             "{}",
             location(&last)
         );
@@ -7341,7 +7342,10 @@ mod tests {
             P((code.clone(), client_row.id)),
         )
         .await;
-        assert_eq!(location(&removed), format!("/app/projects/{code}"));
+        assert_eq!(
+            location(&removed),
+            format!("/app/projects/{code}/participants")
+        );
         assert!(
             !store::projects::participation_by_id(&db, client_row.id)
                 .await
@@ -7355,7 +7359,10 @@ mod tests {
             P((code.clone(), client_row.id)),
         )
         .await;
-        assert_eq!(location(&designated), format!("/app/projects/{code}"));
+        assert_eq!(
+            location(&designated),
+            format!("/app/projects/{code}/participants")
+        );
         assert!(
             store::projects::participation_by_id(&db, client_row.id)
                 .await

@@ -34,11 +34,25 @@ pub const MAX_SLUG_LEN: usize = 48;
 /// two identical tabs side by side, so `Y021` refuses it.
 pub const SHOW_PAGE_TITLE: &str = "Overview";
 
+/// The labels of the matter's built-in tabs, which follow the declared pages
+/// in the same strip. A declared page titled the same would put two
+/// identically named tabs side by side, so `Y021` refuses it.
+pub const BUILTIN_TAB_TITLES: &[&str] = &[
+    "Tasks",
+    "Communications",
+    "Documents",
+    "Billing",
+    "Participants",
+    "Testimonial",
+];
+
 /// Path segments under `/app/projects/{code}/` that a route already owns.
 /// A page slug that matched one would be shadowed by that route, so `Y021`
 /// refuses it by name.
 pub const RESERVED_SLUGS: &[&str] = &[
+    "billing",
     "close",
+    "communications",
     "contract-review",
     "conversation",
     "documents",
@@ -47,6 +61,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "inbox",
     "intake",
     "notations",
+    "participants",
     "people",
     "portal",
     "review",
@@ -397,6 +412,15 @@ fn title_problem(
              for what it shows"
         ));
     }
+    if let Some(builtin) = BUILTIN_TAB_TITLES
+        .iter()
+        .find(|builtin| title.eq_ignore_ascii_case(builtin))
+    {
+        return Some(format!(
+            "`pages:` title `{title}` is a built-in tab, `{builtin}`; name the page for what it \
+             shows"
+        ));
+    }
     let key = title.to_lowercase();
     if let Some(first) = seen.get(&key) {
         return Some(format!(
@@ -507,6 +531,14 @@ lawyer: [engagement_letter, invoice, boundary_note, provenance_statement]\n";
         assert!(is_valid_slug("case-timeline-2"));
         let yaml = VALID.replace("slug: timeline", "slug: documents");
         assert!(shape_problems(&yaml)[0].1.contains("route"));
+    }
+
+    #[test]
+    fn a_built_in_tab_title_is_refused() {
+        let yaml = VALID.replace("title: Engagement", "title: billing");
+        let problems = shape_problems(&yaml);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].1.contains("built-in tab"), "{}", problems[0].1);
     }
 
     #[test]

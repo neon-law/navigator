@@ -9809,7 +9809,7 @@ async fn client_dri_matter_detail_tabs_select_the_server_rendered_panel() {
     let documents_body = body_string(documents).await;
     assert!(
         documents_body.contains("nav-tabs"),
-        "the DRI page renders the documents/testimonial tabs: {documents_body}"
+        "the DRI page renders the matter strip with its Testimonial tab: {documents_body}"
     );
     assert!(
         documents_body.contains("Your documents"),
@@ -9820,22 +9820,19 @@ async fn client_dri_matter_detail_tabs_select_the_server_rendered_panel() {
         "the unselected testimonial panel is not in the default body: {documents_body}"
     );
 
-    let unknown = get_with_cookie(
+    // A workbench section is not a client's page: the same 404 as a
+    // matter they cannot see.
+    let workbench_section = get_with_cookie(
         app.clone(),
-        &format!("/app/projects/{project_code}?tab=unknown"),
+        &format!("/app/projects/{project_code}/participants"),
         &cookie,
     )
     .await;
-    assert_eq!(unknown.status(), StatusCode::OK);
-    let unknown_body = body_string(unknown).await;
-    assert!(
-        unknown_body.contains("Your documents"),
-        "an unrecognised tab still renders documents: {unknown_body}"
-    );
+    assert_eq!(workbench_section.status(), StatusCode::NOT_FOUND);
 
     let testimonial = get_with_cookie(
         app,
-        &format!("/app/projects/{project_code}?tab=testimonial"),
+        &format!("/app/projects/{project_code}/testimonial"),
         &cookie,
     )
     .await;
@@ -16813,10 +16810,7 @@ async fn project_documents_upload_writes_blob_and_document_with_description() {
         .unwrap_or("");
     // The Documents tab, where the table the upload just added to renders;
     // the workbench opens on Overview, which lists no documents (#176).
-    assert_eq!(
-        location,
-        format!("/app/projects/{project_code}?tab=documents")
-    );
+    assert_eq!(location, format!("/app/projects/{project_code}/documents"));
 
     // One document asset — carrying the byte pointer plus upload
     // provenance and the optional description from the form.
@@ -16899,7 +16893,7 @@ async fn project_documents_upload_files_one_document_per_file_in_a_batch() {
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     assert_eq!(
         resp.headers().get("location").and_then(|v| v.to_str().ok()),
-        Some(format!("/app/projects/{project_code}?tab=documents").as_str())
+        Some(format!("/app/projects/{project_code}/documents").as_str())
     );
 
     let mut docs = store::assets::list_all(&state.surreal).await.unwrap();
@@ -17490,7 +17484,7 @@ async fn project_detail_page_renders_documents_and_upload_form() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}?tab=documents"))
+                .uri(format!("/app/projects/{project_code}/documents"))
                 .header(
                     "cookie",
                     &admin_cookie_on_project(&surreal, project_id).await,
@@ -17856,7 +17850,7 @@ async fn project_detail_page_renders_empty_state_when_project_has_no_documents()
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}?tab=documents"))
+                .uri(format!("/app/projects/{project_code}/documents"))
                 .header(
                     "cookie",
                     &admin_cookie_on_project(&surreal, project_id).await,
@@ -18080,7 +18074,7 @@ async fn lawyer_project_documents_render_grouped_history_and_one_offs() {
     let body = body_string(
         get_with_cookie(
             app,
-            &format!("/app/projects/{project_code}?tab=documents"),
+            &format!("/app/projects/{project_code}/documents"),
             &cookie,
         )
         .await,
