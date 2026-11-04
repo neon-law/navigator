@@ -3325,6 +3325,9 @@ async fn build_answer_context(
                 ctx.entry("project.onboarding_jurisdiction".to_string())
                     .or_insert(jurisdiction);
             }
+            if let Some(name) = firm_legal_name_for_brand(&project.brand) {
+                ctx.entry("firm.legal_name".to_string()).or_insert(name);
+            }
         }
     }
     default_governing_law(&mut ctx, choice_rendering);
@@ -3348,6 +3351,22 @@ const GOVERNING_LAW_DEFAULTED_MARKER: &str = "custom_single_choice__governing_la
 /// win — only a gap is filled. A gap fill records
 /// [`GOVERNING_LAW_DEFAULTED_MARKER`] beside the Nevada value so a chosen
 /// Nevada and a defaulted Nevada stay distinct in the fill context.
+/// The Firm's legal name behind `brand`, from the compiled Brand registry.
+/// An unknown key or a Brand with no legal person fills nothing.
+fn firm_legal_name_for_brand(brand: &str) -> Option<String> {
+    let key = views::brand::BrandKey::parse(brand.trim())?;
+    let name = key
+        .resolve_branding(&views::brand::DEFAULT_BRANDING)
+        .firm
+        .legal_entity
+        .trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
 fn default_governing_law(ctx: &mut BTreeMap<String, String>, rendering: ChoiceRendering) {
     let nevada = match rendering {
         ChoiceRendering::Labels => "Nevada",
@@ -3552,7 +3571,7 @@ fn progress_from_chain(order: &[StateName], current_state: &StateName) -> (usize
 #[cfg(test)]
 mod tests {
     use super::{
-        context_from_answers, progress_from_chain, questionnaire_chain,
+        context_from_answers, firm_legal_name_for_brand, progress_from_chain, questionnaire_chain,
         render_context_from_answers, start_post, substitute_template_body,
         typst_body_from_template, StartWalkBody,
     };
@@ -3560,6 +3579,20 @@ mod tests {
     use std::collections::BTreeMap;
     use uuid::Uuid;
     use workflows::{retainer_intake_questionnaire, StateName};
+
+    #[test]
+    fn a_declared_brand_supplies_its_firm_legal_name() {
+        let neon = firm_legal_name_for_brand("neon").expect("the default Brand names its Firm");
+        assert_eq!(
+            neon,
+            views::brand::BrandKey::Neon
+                .resolve_branding(&views::brand::DEFAULT_BRANDING)
+                .firm
+                .legal_entity
+        );
+        assert!(firm_legal_name_for_brand("not-a-brand").is_none());
+        assert!(firm_legal_name_for_brand("").is_none());
+    }
 
     #[tokio::test]
     async fn project_authored_onboarding_walk_reaches_its_declared_review_gate() {
