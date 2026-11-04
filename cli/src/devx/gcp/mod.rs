@@ -752,9 +752,70 @@ mod tests {
         );
         assert_eq!(
             line,
-            "gcp setup [neon-law-test] 05/19 private assets bucket example-a-assets"
+            "gcp setup [neon-law-test] 05/20 private assets bucket example-a-assets"
         );
         assert!(!line.contains("password"));
+    }
+
+    #[test]
+    fn offsite_archive_requires_both_names_and_a_different_project() {
+        let config = |project: Option<&str>, bucket: Option<&str>| super::SetupConfig {
+            offsite_archives_project_id: project.map(ToString::to_string),
+            offsite_archives_bucket: bucket.map(ToString::to_string),
+            ..super::SetupConfig::default()
+        };
+        // The lane declined is a first-class answer.
+        assert_eq!(
+            super::resolve_offsite_archive("example-deploy", &config(None, None)).unwrap(),
+            None
+        );
+        // Both names, different projects: resolved.
+        assert_eq!(
+            super::resolve_offsite_archive(
+                "example-deploy",
+                &config(
+                    Some("example-archive"),
+                    Some("example-deployment-archives-offsite")
+                )
+            )
+            .unwrap(),
+            Some(("example-archive", "example-deployment-archives-offsite"))
+        );
+        // Half-configured in either direction refuses — a bucket without the
+        // project id would provision in-project.
+        let err = super::resolve_offsite_archive(
+            "example-deploy",
+            &config(Some("example-archive"), None),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("--offsite-archives-bucket"),
+            "{err}"
+        );
+        let err = super::resolve_offsite_archive(
+            "example-deploy",
+            &config(None, Some("example-deployment-archives-offsite")),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("--offsite-archives-project-id"),
+            "{err}"
+        );
+        // An archive inside the deployment project defeats the lane's whole
+        // purpose: same blast radius as the live workload.
+        let err = super::resolve_offsite_archive(
+            "example-deploy",
+            &config(
+                Some("example-deploy"),
+                Some("example-deployment-archives-offsite"),
+            ),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("--offsite-archives-project-id"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("blast radius"), "{err}");
     }
 
     #[tokio::test]

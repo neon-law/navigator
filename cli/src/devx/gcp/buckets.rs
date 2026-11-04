@@ -725,9 +725,10 @@ mod tests {
     use super::super::client::{GcpClient, GcpService, StaticToken};
     use super::{
         assets_font_cors_rule, ensure_assets_cors, ensure_bucket, ensure_lifecycle,
-        legacy_assets_font_cors_rule, BucketKind, CreateBucketBody, EnsureOutcome, IamConfig,
-        UniformAccess, APPLICATIONS_RETENTION_DAYS, POSTGRES_BACKUPS_RETENTION_DAYS,
-        TELEMETRY_RETENTION_DAYS,
+        ensure_offsite_archive, ensure_offsite_archive_writer, legacy_assets_font_cors_rule,
+        BucketKind, CreateBucketBody, EnsureOutcome, IamConfig, UniformAccess,
+        APPLICATIONS_RETENTION_DAYS, OFFSITE_ARCHIVES_RETENTION_SECONDS,
+        POSTGRES_BACKUPS_RETENTION_DAYS, TELEMETRY_RETENTION_DAYS,
     };
 
     const PUBLIC_BASE_URL: &str = "https://www.neonlaw.com";
@@ -888,6 +889,7 @@ mod tests {
                 uniform_bucket_level_access: UniformAccess { enabled: true },
                 public_access_prevention: BucketKind::Assets.public_access_prevention(),
             },
+            retention_policy: None,
         })
         .unwrap();
         assert!(
@@ -1295,5 +1297,263 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{err}").contains("500"), "got {err}");
+    }
+
+    #[test]
+    fn offsite_archive_is_classified_by_suffix_and_carries_no_lifecycle_rule() {
+        assert_eq!(
+            BucketKind::from_name("example-deployment-archives-offsite"),
+            BucketKind::OffsiteArchives
+        );
+        assert_eq!(BucketKind::OffsiteArchives.storage_class(), "STANDARD");
+        // Retention belongs to the locked policy, never to a lifecycle age
+        // rule: the lock is the 25-year decision, made once and verified.
+        assert_eq!(BucketKind::OffsiteArchives.retention_days(), None);
+        assert_eq!(
+            BucketKind::OffsiteArchives.public_access_prevention(),
+            Some("enforced")
+        );
+        // 25 × 365.25 days in seconds. Locked GCS retention cannot be
+        // shortened or removed, so this constant is permanent the moment
+        // provisioning locks a bucket with it.
+        assert_eq!(OFFSITE_ARCHIVES_RETENTION_SECONDS, 788_940_000);
+    }
+
+    #[tokio::test]
+    async fn offsite_archive_is_created_verified_then_locked() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/storage/v1/b"))
+            .and(query_param("project", "example-archive"))
+            .and(body_partial_json(json!({
+                "name": "example-deployment-archives-offsite",
+                "storageClass": "STANDARD",
+                "retentionPolicy": { "retentionPeriod": "788940000" },
+                "iamConfiguration": {
+                    "uniformBucketLevelAccess": { "enabled": true },
+                    "publicAccessPrevention": "enforced"
+                }
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"name": "b"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/example-deployment-archives-offsite"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "metageneration": "1",
+                "retentionPolicy": {
+                    "retentionPeriod": "788940000",
+                    "isLocked": false
+                },
+                "iamConfiguration": {
+                    "uniformBucketLevelAccess": { "enabled": true },
+                    "publicAccessPrevention": "enforced"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/storage/v1/b/example-deployment-archives-offsite"))
+            .and(body_partial_json(json!({ "lifecycle": { "rule": [] } })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // The lock carries the metageneration guard read from the verified
+        // bucket, and reports the policy back as locked.
+        Mock::given(method("POST"))
+            .and(path(
+                "/storage/v1/b/example-deployment-archives-offsite/lockRetentionPolicy",
+            ))
+            .and(query_param("ifMetagenerationMatch", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "retentionPolicy": {
+                    "retentionPeriod": "788940000",
+                    "isLocked": true
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let outcome = ensure_offsite_archive(
+            &client_pointed_at(&server),
+            "example-archive",
+            "example-deployment-archives-offsite",
+            "us-west4",
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, EnsureOutcome::Created);
+    }
+
+    #[tokio::test]
+    async fn already_locked_offsite_archive_skips_the_lock_call() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/storage/v1/b"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/example-deployment-archives-offsite"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "metageneration": "7",
+                "retentionPolicy": {
+                    "retentionPeriod": "788940000",
+                    "isLocked": true
+                },
+                "iamConfiguration": {
+                    "uniformBucketLevelAccess": { "enabled": true },
+                    "publicAccessPrevention": "enforced"
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/storage/v1/b/example-deployment-archives-offsite"))
+            .and(body_partial_json(json!({ "lifecycle": { "rule": [] } })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // An already-locked, verified bucket is a no-op: a lock call here
+        // would fail the test, and so would a policy rewrite.
+        Mock::given(method("POST"))
+            .and(path(
+                "/storage/v1/b/example-deployment-archives-offsite/lockRetentionPolicy",
+            ))
+            .respond_with(ResponseTemplate::new(500).set_body_string("lock must not be called"))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let outcome = ensure_offsite_archive(
+            &client_pointed_at(&server),
+            "example-archive",
+            "example-deployment-archives-offsite",
+            "us-west4",
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, EnsureOutcome::AlreadyExists);
+    }
+
+    #[tokio::test]
+    async fn offsite_archive_refuses_to_lock_a_policy_it_did_not_write() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/storage/v1/b"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/example-deployment-archives-offsite"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "metageneration": "1",
+                "retentionPolicy": {
+                    "retentionPeriod": "31536000",
+                    "isLocked": false
+                },
+                "iamConfiguration": {
+                    "uniformBucketLevelAccess": { "enabled": true },
+                    "publicAccessPrevention": "enforced"
+                }
+            })))
+            .mount(&server)
+            .await;
+        // A bucket that pre-exists with a different retention period is
+        // refused, never locked and never silently converged. The lifecycle
+        // clear still runs — the desired rule set is always empty.
+        Mock::given(method("PATCH"))
+            .and(path("/storage/v1/b/example-deployment-archives-offsite"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"name": "example-deployment-archives-offsite"})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/storage/v1/b/example-deployment-archives-offsite/lockRetentionPolicy",
+            ))
+            .respond_with(ResponseTemplate::new(500).set_body_string("lock must not be called"))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let err = ensure_offsite_archive(
+            &client_pointed_at(&server),
+            "example-archive",
+            "example-deployment-archives-offsite",
+            "us-west4",
+        )
+        .await
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("verify offsite archive bucket"),
+            "{message}"
+        );
+        assert!(message.contains("788940000"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn offsite_archive_writer_grant_is_exactly_creator_and_viewer() {
+        let client = GcpClient::new(Arc::new(StaticToken("t".into()))).with_dry_run();
+        ensure_offsite_archive_writer(
+            &client,
+            "example-deployment",
+            "navigator-web",
+            "example-deployment-archives-offsite",
+        )
+        .await
+        .unwrap();
+
+        let calls = client.recorded_calls();
+        assert_eq!(
+            calls.len(),
+            2,
+            "exactly the creator and viewer bindings: {calls:?}"
+        );
+        for call in &calls {
+            let command = call.url.as_str();
+            assert!(
+                command.contains(
+                    "gcloud storage buckets add-iam-policy-binding \
+                     gs://example-deployment-archives-offsite"
+                ),
+                "{command}"
+            );
+            assert!(
+                command.contains(
+                    "serviceAccount:navigator-web@example-deployment.iam.gserviceaccount.com"
+                ),
+                "{command}"
+            );
+        }
+        let plan = calls
+            .iter()
+            .map(|call| call.url.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(plan.contains("roles/storage.objectCreator"), "{plan}");
+        assert!(plan.contains("roles/storage.objectViewer"), "{plan}");
+        // No administration, no overwrite, and no deletion anywhere in the
+        // grant — the IAM layer of the write-only guarantee.
+        for forbidden in [
+            "roles/storage.objectAdmin",
+            "roles/storage.objectUser",
+            "storage.objects.delete",
+            "storage.objects.update",
+            "storage.buckets.delete",
+        ] {
+            assert!(
+                !plan.contains(forbidden),
+                "{forbidden} in the grant: {plan}"
+            );
+        }
     }
 }
