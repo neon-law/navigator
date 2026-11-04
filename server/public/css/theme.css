@@ -1518,8 +1518,11 @@ a.nav-pagination__link:hover {
    footer's muted fine print with the link underlined in the same primary, so
    a reader sees it is a link without it shouting. */
 .site-footer__memberships {
-  display: grid;
-  gap: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem 1.25rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1930,6 +1933,7 @@ a.nav-pagination__link:hover {
 
   .site-footer__memberships {
     justify-self: start;
+    justify-content: flex-start;
   }
 }
 
@@ -6023,12 +6027,12 @@ a.nav-steps__step:focus-visible {
 }
 
 
+/* Guieb & Shook's chamber badge, beside the association badge and as tall
+   as its tile. */
 .site-footer__gvc-badge {
   display: block;
-  width: 240px;
-  max-width: 100%;
-  height: auto;
-  margin: 1.5rem auto 0;
+  height: 2.4rem;
+  width: auto;
 }
 /* Aster perches on the /world map section's top-right corner: absolute over
    the card, decorative, and pointer-transparent so map interactions pass

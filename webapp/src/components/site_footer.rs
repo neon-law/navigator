@@ -22,6 +22,13 @@
 
 use dioxus::prelude::*;
 
+/// Guieb & Shook PC's closing footer lines, shown only when the operating
+/// Firm is Guieb & Shook PC.
+pub const FOOTER_TAGLINE: [&str; 2] = [
+    "Everyone deserves access to justice.",
+    "Made with ❤️ in 🗽.",
+];
+
 use crate::components::{ExternalLink, Icon, IconName};
 
 /// Provider and property notices, independent of the operating firm.
@@ -333,6 +340,10 @@ pub fn SiteFooterLegal(
     /// Firm-verified public membership badge, resolved by the server.
     #[props(default)]
     membership_badge_href: String,
+    /// Close the legal strip with [`FOOTER_TAGLINE`]. The server sets it for
+    /// Guieb & Shook PC only.
+    #[props(default)]
+    tagline: bool,
     /// The registered word mark the site trades under, spelled the way the
     /// register spells it, and the registration that proves it. Renders one
     /// notice under the copyright line — the site's two ownership facts read
@@ -565,7 +576,7 @@ pub fn SiteFooterLegal(
                 // the same family and the same affiliation on every host — so
                 // they sit with the firm's contact detail above and its legal
                 // strip below, not beside a brand's header.
-                if brands.len() > 1 || !memberships.is_empty() {
+                if brands.len() > 1 || !memberships.is_empty() || !membership_badge_href.is_empty() {
                     div { class: "site-footer__affiliations",
                         // "Our Family": every house brand the firm wears, the
                         // current one shown but not linked, the rest linking
@@ -635,7 +646,7 @@ pub fn SiteFooterLegal(
                         // same new-tab treatment every outbound link on the
                         // page does. The award glyph is decorative: the
                         // sentence beside it is the whole meaning.
-                        if !memberships.is_empty() {
+                        if !memberships.is_empty() || !membership_badge_href.is_empty() {
                             ul { class: "site-footer__memberships",
                                 for membership in memberships.iter() {
                                     li { class: "site-footer__membership", key: "{membership.href}",
@@ -667,6 +678,20 @@ pub fn SiteFooterLegal(
                                                 href: membership.href.clone(),
                                                 "{membership.standing}"
                                             }
+                                        }
+                                    }
+                                }
+                                // Guieb & Shook's chamber badge sits on the same
+                                // line as the association's, at the same height.
+                                if !membership_badge_href.is_empty() {
+                                    li { class: "site-footer__membership",
+                                        img {
+                                            class: "site-footer__gvc-badge",
+                                            src: membership_badge_href,
+                                            alt: "Proud member of Greater Vancouver Chamber",
+                                            width: "1500",
+                                            height: "1050",
+                                            loading: "lazy",
                                         }
                                     }
                                 }
@@ -756,6 +781,9 @@ pub fn SiteFooterLegal(
                             }
                         }
                     }
+                    if tagline {
+                        p { class: "site-footer__tagline", "{FOOTER_TAGLINE[0]}" br {} "{FOOTER_TAGLINE[1]}" }
+                    }
                     // One line names the software this page runs: "Powered
                     // by", the public source repository, the release serving
                     // here, and the repository's stars.
@@ -785,16 +813,6 @@ pub fn SiteFooterLegal(
                                 repo: crate::source_repository::SOURCE_REPO.to_string(),
                                 version: navigator_version.clone(),
                                 stars: github_stars,
-                            }
-                        }
-                        if !membership_badge_href.is_empty() {
-                            img {
-                                class: "site-footer__gvc-badge",
-                                src: membership_badge_href,
-                                alt: "Proud member of Greater Vancouver Chamber",
-                                width: "1500",
-                                height: "1050",
-                                loading: "lazy",
                             }
                         }
                     }

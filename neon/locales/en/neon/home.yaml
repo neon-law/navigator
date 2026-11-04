@@ -1,7 +1,7 @@
 head_title: "{site_name} | Home"
 meta_description: >-
   Business counsel, built for the way you work. $5,000 once for contracts within your agreed scope,
-  then from $100/day for ongoing counsel, with contract reviews returned within three business days.
+  then from $50/day for ongoing counsel, with contract reviews returned within three business days.
   Additional flat fees may apply and are quoted in the engagement letter. Financings and excluded agreements cost extra.
 heading: Keep building.
 lead: Attorneys for the Ambitious.
@@ -30,7 +30,7 @@ company:
   video_label: Neon Law presentation
   membership_label: Counsel on call.
   membership_prefix: From
-  membership_price: "$100"
+  membership_price: "$50"
   membership_unit: / day
   membership_body: For ongoing counsel. Ask questions in Slack and pay only for the days the project is active. Additional flat fees may apply and are quoted in the engagement letter.
   membership_features:

@@ -410,7 +410,7 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
         indexed_page(
             "Business counsel",
             "/business",
-            &locales::fractional_gc(&views::brand::DEFAULT_BRANDING).meta_description,
+            &locales::home(&views::brand::DEFAULT_BRANDING).meta_description,
         ),
         services_page_link(),
         indexed_page(
