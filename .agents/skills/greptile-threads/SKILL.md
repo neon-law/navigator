@@ -17,10 +17,10 @@ comment](../../../docs/agent-workflows.md#address-a-pr-comment).
 ## 1. List the open threads
 
 ```bash
-gh api graphql -f query='
-query($owner:String!,$repo:String!,$pr:Int!){
+gh api graphql --paginate -f query='
+query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
   repository(owner:$owner,name:$repo){ pullRequest(number:$pr){
-    reviewThreads(first:100){
+    reviewThreads(first:100, after:$endCursor){
       pageInfo{ hasNextPage endCursor }
       nodes{ id isResolved isOutdated path line
         comments(first:20){ nodes{ databaseId author{login} body } } } } } }
@@ -31,9 +31,10 @@ query($owner:String!,$repo:String!,$pr:Int!){
         | {id, path, line, isOutdated, finding: .comments.nodes[0].body, replies: (.comments.nodes|length - 1)}'
 ```
 
-Follow `pageInfo.endCursor` while `hasNextPage` is true. The bodies are HTML-heavy, so strip tags before you read them.
-Also read Greptile's summary comment (`gh api repos/<slug>/issues/<N>/comments`): a finding that appears only there has
-no thread to resolve and gets a PR comment instead.
+`--paginate` follows `endCursor` until `hasNextPage` is false, so threads beyond the first 100 are listed too. The
+bodies are HTML-heavy, so strip tags before you read them. Also read Greptile's summary comment (`gh api
+repos/<slug>/issues/<N>/comments`): a finding that appears only there has no thread to resolve and gets a PR comment
+instead.
 
 ## 2. Settle each finding
 
@@ -71,14 +72,24 @@ or project name, and follow [public contributor safety](../../../docs/public-con
 ## 4. Confirm, then watch for the re-review
 
 ```bash
-gh api graphql -f query='{repository(owner:"<owner>",name:"<repo>"){pullRequest(number:<N>){
-  reviewThreads(first:100){nodes{isResolved}}}}}' \
-  --jq '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved|not)]|length'
+gh api graphql --paginate -f query='
+query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
+  repository(owner:$owner,name:$repo){ pullRequest(number:$pr){
+    reviewThreads(first:100, after:$endCursor){
+      pageInfo{ hasNextPage endCursor }
+      nodes{ id isResolved comments(first:1){ nodes{ author{login} } } } } } }
+}' -F owner=<owner> -F repo=<repo> -F pr=<N> \
+  --jq '.data.repository.pullRequest.reviewThreads.nodes[]
+        | select(.isResolved|not)
+        | select(.comments.nodes[0].author.login|test("greptile")) | .id' | wc -l
 gh pr view <N> --json mergeStateStatus,autoMergeRequest
 ```
 
-The count must be `0`. Greptile reviews again after each push and can open new threads on the fix itself, so check again
-once its check run on the new head completes. The PR is not done until that review is answered too.
+The command pages through every thread and counts only the unresolved threads Greptile opened. That count must be `0`. A
+human reviewer's thread you left open is not counted here, but it still holds the merge under
+`required_review_thread_resolution`, so name it in the report as a blocker for its reviewer. Greptile reviews again
+after each push and can open new threads on the fix itself, so check again once its check run on the new head completes.
+The PR is not done until that review is answered too.
 
 ## Report
 
