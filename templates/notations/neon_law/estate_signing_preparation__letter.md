@@ -70,4 +70,4 @@ Please let us know if anything above conflicts with your availability.
 
 Sincerely,
 
-**Guieb & Shook PC**, trading as **Neon Law**
+{{firm.legal_name}}

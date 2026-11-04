@@ -36,8 +36,8 @@ Re: Closing Letter — {{project.name}}
 
 Dear {{person__client.name}}:
 
-This Closing Letter confirms that Guieb & Shook PC has completed its work for {{entity.name}} (the "Client") on the
-matter referred to as {{project.code}}.
+This Closing Letter confirms that the Firm has completed its work for {{entity.name}} (the "Client") on the matter
+referred to as {{project.code}}.
 
 ## I. Representation concluded
 

@@ -26,6 +26,8 @@ const ENTITY_CODE: &str = "Y010";
 const FIRM_TRADE_NAME_CODE: &str = "Y017";
 /// `Y018` restricts California law-firm entity wording in onboarding/offboarding templates.
 const CALIFORNIA_LAW_FIRM_ENTITY_CODE: &str = "Y018";
+/// `Y027` rewrites a compiled Firm legal name in contract prose to the role.
+const FIRM_ROLE_NAME_CODE: &str = "Y027";
 const MANIFEST_COMMENT_CODE: &str = "Y011";
 const MANIFEST_VERSION_CODE: &str = "Y012";
 const MANIFEST_DEPRECATED_CODE: &str = "Y013";
@@ -83,6 +85,7 @@ fn all_shipped_codes() -> BTreeSet<&'static str> {
     codes.insert(ENTITY_CODE);
     codes.insert(FIRM_TRADE_NAME_CODE);
     codes.insert(CALIFORNIA_LAW_FIRM_ENTITY_CODE);
+    codes.insert(FIRM_ROLE_NAME_CODE);
     codes.insert(MANIFEST_COMMENT_CODE);
     codes.insert(MANIFEST_VERSION_CODE);
     codes.insert(MANIFEST_DEPRECATED_CODE);
@@ -117,6 +120,6 @@ fn every_shipped_code_has_an_entry_in_the_gate_docs() {
 /// Pin the exhaustive count so a rule addition or removal is a visible diff here, not a silent
 /// change to how many codes the doc is supposed to cover.
 #[test]
-fn the_shipped_code_count_is_one_hundred_and_twenty_one() {
-    assert_eq!(all_shipped_codes().len(), 121);
+fn the_shipped_code_count_is_one_hundred_and_twenty_two() {
+    assert_eq!(all_shipped_codes().len(), 122);
 }

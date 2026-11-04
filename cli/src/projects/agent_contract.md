@@ -10,6 +10,13 @@ the matter's pages, Drafts, and document pointers is a reviewed commit. Declare 
 write application code. When a declaration cannot say what the matter needs, open a Linear issue for a new Section or
 gate rule rather than working around it.
 
+## The Firm
+
+Name the Firm by its role: "the Firm". Do not spell a Firm's legal name in this file, in a skill, in `README.md`, or in
+a Draft. Where a letter must print that name — the letterhead, the From line, or the signature block — write
+`{{firm.legal_name}}`. Navigator fills it from the Firm behind the Brand declared as `project.brand`. A sentence that
+states a fact about a named entity, such as a conversion, a shareholding, or a services agreement, keeps that name.
+
 ## Find the term first
 
 Before naming a table, field, state, or UI concept, run `navigator glossary list` to find a term and its plain-language

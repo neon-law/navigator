@@ -8332,7 +8332,12 @@ fn run_render(
     // free text is untouched.
     // An unanswered Signer Box prints as an empty rule for the signer's
     // hand, in the preview and the final render alike.
-    let answer_context = rendered_answers(&contents, answers);
+    let mut answer_context = rendered_answers(&contents, answers);
+    if let Some(name) = project_firm_legal_name(file) {
+        answer_context
+            .entry("firm.legal_name".to_string())
+            .or_insert_with(|| pdf::markdown::bold_answer(&name));
+    }
     let Ok(body) = pleading_body(file, &contents, &profile, &answer_context, preview)
         .map_err(|message| eprintln!("navigator: {message}"))
     else {
@@ -8407,6 +8412,22 @@ fn run_render(
 /// never the default letterhead. Only the letter frame carries one, so no
 /// other frame reads the manifest; a template outside any Project renders
 /// on the default Brand's letterhead.
+/// The Firm legal name behind the Project's declared Brand, when `file` sits
+/// in a Project whose `navigator.yaml` resolves to one.
+fn project_firm_legal_name(file: &Path) -> Option<String> {
+    let path = projects::matter::find_manifest(file)?;
+    let contents = std::fs::read_to_string(&path).ok()?;
+    let manifest = projects::manifest::parse(&contents).ok()?;
+    let letterhead =
+        cli::letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref()).ok()?;
+    let name = letterhead.entity.trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
 fn project_letterhead(file: &Path, format: &pdf::OutputFormat) -> Result<pdf::Letterhead, String> {
     if !matches!(format, pdf::OutputFormat::Letter(_)) {
         return Ok(pdf::Letterhead::default());

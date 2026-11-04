@@ -172,6 +172,6 @@ Agreed and accepted:
 
 By: ______________________________  Date: ____________
 
-Guieb & Shook PC
+{{firm.legal_name}}
 
 By: ______________________________  Date: ____________
