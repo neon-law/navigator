@@ -626,7 +626,7 @@ async fn stock_local_personas_reach_the_litigation_matter_through_their_own_lens
 }
 
 /// The Billing tab on the stock KIND deployment (which carries no app-side
-/// PostgreSQL): the tab opens from `?tab=billing` and its empty sections
+/// PostgreSQL): the tab opens from its path segment and its empty sections
 /// explain themselves instead of rendering blank regions. Captured time,
 /// fee structures, and the mirror's invoices need a PostgreSQL-backed
 /// deployment, so their rows are asserted by the store, API, and SSR
@@ -639,7 +639,7 @@ async fn the_billing_tab_opens_and_its_empty_sections_explain_themselves() {
     };
     login_as_lawyer(&c).await;
     let url = format!(
-        "{}/app/projects/{}?tab=billing",
+        "{}/app/projects/{}/billing",
         base_url(),
         store::seed::SAMPLE_LITIGATION_CODE
     );

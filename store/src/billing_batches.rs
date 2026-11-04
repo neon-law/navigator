@@ -307,6 +307,7 @@ pub const INVOICE_CURRENCY: &str = "USD";
 /// billing charges nobody saw. Inputs are the effective compose sets: the
 /// remaining fee, the covered-time-filtered entries, and the confirmed
 /// unbilled costs, each with the fields that shape the money.
+#[must_use]
 pub fn preview_digest(
     entries: &[crate::time_entries::TimeEntry],
     costs: &[crate::project_costs::ProjectCost],
@@ -317,19 +318,21 @@ pub fn preview_digest(
 
     let mut canonical = String::new();
     if let Some(fee) = flat_fee_cents {
-        canonical.push_str(&format!("fee:{fee};"));
+        let _ = write!(canonical, "fee:{fee};");
     }
     for entry in entries {
-        canonical.push_str(&format!(
+        let _ = write!(
+            canonical,
             "t:{};{};{};{};",
             entry.id, entry.minutes, entry.rate_cents_per_hour, entry.description
-        ));
+        );
     }
     for cost in costs {
-        canonical.push_str(&format!(
+        let _ = write!(
+            canonical,
             "c:{};{};{};",
             cost.id, cost.amount_cents, cost.description
-        ));
+        );
     }
     let digest = Sha256::digest(canonical.as_bytes());
     let mut hex = String::with_capacity(64);

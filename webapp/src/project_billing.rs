@@ -262,11 +262,11 @@ pub fn MatterTimer(code: String, csrf: String, timer: TimerView) -> Element {
                     // the attorney wants recorded ride the same submit — an
                     // empty description can no longer reach the store, and
                     // no-charge time stays possible.
-                    Field::text("Description", "description", "{note}")
+                    {Field::text("Description", "description", note.clone())
                         .required()
                         .help("What the client's invoice will say.")
-                        .render(),
-                    Field::checkbox("Billable", "billable", "on", true).render(),
+                        .render()}
+                    {Field::checkbox("Billable", "billable", "on", true).render()}
                     button {
                         class: "nav-btn nav-btn--secondary matter-timer-stop",
                         r#type: "submit",
@@ -831,7 +831,6 @@ pub(crate) async fn read_billing(
             store::attorney_rates::resolve_hourly_rate_cents(pg, person_id, project_id, today)
                 .await
                 .map_err(crate::lawyer_project_detail::server_error)?
-                .flatten()
                 .map(|rate| crate::portal_project_detail::format_usd(i64::from(rate)))
         }
         None => None,
@@ -839,7 +838,6 @@ pub(crate) async fn read_billing(
     let flat_fee = store::attorney_rates::flat_fee_cents(pg, project_id)
         .await
         .map_err(crate::lawyer_project_detail::server_error)?
-        .flatten()
         .map(crate::portal_project_detail::format_usd);
 
     Ok(BillingReads {
