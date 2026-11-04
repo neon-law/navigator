@@ -36,8 +36,9 @@ pub fn answers_to_yaml(answers: &[FiledAnswer]) -> Result<String> {
         let Some(state) = answer.state_name.as_deref().filter(|s| !s.is_empty()) else {
             continue;
         };
-        let value = serde_yaml::to_value(&answer.value)
-            .map_err(|error| anyhow::anyhow!("answer for `{state}` is not representable: {error}"))?;
+        let value = serde_yaml::to_value(&answer.value).map_err(|error| {
+            anyhow::anyhow!("answer for `{state}` is not representable: {error}")
+        })?;
         map.insert(state.to_string(), value);
     }
     serde_yaml::to_string(&map).context("serialize answers file")
@@ -147,7 +148,10 @@ mod tests {
         let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
         let map = parsed.as_mapping().unwrap();
         assert_eq!(map.len(), 3);
-        assert_eq!(saved_scalar(&map["person__client"]).unwrap(), "Libra Example");
+        assert_eq!(
+            saved_scalar(&map["person__client"]).unwrap(),
+            "Libra Example"
+        );
         assert_eq!(saved_scalar(&map["usd__fee"]).unwrap(), "2500");
     }
 
@@ -217,7 +221,10 @@ mod tests {
         assert_eq!(saved_count, 2);
         let loaded = load_answers_file(&path).unwrap();
         assert_eq!(loaded.len(), 2);
-        assert_eq!(saved_scalar(&loaded["person__client"]).unwrap(), "P001 Client");
+        assert_eq!(
+            saved_scalar(&loaded["person__client"]).unwrap(),
+            "P001 Client"
+        );
         assert_eq!(saved_scalar(&loaded["custom_text__notes"]).unwrap(), "");
     }
 

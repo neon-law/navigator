@@ -29,12 +29,7 @@ pub async fn offboard(
     run_offboard(root, host, effective_at).await
 }
 
-async fn run(
-    root: &Path,
-    host: Option<&str>,
-    kind: &str,
-    answers_from: Option<&Path>,
-) -> ExitCode {
+async fn run(root: &Path, host: Option<&str>, kind: &str, answers_from: Option<&Path>) -> ExitCode {
     match run_open(root, host, kind, answers_from).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -96,7 +91,11 @@ async fn run_open(
         code,
         &project.client_dri,
         &project.code,
-        if kind == ONBOARDING { answers_from } else { None },
+        if kind == ONBOARDING {
+            answers_from
+        } else {
+            None
+        },
     )
     .await;
     if created != ExitCode::SUCCESS {
@@ -621,7 +620,9 @@ mod tests {
             )
             .unwrap();
         }
-        let error = run_open(root.path(), None, ONBOARDING).await.unwrap_err();
+        let error = run_open(root.path(), None, ONBOARDING, None)
+            .await
+            .unwrap_err();
         assert!(
             error.to_string().contains("multiple onboarding Drafts"),
             "ambiguous Drafts must be refused before Git or HTTP: {error:#}"
@@ -721,7 +722,7 @@ mod tests {
     async fn onboarding_writes_a_stub_before_making_any_remote_request() {
         let root = tempfile::tempdir().unwrap();
         write_manifest(root.path());
-        run_open(root.path(), None, ONBOARDING).await.unwrap();
+        run_open(root.path(), None, ONBOARDING, None).await.unwrap();
         let stub =
             std::fs::read_to_string(template_path(root.path(), ONBOARDING).unwrap()).unwrap();
         assert!(stub.contains("Draft this letter"));
@@ -738,7 +739,7 @@ mod tests {
             "a".repeat(64)
         );
         std::fs::write(folder.join("retainer_signed.pdf.yaml"), pointer).unwrap();
-        run_open(root.path(), None, ONBOARDING).await.unwrap();
+        run_open(root.path(), None, ONBOARDING, None).await.unwrap();
     }
 
     #[tokio::test]
@@ -843,7 +844,7 @@ mod tests {
         std::fs::write(root.path().join(&relative), &stub).unwrap();
         // No git checkout and no host: reaching either would fail, so success
         // proves the stub stopped the command first.
-        run_open(root.path(), None, ONBOARDING).await.unwrap();
+        run_open(root.path(), None, ONBOARDING, None).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(root.path().join(relative)).unwrap(),
             stub

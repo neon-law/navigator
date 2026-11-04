@@ -4332,7 +4332,10 @@ async fn prefill_from_saved_answers(
         } else if question.has_candidates() {
             picker_selection_fields(&question, &crate::answers_file::saved_scalar(value)?)?
         } else {
-            vec![("value".to_string(), crate::answers_file::saved_scalar(value)?)]
+            vec![(
+                "value".to_string(),
+                crate::answers_file::saved_scalar(value)?,
+            )]
         };
         let resp = client
             .post(format!("{base}/app/lawyer/notations/{notation_id}/step"))
@@ -8750,8 +8753,14 @@ mod tests {
     async fn exercise_notation_commands(host: Option<&str>, server_uri: &str, ids: LawyerRouteIds) {
         assert_eq!(notation_list(host, "acme", true).await, ExitCode::SUCCESS);
         assert_eq!(
-            notation_create(host, "memo__contract_review", "libra@example.com", "acme", None)
-                .await,
+            notation_create(
+                host,
+                "memo__contract_review",
+                "libra@example.com",
+                "acme",
+                None
+            )
+            .await,
             ExitCode::SUCCESS
         );
         let client = reqwest::Client::new();
@@ -8833,8 +8842,9 @@ mod tests {
     async fn saved_answers_prefill_a_second_notation_with_the_same_fields() {
         let _lock = CREDENTIALS_ENV_LOCK.lock().await;
         let server = MockServer::start().await;
-        let host = Some(server.uri().as_str());
-        let _env = CredentialsEnv::new(&server.uri());
+        let uri = server.uri();
+        let host = Some(uri.as_str());
+        let _env = CredentialsEnv::new(&uri);
         let filed = Uuid::new_v4();
         let second = Uuid::new_v4();
 
@@ -8884,10 +8894,10 @@ mod tests {
         // Opening the second notation: the create 303s to the walker.
         Mock::given(method("POST"))
             .and(path("/app/projects/acme/notations/new"))
-            .respond_with(ResponseTemplate::new(303).append_header(
-                "location",
-                format!("/app/lawyer/notations/{second}/step"),
-            ))
+            .respond_with(
+                ResponseTemplate::new(303)
+                    .append_header("location", format!("/app/lawyer/notations/{second}/step")),
+            )
             .mount(&server)
             .await;
 
@@ -8941,12 +8951,9 @@ mod tests {
             .iter()
             .filter(|request| {
                 request.method == "POST"
-                    && request
-                        .url
-                        .path()
-                        == format!("/app/lawyer/notations/{second}/step")
+                    && request.url.path() == format!("/app/lawyer/notations/{second}/step")
             })
-            .map(|request| String::from_utf8(request.body.bytes().to_vec()).unwrap())
+            .map(|request| String::from_utf8(request.body.clone()).unwrap())
             .collect();
         assert_eq!(posted, vec!["value=Libra+Example".to_string()]);
     }
@@ -8958,16 +8965,17 @@ mod tests {
     async fn a_malformed_answers_file_fails_the_prefill_before_answering_anything() {
         let _lock = CREDENTIALS_ENV_LOCK.lock().await;
         let server = MockServer::start().await;
-        let host = Some(server.uri().as_str());
-        let _env = CredentialsEnv::new(&server.uri());
+        let uri = server.uri();
+        let host = Some(uri.as_str());
+        let _env = CredentialsEnv::new(&uri);
         let notation = Uuid::new_v4();
 
         Mock::given(method("POST"))
             .and(path("/app/projects/acme/notations/new"))
-            .respond_with(ResponseTemplate::new(303).append_header(
-                "location",
-                format!("/app/lawyer/notations/{notation}/step"),
-            ))
+            .respond_with(
+                ResponseTemplate::new(303)
+                    .append_header("location", format!("/app/lawyer/notations/{notation}/step")),
+            )
             .mount(&server)
             .await;
 
