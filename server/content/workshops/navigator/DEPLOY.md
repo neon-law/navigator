@@ -1242,10 +1242,14 @@ local sign pages, DocuSign-Connect-shaped HMAC-signed completion webhooks; dev a
 provider carries one of two statuses, `EnvelopeStatus`: `sent` (anchors validated against the prepared PDF, PDF stored)
 or `completed` (every recipient signed, documents and certificate filed). There is no third state. Tests fail the loop
 on purpose with the third enum, `Fault` — `send`, `view`, or `webhook` — and the durable envelope keeps its last true
-state across every injected failure. Before anything is sent, on either provider, `prepare_envelope` groups the
-manifest's fields into per-signer, per-role tabs (`SignatureFieldKind::tabs_key` picks the tab type, the recipient's
+state across every injected failure. Before anything is sent, on either provider, `prepare_envelope` groups
+the manifest's fields into per-signer, per-role tabs (`SignatureFieldKind::tabs_key` picks the tab type, the recipient's
 role picks the sign page) and refuses the send with a typed `SignatureError::TabValidation` when a field names no
-recipient, or `SignatureError::AnchorValidation` when the prepared PDF's text lacks the field's `nlsig-` anchor.
+recipient, or `SignatureError::AnchorValidation` when the prepared PDF's text lacks the field's `nlsig-` anchor. Off the
+loop, a matter's execution reading is another closed enum, `OnboardingStatus` (`store/src/projects.rs`): `pitch` — no
+completed, Navigator-sent onboarding envelope on the matter's onboarding notation — or `official` — that envelope has
+completed a loop Navigator itself sent. It is additive to `MatterLifecycle` (`pitch`/`active`/`closed`), which it does
+not change, and surfaces on the matter page, through `navigator project lifecycle`, and in the client portal.
 
 ---
 
