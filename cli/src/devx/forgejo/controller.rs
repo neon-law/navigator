@@ -1283,7 +1283,9 @@ mod tests {
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
-                .and(path_regex("^/api/packages/navigator/generic/navigator/26.11.5/"))
+                .and(path_regex(
+                    "^/api/packages/navigator/generic/navigator/26.11.5/",
+                ))
                 .respond_with(ResponseTemplate::new(200))
                 .expect(2)
                 .mount(&server)

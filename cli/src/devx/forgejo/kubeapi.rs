@@ -352,7 +352,9 @@ mod tests {
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
-                .and(path("/api/v1/namespaces/runners/pods/forgejo-job-x-abcde/log"))
+                .and(path(
+                    "/api/v1/namespaces/runners/pods/forgejo-job-x-abcde/log",
+                ))
                 .respond_with(ResponseTemplate::new(200).set_body_string("step one\n"))
                 .mount(&server)
                 .await;
@@ -375,7 +377,10 @@ mod tests {
             api.create(&json!({"kind": kind, "metadata": {"namespace": "runners"}}))
                 .unwrap();
         }
-        assert_eq!(api.runner_namespace().unwrap()["metadata"]["name"], "runners");
+        assert_eq!(
+            api.runner_namespace().unwrap()["metadata"]["name"],
+            "runners"
+        );
         assert_eq!(api.network_policies().unwrap(), json!({"items": []}));
         assert_eq!(api.job_log("forgejo-job-x").unwrap(), "step one\n");
         // A Job whose pod is already gone has an empty log.
