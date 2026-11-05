@@ -76,7 +76,7 @@ fn every_third_party_action_is_pinned_to_a_commit_sha() {
 }
 
 #[test]
-fn codeql_filters_only_the_self_reference_tag_query() {
+fn codeql_filters_only_the_sanctioned_queries() {
     let config =
         std::fs::read_to_string(repository_root().join(".github/codeql/codeql-config.yml"))
             .expect("the CodeQL config exists");
@@ -84,10 +84,15 @@ fn codeql_filters_only_the_self_reference_tag_query() {
     let filters = parsed["query-filters"]
         .as_sequence()
         .expect("query-filters");
-    assert_eq!(filters.len(), 1, "one filter, no more");
+    let excluded: Vec<&str> = filters
+        .iter()
+        .filter_map(|filter| filter["exclude"]["id"].as_str())
+        .collect();
     assert_eq!(
-        filters[0]["exclude"]["id"].as_str(),
-        Some("actions/unpinned-tag")
+        excluded,
+        vec!["actions/unpinned-tag", "rust/non-https-url"],
+        "only the sanctioned exclusions: the release-cut self-reference tag pin and the \
+         link-local GKE metadata server (HTTP by design) — see the config header"
     );
     let workflow =
         std::fs::read_to_string(repository_root().join(".github/workflows/codeql.yml")).unwrap();
