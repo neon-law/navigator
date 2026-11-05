@@ -265,6 +265,30 @@ Make one small change to a declared page, refresh, and show the reloaded matter 
 
 ## Use the Project's forge
 
+### Git is track changes for the whole folder
+
+Every Project repository is a Git repository. Git records each change to every file in the matter's folder: who made it,
+when, and why. The rest of this section uses a handful of Git words; each maps to work a lawyer already does.
+
+| Git | What it is in a matter |
+| --- | --- |
+| Commit | A saved redline that records who, when, and why |
+| Branch | A working draft that leaves the controlling version alone |
+| Pull request | Sending the redline to the reviewing lawyer, with margin comments |
+| Merge | The reviewer accepts the redline into `main`, the controlling version |
+| History | The folder's docket: every accepted change, in order |
+| Clone | A full copy of the file, history included |
+| Conflict | Two people redlining the same sentence; a person decides |
+| Gate | The clerk who rejects a nonconforming filing before it lands |
+
+Git holds the folder's text. It does not hold the documents themselves: `blobs/` keeps an exhibit list, and Navigator
+keeps the exhibits.
+
+---
+
+Open one file in the sample repository's history on the forge and read who changed it and why. Then have two attendees
+edit the same sentence on separate branches and open pull requests, so the room sees the second one stop on a conflict.
+
 ### Sign in, then receive repository access
 
 Forgejo hosts source repositories and pull requests. Open the repository recorded on the Project rather than guessing
