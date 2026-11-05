@@ -4,8 +4,9 @@
 records cloud-cost data when configured, and reports each scheduled run to firm operators.
 
 It serves deployment operators and analysts who need recoverable, queryable history without placing reporting work on
-the application database. Restate hosts the workflow in `workflows-service`, so retries and partial failures do not
-require a separate long-running archive service.
+the application database. Restate hosts the workflow in `workflows-service` by default. With
+`NAVIGATOR_DBOS_ARCHIVES_ENABLED`, the DBOS executor in `web` hosts it instead and adds the whole-PostgreSQL export.
+Neither needs a separate long-running archive service.
 
 See [Iceberg archive](../docs/iceberg-archive.md) for the data contract, [scheduled jobs](../docs/cronjobs.md) for the
 runtime shape, and the crate source for implementation details.
@@ -56,6 +57,17 @@ coverage manifests. Each manifest has a `relations` array of exact schema/name/k
 `accessible: true`; `derived` rules include an ordinary view and a nonempty reconstruction reason. Review inventories
 against the database's owned schema. Capture catalog input with `coverage::inventory`; accepting every discovered
 relation automatically would hide drift.
+
+The reviewed manifest lives in `k8s/postgres/archive/coverage.json`, which `ops ship` renders as the
+`navigator-archive-coverage` ConfigMap. `tests/coverage_manifest.rs` holds its `navigator` half to a freshly migrated
+database with DBOS launched. `cargo run -p archives --example coverage_inventory -- <url>` prints a review draft of any
+database, which is how the `forgejo` half is captured. See [Iceberg
+archive](../docs/iceberg-archive.md#the-coverage-manifest).
+
+The deployed export runs on the DBOS executor in `web` with `NAVIGATOR_DBOS_ARCHIVES_ENABLED`. It signs in to both
+databases as the read-only `navigator_archive` login, set by `NAVIGATOR_ARCHIVE_POSTGRES_USER` and
+`NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD`. Physical backups and WAL remain the recovery path; this export is the logical
+copy.
 
 The Forgejo source uses the same PostgreSQL server and TLS options with database `forgejo` and separate
 `NAVIGATOR_ARCHIVE_FORGEJO_USER` and `NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD` credentials. The caller must provision read

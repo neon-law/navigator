@@ -154,6 +154,29 @@ pub async fn inventory(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<Relatio
         .collect()
 }
 
+/// A review draft of `observed`: an export rule for every stored relation, and
+/// a derived rule with an empty reason for every ordinary view. The empty
+/// reason fails [`CoverageManifest::verify`] until a reviewer writes how the
+/// view is rebuilt, so a draft can never be committed unread.
+#[must_use]
+pub fn draft(observed: Vec<Relation>) -> CoverageManifest {
+    CoverageManifest {
+        relations: observed
+            .into_iter()
+            .map(|relation| match relation.kind {
+                RelationKind::View => Rule::Derived {
+                    relation,
+                    reason: String::new(),
+                },
+                _ => Rule::Export(Relation {
+                    accessible: true,
+                    ..relation
+                }),
+            })
+            .collect(),
+    }
+}
+
 /// Reviewed inventories for the two required databases. Configuration contains
 /// schema identities and exclusion reasons, never row data or credentials.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
