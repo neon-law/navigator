@@ -193,7 +193,6 @@ pub fn specimen_chart() -> Result<CalculatedChart, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dioxus::prelude::*;
     use ephemeris::{AstrologyChartRequest, AstrologyChartResponse, BirthTime, LocalBirthTime};
 
     fn response(approximate: bool, unknown: bool) -> AstrologyChartResponse {
