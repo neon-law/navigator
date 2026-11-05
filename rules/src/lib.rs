@@ -225,11 +225,12 @@ pub use workflow_steps::{
 };
 
 pub use engine::{
-    canonical_question_codes, classify_source, code_uniqueness_violations, lint_pages,
-    lint_source_classified, navigator_classified_rules, navigator_classified_rules_with_codes,
-    navigator_default_rules, navigator_default_rules_with_codes, navigator_event_rules,
-    navigator_markdown_only_rules, navigator_pages_rules, service_template_violations,
-    ClassifiedRuleEngine, DefaultFileFilter, DocumentKind, FileFilter, LintReport, RuleEngine,
+    blocking_violations, blocking_violations_without_checkout, canonical_question_codes,
+    classify_source, code_uniqueness_violations, lint_pages, lint_source_classified,
+    navigator_classified_rules, navigator_classified_rules_with_codes, navigator_default_rules,
+    navigator_default_rules_with_codes, navigator_event_rules, navigator_markdown_only_rules,
+    navigator_pages_rules, service_template_violations, ClassifiedRuleEngine, DefaultFileFilter,
+    DocumentKind, FileFilter, LintReport, RuleEngine, CHECKOUT_ONLY_RULE_CODES,
 };
 
 use std::ops::Range;
@@ -256,6 +257,21 @@ pub struct Violation {
     pub line: usize,
     pub range: Range<usize>,
     pub message: String,
+}
+
+impl std::fmt::Display for Violation {
+    /// `path:line CODE: message` — the line `navigator project gate`
+    /// prints, so a server refusal and a local lint read the same.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{} {}: {}",
+            self.path.display(),
+            self.line,
+            self.code,
+            self.message
+        )
+    }
 }
 
 /// The byte-offset range of a 1-based line within `contents`,

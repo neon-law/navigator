@@ -985,6 +985,31 @@ struct StreamingSessionStatus {
     received_bytes: u64,
 }
 
+/// The deployment answered `401 Unauthorized`: the session expired or never
+/// authenticated. It says nothing about whether a document exists, so a
+/// caller reports it as a session failure, never as a missing document.
+#[derive(Debug)]
+pub(crate) struct SessionRefused {
+    pub(crate) detail: String,
+}
+
+impl std::fmt::Display for SessionRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the deployment refused the session (401 Unauthorized)")?;
+        if !self.detail.is_empty() {
+            write!(f, ": {}", self.detail)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for SessionRefused {}
+
+/// Whether `error` is a [`SessionRefused`].
+pub(crate) fn is_session_refused(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<SessionRefused>().is_some()
+}
+
 /// Authenticated client for the one Project's document-sync operations.
 pub(crate) struct DocumentClient {
     base: String,
@@ -1113,6 +1138,11 @@ impl DocumentClient {
             .with_context(|| format!("GET {url}"))?;
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(anyhow::Error::new(SessionRefused {
+                detail: first_line(&text),
+            }));
+        }
         if !status.is_success() {
             return Err(anyhow!(
                 "no revision of `{slug}` is visible on this matter: {status}: {}",
@@ -1120,6 +1150,18 @@ impl DocumentClient {
             ));
         }
         serde_json::from_str(&text).context("parse document revisions response")
+    }
+
+    /// The same deployment, Project, and transport with a freshly minted
+    /// bearer — the gate's renewal after a CI session lapses mid-run.
+    pub(crate) fn with_token(&self, token: String) -> Self {
+        Self {
+            base: self.base.clone(),
+            token,
+            client: self.client.clone(),
+            project_id: self.project_id,
+            project_code: self.project_code.clone(),
+        }
     }
 
     /// Every asset row the caller's lens can see, with storage presence and
@@ -4380,12 +4422,15 @@ struct NotationDraftCreated {
 /// /app/projects/{project_code}/notations/draft`. The push persists and
 /// validates the pushed source, enforces the engagement-first rule, and
 /// opens a real notation run — the server returns the draft's path and
-/// the run's (see `portal::notation_draft`). Returns the draft's id, the
-/// run's id when one opened, and the draft's full URL on the deployment.
+/// the run's (see `portal::notation_draft`). `code` is the template's file
+/// stem, which the server stores and lints it under. Returns the draft's
+/// id, the run's id when one opened, and the draft's full URL on the
+/// deployment.
 pub(crate) async fn create_notation_draft(
     host: Option<&str>,
     project_code: &str,
     slug: &str,
+    code: &str,
     source: &str,
 ) -> Result<(Uuid, Option<Uuid>, String)> {
     let (base, token) = resolve(host)?;
@@ -4394,17 +4439,14 @@ pub(crate) async fn create_notation_draft(
     let resp = client
         .post(&url)
         .bearer_auth(&token)
-        .json(&serde_json::json!({ "slug": slug, "source": source }))
+        .json(&serde_json::json!({ "slug": slug, "code": code, "source": source }))
         .send()
         .await
         .with_context(|| format!("POST {url}"))?;
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "could not push a draft (status {status}). The server reported: {}",
-            first_line(&body),
-        ));
+        return Err(anyhow!(draft_push_refusal(status, &body)));
     }
     let created: NotationDraftCreated =
         resp.json().await.context("parse notation-draft response")?;
@@ -4413,6 +4455,27 @@ pub(crate) async fn create_notation_draft(
         created.notation_id,
         format!("{base}{}", created.path),
     ))
+}
+
+/// The message for a refused draft push. A 422 is the server's verdict on
+/// the template and lists every blocking violation one per line, so the
+/// whole body is the answer; any other status keeps to its first line.
+fn draft_push_refusal(status: reqwest::StatusCode, body: &str) -> String {
+    let reported = if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+        let lines: Vec<&str> = body
+            .lines()
+            .map(str::trim_end)
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        if lines.is_empty() {
+            first_line(body)
+        } else {
+            lines.join("\n")
+        }
+    } else {
+        first_line(body)
+    };
+    format!("could not push a draft (status {status}). The server reported: {reported}")
 }
 
 /// `navigator site notation list --project <code>` — inspect the private
@@ -6010,6 +6073,7 @@ mod tests {
             .and(path("/app/projects/acme/notations/draft"))
             .and(body_json(serde_json::json!({
                 "slug": "sample-letter",
+                "code": "sample_letter",
                 "source": "# Sample Letter\n",
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -6029,6 +6093,7 @@ mod tests {
             Some(&server_uri),
             "acme",
             "sample-letter",
+            "sample_letter",
             "# Sample Letter\n",
         )
         .await
@@ -6057,12 +6122,55 @@ mod tests {
             Some(&server_uri),
             "no-such-matter",
             "sample-letter",
+            "sample_letter",
             "# Sample Letter\n",
         )
         .await
         .expect_err("a 404 is not a pushed draft");
 
         assert!(err.to_string().contains("matter not found"), "{err}");
+    }
+
+    /// LAW-274: a 422 names every rule the template broke, not only the
+    /// summary line — the CLI reports the server's whole verdict.
+    #[tokio::test(flavor = "current_thread")]
+    async fn create_notation_draft_reports_every_violation_the_server_lists() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::new(&server_uri);
+
+        Mock::given(method("POST"))
+            .and(path("/app/projects/acme/notations/draft"))
+            .respond_with(ResponseTemplate::new(422).set_body_string(
+                "template `sample_letter` has 2 blocking rule violation(s); fix it and retry\n\
+                 sample_letter.md:1 N101: Frontmatter is missing `title`\n\
+                 sample_letter.md:9 S101: Line is 130 characters\n",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let err = create_notation_draft(
+            Some(&server_uri),
+            "acme",
+            "sample-letter",
+            "sample_letter",
+            "# Sample Letter\n",
+        )
+        .await
+        .expect_err("a 422 is not a pushed draft");
+
+        let message = err.to_string();
+        assert!(message.contains("status 422"), "{message}");
+        assert!(
+            message.contains("\nsample_letter.md:1 N101: Frontmatter is missing `title`"),
+            "{message}"
+        );
+        assert!(
+            message.contains("\nsample_letter.md:9 S101: Line is 130 characters"),
+            "{message}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
