@@ -1249,7 +1249,7 @@ recipient, or `SignatureError::AnchorValidation` when the prepared PDF's text la
 loop, a matter's execution reading is another closed enum, `OnboardingStatus` (`store/src/projects.rs`): `pitch` — no
 completed, Navigator-sent onboarding envelope on the matter's onboarding notation — or `official` — that envelope has
 completed a loop Navigator itself sent. It is additive to `MatterLifecycle` (`pitch`/`active`/`closed`), which it does
-not change, and surfaces on the matter page, through `navigator project lifecycle`, and in the client portal.
+not change, and surfaces on the matter page, through `navigator project lifecycle`, and in the Portal.
 
 ---
 

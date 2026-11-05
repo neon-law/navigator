@@ -11,5 +11,5 @@ provider](fake-signature-provider.md). It is the `official` value of the closed 
 outstanding, one declined — is [Pitch](pitch.md).
 
 Official is additive to the matter's lifecycle, which keeps `pitch`/`active`/`closed` — a matter can be active and still
-a pitch. The reading surfaces on the matter page, through `navigator project lifecycle`, and in the client portal, which
-reads [Pitch](pitch.md) until onboarding completes.
+a pitch. The reading surfaces on the matter page, through `navigator project lifecycle`, and in the [Portal](portal.md),
+which reads [Pitch](pitch.md) until onboarding completes.
