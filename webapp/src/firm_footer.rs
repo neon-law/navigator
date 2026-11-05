@@ -2,33 +2,12 @@
 //! wears the current brand, resolved per request rather than a process-wide
 //! constant (ENG-589).
 //!
-//! [`FirmFooterModel`] is also the shape `crate::public_chrome::inject_public_utility`
-//! (in `portal`) reads to override the public chrome's "Our Family" row with
-//! the live Firm data once one exists — see [`compiled_family_brands`], which
-//! that chrome calls directly for its own compiled-time fallback. `brands`
-//! stays on this model for that reason even though [`FirmFooter`] itself no
-//! longer renders it.
+//! [`FirmFooterModel`] is also what `crate::public_chrome::apply_resolved_firm_footer`
+//! reads to overlay the live Firm's legal entity and home onto the public
+//! chrome once a Firm exists.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
-
-/// One brand the resolved Firm wears.
-///
-/// `href` is empty for a runtime-created brand with no dedicated host to
-/// link to yet (a later issue gives one).
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
-pub struct FirmFooterBrand {
-    pub label: String,
-    pub href: String,
-    pub current: bool,
-    /// The compiled brand mark shown beside the name in public family rows.
-    #[serde(default)]
-    pub logo_href: String,
-    /// What this brand actually does, in a few words. Empty for a
-    /// runtime-created brand that has no compiled line.
-    #[serde(default)]
-    pub byline: String,
-}
 
 /// The data the `/app` footer needs, resolved once per request from the Firm
 /// that wears the current brand — never a process-wide constant.
@@ -38,10 +17,6 @@ pub struct FirmFooterModel {
     /// Server-proven canonical Entity may retain the compiled operator facts.
     #[serde(default)]
     pub compiled_identity_allowed: bool,
-    /// Every brand the Firm wears, in registry order with the current one
-    /// flagged. Not rendered by [`FirmFooter`]; kept for
-    /// `inject_public_utility`'s public-chrome overlay seam. See the module docs.
-    pub brands: Vec<FirmFooterBrand>,
     pub copyright_year: i32,
     /// The resolved Firm's own home — the production home of the firm's own
     /// brand when the Firm wears it. The public footer links the copyright's
@@ -97,15 +72,6 @@ pub fn render_firm_footer(model: FirmFooterModel) -> String {
     dioxus_ssr::render(&dom)
 }
 
-/// The compiled "Our Family" row for a request on `current`: every house
-/// brand the request-scoped firm trades under (`views::brand::firm_family`),
-/// in registry order, each named by its compiled wordmark and linking its
-/// production home, with `current` flagged. Empty under a bundle that renamed
-/// the firm, whose footer must not list another firm's brands.
-///
-/// Shared by [`compiled_firm_footer_model`] and the public chrome, so the two
-/// cannot disagree about who is in the family before a Firm row overrides
-/// both.
 #[cfg(feature = "server")]
 fn compiled_site_brand(current: views::brand::BrandKey) -> &'static views::brand::SiteBrand {
     if current == views::brand::brand_key() {
@@ -117,65 +83,8 @@ fn compiled_site_brand(current: views::brand::BrandKey) -> &'static views::brand
     }
 }
 
-#[cfg(feature = "server")]
-#[must_use]
-pub fn compiled_family_brands(current: views::brand::BrandKey) -> Vec<FirmFooterBrand> {
-    let family = if current == views::brand::brand_key() {
-        views::brand::firm_family()
-    } else {
-        current
-            .resolve_branding(&views::brand::DEFAULT_BRANDING)
-            .firm_family
-    };
-    family
-        .iter()
-        // "Our Family" is a set of links, so it lists only brands a reader
-        // can actually reach — the launch gate's set, the same one
-        // `portal::canonical_host` admits and `cli::devx::ship` renders
-        // certificates for. A brand is registered here well before its host
-        // serves anything; see `views::brand::BrandKey::is_live`.
-        //
-        // `current` is retained beyond that set for exactly one caller: a
-        // developer previewing a held-out brand through its
-        // `local_port_env_var` door, where a footer that omitted the brand
-        // being previewed would be the wrong preview. A public request
-        // cannot arrive wearing a held-out key at all (the router refuses
-        // those hosts), so on a real host this clause is
-        // unreachable, and `the_family_row_lists_only_admitted_brands`
-        // holds that.
-        .filter(|key| key.is_live() || **key == current)
-        .map(|key| FirmFooterBrand {
-            label: compiled_footer_label(*key),
-            href: key.public_home_href(),
-            current: *key == current,
-            logo_href: key
-                .resolve_branding(&views::brand::DEFAULT_BRANDING)
-                .firm
-                .logo_href
-                .to_string(),
-            byline: key.family_byline().to_string(),
-        })
-        .collect()
-}
-
-/// The concise names the footer uses for the two public family entries whose
-/// masthead names are longer or more specific than their family labels.
-#[cfg(feature = "server")]
-fn compiled_footer_label(key: views::brand::BrandKey) -> String {
-    match key {
-        views::brand::BrandKey::Neon => "Neon Law".to_string(),
-        views::brand::BrandKey::DeleteYourData => "DeleteYourData.com".to_string(),
-        _ => key
-            .resolve_branding(&views::brand::DEFAULT_BRANDING)
-            .firm
-            .site_name
-            .to_string(),
-    }
-}
-
-/// The no-store fallback: the compiled `Branding` for `current`, with the
-/// compiled family as its "Our Family" row. What a fresh deployment (no
-/// `firm` rows yet) or a brand key no Firm wears resolves to.
+/// The no-store fallback: the compiled `Branding` for `current`. What a fresh
+/// deployment (no `firm` rows yet) or a brand key no Firm wears resolves to.
 #[cfg(feature = "server")]
 #[must_use]
 pub fn compiled_firm_footer_model(
@@ -183,22 +92,9 @@ pub fn compiled_firm_footer_model(
     copyright_year: i32,
 ) -> FirmFooterModel {
     let brand = compiled_site_brand(current);
-    let mut brands = compiled_family_brands(current);
-    // A firm with no compiled family (a renamed white-label bundle) still
-    // names its one brand, so the model is never empty of identity.
-    if brands.is_empty() {
-        brands.push(FirmFooterBrand {
-            label: brand.site_name.to_string(),
-            href: String::new(),
-            current: true,
-            logo_href: brand.logo_href.to_string(),
-            byline: current.family_byline().to_string(),
-        });
-    }
     FirmFooterModel {
         legal_entity: brand.legal_entity.to_string(),
         compiled_identity_allowed: true,
-        brands,
         copyright_year,
         // The compiled firm brand's production home: the same door the
         // practice footer's copyright has always linked, now single-sourced
@@ -208,11 +104,8 @@ pub fn compiled_firm_footer_model(
 }
 
 /// Resolve [`FirmFooterModel`] for `current`: the Firm wearing that brand
-/// key, its Entity's legal name, and every brand key it wears (in registry
-/// order with the current Brand flagged), each named from its live `brand` row — a
-/// runtime-created brand is listed exactly like a compiled one, never
-/// silently dropped. No Firm wearing `current` (or no live rows at all)
-/// falls back to [`compiled_firm_footer_model`].
+/// key, its Entity's legal name, and its own home. No Firm wearing `current`
+/// (or no live rows at all) falls back to [`compiled_firm_footer_model`].
 ///
 /// # Errors
 ///
@@ -254,63 +147,12 @@ pub async fn resolve_firm_footer_model(
                 .to_lowercase()
                 .as_str(),
         );
-    // The canonical Firm's public family is complete even when only some
-    // of its Brand rows have been attached. Other operators list their own
-    // rows exclusively; a matching display name is not proof of identity.
-    let complete_family = compiled_identity_allowed && current.is_guieb_shook();
-    let mut brands = if complete_family {
-        compiled_family_brands(current)
-    } else {
-        Vec::with_capacity(keys.len())
-    };
-    for key in &keys {
-        let Ok(Some(brand)) = store::brands::find_by_key(surreal, key).await else {
-            continue;
-        };
-        let compiled = views::brand::BrandKey::ALL
-            .iter()
-            .find(|candidate| candidate.as_str() == key);
-        if complete_family && compiled.is_some_and(|key| key.is_guieb_shook()) {
-            continue;
-        }
-        // Same reachability rule the compiled fallback applies: a row in the
-        // `brand` table does not mean a host serves it. A runtime-created
-        // brand has no compiled key and so no launch state — it is listed,
-        // because nothing here knows better than the operator who made it.
-        if compiled.is_some_and(|candidate| !candidate.is_live())
-            && key.as_str() != current.as_str()
-        {
-            continue;
-        }
-        brands.push(FirmFooterBrand {
-            label: compiled
-                .map(|key| compiled_footer_label(*key))
-                .unwrap_or(brand.name),
-            href: compiled
-                .map(|key| key.public_home_href())
-                .unwrap_or_default(),
-            current: key == current.as_str(),
-            logo_href: compiled
-                .map(|key| {
-                    key.resolve_branding(&views::brand::DEFAULT_BRANDING)
-                        .firm
-                        .logo_href
-                        .to_string()
-                })
-                .unwrap_or_default(),
-            // A runtime brand carries no compiled line; a compiled one does.
-            byline: compiled
-                .map(|key| key.family_byline().to_string())
-                .unwrap_or_default(),
-        });
-    }
-    if brands.is_empty() {
-        return fallback();
-    }
-
-    // The canonical Firm's home is part of its compiled family. Other
-    // operators link it only when they wear that compiled firm Brand.
-    let firm_home_href = if complete_family
+    // The canonical Firm's home is its compiled firm Brand's, even before
+    // that Brand row is attached. Other operators link it only when they
+    // wear that compiled firm Brand; a matching display name is not proof
+    // of identity.
+    let canonical_firm = compiled_identity_allowed && current.is_guieb_shook();
+    let firm_home_href = if canonical_firm
         || keys
             .iter()
             .any(|key| key == views::brand::BrandKey::GuiebShook.as_str())
@@ -323,7 +165,6 @@ pub async fn resolve_firm_footer_model(
     FirmFooterModel {
         compiled_identity_allowed,
         legal_entity: entity.name,
-        brands,
         copyright_year,
         firm_home_href,
     }
@@ -339,11 +180,10 @@ mod tests {
         dioxus_ssr::render(&dom)
     }
 
-    fn model(brands: Vec<FirmFooterBrand>) -> FirmFooterModel {
+    fn model() -> FirmFooterModel {
         FirmFooterModel {
             legal_entity: "Guieb & Shook PC".to_string(),
             compiled_identity_allowed: true,
-            brands,
             copyright_year: 2026,
             firm_home_href: "https://www.guiebshook.com".to_string(),
         }
@@ -353,47 +193,13 @@ mod tests {
     fn the_footer_renders_a_centered_copyright_line() {
         fn app() -> Element {
             rsx! {
-                FirmFooter { model: model(vec![]) }
+                FirmFooter { model: model() }
             }
         }
         let html = ssr(app);
         assert!(html.contains("© 2026 Guieb &#38; Shook PC"), "{html}");
         assert!(html.contains("app-footer__copyright"), "{html}");
         assert!(html.starts_with("<footer"), "{html}");
-    }
-
-    /// The footer renders nothing beyond the copyright line, whatever the
-    /// model's brands carry — `brands` rides the model only for
-    /// `inject_public_utility`'s public-chrome override.
-    #[test]
-    fn the_footer_renders_only_the_copyright_line() {
-        fn app() -> Element {
-            rsx! {
-                FirmFooter {
-                    model: model(vec![
-                        FirmFooterBrand {
-                            label: "Neon Law".to_string(),
-                            href: "https://www.neonlaw.com".to_string(),
-                            current: true,
-                            logo_href: "/public/logo.svg".to_string(),
-                            byline: "flat-fee legal services for emerging tech".to_string(),
-                        },
-                        FirmFooterBrand {
-                            label: "DeleteYourData.com".to_string(),
-                            href: "https://www.deleteyourdata.com".to_string(),
-                            current: false,
-                            logo_href: "/public/brand/delete-your-data/logo.svg".to_string(),
-                            byline: String::new(),
-                        },
-                    ]),
-                }
-            }
-        }
-        let html = ssr(app);
-        assert!(!html.contains("Neon Law"), "{html}");
-        assert!(!html.contains("DeleteYourData.com"), "{html}");
-        assert!(!html.contains("<nav"), "{html}");
-        assert!(!html.contains("<a "), "{html}");
     }
 
     /// Every class the footer emits is styled by the theme it ships with.
@@ -403,7 +209,7 @@ mod tests {
     fn every_class_the_footer_emits_is_styled_by_the_theme() {
         fn app() -> Element {
             rsx! {
-                FirmFooter { model: model(vec![]) }
+                FirmFooter { model: model() }
             }
         }
 
@@ -435,45 +241,11 @@ mod tests {
         }
     }
 
-    /// Public chrome reads the legal entity and registry-ordered family from the compiled fallback.
+    /// Public chrome reads the legal entity and firm home from the compiled fallback.
     #[cfg(feature = "server")]
     #[test]
-    fn the_compiled_fallback_resolves_the_legal_entity_and_the_whole_family() {
+    fn the_compiled_fallback_resolves_the_legal_entity_and_the_firm_home() {
         let model = compiled_firm_footer_model(views::brand::BrandKey::DeleteYourData, 2026);
-        let labels: Vec<&str> = model.brands.iter().map(|b| b.label.as_str()).collect();
-        assert_eq!(
-            labels,
-            [
-                "Neon Law",
-                "DeleteYourData.com",
-                "DeleteYourDebt.com",
-                "Vesta Estate Planning",
-                "Misericordia Injury Law",
-                "Abhaya Immigration",
-                "Lawyer Shook",
-                "Summons Defense",
-                "Daybridge Divorce Law",
-                "Death & Divorce",
-                "CyberInjuryLaw",
-                "Aegis Criminal Defense",
-                "Groundwork Real Estate Law",
-                "Guieb & Shook"
-            ]
-        );
-        let current: Vec<bool> = model.brands.iter().map(|b| b.current).collect();
-        assert_eq!(
-            current,
-            [
-                false, true, false, false, false, false, false, false, false, false, false, false,
-                false, false
-            ]
-        );
-        assert_eq!(model.brands[0].href, "https://www.neonlaw.com");
-        assert_eq!(model.brands[6].href, "https://www.lawyershook.com");
-        assert_eq!(model.brands[7].href, "https://www.summonsdefense.nyc");
-        assert_eq!(model.brands[8].href, "https://www.daybridgedivorce.com");
-        assert_eq!(model.brands[9].href, "https://www.deathanddivorcelaw.com");
-        assert_eq!(model.brands[10].href, "https://www.cyberinjurylaw.com");
         assert_eq!(model.legal_entity, "Guieb & Shook PC");
         assert_eq!(
             model.firm_home_href,
@@ -482,7 +254,7 @@ mod tests {
         );
     }
 
-    /// The resolver reads the Firm's Entity and Brand rows in registry order, with the current Brand first.
+    /// The resolver reads the Firm's Entity, and grants compiled identity only to the anchored one.
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn resolves_the_firm_wearing_the_compiled_key() {
@@ -549,15 +321,8 @@ mod tests {
         let canonical =
             resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
         assert!(canonical.compiled_identity_allowed);
-        assert_eq!(
-            canonical.brands.len(),
-            views::brand::BrandKey::GUIEB_SHOOK_FAMILY.len()
-        );
 
         assert_eq!(model.legal_entity, "Guieb & Shook PC");
-        assert_eq!(model.brands.len(), 2);
-        assert!(model.brands[0].current);
-        assert_eq!(model.brands[0].label, "Neon Law");
         // The firm wears `neon` but not its own compiled firm brand
         // (`guieb-shook`): it publishes no home, so the public footer's
         // copyright renders unlinked rather than linked to some other
@@ -627,14 +392,12 @@ mod tests {
         );
     }
 
-    /// A second Firm wearing a runtime-created brand (never one of the compiled
-    /// compiled keys) alongside a compiled one: the footer for its compiled
-    /// key names *that* Firm's Entity and lists both of *its* brands by their
-    /// live names — never the other, seeded Firm's name or brands.
+    /// A second Firm wearing a compiled key: the footer for that key names
+    /// *that* Firm's Entity — never the other Firm's.
     #[cfg(feature = "server")]
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
-    async fn a_second_firm_with_a_runtime_brand_is_isolated_from_the_first() {
+    async fn a_second_firm_is_isolated_from_the_first() {
         let surreal = store::surreal::test_support::mem().await;
 
         // The first Firm, wearing the other compiled key.
@@ -682,8 +445,7 @@ mod tests {
         .await
         .unwrap();
 
-        // The second Firm, wearing the reachable compiled key plus a
-        // runtime-created one with no dedicated host yet.
+        // The second Firm, wearing another compiled key.
         let admin_b = store::test_support::ensure_person(
             &surreal,
             &store::persons::NewPerson::with_role(
@@ -718,50 +480,21 @@ mod tests {
         )
         .await
         .unwrap();
-        store::brands::create(
-            &surreal,
-            store::persons::Role::Admin,
-            Some(admin_b.id),
-            &store::brands::NewBrand {
-                name: "Acme Runtime Brand".to_string(),
-                key: "acme-runtime-brand".to_string(),
-                firm_id: Some(firm_b.id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
         store::firms::attach_brand(
             &surreal,
             store::persons::Role::Owner,
             None,
             firm_b.id,
-            "lawyer-shook",
-        )
-        .await
-        .unwrap();
-        store::firms::attach_brand(
-            &surreal,
-            store::persons::Role::Owner,
-            None,
-            firm_b.id,
-            "acme-runtime-brand",
+            "delete-your-data",
         )
         .await
         .unwrap();
 
         let model =
-            resolve_firm_footer_model(&surreal, views::brand::BrandKey::LawyerShook, 2026).await;
+            resolve_firm_footer_model(&surreal, views::brand::BrandKey::DeleteYourData, 2026).await;
 
         assert_eq!(model.legal_entity, "Firm B Legal Entity LLC");
         assert_ne!(model.legal_entity, "Firm A Legal Entity LLC");
-        let labels: Vec<&str> = model.brands.iter().map(|b| b.label.as_str()).collect();
-        assert!(labels.contains(&"Lawyer Shook"));
-        assert!(labels.contains(&"Acme Runtime Brand"));
-        assert!(
-            !labels.iter().any(|label| label.contains("neon")),
-            "Firm A's brand must never appear on Firm B's footer: {labels:?}"
-        );
     }
 
     /// A brand key no Firm wears — the pre-seed database — falls back to the
@@ -777,16 +510,6 @@ mod tests {
             model.legal_entity,
             views::brand::DEFAULT_BRANDING.firm.legal_entity
         );
-        // Only the reachable brands: the registry holds more than the
-        // footer advertises. See `BrandKey::is_live`.
-        assert_eq!(
-            model.brands.len(),
-            views::brand::BrandKey::GUIEB_SHOOK_FAMILY
-                .iter()
-                .filter(|key| key.is_live())
-                .count()
-        );
-        assert!(model.brands[0].current);
     }
 
     /// `DeleteYourDebt`'s byline is a regulatory boundary, not a style choice.
@@ -821,53 +544,13 @@ mod tests {
         }
     }
 
-    /// A brand nobody can visit stays out of "Our Family".
-    ///
-    /// The row is a link, so listing an unreachable host advertises a
-    /// practice a reader cannot get to. For the NYC summons practice it is
-    /// sharper than a dead link: holding out a New York practice before
-    /// admission is a licensing problem, not a cosmetic one. The brand whose
-    /// page the reader is *on* is exempt, since it renders as plain text
-    /// rather than a link and a site that omitted itself would be stranger
-    /// still.
-    #[cfg(feature = "server")]
-    #[test]
-    fn an_unreachable_brand_stays_out_of_the_family_row() {
-        let rows = compiled_family_brands(views::brand::BrandKey::Neon);
-        let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
-
-        // Lex Tecnica's brands are another firm's and never join this row.
-        for key in views::brand::BrandKey::LEX_TECNICA_FAMILY {
-            let label = compiled_footer_label(*key);
-            assert!(!labels.contains(&label.as_str()), "{label}: {labels:?}");
-        }
-        for key in views::brand::BrandKey::GUIEB_SHOOK_FAMILY {
-            let label = compiled_footer_label(*key);
-            if key.is_live() {
-                assert!(
-                    labels.contains(&label.as_str()),
-                    "{label} is live and is listed: {labels:?}"
-                );
-            } else {
-                assert!(
-                    !labels.contains(&label.as_str()),
-                    "{label} is not reachable and must not be advertised: {labels:?}"
-                );
-            }
-        }
-    }
-
     /// The seeded `brand` row wears the same wordmark the compiled
     /// `Branding` publishes.
     ///
-    /// The two footer paths read different sources for one label:
-    /// [`compiled_family_brands`] takes `SiteBrand::site_name`, and
-    /// [`resolve_firm_footer_model`] takes `brand.name` from the row
-    /// `store::seed` wrote. `store` cannot depend on `views`, so that row's
-    /// name is a hand-copied constant — and this is the only place in the
-    /// workspace that can see both halves and hold them together. Without
-    /// it, a deployment with a seeded Firm quietly publishes a different
-    /// wordmark than the same page renders before seeding.
+    /// `store` cannot depend on `views`, so the seeded row's name is a
+    /// hand-copied constant — and this is a place in the workspace that can
+    /// see both halves and hold them together. Without it, a deployment with
+    /// a seeded Firm names a brand differently than its own pages do.
     #[cfg(feature = "server")]
     #[test]
     fn every_compiled_brand_seeds_its_published_wordmark() {
@@ -908,9 +591,8 @@ mod tests {
         }
     }
 
-    /// Every compiled brand carries a line, so a "Our Family" row (the
-    /// public chrome's, or a future `/app` one) can never render a bare
-    /// wordmark for a brand the firm actually ships.
+    /// Every compiled brand carries a line, so the firm's practice portfolio
+    /// never renders a bare wordmark for a brand the firm actually ships.
     #[test]
     fn every_compiled_brand_has_a_byline() {
         for key in views::brand::BrandKey::ALL {
@@ -933,21 +615,8 @@ mod tests {
         views::brand::scope(custom, async {
             let model = compiled_firm_footer_model(views::brand::BrandKey::Neon, 2026);
             assert_eq!(model.legal_entity, "Synthetic Custom Entity LLC");
-            assert_eq!(model.brands.len(), 1);
-            assert_eq!(model.brands[0].label, "Synthetic Custom Practice");
-            assert_eq!(model.brands[0].logo_href, "/synthetic-custom-logo.svg");
             let other = compiled_firm_footer_model(views::brand::BrandKey::IepDefenders, 2026);
             assert_eq!(other.legal_entity, "Lex Tecnica, Ltd.");
-            // Lex Tecnica's own family: its two brands, IEP Defenders current.
-            assert_eq!(other.brands.len(), 2);
-            assert!(other
-                .brands
-                .iter()
-                .any(|brand| brand.current && brand.label == "IEP Defenders"));
-            assert!(other
-                .brands
-                .iter()
-                .all(|brand| brand.label != "Synthetic Custom Practice"));
         })
         .await;
         let other = compiled_firm_footer_model(views::brand::BrandKey::IepDefenders, 2026);

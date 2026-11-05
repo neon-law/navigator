@@ -86,12 +86,12 @@ async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
         ] {
             assert!(html.contains(expected), "{host} missing {expected:?}");
         }
-        // Every Guieb & Shook practice publishes the same family row and
-        // links the copyright to the Firm's own site.
+        // Every Guieb & Shook practice links the copyright to the Firm's
+        // own site, and lists no brand family.
         let footer = html.split("<footer").nth(1).expect("shared footer");
         assert!(
-            footer.contains("site-footer__family") && footer.contains("Our family"),
-            "{host} publishes the shared family row: {footer}"
+            !footer.contains("site-footer__family"),
+            "{host} lists no brand family: {footer}"
         );
         assert!(
             footer.contains(r#"href="https://www.guiebshook.com""#),

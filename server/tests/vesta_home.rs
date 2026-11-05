@@ -90,9 +90,9 @@ async fn design_gallery_has_the_host_header_and_footer() {
         assert!(html.contains(&format!("/public/css/brand-{}-tokens.css", brand.as_str())));
         let footer = children.last().unwrap();
         assert_eq!(
-            footer.select(&select(".site-footer__family-item")).count(),
-            branding.firm_family.len(),
-            "{} family",
+            footer.select(&select(".site-footer__family")).count(),
+            0,
+            "{} footer lists no brand family",
             brand.as_str()
         );
         if brand.is_guieb_shook() {
@@ -169,12 +169,6 @@ async fn every_firm_footer_destination_publishes_the_complete_footer() {
             "{}",
             link.label
         );
-        assert_eq!(
-            footer.select(&select(".site-footer__family-item")).count(),
-            BrandKey::GUIEB_SHOOK_FAMILY.len(),
-            "{}",
-            link.label
-        );
     }
 }
 
@@ -197,40 +191,6 @@ async fn vesta_shows_starting_price_and_shared_booking_calendar() {
         assert!(html.contains(expected), "missing {expected}");
     }
     assert!(html.contains("do not replace the signatures"));
-}
-
-#[tokio::test]
-async fn lawyer_shook_lists_the_launched_family_and_keeps_the_firm_notice() {
-    let html = preview(BrandKey::LawyerShook, "/").await;
-    for expected in [
-        "holding-page",
-        "Guieb &#38; Shook PC is an American law firm",
-        "home-practice",
-        "Neon Law",
-        "DeleteYourData.com",
-        "DeleteYourDebt.com",
-        "Vesta Estate Planning",
-        "Misericordia Injury Law",
-        "Abhaya Immigration",
-        "Aegis Criminal Defense",
-        "Groundwork Real Estate Law",
-        "Summons Defense",
-        "emerging tech",
-        "site-footer",
-        "https://www.deleteyourdata.com",
-        "https://www.vestaestateplanning.com",
-        "https://www.summonsdefense.nyc",
-        "/public/brand/lawyer-shook/logo.svg",
-        "/public/brand/lawyer-shook/logo.png",
-    ] {
-        assert!(html.contains(expected), "missing {expected}");
-    }
-    let head = html.split_once("</head>").expect("document head").0;
-    assert!(head.contains(r#"rel="icon""#), "missing favicon: {head}");
-    assert!(
-        head.contains(r#"href="/public/brand/lawyer-shook/logo.svg""#),
-        "the Lawyer Shook tab must use its supplied mark: {head}"
-    );
 }
 
 #[tokio::test]
@@ -316,18 +276,13 @@ async fn vesta_services_describe_tailored_planning_with_a_starting_price() {
 }
 
 #[tokio::test]
-async fn vesta_and_lawyer_shook_omit_the_lawyer_shook_trademark_notice() {
-    for html in [
-        preview(BrandKey::Vesta, "/").await,
-        preview(BrandKey::LawyerShook, "/").await,
-    ] {
-        let footer = html.split("<footer").nth(1).expect("shared footer");
-        assert!(footer.contains("https://www.guiebshook.com"));
-        assert!(footer.contains("Everyone deserves access to justice."));
-        assert!(footer.contains("Our family"));
-        assert!(!footer.contains("LAWYER SHOOK"));
-        assert!(!footer.contains("common-law mark of Guieb &#38; Shook PC"));
-    }
+async fn vesta_footer_links_the_firm_without_a_brand_family() {
+    let html = preview(BrandKey::Vesta, "/").await;
+    let footer = html.split("<footer").nth(1).expect("shared footer");
+    assert!(footer.contains("https://www.guiebshook.com"));
+    assert!(footer.contains("Everyone deserves access to justice."));
+    assert!(!footer.contains("Our Family"));
+    assert!(!footer.contains("common-law mark of Guieb &#38; Shook PC"));
 }
 
 #[tokio::test]
@@ -486,7 +441,7 @@ async fn aster_illustrates_vesta_without_replacing_the_brand_or_optional_reflect
     assert!(!html.contains("/public/brand/aster/aster.svg"));
     assert!(html.contains("/public/brand/vesta.svg"));
     assert!(html.contains("Readings are optional personal reflection"));
-    assert!(!preview(BrandKey::LawyerShook, "/")
+    assert!(!preview(BrandKey::Neon, "/")
         .await
         .contains("/public/brand/aster/"));
     let services = preview(BrandKey::Vesta, "/services").await;
