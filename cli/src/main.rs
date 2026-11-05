@@ -27,18 +27,11 @@ mod forms_sync;
 mod glossary;
 mod inbox;
 mod inbox_import;
-#[allow(dead_code)]
-mod intake;
 mod journal;
 mod login;
 mod lsp_download;
 mod lsp_publish;
 mod mail;
-// ENG-931: proves the allowlisted extraction contract (see the module docs)
-// ahead of the `navigator ops` subcommand and target repository that will
-// call it at cutover. Same status as `intake` below: prepared, not yet wired.
-#[allow(dead_code)]
-mod lsp_source_export;
 mod mcp_bridge;
 mod nautilus_preview;
 mod notation_import;
@@ -55,7 +48,6 @@ mod release_check;
 mod release_default_tag;
 mod release_pins;
 mod release_version;
-#[allow(dead_code)]
 mod remote;
 mod sas;
 mod scraper;

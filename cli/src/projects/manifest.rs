@@ -147,7 +147,6 @@ pub struct SkillPin {
 /// Unknown keys are not stored: [`lint`] refuses them before a caller reads
 /// this struct. The `no_live_row` field stays untyped so `true` cannot coerce
 /// into a plausible reason.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct Manifest {
     pub version: Option<String>,
@@ -159,9 +158,6 @@ pub struct Manifest {
     pub client_dri: Option<String>,
     pub private_slack_channel: Option<String>,
     pub private_notion_page: Option<String>,
-    pub shared_slack_channel: Option<String>,
-    pub shared_notion_page: Option<String>,
-    pub xero_customer: Option<String>,
     /// The Project's shared Google Calendar id. Optional: `navigator project
     /// setup` creates the calendar and `navigator project set --calendar`
     /// records it here.
@@ -1152,9 +1148,6 @@ pub fn parse(contents: &str) -> Result<Manifest, String> {
         client_dri: values("client_dri")?,
         private_slack_channel: values("private_slack_channel")?,
         private_notion_page: values("private_notion_page")?,
-        shared_slack_channel: values("shared_slack_channel")?,
-        shared_notion_page: values("shared_notion_page")?,
-        xero_customer: values("xero_customer")?,
         calendar_id: values("calendar_id")?,
         drive_folder_id: values("drive_folder_id")?,
         no_live_row: mapping.get("no_live_row").cloned(),
@@ -1680,9 +1673,6 @@ mod tests {
             "  client_dri: client@example.com\n",
             "  private_slack_channel: https://slack.example.com/private\n",
             "  private_notion_page: https://notion.example.com/private\n",
-            "  shared_slack_channel: https://slack.example.com/shared\n",
-            "  shared_notion_page: https://notion.example.com/shared\n",
-            "  xero_customer: customer-1\n",
             "  calendar_id: c_0123@group.calendar.example.com\n",
         );
         let parsed = parse(yaml).expect("nested manifest deserializes");
@@ -1694,7 +1684,6 @@ mod tests {
         assert_eq!(parsed.host.as_deref(), Some("staging.neonlaw.com"));
         assert_eq!(parsed.project.as_deref(), Some("acme"));
         assert_eq!(parsed.lawyer_dri.as_deref(), Some("lawyer@example.com"));
-        assert_eq!(parsed.xero_customer.as_deref(), Some("customer-1"));
         assert!(lint_contents(Path::new(FILE), yaml).is_empty());
     }
 

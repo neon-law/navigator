@@ -20,14 +20,12 @@
 //! | `notation preview` | `POST /app/projects/{project_code}/notations/draft` |
 //! | `navigator site import` | `POST /app/api/seed` (optional `POST /auth/ci/seed-token`) |
 
-use std::collections::VecDeque;
-use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
-use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
+use comfy_table::{presets::UTF8_FULL, ContentArrangement, Table};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -864,8 +862,6 @@ pub(crate) struct IntegrityAsset {
     #[serde(default)]
     pub(crate) derived_from: Option<serde_json::Value>,
     #[serde(default)]
-    pub(crate) transcript_quality: Option<String>,
-    #[serde(default)]
     pub(crate) operative: bool,
     #[serde(default)]
     pub(crate) version: Option<usize>,
@@ -927,8 +923,6 @@ pub(crate) struct LiveDocumentSummary {
     pub(crate) signing: Option<store::documents::Signing>,
     #[serde(default)]
     pub(crate) notarization: Vec<store::documents::Notarization>,
-    #[serde(default)]
-    pub(crate) evidence: Option<store::documents::Evidence>,
 }
 
 /// How an executed document was executed, as an upload records it. Empty for
@@ -1377,42 +1371,6 @@ impl DocumentClient {
             .await
             .context("read authority archive bytes")?
             .to_vec())
-    }
-
-    /// Upload one revision from a local file and return the source-safe
-    /// pointer.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn upload(
-        &self,
-        file: &Path,
-        kind: &str,
-        visibility: Option<&str>,
-        description: Option<&str>,
-        content_type: Option<&str>,
-        slug: Option<&str>,
-        transcript_quality: Option<&str>,
-        execution: &DocumentExecution,
-    ) -> Result<store::document_pointers::DocumentPointer> {
-        let bytes = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
-        let filename = file
-            .file_name()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| anyhow!("file path has no filename"))?;
-        self.upload_bytes_with_details(
-            filename,
-            &bytes,
-            kind,
-            visibility,
-            description,
-            content_type,
-            slug,
-            None,
-            None,
-            transcript_quality,
-            execution,
-        )
-        .await
     }
 
     /// Upload one revision from bytes already in memory — the archive
@@ -2124,10 +2082,9 @@ pub(crate) struct MailFileAttachment {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct MailFileResponse {
-    pub(crate) dry_run: bool,
     pub(crate) attachments: Vec<MailFileAttachment>,
-    /// One pointer per filed attachment, in message-part order. Empty when
-    /// `dry_run`, or when the message carried no attachments.
+    /// One pointer per filed attachment, in message-part order. Empty on a
+    /// dry run, or when the message carried no attachments.
     pub(crate) filed: Vec<store::document_pointers::DocumentPointer>,
 }
 
@@ -3352,196 +3309,6 @@ pub(crate) async fn post_integration_door(
     serde_json::from_str(&body).with_context(|| format!("parse POST {url}"))
 }
 
-/// The closed set of outcomes an integration door reports as success.
-/// Everything else — a named failure slug (`credential_missing`,
-/// `provider_unavailable`, `conflict`, `renamed`, `archived`, `missing`,
-/// `duplicate`, `address_not_recorded`, …) or a slug this CLI has never
-/// seen — fails closed: an unrecognized outcome never reads as success just
-/// because the HTTP status was 200.
-const INTEGRATION_SUCCESS_OUTCOMES: &[&str] =
-    &["created", "adopted", "unchanged", "repaired", "notified"];
-
-fn integration_outcome_succeeded(outcome: &IntegrationOutcome) -> bool {
-    INTEGRATION_SUCCESS_OUTCOMES.contains(&outcome.outcome.as_str())
-}
-
-fn describe_integration_outcome(outcome: &IntegrationOutcome) -> String {
-    let project_code = outcome.project_code.as_deref().unwrap_or("unknown Project");
-    match &outcome.detail {
-        Some(detail) => format!("{project_code}: {} ({detail})", outcome.outcome),
-        None => format!("{project_code}: {}", outcome.outcome),
-    }
-}
-
-/// Parse an integration door's JSON body into its per-Project outcomes. A
-/// body that does not parse as the expected shape is itself a failure: an
-/// HTTP-200 response this CLI cannot interpret must never be treated as
-/// success, so this returns `Err` rather than an empty list.
-fn parse_integration_report(body: &str) -> Result<Vec<IntegrationOutcome>> {
-    serde_json::from_str::<IntegrationReportBody>(body)
-        .map(|report| report.results)
-        .with_context(|| {
-            format!(
-                "the server returned a body this CLI could not interpret: {}",
-                first_line(body)
-            )
-        })
-}
-
-/// Print each outcome in text mode and, when every one succeeded, return
-/// `Ok(())`; otherwise `Err` naming exactly which Project/outcome pairs
-/// failed, so a mixed `--all` result still fails the whole command even
-/// though most rows are fine. An empty result set (an `--all` sweep that
-/// matched nothing) is not a failure — there was simply nothing to do.
-fn report_integration_outcomes(door: &str, json: bool, body: &str) -> Result<()> {
-    let results = parse_integration_report(body)?;
-    if json {
-        println!("{body}");
-    } else if results.is_empty() {
-        println!("{door}: nothing to do");
-    } else {
-        for outcome in &results {
-            println!("{}", describe_integration_outcome(outcome));
-        }
-    }
-    let failed: Vec<&IntegrationOutcome> = results
-        .iter()
-        .filter(|outcome| !integration_outcome_succeeded(outcome))
-        .collect();
-    if failed.is_empty() {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "{door} did not fully succeed: {}",
-            failed
-                .iter()
-                .map(|outcome| describe_integration_outcome(outcome))
-                .collect::<Vec<_>>()
-                .join("; ")
-        ))
-    }
-}
-
-/// Internal Notion-door client retained for callers that need the provider
-/// endpoint directly. The public Project CLI uses `project setup`, which
-/// composes this door with the surface and Slack doors. The Firm's provider
-/// credential is resolved server-side from the Project's `firm_id`, so no
-/// provider token is read, accepted, or printed by the CLI.
-async fn notion_command(
-    host: Option<&str>,
-    action: &str,
-    project_code: Option<&str>,
-    all: bool,
-    json: bool,
-) -> ExitCode {
-    run(async {
-        if project_code.is_none() && !all {
-            return Err(anyhow!("provide a Project code or --all"));
-        }
-        let (base, token) = resolve(host)?;
-        let url = format!("{base}/app/api/integrations/notion/{action}");
-        let response = reqwest::Client::new()
-            .post(&url)
-            .bearer_auth(token)
-            .json(&serde_json::json!({
-                "project_code": project_code,
-                "all": all,
-            }))
-            .send()
-            .await
-            .with_context(|| format!("POST {url}"))?;
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "Notion {action} failed: {status}: {}",
-                first_line(&body)
-            ));
-        }
-        report_integration_outcomes(&format!("Notion {action}"), json, &body)
-    })
-    .await
-}
-
-pub async fn notion_ensure(
-    host: Option<&str>,
-    project_code: Option<&str>,
-    all: bool,
-    json: bool,
-) -> ExitCode {
-    notion_command(host, "ensure", project_code, all, json).await
-}
-
-pub async fn notion_reconcile(
-    host: Option<&str>,
-    project_code: Option<&str>,
-    all: bool,
-    json: bool,
-) -> ExitCode {
-    notion_command(host, "reconcile", project_code, all, json).await
-}
-
-/// Internal Slack-door client retained for the mechanism-notice lane. Public
-/// setup uses the ensure door directly; the event vocabulary is validated here
-/// so an unsupported kind fails before the request, and no free-text message
-/// body is accepted.
-async fn slack_command(
-    host: Option<&str>,
-    action: &str,
-    project_code: &str,
-    event: Option<&str>,
-    json: bool,
-) -> ExitCode {
-    run(async {
-        if let Some(event) = event {
-            if !matches!(
-                event,
-                "project_opened"
-                    | "project_closed"
-                    | "project_reconciled"
-                    | "integration_unavailable"
-            ) {
-                return Err(anyhow!("unsupported Slack event {event}"));
-            }
-        }
-        let (base, token) = resolve(host)?;
-        let url = format!("{base}/app/api/integrations/slack/{action}");
-        let response = reqwest::Client::new()
-            .post(&url)
-            .bearer_auth(token)
-            .json(&serde_json::json!({
-                "project_code": project_code,
-                "event": event,
-            }))
-            .send()
-            .await
-            .with_context(|| format!("POST {url}"))?;
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "Slack {action} failed: {status}: {}",
-                first_line(&body)
-            ));
-        }
-        report_integration_outcomes(&format!("Slack {action}"), json, &body)
-    })
-    .await
-}
-
-pub async fn slack_ensure(host: Option<&str>, project_code: &str, json: bool) -> ExitCode {
-    slack_command(host, "ensure", project_code, None, json).await
-}
-
-pub async fn slack_notify(
-    host: Option<&str>,
-    project_code: &str,
-    event: &str,
-    json: bool,
-) -> ExitCode {
-    slack_command(host, "notify", project_code, Some(event), json).await
-}
-
 /// `navigator project close <project-code>` — move a matter directly to
 /// `closed` through the REST lifecycle door
 /// (`POST /app/api/projects/{id}/lifecycle`). Resolves the human-facing code
@@ -4371,8 +4138,6 @@ struct NotationDraftCreated {
     path: String,
     /// The run the push opened, when it opened one.
     notation_id: Option<Uuid>,
-    /// The lawyer-side path of the run's questionnaire.
-    run_path: Option<String>,
 }
 
 /// `navigator notation preview <file>` (LAW-29) — push a template as a
@@ -4675,128 +4440,11 @@ pub async fn notation_answers(
     .await
 }
 
-/// Legacy intake client — walk the notation's questionnaire one
-/// question at a time over the same `/app/lawyer/notations/:id/step`
-/// route the browser POSTs, reading each question's metadata from the
-/// `?format=json` branch. Interactive by default (prompts at the
-/// terminal); non-interactive when `--answer` / `--select` / `--person`
-/// flags are supplied, consuming scalar answers in order, question-qualified
-/// picker selections for candidate-backed questions, and the people rows
-/// for the first `people_list` question.
-pub async fn intake_answer(
-    host: Option<&str>,
-    notation_id: Uuid,
-    answers: Vec<String>,
-    selections: Vec<String>,
-    persons: Vec<String>,
-    transcript: Option<&Path>,
-) -> ExitCode {
-    run(async {
-        let (base, token) = resolve(host)?;
-        let client = reqwest::Client::new();
-        // A transcript pre-fills the walk: batch coverage runs server-side and
-        // seeds proposed answers the walk then offers as defaults. It's an
-        // input mode of the same walk, so the interactive/scripted loop below
-        // runs afterward regardless.
-        if let Some(path) = transcript {
-            post_transcript_coverage(&client, &base, &token, notation_id, path).await?;
-        }
-        let interactive = answers.is_empty() && selections.is_empty() && persons.is_empty();
-        // Fail fast on a malformed `--person` before touching the server.
-        let parsed_persons: Vec<Vec<(String, String)>> = persons
-            .iter()
-            .map(|s| crate::intake::parse_person(s))
-            .collect::<Result<_>>()?;
-        let mut answer_queue: VecDeque<String> = answers.into();
-        let mut selection_queue: VecDeque<ScriptedSelection> = selections
-            .iter()
-            .map(|selection| parse_scripted_selection(selection))
-            .collect::<Result<_>>()?;
-        let mut persons_consumed = false;
-        let mut answered = 0u32;
-
-        loop {
-            let step = fetch_step(&client, &base, &token, notation_id).await?;
-            let Some(question) = step.question else {
-                ensure_no_unused_selections(&selection_queue)?;
-                print_questionnaire_complete(notation_id, answered);
-                break;
-            };
-
-            let fields: Vec<(String, String)> =
-                if store::question_registry::answer_type_is_aggregate(&question.answer_type) {
-                    let rows = if interactive {
-                        read_people_list(&question)?
-                    } else {
-                        if persons_consumed {
-                            return Err(anyhow!(
-                                "question `{}` is a people_list but every --person row was already \
-                             consumed by an earlier one; this matter has more than one — answer \
-                             it interactively",
-                                question.code,
-                            ));
-                        }
-                        persons_consumed = true;
-                        crate::intake::people_list_fields(&parsed_persons)
-                    };
-                    rows
-                } else if interactive {
-                    prompt_scalar_fields(&question)?
-                } else if question.has_candidates() {
-                    let selection = selection_queue.pop_front().ok_or_else(|| {
-                        anyhow!(
-                            "ran out of --select values at picker question `{}` ({})",
-                            question.code,
-                            question.prompt,
-                        )
-                    })?;
-                    scripted_picker_selection_fields(&question, &selection)?
-                } else {
-                    answer_queue
-                        .pop_front()
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "ran out of --answer values at question `{}` ({})",
-                                question.code,
-                                question.prompt,
-                            )
-                        })
-                        .map(|value| vec![("value".to_string(), value)])?
-                };
-
-            let resp = client
-                .post(format!("{base}/app/lawyer/notations/{notation_id}/step"))
-                .bearer_auth(&token)
-                .form(&fields)
-                .send()
-                .await
-                .context("POST step")?;
-            let status = resp.status();
-            if !status.is_success() && !status.is_redirection() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(anyhow!(
-                    "answering `{}` failed: {}",
-                    question.code,
-                    server_error(status, &body),
-                ));
-            }
-            println!(
-                "{} {}",
-                palette::dim("answered"),
-                palette::highlight(&question.code)
-            );
-            answered += 1;
-        }
-        Ok(())
-    })
-    .await
-}
-
 /// `navigator site notation approve <id>` — render + park the notation's
-/// document (`POST …/approve-send`). The generic sibling of `retainer
-/// approve`: it fills the bound packet (a formation's official Secretary-of-State form,
-/// or a retainer PDF) for attorney review. Idempotent server-side — a
-/// re-approve once the PDF exists is a success, not an error.
+/// document (`POST …/approve-send`): fill the bound packet (a formation's
+/// official Secretary-of-State form, or a retainer PDF) for attorney review.
+/// Idempotent server-side — a re-approve once the PDF exists is a success,
+/// not an error.
 pub async fn notation_approve(host: Option<&str>, notation_id: Uuid) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
@@ -4805,7 +4453,8 @@ pub async fn notation_approve(host: Option<&str>, notation_id: Uuid) -> ExitCode
                 "{base}/app/lawyer/notations/{notation_id}/approve-send"
             ))
             .bearer_auth(&token)
-            // `Content-Length: 0` for the same LB gotcha as `retainer approve`.
+            // `Content-Length: 0` — the LB rejects an empty body without an
+            // explicit length.
             .header(reqwest::header::CONTENT_LENGTH, "0")
             .body(Vec::<u8>::new())
             .send()
@@ -4974,226 +4623,6 @@ pub async fn notation_document(host: Option<&str>, notation_id: Uuid, out: &Path
     .await
 }
 
-/// Legacy retainer client — POST approve-send. This renders +
-/// parks: the worker durably renders + persists the retainer PDF and the
-/// workflow waits at `generate_pdf__retainer_pdf`. It does NOT send — the
-/// binding envelope goes out only on the separate `retainer send`, after
-/// the PDF is confirmed present.
-pub async fn retainer_approve(host: Option<&str>, notation_id: Uuid) -> ExitCode {
-    run(async {
-        let (base, token) = resolve(host)?;
-        let resp = reqwest::Client::new()
-            .post(format!(
-                "{base}/app/lawyer/notations/{notation_id}/approve-send"
-            ))
-            .bearer_auth(&token)
-            // Force `Content-Length: 0`. The handler takes no form fields,
-            // but a bodyless POST carries no length header, and GCP's HTTPS
-            // load balancer rejects that with `411 Length Required` before
-            // the request ever reaches the app. reqwest omits the header for
-            // an empty body, so set it explicitly.
-            .header(reqwest::header::CONTENT_LENGTH, "0")
-            .body(Vec::<u8>::new())
-            .send()
-            .await
-            .context("POST approve-send")?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("approve failed: {}", server_error(status, &body)));
-        }
-        // Read the authoritative post-state for the operator.
-        let st = fetch_status(&base, &token, notation_id).await?;
-        println!(
-            "{} {} — state {} (document_ready {})",
-            palette::dim("approved; worker rendering the retainer PDF — notation"),
-            palette::highlight(notation_id.to_string()),
-            palette::highlight(&st.state),
-            st.document_ready,
-        );
-        println!(
-            "{}",
-            palette::dim(format!(
-                "dispatch the envelope from the live site for notation {notation_id}"
-            )),
-        );
-        Ok(())
-    })
-    .await
-}
-
-/// Legacy retainer client — POST the deliberate send. On prod this
-/// emits exactly one real envelope, so it is a deliberate authenticated
-/// human command (never an LLM-routable tool). Honors the readiness gate:
-/// a `409` means the worker hasn't rendered the PDF yet — print the
-/// server's reason and exit non-zero so the operator retries rather than
-/// the command silently loops against a misconfigured worker.
-pub async fn retainer_send(host: Option<&str>, notation_id: Uuid) -> ExitCode {
-    run(async {
-        let (base, token) = resolve(host)?;
-        // `Content-Length: 0` for the same LB gotcha as `retainer approve`.
-        let resp = reqwest::Client::new()
-            .post(format!("{base}/app/lawyer/notations/{notation_id}/send"))
-            .bearer_auth(&token)
-            .header(reqwest::header::CONTENT_LENGTH, "0")
-            .body(Vec::<u8>::new())
-            .send()
-            .await
-            .context("POST send")?;
-        let status = resp.status();
-        if status.as_u16() == 409 {
-            // Not yet: the PDF isn't rendered. Print the server's reason
-            // verbatim and tell the operator to retry.
-            let body = resp.text().await.unwrap_or_default();
-            let reason = json_reason(&body).unwrap_or_else(|| "document not ready yet".to_string());
-            return Err(anyhow!(
-                "not ready to send: {reason}\n\
-                 retry from the live site for notation {notation_id}"
-            ));
-        }
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!("send failed: {}", server_error(status, &body)));
-        }
-        let st = fetch_status(&base, &token, notation_id).await?;
-        println!(
-            "{} {} — state {}{}",
-            palette::dim("sent for signature; notation"),
-            palette::highlight(notation_id.to_string()),
-            palette::highlight(&st.state),
-            st.signature_request_id
-                .as_deref()
-                .map(|id| format!(" (signature request {id})"))
-                .unwrap_or_default(),
-        );
-        Ok(())
-    })
-    .await
-}
-
-/// Legacy retainer client — print the notation's custom
-/// clauses from the clause editor's `?format=json` branch.
-pub async fn clause_list(host: Option<&str>, notation_id: Uuid, json: bool) -> ExitCode {
-    run(async {
-        let (base, token) = resolve(host)?;
-        let resp = reqwest::Client::new()
-            .get(format!(
-                "{base}/app/lawyer/notations/{notation_id}/clauses?format=json"
-            ))
-            .bearer_auth(&token)
-            .send()
-            .await
-            .context("GET clauses (json)")?;
-        let status = resp.status();
-        if status.as_u16() == 404 {
-            return Err(anyhow!("no notation {notation_id} on {base}"));
-        }
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "clause list failed: {}",
-                server_error(status, &body)
-            ));
-        }
-        let body = resp.text().await.unwrap_or_default();
-        if json {
-            println!("{body}");
-            return Ok(());
-        }
-        let clauses: Vec<Clause> = serde_json::from_str(&body).context("parse clauses json")?;
-        if clauses.is_empty() {
-            println!("{}", palette::dim("no custom clauses on this notation"));
-            return Ok(());
-        }
-        for c in &clauses {
-            let provenance = if c.system_authored {
-                palette::dim("[system draft]")
-            } else {
-                palette::dim("[lawyer]")
-            };
-            println!(
-                "{} {} {}\n    {}",
-                palette::highlight(format!("#{}", c.position)),
-                provenance,
-                palette::dim(c.id.to_string()),
-                c.body.replace('\n', "\n    "),
-            );
-        }
-        Ok(())
-    })
-    .await
-}
-
-/// Legacy retainer client — append one clause.
-pub async fn clause_add(host: Option<&str>, notation_id: Uuid, body: &str) -> ExitCode {
-    run(async {
-        let (base, token) = resolve(host)?;
-        let resp = reqwest::Client::new()
-            .post(format!("{base}/app/lawyer/notations/{notation_id}/clauses"))
-            .bearer_auth(&token)
-            .form(&[("body", body)])
-            .send()
-            .await
-            .context("POST clause add")?;
-        clause_write_result(resp, notation_id, "added").await
-    })
-    .await
-}
-
-/// Legacy retainer client — replace a body.
-pub async fn clause_edit(
-    host: Option<&str>,
-    notation_id: Uuid,
-    clause_id: Uuid,
-    body: &str,
-) -> ExitCode {
-    run(async {
-        let (base, token) = resolve(host)?;
-        let resp = reqwest::Client::new()
-            .post(format!(
-                "{base}/app/lawyer/notations/{notation_id}/clauses/{clause_id}/edit"
-            ))
-            .bearer_auth(&token)
-            .form(&[("body", body)])
-            .send()
-            .await
-            .context("POST clause edit")?;
-        clause_write_result(resp, notation_id, "updated").await
-    })
-    .await
-}
-
-/// Shared handler for a clause add/edit response: the routes 303-redirect
-/// back to the clause page on success.
-async fn clause_write_result(resp: reqwest::Response, notation_id: Uuid, verb: &str) -> Result<()> {
-    let status = resp.status();
-    // The clause routes redirect (303/302) on success; a no-redirect client
-    // is not used here, so reqwest follows it and we land on the 200 page.
-    if !status.is_success() && status.as_u16() != 303 {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "clause {verb} failed: {}",
-            server_error(status, &body)
-        ));
-    }
-    println!(
-        "{} {}",
-        palette::dim(format!("clause {verb} on notation")),
-        palette::highlight(notation_id.to_string()),
-    );
-    Ok(())
-}
-
-/// One row of the clause editor's `?format=json` body.
-#[derive(Debug, serde::Deserialize)]
-struct Clause {
-    id: Uuid,
-    position: i32,
-    body: String,
-    #[serde(default)]
-    system_authored: bool,
-}
-
 /// `navigator site notation status <id>` — print the workflow state + the
 /// signature request id from the review handler's JSON branch.
 pub async fn notation_status(host: Option<&str>, notation_id: Uuid, json: bool) -> ExitCode {
@@ -5229,7 +4658,7 @@ struct NotationStatus {
     #[serde(default)]
     delivery: Option<String>,
     /// Whether the worker has rendered + persisted the document PDF — the
-    /// gate `retainer send` honors. Defaults to `false` for an older
+    /// gate a client-side send must honor. Defaults to `false` for an older
     /// server that doesn't yet emit the field.
     #[serde(default)]
     document_ready: bool,
@@ -5253,15 +4682,6 @@ fn server_error(status: reqwest::StatusCode, body: &str) -> String {
     format!("{status}: {}", first_line(body))
 }
 
-/// The `reason` field of a server JSON error body, if present.
-fn json_reason(body: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()?
-        .get("reason")
-        .and_then(serde_json::Value::as_str)
-        .map(ToString::to_string)
-}
-
 /// One step of the questionnaire walker's `?format=json` body.
 #[derive(Debug, serde::Deserialize)]
 struct StepResponse {
@@ -5276,25 +4696,10 @@ struct StepQuestion {
     code: String,
     prompt: String,
     answer_type: String,
-    /// `(value, label)` choices for a `radio`; empty otherwise.
-    #[serde(default)]
-    choices: Vec<StepChoice>,
-    /// Attorney-authored guidance for the question; absent when it
-    /// declares none.
-    #[serde(default)]
-    help_text: Option<String>,
     /// DB-backed picker candidates for singular record/reference
     /// questions, empty for primitive and aggregate answers.
     #[serde(default)]
     candidates: Vec<StepCandidate>,
-    /// A prior answer for this step — a value navigated back to, or a
-    /// transcript-coverage proposal — surfaced as an Enter-to-accept default.
-    #[serde(default)]
-    prior_answer: Option<String>,
-    /// The `source` of `prior_answer` (`extracted` for a transcript proposal,
-    /// `lawyer`/`client` for a typed one); labels the default in the walk.
-    #[serde(default)]
-    prior_source: Option<String>,
 }
 
 impl StepQuestion {
@@ -5304,20 +4709,8 @@ impl StepQuestion {
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct StepChoice {
-    value: String,
-    label: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
 struct StepCandidate {
     id: Uuid,
-    name: String,
-}
-
-struct ScriptedSelection {
-    question_code: String,
-    raw: String,
 }
 
 /// GET the current questionnaire step as JSON.
@@ -5346,256 +4739,9 @@ async fn fetch_step(
     resp.json::<StepResponse>().await.context("parse step json")
 }
 
-/// The coverage summary `POST …/transcript` returns: which inquiries the
-/// transcript covered (each with its proposed answer) and which it left as
-/// gaps the walk will still ask.
-#[derive(Debug, serde::Deserialize)]
-struct CoverageSummary {
-    #[serde(default)]
-    covered: Vec<CoveredInquiry>,
-    #[serde(default)]
-    uncovered: Vec<String>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct CoveredInquiry {
-    code: String,
-    proposed_answer: String,
-}
-
-/// POST a transcript file to the batch-coverage endpoint, then print what it
-/// covered. The proposals are persisted server-side (`source = extracted`) and
-/// surface as the walk's Enter-to-accept defaults — never auto-accepted.
-async fn post_transcript_coverage(
-    client: &reqwest::Client,
-    base: &str,
-    token: &str,
-    notation_id: Uuid,
-    path: &Path,
-) -> Result<()> {
-    let transcript = std::fs::read_to_string(path)
-        .with_context(|| format!("read transcript {}", path.display()))?;
-    let resp = client
-        .post(format!(
-            "{base}/app/lawyer/notations/{notation_id}/transcript"
-        ))
-        .bearer_auth(token)
-        .form(&[("transcript", transcript.as_str())])
-        .send()
-        .await
-        .context("POST transcript")?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!(
-            "transcript coverage failed: {}",
-            server_error(status, &body)
-        ));
-    }
-    let summary = resp
-        .json::<CoverageSummary>()
-        .await
-        .context("parse coverage summary")?;
-    println!(
-        "{} {} covered, {} to confirm",
-        palette::dim("transcript:"),
-        palette::highlight(summary.covered.len()),
-        palette::highlight(summary.uncovered.len()),
-    );
-    for inquiry in &summary.covered {
-        println!(
-            "  {} {} {}",
-            palette::dim("proposed"),
-            palette::highlight(&inquiry.code),
-            palette::dim(format!("→ {}", inquiry.proposed_answer)),
-        );
-    }
-    Ok(())
-}
-
-/// Interactively read one scalar answer, showing a `radio`'s choices or a
-/// record/reference pick-list when the server exposes candidates.
-fn prompt_scalar_fields(question: &StepQuestion) -> Result<Vec<(String, String)>> {
-    println!("{}", palette::highlight(&question.prompt));
-    // Guidance sits directly under the prompt it explains, ahead of the
-    // pick-list and the choice table, so the reader has it before the
-    // options rather than after them.
-    if let Some(help) = question.help_text.as_deref().filter(|h| !h.is_empty()) {
-        println!("{}", palette::dim(help));
-    }
-    if question.has_candidates() {
-        print_candidate_table(question);
-    }
-    if !question.choices.is_empty() {
-        println!("{}", palette::dim("choices:"));
-        for c in &question.choices {
-            println!("  {} — {}", palette::highlight(&c.value), c.label);
-        }
-    }
-    // A transcript-coverage proposal (or a prior answer) becomes an
-    // Enter-to-accept default. For a picker the proposal is matched to a
-    // candidate by name (Enter posts that row's id); for a choice question the
-    // accepted string resolves to the canonical choice value, not its label.
-    let prior = question.prior_answer.as_deref().filter(|d| !d.is_empty());
-    let default_candidate = if question.has_candidates() {
-        prior.and_then(|p| candidate_by_name(question, p))
-    } else {
-        None
-    };
-    let default_display = if question.has_candidates() {
-        default_candidate.map(|c| c.name.as_str())
-    } else {
-        prior
-    };
-    if let Some(prev) = default_display {
-        let tag = if question.prior_source.as_deref() == Some("extracted") {
-            "proposed from transcript"
-        } else {
-            "prior answer"
-        };
-        println!(
-            "  {} {} {}",
-            palette::dim(tag),
-            palette::highlight(prev),
-            palette::dim("(press Enter to accept, or type a new answer)"),
-        );
-    }
-    print!("{} ", palette::dim(format!("{}>", question.code)));
-    std::io::stdout().flush().ok();
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .context("read answer from stdin")?;
-    let value = line.trim().to_string();
-    if question.has_candidates() {
-        // Enter accepts a name-matched proposal; otherwise the typed number /
-        // id / name resolves against the candidates as before.
-        if value.is_empty() {
-            if let Some(candidate) = default_candidate {
-                return Ok(vec![("id".to_string(), candidate.id.to_string())]);
-            }
-        }
-        picker_selection_fields(question, &value)
-    } else {
-        let raw = if value.is_empty() {
-            prior.unwrap_or_default().to_string()
-        } else {
-            value
-        };
-        Ok(vec![(
-            "value".to_string(),
-            canonical_choice_value(question, raw),
-        )])
-    }
-}
-
-/// Match a picker proposal string to a candidate by name (case-insensitive) so
-/// a transcript-extracted display value can be confirmed as its row id.
-fn candidate_by_name<'a>(question: &'a StepQuestion, name: &str) -> Option<&'a StepCandidate> {
-    question
-        .candidates
-        .iter()
-        .find(|candidate| candidate.name.eq_ignore_ascii_case(name))
-}
-
-/// Resolve an answer for a choice question (`radio`/`yes_no`) to its canonical
-/// stored value: an exact value match wins, else a case-insensitive value or
-/// label match maps to the choice's value. A question with no choices (or an
-/// off-list value) keeps the string as typed. Without this, confirming an
-/// extracted proposal whose display label differs from the choice value (e.g.
-/// `Yes` vs `yes`) would store the label.
-fn canonical_choice_value(question: &StepQuestion, raw: String) -> String {
-    if question.choices.iter().any(|choice| choice.value == raw) {
-        return raw;
-    }
-    question
-        .choices
-        .iter()
-        .find(|choice| {
-            choice.value.eq_ignore_ascii_case(&raw) || choice.label.eq_ignore_ascii_case(&raw)
-        })
-        .map_or(raw, |choice| choice.value.clone())
-}
-
-fn print_candidate_table(question: &StepQuestion) {
-    let mut table = Table::new();
-    table.load_style(UTF8_FULL);
-    table.set_content_arrangement(ContentArrangement::Dynamic);
-    table.set_header([
-        Cell::new(palette::header("#")),
-        Cell::new(palette::header("name")),
-        Cell::new(palette::header("id")),
-    ]);
-    for (idx, candidate) in question.candidates.iter().enumerate() {
-        table.add_row([
-            Cell::new(palette::highlight(idx + 1)),
-            Cell::new(&candidate.name),
-            Cell::new(palette::dim(candidate.id)),
-        ]);
-    }
-    println!("{table}");
-}
-
 fn picker_selection_fields(question: &StepQuestion, raw: &str) -> Result<Vec<(String, String)>> {
     let selected = select_candidate(question, raw.trim())?;
     Ok(vec![("id".to_string(), selected.id.to_string())])
-}
-
-fn parse_scripted_selection(raw: &str) -> Result<ScriptedSelection> {
-    let (question_code, value) = raw.split_once('=').ok_or_else(|| {
-        anyhow!("--select must be `question_code=value`, for example `country__of_birth=2`")
-    })?;
-    let question_code = question_code.trim();
-    let value = value.trim();
-    if question_code.is_empty() || value.is_empty() {
-        return Err(anyhow!(
-            "--select must include both a question code and a value, for example `country__of_birth=2`"
-        ));
-    }
-    Ok(ScriptedSelection {
-        question_code: question_code.to_string(),
-        raw: value.to_string(),
-    })
-}
-
-fn print_questionnaire_complete(notation_id: Uuid, answered: u32) {
-    if answered == 0 {
-        println!(
-            "{}",
-            palette::dim(format!("notation {notation_id} has no open questions"))
-        );
-    } else {
-        println!(
-            "{} {} ({answered} answered)",
-            palette::dim("questionnaire complete — notation"),
-            palette::highlight(notation_id.to_string()),
-        );
-    }
-}
-
-fn scripted_picker_selection_fields(
-    question: &StepQuestion,
-    selection: &ScriptedSelection,
-) -> Result<Vec<(String, String)>> {
-    if selection.question_code != question.code {
-        return Err(anyhow!(
-            "--select for question `{}` reached picker question `{}`; pass selections in questionnaire order and use the current question code",
-            selection.question_code,
-            question.code
-        ));
-    }
-    picker_selection_fields(question, &selection.raw)
-}
-
-fn ensure_no_unused_selections(selection_queue: &VecDeque<ScriptedSelection>) -> Result<()> {
-    if let Some(selection) = selection_queue.front() {
-        return Err(anyhow!(
-            "unused --select for question `{}`; questionnaire has no remaining picker questions",
-            selection.question_code
-        ));
-    }
-    Ok(())
 }
 
 fn select_candidate<'a>(question: &'a StepQuestion, raw: &str) -> Result<&'a StepCandidate> {
@@ -5635,44 +4781,6 @@ fn select_candidate<'a>(question: &'a StepQuestion, raw: &str) -> Result<&'a Ste
         "selection `{raw}` for question `{}` is not a list number or row id",
         question.code
     ))
-}
-
-/// Interactively read a `people_list` answer row by row; a blank name
-/// ends the list. Returns the assembled `p{row}_{part}` form fields.
-fn read_people_list(question: &StepQuestion) -> Result<Vec<(String, String)>> {
-    println!("{}", palette::highlight(&question.prompt));
-    println!(
-        "{}",
-        palette::dim("enter each person; a blank name ends the list")
-    );
-    let stdin = std::io::stdin();
-    let mut rows: Vec<Vec<(String, String)>> = Vec::new();
-    loop {
-        print!("{}", palette::dim("name (blank to finish)> "));
-        std::io::stdout().flush().ok();
-        let mut name = String::new();
-        stdin.lock().read_line(&mut name).context("read name")?;
-        let name = name.trim().to_string();
-        if name.is_empty() {
-            break;
-        }
-        let mut row = vec![("name".to_string(), name)];
-        for part in &crate::intake::PARTS[1..] {
-            print!("{}", palette::dim(format!("{part}> ")));
-            std::io::stdout().flush().ok();
-            let mut value = String::new();
-            stdin
-                .lock()
-                .read_line(&mut value)
-                .with_context(|| format!("read {part}"))?;
-            let value = value.trim().to_string();
-            if !value.is_empty() {
-                row.push(((*part).to_string(), value));
-            }
-        }
-        rows.push(row);
-    }
-    Ok(crate::intake::people_list_fields(&rows))
 }
 
 async fn fetch_status(base: &str, token: &str, notation_id: Uuid) -> Result<NotationStatus> {
@@ -5845,7 +4953,6 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
     use std::process::ExitCode;
     use std::sync::LazyLock;
 
@@ -5853,21 +4960,18 @@ mod tests {
     use super::reslug_with_local;
     use super::retire_document;
     use super::{
-        archive_repository, candidate_by_name, canonical_choice_value, clause_add, clause_edit,
-        clause_list, create_notation_draft, document_reclassify, document_repair, document_slug,
-        document_transcribe_from, document_upload, document_upload_from, document_visibility,
-        ensure_no_unused_selections, fetch_status, mail_file, matter_close, notation_answers,
+        archive_repository, create_notation_draft, document_reclassify, document_repair,
+        document_slug, document_transcribe_from, document_upload, document_upload_from,
+        document_visibility, fetch_status, mail_file, matter_close, notation_answers,
         notation_approve, notation_create, notation_document, notation_list,
-        notation_request_changes, notation_status, notation_update, notion_ensure,
-        notion_reconcile, parse_scripted_selection, picker_selection_fields, project_code_exists,
-        projects_create, projects_create_named, retainer_approve, retainer_send,
-        scripted_picker_selection_fields, seed, seed_directory, select_candidate, slack_ensure,
-        source_revision, CoverageSummary, DocumentClient, DocumentExecution, RevisionSummary,
-        SeedCredential, SeedOptions, StepQuestion, StepResponse,
+        notation_request_changes, notation_status, notation_update, picker_selection_fields,
+        project_code_exists, projects_create, projects_create_named, seed, seed_directory,
+        select_candidate, source_revision, DocumentClient, DocumentExecution, RevisionSummary,
+        SeedCredential, SeedOptions, StepResponse,
     };
     use super::{
-        exit_code_for, fetch_step, first_line, integrity_failure, json_reason,
-        mint_refusal_annotation, server_error,
+        exit_code_for, fetch_step, first_line, integrity_failure, mint_refusal_annotation,
+        server_error,
     };
     use super::{fetch_project_list_with, trimmed_body, UploadSessionExpired};
     use crate::credentials::{self, Credentials, HostCredential};
@@ -5887,7 +4991,6 @@ mod tests {
     struct LawyerRouteIds {
         notation: Uuid,
         project: Uuid,
-        clause: Uuid,
     }
 
     impl CredentialsEnv {
@@ -6413,219 +5516,6 @@ mod tests {
 
         let gate_failure = anyhow::anyhow!("2 of 2 pointer(s) failed live verification");
         assert_eq!(exit_code_for(&gate_failure), ExitCode::from(2));
-    }
-
-    /// ENG-807: the CLI must fail closed on an HTTP-200 outcome it cannot
-    /// call success, in both text and `--json` mode. Each case here mirrors a
-    /// row of the issue's own reproduction table (`credential_missing`,
-    /// `provider_unavailable`, `conflict`) plus the "not a slug I've ever
-    /// seen" and "not even valid JSON" cases the acceptance criteria add.
-    mod integration_outcome_exit_codes {
-        use super::{
-            notion_ensure, notion_reconcile, slack_ensure, CredentialsEnv, ExitCode, MockServer,
-            CREDENTIALS_ENV_LOCK,
-        };
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, ResponseTemplate};
-
-        async fn mount_notion_ensure(server: &MockServer, body: serde_json::Value) {
-            Mock::given(method("POST"))
-                .and(path("/app/api/integrations/notion/ensure"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(body))
-                .mount(server)
-                .await;
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn a_credential_missing_outcome_exits_nonzero_in_text_and_json_mode() {
-            let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-            let server = MockServer::start().await;
-            let server_uri = server.uri();
-            let _env = CredentialsEnv::new(&server_uri);
-            mount_notion_ensure(
-                &server,
-                serde_json::json!({ "results": [
-                    { "project_code": "acme", "outcome": "credential_missing" }
-                ]}),
-            )
-            .await;
-
-            for json in [false, true] {
-                assert_ne!(
-                    notion_ensure(Some(server_uri.as_str()), Some("acme"), false, json).await,
-                    ExitCode::SUCCESS,
-                    "json={json}"
-                );
-            }
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn a_provider_unavailable_outcome_exits_nonzero() {
-            let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-            let server = MockServer::start().await;
-            let server_uri = server.uri();
-            let _env = CredentialsEnv::new(&server_uri);
-            mount_notion_ensure(
-                &server,
-                serde_json::json!({ "results": [
-                    { "project_code": "acme", "outcome": "provider_unavailable" }
-                ]}),
-            )
-            .await;
-
-            assert_ne!(
-                notion_ensure(Some(server_uri.as_str()), Some("acme"), false, true).await,
-                ExitCode::SUCCESS
-            );
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn a_conflict_outcome_exits_nonzero() {
-            let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-            let server = MockServer::start().await;
-            let server_uri = server.uri();
-            let _env = CredentialsEnv::new(&server_uri);
-            Mock::given(method("POST"))
-                .and(path("/app/api/integrations/notion/reconcile"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "results": [
-                        { "project_code": "acme", "outcome": "conflict", "detail": "2 pages carry this code" }
-                    ]
-                })))
-                .mount(&server)
-                .await;
-
-            assert_ne!(
-                notion_reconcile(Some(server_uri.as_str()), Some("acme"), false, true).await,
-                ExitCode::SUCCESS
-            );
-        }
-
-        /// A slug this CLI has never been told about must never read as
-        /// success merely because the HTTP status was 200 — fail closed
-        /// rather than fail open on an unrecognized future outcome.
-        #[tokio::test(flavor = "current_thread")]
-        async fn an_unknown_outcome_slug_exits_nonzero() {
-            let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-            let server = MockServer::start().await;
-            let server_uri = server.uri();
-            let _env = CredentialsEnv::new(&server_uri);
-            mount_notion_ensure(
-                &server,
-                serde_json::json!({ "results": [
-                    { "project_code": "acme", "outcome": "something_nobody_named_yet" }
-                ]}),
-            )
-            .await;
-
-            assert_ne!(
-                notion_ensure(Some(server_uri.as_str()), Some("acme"), false, false).await,
-                ExitCode::SUCCESS
-            );
-        }
-
-        /// A 200 body that isn't even the expected shape is a malformed
-        /// response, not a silent success.
-        #[tokio::test(flavor = "current_thread")]
-        async fn a_malformed_body_exits_nonzero() {
-            let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-            let server = MockServer::start().await;
-            let server_uri = server.uri();
-            let _env = CredentialsEnv::new(&server_uri);
-            mount_notion_ensure(&server, serde_json::json!({ "not_results_at_all": true })).await;
-
-            assert_ne!(
-                notion_ensure(Some(server_uri.as_str()), Some("acme"), false, false).await,
-                ExitCode::SUCCESS
-            );
-        }
-
-        /// A genuinely successful outcome still exits zero — the fix must not
-        /// turn every ensure into a failure.
-        #[tokio::test(flavor = "current_thread")]
-        async fn a_created_outcome_exits_zero() {
-            let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-            let server = MockServer::start().await;
-            let server_uri = server.uri();
-            let _env = CredentialsEnv::new(&server_uri);
-            mount_notion_ensure(
-                &server,
-                serde_json::json!({ "results": [
-                    { "project_code": "acme", "outcome": "created" }
-                ]}),
-            )
-            .await;
-
-            assert_eq!(
-                notion_ensure(Some(server_uri.as_str()), Some("acme"), false, true).await,
-                ExitCode::SUCCESS
-            );
-        }
-
-        /// `--all` mixing one success with one failure must fail the whole
-        /// command — a caller scripting `ensure --all` cannot tell a mixed
-        /// result apart from full success unless the exit code disagrees.
-        #[tokio::test(flavor = "current_thread")]
-        async fn a_mixed_all_result_exits_nonzero() {
-            let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-            let server = MockServer::start().await;
-            let server_uri = server.uri();
-            let _env = CredentialsEnv::new(&server_uri);
-            mount_notion_ensure(
-                &server,
-                serde_json::json!({ "results": [
-                    { "project_code": "acme", "outcome": "created" },
-                    { "project_code": "beta", "outcome": "credential_missing" }
-                ]}),
-            )
-            .await;
-
-            for json in [false, true] {
-                assert_ne!(
-                    notion_ensure(Some(server_uri.as_str()), None, true, json).await,
-                    ExitCode::SUCCESS,
-                    "json={json}"
-                );
-            }
-        }
-
-        /// An `--all` sweep that legitimately matched nothing is not a
-        /// failure — there was simply nothing to do.
-        #[tokio::test(flavor = "current_thread")]
-        async fn an_empty_all_sweep_exits_zero() {
-            let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-            let server = MockServer::start().await;
-            let server_uri = server.uri();
-            let _env = CredentialsEnv::new(&server_uri);
-            mount_notion_ensure(&server, serde_json::json!({ "results": [] })).await;
-
-            assert_eq!(
-                notion_ensure(Some(server_uri.as_str()), None, true, true).await,
-                ExitCode::SUCCESS
-            );
-        }
-
-        #[tokio::test(flavor = "current_thread")]
-        async fn slack_ensure_also_fails_closed_on_credential_missing() {
-            let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-            let server = MockServer::start().await;
-            let server_uri = server.uri();
-            let _env = CredentialsEnv::new(&server_uri);
-            Mock::given(method("POST"))
-                .and(path("/app/api/integrations/slack/ensure"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "results": [
-                        { "project_code": "acme", "outcome": "credential_missing" }
-                    ]
-                })))
-                .mount(&server)
-                .await;
-
-            assert_ne!(
-                slack_ensure(Some(server_uri.as_str()), "acme", true).await,
-                ExitCode::SUCCESS
-            );
-        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -8751,30 +7641,6 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path(format!(
-                "/app/lawyer/notations/{}/clauses",
-                ids.notation
-            )))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
-            .mount(server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path(format!(
-                "/app/lawyer/notations/{}/clauses",
-                ids.notation
-            )))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path(format!(
-                "/app/lawyer/notations/{}/clauses/{}/edit",
-                ids.notation, ids.clause
-            )))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(format!(
                 "/app/lawyer/notations/{}/review",
                 ids.notation
             )))
@@ -8849,23 +7715,6 @@ mod tests {
             ExitCode::SUCCESS
         );
         assert_eq!(std::fs::read(out.path()).unwrap(), b"pdf bytes");
-        assert_eq!(
-            retainer_approve(host, ids.notation).await,
-            ExitCode::SUCCESS
-        );
-        assert_eq!(retainer_send(host, ids.notation).await, ExitCode::SUCCESS);
-        assert_eq!(
-            clause_list(host, ids.notation, true).await,
-            ExitCode::SUCCESS
-        );
-        assert_eq!(
-            clause_add(host, ids.notation, "custom clause").await,
-            ExitCode::SUCCESS
-        );
-        assert_eq!(
-            clause_edit(host, ids.notation, ids.clause, "updated").await,
-            ExitCode::SUCCESS
-        );
         assert_eq!(
             notation_status(host, ids.notation, true).await,
             ExitCode::SUCCESS
@@ -9100,91 +7949,6 @@ mod tests {
         let question = step.question.unwrap();
         assert_eq!(question.candidates.len(), 2);
         assert_eq!(question.candidates[0].id, mexico);
-        assert_eq!(question.candidates[0].name, "Mexico");
-    }
-
-    /// The step carries a transcript-coverage proposal as `prior_answer` /
-    /// `prior_source` so the walk can offer it as a default (defaults to `None`
-    /// on an older server that omits them).
-    #[test]
-    fn step_json_deserializes_prior_answer_fields() {
-        let step: StepResponse = serde_json::from_value(serde_json::json!({
-            "question": {
-                "code": "custom_text__testator_name",
-                "prompt": "Who is the testator?",
-                "answer_type": "string",
-                "prior_answer": "Jane Doe",
-                "prior_source": "extracted"
-            }
-        }))
-        .unwrap();
-        let question = step.question.unwrap();
-        assert_eq!(question.prior_answer.as_deref(), Some("Jane Doe"));
-        assert_eq!(question.prior_source.as_deref(), Some("extracted"));
-    }
-
-    fn choice_question(choices: &serde_json::Value) -> StepQuestion {
-        serde_json::from_value(serde_json::json!({
-            "code": "custom_yes_no__recording_consent",
-            "prompt": "Consent to record?",
-            "answer_type": "yes_no",
-            "choices": choices,
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn canonical_choice_value_maps_label_to_value() {
-        // A yes/no whose stored value differs from its display label — the
-        // extracted proposal is the label, but confirming must store the value.
-        let q = choice_question(&serde_json::json!([
-            {"value": "yes", "label": "Yes"},
-            {"value": "no", "label": "No"},
-        ]));
-        // Exact value kept; label (any case) and value (any case) map to value.
-        assert_eq!(canonical_choice_value(&q, "yes".into()), "yes");
-        assert_eq!(canonical_choice_value(&q, "Yes".into()), "yes");
-        assert_eq!(canonical_choice_value(&q, "YES".into()), "yes");
-        assert_eq!(canonical_choice_value(&q, "No".into()), "no");
-        // An off-list value is kept as typed (free-text fallback).
-        assert_eq!(canonical_choice_value(&q, "maybe".into()), "maybe");
-    }
-
-    #[test]
-    fn canonical_choice_value_passthrough_without_choices() {
-        let q = choice_question(&serde_json::json!([]));
-        assert_eq!(canonical_choice_value(&q, "Jane Doe".into()), "Jane Doe");
-    }
-
-    #[test]
-    fn candidate_by_name_matches_case_insensitively() {
-        let mexico = Uuid::now_v7();
-        let step: StepResponse = serde_json::from_value(serde_json::json!({
-            "question": {
-                "code": "country__of_birth",
-                "prompt": "Where were you born?",
-                "answer_type": "country",
-                "candidates": [{"id": mexico, "name": "Mexico"}],
-            }
-        }))
-        .unwrap();
-        let q = step.question.unwrap();
-        assert_eq!(candidate_by_name(&q, "mexico").map(|c| c.id), Some(mexico));
-        assert!(candidate_by_name(&q, "Brazil").is_none());
-    }
-
-    #[test]
-    fn coverage_summary_deserializes_covered_and_gaps() {
-        let summary: CoverageSummary = serde_json::from_value(serde_json::json!({
-            "template_code": "sitting__transcript",
-            "covered": [{"code": "custom_yes_no__recording_consent", "proposed_answer": "Yes"}],
-            "uncovered": ["custom_text__note"],
-        }))
-        .unwrap();
-        assert_eq!(summary.covered.len(), 1);
-        assert_eq!(summary.covered[0].code, "custom_yes_no__recording_consent");
-        assert_eq!(summary.covered[0].proposed_answer, "Yes");
-        assert_eq!(summary.uncovered, vec!["custom_text__note".to_string()]);
     }
 
     #[test]
@@ -9236,51 +8000,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn scripted_picker_selection_requires_question_code() {
-        let parsed = parse_scripted_selection("country__of_birth=2").unwrap();
-        assert_eq!(parsed.question_code, "country__of_birth");
-        assert_eq!(parsed.raw, "2");
-
-        assert!(parse_scripted_selection("2").is_err());
-        assert!(parse_scripted_selection("country__of_birth=").is_err());
-        assert!(parse_scripted_selection("=2").is_err());
-    }
-
-    #[test]
-    fn scripted_picker_selection_rejects_question_mismatch() {
-        let picked = Uuid::now_v7();
-        let step: StepResponse = serde_json::from_value(serde_json::json!({
-            "question": {
-                "code": "country__of_birth",
-                "prompt": "Where were you born?",
-                "answer_type": "country",
-                "candidates": [
-                    {"id": picked, "name": "Mexico"}
-                ]
-            }
-        }))
-        .unwrap();
-        let question = step.question.unwrap();
-        let selection = parse_scripted_selection("country__of_birth=1").unwrap();
-        let stale = parse_scripted_selection("country__residence=1").unwrap();
-
-        assert_eq!(
-            scripted_picker_selection_fields(&question, &selection).unwrap(),
-            vec![("id".to_string(), picked.to_string())]
-        );
-        assert!(scripted_picker_selection_fields(&question, &stale).is_err());
-    }
-
-    #[test]
-    fn scripted_picker_selection_rejects_leftovers() {
-        let mut selections = VecDeque::new();
-        assert!(ensure_no_unused_selections(&selections).is_ok());
-
-        selections.push_back(parse_scripted_selection("country__of_birth=1").unwrap());
-        assert!(ensure_no_unused_selections(&selections).is_err());
-    }
-
     #[tokio::test(flavor = "current_thread")]
     async fn remote_commands_call_lawyer_routes() {
         let _lock = CREDENTIALS_ENV_LOCK.lock().await;
@@ -9291,7 +8010,6 @@ mod tests {
         let ids = LawyerRouteIds {
             notation: Uuid::now_v7(),
             project: Uuid::now_v7(),
-            clause: Uuid::now_v7(),
         };
         mount_project_routes(&server, ids).await;
         mount_notation_routes(&server, ids).await;
@@ -9299,83 +8017,6 @@ mod tests {
 
         exercise_project_commands(host).await;
         exercise_notation_commands(host, &server_uri, ids).await;
-    }
-
-    /// `retainer send` against a notation whose packet has not rendered yet
-    /// answers `409`, and that is the one branch that must not read as a
-    /// generic failure: the operator's next move is to retry, so the server's
-    /// own reason and the retry command both have to reach them.
-    #[tokio::test(flavor = "current_thread")]
-    async fn sending_before_the_packet_renders_reports_the_reason_and_the_retry() {
-        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-        let server = MockServer::start().await;
-        let server_uri = server.uri();
-        let _env = CredentialsEnv::new(&server_uri);
-        let notation = Uuid::now_v7();
-
-        Mock::given(method("POST"))
-            .and(path(format!("/app/lawyer/notations/{notation}/send")))
-            .respond_with(ResponseTemplate::new(409).set_body_string(
-                r#"{"error":"not ready","reason":"the retainer packet has not rendered"}"#,
-            ))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        assert_eq!(
-            retainer_send(Some(server_uri.as_str()), notation).await,
-            ExitCode::from(2)
-        );
-    }
-
-    /// A `409` with no JSON reason still has to say something actionable
-    /// rather than print an empty tail, so the handler supplies its own
-    /// wording.
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_409_without_a_json_reason_still_names_the_problem() {
-        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-        let server = MockServer::start().await;
-        let server_uri = server.uri();
-        let _env = CredentialsEnv::new(&server_uri);
-        let notation = Uuid::now_v7();
-
-        Mock::given(method("POST"))
-            .and(path(format!("/app/lawyer/notations/{notation}/send")))
-            .respond_with(ResponseTemplate::new(409).set_body_string("<html>gateway noise</html>"))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        assert_eq!(
-            retainer_send(Some(server_uri.as_str()), notation).await,
-            ExitCode::from(2)
-        );
-    }
-
-    /// Any other failing status takes the ordinary `server_error` path, which
-    /// is a different branch from the 409 above.
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_failing_send_reports_the_server_error() {
-        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
-        let server = MockServer::start().await;
-        let server_uri = server.uri();
-        let _env = CredentialsEnv::new(&server_uri);
-        let notation = Uuid::now_v7();
-
-        Mock::given(method("POST"))
-            .and(path(format!("/app/lawyer/notations/{notation}/send")))
-            .respond_with(
-                ResponseTemplate::new(500)
-                    .set_body_string(r#"{"reason":"the signature provider refused"}"#),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        assert_eq!(
-            retainer_send(Some(server_uri.as_str()), notation).await,
-            ExitCode::from(2)
-        );
     }
 
     /// The council's "no opaque 500" rule lives in `server_error`: when a
@@ -9482,20 +8123,6 @@ mod tests {
             integrity_failure(Ok((reqwest::StatusCode::NOT_FOUND, "not found")), limit),
             "404 Not Found: not found"
         );
-    }
-
-    #[test]
-    fn json_reason_reads_the_field_and_tolerates_every_other_shape() {
-        assert_eq!(
-            json_reason(r#"{"reason":"the packet has not rendered yet"}"#).as_deref(),
-            Some("the packet has not rendered yet")
-        );
-        // Present-but-wrong field, unparseable body, and empty body all mean
-        // "no reason to show", so the caller falls back to its own wording.
-        assert!(json_reason(r#"{"error":"no reason here"}"#).is_none());
-        assert!(json_reason(r#"{"reason":404}"#).is_none());
-        assert!(json_reason("<html>not json at all</html>").is_none());
-        assert!(json_reason("").is_none());
     }
 
     #[test]
@@ -11297,7 +9924,6 @@ mod tests {
             .file_mail(message_id, "correspondence", "client", false)
             .await
             .unwrap();
-        assert!(!filed.dry_run);
         assert_eq!(filed.attachments[0].filename, "a.pdf");
         assert_eq!(filed.attachments[0].content_type, "application/pdf");
         assert_eq!(filed.attachments[0].size_bytes, 3);
@@ -11742,72 +10368,6 @@ mod tests {
         .starts_with("parse POST"));
     }
 
-    #[test]
-    fn integration_outcomes_fail_closed_on_any_unrecognized_slug() {
-        let outcome =
-            |code: Option<&str>, outcome: &str, detail: Option<&str>| super::IntegrationOutcome {
-                project_code: code.map(str::to_string),
-                outcome: outcome.to_string(),
-                detail: detail.map(str::to_string),
-            };
-        for success in ["created", "adopted", "unchanged", "repaired", "notified"] {
-            assert!(super::integration_outcome_succeeded(&outcome(
-                Some("acme"),
-                success,
-                None
-            )));
-        }
-        assert!(!super::integration_outcome_succeeded(&outcome(
-            Some("acme"),
-            "credential_missing",
-            None
-        )));
-        assert_eq!(
-            super::describe_integration_outcome(&outcome(
-                Some("acme"),
-                "conflict",
-                Some("renamed")
-            )),
-            "acme: conflict (renamed)"
-        );
-        assert_eq!(
-            super::describe_integration_outcome(&outcome(None, "missing", None)),
-            "unknown Project: missing"
-        );
-
-        assert!(
-            super::report_integration_outcomes("Slack ensure", false, r#"{"results":[]}"#).is_ok()
-        );
-        assert!(super::report_integration_outcomes(
-            "Slack ensure",
-            true,
-            r#"{"results":[{"project_code":"acme","outcome":"unchanged"}]}"#
-        )
-        .is_ok());
-        let mixed = super::report_integration_outcomes(
-            "Notion reconcile",
-            false,
-            r#"{"results":[
-                {"project_code":"acme","outcome":"created"},
-                {"project_code":"beta","outcome":"provider_unavailable","detail":"503"},
-                {"project_code":"gamma","outcome":"brand_new_slug"}
-            ]}"#,
-        )
-        .unwrap_err()
-        .to_string();
-        assert_eq!(
-            mixed,
-            "Notion reconcile did not fully succeed: beta: provider_unavailable (503); gamma: brand_new_slug"
-        );
-        let unreadable = super::report_integration_outcomes("Slack ensure", false, "ok\n")
-            .unwrap_err()
-            .to_string();
-        assert_eq!(
-            unreadable,
-            "the server returned a body this CLI could not interpret: ok"
-        );
-    }
-
     #[tokio::test]
     async fn a_ci_scoped_dry_run_names_the_project_and_is_never_rechecked() {
         let server = MockServer::start().await;
@@ -12100,68 +10660,6 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "notation status failed: 503 Service Unavailable"
-        );
-    }
-
-    #[tokio::test]
-    async fn transcript_coverage_posts_the_file_and_reports_a_refusal() {
-        let server = MockServer::start().await;
-        let notation_id = Uuid::now_v7();
-        let refused = Uuid::now_v7();
-        Mock::given(method("POST"))
-            .and(path(format!(
-                "/app/lawyer/notations/{notation_id}/transcript"
-            )))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "covered": [{"code": "person__client", "proposed_answer": "Libra"}],
-                "uncovered": ["country__of_birth"]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path(format!("/app/lawyer/notations/{refused}/transcript")))
-            .respond_with(ResponseTemplate::new(422).set_body_string("transcript is empty"))
-            .mount(&server)
-            .await;
-        let dir = tempfile::tempdir().unwrap();
-        let transcript = dir.path().join("call.txt");
-        std::fs::write(&transcript, "My name is Libra & I was born in Reno.").unwrap();
-        let client = reqwest::Client::new();
-        let uri = server.uri();
-
-        super::post_transcript_coverage(&client, &uri, "t", notation_id, &transcript)
-            .await
-            .unwrap();
-        let requests = server.received_requests().await.unwrap();
-        let form = String::from_utf8(requests[0].body.clone()).unwrap();
-        let fields: Vec<(String, String)> = url::form_urlencoded::parse(form.as_bytes())
-            .into_owned()
-            .collect();
-        assert_eq!(
-            fields,
-            vec![(
-                "transcript".to_string(),
-                "My name is Libra & I was born in Reno.".to_string()
-            )]
-        );
-
-        let error = super::post_transcript_coverage(&client, &uri, "t", refused, &transcript)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.starts_with("transcript coverage failed:")
-                && error.contains("transcript is empty"),
-            "{error}"
-        );
-        let missing = dir.path().join("absent.txt");
-        assert!(
-            super::post_transcript_coverage(&client, &uri, "t", notation_id, &missing)
-                .await
-                .unwrap_err()
-                .to_string()
-                .starts_with("read transcript")
         );
     }
 
