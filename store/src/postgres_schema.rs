@@ -1390,6 +1390,12 @@ mod tests {
                 "20261104120000_sent_email_append_only.sql",
                 include_str!("../postgres/migrations/20261104120000_sent_email_append_only.sql"),
             ),
+            (
+                "20261105120000_index_message_provider_message_id.sql",
+                include_str!(
+                    "../postgres/migrations/20261105120000_index_message_provider_message_id.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

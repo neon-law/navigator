@@ -259,6 +259,60 @@ pub fn parse_raw_eml(raw: &[u8]) -> Option<InboundEmail> {
     })
 }
 
+/// The thread keys a raw RFC 5322 message carries, for
+/// `store::inbox::ingest_inbound_threaded`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadKeys {
+    /// The provider's own thread id, when the export carries one (Gmail's
+    /// `X-GM-THRID`, present in Takeout mbox exports).
+    pub provider_thread_ref: Option<String>,
+    /// The Message-IDs the message answers, nearest ancestor first, without
+    /// angle brackets: `In-Reply-To`, then `References` newest to oldest.
+    pub references: Vec<String>,
+}
+
+/// Read the [`ThreadKeys`] from raw MIME bytes. A message that names no
+/// thread yields empty keys and starts a new Conversation.
+#[must_use]
+pub fn thread_keys_from_raw(raw: &[u8]) -> ThreadKeys {
+    let Some(message) = mail_parser::MessageParser::default().parse(raw) else {
+        return ThreadKeys::default();
+    };
+    let own_id = message.message_id();
+    let mut references: Vec<String> = Vec::new();
+    let in_reply_to = message.in_reply_to();
+    let chain = message.references();
+    let candidates = in_reply_to
+        .iter()
+        .flat_map(|ids| ids.iter().rev())
+        .chain(chain.iter().flat_map(|ids| ids.iter().rev()));
+    for candidate in candidates {
+        let id = candidate
+            .trim()
+            .trim_start_matches('<')
+            .trim_end_matches('>');
+        if id.is_empty() || Some(id) == own_id || references.iter().any(|known| known == id) {
+            continue;
+        }
+        references.push(id.to_string());
+    }
+    let provider_thread_ref = message
+        .headers()
+        .iter()
+        .find(|header| header.raw_name().eq_ignore_ascii_case("X-GM-THRID"))
+        .map(|header| {
+            String::from_utf8_lossy(header.raw_value())
+                .trim()
+                .to_string()
+        })
+        .filter(|thread| !thread.is_empty())
+        .map(|thread| format!("gmail:{thread}"));
+    ThreadKeys {
+        provider_thread_ref,
+        references,
+    }
+}
+
 /// The message's `Date` header rendered as RFC 3339 in UTC, or `None`
 /// when the raw bytes carry no parseable date.
 #[must_use]
@@ -1311,6 +1365,20 @@ mod tests {
         );
         // No Message-ID header → None.
         assert!(message_id_from_raw(b"Subject: x\r\n\r\nbody").is_none());
+    }
+
+    #[test]
+    fn thread_keys_order_the_reference_chain_nearest_first() {
+        let raw = b"Message-ID: <c@x.example>\r\nIn-Reply-To: <b@x.example>\r\n\
+                    References: <a@x.example> <b@x.example>\r\nX-GM-THRID: 179\r\n\
+                    From: a@sender.example\r\nSubject: x\r\n\r\nbody";
+        let keys = super::thread_keys_from_raw(raw);
+        assert_eq!(keys.references, vec!["b@x.example", "a@x.example"]);
+        assert_eq!(keys.provider_thread_ref.as_deref(), Some("gmail:179"));
+        assert_eq!(
+            super::thread_keys_from_raw(b"Message-ID: <c@x.example>\r\nSubject: x\r\n\r\nbody"),
+            super::ThreadKeys::default()
+        );
     }
 
     #[test]

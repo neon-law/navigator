@@ -3884,3 +3884,8 @@ $$;
 CREATE TRIGGER sent_email_no_truncate
     BEFORE TRUNCATE ON sent_email
     FOR EACH STATEMENT EXECUTE FUNCTION sent_email_refuse_truncate();
+
+-- Migration: 20261105120000_index_message_provider_message_id.sql
+-- Email ingest threads a delivery into the Conversation of a Message it names in
+-- In-Reply-To or References, looked up by that Message's RFC 5322 Message-ID.
+CREATE INDEX message_provider_message_id ON message (provider_message_id) WHERE provider_message_id IS NOT NULL;

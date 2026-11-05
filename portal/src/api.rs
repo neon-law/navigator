@@ -4993,7 +4993,10 @@ struct IngestProviderMessageRequest {
 /// attributed to this Project. Ingest-only: nothing is sent, and the
 /// conversation stays in the Inbox workflow where an Owner can reassign it.
 /// Re-running the verb is safe: the message dedupes on Firm, channel,
-/// provider account, and message id.
+/// provider account, and message id. A message that answers one already
+/// filed in this Project (`In-Reply-To`, `References`, or Gmail's
+/// `X-GM-THRID`) joins that message's Conversation, so one email thread is
+/// one Conversation; a thread filed in another Project is never joined.
 async fn ingest_provider_message_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
@@ -5056,7 +5059,8 @@ async fn ingest_provider_message_door(
         .unwrap_or_else(|| format!("raw-{}", store::assets::sha256_hex(&raw)));
     let occurred_at = crate::inbound_email::date_from_raw(&raw)
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let ingested = store::inbox::ingest_inbound(
+    let thread = crate::inbound_email::thread_keys_from_raw(&raw);
+    let ingested = store::inbox::ingest_inbound_threaded(
         &state.surreal,
         &store::inbox::IngestInbound {
             raw_storage_key: None,
@@ -5065,12 +5069,12 @@ async fn ingest_provider_message_door(
             brand_key: None,
             interaction_type: Some("message"),
             provider_post_id: None,
-            parent_provider_message_id: None,
+            parent_provider_message_id: thread.references.first().map(String::as_str),
             visibility: None,
             channel: store::inbox::channel::EMAIL,
             provider_account: &provider_account,
             provider_message_id: &provider_message_id,
-            provider_thread_ref: None,
+            provider_thread_ref: thread.provider_thread_ref.as_deref(),
             external_address: &email.from,
             external_name: None,
             subject: Some(email.subject.as_str()),
@@ -5083,6 +5087,7 @@ async fn ingest_provider_message_door(
             attachments,
             occurred_at: &occurred_at,
         },
+        &thread.references,
     )
     .await
     .map_err(|error| ApiError::Db(error.to_string()))?;

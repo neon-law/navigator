@@ -183,7 +183,8 @@ pub enum MailAction {
     /// the Navigator ingest door. Ingest-only: nothing is sent, and no
     /// Gmail OAuth setup is required. Re-running is safe — the door
     /// dedupes on the provider Message-ID (falling back to a raw-content
-    /// hash).
+    /// hash). A reply joins the Conversation of the message it answers in
+    /// the same Project (In-Reply-To, References, or Gmail's X-GM-THRID).
     Ingest {
         /// Path to the raw RFC 5322 message to file.
         #[arg(value_name = "PATH")]

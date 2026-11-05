@@ -970,6 +970,102 @@ async fn threading_partitions_by_the_surreal_key() {
     assert_eq!(message_count(&fixture.pg).await, 4);
 }
 
+/// LAW-262: email threading follows the RFC 5322 reference chain and the
+/// provider thread id across senders, within one Project only.
+#[tokio::test]
+async fn threaded_ingest_joins_referenced_conversations_within_the_project() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let other_project = seed_project(
+        &fixture.pg,
+        &fixture.db,
+        fixture.entity,
+        fixture.firm,
+        "beta-matter",
+        "Beta Matter",
+    )
+    .await;
+    let mut root = inbound(
+        fixture.firm,
+        channel::EMAIL,
+        "nick@neonlaw.com",
+        "root@example.com",
+        "client@example.com",
+    );
+    root.project_id = Some(fixture.project);
+    let first = pg_inbox::ingest_threaded_on(&fixture.pg, &root, Some(&[]))
+        .await
+        .unwrap();
+
+    // The Firm's reply: another sender, In-Reply-To names the root.
+    let reply = inbound_with(&root, None, "lawyer@firm.example", "reply@firm.example");
+    let refs = ["root@example.com".to_string()];
+    let joined = pg_inbox::ingest_threaded_on(&fixture.pg, &reply, Some(&refs))
+        .await
+        .unwrap();
+    assert!(!joined.deduped);
+    assert_eq!(joined.conversation_id, first.conversation_id);
+    let redelivered = pg_inbox::ingest_threaded_on(&fixture.pg, &reply, Some(&refs))
+        .await
+        .unwrap();
+    assert!(redelivered.deduped);
+    assert_eq!(redelivered.message_id, joined.message_id);
+
+    // An unknown nearest ancestor falls through to an older known one.
+    let later = inbound_with(
+        &root,
+        None,
+        "cocounsel@other.example",
+        "later@other.example",
+    );
+    let chain = [
+        "never-ingested@other.example".to_string(),
+        "reply@firm.example".to_string(),
+    ];
+    let chained = pg_inbox::ingest_threaded_on(&fixture.pg, &later, Some(&chain))
+        .await
+        .unwrap();
+    assert_eq!(chained.conversation_id, first.conversation_id);
+
+    // The same reference from another Project starts its own Conversation.
+    let mut elsewhere = inbound_with(&root, None, "lawyer@firm.example", "elsewhere@firm.example");
+    elsewhere.project_id = Some(other_project);
+    let scoped = pg_inbox::ingest_threaded_on(&fixture.pg, &elsewhere, Some(&refs))
+        .await
+        .unwrap();
+    assert_ne!(scoped.conversation_id, first.conversation_id);
+
+    // No matching reference and a new sender: a new Conversation.
+    let unrelated = inbound_with(&root, None, "stranger@example.com", "unrelated@example.com");
+    let unknown = ["other-thread@example.com".to_string()];
+    let fresh = pg_inbox::ingest_threaded_on(&fixture.pg, &unrelated, Some(&unknown))
+        .await
+        .unwrap();
+    assert_ne!(fresh.conversation_id, first.conversation_id);
+
+    // A shared provider thread id joins across senders without references.
+    let gmail_one = inbound_with(
+        &root,
+        Some("gmail:179"),
+        "a@example.com",
+        "gm-1@example.com",
+    );
+    let gmail_two = inbound_with(
+        &root,
+        Some("gmail:179"),
+        "b@example.com",
+        "gm-2@example.com",
+    );
+    let one = pg_inbox::ingest_threaded_on(&fixture.pg, &gmail_one, Some(&[]))
+        .await
+        .unwrap();
+    let two = pg_inbox::ingest_threaded_on(&fixture.pg, &gmail_two, Some(&[]))
+        .await
+        .unwrap();
+    assert_eq!(one.conversation_id, two.conversation_id);
+}
+
 /// Sequential replay of an imported payload is a no-op that reports the
 /// existing ids — LAW-238's idempotent import contract.
 #[tokio::test]

@@ -723,6 +723,43 @@ pub async fn ingest_inbound(
     db: &SurrealDb,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
+    Box::pin(ingest_inbound_in(db, inbound, None)).await
+}
+
+/// Ingest one provider email into the Conversation its thread already
+/// occupies. Before the per-sender lookup [`ingest_inbound`] runs, the
+/// delivery joins an existing Conversation of the same Firm, channel, and
+/// Project attribution when either
+///
+/// - `inbound.provider_thread_ref` (a provider thread id such as Gmail's
+///   `X-GM-THRID`) is that Conversation's thread, or
+/// - one of `references` — RFC 5322 Message-IDs from `In-Reply-To` and
+///   `References`, nearest ancestor first, without angle brackets — is the
+///   `provider_message_id` of a Message already in it.
+///
+/// So an inbound message and the Firm's reply to it land in one
+/// Conversation whatever their senders. A Conversation with a different
+/// Project attribution is never joined. Dedup on the provider message id
+/// runs first, unchanged.
+///
+/// # Errors
+///
+/// Propagates any database error.
+pub async fn ingest_inbound_threaded(
+    db: &SurrealDb,
+    inbound: &IngestInbound<'_>,
+    references: &[String],
+) -> Result<IngestedInbound, InboxError> {
+    Box::pin(ingest_inbound_in(db, inbound, Some(references))).await
+}
+
+/// `thread` is `None` for the per-sender threading of [`ingest_inbound`]
+/// and the reference chain for [`ingest_inbound_threaded`].
+async fn ingest_inbound_in(
+    db: &SurrealDb,
+    inbound: &IngestInbound<'_>,
+    thread: Option<&[String]>,
+) -> Result<IngestedInbound, InboxError> {
     if let Some(pg) = inbox_authority().await? {
         for attachment in &inbound.attachments {
             Box::pin(crate::postgres_mirror::mirror(
@@ -733,9 +770,26 @@ pub async fn ingest_inbound(
             .await
             .map_err(|error| InboxError::Db(error.to_string()))?;
         }
-        return Box::pin(crate::postgres::inbox::ingest_inbound_on(&pg, inbound)).await;
+        return Box::pin(crate::postgres::inbox::ingest_threaded_on(
+            &pg, inbound, thread,
+        ))
+        .await;
     }
-    Box::pin(ingest_inbound_surreal(db, inbound)).await
+    Box::pin(ingest_inbound_surreal(db, inbound, thread)).await
+}
+
+/// The Conversation the nearest referenced Message lives in: `references`
+/// is ordered nearest ancestor first, and `hits` pairs each referenced
+/// provider message id found in scope with its Conversation.
+pub(crate) fn nearest_referenced_conversation(
+    references: &[String],
+    hits: &[(String, Uuid)],
+) -> Option<Uuid> {
+    references.iter().find_map(|reference| {
+        hits.iter()
+            .find(|(provider_message_id, _)| provider_message_id == reference)
+            .map(|(_, conversation_id)| *conversation_id)
+    })
 }
 
 /// The direction-aware ingest entry for imported correspondence (LAW-238
@@ -786,6 +840,7 @@ pub async fn set_attachment_asset(message_id: Uuid, asset_id: Uuid) -> Result<()
 async fn ingest_inbound_surreal(
     db: &SurrealDb,
     inbound: &IngestInbound<'_>,
+    thread: Option<&[String]>,
 ) -> Result<IngestedInbound, InboxError> {
     let channel_supported = matches!(
         inbound.channel,
@@ -811,9 +866,16 @@ async fn ingest_inbound_surreal(
         return replay_existing_message(db, existing).await;
     }
 
-    let conversation = match find_open_thread(db, inbound).await? {
+    let threaded = match thread {
+        Some(references) => find_referenced_thread(db, inbound, references).await?,
+        None => None,
+    };
+    let conversation = match threaded {
         Some(existing) => existing,
-        None => create_conversation(db, inbound).await?,
+        None => match find_open_thread(db, inbound).await? {
+            Some(existing) => existing,
+            None => create_conversation(db, inbound).await?,
+        },
     };
     if inbound.email_conversation_id.is_some() && conversation.email_conversation_id.is_none() {
         link_email_conversation(db, conversation.id, inbound.email_conversation_id).await?;
@@ -3178,6 +3240,71 @@ async fn parent_message_id(
         .check()?;
     let id: Option<surrealdb::types::RecordId> = response.take(0)?;
     Ok(id.as_ref().and_then(record_uuid))
+}
+
+#[derive(SurrealValue)]
+struct ReferencedRow {
+    conversation_id: surrealdb::types::RecordId,
+    provider_message_id: String,
+}
+
+/// The Conversation [`ingest_inbound_threaded`] joins: same Firm, channel,
+/// and Project attribution, keyed on the provider thread id first and then
+/// on the nearest referenced Message.
+async fn find_referenced_thread(
+    db: &SurrealDb,
+    inbound: &IngestInbound<'_>,
+    references: &[String],
+) -> Result<Option<Conversation>, InboxError> {
+    let project = inbound.project_id.map(|id| record_id("project", id));
+    let mut conversation_id = None;
+    if let Some(thread) = inbound.provider_thread_ref {
+        let mut response = db
+            .query(format!(
+                "SELECT VALUE id FROM {CONVERSATION} WHERE firm_id = $firm AND channel = $channel \
+                 AND project_id = $project AND provider_thread_ref = $thread \
+                 ORDER BY inserted_at DESC LIMIT 1"
+            ))
+            .bind(("firm", record_id(crate::firms::TABLE, inbound.firm_id)))
+            .bind(("channel", inbound.channel.to_string()))
+            .bind(("project", project.clone()))
+            .bind(("thread", thread.to_string()))
+            .await?
+            .check()?;
+        let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
+        conversation_id = ids.first().and_then(record_uuid);
+    }
+    if conversation_id.is_none() && !references.is_empty() {
+        let mut response = db
+            .query(format!(
+                "SELECT conversation_id, provider_message_id FROM {MESSAGE} \
+                 WHERE provider_message_id IN $references \
+                 AND conversation_id.firm_id = $firm AND conversation_id.channel = $channel \
+                 AND conversation_id.project_id = $project"
+            ))
+            .bind(("references", references.to_vec()))
+            .bind(("firm", record_id(crate::firms::TABLE, inbound.firm_id)))
+            .bind(("channel", inbound.channel.to_string()))
+            .bind(("project", project))
+            .await?
+            .check()?;
+        let rows: Vec<ReferencedRow> = response.take(0)?;
+        let hits: Vec<(String, Uuid)> = rows
+            .into_iter()
+            .filter_map(|row| Some((row.provider_message_id, record_uuid(&row.conversation_id)?)))
+            .collect();
+        conversation_id = nearest_referenced_conversation(references, &hits);
+    }
+    let Some(conversation_id) = conversation_id else {
+        return Ok(None);
+    };
+    let mut response = db
+        .query(format!("SELECT {CONVERSATION_SELECT} FROM ONLY $id"))
+        .bind(("id", record_id(CONVERSATION, conversation_id)))
+        .await?
+        .check()?;
+    let row: Option<ConversationRow> = response.take(0)?;
+    Ok(row.and_then(ConversationRow::into_conversation))
 }
 
 async fn find_open_thread(

@@ -213,6 +213,7 @@ async fn insert_message(
 
 /// The ingest entry for provider-webhook-shaped deliveries: direction
 /// `inbound`, no author, exactly `store::inbox::ingest_inbound`'s contract.
+#[cfg(test)]
 pub(crate) async fn ingest_inbound_on(
     pg: &PostgresDb,
     inbound: &IngestInbound<'_>,
@@ -220,20 +221,41 @@ pub(crate) async fn ingest_inbound_on(
     ingest_message_on(pg, direction::INBOUND, None, inbound).await
 }
 
+/// The inbound ingest entry behind `store::inbox::ingest_inbound` (`thread`
+/// is `None`) and `store::inbox::ingest_inbound_threaded` (`thread` is the
+/// reference chain, nearest ancestor first).
+pub(crate) async fn ingest_threaded_on(
+    pg: &PostgresDb,
+    inbound: &IngestInbound<'_>,
+    thread: Option<&[String]>,
+) -> Result<IngestedInbound, InboxError> {
+    ingest_on(pg, direction::INBOUND, None, inbound, thread).await
+}
+
 /// The direction-aware ingest entry. Inbound traffic behaves exactly like
 /// `ingest_inbound_on`; lawyer-sent imports (LAW-238 D1) arrive with direction
 /// `outbound` and the mailbox owner as author. Delivery is `received` —
 /// historical mail is already delivered — and `dispatch_queued` never
 /// re-sends it, because only `queued` is dispatched.
-// The transactional ingest mirrors the Surreal `ingest_inbound` flow step
-// for step; splitting it would hide the ordering that makes the dedup
-// race-safe.
-#[allow(clippy::too_many_lines)]
 pub(crate) async fn ingest_message_on(
     pg: &PostgresDb,
     direction_value: &str,
     author_person_id: Option<Uuid>,
     inbound: &IngestInbound<'_>,
+) -> Result<IngestedInbound, InboxError> {
+    ingest_on(pg, direction_value, author_person_id, inbound, None).await
+}
+
+// The transactional ingest mirrors the Surreal `ingest_inbound` flow step
+// for step; splitting it would hide the ordering that makes the dedup
+// race-safe.
+#[allow(clippy::too_many_lines)]
+async fn ingest_on(
+    pg: &PostgresDb,
+    direction_value: &str,
+    author_person_id: Option<Uuid>,
+    inbound: &IngestInbound<'_>,
+    thread: Option<&[String]>,
 ) -> Result<IngestedInbound, InboxError> {
     let channel_supported = matches!(
         inbound.channel,
@@ -263,9 +285,16 @@ pub(crate) async fn ingest_message_on(
     }
 
     let mut tx = pg.0.begin().await.map_err(db_error)?;
-    let conversation = match find_open_thread_on(&mut *tx, inbound).await? {
+    let threaded = match thread {
+        Some(references) => find_referenced_thread_on(&mut tx, inbound, references).await?,
+        None => None,
+    };
+    let conversation = match threaded {
         Some(existing) => existing,
-        None => create_conversation_on(&mut *tx, inbound).await?,
+        None => match find_open_thread_on(&mut *tx, inbound).await? {
+            Some(existing) => existing,
+            None => create_conversation_on(&mut *tx, inbound).await?,
+        },
     };
     if let Some(email_conversation_id) = inbound.email_conversation_id {
         if conversation.email_conversation_id.is_none() {
@@ -582,6 +611,60 @@ async fn find_ingress_on(
     .await
     .map_err(db_error)?;
     Ok(message_id)
+}
+
+/// The Conversation `store::inbox::ingest_inbound_threaded` joins: same
+/// Firm, channel, and Project attribution, keyed on the provider thread id
+/// first and then on the nearest referenced Message.
+async fn find_referenced_thread_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    inbound: &IngestInbound<'_>,
+    references: &[String],
+) -> Result<Option<crate::inbox::Conversation>, InboxError> {
+    let mut conversation_id: Option<Uuid> = None;
+    if let Some(thread) = inbound.provider_thread_ref {
+        conversation_id = sqlx::query_scalar(
+            "SELECT id FROM inbox_conversation WHERE firm_id = $1 AND channel = $2 \
+             AND project_id IS NOT DISTINCT FROM $3 AND provider_thread_ref = $4 \
+             ORDER BY inserted_at DESC LIMIT 1",
+        )
+        .bind(inbound.firm_id)
+        .bind(inbound.channel)
+        .bind(inbound.project_id)
+        .bind(thread)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db_error)?;
+    }
+    if conversation_id.is_none() && !references.is_empty() {
+        let hits: Vec<(String, Uuid)> = sqlx::query_as(
+            "SELECT m.provider_message_id, m.conversation_id FROM message m \
+             JOIN inbox_conversation c ON c.id = m.conversation_id \
+             WHERE m.provider_message_id = ANY($1) AND c.firm_id = $2 AND c.channel = $3 \
+             AND c.project_id IS NOT DISTINCT FROM $4",
+        )
+        .bind(references)
+        .bind(inbound.firm_id)
+        .bind(inbound.channel)
+        .bind(inbound.project_id)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(db_error)?;
+        conversation_id = inbox::nearest_referenced_conversation(references, &hits);
+    }
+    let Some(conversation_id) = conversation_id else {
+        return Ok(None);
+    };
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {CONVERSATION_COLUMNS} FROM inbox_conversation WHERE id = $1"
+    )))
+    .bind(conversation_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db_error)?;
+    row.map(|row| conversation(&row))
+        .transpose()
+        .map_err(db_error)
 }
 
 async fn find_open_thread_on(
