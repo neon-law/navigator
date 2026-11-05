@@ -64,6 +64,7 @@ pub mod acroform;
 pub mod certificate;
 pub mod format;
 pub mod markdown;
+pub mod merge;
 pub mod passage;
 pub mod pleading;
 pub mod safety;
@@ -81,6 +82,7 @@ pub use format::{
     PREVIEW_LABEL, PRIVILEGED_LABEL,
 };
 pub use markdown::to_typst;
+pub use merge::append_document;
 pub use passage::{
     locate, occurrence_count, page_count, page_render, NormalisedRect, PassageError,
     PassageLocation, PassageRect,

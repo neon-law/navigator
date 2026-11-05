@@ -91,6 +91,7 @@ async fn worker_fills(world: &mut AcroWorld, entity_name: String, agent: String)
         storage_key: OUTPUT_KEY.to_string(),
         blank_form_key: FORM_KEY.to_string(),
         fields,
+        addendum_typst: None,
     })
     .unwrap();
 
