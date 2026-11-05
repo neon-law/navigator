@@ -135,6 +135,7 @@ const UNIQUE_INDEX_NAMES: &[&str] = &[
     "template_current_key",
     "review_document_notation_kind",
     "signature_provider_request",
+    "esignature_webhook_journal_event",
     "notarization_provider_request",
     "authority_citation",
     "playbook_entity_name",

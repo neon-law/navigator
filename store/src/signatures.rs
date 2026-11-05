@@ -56,6 +56,18 @@ impl SignatureProvider {
             Self::DocuSign => "docusign",
         }
     }
+
+    /// The provider a stored string names — `None` for a value outside
+    /// the closed set. The webhook journal's replay sweep resolves its
+    /// receipts' provider column through this, the same closed set the
+    /// column's writers used.
+    #[must_use]
+    pub fn from_stored(value: &str) -> Option<Self> {
+        match value {
+            "docusign" => Some(Self::DocuSign),
+            _ => None,
+        }
+    }
 }
 
 /// The closed lifecycle of one signature request.
