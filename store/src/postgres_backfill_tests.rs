@@ -868,3 +868,60 @@ async fn object_verification_preserves_success_and_missing_object_classification
         ObjectCheckError::Backend(cloud::StorageError::NotFound(_))
     ));
 }
+
+#[tokio::test]
+async fn source_inventory_reports_empty_and_excluded_tables_in_order() {
+    let surreal = mem_surreal().await;
+    surreal.query("DELETE brand; DEFINE TABLE zz_empty_fixture SCHEMAFULL; DEFINE TABLE aa_runtime_fixture SCHEMAFULL; CREATE aa_runtime_fixture:one; CREATE aa_runtime_fixture:two;")
+        .await.unwrap().check().unwrap();
+    let covered = BTreeSet::from(["aa_runtime_fixture"]);
+    let inventory = source_inventory(&surreal, &covered).await.unwrap();
+    assert!(inventory
+        .windows(2)
+        .all(|pair| pair[0].table < pair[1].table));
+    let runtime = inventory
+        .iter()
+        .find(|table| table.table == "aa_runtime_fixture")
+        .unwrap();
+    assert_eq!(runtime.rows, 2);
+    assert_eq!(runtime.disposition, SourceDisposition::Mirrored);
+    let empty = inventory
+        .iter()
+        .find(|table| table.table == "zz_empty_fixture")
+        .unwrap();
+    assert_eq!(empty.rows, 0);
+    assert_eq!(empty.disposition, SourceDisposition::Unsupported);
+    let metadata = inventory
+        .iter()
+        .find(|table| table.table == "schema_version")
+        .unwrap();
+    assert_eq!(metadata.disposition, SourceDisposition::RecreatedMetadata);
+    assert!(metadata.rows > 0);
+    let derived = inventory
+        .iter()
+        .find(|table| table.table == "draft")
+        .unwrap();
+    assert_eq!(derived.disposition, SourceDisposition::Derived);
+    assert_eq!(
+        source_inventory(&surreal, &covered).await.unwrap(),
+        inventory
+    );
+    let rows: Vec<surrealdb::types::Value> = surreal
+        .query("SELECT * FROM aa_runtime_fixture")
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
+    assert_eq!(rows.len(), 2, "inventory is read-only");
+}
+
+#[test]
+fn missing_source_inventory_is_an_error_instead_of_an_empty_database() {
+    assert!(matches!(
+        required_source_tables(None),
+        Err(BackfillError::SourceInventory)
+    ));
+    assert!(required_source_tables(Some(BTreeMap::new()))
+        .unwrap()
+        .is_empty());
+}
