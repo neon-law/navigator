@@ -7,7 +7,8 @@ A matter document — a project-scoped [Asset](asset.md) carrying the metadata c
 `received_at`) alongside the byte pointer. `kind` is a closed asset-lane classification from
 [`rules::kind::Kind`](../../rules/src/kind.rs) (`valid_for(Lane::Asset)`). `POST /app/api/projects/{id}/documents` and
 `navigator site document upload` require it; omitted or blank is `400 kind_required`. Inbound email attachments still
-file as `unclassified`.
+file as `unclassified`. Each upload path's per-file and per-batch limits, and what a caller over one sees, are in
+[Upload limits](../project-repositories.md#upload-limits).
 
 An OCR transcript is another `transcript` Document revision. Its `derived_from` field records the source Document's
 asset id, revision number, and SHA-256, so a live document check can tell when the source has moved on. Its
