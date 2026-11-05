@@ -153,6 +153,12 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
     use axum::routing::{delete, get, patch, post, put};
     vec![
         ("GET", "/app/api/people", get(list_people)),
+        (
+            "POST",
+            "/app/api/projects/{id}/astrology-chart",
+            post(crate::private_chart::calculate)
+                .layer(DefaultBodyLimit::max(crate::private_chart::MAX_BODY_BYTES)),
+        ),
         ("POST", "/app/api/people", post(create_person)),
         ("POST", "/app/api/people/merge", post(merge_people)),
         ("GET", "/app/api/people/{id}", get(get_person)),

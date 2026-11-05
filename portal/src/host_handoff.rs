@@ -1,18 +1,21 @@
 //! Per-host sign-in for brand hosts.
 //!
 //! Every identity provider knows one callback, `OAUTH_REDIRECT_URI`. A brand
-//! host such as `iep.neonlaw.com` still keeps its own session: its
-//! `/auth/login` sends the visitor to the callback origin with the host it came
-//! from, and the callback origin hands a verified sign-in back to that host.
-//! No provider console needs one redirect URI per host.
+//! host such as `www.vestaestateplanning.com` still keeps its own sign-in page
+//! and session: the visitor picks a provider on the brand's own page, its
+//! `/auth/login/{provider}` sends them to the callback origin with the host it
+//! came from, and the callback origin hands a verified sign-in back to that
+//! host. No provider console needs one redirect URI per host, and the callback
+//! origin is only ever crossed in redirects, never shown as a page.
 //!
 //! The four steps:
 //!
-//! 1. The brand host's `/auth/login` sets a host-only nonce cookie and 303s to
-//!    the callback origin with `return_host` and `handoff_nonce`
-//!    ([`brand_host_login_redirect`]).
-//! 2. The callback origin's `/auth/login` keeps both in a signed cookie when
-//!    the host is one this deployment serves ([`remember_return_host`]).
+//! 1. The brand host's `/auth/login/{provider}` sets a host-only nonce cookie
+//!    and 303s to the callback origin's same path with `return_host` and
+//!    `handoff_nonce` ([`brand_host_login_redirect`]).
+//! 2. The callback origin's `/auth/login/{provider}` keeps both in a signed
+//!    cookie when the host is one this deployment serves
+//!    ([`remember_return_host`]), then redirects to the provider.
 //! 3. After the provider verifies the person, the callback origin redirects to
 //!    the brand host's `/auth/handoff` with a signed, 60-second payload bound to
 //!    that host and nonce ([`handoff_redirect`]).
@@ -65,7 +68,7 @@ struct Handoff {
     exp: i64,
 }
 
-/// Step 1: the 303 a brand host answers `/auth/login` with.
+/// Step 1: the 303 a brand host answers `/auth/login/{provider}` with.
 ///
 /// `host` is the brand host's `Host:` header as received, port included, so a
 /// local listener gets its own port back.

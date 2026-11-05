@@ -146,15 +146,16 @@ async fn callback_origin_wins_over_canonical_host_without_looping() {
     .await;
     let secondary = app
         .clone()
-        .oneshot(request("localhost:20430", "/auth/login"))
+        .oneshot(request("localhost:20430", "/auth/login/oidc"))
         .await
         .unwrap();
-    // A loopback brand listener detours with its handoff parameters.
+    // A loopback brand listener's provider leg detours with its handoff
+    // parameters.
     assert!(secondary.headers()["location"]
         .to_str()
         .unwrap()
         .starts_with(
-            "http://localhost:20400/auth/login?return_host=localhost%3A20430&handoff_nonce="
+            "http://localhost:20400/auth/login/oidc?return_host=localhost%3A20430&handoff_nonce="
         ));
     let primary = app
         .clone()
@@ -549,10 +550,22 @@ async fn brand_host_sign_in_is_handed_back_with_its_own_session() {
     let (app, idp) = handoff_app().await;
     let login_path = "/auth/login?return_to=%2Fapp%2Fprojects";
 
-    // 1. The brand host sets its nonce cookie and detours to the callback origin.
-    let brand_login = app
+    // 1. The brand host keeps `/auth/login` for itself: with one provider it
+    // sends the visitor to its own provider path, never to another origin.
+    let brand_page = app
         .clone()
         .oneshot(request(LOCAL_BRAND, login_path))
+        .await
+        .unwrap();
+    assert_eq!(brand_page.status(), StatusCode::SEE_OTHER);
+    let provider_path = brand_page.headers()["location"].to_str().unwrap();
+    assert_eq!(provider_path, "/auth/login/oidc?return_to=/app/projects");
+
+    // 2. The brand host's provider path sets its nonce cookie and detours to
+    // the callback origin.
+    let brand_login = app
+        .clone()
+        .oneshot(request(LOCAL_BRAND, provider_path))
         .await
         .unwrap();
     assert_eq!(brand_login.status(), StatusCode::SEE_OTHER);
@@ -576,7 +589,7 @@ async fn brand_host_sign_in_is_handed_back_with_its_own_session() {
         nonce_cookie
     );
 
-    // 2. The callback origin starts the provider redirect and remembers the host.
+    // 3. The callback origin starts the provider redirect and remembers the host.
     let primary_login = app
         .clone()
         .oneshot(request(
@@ -594,7 +607,7 @@ async fn brand_host_sign_in_is_handed_back_with_its_own_session() {
         .to_owned();
     mount_token(&idp, &pre.nonce).await;
 
-    // 3. The callback hands the verified sign-in back to the brand host.
+    // 4. The callback hands the verified sign-in back to the brand host.
     let callback = app
         .clone()
         .oneshot(with_cookies(
@@ -634,7 +647,7 @@ async fn brand_host_sign_in_is_handed_back_with_its_own_session() {
         .unwrap();
     assert_eq!(elsewhere.status(), StatusCode::BAD_REQUEST);
 
-    // 4. The brand host sets its own session and lands on the deep link.
+    // 5. The brand host sets its own session and lands on the deep link.
     let landed = app
         .clone()
         .oneshot(with_cookies(

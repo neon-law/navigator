@@ -13,7 +13,8 @@
 //! 3. **Sign-in** — a brand host signs in through the deployment's one
 //!    registered callback and is handed back for its own session
 //!    (`portal::host_handoff`), so no identity provider needs a new redirect
-//!    URI. This checks that `/auth/login` on the host detours correctly.
+//!    URI. The host serves its own branded sign-in page; this checks that
+//!    its provider path, `/auth/login/oidc`, detours correctly.
 
 use std::net::ToSocketAddrs;
 
@@ -84,9 +85,13 @@ fn registrable_domain(host: &str) -> String {
     labels[labels.len().saturating_sub(2)..].join(".")
 }
 
-/// Whether a `curl -D -` of `https://<host>/auth/login` shows the per-host
-/// sign-in detour: a 303 to another origin's `/auth/login` that names this
-/// host as `return_host`.
+/// The brand host path that detours to the sign-in origin: the primary
+/// provider's redirect. `/auth/login` itself renders the brand's own page.
+const SIGN_IN_PROBE_PATH: &str = "/auth/login/oidc";
+
+/// Whether a `curl -D -` of `https://<host>/auth/login/oidc` shows the
+/// per-host sign-in detour: a 303 to another origin's same path that names
+/// this host as `return_host`.
 pub(crate) fn sign_in_detours(headers: &str, host: &str) -> Result<String, String> {
     let status = headers
         .lines()
@@ -110,9 +115,9 @@ pub(crate) fn sign_in_detours(headers: &str, host: &str) -> Result<String, Strin
     let names_host = url
         .query_pairs()
         .any(|(name, value)| name == "return_host" && value.eq_ignore_ascii_case(host));
-    if status == Some(303) && url.path() == "/auth/login" && names_host {
+    if status == Some(303) && url.path() == SIGN_IN_PROBE_PATH && names_host {
         Ok(format!(
-            "/auth/login detours to {} and returns here",
+            "{SIGN_IN_PROBE_PATH} detours to {} and returns here",
             url.origin().ascii_serialization()
         ))
     } else {
@@ -223,7 +228,7 @@ fn run_with<R: CommandRunner>(
             "-".into(),
             "-o".into(),
             "/dev/null".into(),
-            format!("https://{}/auth/login", plan.host),
+            format!("https://{}{SIGN_IN_PROBE_PATH}", plan.host),
         ],
     );
     match sign_in_detours(&login.stdout, plan.host) {
@@ -369,7 +374,7 @@ mod tests {
 
     fn detour(host: &str) -> CommandOutcome {
         answered(&format!(
-            "HTTP/2 303 \r\nlocation: https://www.neonlaw.com/auth/login?return_host={host}&handoff_nonce=n\r\n"
+            "HTTP/2 303 \r\nlocation: https://www.neonlaw.com/auth/login/oidc?return_host={host}&handoff_nonce=n\r\n"
         ))
     }
 
@@ -420,7 +425,7 @@ mod tests {
             runner.urls,
             vec![
                 "https://iep.neonlaw.com/".to_owned(),
-                "https://iep.neonlaw.com/auth/login".to_owned()
+                "https://iep.neonlaw.com/auth/login/oidc".to_owned()
             ]
         );
     }
@@ -533,7 +538,7 @@ mod tests {
             "HTTP/2 303 \r\nlocation: https://www.neonlaw.com/app?return_host=iep.neonlaw.com\r\n";
         assert!(sign_in_detours(wrong_path, "iep.neonlaw.com").is_err());
         let found =
-            "HTTP/2 302 \r\nlocation: https://www.neonlaw.com/auth/login?return_host=iep.neonlaw.com\r\n";
+            "HTTP/2 302 \r\nlocation: https://www.neonlaw.com/auth/login/oidc?return_host=iep.neonlaw.com\r\n";
         assert!(sign_in_detours(found, "iep.neonlaw.com").is_err());
     }
 
@@ -569,9 +574,9 @@ mod tests {
 
     #[test]
     fn sign_in_detour_requires_a_303_naming_the_host() {
-        let ok = "HTTP/2 303 \r\nlocation: https://www.neonlaw.com/auth/login?return_host=iep.neonlaw.com&handoff_nonce=x\r\n";
+        let ok = "HTTP/2 303 \r\nlocation: https://www.neonlaw.com/auth/login/oidc?return_host=iep.neonlaw.com&handoff_nonce=x\r\n";
         assert!(sign_in_detours(ok, "iep.neonlaw.com").is_ok());
-        let shared = "HTTP/2 303 \r\nlocation: https://www.neonlaw.com/auth/login\r\n";
+        let shared = "HTTP/2 303 \r\nlocation: https://www.neonlaw.com/auth/login/oidc\r\n";
         assert!(sign_in_detours(shared, "iep.neonlaw.com").is_err());
         let missing = "HTTP/2 404 \r\n";
         assert!(sign_in_detours(missing, "iep.neonlaw.com").is_err());
