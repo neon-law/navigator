@@ -31,9 +31,9 @@ One run covers the whole workspace, including the typed event pass and a `.yaml`
 scope; `.git`, `.build`, `.claude`, `.codex`, `node_modules/`, `dist/`, and `target/` are skipped. The per-kind
 frontmatter keys are documented in `docs/frontmatter.md`.
 
-The gate fixes trailing whitespace, ATX heading spacing, blockquote spacing, and S102 paragraph packing in place, so
-what prints still needs a person. Exit `0` means clean; otherwise each violation prints to stdout with file, line, rule
-code, and message. Run it before committing any `.md` change; CI also validates the content tree.
+The gate fixes trailing whitespace, ATX heading spacing, blockquote spacing, and S102 paragraph packing in place; what
+prints still needs a person. Exit `0` means clean; otherwise each violation prints to stdout with file, line, rule code,
+and message. Run it before committing any `.md` change; CI also validates the content tree.
 
 ## Common rules that fire
 

@@ -1437,6 +1437,10 @@ mod tests {
                     "../postgres/migrations/20261105130000_index_message_provider_message_id.sql"
                 ),
             ),
+            (
+                "20261105140000_entity_metadata.sql",
+                include_str!("../postgres/migrations/20261105140000_entity_metadata.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

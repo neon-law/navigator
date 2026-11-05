@@ -8,8 +8,8 @@ description: >-
 # `/greptile-threads`: update a PR's Greptile threads
 
 `main` requires every review thread resolved (`required_review_thread_resolution`), so one open Greptile thread holds
-auto-merge as firmly as a red `ci`. This skill is the batch loop around [[review-pr]]. That skill settles one finding.
-This one finds them all, settles each, and leaves none open. The authoritative commands are in [Address a PR
+auto-merge as firmly as a red `ci`. This skill is the batch loop around [[review-pr]], which settles one finding: find
+them all, settle each, and leave none open. The authoritative commands are in [Address a PR
 comment](../../../docs/agent-workflows.md#address-a-pr-comment).
 
 ## 1. List the open threads
@@ -29,10 +29,9 @@ query($owner:String!,$repo:String!,$pr:Int!,$endCursor:String){
         | {id, path, line, isOutdated, finding: .comments.nodes[0].body, replies: (.comments.nodes|length - 1)}'
 ```
 
-`--paginate` follows `endCursor` until `hasNextPage` is false, so threads beyond the first 100 are listed too. The
-bodies are HTML-heavy, so strip tags before you read them. Also read Greptile's summary comment (`gh api
-repos/<slug>/issues/<N>/comments`): a finding that appears only there has no thread to resolve and gets a PR comment
-instead.
+`--paginate` lists threads beyond the first 100. Strip HTML tags from the bodies before reading them. Also read
+Greptile's summary comment (`gh api repos/<slug>/issues/<N>/comments`): a finding that appears only there has no thread
+to resolve and gets a PR comment instead.
 
 ## 2. Settle each finding
 
@@ -87,12 +86,10 @@ fi
 gh pr view <N> --json mergeStateStatus,autoMergeRequest
 ```
 
-The command pages through every thread and counts only the unresolved threads Greptile opened. That count must be `0`. A
-failed lookup prints an error and no count, so rerun it rather than reading silence as zero. A human reviewer's thread
-you left open is not counted here, but it still holds the merge under `required_review_thread_resolution`, so name it in
-the report as a blocker for its reviewer. Greptile reviews again after each push and can open new threads on the fix
-itself, so check again once its check run on the new head completes. The PR is not done until that review is answered
-too.
+The count of unresolved Greptile threads must be `0`. A failed lookup prints an error and no count; rerun it rather than
+reading silence as zero. A human reviewer's open thread is not counted but still holds the merge, so name it in the
+report as a blocker for its reviewer. Greptile reviews again after each push and can open threads on the fix itself:
+check again once its check run on the new head completes. The PR is not done until that review is answered too.
 
 ## Report
 

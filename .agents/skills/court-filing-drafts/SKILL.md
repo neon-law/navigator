@@ -9,8 +9,8 @@ description: >-
 
 Before naming a record or UI concept, follow **Find the term first** in `AGENTS.md`.
 
-A draft of a court filing that counsel will sign reads as a draft at a glance. The marks below go on every draft and
-come off only at finalizing.
+Every draft of a court filing counsel will sign carries the marks below, so it reads as a draft at a glance. They come
+off only at finalizing.
 
 ## Draft marks
 

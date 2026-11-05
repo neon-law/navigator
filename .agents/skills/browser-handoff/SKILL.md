@@ -14,9 +14,9 @@ the term itself:
 navigator glossary show "Document"
 ```
 
-Some files a matter needs sit behind the attorney's login on a third-party site, such as the stamped copy of a filing on
-an e-filing provider. Navigator stores no credentials for those sites. The agent works inside a browser the attorney has
-already signed in to, downloads the file, and files it. The attorney's session is the only authority it uses.
+Some matter files sit behind the attorney's login on a third-party site, such as a stamped filing on an e-filing
+provider. Navigator stores no credentials for those sites. The agent works in a browser the attorney already signed in
+to, downloads the file, and files it; the attorney's session is its only authority.
 
 ## 1. Get the attorney's browser
 
@@ -26,8 +26,8 @@ Use one of these, in order:
    extension shows as connected. The agent then has the `mcp__claude-in-chrome__*` tools and works in the attorney's
    real Chrome, with their sign-ins.
 2. **Claude in Chrome, from the start.** The attorney starts the session with `claude --chrome`, or `claude --chrome
-   --continue` to resume this conversation. Tools register when a session connects to the extension. Installing the
-   extension partway through a session does not add them.
+   --continue` to resume this conversation. Tools register only when a session connects to the extension, not when the
+   extension is installed mid-session.
 3. **Fallback: the Claude desktop app's browser pane.** It keeps its own sign-ins, separate from Chrome, so the attorney
    signs in there once, by hand, before the agent opens the site.
 
@@ -55,8 +55,8 @@ reached past one of those controls, stop and ask the attorney to take that step.
 
 ## 4. File the download
 
-The file lands in the browser's download folder, outside the repository. Never commit it. File it from the matching
-Project repository so the pointer is written there:
+The download lands outside the repository; never commit it. File it from the matching Project repository so the pointer
+is written there:
 
 ```bash
 navigator site document upload --project <code> --file <download> --kind filing --slug <name>.pdf

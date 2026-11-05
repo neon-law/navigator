@@ -37,7 +37,7 @@ shorten the markup.
 
 ## Draft the minimum valid change
 
-- Interpret "minimal" as the smallest textual delta that expresses the intended substance, not the fewest retained
+- "Minimal" means the smallest textual delta that expresses the intended substance, not the fewest retained
   protections.
 - Match the original party voice. Keep first- or second-person language such as "we" and "you" when the source uses
   it; do not convert the agreement to a third-party narrator.
@@ -53,8 +53,7 @@ shorten the markup.
 
 ## Build true tracked changes
 
-Work from a copy of the original document so unchanged content and layout remain authoritative. Use genuine
-WordprocessingML revisions rather than colored text, strikethrough formatting, or a comparison table.
+Work from a copy of the original document so unchanged content and layout remain authoritative.
 
 - Represent insertions with `w:ins` and deletions with `w:del`; use `w:delText` for deleted text.
 - Keep paragraph properties, numbering properties, run properties, styles, section properties, headers, footers,

@@ -15,7 +15,7 @@ standing engineering- and legal-council order. When in doubt, log the id and loo
 ## The seam
 
 Every service binary calls `telemetry::init("navigator-<name>")` once in `main` and **holds the returned guard to the
-end of `main`**. The drop flushes batched export, which matters for short-lived trigger jobs. Never hand-roll
+end of `main`**: the drop flushes batched export, which short-lived trigger jobs need. Never hand-roll
 `tracing_subscriber` in a binary.
 
 - `OTEL_EXPORTER_OTLP_ENDPOINT` **unset**: human `fmt` logs to stdout, no OTLP, zero cost (dev, CI, forks).
@@ -33,8 +33,8 @@ let _telemetry = telemetry::init("navigator-<name>");
 ```
 
 Seven service binaries wire the seam: `web`, `workflows-service`, the four `*-trigger` jobs, and `redirect`. The
-interactive CLIs, `cli` (navigator) and `navigator-lsp`, deliberately do **not**: their output is for a human at a
-terminal or an LSP client over stdio. Wire every new service binary; leave a new CLI stdout-only.
+interactive CLIs, `cli` (navigator) and `navigator-lsp`, do **not**: their output is for a human at a terminal or an LSP
+client over stdio. Wire every new service binary; leave a new CLI stdout-only.
 
 ## Instrumenting work
 
@@ -64,8 +64,8 @@ see what you emitted, follow
 ## Debugging a missing periodic job
 
 1. **`navigator ops doctor`**: names any trigger Job wedged in `ImagePullBackOff` or `CrashLoopBackOff`, or active too
-   long (which, under a `CronJob`'s `concurrencyPolicy: Forbid`, silently skips every run), and any unready workload,
-   each with the exact `kubectl` fix.
+   long (under a `CronJob`'s `concurrencyPolicy: Forbid`, that silently skips every run), and any unready workload, each
+   with the exact `kubectl` fix.
 2. **BigQuery or logs**: query `navigator.workflow.trigger.fired` by `service` and `outcome`. `rejected status=401` is a
    stale `RESTATE_AUTH_TOKEN`; `404` is a service not re-registered; `transport_error` is a hung or unreachable ingress.
 3. **Restate Cloud console, Invocations**: did the worker run it, and which step failed.

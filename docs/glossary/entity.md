@@ -15,3 +15,10 @@ A legal organization — an LLC, trust, corporation, foundation, etc. Has a name
 The table is `entity`.
 
 Schema: [`entity`](../../store/postgres/schema.sql).
+
+Supplemental attributes live in the Entity's optional `metadata` JSON object, including an employer identification
+number as the string `ein` in `NN-NNNNNNN` format. This is part of the Entity row, not a separate table. The
+authenticated `PATCH /app/api/entities/{id}` accepts `metadata`: omitting it preserves the stored object, supplying an
+object replaces it, and `{}` clears it. Other Entity edits preserve metadata. Client identifiers belong in Navigator's
+private records. Approved public firm facts may be included in the canonical seed. The firm overview displays its linked
+Entity's EIN beneath the firm name.

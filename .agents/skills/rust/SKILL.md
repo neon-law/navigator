@@ -13,8 +13,8 @@ description: >-
 - **One stack: Axum, Tokio, and the current store.** SurrealDB runs today; PostgreSQL replaces it (see
   [`postgres`](../postgres/SKILL.md)). Add no other store client, web framework, or async runtime; extend the existing
   router, entity, and runtime.
-- **Target macOS and Linux only.** Add no `cfg(windows)`
-  arm, `.exe` name, `%USERPROFILE%` fallback, or Windows CI or release job; `cfg(unix)` covers every host we ship.
+- **Target macOS and Linux only.** Add no `cfg(windows)` arm, `.exe` name, `%USERPROFILE%` fallback, or Windows CI or
+  release job; `cfg(unix)` covers every host we ship.
 - **Use `portal::hosting::shutdown_signal`** (SIGTERM + SIGINT); no inline `ctrl_c().await.unwrap()` in `main`.
 - **Iterate on failure-only output.** When installed, run agent-facing `cargo build`, `check`, `clippy`, `test`, and
   `nextest` through RTK; it keeps only failures, warnings, and exit codes. Use plain Cargo for `cargo fmt`, coverage,

@@ -1,7 +1,7 @@
 ---
 name: implement-issue
 description: >-
-  Verify and implement one Linear issue in an isolated worktree, then open a ready PR. Use triage-issue for plan- only
+  Verify and implement one Linear issue in an isolated worktree, then open a ready PR. Use triage-issue for plan-only
   requests.
 ---
 
@@ -29,8 +29,8 @@ cannot complete safely, stop and report rather than combining unrelated work.
 
 Read `docs/public-contributor-safety.md`, `docs/glossary/`, and the narrowest relevant source of truth from
 `docs/index.md`. Fetch the Linear issue with `get_issue` using `includeRelations: true`, then `list_comments`, and read
-from the opening body through the last comment. Treat an existing triage comment as evidence, not authority: refresh
-every claim against `origin/main`.
+from the opening body through the last comment. An existing triage comment is evidence, not authority: refresh every
+claim against `origin/main`.
 
 Determine whether the issue already shipped: check Linear's GitHub linkage, then correlated merged pull requests, then
 the source. Derive the repository from `origin`, list its merged pull requests, and call Linear's `get_diff` for each
@@ -60,8 +60,8 @@ legal, product, or operator decision.
 
 ## Implement with TDD
 
-Name the smallest behavior and the test that proves it. Add or adjust the covering test first and watch it fail for the
-intended reason. Implement only enough to pass it, then run the focused test and the applicable repository gate.
+Add or adjust the covering test first and watch it fail for the intended reason. Implement only enough to pass it, then
+run the focused test and the applicable repository gate.
 
 Use the workspace's established seams and specialized skills. When the issue changes a route, authorization boundary,
 workflow, or user-visible behavior, test that surface, not an incidental helper.
@@ -73,10 +73,10 @@ in the same change. Do not add decision history, compatibility narration, or "us
 
 Run the focused test that covers the change. Verify user-facing changes through the documented browser loop.
 
-For agent-facing Rust output, use `rtk cargo build`, `check`, `clippy`, `test`, or `nextest` when RTK is installed. It
-compresses repetitive output but does not speed compilation. Keep formatting, coverage, project gates, machine-readable
-output, and raw diagnostics on plain Cargo. Use `rtk git`/`rtk gh` for human-facing summaries; keep raw commands for
-revision values, rebases, API/JSON, patches, auth tokens, and exact body/URL operations.
+When RTK is installed, use `rtk cargo build`, `check`, `clippy`, `test`, or `nextest` for agent-facing Rust output (it
+compresses output; it does not speed compilation). Keep formatting, coverage, project gates, machine-readable output,
+and raw diagnostics on plain Cargo. Use `rtk git`/`rtk gh` for human-facing summaries; keep raw commands for revision
+values, rebases, API/JSON, patches, auth tokens, and exact body/URL operations.
 
 Before opening the PR, rebase with `git rebase -S origin/main` again and run `navigator validate` (or `cargo run -p cli
 --quiet -- validate` when `navigator` is not on `PATH`). Do not re-run the workspace tests, the `features` harness, or

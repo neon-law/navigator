@@ -21,9 +21,9 @@ safety](../../../docs/public-contributor-safety.md) before saving content.
   unresolved facts. Distinguish proposals from confirmed services and completed actions.
 - Keep plans, subscriber records, campaign schedules, internal metrics, and private Notion links out of tracked
   files, commits, PR descriptions, comments, fixtures, and captures. Public PRs describe the change and validation.
-- Keep client data and legal work product in Navigator-managed systems and approved file stores. Do not use client
-  records as marketing examples. A plan is a firm planning page: no client names, matter codes, transcript excerpts, or
-  anything copied from a Project's private or shared page. See [what Notion
+- Keep client data and legal work product in Navigator-managed systems and approved file stores. A plan is a firm
+  planning page: no client records as examples, client names, matter codes, transcript excerpts, or anything copied from
+  a Project's private or shared page. See [what Notion
   holds](../../../docs/third-party-integrations.md#what-notion-holds).
 - Claiming profiles, subscribing people, sending messages, and publishing campaigns require explicit user
   authorization; saving a plan does not provide it.

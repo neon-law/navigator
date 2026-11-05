@@ -55,8 +55,8 @@ The Calendar API cannot create appointment schedules, so the client booking link
 
 The matter page shows the link to the client as "Book a time". Clear it with `--booking-url ""`.
 
-For the fleet, a repository adopts this skill and the other synced skills when it updates its gate to a release that
-includes them. The repository gate requires synced skill files to match that release byte-for-byte.
+A repository adopts the synced skills by updating its gate to a release that includes them. The gate requires synced
+skill files to match that release byte-for-byte.
 
 ## Matter folders
 
@@ -73,20 +73,19 @@ empty:
 | `Engagement/` | The letters that open and close the engagement | `onboarding` |
 | `Work Product/` | Drafts, research, everything else | every other kind |
 
-`Work Product/` holds the same seven fixed subfolders in every checkout, each suffixed so it reads unambiguously out of
-context and never collides with a served twin: `Client Calls (Work Product)/` (`transcript`), `Correspondence (Work
-Product)/` (letters drafted, not served), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work
-Product)/` (one folder per motion), `Pleadings (Work Product)/`, `Research (Work Product)/` (`memo`), and `Stipulations
-(Work Product)/`.
+`Work Product/` holds seven fixed subfolders, each suffixed so it never collides with a served twin: `Client Calls (Work
+Product)/` (`transcript`), `Correspondence (Work Product)/` (letters drafted, not served), `Discovery (Work Product)/`
+(discovery in preparation), `Motions (Work Product)/` (one folder per motion), `Pleadings (Work Product)/`, `Research
+(Work Product)/` (`memo`), and `Stipulations (Work Product)/`.
 
 Git tracks only the pointers under `blobs/`. To file a document, drop it into its matter folder and run `navigator
-project sync`, or run `navigator site document upload --folder "<Folder>"` — a `Work Product` subfolder's name is its
+project sync`, or run `navigator site document upload --folder "<Folder>"`. A `Work Product` subfolder's name is its
 whole path below `documents/`, such as `"Work Product/Research (Work Product)"`. `onboarding/`, `offboarding/`,
 `invoices/`, `cases/`, and `rules/` stay beside the matter folders.
 
-A checkout from before the matter folders moves on the next `navigator project sync`, or with `navigator project
-repository migrate-documents`. A checkout still holding the bare `Discovery/` folder of the five-folder tree refiles
-with `navigator project repository migrate-folders`. Neither move leaves a pointer's checksum or asset id changed.
+A checkout without the matter folders moves into them on the next `navigator project sync`, or with `navigator project
+repository migrate-documents`. One holding a bare `Discovery/` folder refiles with `navigator project repository
+migrate-folders`. Neither move changes a pointer's checksum or asset id.
 
 ## Verify
 
