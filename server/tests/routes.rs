@@ -732,6 +732,7 @@ fn erroring_policy() -> portal::policy::PolicyClient {
 async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
     AppState {
         brand_bundle: None,
+        fake_signature_dir: None,
         surreal: store::surreal::test_support::mem().await,
         workshops: WorkshopIndex::new(materials),
         auth: AuthConfig::new(true, None),
