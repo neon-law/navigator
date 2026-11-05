@@ -2,8 +2,8 @@
 //! Navigator's omnichannel inbox — the same entry point support-app intake
 //! uses, and the only path toward a matter folder. Production hands
 //! documents to [`StoreInboxIntake`] (an inbox message with the bytes
-//! stored as a content-addressed Asset); tests record with
-//! [`RecordingIntake`].
+//! stored as a content-addressed Asset); tests record with the
+//! `testing::RecordingIntake` double.
 //!
 //! Naming is Navigator's own, not the scraper's: every document carries the
 //! `DKT NNNN[-att] - <title>.<ext>` name `store::cases::filing_name`
@@ -100,7 +100,7 @@ pub(crate) struct IntakeReceipt {
 
 /// The outbound seam between the scraper and Navigator's omnichannel
 /// inbox. Production implements this over the inbox source the support app
-/// already feeds; tests record with [`RecordingIntake`].
+/// already feeds; tests record with the `testing::RecordingIntake` double.
 #[async_trait::async_trait]
 pub(crate) trait InboxIntake: Send + Sync {
     /// Hand one scraped document to the omnichannel inbox.
@@ -110,72 +110,6 @@ pub(crate) trait InboxIntake: Send + Sync {
     /// `Transient` failures may be retried by the orchestration; anything
     /// else is terminal for the run.
     async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError>;
-}
-
-/// The test double: records every document handed across the seam and can
-/// be scripted to reject transiently, so orchestration tests exercise the
-/// retry path without an inbox.
-#[derive(Debug, Default)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct RecordingIntake {
-    received: std::sync::Mutex<Vec<ScrapedDocument>>,
-    /// The first N `enqueue` calls fail with [`IntakeError::Transient`].
-    pub(crate) transient_failures_first: std::sync::atomic::AtomicU32,
-    calls: std::sync::atomic::AtomicU32,
-}
-
-impl RecordingIntake {
-    /// Snapshots, in enqueue order, everything the intake accepted.
-    #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn received(&self) -> Vec<ScrapedDocument> {
-        self.received.lock().expect("uncontended").clone()
-    }
-
-    #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn calls(&self) -> u32 {
-        self.calls.load(std::sync::atomic::Ordering::SeqCst)
-    }
-}
-
-#[async_trait::async_trait]
-impl InboxIntake for RecordingIntake {
-    async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError> {
-        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let failures = self
-            .transient_failures_first
-            .load(std::sync::atomic::Ordering::SeqCst);
-        if call < failures {
-            return Err(IntakeError::Transient {
-                detail: "the inbox is not answering (scripted)".to_owned(),
-            });
-        }
-        self.received
-            .lock()
-            .expect("uncontended")
-            .push(document.clone());
-        Ok(IntakeReceipt {
-            message_id: uuid::Uuid::now_v7(),
-            deduped: false,
-        })
-    }
-}
-
-/// An intake double that always fails with a transient error — for tests
-/// of the retry budget and of the boundary between staging and enqueue.
-#[derive(Debug, Default)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct FailingIntake;
-
-#[async_trait::async_trait]
-impl InboxIntake for FailingIntake {
-    async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError> {
-        let _ = document;
-        Err(IntakeError::Transient {
-            detail: "the inbox service is restarting".to_owned(),
-        })
-    }
 }
 
 /// The production intake: a scraped document becomes an omnichannel inbox
@@ -309,8 +243,9 @@ impl InboxIntake for StoreInboxIntake {
 
 #[cfg(test)]
 mod tests {
-    use super::{InboxIntake, IntakeError, RecordingIntake, ScrapedDocument, StoreInboxIntake};
+    use super::{InboxIntake, IntakeError, ScrapedDocument, StoreInboxIntake};
     use crate::scraper::adapter::{NoticeRef, SiteKey};
+    use crate::scraper::testing::RecordingIntake;
 
     fn site() -> SiteKey {
         SiteKey::new("la-superior").expect("valid key")
@@ -372,10 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_scripted_transient_failure_then_recovery() {
-        let intake = RecordingIntake {
-            transient_failures_first: std::sync::atomic::AtomicU32::new(1),
-            ..RecordingIntake::default()
-        };
+        let intake = RecordingIntake::with_transient_failures_first(1);
         let first = intake.enqueue(&document("4", "Notice of Hearing")).await;
         assert!(matches!(first, Err(IntakeError::Transient { .. })));
         assert!(

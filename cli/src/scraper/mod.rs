@@ -502,8 +502,8 @@ mod tests {
     };
     use crate::scraper::adapter::{find_adapter, AdapterError, SiteKey};
     use crate::scraper::fetcher::{FetchRequest, FetchResponse};
-    use crate::scraper::intake::RecordingIntake;
     use crate::scraper::retry::RetryPolicy;
+    use crate::scraper::testing::RecordingIntake;
     use crate::scraper::testing::{
         DownloadStep, LoginStep, MockAdapter, MockFetcher, StubClock, StubSessions,
     };
@@ -709,7 +709,7 @@ mod tests {
         ]);
         // Run one downloads and stages the bytes, but the intake is down
         // and the transient budget is one: the run dies after staging.
-        let failing = crate::scraper::intake::FailingIntake;
+        let failing = crate::scraper::testing::FailingIntake;
         let mut failed_deps = deps(&fixture);
         failed_deps.intake = &failing;
         failed_deps.fetch_policy = instant_policy(1);
@@ -978,7 +978,7 @@ mod tests {
         let mut adapter = MockAdapter::simple(site());
         adapter.notices_script(vec![Ok(vec![notice("4", "Notice of Hearing")])]);
         adapter.download_script(vec![vec![DownloadStep::Chunk(b"PDF-A".to_vec())]]);
-        let rejecting = crate::scraper::intake::FailingIntake;
+        let rejecting = crate::scraper::testing::FailingIntake;
         let mut deps = deps(&fixture);
         deps.intake = &rejecting;
         let error = run_scraper(&adapter, &query(), &deps)
