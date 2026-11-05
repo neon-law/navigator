@@ -28,7 +28,7 @@
     "migration_slice": "identity-storage",
     "parity_scenario": "owner-scoped conversation history; cross-owner isolation; purge removes every stored turn",
     "scope": "identity",
-    "through": "person_id \u2014 owner-scoped sandbox transcript with no firm or project anchor"
+    "through": "person_id — owner-scoped sandbox transcript with no firm or project anchor"
   },
   "attestation": {
     "migration_slice": "workflow-storage",
@@ -48,6 +48,13 @@
     "scope": "project",
     "through": "project_id -> Project.firm_id"
   },
+  "billed_call": {
+    "migration_slice": "billed-calls",
+    "parity_scenario": "one row per completed CallSid; idempotent re-record and content-mismatch conflict; attribution sets the project and never the call facts",
+    "scope": "firm",
+    "target_only": true,
+    "through": "firm_id as resolved by the webhook spine at ingest; no Surreal source"
+  },
   "blog_video": {
     "migration_slice": "brand-storage",
     "parity_scenario": "same-Firm round trip; cross-Firm refusal",
@@ -59,13 +66,6 @@
     "parity_scenario": "same-Firm round trip; cross-Firm refusal",
     "scope": "firm",
     "through": "firm_id or Firm identity; referenced Projects must have the same Firm"
-  },
-  "billed_call": {
-    "migration_slice": "billed-calls",
-    "parity_scenario": "one row per completed CallSid; idempotent re-record and content-mismatch conflict; attribution sets the project and never the call facts",
-    "scope": "firm",
-    "target_only": true,
-    "through": "firm_id as resolved by the webhook spine at ingest; no Surreal source"
   },
   "brand_letterhead": {
     "migration_slice": "brand-letterheads",
@@ -245,6 +245,12 @@
     "parity_scenario": "stable catalog lookup; unauthorized mutation refusal",
     "scope": "catalog",
     "through": "explicit shared catalog; no caller-derived tenant ownership"
+  },
+  "esignature_webhook_journal": {
+    "migration_slice": "workflow-storage",
+    "parity_scenario": "verified receipts journal before consumption; redelivery deduplication; replay advances or retries; unknown envelope stays unjournaled",
+    "scope": "project",
+    "through": "envelope_id -> signature -> notation_id -> owning parent scope"
   },
   "estate_asset": {
     "migration_slice": "matter-storage",

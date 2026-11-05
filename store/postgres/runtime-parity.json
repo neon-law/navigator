@@ -375,6 +375,27 @@
       "Equivalent application queries, directory/participation isolation, and unauthorized mutations are not established by this mirror lifecycle."
     ]
   },
+  "esignature_webhook_journal": {
+    "scenario": "verified receipts journal before consumption; redelivery deduplication; replay advances or retries; unknown envelope stays unjournaled",
+    "runtime_tests": [
+      {
+        "file": "server/tests/esignature_loop.rs",
+        "function": "journaled_receipt_recovers_after_a_mid_delivery_death",
+        "proves": "a receipt journaled before consumption is replayed after a mid-delivery death, so the event is recovered, not lost"
+      },
+      {
+        "file": "server/tests/esignature_loop.rs",
+        "function": "a_redelivered_completion_is_answered_from_the_journal",
+        "proves": "a redelivered terminal event is answered from the journal instead of consuming twice"
+      },
+      {
+        "file": "server/tests/esignature_loop.rs",
+        "function": "a_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving",
+        "proves": "a failed consumption keeps its receipt pending and the replay sweep continues through the backlog"
+      }
+    ],
+    "remaining": []
+  },
   "estate_asset": {
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "runtime_tests": [],
