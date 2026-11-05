@@ -3620,6 +3620,188 @@ pub fn matter_lifecycle(
     }
 }
 
+/// Whether a matter's onboarding has *completed* — a status about execution,
+/// not filing. Where [`MatterLifecycle`] answers "is the paperwork on file",
+/// this answers "did the client actually sign": the matter is
+/// [`OnboardingStatus::Official`] only once its onboarding notation's
+/// envelope completes a signature loop Navigator drove, and reads
+/// [`OnboardingStatus::Pitch`] until then.
+///
+/// Additive to [`MatterLifecycle`], which keeps `pitch`/`active`/`closed`
+/// untouched: no existing column, badge, or migration changes — this is a
+/// second, finer lens a caller opts into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnboardingStatus {
+    /// The matter is still a pitch: no onboarding envelope has completed a
+    /// Navigator-driven signature loop. Includes a matter whose envelope was
+    /// sent and is still outstanding, and one that was declined, voided, or
+    /// expired — none of those is execution.
+    Pitch,
+    /// The matter's onboarding notation has a provider-confirmed completed
+    /// envelope: every recipient signed on a loop Navigator itself sent.
+    Official,
+}
+
+impl OnboardingStatus {
+    /// The visible text label, in the firm's own words — `pitch` is the same
+    /// word [`MatterLifecycle::label`] uses for the unpapered stage, and
+    /// `official` is the word this status exists to earn.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pitch => "pitch",
+            Self::Official => "official",
+        }
+    }
+
+    /// The hover/assistive title, spelling out what the status did and did
+    /// not verify, so the short label never has to carry the caveat alone.
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Pitch => {
+                "This matter is still a pitch: its onboarding document has not completed a \
+                 signature loop driven by Navigator."
+            }
+            Self::Official => {
+                "Onboarding is official: the matter's onboarding document completed a signature \
+                 loop driven by Navigator — every recipient signed."
+            }
+        }
+    }
+
+    /// The derivation itself, from one bit of evidence: whether the matter's
+    /// onboarding notation has a completed, Navigator-sent envelope. Every
+    /// `signatures` row is Navigator-sent by construction — `record_request`
+    /// is the only writer, called when Navigator itself sends the envelope —
+    /// and `signed_at` is stamped only when the provider reports every
+    /// recipient signed, verified through the HMAC-checked webhook. Anything
+    /// else — a live envelope, a decline, a void, an expiry, or no envelope
+    /// at all — is [`OnboardingStatus::Pitch`].
+    #[must_use]
+    pub fn from_completed_envelope(completed: bool) -> Self {
+        if completed {
+            Self::Official
+        } else {
+            Self::Pitch
+        }
+    }
+}
+
+/// From a matter's onboarding facts, whether the matter reads
+/// [`OnboardingStatus::Official`]: the matter has an onboarding notation
+/// whose template opens a matter *and* a provider-confirmed completed
+/// envelope on that notation. A completed envelope on a non-onboarding
+/// notation (a later letter, a filing) never makes a matter official.
+///
+/// # Errors
+///
+/// [`SignatureError::Db`] if the lookup fails.
+pub async fn onboarding_status(
+    surreal: &crate::surreal::SurrealDb,
+    project_id: Uuid,
+) -> Result<OnboardingStatus, String> {
+    let notations = crate::notations::list_by_project(surreal, project_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    onboarding_status_from_notations(surreal, &notations).await
+}
+
+/// The single-matter derivation over an already-loaded notation set — the
+/// pure core [`onboarding_status`] wraps, shared with tests so the query
+/// boundary is the only thing a mock has to fake.
+///
+/// # Errors
+///
+/// [`SignatureError::Db`] if the lookup fails.
+pub async fn onboarding_status_from_notations(
+    surreal: &crate::surreal::SurrealDb,
+    notations: &[crate::notations::Notation],
+) -> Result<OnboardingStatus, String> {
+    let template_ids: Vec<Uuid> = notations.iter().map(|n| n.template_id).collect();
+    let templates_by_id: std::collections::HashMap<Uuid, crate::templates::Template> =
+        crate::templates::find_by_ids(surreal, &template_ids)
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|t| (t.id, t))
+            .collect();
+    let onboarding_notation_ids: Vec<Uuid> = notations
+        .iter()
+        .filter(|n| {
+            templates_by_id
+                .get(&n.template_id)
+                .is_some_and(|t| template_opens_a_matter(t.kind.as_deref()))
+        })
+        .map(|n| n.id)
+        .collect();
+    let completed = crate::signatures::completed_for_notations(surreal, &onboarding_notation_ids)
+        .await
+        .map_err(|error| error.to_string())?;
+    // A completed envelope only counts when its notation belongs to *this*
+    // matter — the guard is local, so a caller passing a foreign notation set
+    // cannot promote the wrong matter.
+    let has_completed = completed
+        .iter()
+        .any(|s| notations.iter().any(|n| n.id == s.notation_id));
+    Ok(OnboardingStatus::from_completed_envelope(has_completed))
+}
+
+/// For the given matters, which read [`OnboardingStatus::Official`] — one
+/// batched set over notations, their templates, and the completed signatures
+/// on them. The batched shape the Projects-list and dashboard callers share,
+/// mirroring [`matter_lifecycle_sets`]: one round trip per table, not per
+/// Project.
+///
+/// # Errors
+///
+/// A query failure is returned, never swallowed: an empty set is
+/// indistinguishable from "every matter is still a pitch", so swallowing a
+/// failed query would demote matters that are actually official.
+pub async fn onboarding_official_sets(
+    surreal: &crate::surreal::SurrealDb,
+    projects: &[Project],
+) -> Result<std::collections::HashSet<Uuid>, String> {
+    use std::collections::HashSet;
+    let project_ids: Vec<Uuid> = projects.iter().map(|p| p.id).collect();
+    let mut official = HashSet::new();
+    if project_ids.is_empty() {
+        return Ok(official);
+    }
+    let notations = crate::notations::list_by_projects(surreal, &project_ids)
+        .await
+        .map_err(|error| error.to_string())?;
+    let template_ids: Vec<Uuid> = notations.iter().map(|n| n.template_id).collect();
+    let templates_by_id: std::collections::HashMap<Uuid, crate::templates::Template> =
+        crate::templates::find_by_ids(surreal, &template_ids)
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|t| (t.id, t))
+            .collect();
+    let onboarding_notation_ids: Vec<Uuid> = notations
+        .iter()
+        .filter(|n| {
+            templates_by_id
+                .get(&n.template_id)
+                .is_some_and(|t| template_opens_a_matter(t.kind.as_deref()))
+        })
+        .map(|n| n.id)
+        .collect();
+    let notation_project: std::collections::HashMap<Uuid, Uuid> =
+        notations.iter().map(|n| (n.id, n.project_id)).collect();
+    let completed = crate::signatures::completed_for_notations(surreal, &onboarding_notation_ids)
+        .await
+        .map_err(|error| error.to_string())?;
+    for s in completed {
+        if let Some(&project_id) = notation_project.get(&s.notation_id) {
+            official.insert(project_id);
+        }
+    }
+    Ok(official)
+}
+
 /// For the given matters, return `(project_ids with a matter-opening engagement,
 /// project_ids with a matter-closing offboarding letter)` in four batched
 /// queries (notations for these projects, the templates they bind, the drafted
@@ -5080,6 +5262,243 @@ mod project_jurisdiction_tests {
                 .unwrap(),
             None,
             "a matter that does not exist is reported as absent, not created"
+        );
+    }
+}
+
+#[cfg(test)]
+mod onboarding_status_tests {
+    use super::{
+        find_by_id, onboarding_official_sets, onboarding_status_from_notations, OnboardingStatus,
+    };
+    use crate::notations::NewNotation;
+    use crate::signatures::SignatureProvider;
+    use crate::surreal::test_support::mem;
+    use crate::templates::Version;
+    use crate::test_support::seed_notation_with_kind;
+
+    async fn notation_row(
+        surreal: &crate::surreal::SurrealDb,
+        notation_id: uuid::Uuid,
+    ) -> crate::notations::Notation {
+        crate::notations::find_by_id(surreal, notation_id)
+            .await
+            .expect("notation lookup")
+            .expect("seeded notation exists")
+    }
+
+    async fn project_row(
+        surreal: &crate::surreal::SurrealDb,
+        project_id: uuid::Uuid,
+    ) -> super::Project {
+        find_by_id(surreal, project_id)
+            .await
+            .expect("project lookup")
+            .expect("seeded project exists")
+    }
+
+    #[tokio::test]
+    async fn a_matter_with_no_signature_reads_pitch() {
+        let surreal = mem().await;
+        let notation_id = seed_notation_with_kind(&surreal, Some("onboarding")).await;
+        let notation = notation_row(&surreal, notation_id).await;
+        let status = onboarding_status_from_notations(&surreal, &[notation])
+            .await
+            .unwrap();
+        assert_eq!(status, OnboardingStatus::Pitch);
+    }
+
+    #[tokio::test]
+    async fn a_completed_navigator_sent_envelope_makes_the_matter_official() {
+        let surreal = mem().await;
+        let notation_id = seed_notation_with_kind(&surreal, Some("onboarding")).await;
+        let notation = notation_row(&surreal, notation_id).await;
+        crate::signatures::record_request(
+            &surreal,
+            notation_id,
+            SignatureProvider::DocuSign,
+            "env-official-1",
+        )
+        .await
+        .unwrap();
+        // Still pitch while the envelope is merely sent.
+        assert_eq!(
+            onboarding_status_from_notations(&surreal, std::slice::from_ref(&notation))
+                .await
+                .unwrap(),
+            OnboardingStatus::Pitch
+        );
+        let stamped = crate::signatures::stamp_signed(
+            &surreal,
+            SignatureProvider::DocuSign,
+            "env-official-1",
+            "2026-01-01T00:00:00Z",
+        )
+        .await
+        .expect("stamp");
+        assert!(stamped, "stamp_signed must stamp the requested envelope");
+        let completed = crate::signatures::completed_for_notations(&surreal, &[notation_id])
+            .await
+            .unwrap();
+        assert!(
+            !completed.is_empty(),
+            "the completed envelope must be found after signing"
+        );
+        assert_eq!(
+            onboarding_status_from_notations(&surreal, std::slice::from_ref(&notation))
+                .await
+                .unwrap(),
+            OnboardingStatus::Official
+        );
+    }
+
+    #[tokio::test]
+    async fn a_declined_envelope_leaves_the_matter_pitch() {
+        let surreal = mem().await;
+        let notation_id = seed_notation_with_kind(&surreal, Some("onboarding")).await;
+        let notation = notation_row(&surreal, notation_id).await;
+        crate::signatures::record_request(
+            &surreal,
+            notation_id,
+            SignatureProvider::DocuSign,
+            "env-declined-1",
+        )
+        .await
+        .unwrap();
+        crate::signatures::stamp_declined(&surreal, SignatureProvider::DocuSign, "env-declined-1")
+            .await
+            .unwrap();
+        assert_eq!(
+            onboarding_status_from_notations(&surreal, std::slice::from_ref(&notation))
+                .await
+                .unwrap(),
+            OnboardingStatus::Pitch
+        );
+    }
+
+    #[tokio::test]
+    async fn a_completed_envelope_on_a_non_onboarding_notation_never_promotes_the_matter() {
+        let surreal = mem().await;
+        let notation_id = seed_notation_with_kind(&surreal, Some("onboarding")).await;
+        let notation = notation_row(&surreal, notation_id).await;
+        // A later letter on the same matter, completed — a filing or demand
+        // letter signature says nothing about onboarding.
+        let letter_template = crate::templates::save_version(
+            &surreal,
+            None,
+            &format!("sitting__transcript-{}", uuid::Uuid::now_v7()),
+            Version {
+                title: "Demand letter".into(),
+                respondent_type: "person".into(),
+                asset_id: None,
+                form_code: None,
+                kind: Some("letter".into()),
+                source_commit_sha: None,
+            },
+        )
+        .await
+        .unwrap()
+        .into_model();
+        let letter = crate::notations::create(
+            &surreal,
+            &NewNotation::new(
+                letter_template.id,
+                notation.person_id,
+                notation.project_id,
+                "BEGIN",
+            ),
+        )
+        .await
+        .unwrap();
+        crate::signatures::record_request(
+            &surreal,
+            letter.id,
+            SignatureProvider::DocuSign,
+            "env-letter-1",
+        )
+        .await
+        .unwrap();
+        crate::signatures::stamp_signed(
+            &surreal,
+            SignatureProvider::DocuSign,
+            "env-letter-1",
+            "2026-01-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            onboarding_status_from_notations(
+                &surreal,
+                &[
+                    notation.clone(),
+                    crate::notations::find_by_id(&surreal, letter.id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                ]
+            )
+            .await
+            .unwrap(),
+            OnboardingStatus::Pitch
+        );
+    }
+
+    #[tokio::test]
+    async fn the_batched_set_reports_only_the_official_matters() {
+        let surreal = mem().await;
+        let official_notation = seed_notation_with_kind(&surreal, Some("onboarding")).await;
+        let pitch_notation = seed_notation_with_kind(&surreal, Some("onboarding")).await;
+        let official_row = notation_row(&surreal, official_notation).await;
+        let pitch_row = notation_row(&surreal, pitch_notation).await;
+        crate::signatures::record_request(
+            &surreal,
+            official_notation,
+            SignatureProvider::DocuSign,
+            "env-official-2",
+        )
+        .await
+        .unwrap();
+        crate::signatures::stamp_signed(
+            &surreal,
+            SignatureProvider::DocuSign,
+            "env-official-2",
+            "2026-01-01T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        let official_matter = project_row(&surreal, official_row.project_id).await;
+        let pitch_matter = project_row(&surreal, pitch_row.project_id).await;
+        let official =
+            onboarding_official_sets(&surreal, &[official_matter.clone(), pitch_matter.clone()])
+                .await
+                .unwrap();
+        assert!(
+            official.contains(&official_matter.id),
+            "signed matter is official"
+        );
+        assert!(
+            !official.contains(&pitch_matter.id),
+            "an unsigned matter stays pitch"
+        );
+    }
+
+    #[test]
+    fn the_labels_and_titles_name_both_states() {
+        assert_eq!(OnboardingStatus::Pitch.label(), "pitch");
+        assert_eq!(OnboardingStatus::Official.label(), "official");
+        for (status, needle) in [
+            (OnboardingStatus::Pitch, "still a pitch"),
+            (OnboardingStatus::Official, "official"),
+        ] {
+            assert!(status.title().contains(needle), "{status:?} title");
+        }
+        assert_eq!(
+            OnboardingStatus::from_completed_envelope(true),
+            OnboardingStatus::Official
+        );
+        assert_eq!(
+            OnboardingStatus::from_completed_envelope(false),
+            OnboardingStatus::Pitch
         );
     }
 }
