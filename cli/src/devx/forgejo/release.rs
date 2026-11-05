@@ -262,9 +262,11 @@ pub(in crate::devx) fn run(url: &str, version: &str) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
+    // The operator named the version; echoing a value parsed from the
+    // command line trips CodeQL's cleartext-logging rule, so it is not repeated.
     match runtime.block_on(registry.ensure(version))? {
-        Mirrored::Present => println!("Release {version} is already mirrored"),
-        Mirrored::Uploaded => println!("Release {version} mirrored and its SHA-256 verified"),
+        Mirrored::Present => println!("The release is already mirrored"),
+        Mirrored::Uploaded => println!("The release was mirrored and its SHA-256 verified"),
     }
     Ok(())
 }
@@ -287,6 +289,18 @@ mod tests {
 
     fn package(file: &str) -> String {
         format!("/api/packages/navigator/generic/navigator/{VERSION}/{file}")
+    }
+
+    /// `CodeQL` treats every value parsed from the command line as a secret
+    /// (`rust/cleartext-logging`); the verb's report must not print one.
+    #[test]
+    fn the_mirror_report_does_not_echo_the_version_flag() {
+        let source = include_str!("release.rs");
+        let run = &source[source.find("pub(in crate::devx) fn run(").unwrap()..];
+        let run = &run[..run.find("\n}\n").unwrap()];
+        for line in run.lines().filter(|line| line.contains("println!")) {
+            assert!(!line.contains("{version}"), "{line}");
+        }
     }
 
     #[test]
