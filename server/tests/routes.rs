@@ -232,6 +232,9 @@ fn test_sessions() -> SessionStore {
     SessionStore::new("test-session-key-not-for-production")
 }
 
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
 fn ensure_callsite_interest() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
@@ -448,8 +451,7 @@ fn assert_nav_links(body: &str, expected: &[&str], unexpected: &[&str]) {
 }
 
 fn bearer_header_for_role(role: store::persons::Role) -> String {
-    let token = test_sessions().encode(&portal::SessionData::fresh("api-test-sub", role));
-    format!("Bearer {token}")
+    bearer_common::bearer_opt(None, role)
 }
 
 async fn client_project_fixture(

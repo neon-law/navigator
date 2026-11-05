@@ -1047,26 +1047,6 @@ mod tests {
         .unwrap()
     }
 
-    async fn seed_project(
-        db: &crate::surreal::SurrealDb,
-        firm_id: Uuid,
-        name: &str,
-    ) -> crate::projects::Project {
-        crate::projects::create(
-            db,
-            &crate::projects::NewProject {
-                code: crate::projects::code_from_name(name, Uuid::now_v7()),
-                name: name.into(),
-                status: "open".into(),
-                entity_id: crate::test_support::seed_entity(db).await,
-                firm_id: Some(firm_id),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-    }
-
     #[allow(clippy::too_many_lines)]
     fn new_triage(
         message_id: Uuid,
@@ -1135,7 +1115,9 @@ mod tests {
         let message = inbound(&db, firm, "instagram", "triage-social").await;
         let label = privilege_label("instagram", true, None);
         assert_eq!(label, PrivilegeLabel::NotPrivileged);
-        let project = seed_project(&db, firm, "Synthetic Triage Project").await;
+        let project =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Synthetic Triage Project")
+                .await;
         let row = record(
             &db,
             &new_triage(
@@ -1183,7 +1165,12 @@ mod tests {
         .await
         .unwrap();
         let message = inbound(&db, firm, "email", "triage-cross-firm").await;
-        let project = seed_project(&db, other.id, "Synthetic Other Firm Project").await;
+        let project = crate::test_support::seed_project_on_firm(
+            &db,
+            Some(other.id),
+            "Synthetic Other Firm Project",
+        )
+        .await;
         let error = record(
             &db,
             &new_triage(
@@ -1383,7 +1370,8 @@ mod tests {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Confirm Owner", Role::Owner).await;
-        let project = seed_project(&db, firm, "Confirm Target").await;
+        let project =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Confirm Target").await;
         let (triage_id, message) =
             needs_human_with_suggestion(&db, firm, "confirm-owner", Some(project.id)).await;
 
@@ -1419,8 +1407,10 @@ mod tests {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Confirm Strict Owner", Role::Owner).await;
-        let suggested = seed_project(&db, firm, "Suggested Matter").await;
-        let other = seed_project(&db, firm, "Other Matter").await;
+        let suggested =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Suggested Matter").await;
+        let other =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Other Matter").await;
         let (triage_id, message) =
             needs_human_with_suggestion(&db, firm, "confirm-strict", Some(suggested.id)).await;
 
@@ -1436,7 +1426,9 @@ mod tests {
     async fn a_lawyer_confirms_only_while_participating() {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        let project = seed_project(&db, firm, "Participation Matter").await;
+        let project =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Participation Matter")
+                .await;
         let (outside_id, _) =
             needs_human_with_suggestion(&db, firm, "confirm-lawyer-out", None).await;
         let (triage_id, message) =
@@ -1501,8 +1493,10 @@ mod tests {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Override Owner", Role::Owner).await;
-        let suggested = seed_project(&db, firm, "Wrong Suggestion").await;
-        let corrected = seed_project(&db, firm, "Right Matter").await;
+        let suggested =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Wrong Suggestion").await;
+        let corrected =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Right Matter").await;
         let (triage_id, message) =
             needs_human_with_suggestion(&db, firm, "override-labeled", Some(suggested.id)).await;
 
@@ -1531,7 +1525,8 @@ mod tests {
 
         // The correction crosses Firms at its own peril.
         let other = crate::test_support::seed_firm_with_brand(&db, "summons").await;
-        let foreign = seed_project(&db, other, "Foreign Matter").await;
+        let foreign =
+            crate::test_support::seed_project_on_firm(&db, Some(other), "Foreign Matter").await;
         let (open_row, _) = needs_human_with_suggestion(&db, firm, "override-foreign", None).await;
         let error = override_project(&db, owner, open_row, foreign.id, "cross firm").await;
         assert!(matches!(error, Err(InboxError::CrossFirm)));
@@ -1656,7 +1651,9 @@ mod tests {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Private Review Owner", Role::Owner).await;
-        let project = seed_project(&db, firm, "Private Review Matter").await;
+        let project =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Private Review Matter")
+                .await;
         participate(&db, owner, project.id).await;
         let inbound = inbound(&db, firm, "x", "private-review").await;
         db.query("UPDATE $message SET visibility = 'private'")
@@ -1730,7 +1727,8 @@ mod tests {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Rerun Owner", Role::Owner).await;
-        let project = seed_project(&db, firm, "Rerun Matter").await;
+        let project =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Rerun Matter").await;
         participate(&db, owner, project.id).await;
 
         // A confirmed email row reopens as Uncertain — the portal re-runs
@@ -1783,7 +1781,9 @@ mod tests {
         let other_firm = crate::test_support::seed_firm_with_brand(&db, "vesta").await;
         let admin = person(&db, "Scoped Admin", Role::Admin).await;
         member(&db, admin, own_firm, FirmMembership::Admin).await;
-        let project = seed_project(&db, other_firm, "Other Firm Project").await;
+        let project =
+            crate::test_support::seed_project_on_firm(&db, Some(other_firm), "Other Firm Project")
+                .await;
         for action in ["confirm", "override", "resolve", "rerun"] {
             let (row, _) =
                 needs_human_with_suggestion(&db, other_firm, action, Some(project.id)).await;
@@ -1875,8 +1875,12 @@ mod tests {
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let owner = person(&db, "Assignment Owner", Role::Owner).await;
         let lawyer = person(&db, "Target Reviewer", Role::Lawyer).await;
-        let source = seed_project(&db, firm, "Unseen Source Matter").await;
-        let target = seed_project(&db, firm, "Visible Target Matter").await;
+        let source =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Unseen Source Matter")
+                .await;
+        let target =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Visible Target Matter")
+                .await;
         participate(&db, lawyer, target.id).await;
         let (row, message) =
             needs_human_with_suggestion(&db, firm, "unseen-reassignment", Some(target.id)).await;
@@ -1924,7 +1928,9 @@ mod tests {
         let owner = person(&db, "Scope Owner", Role::Owner).await;
         let lawyer = person(&db, "synthetic reviewer", Role::Lawyer).await;
         member(&db, lawyer, firm, FirmMembership::Lawyer).await;
-        let project = seed_project(&db, firm, "Restricted Review Matter").await;
+        let project =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Restricted Review Matter")
+                .await;
         let (row, message) =
             needs_human_with_suggestion(&db, firm, "unseen-review", Some(project.id)).await;
         crate::inbox::assign(&db, owner, message.conversation_id, project.id)
@@ -1964,7 +1970,9 @@ mod tests {
     async fn assigned_matter_audit_content_requires_project_participation() {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        let project = seed_project(&db, firm, "Private Audit Project").await;
+        let project =
+            crate::test_support::seed_project_on_firm(&db, Some(firm), "Private Audit Project")
+                .await;
         let owner = person(&db, "Audit Owner", Role::Owner).await;
         let lawyer = person(&db, "Audit Lawyer", Role::Lawyer).await;
         member(&db, lawyer, firm, FirmMembership::Lawyer).await;

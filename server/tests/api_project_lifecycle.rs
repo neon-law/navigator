@@ -17,7 +17,12 @@ use store::test_support::{mem_surreal, seed_entity};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const KEY: &str = "api-project-lifecycle-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_opt as bearer;
 const PATH: &str = "/app/api/project-lifecycle";
 
 struct Fixture {
@@ -28,11 +33,6 @@ struct Fixture {
     client: String,
     codes: [String; 3],
     ids: [Uuid; 3],
-}
-
-fn bearer(role: Role) -> String {
-    let session = SessionData::fresh("api-project-lifecycle-sub", role);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&session))
 }
 
 async fn build_fixture() -> Fixture {
@@ -95,9 +95,9 @@ async fn build_fixture() -> Fixture {
     Fixture {
         app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
         surreal,
-        admin: bearer(Role::Admin),
-        lawyer: bearer(Role::Lawyer),
-        client: bearer(Role::Client),
+        admin: bearer(None, Role::Admin),
+        lawyer: bearer(None, Role::Lawyer),
+        client: bearer(None, Role::Client),
         codes,
         ids,
     }

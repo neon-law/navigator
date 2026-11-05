@@ -14,14 +14,18 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use base64::Engine as _;
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const KEY: &str = "api-document-retention-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer;
 const COMMIT: &str = "3f87afb5c0ffee1234567890abcdef1234567890";
 
 struct Fixture {
@@ -36,12 +40,6 @@ struct Fixture {
     outsider: String,
     client: String,
     admin: String,
-}
-
-fn bearer(person_id: Uuid, role: Role) -> String {
-    let mut s = SessionData::fresh("api-retention-sub", role);
-    s.person_id = Some(person_id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 async fn person(

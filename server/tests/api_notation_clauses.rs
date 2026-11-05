@@ -13,7 +13,6 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::seed;
@@ -21,7 +20,12 @@ use store::test_support::mem_surreal;
 use tower::ServiceExt;
 
 const TEMPLATE_CODE: &str = "onboarding__letter";
-const KEY: &str = "api-notation-clauses-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_new_person;
 
 async fn build_app() -> (axum::Router, store::surreal::SurrealDb) {
     let surreal = mem_surreal().await;
@@ -44,28 +48,6 @@ async fn build_app() -> (axum::Router, store::surreal::SurrealDb) {
 
 async fn open_project(surreal: &store::surreal::SurrealDb) -> store::projects::Project {
     store::test_support::seed_project(surreal, "Matter").await
-}
-
-async fn bearer(
-    surreal: &store::surreal::SurrealDb,
-    email: &str,
-    role: Role,
-    project: Option<uuid::Uuid>,
-) -> String {
-    let actor = store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(email, email, role),
-    )
-    .await
-    .unwrap();
-    if let Some(project_id) = project {
-        store::projects::add_participation(surreal, project_id, actor.id, "lawyer")
-            .await
-            .unwrap();
-    }
-    let mut s = SessionData::fresh("api-clause-sub", role);
-    s.person_id = Some(actor.id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 /// Insert a notation on `project` bound to a fresh client; returns its id.
@@ -130,7 +112,7 @@ async fn client_is_403() {
     let (app, surreal) = build_app().await;
     let project = open_project(&surreal).await;
     let notation_id = seed_notation(&surreal, project.id).await;
-    let client = bearer(&surreal, "client@example.com", Role::Client, None).await;
+    let client = bearer_new_person(&surreal, "client@example.com", Role::Client, None).await;
 
     let resp = post_clause(&app, Some(&client), notation_id, "A clause.").await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -141,7 +123,7 @@ async fn lawyer_outside_the_matter_scope_is_404() {
     let (app, surreal) = build_app().await;
     let project = open_project(&surreal).await;
     let notation_id = seed_notation(&surreal, project.id).await;
-    let outsider = bearer(&surreal, "outsider@example.com", Role::Lawyer, None).await;
+    let outsider = bearer_new_person(&surreal, "outsider@example.com", Role::Lawyer, None).await;
 
     let resp = post_clause(&app, Some(&outsider), notation_id, "A clause.").await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -152,11 +134,11 @@ async fn a_blank_body_is_400() {
     let (app, surreal) = build_app().await;
     let project = open_project(&surreal).await;
     let notation_id = seed_notation(&surreal, project.id).await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -169,11 +151,11 @@ async fn participant_lawyer_appends_a_clause() {
     let (app, surreal) = build_app().await;
     let project = open_project(&surreal).await;
     let notation_id = seed_notation(&surreal, project.id).await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -201,7 +183,7 @@ async fn admin_bypasses_scope_and_appends() {
     let (app, surreal) = build_app().await;
     let project = open_project(&surreal).await;
     let notation_id = seed_notation(&surreal, project.id).await;
-    let admin = bearer(&surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_new_person(&surreal, "admin@example.com", Role::Admin, None).await;
 
     let resp = post_clause(&app, Some(&admin), notation_id, "A clause.").await;
     assert_eq!(resp.status(), StatusCode::CREATED);
