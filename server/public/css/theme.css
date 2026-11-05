@@ -1358,13 +1358,12 @@ a.nav-pagination__link:hover {
   color: var(--nav-color-text);
 }
 
-/* The affiliations row: the firm's family on the left, its association
-   memberships on the right, between the contact band and the legal strip.
-   Inset to the band's tiles like the masthead above, so the family's first
-   chip starts where the first address tile does. Every colour here is a
-   `--nav-*` token, so on a house brand's own host the chips and the
-   membership underline take that brand's primary and face — the row is the
-   same markup on every host and wears whichever palette the host resolved. */
+/* The affiliations row: the firm's association memberships, right-aligned
+   between the contact band and the legal strip. Inset to the band's tiles
+   like the masthead above. Every colour here is a `--nav-*` token, so on a
+   house brand's own host the membership underline takes that brand's
+   primary — the row is the same markup on every host and wears whichever
+   palette the host resolved. */
 .site-footer__affiliations {
   grid-column: 1 / -1;
   display: grid;
@@ -1372,77 +1371,6 @@ a.nav-pagination__link:hover {
   align-items: center;
   gap: 1rem 2rem;
   padding-inline: calc(var(--footer-band-inset) + 1px);
-}
-
-/* "Our Family": a small uppercase heading and a row of chips, one per house
-   brand. The heading is the landmark's accessible name too, so it stays a
-   real heading rather than a styled span. */
-.site-footer__family {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.6rem 1rem;
-  margin: 0;
-  padding: 0;
-}
-
-.site-footer__family-heading {
-  margin: 0;
-  font-family: inherit;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--nav-color-text-muted);
-}
-
-.site-footer__family-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.site-footer__family-item {
-  margin: 0;
-}
-
-/*
- * Every multi-brand row becomes a two-column block on desktop, one brand per
- * line. One column on narrow screens keeps each entry readable.
- */
-.site-footer__family-list--two-column {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.35rem 2rem;
-}
-
-@media (min-width: 40rem) {
-  .site-footer__family-list--two-column {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-/* In the block form the entry is a line of text, not a chip. */
-.site-footer__family-list--two-column .site-footer__family-link,
-.site-footer__family-list--two-column .site-footer__family-current {
-  display: inline;
-  min-height: 0;
-  padding: 0;
-  background: none;
-  border: 0;
-}
-
-/*
- * Supporting text, so quieter than the name it follows - but it still has to
- * clear AA, so it reads --nav-color-text-muted rather than an opacity, which
- * would silently drop contrast below the floor the palette guarantees.
- */
-.site-footer__family-byline {
-  font-size: 0.8125rem;
-  color: var(--nav-color-text-muted);
 }
 
 /*
@@ -1457,64 +1385,8 @@ a.nav-pagination__link:hover {
   color: var(--nav-color-text);
 }
 
-/* A chip per brand, grounded like the contact band's tiles. The 2rem minimum
-   height keeps each a comfortable target for a finger or a pointer. */
-.site-footer__family-link,
-.site-footer__family-current {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2rem;
-  padding: 0.25rem 0.85rem;
-  border: 1px solid color-mix(in oklab, var(--nav-color-border) 78%, transparent);
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--nav-color-surface) 74%, transparent);
-  color: var(--nav-color-text);
-  font-size: 0.875rem;
-  line-height: 1.2;
-  text-decoration: none;
-  transition:
-    border-color 240ms ease,
-    background-color 240ms ease,
-    transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.site-footer__family-logo {
-  width: 2rem;
-  height: 2rem;
-  flex: 0 0 2rem;
-  object-fit: contain;
-}
-
-/* `.nav-theme a` is more specific than the chip class, so the link colour and
-   hover underline are re-asserted away at matching specificity: a chip is a
-   tile, and answers a pointer the way the contact tiles do — brand border,
-   brand wash, a lift — rather than as a phrase in a sentence. Focus gets the
-   same treatment as hover so the two states agree; the browser's own ring
-   still marks it for a keyboard reader. */
-.nav-theme a.site-footer__family-link {
-  color: var(--nav-color-text);
-  text-decoration: none;
-}
-
-.nav-theme a.site-footer__family-link:hover,
-.nav-theme a.site-footer__family-link:focus-visible {
-  border-color: var(--nav-color-primary);
-  background: color-mix(in oklab, var(--nav-color-primary) 12%, transparent);
-  color: var(--nav-color-text);
-  text-decoration: none;
-  transform: translateY(-1px);
-}
-
-/* The brand a reader is already on: filled in the host's primary, bold, and
-   not a link — `aria-current` says so to a screen reader. */
-.site-footer__family-current {
-  border-color: color-mix(in oklab, var(--nav-color-primary) 60%, transparent);
-  background: color-mix(in oklab, var(--nav-color-primary) 14%, transparent);
-  font-weight: 600;
-}
-
-/* The association standing line: one quiet line per affiliation, right-aligned against
-   the family. The award glyph takes the host's primary; the sentence is the
+/* The association standing line: one quiet line per affiliation, right-aligned.
+   The award glyph takes the host's primary; the sentence is the
    footer's muted fine print with the link underlined in the same primary, so
    a reader sees it is a link without it shouting. */
 .site-footer__memberships {
@@ -1575,17 +1447,6 @@ a.nav-pagination__link:hover {
 .nav-theme a.site-footer__membership-link:focus-visible {
   color: var(--nav-color-text);
   text-decoration-color: var(--nav-color-primary);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .site-footer__family-link {
-    transition: none;
-  }
-
-  .nav-theme a.site-footer__family-link:hover,
-  .nav-theme a.site-footer__family-link:focus-visible {
-    transform: none;
-  }
 }
 
 /* The contact band: one bordered surface wrapping the tile grid (the email
@@ -6027,11 +5888,11 @@ a.nav-steps__step:focus-visible {
 }
 
 
-/* Guieb & Shook's chamber badge, beside the association badge and as tall
-   as its tile. */
+/* Guieb & Shook's chamber badge, beside the association badge, half again
+   as tall as its tile. */
 .site-footer__gvc-badge {
   display: block;
-  height: 2.4rem;
+  height: 3.6rem;
   width: auto;
 }
 /* Aster perches on the /world map section's top-right corner: absolute over

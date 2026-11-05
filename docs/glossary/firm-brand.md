@@ -20,15 +20,13 @@ Brands](house-brand.md). `store::seed` migrates each House Brand into a `brand` 
 (`store::firms::CLOSED_BRAND_KEYS` is the compiled list it reads) so validation has a catalog from the start.
 
 Every footer names the Firm wearing the request's resolved Brand. The footer resolver reads its Entity for the legal
-name and its attached Brands for the public "Our Family" row. The canonical Guieb & Shook Entity carries the complete
-compiled family in registry order, plus its runtime-created Brands. Other operators carry their own attached Brands.
-When no Firm wears the key, the compiled family supplies the row. Compiled links include reachable live Brands and the
-current Brand, which is marked as current.
+name and links the Firm's own home when it wears its compiled firm Brand. When no Firm wears the key, the compiled
+Branding supplies both. Footers do not list the Firm's other Brands.
 
-Every Guieb & Shook public footer carries the same family and twelve page links. Design, Blog, Privacy, Terms, and
-Testimonials stay on the current Brand's host. Shared tools, including API, link to Neon's host. The public footer also
-carries the Firm's association memberships. The `/app` footer uses the same resolved legal name in a compact copyright
-line. A renamed operator inherits its own identity and attached Brands.
+Every Guieb & Shook public footer carries the same twelve page links. Design, Blog, Privacy, Terms, and Testimonials
+stay on the current Brand's host. Shared tools, including API, link to Neon's host. The public footer also carries the
+Firm's association memberships. The `/app` footer uses the same resolved legal name in a compact copyright line. A
+renamed operator inherits its own identity and attached Brands.
 
 - Schema: [`firm_brand` in the PostgreSQL schema](../../store/postgres/schema.sql) ·
   [`store::firms`](../../store/src/firms.rs)

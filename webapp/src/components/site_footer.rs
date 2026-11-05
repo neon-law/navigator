@@ -2,9 +2,8 @@
 //!
 //! Three bands. The contact band reaches the firm: the published email address, the
 //! voice line, and every office it keeps. The affiliations row under it names
-//! the firm's family — every house brand it trades under, the current one
-//! unlinked — and the firm's association affiliations, each with its published
-//! standing line linking the association's own site. Below both the legal strip carries
+//! the firm's association affiliations, each with its published standing line
+//! linking the association's own site. Below both the legal strip carries
 //! the load-bearing, brand-driven lines every public page owes — the copyright
 //! that names the legal person behind the site, which attorney holds which bar
 //! licence, and the attorney-advertising disclaimer.
@@ -149,36 +148,6 @@ fn social_icon(network: &str) -> Option<IconName> {
         "youtube" => Some(IconName::YouTube),
         _ => None,
     }
-}
-
-/// Any multi-brand family uses two columns on desktop and one on mobile.
-pub const FAMILY_TWO_COLUMN_THRESHOLD: usize = 2;
-
-/// The family list's class, widened for every multi-brand family.
-#[must_use]
-pub fn family_list_class(entries: usize) -> &'static str {
-    if entries >= FAMILY_TWO_COLUMN_THRESHOLD {
-        "site-footer__family-list site-footer__family-list--two-column"
-    } else {
-        "site-footer__family-list"
-    }
-}
-
-/// One brand the current firm wears — an entry in the footer's "Our Family"
-/// row. The current brand is shown but not linked; every other entry links
-/// that brand's home host. An entry with no `href` (a runtime-created brand
-/// with no host yet) is shown unlinked too, never as an empty anchor.
-#[derive(Clone, PartialEq, Eq)]
-pub struct FooterBrandLink {
-    pub label: String,
-    pub href: String,
-    pub current: bool,
-    /// The brand's own mark; decorative because the adjacent text names it.
-    pub logo_href: String,
-    /// What this brand does, in a few words. A cold reader learns nothing
-    /// from "Vesta" or "Abhaya", so the family list is close to useless as
-    /// bare wordmarks. Empty renders the wordmark alone.
-    pub byline: String,
 }
 
 /// One association affiliation — the footer's standing line, linking the
@@ -326,12 +295,6 @@ pub fn SiteFooterLegal(
     attribution: String,
     #[props(default)] home_href: String,
     #[props(default)] nav: Vec<FooterNavLink>,
-    /// The house brands this firm trades under — the "Our Family" row, in
-    /// registry order, the current one unlinked. One entry is no row: a
-    /// single-brand firm has no family to name, and stays byte-identical to
-    /// a footer that never learned the list.
-    #[props(default)]
-    brands: Vec<FooterBrandLink>,
     /// The associations the firm has a public affiliation with, one standing
     /// line per association. Empty renders no line — a white-label deploy
     /// cannot claim this repository's affiliations.
@@ -570,75 +533,12 @@ pub fn SiteFooterLegal(
                         }
                     }
                 // The firm's affiliations, in one row between the contact
-                // band and the legal strip: the house brands it trades under
-                // on the left, the association affiliations on the right.
-                // Both are facts about the firm rather than about a brand —
-                // the same family and the same affiliation on every host — so
-                // they sit with the firm's contact detail above and its legal
-                // strip below, not beside a brand's header.
-                if brands.len() > 1 || !memberships.is_empty() || !membership_badge_href.is_empty() {
+                // band and the legal strip. They are facts about the firm
+                // rather than about a brand — the same affiliation on every
+                // host — so they sit with the firm's contact detail above and
+                // its legal strip below, not beside a brand's header.
+                if !memberships.is_empty() || !membership_badge_href.is_empty() {
                     div { class: "site-footer__affiliations",
-                        // "Our Family": every house brand the firm wears, the
-                        // current one shown but not linked, the rest linking
-                        // their own homes. A `<nav>`, because it is a set of
-                        // destinations, named by the same words the visible
-                        // heading carries so a landmark list reads what a
-                        // sighted reader sees. `aria-label` rather than
-                        // `aria-labelledby`: a page that renders this footer
-                        // twice (the `/design` gallery does) would otherwise
-                        // duplicate the heading's id.
-                        if brands.len() > 1 {
-                            nav { class: "site-footer__family", "aria-label": "Our family",
-                                h2 { class: "site-footer__family-heading", "Our Family" }
-                                ul { class: family_list_class(brands.len()),
-                                    for brand in brands.iter() {
-                                        li { class: "site-footer__family-item", key: "{brand.label}",
-                                            // The brand a reader is already on is
-                                            // text, not a link to the page they are
-                                            // reading, and `aria-current` says so
-                                            // the way the header marks the current
-                                            // page. A brand with no host yet is text
-                                            // too, rather than an `<a href="">` that
-                                            // reloads whatever page it sits on.
-                                            if brand.current {
-                                                span {
-                                                    class: "site-footer__family-current",
-                                                    "aria-current": "true",
-                                                    if !brand.logo_href.is_empty() {
-                                                        img { class: "site-footer__family-logo", src: "{brand.logo_href}", alt: "" }
-                                                    }
-                                                    span { "{brand.label}" }
-                                                }
-                                            } else if brand.href.is_empty() {
-                                                span { class: "site-footer__family-current",
-                                                    if !brand.logo_href.is_empty() {
-                                                        img { class: "site-footer__family-logo", src: "{brand.logo_href}", alt: "" }
-                                                    }
-                                                    span { "{brand.label}" }
-                                                }
-                                            } else {
-                                                a {
-                                                    class: "site-footer__family-link",
-                                                    href: "{brand.href}",
-                                                    target: "_blank",
-                                                    rel: "noopener noreferrer",
-                                                    if !brand.logo_href.is_empty() {
-                                                        img { class: "site-footer__family-logo", src: "{brand.logo_href}", alt: "" }
-                                                    }
-                                                    span { "{brand.label}" }
-                                                }
-                                            }
-                                            if !brand.byline.is_empty() {
-                                                span {
-                                                    class: "site-footer__family-byline",
-                                                    " · {brand.byline}"
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
                         // One standing line per association, linking the
                         // association's own site so a reader checks the
                         // relationship against the association's published
@@ -994,7 +894,7 @@ mod tests {
                     copyright_holder: "Guieb & Shook PC".to_string(),
                     disclaimer: "This is an attorney advertisement.".to_string(),
                     copyright_year: 2026,
-                    trademark: "LAWYER SHOOK".to_string(),
+                    trademark: "VESTA".to_string(),
                 }
             }
         }
@@ -1016,7 +916,7 @@ mod tests {
         );
 
         let out = ssr(common_law);
-        assert!(out.contains("LAWYER SHOOK") && out.contains("™"), "{out}");
+        assert!(out.contains("VESTA") && out.contains("™"), "{out}");
         assert!(
             out.contains("common-law mark of Guieb &#38; Shook PC"),
             "{out}"
@@ -1822,32 +1722,6 @@ mod tests {
         );
     }
 
-    fn three_firm_brands() -> Vec<FooterBrandLink> {
-        vec![
-            FooterBrandLink {
-                label: "Neon Law".to_string(),
-                href: "https://www.neonlaw.com".to_string(),
-                current: true,
-                logo_href: "/public/logo.svg".to_string(),
-                byline: String::new(),
-            },
-            FooterBrandLink {
-                label: "DeleteYourData.com".to_string(),
-                href: "https://www.deleteyourdata.com".to_string(),
-                current: false,
-                logo_href: "/public/brand/delete-your-data/logo.svg".to_string(),
-                byline: String::new(),
-            },
-            FooterBrandLink {
-                label: "Lawyer Shook".to_string(),
-                href: "https://www.lawyershook.com".to_string(),
-                current: false,
-                logo_href: "/public/brand/lawyer-shook/logo.svg".to_string(),
-                byline: String::new(),
-            },
-        ]
-    }
-
     fn one_membership() -> Vec<FooterMembership> {
         vec![FooterMembership {
             label: "Justice Technology Association".to_string(),
@@ -1857,8 +1731,7 @@ mod tests {
         }]
     }
 
-    /// The legal strip plus the firm's live-brand affiliations
-    /// and the one association affiliation.
+    /// The legal strip plus the one association affiliation.
     fn affiliated_html() -> String {
         fn app() -> Element {
             rsx! {
@@ -1866,7 +1739,6 @@ mod tests {
                     copyright_holder: "Neon Law".to_string(),
                     disclaimer: "This is an attorney advertisement.".to_string(),
                     copyright_year: 2026,
-                    brands: three_firm_brands(),
                     memberships: one_membership(),
                 }
             }
@@ -1874,134 +1746,11 @@ mod tests {
         ssr(app)
     }
 
-    /// "Our Family" lists every brand in registry order under a visible
-    /// heading, as a navigation landmark named by the same words, with the
-    /// current brand as text marked `aria-current` and every other brand a
-    /// link to its own home.
-    #[test]
-    fn a_firm_with_three_brands_renders_its_family_in_order_with_the_current_one_unlinked() {
-        let out = affiliated_html();
-        let family = out
-            .split_once(r#"<nav class="site-footer__family" aria-label="Our family">"#)
-            .and_then(|(_, rest)| rest.split_once("</nav>"))
-            .map(|(row, _)| row)
-            .expect("the family renders as a labelled landmark");
-        assert!(
-            family.contains(r#"<h2 class="site-footer__family-heading">Our Family</h2>"#),
-            "the row is headed by the words its landmark is named with: {family}"
-        );
-        let neon = family.find("Neon Law").expect("neon");
-        let dyd = family.find("DeleteYourData.com").expect("dyd");
-        let shook = family.find("Lawyer Shook").expect("lawyer shook");
-        assert!(neon < dyd && dyd < shook, "registry order: {family}");
-        assert!(
-            family.contains(
-                r#"<span class="site-footer__family-current" aria-current="true"><img class="site-footer__family-logo" src="/public/logo.svg" alt=""/><span>Neon Law</span></span>"#
-            ),
-            "the current brand is text, marked current: {family}"
-        );
-        assert!(
-            !family.contains(r#"href="https://www.neonlaw.com""#),
-            "the current brand is unlinked: {family}"
-        );
-        assert!(
-            family.contains(
-                r#"<a class="site-footer__family-link" href="https://www.deleteyourdata.com" target="_blank" rel="noopener noreferrer"><img class="site-footer__family-logo" src="/public/brand/delete-your-data/logo.svg" alt=""/><span>DeleteYourData.com</span></a>"#
-            ),
-            "other brands link their home host, off-site, in a new tab: {family}"
-        );
-        assert!(
-            family.contains(r#"href="https://www.lawyershook.com""#),
-            "{family}"
-        );
-        assert_eq!(
-            family
-                .matches(r#"<li class="site-footer__family-item""#)
-                .count(),
-            3,
-            "one item per brand: {family}"
-        );
-    }
-
-    /// A brand with no host yet (a runtime-created one) is shown as text,
-    /// never as an anchor with an empty `href` that reloads the page.
-    #[test]
-    fn a_brand_with_no_host_renders_unlinked_not_as_an_empty_anchor() {
-        fn app() -> Element {
-            rsx! {
-                SiteFooterLegal {
-                    copyright_holder: "Neon Law".to_string(),
-                    disclaimer: "This is an attorney advertisement.".to_string(),
-                    copyright_year: 2026,
-                    brands: vec![
-                        FooterBrandLink {
-                            label: "Neon Law".to_string(),
-                            href: "https://www.neonlaw.com".to_string(),
-                            current: true,
-                            logo_href: String::new(),
-                            byline: String::new(),
-                        },
-                        FooterBrandLink {
-                            label: "Acme Runtime Brand".to_string(),
-                            href: String::new(),
-                            current: false,
-                            logo_href: String::new(),
-                            byline: String::new(),
-                        },
-                    ],
-                }
-            }
-        }
-        let out = ssr(app);
-        assert!(out.contains("Acme Runtime Brand"), "{out}");
-        assert!(!out.contains(r#"href="""#), "no empty anchor: {out}");
-        assert_eq!(
-            out.matches(r#"aria-current="true""#).count(),
-            1,
-            "only the current brand is marked current: {out}"
-        );
-    }
-
-    #[test]
-    fn a_firm_with_one_brand_renders_no_family_row() {
-        fn app() -> Element {
-            rsx! {
-                SiteFooterLegal {
-                    copyright_holder: "Neon Law".to_string(),
-                    disclaimer: "This is an attorney advertisement.".to_string(),
-                    copyright_year: 2026,
-                    brands: vec![FooterBrandLink {
-                        label: "Neon Law".to_string(),
-                        href: "https://www.neonlaw.com".to_string(),
-                        current: true,
-                        logo_href: String::new(),
-                        byline: String::new(),
-                    }],
-                }
-            }
-        }
-        let out = ssr(app);
-        assert!(
-            !out.contains("site-footer__family"),
-            "one brand is no row: {out}"
-        );
-        assert!(
-            !out.contains("site-footer__affiliations"),
-            "and with no membership either, no affiliations row at all: {out}"
-        );
-        let bare = legal_html();
-        assert!(
-            !bare.contains("site-footer__family"),
-            "an unset list is no row: {bare}"
-        );
-        assert!(!bare.contains("Proud member"), "no membership line: {bare}");
-    }
-
     /// The affiliation line names the association and links its Get Involved
     /// page,
     /// wearing the off-site treatment every outbound link on the page does —
-    /// a new tab, the OWASP `rel` pair, and the arrow that says so — after
-    /// the family row and before the legal strip.
+    /// a new tab, the OWASP `rel` pair, and the arrow that says so — before
+    /// the legal strip.
     #[test]
     fn publishes_each_affiliation_with_its_standing_line_linking_off_site() {
         let out = affiliated_html();
@@ -2038,22 +1787,17 @@ mod tests {
             !line.contains("award-fill") && !line.contains(r#"aria-hidden="true""#),
             "with a mark there is no award glyph: {line}"
         );
-        let family = out.find("Our Family").expect("family");
         let standing = out.find(JTA_STANDING).expect("membership");
         let legal = out
             .find(r#"class="site-footer__legal""#)
             .expect("legal strip");
-        assert!(
-            family < standing && standing < legal,
-            "family, then affiliation, then the legal strip: {out}"
-        );
+        assert!(standing < legal, "affiliation, then the legal strip: {out}");
     }
 
-    /// A membership alone — a firm with one brand — still renders the
-    /// affiliations row, with the line and no family beside it. One with no
-    /// mark of its own wears the decorative award glyph in the badge's place.
+    /// A membership alone renders the affiliations row with its line. One
+    /// with no mark of its own wears the decorative award glyph in the badge's place.
     #[test]
-    fn a_membership_without_a_family_renders_the_line_alone() {
+    fn a_membership_without_a_mark_renders_the_award_glyph() {
         fn app() -> Element {
             rsx! {
                 SiteFooterLegal {
@@ -2070,7 +1814,6 @@ mod tests {
         let out = ssr(app);
         assert!(out.contains("site-footer__affiliations"), "{out}");
         assert!(out.contains(JTA_STANDING), "{out}");
-        assert!(!out.contains("site-footer__family"), "{out}");
         assert!(
             !out.contains("site-footer__membership-badge") && out.contains(r#"aria-hidden="true""#),
             "no mark, so the decorative glyph stands in: {out}"
@@ -2104,17 +1847,13 @@ mod tests {
         let row_classes: Vec<&String> = classes
             .iter()
             .filter(|class| {
-                [
-                    "site-footer__affiliations",
-                    "site-footer__family",
-                    "site-footer__membership",
-                ]
-                .iter()
-                .any(|prefix| class.starts_with(prefix))
+                ["site-footer__affiliations", "site-footer__membership"]
+                    .iter()
+                    .any(|prefix| class.starts_with(prefix))
             })
             .collect();
         assert!(
-            row_classes.len() >= 8,
+            row_classes.len() >= 5,
             "the row emits its own classes: {row_classes:?}"
         );
         for class in row_classes {
@@ -2126,59 +1865,7 @@ mod tests {
         }
     }
 
-    // --- ENG-741: bylines, two columns, attribution, the JTA badge --------
-
-    /// A cold reader learns nothing from "Vesta" or "Abhaya", so every entry
-    /// carries what it does — including the brand the reader is already on.
-    #[test]
-    fn family_entries_carry_their_bylines() {
-        fn app() -> Element {
-            rsx! {
-                SiteFooterLegal {
-                    copyright_holder: "Guieb & Shook PC".to_string(),
-                    disclaimer: "This is an attorney advertisement.".to_string(),
-                    copyright_year: 2026,
-                    brands: vec![
-                        FooterBrandLink {
-                            label: "Neon Law".to_string(),
-                            href: String::new(),
-                            current: true,
-                            logo_href: String::new(),
-                            byline: "flat-fee legal services for emerging tech".to_string(),
-                        },
-                        FooterBrandLink {
-                            label: "Abhaya Immigration".to_string(),
-                            href: "https://www.abhayaimmigration.com".to_string(),
-                            current: false,
-                            logo_href: String::new(),
-                            byline: "visas, green cards, and citizenship".to_string(),
-                        },
-                    ],
-                }
-            }
-        }
-        let out = ssr(app);
-        assert!(out.contains("visas, green cards, and citizenship"), "{out}");
-        assert!(
-            out.contains("flat-fee legal services for emerging tech"),
-            "the current brand keeps its byline: {out}"
-        );
-    }
-
-    /// Every multi-brand family gets the desktop two-column class; the
-    /// responsive stylesheet collapses it to one column on mobile.
-    #[test]
-    fn the_family_list_splits_into_two_columns_only_once_it_is_long() {
-        assert_eq!(family_list_class(1), "site-footer__family-list");
-        assert_eq!(
-            family_list_class(FAMILY_TWO_COLUMN_THRESHOLD),
-            "site-footer__family-list site-footer__family-list--two-column"
-        );
-        assert_eq!(
-            family_list_class(8),
-            "site-footer__family-list site-footer__family-list--two-column"
-        );
-    }
+    // --- ENG-741: attribution and the JTA badge ---------------------------
 
     /// "A practice of Guieb & Shook PC" is what keeps a trade name from being
     /// misleading — disclosed affiliation is the thing Nevada's rule turns
