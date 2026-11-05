@@ -18,6 +18,9 @@ use std::path::PathBuf;
 /// The environment variable naming the filesystem data root.
 pub const DATA_DIR_ENV: &str = "NAVIGATOR_EPHEMERIS_DIR";
 
+/// Source manifest format with explicit model and UTC retrieval provenance.
+pub const MANIFEST_VERSION: u32 = 2;
+
 /// Reads kernel bytes by manifest name.
 pub trait EphemerisStore: Send + Sync {
     /// Returns the complete bytes of the named kernel.
@@ -84,6 +87,10 @@ impl EphemerisStore for FilesystemStore {
 /// One pinned kernel file in the manifest.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EphemerisFile {
+    /// Upstream model or orbit-solution version, independent of retrieval time.
+    pub upstream_version: String,
+    /// UTC time when these exact bytes were retrieved.
+    pub retrieved_at: chrono::DateTime<chrono::Utc>,
     /// Bare file name inside the data root, for example `de440.bsp`.
     pub name: String,
     /// SHA-256 of the file bytes, lowercase hex.
@@ -92,16 +99,16 @@ pub struct EphemerisFile {
     pub bytes: u64,
     /// Where the file was downloaded from.
     pub source: String,
-    /// Human-readable coverage start (TDB), for example `1549-12-21`.
+    /// Proleptic Gregorian coverage start (TDB), for example `1549-12-31`.
     pub coverage_start: String,
-    /// Human-readable coverage end (TDB), for example `2650-01-25`.
+    /// Proleptic Gregorian coverage end (TDB), for example `2650-01-25`.
     pub coverage_end: String,
 }
 
 /// The checked-in manifest pinning every kernel the crate may load.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EphemerisManifest {
-    /// Manifest format version, currently 1.
+    /// Manifest format version, currently 2.
     pub version: u32,
     /// The ΔT / time-scale model used to convert UTC birth data to TDB, kept
     /// verbatim in the provenance output for reproducibility.
@@ -110,6 +117,59 @@ pub struct EphemerisManifest {
     pub reference_frame: String,
     /// The pinned files, loaded in order.
     pub files: Vec<EphemerisFile>,
+}
+
+impl EphemerisManifest {
+    /// Validate the complete source declaration before any store access.
+    pub fn validate(&self) -> Result<(), EphemerisError> {
+        let invalid = |problem: String| EphemerisError::InvalidManifest { problem };
+        if self.version != MANIFEST_VERSION {
+            return Err(invalid(format!(
+                "unsupported manifest version {}",
+                self.version
+            )));
+        }
+        if self.files.is_empty()
+            || self.time_scale_model.trim().is_empty()
+            || self.reference_frame.trim().is_empty()
+        {
+            return Err(invalid(
+                "files, time model and reference frame must be declared".to_owned(),
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for entry in &self.files {
+            if !seen.insert(&entry.name) {
+                return Err(invalid(format!("duplicate file {}", entry.name)));
+            }
+            if PathBuf::from(&entry.name)
+                .file_name()
+                .is_none_or(|base| base != entry.name.as_str())
+            {
+                return Err(invalid("kernel names must be bare file names".to_owned()));
+            }
+            if entry.bytes == 0
+                || entry.sha256.len() != 64
+                || !entry.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(invalid(format!(
+                    "kernel {} needs a nonzero size and SHA-256 digest",
+                    entry.name
+                )));
+            }
+            if entry.source.trim().is_empty()
+                || entry.upstream_version.trim().is_empty()
+                || entry.coverage_start.trim().is_empty()
+                || entry.coverage_end.trim().is_empty()
+            {
+                return Err(invalid(format!(
+                    "kernel {} has incomplete source provenance",
+                    entry.name
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The loaded ephemeris plus the manifest that proves its provenance.
@@ -133,20 +193,18 @@ pub fn load(
     store: &dyn EphemerisStore,
     manifest: &EphemerisManifest,
 ) -> Result<LoadedEphemeris, EphemerisError> {
-    if manifest.files.is_empty() {
-        return Err(EphemerisError::InvalidManifest {
-            problem: "no files listed".to_string(),
-        });
-    }
-    let mut seen = std::collections::HashSet::new();
+    manifest.validate()?;
     let mut files = Vec::with_capacity(manifest.files.len());
     for entry in &manifest.files {
-        if !seen.insert(entry.name.clone()) {
+        let bytes = store.read(&entry.name)?;
+        if u64::try_from(bytes.len()).ok() != Some(entry.bytes) {
             return Err(EphemerisError::InvalidManifest {
-                problem: format!("duplicate file {}", entry.name),
+                problem: format!(
+                    "kernel {} does not match its declared byte count",
+                    entry.name
+                ),
             });
         }
-        let bytes = store.read(&entry.name)?;
         verify_checksum(&entry.name, &entry.sha256, &bytes)?;
         files.push(SpkFile::from_bytes(bytes, entry.name.clone())?);
     }
@@ -157,7 +215,7 @@ pub fn load(
 }
 
 /// Lowercase hex encoding, for manifest digest comparisons.
-fn hex_encode(bytes: &[u8]) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut hex = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -209,10 +267,12 @@ mod tests {
 
     fn manifest_for(name: &str, sha256: String, size: usize) -> EphemerisManifest {
         EphemerisManifest {
-            version: 1,
+            version: MANIFEST_VERSION,
             time_scale_model: "UTC→TAI via hifitime leap-second table; TT = TAI + 32.184 s; TDB = TT + periodic term".to_string(),
             reference_frame: "ICRF / J2000 (NAIF frame 1)".to_string(),
             files: vec![EphemerisFile {
+                upstream_version: "synthetic fixture".to_owned(),
+                retrieved_at: chrono::DateTime::from_timestamp(0, 0).expect("synthetic source timestamp"),
                 name: name.to_string(),
                 sha256,
                 bytes: size as u64,
@@ -277,6 +337,57 @@ mod tests {
         assert_eq!(position, [1000.0, 2000.0, 3000.0]);
     }
 
+    #[test]
+    fn matching_digest_does_not_override_a_wrong_byte_count() {
+        let kernel = synthetic_type2(
+            3,
+            0,
+            0.0,
+            DAY,
+            &[(
+                DAY / 2.0,
+                DAY / 2.0,
+                &[1.0; 2][..],
+                &[1.0; 2][..],
+                &[1.0; 2][..],
+            )],
+        );
+        let bytes = kernel.raw_bytes_for_test();
+        let manifest = manifest_for("kernel.bsp", hex_digest(&bytes), bytes.len() + 1);
+        assert!(
+            matches!(
+                load(&BytesStore(bytes), &manifest),
+                Err(EphemerisError::InvalidManifest { .. })
+            ),
+            "a matching checksum must not validate an inconsistent declared size"
+        );
+    }
+
+    #[test]
+    fn an_unknown_manifest_version_is_rejected_before_reading_files() {
+        struct UnavailableStore;
+        impl EphemerisStore for UnavailableStore {
+            fn read(&self, name: &str) -> Result<Vec<u8>, EphemerisError> {
+                Err(EphemerisError::Io {
+                    path: name.to_owned(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "synthetic unavailable kernel",
+                    ),
+                })
+            }
+        }
+        let mut manifest = manifest_for("kernel.bsp", "0".repeat(64), 100);
+        manifest.version = u32::MAX;
+        assert!(
+            matches!(
+                load(&UnavailableStore, &manifest),
+                Err(EphemerisError::InvalidManifest { .. })
+            ),
+            "unsupported manifest versions must fail before store access"
+        );
+    }
+
     /// The filesystem store resolves names under its root.
     #[test]
     fn filesystem_store_reads_from_root() {
@@ -315,17 +426,20 @@ mod tests {
         );
         let bytes = kernel.raw_bytes_for_test();
         let entry = EphemerisFile {
+            upstream_version: "synthetic fixture".to_owned(),
+            retrieved_at: chrono::DateTime::from_timestamp(0, 0)
+                .expect("synthetic source timestamp"),
             name: "kernel.bsp".to_string(),
             sha256: hex_digest(&bytes),
             bytes: bytes.len() as u64,
-            source: String::new(),
-            coverage_start: String::new(),
-            coverage_end: String::new(),
+            source: "synthetic://test".to_owned(),
+            coverage_start: "synthetic start".to_owned(),
+            coverage_end: "synthetic end".to_owned(),
         };
         let manifest = EphemerisManifest {
-            version: 1,
-            time_scale_model: String::new(),
-            reference_frame: String::new(),
+            version: MANIFEST_VERSION,
+            time_scale_model: "synthetic time model".to_owned(),
+            reference_frame: "synthetic frame 1".to_owned(),
             files: vec![entry.clone(), entry],
         };
         let error = load(&BytesStore(bytes), &manifest).expect_err("must refuse");
