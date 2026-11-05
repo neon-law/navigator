@@ -69,8 +69,8 @@ pub enum LineBody {
     Pluto,
     /// 2060 Chiron.
     Chiron,
-    /// The Moon's mean ascending node (North Node), Swiss Ephemeris
-    /// `SE_MEAN_NODE` convention.
+    /// The Moon's mean ascending node (North Node), IERS 2003 longitude
+    /// referred to the true equinox of date.
     MeanNode,
 }
 

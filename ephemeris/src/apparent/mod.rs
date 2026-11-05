@@ -17,8 +17,8 @@
 //!
 //! The mean lunar node is a point of lunar orbital geometry rather than a
 //! physical body, so it bypasses that chain: [`node`] derives its longitude
-//! from Moshier's mean elements plus a DE431-fit correction and reports it in
-//! the Swiss Ephemeris `SE_MEAN_NODE` convention (see [`mean_node`]).
+//! from the IERS 2003 mean longitude and reports it on the true equinox
+//! of date (see [`mean_node`]).
 
 pub(crate) mod aberration;
 pub(crate) mod frame;
@@ -80,11 +80,11 @@ pub fn apparent_geocentric(
     ))
 }
 
-/// The apparent mean lunar node at `t`, in the Swiss Ephemeris
-/// `SE_MEAN_NODE` convention: the Moon's mean ascending node, referred to the
-/// true equinox of date, with latitude exactly zero and RA/Dec from the
+/// The apparent mean lunar node at `t`, using IERS 2003: the Moon's mean
+/// ascending node, referred to the true equinox of date, with latitude
+/// exactly zero and RA/Dec from the
 /// true-of-date ecliptic longitude. See [`node`] for the full convention and
-/// the Swiss Ephemeris equivalence proof.
+/// the IERS reference and independent Swiss Ephemeris validation.
 ///
 /// Unlike [`apparent_geocentric`], no ephemeris kernels are involved: the
 /// node follows from lunar orbital geometry alone.
