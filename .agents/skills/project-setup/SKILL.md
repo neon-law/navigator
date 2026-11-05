@@ -74,8 +74,8 @@ empty:
 | `Work Product/` | Drafts, research, everything else | every other kind |
 
 `Work Product/` holds the same seven fixed subfolders in every checkout, each suffixed so it reads unambiguously out of
-context and never collides with a served twin (LAW-215): `Client Calls (Work Product)/` (`transcript`), `Correspondence
-(Work Product)/` (letters drafted, not served), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work
+context and never collides with a served twin: `Client Calls (Work Product)/` (`transcript`), `Correspondence (Work
+Product)/` (letters drafted, not served), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work
 Product)/` (one folder per motion), `Pleadings (Work Product)/`, `Research (Work Product)/` (`memo`), and `Stipulations
 (Work Product)/`.
 

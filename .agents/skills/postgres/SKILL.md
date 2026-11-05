@@ -1,11 +1,8 @@
 ---
 name: postgres
-description: >
-  PostgreSQL is replacing SurrealDB as Navigator's store. Use this skill for the image we run
-  (`ghcr.io/neon-law/neon-law-postgres`: PostgreSQL 16.15 + Apache AGE 1.6.0 + pgvector 0.8.2), its digest pin, the
-  retained GKE StatefulSet, the local KIND overlays, and the CI gates. Trigger when the user mentions Postgres, the
-  Surreal swap, AGE, pgvector, DBOS, or `images/postgres/`; when a change edits `k8s/postgres/`,
-  `k8s/overlays/*postgres*`, or `examples/deploy/k8s/gke/postgres/`; or before designing a new table or store client.
+description: >-
+  Maintain PostgreSQL storage, migrations, AGE, pgvector, DBOS, image pins, and deployments. Use before new storage
+  design.
 ---
 
 # PostgreSQL
@@ -31,7 +28,7 @@ handlers and the runtime importer perform no DDL. Deployment configuration selec
   [`k8s/overlays/postgres-spike/kustomization.yaml`](../../../k8s/overlays/postgres-spike/kustomization.yaml).
   `cli/tests/staging_manifests.rs` fails when they drift.
 - **Recipe, tests, and build context:** [`images/postgres/`](../../../images/postgres/README.md). This repository is the
-  image's source; `neon-law/neon-law-postgres` is superseded.
+  image's source.
 - **Weekly publish:** [`postgres-image.yml`](../../../.github/workflows/postgres-image.yml) builds, tests, signs, and
   publishes, then opens a pull request moving every pin with
   [`scripts/postgres-image-pin.sh`](../../../scripts/postgres-image-pin.sh).

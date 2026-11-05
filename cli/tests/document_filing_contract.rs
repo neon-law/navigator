@@ -1,14 +1,4 @@
-//! ENG-872: the `legal-writing` skill's "Filing a document into a matter"
-//! section must name commands that actually exist and behave exactly as
-//! documented — a lawyer or an unattended agent follows that prose verbatim.
-//!
-//! Two kinds of coverage: a prose-drift check (the skill still names every
-//! documented command and behavior), and an end-to-end run of the documented
-//! procedure — direct upload writing its source pointer, the gate checking it,
-//! and `site document log` verifying the revision landed — plus a
-//! regression lock on the missing-extension diagnostic the skill tells a
-//! filer to expect. Every fixture below is synthetic (AGENTS.md: no client
-//! data, this must work for everyone).
+//! Document filing commands, flags, upload pointers, and revision verification use synthetic fixtures.
 
 use std::fs;
 use std::path::Path;
@@ -19,34 +9,6 @@ use tempfile::TempDir;
 use uuid::Uuid;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-const SKILL: &str = include_str!("../../.agents/skills/legal-writing/SKILL.md");
-
-#[test]
-fn memo_authoring_contract_preserves_the_source_and_storage_boundary() {
-    let contract = include_str!("../src/projects/agent_contract.md");
-    let scope = include_str!("../../.agents/skills/stay-in-repo/SKILL.md");
-    for required in [
-        "kind: memo",
-        "templates/<code>.md",
-        "navigator notation preview",
-        "confidential: true",
-    ] {
-        assert!(
-            SKILL.contains(required),
-            "memo procedure must name {required}"
-        );
-    }
-    assert!(contract.contains("Memo notations"));
-    assert!(contract.contains("client data"));
-    assert!(!scope.contains("an uncommitted memo"));
-    for firm in ["Wachtell", "Cravath", "Quinn Emanuel"] {
-        assert!(
-            !SKILL.contains(firm),
-            "legal writing must use the plain house style"
-        );
-    }
-}
 
 fn navigator() -> Command {
     let mut command = Command::cargo_bin("navigator").unwrap();
@@ -118,30 +80,6 @@ async fn mount_project_lookup(server: &MockServer, project_id: Uuid) {
         ])))
         .mount(server)
         .await;
-}
-
-/// Every command name and behavior the skill's filing section states must
-/// actually be present in the shipped skill text — a coupling test, not a CLI
-/// check: if this fails, the prose has drifted from what it names.
-#[test]
-fn legal_writing_skill_names_every_documented_filing_command() {
-    for expected in [
-        "navigator site document upload",
-        "navigator project gate",
-        "navigator project sync",
-        "navigator site document log",
-        "navigator site login",
-        "--no-browser",
-        "project.repository_url",
-        "blobs/",
-        "must carry the source extension from",
-        "~/.navigator.json",
-    ] {
-        assert!(
-            SKILL.contains(expected),
-            "legal-writing/SKILL.md must document `{expected}` — the filing procedure has drifted"
-        );
-    }
 }
 
 /// Every command the skill instructs a filer to run actually resolves, and

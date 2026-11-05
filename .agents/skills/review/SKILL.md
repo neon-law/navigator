@@ -1,12 +1,8 @@
 ---
 name: review
-description: >
-  Review a numbered GitHub pull request against the current Navigator codebase, tests, documentation, and its governing
-  Linear issue or issues. Read the complete PR and Linear conversations, reproduce relevant behavior, then land the
-  fixes that need no author decision on the PR branch and approve at the exact pushed head. Trigger for `/review` with a
-  PR number or a request for a whole-PR review; use `review-pr` for addressing one existing review comment,
-  `implement-issue` when an issue needs code, and the deprecated `triage-issue` compatibility command only for an
-  explicit plan-only request.
+description: >-
+  Review a whole GitHub PR against source, tests, and its Linear issue. Land determined fixes and approve the verified
+  head; honor read-only requests.
 ---
 
 # `/review`: review one pull request
@@ -189,10 +185,9 @@ git rev-parse HEAD   # must equal the headRefOid recorded in step 1
 
 If the head has moved since step 1, restart the review at the new head.
 
-Commit each finding's fix on its own, with the covering test in the same commit. Sign every commit: signing remains the
-convention even though CI no longer refuses unsigned commits. State the durable reason a reader can still check in a
-year (the rule in `AGENTS.md`, the constraint the test enforces, the behavior at the boundary). Never cite the review
-conversation, a chat tool, or a person.
+Commit each finding's fix on its own, with the covering test in the same commit. Sign every commit. State the durable
+reason a reader can still check in a year (the rule in `AGENTS.md`, the constraint the test enforces, the behavior at
+the boundary). Never cite the review conversation, a chat tool, or a person.
 
 ```bash
 rtk git commit -S -m "fix(store): reject an empty participation set at the boundary"

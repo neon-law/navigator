@@ -1,12 +1,8 @@
 ---
 name: case-timeline
-description: >
-  Keep a litigation matter's case timeline as Docket Entries in Navigator, one per entry on the court's docket, each
-  linked to the filed document, with hearings and trials carried as dated entries and continuances superseding the dates
-  they move. Trigger whenever a filing, order, notice, hearing, or continuance arrives in a matter, when a case
-  timeline, docket log, or "current position" is asked for, or before drafting anything that depends on what has been
-  filed. Kept identical, byte for byte, in every Project repository's `.agents/skills/`; this canonical copy lives in
-  Navigator's own `.agents/skills/`.
+description: >-
+  Maintain a matter's Docket Entries and linked filings, including hearings and continuances. Use before record-
+  dependent drafting.
 ---
 
 # Case timeline

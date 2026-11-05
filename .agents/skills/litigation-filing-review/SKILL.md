@@ -1,10 +1,8 @@
 ---
 name: litigation-filing-review
-description: >
-  Attorney-of-record review gate for litigation papers proposed for filing. Trigger when reviewing an application,
-  motion, memorandum, declaration, stipulation, proposed order, proof of service, or a filing package before submission;
-  when red-teaming why requested relief could be denied; or after a ruling when comparing the proposed and entered
-  orders. This is not the Legal Council, which is limited to legal copy before it becomes a notation.
+description: >-
+  Review litigation papers for filing, challenge grounds for denial, or compare proposed and entered orders. Preserve
+  attorney-of-record approval.
 ---
 
 # Litigation Filing Review

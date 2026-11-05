@@ -1,13 +1,7 @@
 ---
 name: authorization-model
-description: >
-  Neon Law Navigator's role + participation authorization model, the canonical answer to "who can see what." Every
-  person carries exactly one role in `persons.role` (`owner`, `admin`, `lawyer`, `clerk`, or `client`); per-project
-  scope lives separately in `person_project_roles.participation`. Owner and Admin bypass project-scoping at route
-  admission, not on the matter surface, and only Owner governs Owner identities. Trigger when the user mentions any of
-  `role`, `roles`, `owner`, `lawyer`, `client`, `admin`, `participation`, OPA, "who can see", "what does Libra/Nick
-  see", or before adding a new authz check anywhere in `web`. Also trigger when reaching for a JSON-array `roles[…]`
-  shape: the schema has a single `role` column.
+description: >-
+  Apply the role and Project-participation model when changing authorization, route admission, or identity governance.
 ---
 
 # Authorization model: role + participation

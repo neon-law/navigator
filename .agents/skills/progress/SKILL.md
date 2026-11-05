@@ -1,9 +1,8 @@
 ---
 name: progress
-description: >
-  Triage Linear against shipped code and open pull requests. Close an issue only when that code makes completion
-  certain, comment when it does not, implement up to five ready issues as separate commits, and open one PR. The turn
-  ends when that PR's required CI is green.
+description: >-
+  Reconcile Linear with shipped code, implement up to five ready issues, and open one PR. Finish when required CI is
+  green.
 ---
 
 # `/progress`: move a project forward

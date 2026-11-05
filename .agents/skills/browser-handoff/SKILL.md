@@ -1,11 +1,8 @@
 ---
 name: browser-handoff
-description: >
-  Borrow the attorney's own signed-in browser to download a document from a third-party site, such as a court-stamped
-  copy from an e-filing provider, then file it in Navigator. Trigger whenever a matter needs a file that sits behind the
-  attorney's login on a site Navigator has no integration for. Never handle the attorney's credentials. Kept identical,
-  byte for byte, in every Project repository's `.agents/skills/`; this canonical copy lives in Navigator's own
-  `.agents/skills/`.
+description: >-
+  Download a matter document through the attorney's signed-in browser when no integration supports the site. Never
+  handle credentials.
 ---
 
 # Browser handoff

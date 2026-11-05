@@ -899,10 +899,10 @@ sync-skills`; it writes only those canonical paths and preserves custom skills. 
 to verify the repository.
 
 For a Project version-bump PR, use the CLI from the exact target release. `ops github setup` then includes missing or
-drifted canonical Agent Skills with the workflow and manifest pins. Legal Council's cited examples are embedded in that
-binary and copied into `.agents/skills/legal-council/SKILL.md`; custom skills remain untouched. A different
-`--action-version` updates pins but prints a diagnostic requiring the matching release CLI for skills. Follow the fleet
-sweep in the [`cut-release` skill](../.agents/skills/cut-release/SKILL.md#fleet-sweep).
+drifted canonical Agent Skills with the workflow and manifest pins. The canonical skill text is embedded in that binary;
+custom skills remain untouched. A different `--action-version` updates pins but prints a diagnostic requiring the
+matching release CLI for skills. Follow the fleet sweep in the [`cut-release`
+skill](../.agents/skills/cut-release/SKILL.md#fleet-sweep).
 
 Drift in a synced skill, `AGENTS.md`, or `.claude/settings.json` is repaired with `navigator project repository
 sync-skills`; the gate detects the mismatch. These canonical files are embedded in that CLI release. A repository

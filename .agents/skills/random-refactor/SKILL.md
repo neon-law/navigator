@@ -1,9 +1,8 @@
 ---
 name: random-refactor
-description: >
-  Pick one tracked Rust file at random and pressure-test it against the workspace Rust skill, The Rust Book, a local
-  standard-library clone, and similar patterns in this repository. Trigger for `/random-refactor`, "random refactor", or
-  an opportunistic quality pass over a Rust file. Do not use for a named bug, a Linear issue, or a pull-request review.
+description: >-
+  Review one randomly selected Rust file against workspace conventions and primary references. Use for an untargeted
+  quality pass.
 ---
 
 # `/random-refactor`: one file, three comparisons, then the smallest honest edit

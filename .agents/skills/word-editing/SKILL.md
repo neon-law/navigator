@@ -1,10 +1,7 @@
 ---
 name: word-editing
-description: >
-  Let the lawyer edit a notation in local Microsoft Word, then carry those edits back into its template. Trigger when
-  the lawyer asks to open a draft, memo, letter, or agreement "in Word", or, after editing one there, asks to "update
-  the notation". Kept identical, byte for byte, in every Project repository's `.agents/skills/`; this canonical copy
-  lives in Navigator's own `.agents/skills/`.
+description: >-
+  Open a notation in Microsoft Word and carry the lawyer's edits back to its template while preserving placeholders.
 ---
 
 # Word editing
@@ -53,5 +50,4 @@ When the lawyer says the file is saved:
 
 ## Limits
 
-This diff is done by hand. A deterministic import verb, which checks the template's hash and maps each Word paragraph to
-its block, is tracked in LAW-229. When it ships, use it in steps 1 through 5.
+Compare the files and map each edit to its template block manually. Preserve the baseline and placeholder checks.

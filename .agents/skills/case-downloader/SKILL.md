@@ -1,11 +1,7 @@
 ---
 name: case-downloader
-description: >
-  Record exactly which cases and statutes a matter relies on: verify each authority against a primary source, download
-  the original, file it as an Authority with `navigator project sync`, and commit only the YAML pointer. Trigger
-  whenever a matter needs the text of a case, statute, or regulation saved, cited, or checked, and before quoting one in
-  work product. Kept identical, byte for byte, in every Project repository's `.agents/skills/`; this canonical copy
-  lives in Navigator's own `.agents/skills/`.
+description: >-
+  Verify and save primary authorities before citing, quoting, or relying on them. Commit only document pointers.
 ---
 
 # Case downloader

@@ -1,15 +1,8 @@
 ---
 name: durable-execution
-description: >
-  The operational contract for Neon Law Navigator's Restate-backed durable execution: keep the running workflows alive,
-  diagnose why one didn't fire, and don't break them. Covers the submit-vs-run split (workflows lib / workflows-service
-  bin), the service inventory, the six-hourly Heartbeat liveness canary, the three start modes, and investigating a
-  stalled workflow from evidence (commit history, GitHub Actions runs, pod and Cloud logs, Google Cloud Trace, GKE, the
-  Restate console), then pinning the fix with a guard test. Trigger when touching workflows-service, a *-trigger
-  CronJob, or the image Containerfiles; when re-registering with Restate; when a scheduled or manual workflow "didn't
-  run"; or when adding a workspace crate (it must enter the Containerfile COPY lists). This engine executes BINDING
-  legal artifacts (retainer dispatch, signatures, filings). Debugging surfaces carry invocation ids and service names,
-  NEVER client content. To *add* a new workflow, use create-legal-workflow.
+description: >-
+  Diagnose stalled workflows and maintain durable execution, triggers, registration, and service images. Use create-
+  legal-workflow to add a workflow.
 ---
 
 # durable-execution

@@ -52,14 +52,9 @@ each answer terse.
   the client is meant to read that document. Treat every change to `visibility: client` as a deliberate client-release
   decision. Review every change to a `client:` lens under `pages:`; it is what the client sees. For each Deadline,
   choose deliberately whether it is internal or client-visible.
-* "Pull changes" means rebase the current branch onto the latest `origin/main`; never `git pull` into a PR branch,
-  merge `origin/main`, or only fetch. Start from a clean tree (commit work in progress; never stash), then `git fetch
-  origin && git rebase origin/main` (on `main` itself, `git pull --rebase origin main`). Resolve conflicts, `git add`,
-  `git rebase --continue`; if they cannot be resolved cleanly, `git rebase --abort` and report what conflicted. Commits
-  already squash-merged into `main` drop out of the rebase; where they conflict, keep `origin/main`'s version. Run
-  `navigator project gate`, then push with `git push --force-with-lease`, never plain `--force`, and never force-push
-  `main`. A host-side "sync with base branch" tool merges rather than rebases; use it only when the sandbox blocks a
-  rebase, and say so. The steps live in `.agents/skills/pull-changes/SKILL.md`.
+* "Pull changes" means rebase onto refreshed `origin/main` from a clean tree. Commit work in progress; never stash,
+  merge `origin/main`, or force-push `main`. Follow `.agents/skills/pull-changes/SKILL.md` for conflict handling,
+  validation, and `--force-with-lease`. A host-side sync tool is allowed only when the sandbox blocks rebase; report it.
 * "Push changes", "push this", "ship it", and "land it" mean signed-rebase onto the latest `origin/main`, gate, sign,
   push a topic branch, open a ready PR against `main`, and follow its checks and auto-merge through merge. The job ends
   when the pull request is merged and this checkout is current. Follow `.agents/skills/push-changes/SKILL.md`.
@@ -88,18 +83,17 @@ each answer terse.
   * `Court Rules/` holds the court's local rules and standing orders.
   * `Engagement/` holds the letters that open and close the engagement (`kind: onboarding`).
   * `Work Product/` holds drafts, research, and every other kind. Its seven fixed subfolders each carry the suffix so
-    they read unambiguously out of context and never collide with a served twin (LAW-215): `Client Calls (Work
-    Product)/` (call notes and transcripts, `kind: transcript`), `Correspondence (Work Product)/` (letters the firm
-    drafted but did not serve), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work Product)/` (one
-    folder per motion), `Pleadings (Work Product)/` (pleadings in draft), `Research (Work Product)/` (memos, `kind:
-    memo`), and `Stipulations (Work Product)/`.
+    they read unambiguously out of context and never collide with a served twin: `Client Calls (Work Product)/` (call
+    notes and transcripts, `kind: transcript`), `Correspondence (Work Product)/` (letters the firm drafted but did not
+    serve), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work Product)/` (one folder per motion),
+    `Pleadings (Work Product)/` (pleadings in draft), `Research (Work Product)/` (memos, `kind: memo`), and
+    `Stipulations (Work Product)/`.
   * `onboarding/`, `offboarding/`, `invoices/`, `cases/`, and `rules/` keep their bytes at the pointer's own path.
 
   The slug is the path below the matter folder: `documents/Docket Filings/pleadings/motion.pdf` for
   `blobs/pleadings/motion.pdf.yaml`. A file dropped into a matter folder is uploaded on the next sync with that folder's
-  kind, and a lawyer-made subfolder inside one is part of the slug. Never commit anything under `documents/`. A checkout
-  from before LAW-215 holds a bare `Discovery/` folder instead of `Discovery (Served)/`; `navigator project repository
-  migrate-folders` refiles it.
+  kind, and a lawyer-made subfolder inside one is part of the slug. Never commit anything under `documents/`. Run
+  `navigator project repository migrate-folders` to reconcile `Discovery/` with `Discovery (Served)/`.
 * `drafts/` holds Drafts, the notation blueprints, directly under it; `templates/` is an alias the gate warns about.
   Memo notations use `kind: memo`. Use placeholders for client data and matter facts; answers and work product stay in
   Navigator. A Notation is a database record, never a file here.

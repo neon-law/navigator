@@ -1,10 +1,7 @@
 ---
 name: pull-changes
-description: >
-  Bring the current branch up to date by rebasing it onto the latest `origin/main`. Trigger whenever the lawyer says
-  "pull changes", "pull main", "update the branch", or "sync with main", and before pushing a pull request branch that
-  has fallen behind. Never `git pull` into a branch, never merge `origin/main`, never only fetch. Synced verbatim into
-  every Project repository's `.agents/skills/`; this canonical copy lives in Navigator's own `.agents/skills/`.
+description: >-
+  Rebase the current branch onto refreshed origin/main when syncing or before pushing a stale PR branch.
 ---
 
 # Pull changes
