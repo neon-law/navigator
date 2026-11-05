@@ -5,6 +5,10 @@ use std::path::PathBuf;
 /// Everything that can go wrong while reading or evaluating ephemeris kernels.
 #[derive(Debug, thiserror::Error)]
 pub enum EphemerisError {
+    /// A source position has no finite nonzero geocentric direction.
+    #[error("geocentric direction has a zero or non-finite distance")]
+    InvalidGeocentricDirection,
+
     /// The observer cannot be a target for a geocentric direction.
     #[error("Earth has no direction from the Earth's center")]
     EarthAsGeocentricTarget,

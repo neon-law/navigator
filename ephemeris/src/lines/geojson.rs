@@ -20,17 +20,17 @@ use crate::loader::EphemerisManifest;
 use hifitime::Epoch;
 
 /// The ΔT model behind UT1, verbatim provenance (see [`super::deltat`]).
-const DELTA_T_MODEL: &str = "Espenak & Meeus (2006) polynomials to 1955, \
+pub(crate) const DELTA_T_MODEL: &str = "Espenak & Meeus (2006) polynomials to 1955, \
 Astronomical Almanac table with fourth-order Bessel interpolation \
 1955-2028, Stephenson-Morrison-Hohenkerk (2016) future blend";
 
 /// The sidereal model behind the MC/IC longitudes, verbatim provenance
 /// (see [`super::sidereal`]).
-const SIDEREAL_MODEL: &str = "IERS Earth Rotation Angle, IAU 2006 GMST \
+pub(crate) const SIDEREAL_MODEL: &str = "IERS Earth Rotation Angle, IAU 2006 GMST \
 polynomial, IAU 2000B equation of the equinoxes with true obliquity";
 
 /// The lunar-node convention, when the node is among the lines.
-const NODE_CONVENTION: &str = "Moon mean ascending node, IERS 2003 longitude; \
+pub(crate) const NODE_CONVENTION: &str = "Moon mean ascending node, IERS 2003 longitude; \
 IAU 2000B nutation and IAU 2006 true obliquity";
 
 /// One kernel file's verifying identity, copied from the manifest.
@@ -40,6 +40,14 @@ pub struct KernelProvenance {
     pub name: String,
     /// SHA-256 of the exact bytes that verified at load time.
     pub sha256: String,
+    /// Canonical upstream download or generation request URL.
+    pub source: String,
+    /// Upstream model or orbit solution identity.
+    pub upstream_version: String,
+    /// UTC retrieval timestamp for the exact pinned bytes.
+    pub retrieved_at: chrono::DateTime<chrono::Utc>,
+    /// Verified file length in bytes.
+    pub bytes: u64,
     /// Human-readable coverage start (TDB).
     pub coverage_start: String,
     /// Human-readable coverage end (TDB).
@@ -76,6 +84,10 @@ impl LineProvenance {
             .map(|file| KernelProvenance {
                 name: file.name.clone(),
                 sha256: file.sha256.clone(),
+                source: file.source.clone(),
+                upstream_version: file.upstream_version.clone(),
+                retrieved_at: file.retrieved_at,
+                bytes: file.bytes,
                 coverage_start: file.coverage_start.clone(),
                 coverage_end: file.coverage_end.clone(),
             })
@@ -217,10 +229,13 @@ mod tests {
     /// A minimal manifest for provenance construction.
     fn test_manifest() -> EphemerisManifest {
         EphemerisManifest {
-            version: 1,
+            version: crate::MANIFEST_VERSION,
             time_scale_model: "Espenak-Meeus/Almanac dT".to_owned(),
             reference_frame: "ICRF/J2000, IAU 2006/2000B of-date".to_owned(),
             files: vec![crate::loader::EphemerisFile {
+                upstream_version: "synthetic fixture".to_owned(),
+                retrieved_at: chrono::DateTime::from_timestamp(0, 0)
+                    .expect("synthetic source timestamp"),
                 name: "de440.bsp".to_owned(),
                 sha256: "a1b2c3".to_owned(),
                 bytes: 11,

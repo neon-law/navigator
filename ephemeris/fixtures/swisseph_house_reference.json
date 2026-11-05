@@ -1,0 +1,795 @@
+{
+  "generator": "swe_houses_armc",
+  "swisseph_version": "2.10.03",
+  "obliquity_deg": 23.4392911,
+  "rows": [
+    {
+      "armc_deg": 0.0,
+      "latitude_deg": 0.0,
+      "house_system": "equal",
+      "ascendant_deg": 90.0,
+      "midheaven_deg": 0.0,
+      "cusps_deg": [
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0
+      ]
+    },
+    {
+      "armc_deg": 0.0,
+      "latitude_deg": 0.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 90.0,
+      "midheaven_deg": 0.0,
+      "cusps_deg": [
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0
+      ]
+    },
+    {
+      "armc_deg": 0.0,
+      "latitude_deg": 40.0,
+      "house_system": "equal",
+      "ascendant_deg": 108.45770359038778,
+      "midheaven_deg": 0.0,
+      "cusps_deg": [
+        108.45770359038778,
+        138.45770359038778,
+        168.45770359038778,
+        198.45770359038778,
+        228.45770359038778,
+        258.4577035903878,
+        288.4577035903878,
+        318.4577035903878,
+        348.4577035903878,
+        18.45770359038778,
+        48.45770359038778,
+        78.45770359038778
+      ]
+    },
+    {
+      "armc_deg": 0.0,
+      "latitude_deg": 40.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 108.45770359038778,
+      "midheaven_deg": 0.0,
+      "cusps_deg": [
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0
+      ]
+    },
+    {
+      "armc_deg": 0.0,
+      "latitude_deg": -33.0,
+      "house_system": "equal",
+      "ascendant_deg": 75.51600916122958,
+      "midheaven_deg": 0.0,
+      "cusps_deg": [
+        75.51600916122958,
+        105.51600916122958,
+        135.5160091612296,
+        165.5160091612296,
+        195.5160091612296,
+        225.5160091612296,
+        255.5160091612296,
+        285.5160091612296,
+        315.5160091612296,
+        345.5160091612296,
+        15.51600916122959,
+        45.51600916122959
+      ]
+    },
+    {
+      "armc_deg": 0.0,
+      "latitude_deg": -33.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 75.51600916122958,
+      "midheaven_deg": 0.0,
+      "cusps_deg": [
+        60.0,
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0
+      ]
+    },
+    {
+      "armc_deg": 0.0,
+      "latitude_deg": 75.0,
+      "house_system": "equal",
+      "ascendant_deg": 146.03514801767037,
+      "midheaven_deg": 0.0,
+      "cusps_deg": [
+        146.03514801767037,
+        176.03514801767037,
+        206.03514801767037,
+        236.0351480176704,
+        266.0351480176704,
+        296.0351480176704,
+        326.0351480176704,
+        356.0351480176704,
+        26.035148017670394,
+        56.035148017670394,
+        86.0351480176704,
+        116.0351480176704
+      ]
+    },
+    {
+      "armc_deg": 0.0,
+      "latitude_deg": 75.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 146.03514801767037,
+      "midheaven_deg": 0.0,
+      "cusps_deg": [
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0,
+        90.0
+      ]
+    },
+    {
+      "armc_deg": 37.0,
+      "latitude_deg": 0.0,
+      "house_system": "equal",
+      "ascendant_deg": 124.65890902757346,
+      "midheaven_deg": 39.3972325695697,
+      "cusps_deg": [
+        124.65890902757346,
+        154.65890902757346,
+        184.65890902757346,
+        214.6589090275735,
+        244.6589090275735,
+        274.6589090275735,
+        304.6589090275735,
+        334.6589090275735,
+        4.658909027573486,
+        34.658909027573486,
+        64.65890902757349,
+        94.65890902757349
+      ]
+    },
+    {
+      "armc_deg": 37.0,
+      "latitude_deg": 0.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 124.65890902757346,
+      "midheaven_deg": 39.3972325695697,
+      "cusps_deg": [
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0,
+        90.0
+      ]
+    },
+    {
+      "armc_deg": 37.0,
+      "latitude_deg": 40.0,
+      "house_system": "equal",
+      "ascendant_deg": 137.96639705984737,
+      "midheaven_deg": 39.3972325695697,
+      "cusps_deg": [
+        137.96639705984737,
+        167.96639705984737,
+        197.96639705984737,
+        227.9663970598474,
+        257.9663970598474,
+        287.9663970598474,
+        317.9663970598474,
+        347.9663970598474,
+        17.966397059847395,
+        47.966397059847395,
+        77.9663970598474,
+        107.9663970598474
+      ]
+    },
+    {
+      "armc_deg": 37.0,
+      "latitude_deg": 40.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 137.96639705984737,
+      "midheaven_deg": 39.3972325695697,
+      "cusps_deg": [
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0,
+        90.0
+      ]
+    },
+    {
+      "armc_deg": 37.0,
+      "latitude_deg": -33.0,
+      "house_system": "equal",
+      "ascendant_deg": 110.19964168732415,
+      "midheaven_deg": 39.3972325695697,
+      "cusps_deg": [
+        110.19964168732415,
+        140.19964168732415,
+        170.19964168732415,
+        200.19964168732417,
+        230.19964168732417,
+        260.1996416873242,
+        290.1996416873242,
+        320.1996416873242,
+        350.1996416873242,
+        20.199641687324174,
+        50.199641687324174,
+        80.19964168732417
+      ]
+    },
+    {
+      "armc_deg": 37.0,
+      "latitude_deg": -33.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 110.19964168732415,
+      "midheaven_deg": 39.3972325695697,
+      "cusps_deg": [
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0
+      ]
+    },
+    {
+      "armc_deg": 37.0,
+      "latitude_deg": 75.0,
+      "house_system": "equal",
+      "ascendant_deg": 158.5885460022888,
+      "midheaven_deg": 39.3972325695697,
+      "cusps_deg": [
+        158.5885460022888,
+        188.5885460022888,
+        218.5885460022888,
+        248.5885460022888,
+        278.5885460022888,
+        308.5885460022888,
+        338.5885460022888,
+        8.588546002288808,
+        38.58854600228881,
+        68.58854600228881,
+        98.58854600228881,
+        128.5885460022888
+      ]
+    },
+    {
+      "armc_deg": 37.0,
+      "latitude_deg": 75.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 158.5885460022888,
+      "midheaven_deg": 39.3972325695697,
+      "cusps_deg": [
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0
+      ]
+    },
+    {
+      "armc_deg": 122.0,
+      "latitude_deg": 0.0,
+      "house_system": "equal",
+      "ascendant_deg": 214.257596445815,
+      "midheaven_deg": 119.82592416983641,
+      "cusps_deg": [
+        214.257596445815,
+        244.257596445815,
+        274.257596445815,
+        304.257596445815,
+        334.257596445815,
+        4.257596445815011,
+        34.25759644581501,
+        64.25759644581501,
+        94.25759644581501,
+        124.25759644581501,
+        154.257596445815,
+        184.257596445815
+      ]
+    },
+    {
+      "armc_deg": 122.0,
+      "latitude_deg": 0.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 214.257596445815,
+      "midheaven_deg": 119.82592416983641,
+      "cusps_deg": [
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0,
+        150.0,
+        180.0
+      ]
+    },
+    {
+      "armc_deg": 122.0,
+      "latitude_deg": 40.0,
+      "house_system": "equal",
+      "ascendant_deg": 205.48308253153235,
+      "midheaven_deg": 119.82592416983641,
+      "cusps_deg": [
+        205.48308253153235,
+        235.48308253153235,
+        265.4830825315323,
+        295.4830825315323,
+        325.4830825315323,
+        355.4830825315323,
+        25.483082531532318,
+        55.48308253153232,
+        85.48308253153232,
+        115.48308253153232,
+        145.48308253153232,
+        175.48308253153232
+      ]
+    },
+    {
+      "armc_deg": 122.0,
+      "latitude_deg": 40.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 205.48308253153235,
+      "midheaven_deg": 119.82592416983641,
+      "cusps_deg": [
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0,
+        150.0
+      ]
+    },
+    {
+      "armc_deg": 122.0,
+      "latitude_deg": -33.0,
+      "house_system": "equal",
+      "ascendant_deg": 225.55510035460384,
+      "midheaven_deg": 119.82592416983641,
+      "cusps_deg": [
+        225.55510035460384,
+        255.55510035460384,
+        285.55510035460384,
+        315.55510035460384,
+        345.55510035460384,
+        15.555100354603837,
+        45.55510035460384,
+        75.55510035460384,
+        105.55510035460384,
+        135.55510035460384,
+        165.55510035460384,
+        195.55510035460384
+      ]
+    },
+    {
+      "armc_deg": 122.0,
+      "latitude_deg": -33.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 225.55510035460384,
+      "midheaven_deg": 119.82592416983641,
+      "cusps_deg": [
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0,
+        150.0,
+        180.0
+      ]
+    },
+    {
+      "armc_deg": 122.0,
+      "latitude_deg": 75.0,
+      "house_system": "equal",
+      "ascendant_deg": 193.181582769652,
+      "midheaven_deg": 119.82592416983641,
+      "cusps_deg": [
+        193.181582769652,
+        223.181582769652,
+        253.181582769652,
+        283.181582769652,
+        313.181582769652,
+        343.181582769652,
+        13.181582769651982,
+        43.18158276965198,
+        73.18158276965198,
+        103.18158276965198,
+        133.18158276965198,
+        163.18158276965198
+      ]
+    },
+    {
+      "armc_deg": 122.0,
+      "latitude_deg": 75.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 193.181582769652,
+      "midheaven_deg": 119.82592416983641,
+      "cusps_deg": [
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0,
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0,
+        150.0
+      ]
+    },
+    {
+      "armc_deg": 270.0,
+      "latitude_deg": 0.0,
+      "house_system": "equal",
+      "ascendant_deg": 1e-10,
+      "midheaven_deg": 270.0,
+      "cusps_deg": [
+        1e-10,
+        30.0000000001,
+        60.0000000001,
+        90.00000000009999,
+        120.00000000009999,
+        150.0000000001,
+        180.0000000001,
+        210.0000000001,
+        240.0000000001,
+        270.0000000001,
+        300.0000000001,
+        330.0000000001
+      ]
+    },
+    {
+      "armc_deg": 270.0,
+      "latitude_deg": 0.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 1e-10,
+      "midheaven_deg": 270.0,
+      "cusps_deg": [
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0
+      ]
+    },
+    {
+      "armc_deg": 270.0,
+      "latitude_deg": 40.0,
+      "house_system": "equal",
+      "ascendant_deg": 1e-10,
+      "midheaven_deg": 270.0,
+      "cusps_deg": [
+        1e-10,
+        30.0000000001,
+        60.0000000001,
+        90.00000000009999,
+        120.00000000009999,
+        150.0000000001,
+        180.0000000001,
+        210.0000000001,
+        240.0000000001,
+        270.0000000001,
+        300.0000000001,
+        330.0000000001
+      ]
+    },
+    {
+      "armc_deg": 270.0,
+      "latitude_deg": 40.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 1e-10,
+      "midheaven_deg": 270.0,
+      "cusps_deg": [
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0
+      ]
+    },
+    {
+      "armc_deg": 270.0,
+      "latitude_deg": -33.0,
+      "house_system": "equal",
+      "ascendant_deg": 1e-10,
+      "midheaven_deg": 270.0,
+      "cusps_deg": [
+        1e-10,
+        30.0000000001,
+        60.0000000001,
+        90.00000000009999,
+        120.00000000009999,
+        150.0000000001,
+        180.0000000001,
+        210.0000000001,
+        240.0000000001,
+        270.0000000001,
+        300.0000000001,
+        330.0000000001
+      ]
+    },
+    {
+      "armc_deg": 270.0,
+      "latitude_deg": -33.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 1e-10,
+      "midheaven_deg": 270.0,
+      "cusps_deg": [
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0
+      ]
+    },
+    {
+      "armc_deg": 270.0,
+      "latitude_deg": 75.0,
+      "house_system": "equal",
+      "ascendant_deg": 0.0,
+      "midheaven_deg": 270.0,
+      "cusps_deg": [
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0
+      ]
+    },
+    {
+      "armc_deg": 270.0,
+      "latitude_deg": 75.0,
+      "house_system": "whole_sign",
+      "ascendant_deg": 0.0,
+      "midheaven_deg": 270.0,
+      "cusps_deg": [
+        0.0,
+        30.0,
+        60.0,
+        90.0,
+        120.0,
+        150.0,
+        180.0,
+        210.0,
+        240.0,
+        270.0,
+        300.0,
+        330.0
+      ]
+    }
+  ],
+  "source_revision": "175e1fcb3108bcd5c0d146c803f51dcf23508012",
+  "source_manifest": {
+    "version": "2.10.03",
+    "retrieved_at": "2026-11-05T02:42:19.465202+00:00",
+    "files": [
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/Makefile",
+        "sha256": "1f872c7fb49d45577452caea3bf09c62945e8ba67389f38556827d059e3be805",
+        "bytes": 2732
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/LICENSE",
+        "sha256": "b6345743292c516d07799dfad46f1a641e5270da2160cc4d6bd54594d6faa991",
+        "bytes": 2371
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swetest.c",
+        "sha256": "98e0059e65e91252955327c3c162ef541c06c7bd03dc7c54891bb73fd516a468",
+        "bytes": 144165
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swedate.c",
+        "sha256": "6790e989a003cb6422080d9aecf3c6567a25030f5b5647fd749e5b16422cfac7",
+        "bytes": 20063
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swehouse.c",
+        "sha256": "384c1d7b2a8bcef9f2cf16f7fbf02e7aa18f372bc11320874a5543b92aed95d9",
+        "bytes": 112151
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swejpl.c",
+        "sha256": "44014e260ae9ab2b1e8f413bb8a35fa270e369e3fb4907cd137ae103d2a8d0c2",
+        "bytes": 33480
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swemmoon.c",
+        "sha256": "1d5f5ef9a95cf9a2f395b6334a58c63851ce0512d65bf08e49d3caf0a9fecb00",
+        "bytes": 61388
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swemplan.c",
+        "sha256": "d13502ca7b92e3e32317b67ba7f012d92fabd1d358c3394c094d5515a3567caa",
+        "bytes": 27880
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/sweph.c",
+        "sha256": "80761ccfae7cd7207a33559d8898b9c5386cced609cfaebbbbf050f7a80ddc4f",
+        "bytes": 290642
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swephlib.c",
+        "sha256": "d41eb2f396163fedd574749de02a25e8547b4e1e4c66783d47ccc0c7e4885a05",
+        "bytes": 164395
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swecl.c",
+        "sha256": "ab46bdc303978523c69d814d236432541ff48cb410b756ef78cc1e8d2b2be303",
+        "bytes": 225794
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swehel.c",
+        "sha256": "7b4be28627afd22b059389abc4ef679b7259a0bcb9d0510e7ca3825901754b93",
+        "bytes": 123264
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swejpl.h",
+        "sha256": "f61ae6173b150f456540afba68500989c642506822e0397cf99c2cb7f50aac0d",
+        "bytes": 3995
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/sweodef.h",
+        "sha256": "a2ace0fc0ea81ffbf9eb0a7f9fc1c1446d98f07d3a170a2c54b8ef4908325462",
+        "bytes": 10838
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swephexp.h",
+        "sha256": "dd8e74e2853915a316041397f31730219b7910333be6bba3934fd77130335f22",
+        "bytes": 40932
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swedll.h",
+        "sha256": "cc33c8a26c28d7cba817012040f4ff68260b378d2149d66bf2c341cbb80549d1",
+        "bytes": 17785
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/sweph.h",
+        "sha256": "8e44b9c00d23a0b583581f17fc6798ea376649d2517abbb556ee1b1aff6a138a",
+        "bytes": 34361
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swephlib.h",
+        "sha256": "29a151bb0c6adcb73fa73eff805b498c26bdffbb81e82d55e1b50f79218ea82a",
+        "bytes": 7786
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swehouse.h",
+        "sha256": "7a91a007a4de0900ed6d234d74da421b2372d245b09a2ba8b74d6e2e054a200c",
+        "bytes": 3702
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swemptab.h",
+        "sha256": "dc7595b81bd49e86a6204ed1e0a041c410a9de5c068fd1d90d350a82d604fb85",
+        "bytes": 311984
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swenut2000a.h",
+        "sha256": "83b0a2f569174b56c8e26971b00f85f5ae52265b34c1c53436c7122e0f1faad7",
+        "bytes": 68486,
+        "retrieved_at": "2026-11-05T02:43:30.311258+00:00"
+      }
+    ]
+  },
+  "generator_source_sha256": "32d351da76c9feb5a763b09bf5656f38b337baf829b41b3818e3264df22b6afc",
+  "conventions": "Tropical ecliptic degrees; apparent local sidereal angle (ARMC) and obliquity supplied directly; E equal and W whole-sign; no date/time conversion or ephemeris files.",
+  "reproduction": "For each row call Swiss Ephemeris 2.10.03 swe_houses_armc(armc_deg, latitude_deg, obliquity_deg, E or W, cusps, ascmc). Record ascmc[0], ascmc[1], and cusps[1..=12]. Require a nonnegative return code."
+}

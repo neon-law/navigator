@@ -1,23 +1,27 @@
 {
-  "version": 1,
-  "time_scale_model": "UTC→TAI applies hifitime's built-in leap-second table (27 s as of 2017, the table's last entry; pre-1972 UTC drift modeled). TAI→TT adds the fixed 32.184 s offset. TT→TDB adds the periodic relativistic term (amplitude ≈ 1.6 ms). Classical ΔT = TT−UT1 is not consumed by the ephemeris lookup: SPK segments are functions of TDB only, and ΔT belongs to Earth-rotation quantities computed by later layers.",
+  "version": 2,
+  "time_scale_model": "UTC→TAI uses hifitime 4.3's pinned leap-second and historical UTC model; TAI−UTC is 37 s from 2017 under the pinned table (27 inserted leap seconds plus the initial 10 s). TAI→TT adds 32.184 s. TT→TDB adds the periodic relativistic term, bounded by approximately 1.7 ms. Historical proleptic UTC and future UTC follow this versioned model, not a live Earth-rotation observation. SPK interpolation is a function of TDB. Earth-rotation angles use the separately recorded delta-T model.",
   "reference_frame": "ICRF/J2000 (SPK frame id 1)",
   "files": [
     {
       "name": "de440.bsp",
       "sha256": "a4ce9bf9b3282becc9f4b2ac3cebe03a2ae7599981aabd7265fd8482fff7c4b5",
       "bytes": 119799808,
-      "source": "https://ssd.jpl.nasa.gov/ftp/eph/planets/bsp/de440.bsp",
+      "source": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp",
       "coverage_start": "1549-12-21",
-      "coverage_end": "2650-01-25"
+      "coverage_end": "2650-01-25",
+      "retrieved_at": "2026-11-05T02:54:33.067965+00:00",
+      "upstream_version": "DE440"
     },
     {
       "name": "chiron.bsp",
-      "sha256": "16403150eb6ca8cf3ddddcb77e0e8cea0c0c132a2a1ce4ae3f4a0dfd653bc4bb",
+      "sha256": "017d8c47b17d4d671ffa81a1cfdda6365d721b8917d9e7b668637f9d1e05d7da",
       "bytes": 2791424,
-      "source": "JPL Horizons API SPK generation for 2060 Chiron (COMMAND='2060;', EPHEM_TYPE=SPK, START_TIME='1900-01-01', STOP_TIME='2050-01-02') at https://ssd.jpl.nasa.gov/api/horizons.api; Horizons regenerates the file on request, so re-fetching may yield a different digest for the same solution. Re-fetched 2026-10-30 with the stop extended one day (2050-01-02) so coverage includes the fixture grid's final noon epoch, JD 2469808.0 = 2050-01-01 12:00 TT, which the previous 2050-01-01 stop fell 12 hours short of; byte size unchanged (2791424), digest refreshed, and solution equivalence re-verified by the unchanged Horizons reference fixture table in tests/fixtures.rs. Fetched again later the same day (2026-10-30) for the line-engine layer: Horizons regenerated the file with a new digest (same byte count, same parameters), digest refreshed and solution equivalence re-verified the same way",
+      "source": "https://ssd.jpl.nasa.gov/api/horizons.api?format=json&COMMAND=%272060%3B%27&EPHEM_TYPE=%27SPK%27&START_TIME=%271900-01-01%27&STOP_TIME=%272050-01-02%27&OBJ_DATA=%27YES%27",
       "coverage_start": "1899-12-31",
-      "coverage_end": "2050-01-02"
+      "coverage_end": "2050-01-02",
+      "retrieved_at": "2026-11-05T02:57:11.919601+00:00",
+      "upstream_version": "JPL#171; solution date 2026-Jun-05_06:09:00; SPK ID 20002060; Horizons API 1.2"
     }
   ]
 }
