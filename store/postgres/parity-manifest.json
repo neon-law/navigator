@@ -480,13 +480,6 @@
       "extra_column": null,
       "extra_table": null,
       "missing_column": null,
-      "missing_table": "esignature_webhook_journal",
-      "table": null
-    },
-    {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": null,
       "missing_table": "schema_version",
       "table": null
     }
@@ -1893,7 +1886,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 153,
+    "table_count": 154,
     "tables": {
       "address": {
         "columns": {
@@ -2839,6 +2832,23 @@
         },
         "foreign_keys": [],
         "name": "entity_type",
+        "references": []
+      },
+      "esignature_webhook_journal": {
+        "columns": {
+          "attempts": "BIGINT",
+          "consumed_at": "TIMESTAMPTZ",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "last_error": "TEXT",
+          "payload": "TEXT",
+          "provider": "TEXT",
+          "provider_id": "TEXT",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "esignature_webhook_journal",
         "references": []
       },
       "estate_asset": {
