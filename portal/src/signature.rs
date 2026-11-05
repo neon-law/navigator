@@ -253,6 +253,12 @@ pub enum SignatureError {
     /// without its declared fields is a silently unsigned page.
     #[error("anchor validation failed: {0}")]
     AnchorValidation(String),
+    /// A declared field no declared recipient signs. Refused at prepare,
+    /// like a missing anchor: an anchor present in the PDF's text that
+    /// binds to no recipient's tabs is a silently unsigned field — every
+    /// provider would send it and no signer would place it.
+    #[error("tab preparation failed: {0}")]
+    TabValidation(String),
 }
 
 #[async_trait]
@@ -403,6 +409,121 @@ pub fn validate_anchors(pdf_bytes: &[u8], fields: &[SignatureField]) -> Result<(
         "missing anchors (not present in the prepared PDF's text layer): {}",
         missing.join(", ")
     )))
+}
+
+/// One signer's prepared tabs: the recipient exactly as the manifest
+/// declared them, plus the DocuSign `tabs` object their anchored fields
+/// group into (`None` when the recipient anchors no fields — the signer
+/// JSON then simply omits `tabs`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedSigner {
+    pub recipient: SignatureRecipient,
+    pub tabs: Option<serde_json::Value>,
+}
+
+/// The prepare-time, per-signer tab plan: every declared field bound to
+/// the recipient that signs it, recipients in routing order. Both
+/// providers build their envelope from this — the fake's sign pages and
+/// DocuSign's signer JSON are two projections of one plan, so a field
+/// can bind on one path and vanish on the other.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedTabs {
+    pub signers: Vec<PreparedSigner>,
+}
+
+impl PreparedTabs {
+    /// True when the manifest declared no recipients — the single
+    /// configured-signer fallback (no anchored signing plan).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.signers.is_empty()
+    }
+}
+
+/// Bind every declared field to a declared recipient and group the
+/// fields per signer under their [`SignatureFieldKind::tabs_key`] tab
+/// collection, recipients in routing order, kinds in placement order.
+///
+/// A field whose `recipient_role` names no recipient is a hard error —
+/// the anchor would pass text validation and still be placed by no one.
+///
+/// # Errors
+///
+/// [`SignatureError::TabValidation`] when a declared field binds to no
+/// declared recipient; the error names every orphaned anchor and role.
+pub fn prepare_tabs(manifest: &SignatureManifest) -> Result<PreparedTabs, SignatureError> {
+    let orphans: Vec<String> = manifest
+        .fields
+        .iter()
+        .filter(|f| {
+            !manifest
+                .recipients
+                .iter()
+                .any(|r| r.role == f.recipient_role)
+        })
+        .map(|f| format!("{} (role `{}`)", f.anchor, f.recipient_role))
+        .collect();
+    if !orphans.is_empty() {
+        return Err(SignatureError::TabValidation(format!(
+            "declared fields name no declared recipient — no signer would place them: {}",
+            orphans.join(", ")
+        )));
+    }
+    let signers = manifest
+        .recipients
+        .iter()
+        .map(|r| PreparedSigner {
+            recipient: r.clone(),
+            tabs: tabs_object(&r.role, &manifest.fields),
+        })
+        .collect();
+    Ok(PreparedTabs { signers })
+}
+
+/// The full prepare both providers run before an envelope is accepted:
+/// every declared anchor must be present in the prepared PDF's text
+/// ([`validate_anchors`]) and every declared field must bind to a
+/// declared recipient ([`prepare_tabs`]). Either failure refuses the
+/// send before anything is persisted or POSTed.
+///
+/// # Errors
+///
+/// [`SignatureError::AnchorValidation`] or [`SignatureError::TabValidation`].
+pub fn prepare_envelope(
+    pdf_bytes: &[u8],
+    manifest: &SignatureManifest,
+) -> Result<PreparedTabs, SignatureError> {
+    validate_anchors(pdf_bytes, &manifest.fields)?;
+    prepare_tabs(manifest)
+}
+
+/// The DocuSign `tabs` object for one recipient `role`: every anchored
+/// field of that role, grouped under its tab-collection key. `None`
+/// when the role anchors no fields, so the signer JSON simply omits
+/// `tabs`.
+fn tabs_object(role: &str, fields: &[SignatureField]) -> Option<serde_json::Value> {
+    let mut tabs = serde_json::Map::new();
+    for kind in SignatureFieldKind::ALL {
+        let placed: Vec<serde_json::Value> = fields
+            .iter()
+            .filter(|f| f.recipient_role == role && f.kind == kind)
+            .map(|f| {
+                serde_json::json!({
+                    "anchorString": f.anchor,
+                    "anchorUnits": "pixels",
+                    "anchorYOffset": "-6",
+                    "anchorIgnoreIfNotPresent": "false",
+                })
+            })
+            .collect();
+        if !placed.is_empty() {
+            tabs.insert(
+                kind.tabs_key().to_string(),
+                serde_json::Value::Array(placed),
+            );
+        }
+    }
+    (!tabs.is_empty()).then_some(serde_json::Value::Object(tabs))
 }
 
 /// The fake provider — what dev, KIND, and tests run. It closes the
@@ -958,7 +1079,11 @@ impl SignatureProvider for FakeSignatureProvider {
                 "injected send failure".to_string(),
             ));
         }
-        validate_anchors(pdf, &manifest.fields)?;
+        // Prepare fails closed before any write: every declared anchor
+        // must be present in the prepared PDF's text, and every declared
+        // field must bind to a declared recipient. Nothing is persisted
+        // or recorded otherwise — the disk's state stays true.
+        prepare_envelope(pdf, manifest)?;
 
         let mut calls = self.calls.lock().expect("fake provider lock");
         let seq = calls.len() + 1;
@@ -1050,35 +1175,6 @@ impl SignatureProvider for FakeSignatureProvider {
             certificate_pdf: certificate,
         })
     }
-}
-
-/// Build DocuSign's `tabs` object for one recipient `role` from the
-/// manifest's fields, grouping each anchored field under its DocuSign
-/// tab-collection key. Returns `None` when the role anchors no fields,
-/// so the signer JSON simply omits `tabs`.
-fn tabs_for_role(role: &str, fields: &[SignatureField]) -> Option<serde_json::Value> {
-    let mut tabs = serde_json::Map::new();
-    for kind in SignatureFieldKind::ALL {
-        let placed: Vec<serde_json::Value> = fields
-            .iter()
-            .filter(|f| f.recipient_role == role && f.kind == kind)
-            .map(|f| {
-                serde_json::json!({
-                    "anchorString": f.anchor,
-                    "anchorUnits": "pixels",
-                    "anchorYOffset": "-6",
-                    "anchorIgnoreIfNotPresent": "false",
-                })
-            })
-            .collect();
-        if !placed.is_empty() {
-            tabs.insert(
-                kind.tabs_key().to_string(),
-                serde_json::Value::Array(placed),
-            );
-        }
-    }
-    (!tabs.is_empty()).then_some(serde_json::Value::Object(tabs))
 }
 
 /// Re-mint a JWT-grant token this many seconds before DocuSign's stated
@@ -1260,23 +1356,25 @@ impl DocuSignSignatureProvider {
         }
     }
 
-    /// Build the DocuSign envelope-create JSON body. Pure — exposed for
-    /// unit-testing the request shape without an HTTP round-trip.
+    /// Build the DocuSign envelope-create JSON body from the prepared
+    /// tab plan. Pure — exposed for unit-testing the request shape
+    /// without an HTTP round-trip. Call [`prepare_envelope`] first: it
+    /// validates the manifest this body projects.
     ///
-    /// When `manifest` carries recipients, each becomes a signer with
-    /// its anchored `tabs` and routing order. When it's empty, we fall
-    /// back to the single configured recipient with no tabs (the
-    /// pre-anchor behavior) — a deliberate transitional state until the
-    /// caller supplies a real manifest.
+    /// When the plan carries recipients, each becomes a signer with its
+    /// anchored `tabs` and routing order. When it's empty, we fall back
+    /// to the single configured recipient with no tabs (the pre-anchor
+    /// behavior) — a deliberate transitional state until the caller
+    /// supplies a real manifest.
     #[must_use]
     pub fn build_envelope_body(
         &self,
         notation_id: Uuid,
         pdf: &[u8],
-        manifest: &SignatureManifest,
+        prepared: &PreparedTabs,
     ) -> serde_json::Value {
         let document_b64 = base64::engine::general_purpose::STANDARD.encode(pdf);
-        let signers: Vec<serde_json::Value> = if manifest.is_empty() {
+        let signers: Vec<serde_json::Value> = if prepared.is_empty() {
             vec![serde_json::json!({
                 "email": self.signer_email,
                 "name": self.signer_name,
@@ -1284,10 +1382,11 @@ impl DocuSignSignatureProvider {
                 "routingOrder": "1",
             })]
         } else {
-            manifest
-                .recipients
+            prepared
+                .signers
                 .iter()
-                .map(|r| {
+                .map(|s| {
+                    let r = &s.recipient;
                     let mut signer = serde_json::json!({
                         "email": r.email,
                         "name": r.name,
@@ -1300,8 +1399,8 @@ impl DocuSignSignatureProvider {
                     if let Some(client_user_id) = &r.client_user_id {
                         signer["clientUserId"] = serde_json::Value::String(client_user_id.clone());
                     }
-                    if let Some(tabs) = tabs_for_role(&r.role, &manifest.fields) {
-                        signer["tabs"] = tabs;
+                    if let Some(tabs) = &s.tabs {
+                        signer["tabs"] = tabs.clone();
                     }
                     signer
                 })
@@ -1391,7 +1490,10 @@ impl SignatureProvider for DocuSignSignatureProvider {
             // double-send. DocuSign honors this key for 24h.
             .header("X-DocuSign-Idempotency-Key", notation_id.to_string())
             .bearer_auth(self.bearer_token().await?)
-            .json(&self.build_envelope_body(notation_id, pdf, manifest))
+            // Prepare fails closed before the POST: a missing anchor or
+            // an unbound field refuses the send — DocuSign never sees an
+            // envelope Navigator could have refused itself.
+            .json(&self.build_envelope_body(notation_id, pdf, &prepare_envelope(pdf, manifest)?))
             .send()
             .await
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
@@ -1476,13 +1578,14 @@ impl SignatureProvider for DocuSignSignatureProvider {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_anchors, CachedToken, DocuSignSignatureProvider, EnvelopeStatus,
-        FakeSignatureProvider, Fault, Faults, RecipientView, SignatureError, SignatureField,
-        SignatureFieldKind, SignatureManifest, SignatureProvider, SignatureProviderKind,
-        SignatureProviderSelectionError, SignatureRecipient, SignatureRequestId, WebhookTarget,
-        SIGNATURE_PROVIDER_ENV,
+        prepare_envelope, prepare_tabs, validate_anchors, CachedToken, DocuSignSignatureProvider,
+        EnvelopeStatus, FakeSignatureProvider, Fault, Faults, RecipientView, SignatureError,
+        SignatureField, SignatureFieldKind, SignatureManifest, SignatureProvider,
+        SignatureProviderKind, SignatureProviderSelectionError, SignatureRecipient,
+        SignatureRequestId, WebhookTarget, SIGNATURE_PROVIDER_ENV,
     };
     use crate::docusign_auth::{test_priv_pem, DocuSignJwtAuth};
+    use crate::signature_render::expand_signatures;
     use base64::Engine;
     use uuid::Uuid;
     use wiremock::matchers::{body_string_contains, header, method, path};
@@ -1733,7 +1836,7 @@ mod tests {
             .expect_err("missing anchors are a hard error");
         let missing = match err {
             SignatureError::AnchorValidation(message) => message,
-            other @ SignatureError::Provider(_) => {
+            other @ (SignatureError::Provider(_) | SignatureError::TabValidation(_)) => {
                 panic!("expected AnchorValidation, got {other:?}")
             }
         };
@@ -1847,7 +1950,8 @@ mod tests {
         // Empty manifest → the pre-anchor behavior: one configured
         // signer, no tabs.
         let ds = docusign("https://demo.docusign.net/restapi".into());
-        let body = ds.build_envelope_body(ID42, b"%PDF-1.7 fake", &no_manifest());
+        let prepared = prepare_tabs(&no_manifest()).expect("an empty manifest prepares");
+        let body = ds.build_envelope_body(ID42, b"%PDF-1.7 fake", &prepared);
         assert_eq!(body["status"], "sent");
         let signers = body["recipients"]["signers"].as_array().unwrap();
         assert_eq!(signers.len(), 1);
@@ -1863,7 +1967,8 @@ mod tests {
     #[test]
     fn docusign_envelope_body_emits_anchored_tabs_and_routing_from_manifest() {
         let ds = docusign("https://demo.docusign.net/restapi".into());
-        let body = ds.build_envelope_body(ID42, b"%PDF", &retainer_manifest());
+        let prepared = prepare_tabs(&retainer_manifest()).expect("a bound manifest prepares");
+        let body = ds.build_envelope_body(ID42, b"%PDF", &prepared);
         let signers = body["recipients"]["signers"].as_array().unwrap();
         assert_eq!(signers.len(), 2, "one signer per manifest recipient");
 
@@ -1935,6 +2040,256 @@ mod tests {
             .await
             .expect("recipient view succeeds");
         assert_eq!(url, "https://demo.docusign.net/signing/abc123");
+    }
+
+    // --- Per-signer, per-role tabs at prepare time ------------------------
+    //
+    // Every declared field must bind, at prepare, to the recipient that
+    // signs it, under the right tab kind — and a field no recipient
+    // signs is refused, exactly like a missing anchor.
+
+    /// A three-party retainer body, expanded by the real renderer: the
+    /// client signs and dates, the firm countersigns, and a confirming
+    /// assignor initials — the multi-recipient routing shape.
+    fn three_party_body() -> &'static str {
+        "Assignment terms above.\n\n\
+         {{client.signature}}\n\n{{client.date}}\n\n\
+         {{firm.signature}}\n\n\
+         Initial here: {{confirming_assignor.initials}}\n"
+    }
+
+    /// The manifest a three-party render produces, with recipients in
+    /// the template's declaration order (client, firm, confirming
+    /// assignor) and routing orders 1, 2, 3.
+    fn three_party() -> (Vec<u8>, SignatureManifest) {
+        let (typst, fields) = expand_signatures(three_party_body());
+        assert_eq!(fields.len(), 4, "three signers place four fields");
+        let pdf = pdf::render(&typst).expect("three-party body renders");
+        let recipient = |role: &str, email: &str| SignatureRecipient {
+            role: role.to_string(),
+            email: email.to_string(),
+            name: role.to_string(),
+            routing_order: 0,
+            client_user_id: None,
+        };
+        let mut manifest = SignatureManifest {
+            recipients: vec![
+                recipient("client", "libra@example.com"),
+                recipient("firm", "attorney@neonlaw.com"),
+                recipient("confirming_assignor", "assignor@example.com"),
+            ],
+            fields,
+        };
+        for (r, routing) in manifest.recipients.iter_mut().zip(1u32..) {
+            r.routing_order = routing;
+        }
+        (pdf, manifest)
+    }
+
+    #[test]
+    fn prepare_maps_every_declared_anchor_to_its_signer_and_tab_kind() {
+        // Over rendered PDF text: every declared field's anchor is
+        // present exactly once, and the prepared plan binds it to the
+        // right recipient under the right tab kind.
+        let (pdf, manifest) = three_party();
+        for field in &manifest.fields {
+            let count = pdf::passage::occurrence_count(&pdf, &field.anchor)
+                .expect("the PDF text layer reads");
+            assert_eq!(count, 1, "anchor {} is placed once", field.anchor);
+        }
+
+        let prepared =
+            prepare_envelope(&pdf, &manifest).expect("a bound three-party manifest prepares");
+        assert_eq!(prepared.signers.len(), 3, "one plan per signer");
+        for (signer, routing) in prepared.signers.iter().zip(1u32..) {
+            assert_eq!(
+                signer.recipient.routing_order, routing,
+                "routing follows the template's declaration order"
+            );
+        }
+
+        let client = &prepared.signers[0];
+        assert_eq!(client.recipient.role, "client");
+        let client_tabs = client.tabs.as_ref().expect("the client anchors fields");
+        assert_eq!(
+            client_tabs[SignatureFieldKind::Signature.tabs_key()][0]["anchorString"],
+            "nlsig-client-signature-1"
+        );
+        assert_eq!(
+            client_tabs[SignatureFieldKind::Date.tabs_key()][0]["anchorString"],
+            "nlsig-client-date-1"
+        );
+
+        let firm = &prepared.signers[1];
+        assert_eq!(firm.recipient.role, "firm");
+        assert_eq!(
+            firm.tabs.as_ref().expect("the firm anchors fields")
+                [SignatureFieldKind::Signature.tabs_key()][0]["anchorString"],
+            "nlsig-firm-signature-1"
+        );
+
+        let assignor = &prepared.signers[2];
+        assert_eq!(assignor.recipient.role, "confirming_assignor");
+        assert_eq!(
+            assignor.tabs.as_ref().expect("the assignor anchors fields")
+                [SignatureFieldKind::Initials.tabs_key()][0]["anchorString"],
+            "nlsig-confirming_assignor-initials-1"
+        );
+    }
+
+    #[test]
+    fn a_field_no_recipient_signs_refuses_prepare() {
+        // The assignor's initials anchor sits in the PDF's text layer —
+        // anchor validation alone would pass — but no recipient is
+        // declared for the role. Prepare must refuse it: every provider
+        // would send the document and no signer would place the field.
+        let (pdf, mut manifest) = three_party();
+        let orphan = manifest
+            .fields
+            .last()
+            .expect("the assignor anchors a field")
+            .clone();
+        manifest.recipients.pop();
+
+        let err = prepare_envelope(&pdf, &manifest).expect_err("an unbound field refuses prepare");
+        match err {
+            SignatureError::TabValidation(message) => {
+                assert!(
+                    message.contains(&orphan.anchor),
+                    "names the orphaned anchor: {message}"
+                );
+                assert!(
+                    message.contains("confirming_assignor"),
+                    "names the unbound role: {message}"
+                );
+            }
+            other @ (SignatureError::Provider(_) | SignatureError::AnchorValidation(_)) => {
+                panic!("expected TabValidation, got {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_fake_refuses_an_unbound_field_and_persists_nothing() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let fake = FakeSignatureProvider::new_in(temp.path());
+        let (pdf, mut manifest) = three_party();
+        let orphan = manifest
+            .fields
+            .last()
+            .expect("the assignor anchors a field")
+            .clone();
+        manifest.recipients.pop();
+
+        let err = fake
+            .send_for_signature(ID42, &pdf, &manifest)
+            .await
+            .expect_err("an unbound field refuses the send");
+        assert!(
+            matches!(err, SignatureError::TabValidation(ref m) if m.contains(&orphan.anchor)),
+            "expected TabValidation naming the anchor, got {err:?}"
+        );
+
+        // Nothing was sent half-bound: no envelope on disk, no call record.
+        assert!(
+            fake.envelope(&SignatureRequestId(format!("fake-{ID42}-1")))
+                .expect("read succeeds")
+                .is_none(),
+            "no envelope may exist for a refused send"
+        );
+        assert!(fake.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_three_party_loop_signs_each_recipient_in_routing_order() {
+        // Per-signer routing through the fake: each sign page carries
+        // only that signer's fields, and the envelope completes when the
+        // last signer in the routing order signs.
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let fake = FakeSignatureProvider::new_in(temp.path());
+        let (pdf, manifest) = three_party();
+        let id = fake
+            .send_for_signature(ID42, &pdf, &manifest)
+            .await
+            .expect("a prepared three-party manifest sends");
+
+        for (n, signer) in manifest.recipients.iter().enumerate() {
+            let page = std::fs::read_to_string(fake.signing_page_path(&id.0, &signer.email))
+                .expect("every recipient's sign page exists the moment the envelope does");
+            for field in &manifest.fields {
+                let mine = field.recipient_role == signer.role;
+                assert_eq!(
+                    page.contains(&field.anchor),
+                    mine,
+                    "page for {} {} the anchor {}",
+                    signer.role,
+                    if mine { "carries" } else { "omits" },
+                    field.anchor
+                );
+            }
+            let status = fake
+                .sign(&id, &signer.email)
+                .await
+                .expect("signing succeeds");
+            let complete = n + 1 == manifest.recipients.len();
+            assert_eq!(
+                status,
+                if complete {
+                    EnvelopeStatus::Completed
+                } else {
+                    EnvelopeStatus::Sent
+                },
+                "the envelope completes only when the last signer signs"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn docusign_send_refuses_a_bad_manifest_before_any_post() {
+        // Both prepare failures — an unbound field and a missing anchor —
+        // refuse the send locally: DocuSign is never POSTed an envelope
+        // Navigator could have refused itself.
+        for (name, manifest, pdf) in [
+            (
+                "unbound field",
+                {
+                    let (_, mut manifest) = three_party();
+                    manifest.recipients.pop();
+                    manifest
+                },
+                three_party().0,
+            ),
+            (
+                "missing anchor",
+                retainer_manifest(),
+                pdf::render("= No anchors here\n").expect("renders"),
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v2.1/accounts/acct-guid/envelopes"))
+                .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                    "envelopeId": "env-1"
+                })))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let provider = docusign(server.uri());
+
+            let err = provider
+                .send_for_signature(ID42, &pdf, &manifest)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    SignatureError::TabValidation(_) | SignatureError::AnchorValidation(_)
+                ),
+                "{name}: expected a prepare error, got {err:?}"
+            );
+            // The `.expect(0)` on the envelope mock, verified on server
+            // drop, proves no POST fired.
+        }
     }
 
     #[tokio::test]
@@ -2038,8 +2393,9 @@ mod tests {
             .await;
 
         let ds = docusign(server.uri());
+        let pdf = rendered_anchor_pdf();
         let id = ds
-            .send_for_signature(ID42, b"<pdf>", &retainer_manifest())
+            .send_for_signature(ID42, &pdf, &retainer_manifest())
             .await
             .expect("send succeeds");
         assert_eq!(id, SignatureRequestId("env-anchored".into()));
@@ -2089,7 +2445,8 @@ mod tests {
             super::SignatureError::Provider(msg) => {
                 assert!(msg.contains("401"), "expected 401 in error, got: {msg}");
             }
-            other @ super::SignatureError::AnchorValidation(_) => {
+            other @ (super::SignatureError::AnchorValidation(_)
+            | super::SignatureError::TabValidation(_)) => {
                 panic!("expected Provider, got {other:?}")
             }
         }
@@ -2143,7 +2500,8 @@ mod tests {
             super::SignatureError::Provider(msg) => {
                 assert!(msg.contains("404"), "expected 404 in error, got: {msg}");
             }
-            other @ super::SignatureError::AnchorValidation(_) => {
+            other @ (super::SignatureError::AnchorValidation(_)
+            | super::SignatureError::TabValidation(_)) => {
                 panic!("expected Provider, got {other:?}")
             }
         }
