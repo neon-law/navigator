@@ -341,19 +341,16 @@ async fn read_only_trust_lanes_map_http_errors_to_provider_errors() {
     let provider: &dyn BillingProvider = &provider;
 
     // The IOLTA mirror is read-only and fails closed: a provider outage
-    // is an error to surface, never a silently empty ledger.
+    // is an error to surface, never a silently empty ledger. Provider
+    // payloads stay out of assertion messages — the macro reports the
+    // compared operands, and rendering provider data into test logs is
+    // cleartext logging of sensitive information.
     let accounts = provider.list_bank_accounts().await;
-    assert!(
-        matches!(accounts, Err(BillingError::Provider(_))),
-        "{accounts:?}"
-    );
+    assert!(matches!(accounts, Err(BillingError::Provider(_))));
     assert!(accounts.err().unwrap().to_string().contains("500"));
 
     let transactions = provider.list_trust_transactions().await;
-    assert!(
-        matches!(transactions, Err(BillingError::Provider(_))),
-        "{transactions:?}"
-    );
+    assert!(matches!(transactions, Err(BillingError::Provider(_))));
     assert!(transactions.err().unwrap().to_string().contains("403"));
 }
 
