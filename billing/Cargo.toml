@@ -34,6 +34,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true
+# Integration tests need a concrete matter id for `create_invoice`.
+uuid.workspace = true
 
 [lints]
 workspace = true
