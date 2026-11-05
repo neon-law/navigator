@@ -268,6 +268,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "finance",
             "gate",
             "import-source",
+            "migrate-letter",
             "notations",
             "offboard",
             "onboard",
