@@ -381,8 +381,8 @@ pub fn validate_anchors(pdf_bytes: &[u8], fields: &[SignatureField]) -> Result<(
     let mut missing: Vec<String> = Vec::new();
     for field in fields {
         match pdf::passage::occurrence_count(pdf_bytes, &field.anchor) {
-            // Ok(0) is not reachable today (occurrence_count errors on
-            // zero), but treating it as missing keeps the contract total.
+            // Ok(0) is the anchor-absent case, returned as a plain
+            // count; treat it as missing, same as QuoteNotFound.
             Ok(0) => missing.push(format!("{} (found 0 occurrences)", field.anchor)),
             Ok(_) => {}
             Err(pdf::PassageError::QuoteNotFound { quote }) => {

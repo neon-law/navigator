@@ -263,6 +263,22 @@ fn a_font_without_widths_is_refused_rather_than_approximated() {
 }
 
 #[test]
+fn a_text_only_search_still_reads_a_widthless_font() {
+    // The count needs no extents: an anchor check must not fail because
+    // a font on the page carries no widths. Locating the same quote
+    // still refuses — rects cannot be honest there.
+    let pdf = simple_font_pdf("The stipulation stands.", 72.0, 700.0, false);
+    assert_eq!(
+        pdf::occurrence_count(&pdf, "stipulation").expect("text-only search"),
+        1,
+    );
+    assert!(matches!(
+        pdf::locate(&pdf, "stipulation", 1),
+        Err(PassageError::UnmeasurableFont { .. })
+    ));
+}
+
+#[test]
 fn a_typst_rendered_draft_is_an_accepted_input() {
     // #889 produces court paper; #893 consumes any stored PDF, this one
     // included. Typst subsets its fonts, so the text-showing operators
