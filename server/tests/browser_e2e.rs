@@ -495,12 +495,104 @@ async fn astrology_design_controls_update_the_chart_and_map() {
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    wait_for_text(&c, "Calculated reference", Duration::from_secs(5)).await;
+    assert_eq!(
+        c.find_all(Locator::Css("#astrology-chart svg g[data-house]"))
+            .await
+            .unwrap()
+            .len(),
+        12,
+        "calculated house cusps reach the hydrated wheel"
+    );
+    let original_aspects = c
+        .find_all(Locator::Css("#astrology-chart svg line[data-aspect]"))
+        .await
+        .unwrap()
+        .len();
+    let orb = c.find(Locator::Css("#chart-aspect-orb")).await.unwrap();
+    orb.clear().await.unwrap();
+    orb.send_keys("0.25").await.unwrap();
     assert!(
-        c.find_all(Locator::Css("#astrology-chart svg line"))
+        c.execute(
+            "return document.getElementById('chart-aspect-orb').validity.valid",
+            vec![]
+        )
+        .await
+        .unwrap()
+        .as_bool()
+        .unwrap(),
+        "fractional orbs within the stated range must be valid native input"
+    );
+    // Native keyboard input changes the actual geometry, not just the displayed value.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if c.find_all(Locator::Css("#astrology-chart svg line[data-aspect]"))
             .await
             .unwrap()
             .len()
-            > 12
+            < original_aspects
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "orb did not update aspect geometry"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    orb.clear().await.unwrap();
+    orb.send_keys("3").await.unwrap();
+    orb.clear().await.unwrap();
+    orb.send_keys("11").await.unwrap();
+    wait_for_text(
+        &c,
+        "Enter an aspect orb from 0° to 10°",
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(
+        orb.attr("aria-invalid").await.unwrap().as_deref(),
+        Some("true")
+    );
+    assert!(
+        c.find_all(Locator::Css("#astrology-chart svg line[data-aspect]"))
+            .await
+            .unwrap()
+            .is_empty(),
+        "invalid input must not show stale aspect results"
+    );
+    orb.clear().await.unwrap();
+    orb.send_keys("3").await.unwrap();
+    let conjunction = c
+        .find(Locator::XPath(
+            "//section[@id='astrology-chart']//label[contains(., 'Conjunction')]/input",
+        ))
+        .await
+        .unwrap();
+    conjunction.send_keys(" ").await.unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if c.find_all(Locator::Css(
+            "#astrology-chart svg line[data-aspect='Conjunction']",
+        ))
+        .await
+        .unwrap()
+        .is_empty()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "keyboard checkbox did not filter aspects"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        c.find_all(Locator::Css("#astrology-chart svg line[data-aspect]"))
+            .await
+            .unwrap()
+            .len()
+            > 0
     );
     c.find(Locator::XPath(
         "//section[@id='astrology-chart']//button[contains(., 'Hide aspects')]",
@@ -518,11 +610,11 @@ async fn astrology_design_controls_update_the_chart_and_map() {
         .await
         .expect("aspect visibility updated");
     assert_eq!(
-        c.find_all(Locator::Css("#astrology-chart svg line"))
+        c.find_all(Locator::Css("#astrology-chart svg line[data-aspect]"))
             .await
             .unwrap()
             .len(),
-        12
+        0
     );
     assert_eq!(
         c.find_all(Locator::Css("#astrocartography .astro-map-line"))

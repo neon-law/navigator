@@ -191,3 +191,7 @@ server = ["dioxus/server", "dep:store", "dep:dioxus-fullstack-core", "dep:axum",
 
 [lints]
 workspace = true
+
+[[example]]
+name = "chart_specimen"
+required-features = ["server"]

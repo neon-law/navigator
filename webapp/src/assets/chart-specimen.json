@@ -1,0 +1,301 @@
+{
+  "house_cusps": [
+    11.375505668642234,
+    41.375505668642234,
+    71.37550566864223,
+    101.37550566864223,
+    131.37550566864223,
+    161.37550566864223,
+    191.37550566864223,
+    221.37550566864223,
+    251.37550566864223,
+    281.37550566864223,
+    311.37550566864223,
+    341.37550566864223
+  ],
+  "metadata": {
+    "body_states": [
+      {
+        "body": "sun",
+        "declination_deg": -23.032430149265934,
+        "distance_km": 147103719.12891755,
+        "distance_speed_km_per_day": -1099.7066831588745,
+        "latitude_deg": 0.00022740223174969653,
+        "latitude_speed_deg_per_day": -6.4916398360330765e-6,
+        "longitude_deg": 280.36892268365466,
+        "longitude_speed_deg_per_day": 1.0194336408221716,
+        "right_ascension_deg": 281.27838993226175,
+        "source_id": 10
+      },
+      {
+        "body": "moon",
+        "declination_deg": -10.900653739977306,
+        "distance_km": 402416.66464725474,
+        "distance_speed_km_per_day": 2778.9604884479195,
+        "latitude_deg": 5.170739692214865,
+        "latitude_speed_deg_per_day": -0.17804235483808384,
+        "longitude_deg": 223.32380030481147,
+        "longitude_speed_deg_per_day": 12.021323905773897,
+        "right_ascension_deg": 222.45221531846204,
+        "source_id": 301
+      },
+      {
+        "body": "mercury",
+        "declination_deg": -24.418901106494022,
+        "distance_km": 211751218.6109243,
+        "distance_speed_km_per_day": 690733.4309005737,
+        "latitude_deg": -0.9948284322157994,
+        "latitude_speed_deg_per_day": -0.0974972443804667,
+        "longitude_deg": 271.889288042877,
+        "longitude_speed_deg_per_day": 1.556255737950778,
+        "right_ascension_deg": 272.07465737397297,
+        "source_id": 199
+      },
+      {
+        "body": "venus",
+        "declination_deg": -18.448919429736296,
+        "distance_km": 170179432.4236229,
+        "distance_speed_km_per_day": 970030.1471614838,
+        "latitude_deg": 2.066348935270149,
+        "latitude_speed_deg_per_day": -0.028079149557171945,
+        "longitude_deg": 241.5657940593783,
+        "longitude_speed_deg_per_day": 1.2090422869232498,
+        "right_ascension_deg": 239.89277503289105,
+        "source_id": 299
+      },
+      {
+        "body": "mars",
+        "declination_deg": -13.18248165563176,
+        "distance_km": 276709365.7201474,
+        "distance_speed_km_per_day": 811212.8518295288,
+        "latitude_deg": -1.067785292477246,
+        "latitude_speed_deg_per_day": 0.01247247951127406,
+        "longitude_deg": 327.9633044177075,
+        "longitude_speed_deg_per_day": 0.775673617481516,
+        "right_ascension_deg": 330.5168129473634,
+        "source_id": 4
+      },
+      {
+        "body": "jupiter",
+        "declination_deg": 8.594263599958714,
+        "distance_km": 691317960.077257,
+        "distance_speed_km_per_day": 2322203.6250686646,
+        "latitude_deg": -1.2621878699706277,
+        "latitude_speed_deg_per_day": 0.005176094458008151,
+        "longitude_deg": 25.253086504757505,
+        "longitude_speed_deg_per_day": 0.04076126154814119,
+        "right_ascension_deg": 23.867855353261394,
+        "source_id": 5
+      },
+      {
+        "body": "saturn",
+        "declination_deg": 12.61476416099256,
+        "distance_km": 1294439913.2240725,
+        "distance_speed_km_per_day": 2152289.3980407715,
+        "latitude_deg": -2.4448546472887056,
+        "latitude_speed_deg_per_day": 0.004747214018365753,
+        "longitude_deg": 40.395662449313306,
+        "longitude_speed_deg_per_day": -0.019944987188864616,
+        "right_ascension_deg": 38.76541346569148,
+        "source_id": 6
+      },
+      {
+        "body": "uranus",
+        "declination_deg": -17.02032928037574,
+        "distance_km": 3100740604.6577554,
+        "distance_speed_km_per_day": 1477955.7401275635,
+        "latitude_deg": -0.6583347977149011,
+        "latitude_speed_deg_per_day": 0.00024575517556968407,
+        "longitude_deg": 314.8091844991313,
+        "longitude_speed_deg_per_day": 0.05034349004745309,
+        "right_ascension_deg": 317.4748285243548,
+        "source_id": 7
+      },
+      {
+        "body": "neptune",
+        "declination_deg": -19.213241852935127,
+        "distance_km": 4641198779.81536,
+        "distance_speed_km_per_day": 1003011.7991638184,
+        "latitude_deg": 0.2349917898386248,
+        "latitude_speed_deg_per_day": -0.00022871159406356867,
+        "longitude_deg": 303.19300795432076,
+        "longitude_speed_deg_per_day": 0.035570014579207054,
+        "right_ascension_deg": 305.43284020323745,
+        "source_id": 8
+      },
+      {
+        "body": "pluto",
+        "declination_deg": -11.394297246614602,
+        "distance_km": 4647162253.749834,
+        "distance_speed_km_per_day": -1191063.4785461426,
+        "latitude_deg": 10.855230304087726,
+        "latitude_speed_deg_per_day": 0.0014617535623528966,
+        "longitude_deg": 251.45478324240446,
+        "longitude_speed_deg_per_day": 0.03515334301027906,
+        "right_ascension_deg": 251.41918528593516,
+        "source_id": 9
+      },
+      {
+        "body": "mean_node",
+        "declination_deg": 19.005375993179175,
+        "distance_km": null,
+        "distance_speed_km_per_day": null,
+        "latitude_deg": 0.0,
+        "latitude_speed_deg_per_day": 0.0,
+        "longitude_deg": 125.04064576708998,
+        "longitude_speed_deg_per_day": -0.05295179056702182,
+        "right_ascension_deg": 127.39167189813,
+        "source_id": null
+      }
+    ],
+    "provenance": {
+      "algorithm": "navigator-local-SPK/apparent-IAU2006-2000B/IERS2003-node/USNO-deltaT/civil-UT1-before-1972/chart-v3",
+      "delta_t_model": "USNO pinned 2026-11-05 snapshot, linear observation/forecast interpolation; terminal-segment extrapolation without a reported error bound; Espenak-Meeus historical polynomials before 1955",
+      "delta_t_sources": [
+        {
+          "bytes": 30345,
+          "name": "historic_deltat.data",
+          "retrieved_at": "2026-11-05T03:28:35.185697+00:00",
+          "sha256": "9f43514119060601a00624a5d9287a91b0b1f5e12bec5209bbabda90b392b70b",
+          "source": "https://maia.usno.navy.mil/ser7/historic_deltat.data",
+          "upstream_version": "Unversioned USNO product; pinned retrieval 2026-11-05"
+        },
+        {
+          "bytes": 13545,
+          "name": "deltat.data",
+          "retrieved_at": "2026-11-05T03:28:35.675590+00:00",
+          "sha256": "7396fcfdad33856b5242f288887678d75f3803494fa79394bc02f37eb99efc1e",
+          "source": "https://maia.usno.navy.mil/ser7/deltat.data",
+          "upstream_version": "Unversioned USNO product; pinned retrieval 2026-11-05"
+        },
+        {
+          "bytes": 1483,
+          "name": "deltat.preds",
+          "retrieved_at": "2026-11-05T03:28:36.136643+00:00",
+          "sha256": "5d864fddd30b2c64d2a86d3debbb25604eb5de44370c96bccf2abd5463f3db08",
+          "source": "https://maia.usno.navy.mil/ser7/deltat.preds",
+          "upstream_version": "Unversioned USNO product; pinned retrieval 2026-11-05"
+        }
+      ],
+      "manifest": {
+        "files": [
+          {
+            "bytes": 119799808,
+            "coverage_end": "2650-01-25",
+            "coverage_start": "1549-12-31",
+            "name": "de440.bsp",
+            "retrieved_at": "2026-11-05T02:54:33.067965Z",
+            "sha256": "a4ce9bf9b3282becc9f4b2ac3cebe03a2ae7599981aabd7265fd8482fff7c4b5",
+            "source": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp",
+            "upstream_version": "DE440"
+          }
+        ],
+        "reference_frame": "ICRF/J2000 (SPK frame id 1)",
+        "time_scale_model": "Resolved civil birth labels before 1972 are UT1: TT = UT1 + the pinned delta-T model. This convention approximates historical civil UTC; fractional 1961-1971 UTC adjustments are not reconstructed. From 1972, UTC→TAI uses hifitime 4.3.1 IERS leap seconds; TAI−UTC is 37 s from 2017 (27 inserted leaps plus initial 10 s). TT = TAI + 32.184 s. TT→TDB adds the periodic relativistic term, bounded by about 1.7 ms. Raw proleptic UTC Epoch APIs use TAI−UTC = 0 before 1972 and do not interpret historical civil clocks. Future UTC follows the pinned table, not live observations. SPK interpolation uses physical TDB; chart Earth rotation retains explicit UT1.",
+        "version": 2
+      },
+      "node_model": "Moon mean ascending node, IERS 2003 longitude; IAU 2000B nutation and IAU 2006 true obliquity",
+      "sidereal_model": "IERS Earth Rotation Angle, IAU 2006 GMST polynomial, IAU 2000B equation of the equinoxes with true obliquity",
+      "time_scales": {
+        "delta_t_kind": "observation",
+        "delta_t_reported_error_seconds": null,
+        "delta_t_seconds": 63.828938709677416,
+        "julian_day_tdb": 2451545.0007428695,
+        "julian_day_tt": 2451545.00074287,
+        "julian_day_utc": 2451545.0,
+        "model_julian_day_ut1": 2451545.000004109,
+        "reference": {
+          "calendar": "2000-01-01T12:00:00",
+          "scale": "utc"
+        }
+      },
+      "tzdb_version": "2025b",
+      "version": "26.11.5"
+    },
+    "reference": {
+      "generator": "webapp/examples/chart_specimen.rs",
+      "generator_sha256": "ccb1890f331136b21f4707aa6f5a25cf47823f31199034af1296c8defa1a674b",
+      "instant_utc": "2000-01-01T12:00:00Z",
+      "inventory": "DE440 core bodies and mean node; no minor bodies",
+      "latitude_deg": 0.0,
+      "longitude_deg": 0.0
+    },
+    "settings": {
+      "frame": "true_of_date",
+      "houses": "equal",
+      "north_node": "mean",
+      "origin": "geocentric",
+      "refraction": "none",
+      "zodiac": "tropical"
+    }
+  },
+  "positions": [
+    {
+      "glyph": "☉",
+      "longitude": 280.36892268365466,
+      "longitude_speed_deg_per_day": 1.0194336408221716,
+      "name": "Sun"
+    },
+    {
+      "glyph": "☽",
+      "longitude": 223.32380030481147,
+      "longitude_speed_deg_per_day": 12.021323905773897,
+      "name": "Moon"
+    },
+    {
+      "glyph": "☿",
+      "longitude": 271.889288042877,
+      "longitude_speed_deg_per_day": 1.556255737950778,
+      "name": "Mercury"
+    },
+    {
+      "glyph": "♀",
+      "longitude": 241.5657940593783,
+      "longitude_speed_deg_per_day": 1.2090422869232498,
+      "name": "Venus"
+    },
+    {
+      "glyph": "♂",
+      "longitude": 327.9633044177075,
+      "longitude_speed_deg_per_day": 0.775673617481516,
+      "name": "Mars"
+    },
+    {
+      "glyph": "♃",
+      "longitude": 25.253086504757505,
+      "longitude_speed_deg_per_day": 0.04076126154814119,
+      "name": "Jupiter"
+    },
+    {
+      "glyph": "♄",
+      "longitude": 40.395662449313306,
+      "longitude_speed_deg_per_day": -0.019944987188864616,
+      "name": "Saturn"
+    },
+    {
+      "glyph": "♅",
+      "longitude": 314.8091844991313,
+      "longitude_speed_deg_per_day": 0.05034349004745309,
+      "name": "Uranus"
+    },
+    {
+      "glyph": "♆",
+      "longitude": 303.19300795432076,
+      "longitude_speed_deg_per_day": 0.035570014579207054,
+      "name": "Neptune"
+    },
+    {
+      "glyph": "♇",
+      "longitude": 251.45478324240446,
+      "longitude_speed_deg_per_day": 0.03515334301027906,
+      "name": "Pluto"
+    },
+    {
+      "glyph": "☊",
+      "longitude": 125.04064576708998,
+      "longitude_speed_deg_per_day": -0.05295179056702182,
+      "name": "Mean North Node"
+    }
+  ],
+  "precision": "Exact"
+}

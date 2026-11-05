@@ -5691,6 +5691,14 @@ a.nav-steps__step:focus-visible {
 }
 .astrology-chart__controls button[aria-pressed="true"], .astro-map-selection button[aria-pressed="true"] { border-color: var(--nav-color-primary); background: var(--nav-color-primary); color: var(--nav-color-on-primary); }
 .astrology-chart__controls button:focus-visible, .astro-map-selection button:focus-visible, .astro-map-layers input:focus-visible { outline: 2px solid var(--nav-color-primary); outline-offset: 3px; }
+.astrology-chart__aspect-controls { min-width: 0; margin-block: 1rem; padding: 1rem; border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius-sm); display: grid; grid-template-columns: minmax(0, 1fr) minmax(4rem, 6rem); align-items: center; gap: .5rem 1rem; }
+.astrology-chart__aspect-controls legend { font-weight: 600; padding-inline: .25rem; }
+.astrology-chart__aspect-controls input[type="number"] { width: 100%; min-width: 0; padding: .4rem; color: var(--nav-color-text); background: var(--nav-color-surface); border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius-sm); font: inherit; }
+.astrology-chart__aspect-types { min-width: 0; grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+.astrology-chart__aspect-types label { display: flex; align-items: center; gap: .35rem; min-height: 2.5rem; }
+.astrology-chart__aspect-types input { accent-color: var(--nav-color-primary); }
+.astrology-chart__aspect-controls p { min-width: 0; grid-column: 1 / -1; margin: 0; }
+.calculated-astrology-chart > details dd { margin-inline-start: 0; margin-block-end: .75rem; overflow-wrap: anywhere; }
 .astrology-chart__layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); align-items: start; gap: 2rem; }
 .astrology-chart__wheel { display: block; width: 100%; max-width: 40rem; color: var(--nav-color-text); font-family: 'Apple Symbols', 'Segoe UI Symbol', serif; font-variant-emoji: text; }
 .astrology-chart__table { width: 100%; border-collapse: collapse; text-align: left; font-size: .9rem; }
