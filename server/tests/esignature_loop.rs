@@ -57,9 +57,23 @@ async fn body_string(resp: axum::http::Response<Body>) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
-#[tokio::test]
+/// One retainer driven to `sent_for_signature__pending` through the real
+/// `DocuSignSignatureProvider` against mocked endpoints — the harness
+/// every journal/recovery test shares. `replay_state` is a clone of the
+/// app state taken before the router consumed the original: the boot-time
+/// replay sweep's handle.
+struct SentLoop {
+    app: axum::Router,
+    replay_state: AppState,
+    surreal: store::surreal::SurrealDb,
+    storage: Arc<dyn cloud::StorageService>,
+    nid: uuid::Uuid,
+    docusign: MockServer,
+    runtime: Arc<InMemoryRuntime>,
+}
+
 #[allow(clippy::too_many_lines)]
-async fn full_signature_loop_reaches_end_through_real_provider_and_webhook() {
+async fn sent_loop() -> SentLoop {
     // 1. Mock DocuSign's envelope-create + document-download endpoints.
     let docusign = MockServer::start().await;
     Mock::given(method("POST"))
@@ -97,7 +111,7 @@ async fn full_signature_loop_reaches_end_through_real_provider_and_webhook() {
             .unwrap(),
     );
     seed::seed_canonical(&surreal, &storage).await.unwrap();
-    // Hold a handle so we can assert the archived documents after the
+    // Hold a handle so tests can assert the archived documents after the
     // shared `storage` is moved into AppState below.
     let storage_handle = storage.clone();
     let tmpl = store::templates::resolve(&surreal, None, TEMPLATE_CODE)
@@ -165,6 +179,7 @@ async fn full_signature_loop_reaches_end_through_real_provider_and_webhook() {
         email,
         ..portal::test_support::app_state(surreal.clone()).await
     };
+    let replay_state = state.clone();
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     // 2. Walk the full questionnaire — the final POST drives the
@@ -234,8 +249,8 @@ async fn full_signature_loop_reaches_end_through_real_provider_and_webhook() {
             .await
             .unwrap();
         // Both actions are post/redirect/get onto the review screen since it
-        // moved to Dioxus: a refresh after dispatching an envelope re-reads the
-        // screen instead of re-posting the send.
+        // moved to Dioxus: a refresh after dispatching an envelope re-reads
+        // the screen instead of re-posting the send.
         assert_eq!(resp.status(), StatusCode::SEE_OTHER, "{action} status");
         assert_eq!(
             resp.headers().get("location").and_then(|v| v.to_str().ok()),
@@ -257,6 +272,30 @@ async fn full_signature_loop_reaches_end_through_real_provider_and_webhook() {
             .as_deref(),
         Some(ENVELOPE_ID)
     );
+
+    SentLoop {
+        app,
+        replay_state,
+        surreal,
+        storage: storage_handle,
+        nid,
+        docusign,
+        runtime,
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn full_signature_loop_reaches_end_through_real_provider_and_webhook() {
+    let SentLoop {
+        app,
+        surreal,
+        storage: storage_handle,
+        nid,
+        docusign,
+        runtime,
+        ..
+    } = sent_loop().await;
 
     // End-to-end anchor proof: the retainer template's signature blocks
     // travelled template -> Typst -> rendered PDF -> DocuSign envelope.
@@ -327,4 +366,227 @@ async fn full_signature_loop_reaches_end_through_real_provider_and_webhook() {
         .expect("certificate of completion archived")
         .bytes;
     assert_eq!(cert, b"%PDF-certificate");
+}
+
+/// The acceptance evidence for a journaled webhook (ENG-787): a worker
+/// that died between journaling the verified receipt and consuming it
+/// loses nothing — the next boot's sweep replays the receipt through the
+/// same consumption path first delivery ran, and the loop closes.
+#[tokio::test]
+async fn journaled_receipt_recovers_after_a_mid_delivery_death() {
+    let SentLoop {
+        replay_state,
+        surreal,
+        storage,
+        nid,
+        runtime,
+        ..
+    } = sent_loop().await;
+
+    // The worker's last durable act: the verified receipt is in the
+    // journal and nothing was consumed. The webhook never reaches the
+    // router in this test — the delivery died here.
+    store::signature_webhook_journal::journal_verified_receipt(
+        &surreal,
+        store::signatures::SignatureProvider::DocuSign,
+        ENVELOPE_ID,
+        store::signatures::SignatureState::Completed.as_str(),
+        &String::from_utf8_lossy(&completion_body()),
+    )
+    .await
+    .unwrap();
+    let row = store::notations::find_by_id(&surreal, nid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.state, "sent_for_signature__pending",
+        "the crash ate the delivery, not the workflow"
+    );
+
+    // The next boot's sweep replays the pending receipt.
+    portal::esignature_webhook::replay_pending_receipts(&replay_state, 100)
+        .await
+        .unwrap();
+
+    // The loop closed: END, the signature stamped, the executed
+    // documents archived, the journal drained.
+    let row = store::notations::find_by_id(&surreal, nid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, "END");
+    let final_state =
+        StateMachineRuntime::current_state(runtime.as_ref(), MachineKind::Workflow, nid)
+            .await
+            .unwrap();
+    assert_eq!(final_state.as_str(), "END");
+    let signature = store::signatures::by_provider(
+        &surreal,
+        store::signatures::SignatureProvider::DocuSign,
+        ENVELOPE_ID,
+    )
+    .await
+    .unwrap()
+    .expect("the envelope's signature row");
+    assert_eq!(
+        signature.state,
+        store::signatures::SignatureState::Completed
+    );
+    assert!(signature.signed_at.is_some(), "the sweep stamped signed_at");
+    let signed = storage
+        .get(&store::notations::signed_document_storage_key(nid))
+        .await
+        .expect("signed retainer archived by the sweep")
+        .bytes;
+    assert_eq!(signed, b"%PDF-signed-retainer");
+    let cert = storage
+        .get(&store::notations::certificate_of_completion_storage_key(
+            nid,
+        ))
+        .await
+        .expect("certificate of completion archived by the sweep")
+        .bytes;
+    assert_eq!(cert, b"%PDF-certificate");
+    let pending = store::signature_webhook_journal::pending_receipts(&surreal, 100)
+        .await
+        .unwrap();
+    assert!(
+        pending.is_empty(),
+        "the journal shows the event recovered, not lost"
+    );
+}
+
+/// A redelivery of an already-consumed event is answered from the
+/// journal with 200: the workflow is not signaled twice and the event
+/// key keeps its one receipt row.
+#[tokio::test]
+async fn a_redelivered_completion_is_answered_from_the_journal() {
+    let SentLoop {
+        app, surreal, nid, ..
+    } = sent_loop().await;
+
+    let body = completion_body();
+    let signature = sign_hmac_sha256_b64(HMAC_KEY.as_bytes(), &body);
+    // The first delivery consumes the event and closes the loop; the
+    // second is the provider's redelivery of the same event.
+    for delivery in 0..2 {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhook/esignature/any-token")
+                    .header("content-type", "application/json")
+                    .header("x-docusign-signature-1", signature.clone())
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "delivery {delivery} status: {}",
+            body_string(resp).await
+        );
+    }
+
+    let row = store::notations::find_by_id(&surreal, nid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, "END", "the redelivery must not re-run the loop");
+    let receipt = store::signature_webhook_journal::by_event(
+        &surreal,
+        store::signatures::SignatureProvider::DocuSign,
+        ENVELOPE_ID,
+        store::signatures::SignatureState::Completed.as_str(),
+    )
+    .await
+    .unwrap()
+    .expect("the completion event's receipt row");
+    assert!(
+        receipt.consumed_at.is_some(),
+        "one consumed row for the event"
+    );
+}
+
+/// One unrecoverable receipt never stops the backlog: a receipt whose
+/// correlation is missing stays pending with the failure named, while
+/// the good receipt behind it recovers in the same sweep.
+#[tokio::test]
+async fn a_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving() {
+    let SentLoop {
+        replay_state,
+        surreal,
+        storage,
+        nid,
+        runtime,
+        ..
+    } = sent_loop().await;
+
+    // A completion for an envelope no signature row names — verified
+    // bytes, so the journal takes it; replay cannot correlate it. Plus
+    // the real completion behind it.
+    store::signature_webhook_journal::journal_verified_receipt(
+        &surreal,
+        store::signatures::SignatureProvider::DocuSign,
+        "env-never-sent",
+        store::signatures::SignatureState::Completed.as_str(),
+        "{\"event\":\"envelope-completed\",\"data\":{\"envelopeId\":\"env-never-sent\"}}",
+    )
+    .await
+    .unwrap();
+    store::signature_webhook_journal::journal_verified_receipt(
+        &surreal,
+        store::signatures::SignatureProvider::DocuSign,
+        ENVELOPE_ID,
+        store::signatures::SignatureState::Completed.as_str(),
+        &String::from_utf8_lossy(&completion_body()),
+    )
+    .await
+    .unwrap();
+
+    portal::esignature_webhook::replay_pending_receipts(&replay_state, 100)
+        .await
+        .unwrap();
+
+    // The good receipt recovered through the same sweep.
+    let row = store::notations::find_by_id(&surreal, nid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, "END");
+    let signed = storage
+        .get(&store::notations::signed_document_storage_key(nid))
+        .await
+        .expect("signed retainer archived by the sweep")
+        .bytes;
+    assert_eq!(signed, b"%PDF-signed-retainer");
+    let final_state =
+        StateMachineRuntime::current_state(runtime.as_ref(), MachineKind::Workflow, nid)
+            .await
+            .unwrap();
+    assert_eq!(final_state.as_str(), "END");
+
+    // The uncorrelatable one stays pending with the failure named —
+    // visible, retryable, and not blocking the next receipt.
+    let pending = store::signature_webhook_journal::pending_receipts(&surreal, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        pending.len(),
+        1,
+        "only the uncorrelatable receipt stays pending"
+    );
+    assert_eq!(pending[0].provider_id, "env-never-sent");
+    let failure = pending[0]
+        .last_error
+        .clone()
+        .expect("the failure is named on the receipt");
+    assert!(
+        failure.contains("no signature row"),
+        "the failure names the problem: {failure}"
+    );
 }
