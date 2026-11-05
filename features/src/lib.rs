@@ -164,6 +164,7 @@ pub async fn app_state_with_email(
         runtime_kms: Arc::new(cloud::NoRuntimeKms),
         esignature_webhook_secret: None,
         esignature_hmac_key: None,
+        fake_signature_dir: None,
         email,
         attachment_scanner: Arc::new(portal::attachment_scanner::FakeAttachmentScanner::clean()),
         inbound_email_secret: None,
