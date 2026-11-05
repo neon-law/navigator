@@ -900,6 +900,8 @@ DEFINE FIELD OVERWRITE avatar_url ON entity TYPE option<string>;
 -- absent value reads as `NONE`, exactly what an entity never linked to
 -- Xero should report.
 DEFINE FIELD OVERWRITE xero_id ON entity TYPE option<string>;
+-- TYPE any preserves arbitrary nested JSON; the command requires an object.
+DEFINE FIELD OVERWRITE metadata ON entity TYPE any;
 DEFINE FIELD OVERWRITE firm_anchor_key ON entity TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON entity TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON entity TYPE datetime DEFAULT time::now();
