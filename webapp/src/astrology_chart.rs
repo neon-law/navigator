@@ -188,7 +188,7 @@ pub fn AstrologyChart(
             fieldset { class: "astrology-chart__aspect-controls", disabled: !show_aspects(),
                 legend { "Selected aspects" }
                 label { r#for: "chart-aspect-orb", "Aspect orb (degrees)" }
-                input { id: "chart-aspect-orb", r#type: "number", min: "0", max: "10", step: "any", value: "{aspect_orb()}",
+                input { class: "nav-input", id: "chart-aspect-orb", r#type: "number", min: "0", max: "10", step: "any", value: "{aspect_orb()}",
                     "aria-describedby": "chart-aspect-help",
                     "aria-invalid": "{orb.is_none()}",
                     oninput: move |event| aspect_orb.set(event.value())
@@ -199,7 +199,7 @@ pub fn AstrologyChart(
                 div { class: "astrology-chart__aspect-types",
                     for (index, (_, name)) in ASPECTS.into_iter().enumerate() {
                         label {
-                            input { r#type: "checkbox", checked: enabled_aspects()[index],
+                            input { class: "nav-checkbox", r#type: "checkbox", checked: enabled_aspects()[index],
                                 oninput: move |event| {
                                     let mut enabled = enabled_aspects();
                                     enabled[index] = event.checked();

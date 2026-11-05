@@ -1136,7 +1136,11 @@ Later prose is outside the table.",
         assert!(html.contains("Review and sign when you"), "{html}");
         assert!(!html.contains("style="), "{html}");
         let css = include_str!("../../../server/public/css/theme.css");
-        let block = &css[css.find("Notation sections").expect("notation css block")..];
+        let start = css.find("Notation sections").expect("notation css block");
+        let end = css[start..]
+            .find("/* The navigator-signature seal")
+            .expect("the next stylesheet section");
+        let block = &css[start..start + end];
         assert!(!block.contains("min-width"), "no fixed minimum width");
     }
 
