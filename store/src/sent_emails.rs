@@ -1,14 +1,22 @@
 //! The outbound-email audit trail: one row per attempt through `EmailService`.
 //!
-//! `portal::email` writes through its `LoggingEmail` decorator; the administrator
-//! email log reads pages from this table. Rows carry an optional Project link.
+//! `workflows::email::LoggingEmail` writes every send through [`record`] — the
+//! `web` process and the `workflows-service` worker both wrap their backend in
+//! it — and the administrator email log reads pages from this table. Rows carry
+//! the addressee's `person_id` and an optional Project link.
 //!
-//! SurrealDB owns the write result. An opt-in, insert-only PostgreSQL mirror
-//! preserves every field and timestamp. Mirror failures leave parity drift and
-//! never turn a successful audit insert into a failed send.
+//! PostgreSQL is the system of record whenever `NAVIGATOR_POSTGRES_HOST` is
+//! set ([`postgres_configured`]): [`record`], [`page`] and [`all`] read and
+//! write the `sent_email` table there, and a configured but unreachable server
+//! is an error, never a silent fall back. The table is append-only in the
+//! database itself (a trigger refuses UPDATE, TRUNCATE and any DELETE but the
+//! export-gated retention purge, [`postgres::purge`]). Without a PostgreSQL
+//! host — a bare dev run, the in-memory test lane — the same calls use the
+//! SurrealDB `sent_email` table. Rows SurrealDB still holds from before the
+//! switch reach PostgreSQL through `navigator ops postgres mirror reconcile`.
 //!
-//! There is no update or delete operation. Audit insertion is best effort at
-//! the call site because the delivery attempt has already happened.
+//! There is no update operation. Audit insertion is best effort at the call
+//! site because the delivery attempt has already happened.
 //!
 //! [`page`] reads its count and rows inside one explicit transaction so both
 //! describe the same snapshot. SurrealDB statements outside `BEGIN` have separate
@@ -20,7 +28,10 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+
+pub mod postgres;
 
 /// The table these rows live in.
 const TABLE: &str = "sent_email";
@@ -38,6 +49,9 @@ pub struct SentEmail {
     /// firm-wide send and for every historical row — see the schema note on
     /// `sent_email.project_id`.
     pub project_id: Option<Uuid>,
+    /// The Person the message was addressed to, when the caller named one
+    /// (`OutboundEmail::person_id`). Always `None` on a SurrealDB row.
+    pub person_id: Option<Uuid>,
     /// Slug of the template that rendered the body (`welcome`, …).
     /// `None` for ad-hoc messages.
     pub template_slug: Option<String>,
@@ -60,6 +74,7 @@ pub struct NewSentEmail {
     pub subject: String,
     pub sender: String,
     pub project_id: Option<Uuid>,
+    pub person_id: Option<Uuid>,
     pub template_slug: Option<String>,
     pub body: String,
     pub outcome: String,
@@ -95,6 +110,7 @@ impl SentEmailRow {
             subject: self.subject,
             sender: self.sender,
             project_id: self.project_id.as_ref().and_then(record_uuid),
+            person_id: None,
             template_slug: self.template_slug,
             body: self.body,
             outcome: self.outcome,
@@ -117,6 +133,12 @@ pub enum SentEmailError {
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    /// The configured PostgreSQL server could not be reached.
+    #[error("PostgreSQL: {0}")]
+    Postgres(#[from] crate::postgres::PostgresError),
+    /// A PostgreSQL statement failed.
+    #[error("PostgreSQL query: {0}")]
+    Sql(#[from] sqlx::Error),
     /// A write reported success but returned no row, or returned one
     /// this module could not read back — see
     /// [`SentEmailRow::into_sent_email`].
@@ -138,13 +160,27 @@ pub struct Page {
     pub page: u64,
 }
 
-/// Journal one outbound attempt.
+/// Whether this process keeps the trail in PostgreSQL.
+#[must_use]
+pub fn postgres_configured() -> bool {
+    std::env::var_os(crate::firm_journal::POSTGRES_HOST_ENV).is_some()
+}
+
+/// Journal one outbound attempt, in PostgreSQL when it is configured and in
+/// SurrealDB otherwise.
 ///
 /// # Errors
 ///
-/// [`SentEmailError::Db`] if the insert fails. The caller is expected
+/// [`SentEmailError`] if the insert fails. The caller is expected
 /// to treat that as a logged audit miss, not a failed send.
 pub async fn record(db: &SurrealDb, new: &NewSentEmail) -> Result<SentEmail, SentEmailError> {
+    if postgres_configured() {
+        return postgres::record(&PostgresDb::from_env().await?, new).await;
+    }
+    record_surreal(db, new).await
+}
+
+async fn record_surreal(db: &SurrealDb, new: &NewSentEmail) -> Result<SentEmail, SentEmailError> {
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -178,11 +214,8 @@ pub async fn record(db: &SurrealDb, new: &NewSentEmail) -> Result<SentEmail, Sen
         .and_then(surrealdb::IndexedResults::check)?;
 
     let row: Option<SentEmailRow> = response.take(0)?;
-    let email = row
-        .and_then(SentEmailRow::into_sent_email)
-        .ok_or(SentEmailError::WriteReturnedNothing)?;
-    crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::SentEmail(id)).await;
-    Ok(email)
+    row.and_then(SentEmailRow::into_sent_email)
+        .ok_or(SentEmailError::WriteReturnedNothing)
 }
 
 /// One page of the trail, newest first, with `requested` clamped into
@@ -204,13 +237,22 @@ pub async fn record(db: &SurrealDb, new: &NewSentEmail) -> Result<SentEmail, Sen
 ///
 /// # Errors
 ///
-/// [`SentEmailError::Db`] if the query fails.
+/// [`SentEmailError`] if the query fails.
 pub async fn page(
     db: &SurrealDb,
     requested: u64,
     per_page: u64,
     project_ids: Option<&[Uuid]>,
 ) -> Result<Page, SentEmailError> {
+    if postgres_configured() {
+        return postgres::page(
+            &PostgresDb::from_env().await?,
+            requested,
+            per_page,
+            project_ids,
+        )
+        .await;
+    }
     let per_page = per_page.max(1);
     let requested = requested.max(1);
     let scoped = project_ids.is_some();
@@ -289,8 +331,11 @@ pub async fn page(
 ///
 /// # Errors
 ///
-/// [`SentEmailError::Db`] if the lookup fails.
+/// [`SentEmailError`] if the lookup fails.
 pub async fn all(db: &SurrealDb) -> Result<Vec<SentEmail>, SentEmailError> {
+    if postgres_configured() {
+        return postgres::all(&PostgresDb::from_env().await?).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY sent_at DESC, id DESC"
@@ -322,6 +367,7 @@ mod tests {
             subject: "Your matter".to_string(),
             sender: "support@neonlaw.com".to_string(),
             project_id: None,
+            person_id: None,
             template_slug: Some("welcome".to_string()),
             body: "Hello.".to_string(),
             outcome: "sent".to_string(),

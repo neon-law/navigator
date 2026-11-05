@@ -37,8 +37,7 @@ use workflows_service::request_identity::{apply_identity_key, install_crypto_pro
 use workflows_service::social_publisher::{SocialPublishReconcilerService, SocialPublisherService};
 use workflows_service::youtube_comments::YoutubeCommentsPollerService;
 use workflows_service::{
-    email_from_env, notifier_from_env, project_slack::ProjectSlackService, slack_bot_from_env,
-    NotationService,
+    notifier_from_env, project_slack::ProjectSlackService, slack_bot_from_env, NotationService,
 };
 
 macro_rules! bind_common_services {
@@ -463,7 +462,17 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connect to SurrealDB")?;
 
-    let email = email_from_env().context("build email service from env")?;
+    // Every worker send — the workflow-driven template mail and the
+    // Notation service's client mail — journals one `sent_email` row, the
+    // same decorator `web` wraps its backend in.
+    let (backend, sender) =
+        workflows_service::email_config::select_backend(|key| std::env::var(key).ok())
+            .context("build email service from env")?;
+    let email: Arc<dyn workflows::EmailService> = Arc::new(workflows::email::LoggingEmail::new(
+        backend,
+        surreal.clone(),
+        sender,
+    ));
     tracing::info!(
         backend = if std::env::var("NAVIGATOR_EMAIL_BACKEND").as_deref() == Ok("sendgrid") {
             "SendGrid"

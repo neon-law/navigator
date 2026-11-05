@@ -748,6 +748,13 @@
     "scope": "project-or-firm",
     "through": "project_id when assigned; explicit owning Firm for unassigned rows"
   },
+  "sent_email_export": {
+    "migration_slice": "sent-email-export",
+    "parity_scenario": "one ledger row per exported UTC day; an unchanged re-run writes nothing; a late row re-exports the day; a purged day is never exported again",
+    "scope": "firm",
+    "target_only": true,
+    "through": "the sent_email rows of that UTC day; no Surreal source"
+  },
   "signature": {
     "migration_slice": "workflow-storage",
     "parity_scenario": "provider/envelope correlation; duplicate completion harmless; signed artifact retrieval; notation isolation",

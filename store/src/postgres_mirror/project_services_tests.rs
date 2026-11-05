@@ -153,6 +153,7 @@ async fn create_source_service_parents(
             subject: "Synthetic service evidence".into(),
             sender: "synthetic-sender@example.test".into(),
             project_id: Some(project_id),
+            person_id: None,
             template_slug: Some("synthetic-service".into()),
             body: "Synthetic audit content".into(),
             outcome: "captured".into(),

@@ -19,6 +19,7 @@ pub mod iceberg;
 pub mod parquet_io;
 pub mod postgres;
 pub mod runner;
+pub mod sent_email_export;
 pub mod snapshot;
 pub mod tables;
 /// Test doubles for the crate's storage interactions. `pub` so the
