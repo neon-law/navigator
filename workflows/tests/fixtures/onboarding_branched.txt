@@ -5,6 +5,7 @@ respondent_type: person
 confidential: true
 prompts:
   path: Which engagement shape is this?
+  closing_date: When does the deal close?
 choices:
   path:
     litigation: Litigation
