@@ -684,8 +684,16 @@ async fn ensure_one_calendar(
     }
 }
 
+/// A provider client that could not be built. The unconfigured runtime
+/// carries its detail — the missing deployment configuration and the step
+/// that supplies it — the way a skipped Drive surface does.
 fn unavailable(project: &store::projects::Project, error: &IntegrationError) -> ProjectOutcome {
-    ProjectOutcome::plain(project.code.clone(), error.slug())
+    match error.detail() {
+        Some(detail) => {
+            ProjectOutcome::with_detail(project.code.clone(), error.slug(), detail.to_string())
+        }
+        None => ProjectOutcome::plain(project.code.clone(), error.slug()),
+    }
 }
 
 /// `{ "project_code": "…", "all": false, "dry_run": true }` — the ensure
