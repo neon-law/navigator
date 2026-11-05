@@ -281,10 +281,12 @@ refuses the start. Keep the bootstrap Owner address in its secret configuration;
   behind the row, rendering only the participation ledger until the fixture Admin grants themself one.
   `lawyer@neonlaw.com` carries exactly one role, lawyer, not admin.
 
-Email identifies exactly one person regardless of casing. `person.email_lower`, a computed field, carries a unique index
-(`person_email_lower`), and every lookup keyed on email goes through `store::persons::find_by_email_ci`, so an identity
-provider presenting `Attorney@Example.com` resolves to the row stored as `attorney@example.com` and authorizes against
-the same role. Two rows differing only by case cannot exist.
+Email identifies exactly one person regardless of casing, and the stored address keeps the casing it was entered with.
+In SurrealDB, `person.email_lower`, a computed field, carries a unique index (`person_email_lower`); in PostgreSQL,
+`person.email` is `citext` with the unique index `person_email_key`. Every lookup keyed on email goes through
+`store::persons::find_by_email_ci`, so an identity provider presenting `Attorney@Example.com` resolves to the row stored
+as `attorney@example.com` and authorizes against the same role. Two rows differing only by case cannot exist. A Person
+seed import with `--overwrite` writes a change that is only in letter case.
 
 ## Participation
 

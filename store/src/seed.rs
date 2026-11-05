@@ -1009,9 +1009,13 @@ async fn reconcile_people(
                     authorize_person_project_scope(surreal, existing.id, project).await?;
                 }
                 let mut changed_fields = person_changed_fields(&existing, &rec);
+                // The lookup ignores letter case, so a record can match a row
+                // whose address differs only in case. That is still a change
+                // to write — the address keeps the casing entered — but not a
+                // move to another mailbox, so the old spelling is no alias.
                 let moves_primary =
                     existing.email.trim().to_lowercase() != rec.email.trim().to_lowercase();
-                if moves_primary {
+                if existing.email.trim() != rec.email.trim() {
                     changed_fields.push("email".to_string());
                 }
                 let wanted = rec
@@ -6188,6 +6192,70 @@ records:
             Role::Owner,
             "the bootstrap Owner's role stays pinned through the seed path too"
         );
+    }
+
+    #[tokio::test]
+    async fn person_seed_overwrite_writes_a_case_only_email_change() {
+        let surreal = mem_surreal().await;
+        let person = persons::create(
+            &surreal,
+            &NewPerson::new("Recased Client", "recased.client@example.com"),
+        )
+        .await
+        .unwrap();
+        let actor = ReconcileActor {
+            bootstrap_owner_email: None,
+            actor_role: Role::Lawyer,
+            may_change_roles: false,
+            project_scope: None,
+            dry_run: true,
+            actor_person_id: None,
+        };
+        let yaml = person_yaml("Recased.Client@Example.com", "Recased Client");
+
+        let skipped = reconcile_yaml(&surreal, SeedModel::Person, &yaml, "Firm", false, &actor)
+            .await
+            .unwrap();
+        assert_eq!((skipped.updated, skipped.unchanged), (0, 1));
+
+        let preview = reconcile_yaml(&surreal, SeedModel::Person, &yaml, "Firm", true, &actor)
+            .await
+            .unwrap();
+        assert_eq!((preview.created, preview.updated), (0, 1));
+        assert_eq!(preview.records[0].changed_fields, vec!["email".to_string()]);
+
+        let applied = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &yaml,
+            "Firm",
+            true,
+            &ReconcileActor {
+                dry_run: false,
+                ..actor
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(applied.updated, 1);
+        let row = persons::find_by_email_ci(&surreal, "RECASED.CLIENT@example.com")
+            .await
+            .unwrap()
+            .expect("a differently-cased lookup finds the Person");
+        assert_eq!(row.id, person.id);
+        assert_eq!(row.email, "Recased.Client@Example.com");
+        assert!(
+            persons::aliases(&surreal, person.id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "the old spelling is the same mailbox, not an alias"
+        );
+
+        let again = reconcile_yaml(&surreal, SeedModel::Person, &yaml, "Firm", true, &actor)
+            .await
+            .unwrap();
+        assert_eq!((again.updated, again.unchanged), (0, 1));
     }
 
     #[tokio::test]
