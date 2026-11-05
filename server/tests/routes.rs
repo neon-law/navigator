@@ -1004,7 +1004,11 @@ async fn admin_page_is_visible_only_to_owner_and_admin() {
         // the administrative surfaces.
         assert!(html.contains("<h1>Admin</h1>"), "{html}");
         assert!(html.contains("href=\"/app/admin/people\""), "{html}");
-        assert!(html.contains("href=\"/app/admin/analytics\""), "{html}");
+        // The hub links to Plausible, the firm's hosted analytics provider.
+        assert!(
+            html.contains("href=\"https://plausible.io/sites\""),
+            "{html}"
+        );
         assert!(
             !html.contains("<table"),
             "the landing must not embed the people table: {html}",
@@ -7969,175 +7973,6 @@ async fn lawyer_shook_hosts_redirect_to_guieb_shook() {
             Some(expected),
         );
     }
-}
-
-#[tokio::test]
-async fn visitor_analytics_counts_public_routes_and_excludes_private_surfaces() {
-    let state = empty_state().await;
-    let db = state.surreal.clone();
-    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-
-    let public = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/?utm_source=linkedin&token=secret")
-                // The served host, not the apex: `neonlaw.com` now 301s to
-                // `www` in the app rather than at the DNS provider, and this
-                // test wants a rendered page to count.
-                .header(header::HOST, "www.neonlaw.com")
-                .header("x-navigator-client-region", "us")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(public.status(), StatusCode::OK);
-
-    for uri in [
-        "/app/lawyer",
-        "/admin",
-        "/app/api/mcp.json",
-        "/app/mcp",
-        "/public/app.css",
-    ] {
-        let _ = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(uri)
-                    .header(header::COOKIE, admin_session_cookie())
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-    }
-
-    // The aggregate write is fire-and-forget off the request's critical path,
-    // so poll until the counter lands rather than reading it synchronously.
-    let summary = wait_for_visit_total(&db, 1).await;
-    assert_eq!(summary.total_visits, 1);
-    assert_eq!(summary.countries[0].label, "US");
-    assert_eq!(summary.sources[0].label, "linkedin");
-    assert!(
-        summary.routes.iter().any(|row| row.label == "/"),
-        "routes: {:?}",
-        summary.routes
-    );
-}
-
-/// Poll the visitor-analytics summary until `total_visits` reaches `expected`,
-/// giving the fire-and-forget aggregate write in `count_public_visit` time to
-/// land. Fails the test if it never arrives within the timeout.
-async fn wait_for_visit_total(
-    db: &store::surreal::SurrealDb,
-    expected: i64,
-) -> store::visitor_analytics::VisitorAnalyticsSummary {
-    for _ in 0..100 {
-        let summary = store::visitor_analytics::summary(db).await.unwrap();
-        if summary.total_visits >= expected {
-            return summary;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    panic!("visitor analytics did not reach {expected} visits within timeout");
-}
-
-#[tokio::test]
-async fn admin_analytics_page_is_admin_only_and_renders_empty_state() {
-    let (state, _surreal) = state_with_engines().await;
-    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-
-    let lawyer = get_with_role(
-        app.clone(),
-        "/app/admin/analytics",
-        store::persons::Role::Lawyer,
-    )
-    .await;
-    assert_eq!(lawyer.status(), StatusCode::FORBIDDEN);
-
-    let resp = get_with_role(app, "/app/admin/analytics", store::persons::Role::Admin).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = body_string(resp).await;
-    assert!(body.contains("Visitor analytics"), "{body}");
-    assert!(
-        body.contains("No visitor analytics have been recorded yet."),
-        "{body}"
-    );
-}
-
-#[tokio::test]
-async fn admin_analytics_page_sends_the_anonymous_browser_to_login() {
-    // `/admin/*` is a shared Navigator surface, so the session boundary (#732)
-    // bounces an anonymous browser to the login door before the analytics
-    // handler runs — independent of embedded Rego policy, which here runs in passthrough.
-    let (state, _surreal) = state_with_engines().await;
-    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/app/admin/analytics")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    assert_eq!(
-        resp.headers()
-            .get(axum::http::header::LOCATION)
-            .and_then(|value| value.to_str().ok()),
-        Some("/auth/login?return_to=/app/admin/analytics"),
-    );
-}
-
-#[tokio::test]
-async fn admin_analytics_page_returns_500_when_the_summary_query_fails() {
-    // A summary-query failure must surface as a 500, not a rendered page.
-    // Point the handler at an engine that cannot answer so
-    // `store::visitor_analytics::summary` errors, which exercises the
-    // handler's error branch for an admin caller.
-    let (mut state, _surreal) = state_with_engines().await;
-    state.surreal = store::surreal::test_support::unreachable();
-    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-
-    let resp = get_with_role(app, "/app/admin/analytics", store::persons::Role::Admin).await;
-    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-}
-
-#[tokio::test]
-async fn admin_analytics_page_renders_recorded_dimension_totals() {
-    let (state, _surreal) = state_with_engines().await;
-    let db = state.surreal.clone();
-    // Seed a couple of visits directly so the summary is non-empty and every
-    // dimension row renders (the empty-state test leaves those branches unhit).
-    for _ in 0..2 {
-        store::visitor_analytics::record_visit(
-            &db,
-            &store::visitor_analytics::VisitorVisit {
-                country_code: "US",
-                route_pattern: "/blog/{slug}",
-                source: "linkedin",
-                locale: "en",
-                status_class: "2xx",
-            },
-        )
-        .await
-        .unwrap();
-    }
-    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-
-    let resp = get_with_role(app, "/app/admin/analytics", store::persons::Role::Admin).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = body_string(resp).await;
-    assert!(body.contains("/blog/{slug}"), "route row missing: {body}");
-    assert!(body.contains("linkedin"), "source row missing: {body}");
-    assert!(
-        !body.contains("No visitor analytics have been recorded yet."),
-        "empty-state text should be gone: {body}"
-    );
 }
 
 #[tokio::test]
@@ -23162,7 +22997,6 @@ async fn the_moved_admin_listings_are_not_served_at_the_old_paths() {
         "/app/lawyer/people.csv",
         "/admin/people",
         "/admin/people/new",
-        "/admin/analytics",
     ] {
         let resp = get_with_cookie(app.clone(), uri, &cookie).await;
         assert_eq!(

@@ -15,12 +15,14 @@ use crate::components::Card;
 use crate::people::ViewerRole;
 
 /// One tile on the admin landing: a titled card with a short blurb and a
-/// primary link into the surface.
+/// primary link into the surface. `external` tiles leave the app (opened in a
+/// new tab with `rel="noopener"`); every other tile is an internal path.
 struct AdminLink {
     title: &'static str,
     blurb: &'static str,
     href: &'static str,
     cta: &'static str,
+    external: bool,
 }
 
 /// The admin-only surfaces the hub links to.
@@ -31,6 +33,7 @@ const ADMIN_LINKS: &[AdminLink] = &[
                 The bootstrap Owner record's email and role are pinned.",
         href: "/app/admin/people",
         cta: "Manage people",
+        external: false,
     },
     AdminLink {
         title: "Entities",
@@ -38,19 +41,22 @@ const ADMIN_LINKS: &[AdminLink] = &[
                 avatar, and Xero billing contact.",
         href: "/app/admin/entities",
         cta: "Manage entities",
+        external: false,
     },
     AdminLink {
         title: "Leads",
         blurb: "Public contact requests: email, masked phone, consent, and conversion.",
         href: crate::admin_leads::LEADS_PATH,
         cta: "Review leads",
+        external: false,
     },
     AdminLink {
-        title: "Visitor analytics",
-        blurb: "Traffic to the public site — visits by day and month, top routes, \
-                countries, and referrers.",
-        href: "/app/admin/analytics",
-        cta: "View analytics",
+        title: "Plausible",
+        blurb: "Public-site traffic and conversion analytics, measured by \
+                Plausible — the firm's hosted analytics provider.",
+        href: "https://plausible.io/sites",
+        cta: "Open Plausible",
+        external: true,
     },
     AdminLink {
         title: "Projects",
@@ -58,24 +64,28 @@ const ADMIN_LINKS: &[AdminLink] = &[
                 accountable for it.",
         href: crate::matter_directory::MATTER_DIRECTORY_PATH,
         cta: "Browse projects",
+        external: false,
     },
     AdminLink {
         title: "Social",
         blurb: "Review Brand Posts, account connections, and publication status.",
         href: "/app/social",
         cta: "Open social",
+        external: false,
     },
     AdminLink {
         title: "Calendar",
         blurb: "Review and manage scheduled Brand Posts.",
         href: "/app/social/calendar",
         cta: "Open calendar",
+        external: false,
     },
     AdminLink {
         title: "Brands",
         blurb: "Each Firm's Brand presentation and separate social account connections.",
         href: crate::app_chrome::APP_BRANDS_HREF,
         cta: "Manage brands",
+        external: false,
     },
 ];
 
@@ -156,7 +166,13 @@ pub fn admin_landing_body(view: &AdminLandingView) -> Element {
                     Card {
                         h2 { "{link.title}" }
                         p { class: "nav-muted", "{link.blurb}" }
-                        a { class: "nav-btn nav-btn--primary", href: "{link.href}", "{link.cta}" }
+                        a {
+                            class: "nav-btn nav-btn--primary",
+                            href: "{link.href}",
+                            target: if link.external { Some("_blank") } else { None },
+                            rel: if link.external { Some("noopener") } else { None },
+                            "{link.cta}"
+                        }
                     }
                 }
             }
@@ -187,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn the_hub_links_to_people_analytics_and_matters() {
+    fn the_hub_links_to_people_plausible_and_matters() {
         let out = html(ViewerRole::Admin);
         assert!(
             out.contains(r#"href="/app/admin/people""#),
@@ -197,10 +213,13 @@ mod tests {
             out.contains(r#"href="/app/admin/entities""#),
             "entities tile: {out}"
         );
+        // The Plausible tile is an external link: new tab, no opener handle.
         assert!(
-            out.contains(r#"href="/app/admin/analytics""#),
-            "analytics tile: {out}"
+            out.contains(r#"href="https://plausible.io/sites""#),
+            "plausible tile: {out}"
         );
+        assert!(out.contains(r#"target="_blank""#), "plausible tile: {out}");
+        assert!(out.contains(r#"rel="noopener""#), "plausible tile: {out}");
         assert!(
             out.contains(&format!(
                 r#"href="{}""#,
@@ -219,7 +238,7 @@ mod tests {
         assert!(out.contains("Manage people"), "people call to action");
         assert!(out.contains("Manage entities"), "entities call to action");
         assert!(out.contains("Review leads"), "leads call to action");
-        assert!(out.contains("View analytics"), "analytics call to action");
+        assert!(out.contains("Open Plausible"), "plausible call to action");
         assert!(out.contains("Manage brands"), "brands call to action");
     }
 

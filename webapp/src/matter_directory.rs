@@ -11,9 +11,9 @@
 //! surface, so an absent DRI renders as its own emphasized cell rather than as
 //! a blank one.
 //!
-//! The path is deliberately `/app/admin/projects` while its two siblings still
-//! sit at `/app/admin/people` and `/app/admin/analytics`: new admin surfaces are born
-//! under `/app/admin`, and the older two move on their own schedule.
+//! The path is deliberately `/app/admin/projects` while its sibling still
+//! sits at `/app/admin/people`: new admin surfaces are born
+//! under `/app/admin`, and the older sibling moves on its own schedule.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};

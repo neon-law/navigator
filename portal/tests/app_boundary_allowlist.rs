@@ -85,7 +85,6 @@ fn dioxus_app_pages() -> Vec<String> {
         pages::LAWYER_ENTITY_EDIT_PATH,
         pages::LAWYER_RETAINER_NEW_PATH,
         pages::LAWYER_SCHEDULES_PATH,
-        pages::ADMIN_ANALYTICS_PATH,
         pages::ADMIN_MATTER_DIRECTORY_PATH,
         pages::ADMIN_LEADS_PATH,
         pages::ADMIN_LEAD_PATH,

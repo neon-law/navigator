@@ -2830,10 +2830,6 @@ where
 /// redirects back here with a `?notice=` flash.
 pub const LAWYER_SCHEDULES_PATH: &str = webapp::schedules::SCHEDULES_PATH;
 
-/// The admin visitor-analytics page path (#956 Phase 4) — a read-only
-/// aggregate dashboard. Admin-only; no form and no `POST`.
-pub const ADMIN_ANALYTICS_PATH: &str = webapp::analytics::ANALYTICS_PATH;
-
 /// The Owner/Admin lead queue. Admission is the `/app/admin` route bypass;
 /// the path gets no lawyer grant of its own.
 pub const ADMIN_LEADS_PATH: &str = webapp::admin_leads::LEADS_PATH;
