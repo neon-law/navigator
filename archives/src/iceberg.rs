@@ -681,18 +681,49 @@ pub(crate) async fn read_prior_metadata(
     table_prefix: &str,
 ) -> Result<Option<(Vec<u8>, u64)>> {
     let hint_key = format!("{table_prefix}/metadata/version-hint.text");
-    let hint = match storage.get(&hint_key).await {
-        Ok(o) => o,
-        Err(StorageError::NotFound(_)) => return Ok(None),
+    match storage.get(&hint_key).await {
+        Ok(hint) => {
+            let n: u64 = String::from_utf8_lossy(&hint.bytes)
+                .trim()
+                .parse()
+                .context("parse version-hint.text")?;
+            let meta_key = format!("{table_prefix}/metadata/v{n}.metadata.json");
+            let meta = storage.get(&meta_key).await?;
+            Ok(Some((meta.bytes, n)))
+        }
+        // A retention-locked bucket never rewrites version-hint.text (a
+        // locked policy rejects replacement), so the hint is absent by
+        // construction there. The latest version is the highest
+        // v<N>.metadata.json present — the same log-chaining order the
+        // author itself walks.
+        Err(StorageError::NotFound(_)) => {
+            let prefix = format!("{table_prefix}/metadata/");
+            let latest = storage
+                .list(&prefix)
+                .await
+                .with_context(|| format!("list metadata versions under {prefix}"))?
+                .into_iter()
+                .filter_map(|object| version_of(&object.key))
+                .max();
+            match latest {
+                Some(n) => {
+                    let meta_key = format!("{table_prefix}/metadata/v{n}.metadata.json");
+                    let meta = storage.get(&meta_key).await?;
+                    Ok(Some((meta.bytes, n)))
+                }
+                None => Ok(None),
+            }
+        }
         Err(e) => return Err(e.into()),
-    };
-    let n: u64 = String::from_utf8_lossy(&hint.bytes)
-        .trim()
-        .parse()
-        .context("parse version-hint.text")?;
-    let meta_key = format!("{table_prefix}/metadata/v{n}.metadata.json");
-    let meta = storage.get(&meta_key).await?;
-    Ok(Some((meta.bytes, n)))
+    }
+}
+
+/// The version number embedded in a `v<N>.metadata.json` key, or `None`
+/// for any other object under the metadata prefix.
+fn version_of(key: &str) -> Option<u64> {
+    let name = key.rsplit('/').next()?;
+    let version = name.strip_prefix('v')?.strip_suffix(".metadata.json")?;
+    version.parse().ok()
 }
 
 /// Inputs to [`author_iceberg_for_prefix`] — one table's day of Parquet
@@ -810,12 +841,29 @@ pub async fn author_iceberg_for_prefix(
     })
     .await?;
 
+    let locked_lane = storage
+        .retention_locked()
+        .await
+        .context("probe the archive bucket's retention policy")?;
     for (rel, bytes) in &authored.files {
+        // A locked policy rejects replacing version-hint.text — a file
+        // mutable by definition — so the locked lane omits it, and readers
+        // resolve the latest version from the v<N> listing instead.
+        if locked_lane && rel == "metadata/version-hint.text" {
+            continue;
+        }
         let key = format!("{table_prefix}/{rel}");
-        storage
-            .put(&key, bytes, content_type_for(rel))
-            .await
-            .with_context(|| format!("persist {key}"))?;
+        if locked_lane {
+            storage
+                .put_immutable(&key, bytes, content_type_for(rel))
+                .await
+                .with_context(|| format!("persist {key}"))?;
+        } else {
+            storage
+                .put(&key, bytes, content_type_for(rel))
+                .await
+                .with_context(|| format!("persist {key}"))?;
+        }
     }
     Ok(Some(authored))
 }
@@ -1266,6 +1314,98 @@ mod tests {
         for (name, bytes) in &authored.files {
             assert!(!bytes.is_empty(), "{name} should not be empty");
         }
+    }
+
+    /// On a retention-locked bucket the promotion writes every Iceberg
+    /// object create-only, chains onto the prior v<N> without the mutable
+    /// version hint, and read-back resolves the latest version from the
+    /// v<N> listing alone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_locked_lane_chains_promotions_without_a_version_hint() {
+        use crate::test_support::CollisionStorage;
+        use arrow::array::{RecordBatch, StringArray};
+
+        let storage = CollisionStorage::locked();
+        let run_date = chrono::NaiveDate::from_ymd_opt(2026, 6, 14).unwrap();
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new("id", DataType::Utf8, false)]));
+        let parquet = crate::encode_parquet(
+            &RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["synthetic"]))])
+                .unwrap(),
+        )
+        .unwrap();
+        for part in 1..=2 {
+            let key = format!("application/person/data/dt=2026-06-14/part-{part}.parquet");
+            storage
+                .put_immutable(&key, &parquet, "application/octet-stream")
+                .await
+                .unwrap();
+        }
+        let request = PromotionRequest {
+            lane: "application",
+            table: "person",
+            location_base: "gs://exports",
+            run_date,
+            data_key: None,
+            snapshot_id: 5001,
+            timestamp_ms: 1_700_000_000_000,
+            expire_before_ms: None,
+        };
+        let first = author_iceberg_for_prefix(storage.as_ref(), request)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.version, 1);
+
+        // A replay of the same snapshot id no-ops — resolved from v1 even
+        // though the mutable hint is absent on this lane.
+        let replayed = author_iceberg_for_prefix(storage.as_ref(), request)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            replayed.files.is_empty(),
+            "a re-run with the same snapshot id must be a no-op, not a rewrite"
+        );
+
+        let mut second = request;
+        second.snapshot_id = 5002;
+        let second_authored = author_iceberg_for_prefix(storage.as_ref(), second)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            second_authored.version, 2,
+            "the second promotion chains onto the first"
+        );
+
+        assert!(
+            !storage.contains("application/person/metadata/version-hint.text"),
+            "a locked policy rejects replacing the mutable hint"
+        );
+        assert!(storage.contains("application/person/metadata/v1.metadata.json"));
+        assert!(storage.contains("application/person/metadata/v2.metadata.json"));
+
+        // Read-back resolves v2 with the hint absent — the recovery path.
+        let (_, version) = read_prior_metadata(storage.as_ref(), "application/person")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(version, 2);
+    }
+
+    /// With no metadata at all — an unpromoted table — read-back resolves
+    /// None rather than an error, on either lane shape.
+    #[tokio::test]
+    async fn read_back_resolves_none_for_an_unpromoted_table() {
+        use crate::test_support::CollisionStorage;
+
+        let storage = CollisionStorage::locked();
+        assert!(
+            read_prior_metadata(storage.as_ref(), "application/never_promoted")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
