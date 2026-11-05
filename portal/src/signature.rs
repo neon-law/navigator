@@ -427,6 +427,9 @@ pub struct FakeSignatureProvider {
     /// delivery is HMAC-signed with the same scheme
     /// [`crate::esignature_webhook`] verifies fail-closed.
     webhook: Option<WebhookTarget>,
+    /// Failures this fake produces on purpose, before any incidental
+    /// network error could. Default: none armed.
+    faults: Faults,
 }
 
 /// Where and how the fake delivers DocuSign-Connect-shaped webhooks.
@@ -436,6 +439,53 @@ pub struct WebhookTarget {
     pub url: String,
     /// HMAC-SHA256 key; the receiver's `esignature_hmac_key`.
     pub hmac_key: Vec<u8>,
+}
+
+/// A failure the fake is told to produce on purpose, so tests assert the
+/// recovery paths, not just the sunny one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fault {
+    /// `send_for_signature` refuses before anything is validated, written,
+    /// or recorded — nothing half-sent exists to resume from.
+    Send,
+    /// `create_recipient_view` refuses; the envelope on disk is untouched.
+    View,
+    /// Completion webhook delivery fails after the durable write: the
+    /// envelope is `completed` on disk with the delivery failure recorded,
+    /// and the loop recovers by reading completion from the provider.
+    Webhook,
+}
+
+/// The set of [`Fault`]s a fake carries. Default: none armed.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Faults {
+    send: bool,
+    view: bool,
+    webhook: bool,
+}
+
+impl Faults {
+    /// Arm exactly the faults in `faults`.
+    #[must_use]
+    pub fn inject(faults: &[Fault]) -> Self {
+        let mut armed = Self::default();
+        for fault in faults {
+            match fault {
+                Fault::Send => armed.send = true,
+                Fault::View => armed.view = true,
+                Fault::Webhook => armed.webhook = true,
+            }
+        }
+        armed
+    }
+
+    fn armed(self, fault: Fault) -> bool {
+        match fault {
+            Fault::Send => self.send,
+            Fault::View => self.view,
+            Fault::Webhook => self.webhook,
+        }
+    }
 }
 
 impl FakeSignatureProvider {
@@ -456,6 +506,7 @@ impl FakeSignatureProvider {
             recipient_views: Mutex::new(Vec::new()),
             root: root.into(),
             webhook: None,
+            faults: Faults::default(),
         }
     }
 
@@ -466,6 +517,15 @@ impl FakeSignatureProvider {
     #[must_use]
     pub fn with_webhook(mut self, target: WebhookTarget) -> Self {
         self.webhook = Some(target);
+        self
+    }
+
+    /// Arm [`Fault`]s: failures this fake produces on purpose. An armed
+    /// fault fires before any incidental network error could, so tests
+    /// assert the recovery paths deterministically.
+    #[must_use]
+    pub fn with_faults(mut self, faults: Faults) -> Self {
+        self.faults = faults;
         self
     }
 
@@ -545,6 +605,11 @@ impl FakeSignatureProvider {
     /// envelope file does not parse.
     pub fn envelopes(&self) -> Result<Vec<FakeEnvelope>, SignatureError> {
         let mut envelopes = Vec::new();
+        // A store that has never been written is empty, not broken — the
+        // same honesty `envelope`'s `Ok(None)` has for a missing file.
+        if !self.root.exists() {
+            return Ok(envelopes);
+        }
         let entries = std::fs::read_dir(&self.root).map_err(|e| {
             SignatureError::Provider(format!("reading {}: {e}", self.root.display()))
         })?;
@@ -671,19 +736,27 @@ impl FakeSignatureProvider {
             },
         });
         let body = body.to_string().into_bytes();
-        let signature = crate::webhook_auth::sign_hmac_sha256_b64(&target.hmac_key, &body);
-        let outcome = reqwest::Client::new()
-            .post(&target.url)
-            .header("x-docusign-signature-1", signature)
-            .header("content-type", "application/json")
-            .body(body)
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .await;
-        let status = match outcome {
-            Ok(response) if response.status().is_success() => "delivered".to_string(),
-            Ok(response) => format!("failed: receiver answered {}", response.status()),
-            Err(e) => format!("failed: {e}"),
+        let status = if self.faults.armed(Fault::Webhook) {
+            // Injected after the durable write: the envelope on disk is
+            // already true (completed), the delivery fails on purpose,
+            // and the failure is recorded — the loop recovers by reading
+            // completion from the provider.
+            "failed: injected webhook fault".to_string()
+        } else {
+            let signature = crate::webhook_auth::sign_hmac_sha256_b64(&target.hmac_key, &body);
+            let outcome = reqwest::Client::new()
+                .post(&target.url)
+                .header("x-docusign-signature-1", signature)
+                .header("content-type", "application/json")
+                .body(body)
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await;
+            match outcome {
+                Ok(response) if response.status().is_success() => "delivered".to_string(),
+                Ok(response) => format!("failed: receiver answered {}", response.status()),
+                Err(e) => format!("failed: {e}"),
+            }
         };
         if !status.starts_with("delivered") {
             tracing::warn!(envelope_id = %envelope.id, event, %status, "fake signature webhook delivery failed");
@@ -852,6 +925,15 @@ impl SignatureProvider for FakeSignatureProvider {
         // Nothing is sent unsigned: validate every anchor against the
         // prepared PDF's text first, and refuse the whole envelope on a
         // miss — before anything is persisted or recorded.
+        if self.faults.armed(Fault::Send) {
+            // The injected failure fires before validation, before any
+            // write, before any call record: the disk's state — no
+            // envelope — stays true, and re-running the loop resumes
+            // rather than duplicates.
+            return Err(SignatureError::Provider(
+                "injected send failure".to_string(),
+            ));
+        }
         validate_anchors(pdf, &manifest.fields)?;
 
         let mut calls = self.calls.lock().expect("fake provider lock");
@@ -887,6 +969,13 @@ impl SignatureProvider for FakeSignatureProvider {
         request_id: &SignatureRequestId,
         view: &RecipientView,
     ) -> Result<String, SignatureError> {
+        if self.faults.armed(Fault::View) {
+            // Injected before the view is recorded or any page is
+            // rewritten: the durable envelope keeps its last true state.
+            return Err(SignatureError::Provider(
+                "injected view failure".to_string(),
+            ));
+        }
         self.recipient_views
             .lock()
             .expect("fake provider lock")
@@ -1353,8 +1442,8 @@ impl SignatureProvider for DocuSignSignatureProvider {
 mod tests {
     use super::{
         validate_anchors, CachedToken, DocuSignSignatureProvider, EnvelopeStatus,
-        FakeSignatureProvider, RecipientView, SignatureError, SignatureField, SignatureFieldKind,
-        SignatureManifest, SignatureProvider, SignatureProviderKind,
+        FakeSignatureProvider, Fault, Faults, RecipientView, SignatureError, SignatureField,
+        SignatureFieldKind, SignatureManifest, SignatureProvider, SignatureProviderKind,
         SignatureProviderSelectionError, SignatureRecipient, SignatureRequestId, WebhookTarget,
         SIGNATURE_PROVIDER_ENV,
     };
@@ -2167,6 +2256,212 @@ mod tests {
                 .unwrap_or_default()
                 .starts_with("failed"),
             "the failed delivery is recorded on the envelope"
+        );
+    }
+
+    // --- The local signature loop ------------------------------------------
+    //
+    // The headline: one continuous loop, no DocuSign credentials. Render →
+    // send → sign → webhook → file. The dedicated CI job runs exactly this
+    // test; green means the local story is true.
+
+    #[tokio::test]
+    async fn the_local_signature_loop_renders_sends_signs_webhooks_and_files() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let key = b"loop-hmac-key".to_vec();
+        let fake = FakeSignatureProvider::new().with_webhook(WebhookTarget {
+            url: server.uri(),
+            hmac_key: key.clone(),
+        });
+
+        // Render: the prepared PDF carries every anchor, exactly as the
+        // retainer walk produces it.
+        let pdf = rendered_anchor_pdf();
+
+        // Send: the envelope exists on disk, and every recipient's sign
+        // page resolves.
+        let id = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .await
+            .expect("the loop sends");
+        let client_view = fake
+            .create_recipient_view(
+                &id,
+                &RecipientView {
+                    return_url: "https://app.example/return".into(),
+                    email: "libra@example.com".into(),
+                    name: "Libra".into(),
+                    client_user_id: "notation-client".into(),
+                },
+            )
+            .await
+            .expect("the client's sign page exists");
+        assert!(client_view.starts_with("file://"), "a real local URL");
+
+        // Sign: the client first (routing 1), the firm last — the last
+        // signature completes the envelope and fires the completion
+        // webhook.
+        let after_client = fake
+            .sign(&id, "libra@example.com")
+            .await
+            .expect("client signs");
+        assert_eq!(
+            after_client,
+            EnvelopeStatus::Sent,
+            "one signature is not completion"
+        );
+        let after_firm = fake
+            .sign(&id, "attorney@neonlaw.com")
+            .await
+            .expect("firm countersigns");
+        assert_eq!(after_firm, EnvelopeStatus::Completed);
+
+        // Webhook: three Connect-shaped deliveries, every one HMAC-signed
+        // over its exact body with the receiver's own key.
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 3);
+        for request in &requests {
+            let provided = request
+                .headers
+                .get("x-docusign-signature-1")
+                .and_then(|v| v.to_str().ok())
+                .expect("HMAC header present");
+            assert!(
+                crate::webhook_auth::verify_hmac_sha256_b64(&key, &request.body, provided),
+                "the receiver must verify the delivery fail-closed"
+            );
+        }
+
+        // File: the signed PDF is exactly the bytes the sender approved,
+        // the certificate of completion accompanies it, and the envelope
+        // on disk is true.
+        let documents = fake
+            .fetch_completed_documents(&id)
+            .await
+            .expect("the loop files the documents");
+        assert_eq!(documents.signed_pdf, pdf, "the filed PDF is the sent PDF");
+        assert!(
+            !documents.certificate_pdf.is_empty(),
+            "the certificate of completion accompanies the filed PDF"
+        );
+        let envelope = fake.envelope(&id).expect("parses").unwrap();
+        assert_eq!(envelope.status, EnvelopeStatus::Completed);
+        assert_eq!(envelope.webhook_status.as_deref(), Some("delivered"));
+    }
+
+    // --- Fault injection --------------------------------------------------
+    //
+    // The ugly paths as first-class outcomes: an armed fault fires on
+    // purpose, deterministically, before any incidental network error
+    // could — and the durable envelope keeps its last true state.
+
+    #[tokio::test]
+    async fn an_injected_send_fault_writes_nothing_and_resumes_without_duplicating() {
+        let root = std::env::temp_dir().join(format!("navigator-fault-{}", Uuid::new_v4()));
+        let fake = FakeSignatureProvider::new_in(&root).with_faults(Faults::inject(&[Fault::Send]));
+        let err = fake
+            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest())
+            .await
+            .expect_err("the injected send failure fires");
+        assert!(err.to_string().contains("injected send failure"));
+        // Nothing half-sent exists: no envelope on disk, no call recorded.
+        assert!(fake.envelopes().expect("reads").is_empty());
+        assert!(fake.calls().is_empty());
+
+        // Re-running the loop without the fault resumes: exactly one
+        // envelope, not a duplicate.
+        let resumed = FakeSignatureProvider::new_in(&root);
+        let id = resumed
+            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest())
+            .await
+            .expect("send succeeds once the fault is gone");
+        assert_eq!(
+            resumed.envelopes().expect("reads").len(),
+            1,
+            "re-running the loop resumes rather than duplicates"
+        );
+        assert_eq!(id.0, "fake-00000000-0000-0000-0000-00000000002a-1");
+    }
+
+    #[tokio::test]
+    async fn an_injected_view_fault_leaves_the_envelope_untouched() {
+        let fake = FakeSignatureProvider::new().with_faults(Faults::inject(&[Fault::View]));
+        let id = fake
+            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest())
+            .await
+            .expect("send succeeds");
+        let err = fake
+            .create_recipient_view(
+                &id,
+                &RecipientView {
+                    return_url: "https://app.example/return".into(),
+                    email: "libra@example.com".into(),
+                    name: "Libra".into(),
+                    client_user_id: "notation-client".into(),
+                },
+            )
+            .await
+            .expect_err("the injected view failure fires");
+        assert!(err.to_string().contains("injected view failure"));
+        // The durable envelope keeps its last true state, and no view was
+        // recorded.
+        let envelope = fake.envelope(&id).expect("parses").unwrap();
+        assert_eq!(envelope.status, EnvelopeStatus::Sent);
+        assert!(fake.recipient_views().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_injected_webhook_fault_records_failure_and_the_loop_recovers() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let fake = FakeSignatureProvider::new()
+            .with_webhook(WebhookTarget {
+                url: server.uri(),
+                hmac_key: b"loop-hmac-key".to_vec(),
+            })
+            .with_faults(Faults::inject(&[Fault::Webhook]));
+        let id = fake
+            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest())
+            .await
+            .expect("send succeeds");
+
+        // Signing to completion never depends on delivery, and the armed
+        // fault fails every delivery on purpose.
+        fake.sign(&id, "libra@example.com").await.expect("signs");
+        let status = fake
+            .sign(&id, "attorney@neonlaw.com")
+            .await
+            .expect("completes");
+        assert_eq!(status, EnvelopeStatus::Completed);
+        let requests = server.received_requests().await.expect("requests");
+        assert!(
+            requests.is_empty(),
+            "the armed fault fails delivery before anything reaches the receiver"
+        );
+
+        // The durable envelope is true: completed on disk, the failure
+        // recorded — and the loop recovers by reading completion directly
+        // from the provider.
+        let envelope = fake.envelope(&id).expect("parses").unwrap();
+        assert_eq!(envelope.status, EnvelopeStatus::Completed);
+        assert_eq!(
+            envelope.webhook_status.as_deref(),
+            Some("failed: injected webhook fault")
+        );
+        let documents = fake
+            .fetch_completed_documents(&id)
+            .await
+            .expect("completion is recoverable from the provider");
+        assert!(
+            !documents.signed_pdf.is_empty() && !documents.certificate_pdf.is_empty(),
+            "the loop recovers the real bytes, not just a status"
         );
     }
 }
