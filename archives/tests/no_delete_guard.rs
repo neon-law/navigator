@@ -75,7 +75,7 @@ fn no_non_test_code_under_archives_deletes() {
                     path.strip_prefix(&root).unwrap_or(path).to_string_lossy(),
                     lines
                         .iter()
-                        .map(|l| l.to_string())
+                        .map(ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(", ")
                 ))

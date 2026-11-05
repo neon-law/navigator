@@ -25,11 +25,13 @@ pub struct CollisionStorage {
 impl CollisionStorage {
     /// A retention-locked bucket: `put_immutable` is create-only, and
     /// reaching for a plain `put` or a `delete` panics.
+    #[must_use]
     pub fn locked() -> Arc<Self> {
         Self::new(true)
     }
 
     /// The unlocked overwrite lane: plain `put` replaces freely.
+    #[must_use]
     pub fn unlocked() -> Arc<Self> {
         Self::new(false)
     }
@@ -58,9 +60,10 @@ impl CollisionStorage {
 #[async_trait]
 impl StorageService for CollisionStorage {
     async fn put(&self, key: &str, bytes: &[u8], _content_type: &str) -> Result<(), StorageError> {
-        if self.locked {
-            panic!("plain write to a retention-locked bucket: {key}");
-        }
+        assert!(
+            !self.locked,
+            "plain write to a retention-locked bucket: {key}"
+        );
         self.objects
             .lock()
             .unwrap()

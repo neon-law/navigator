@@ -714,7 +714,7 @@ pub(crate) async fn read_prior_metadata(
                 None => Ok(None),
             }
         }
-        Err(e) => return Err(e.into()),
+        Err(e) => Err(e.into()),
     }
 }
 
