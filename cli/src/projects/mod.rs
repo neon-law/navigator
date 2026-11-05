@@ -22,6 +22,7 @@ pub mod document_check;
 pub mod drift;
 pub mod drive_ingest;
 pub mod efiling;
+pub mod feedback_check;
 pub mod finance;
 pub mod forge;
 pub mod forge_forgejo;

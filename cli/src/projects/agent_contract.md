@@ -142,9 +142,9 @@ substitute browser or native-app automation for a server that is available.
 * **Linear** — CLI feedback, named by mechanism and never by matter. Remove personal and matter identifiers before
   filing: write `<client>`, `<claim number>`, `<email>`, `<phone>`, `<address>`, `<identifier>` in their place, and
   never quote matter text. Run `navigator project feedback-check --project <Project code>` on the draft (repeat
-  `--project` for each matter in it, plus `--term` for a private name the store does not know); it resolves each
-  Project's code and participants' names, mailboxes, and phones from the store, runs locally, and refuses a draft that
-  still carries one. Show the checked text to the lawyer before filing.
+  `--project` for each matter in it, plus `--term` for a private name the site does not know); it resolves each
+  Project's code and participants' names, mailboxes, and phones through the site API with your `site login` session,
+  never sends the draft, and refuses a draft that still carries one. Show the checked text to the lawyer before filing.
 * **CourtListener** — dockets, filings, parties, and judges.
 * **Midpage** — statutes and rules.
 * **Descrybe** — case law.
