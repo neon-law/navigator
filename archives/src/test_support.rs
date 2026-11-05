@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use cloud::{ImmutableObject, ObjectHead, ObjectListing, StorageError, StorageService, StoredObject};
+use cloud::{
+    ImmutableObject, ObjectHead, ObjectListing, StorageError, StorageService, StoredObject,
+};
 
 #[derive(Clone)]
 pub struct CollisionStorage {
@@ -67,13 +69,17 @@ impl StorageService for CollisionStorage {
     }
 
     async fn get(&self, key: &str) -> Result<StoredObject, StorageError> {
-        self.objects.lock().unwrap().get(key).cloned().map(|bytes| {
-            StoredObject {
+        self.objects
+            .lock()
+            .unwrap()
+            .get(key)
+            .cloned()
+            .map(|bytes| StoredObject {
                 key: key.to_string(),
                 bytes,
                 content_type: "application/octet-stream".into(),
-            }
-        }).ok_or_else(|| StorageError::NotFound(key.to_string()))
+            })
+            .ok_or_else(|| StorageError::NotFound(key.to_string()))
     }
 
     async fn put_immutable(
@@ -102,7 +108,11 @@ impl StorageService for CollisionStorage {
     }
 
     /// Mirrors [`cloud::FsStorage`]: the double has no signing surface.
-    async fn signed_url(&self, key: &str, _ttl: std::time::Duration) -> Result<String, StorageError> {
+    async fn signed_url(
+        &self,
+        key: &str,
+        _ttl: std::time::Duration,
+    ) -> Result<String, StorageError> {
         let _ = key;
         Err(StorageError::Unsupported("signed URLs"))
     }

@@ -99,9 +99,7 @@ fn no_non_test_code_under_archives_deletes() {
 #[tokio::test]
 async fn a_full_archive_run_performs_zero_deletes() {
     use archives::test_support::CollisionStorage;
-    use archives::{
-        author_iceberg_for_prefix, encode_parquet, PromotionRequest, APPLICATION_LANE,
-    };
+    use archives::{author_iceberg_for_prefix, encode_parquet, PromotionRequest, APPLICATION_LANE};
     use arrow::array::{RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use cloud::StorageService;
@@ -132,9 +130,7 @@ async fn a_full_archive_run_performs_zero_deletes() {
         .unwrap(),
     )
     .unwrap();
-    let data_key = format!(
-        "{APPLICATION_LANE}/person/data/dt={run_date}/part-1.parquet"
-    );
+    let data_key = format!("{APPLICATION_LANE}/person/data/dt={run_date}/part-1.parquet");
     storage
         .put_immutable(&data_key, &parquet, "application/vnd.apache.parquet")
         .await

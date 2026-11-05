@@ -1327,7 +1327,11 @@ mod tests {
 
         let storage = CollisionStorage::locked();
         let run_date = chrono::NaiveDate::from_ymd_opt(2026, 6, 14).unwrap();
-        let schema = Arc::new(ArrowSchema::new(vec![Field::new("id", DataType::Utf8, false)]));
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Utf8,
+            false,
+        )]));
         let parquet = crate::encode_parquet(
             &RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["synthetic"]))])
                 .unwrap(),

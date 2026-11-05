@@ -285,7 +285,11 @@ async fn write_paired_manifest(
         .await
         .context("probe the archive bucket's retention policy")?;
     if locked {
-        if storage.put_immutable(key, &bytes, "application/json").await.is_err() {
+        if storage
+            .put_immutable(key, &bytes, "application/json")
+            .await
+            .is_err()
+        {
             // The marker exists — this generation is already committed.
             // Never rewrite it; read back the standing manifest.
             let standing = storage
@@ -404,7 +408,6 @@ fn hex_component(value: &str) -> String {
             output
         })
 }
-
 
 #[cfg(test)]
 mod tests {

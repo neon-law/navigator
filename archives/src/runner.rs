@@ -25,8 +25,8 @@ use billing::gcp_cost::{
 use crate::tables::{fetch_batch, is_safe_archive_table_name, source_tables};
 use crate::{
     batch_from_rows, classify, encode_parquet, fingerprint, fingerprint_attempt_key,
-    fingerprint_attempt_prefix, fingerprint_key, snapshot_key,
-    DriftDecision, SnapshotConfig, SnapshotEntry, StoredFingerprint, ALL_TABLES, APPLICATION_LANE,
+    fingerprint_attempt_prefix, fingerprint_key, snapshot_key, DriftDecision, SnapshotConfig,
+    SnapshotEntry, StoredFingerprint, ALL_TABLES, APPLICATION_LANE,
 };
 
 /// One table that failed to snapshot, with the rendered error so the
@@ -195,9 +195,14 @@ async fn snapshot_table(
         })
         .context("serialize fingerprint")
     });
-    let destination =
-        resolve_destination(storage, APPLICATION_LANE, table, scheduled_for, fingerprint_due)
-            .await?;
+    let destination = resolve_destination(
+        storage,
+        APPLICATION_LANE,
+        table,
+        scheduled_for,
+        fingerprint_due,
+    )
+    .await?;
     if destination.immutable {
         storage
             .put_immutable(
@@ -216,7 +221,11 @@ async fn snapshot_table(
         }
     } else {
         storage
-            .put(&destination.data_key, &bytes, "application/vnd.apache.parquet")
+            .put(
+                &destination.data_key,
+                &bytes,
+                "application/vnd.apache.parquet",
+            )
             .await
             .with_context(|| format!("upload {}", destination.data_key))?;
         if let Some((key, fp_bytes)) = destination.fingerprint_key.zip(fingerprint_bytes) {
@@ -470,7 +479,9 @@ async fn next_attempt(storage: &dyn StorageService, prefix: &str) -> Result<u64>
 /// layout (`…/run=0930/attempt=12/snapshot.parquet`) and the schema
 /// layout (`…/_schema/attempt=7/fingerprint.json`).
 fn attempt_of(key: &str) -> Option<u64> {
-    let segment = key.split('/').find(|segment| segment.starts_with("attempt="))?;
+    let segment = key
+        .split('/')
+        .find(|segment| segment.starts_with("attempt="))?;
     segment.strip_prefix("attempt=")?.parse().ok()
 }
 
@@ -525,7 +536,11 @@ mod tests {
         let storage = CollisionStorage::locked();
         let scheduled = Utc.with_ymd_and_hms(2026, 11, 4, 9, 30, 0).unwrap();
         let first = snapshot_all(&db, storage.as_ref(), Some(scheduled)).await;
-        assert!(first.failures.is_empty(), "first run: {:#?}", first.failures);
+        assert!(
+            first.failures.is_empty(),
+            "first run: {:#?}",
+            first.failures
+        );
         let second = snapshot_all(&db, storage.as_ref(), Some(scheduled)).await;
         assert!(second.failures.is_empty(), "rerun: {:#?}", second.failures);
 
@@ -576,7 +591,11 @@ mod tests {
         let storage = FsStorage::new(dir.path()).await.unwrap();
         let scheduled = Utc.with_ymd_and_hms(2026, 11, 4, 9, 30, 0).unwrap();
         let first = snapshot_all(&db, &storage, Some(scheduled)).await;
-        assert!(first.failures.is_empty(), "first run: {:#?}", first.failures);
+        assert!(
+            first.failures.is_empty(),
+            "first run: {:#?}",
+            first.failures
+        );
         let second = snapshot_all(&db, &storage, Some(scheduled)).await;
         assert!(second.failures.is_empty(), "rerun: {:#?}", second.failures);
 

@@ -8,9 +8,7 @@
 //! persist alongside every data file.
 
 use archives::test_support::CollisionStorage;
-use archives::{
-    author_iceberg_for_prefix, encode_parquet, PromotionRequest, APPLICATION_LANE,
-};
+use archives::{author_iceberg_for_prefix, encode_parquet, PromotionRequest, APPLICATION_LANE};
 use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use chrono::NaiveDate;

@@ -1180,9 +1180,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/storage/v1/b/navigator"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(bucket_body(None)),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(bucket_body(None)))
             .mount(&server)
             .await;
         let storage = GcsStorage::new_from_config(GcsStorageConfig {
