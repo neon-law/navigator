@@ -14,7 +14,6 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::seed;
@@ -28,7 +27,12 @@ const VALID_TEMPLATE: &str =
 fn amendment_template() -> String {
     VALID_TEMPLATE.replace("code: onboarding__letter", "code: amendment")
 }
-const KEY: &str = "api-notation-intake-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_new_person;
 const CLIENT_EMAIL: &str = "libra@example.com";
 
 // These tests mutate one process-wide repository root and invoke git in that
@@ -81,28 +85,6 @@ async fn build_app() -> Harness {
 
 async fn open_project(surreal: &store::surreal::SurrealDb) -> store::projects::Project {
     store::test_support::seed_project(surreal, "Matter").await
-}
-
-async fn bearer(
-    surreal: &store::surreal::SurrealDb,
-    email: &str,
-    role: Role,
-    project: Option<uuid::Uuid>,
-) -> String {
-    let actor = store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(email, email, role),
-    )
-    .await
-    .unwrap();
-    if let Some(project_id) = project {
-        store::projects::add_participation(surreal, project_id, actor.id, "lawyer")
-            .await
-            .unwrap();
-    }
-    let mut s = SessionData::fresh("api-intake-sub", role);
-    s.person_id = Some(actor.id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 /// Open a notation on `project` bound to `CLIENT_EMAIL`, returning its id.
@@ -169,7 +151,7 @@ async fn client_is_403() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = open_notation(&h, &project).await;
-    let client = bearer(&h.surreal, "client@example.com", Role::Client, None).await;
+    let client = bearer_new_person(&h.surreal, "client@example.com", Role::Client, None).await;
 
     let resp = post_intake(&h.app, Some(&client), notation_id).await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -181,7 +163,7 @@ async fn lawyer_outside_the_matter_scope_is_404() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = open_notation(&h, &project).await;
-    let outsider = bearer(&h.surreal, "outsider@example.com", Role::Lawyer, None).await;
+    let outsider = bearer_new_person(&h.surreal, "outsider@example.com", Role::Lawyer, None).await;
 
     let resp = post_intake(&h.app, Some(&outsider), notation_id).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -193,7 +175,7 @@ async fn participant_lawyer_dispatches_the_intake_and_reports_the_recipient() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = open_notation(&h, &project).await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
@@ -216,7 +198,7 @@ async fn dispatched_intake_uses_the_project_code_in_its_route() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = open_notation(&h, &project).await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
@@ -245,7 +227,7 @@ async fn admin_bypasses_scope_and_dispatches() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = open_notation(&h, &project).await;
-    let admin = bearer(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
 
     let resp = post_intake(&h.app, Some(&admin), notation_id).await;
     assert_eq!(resp.status(), StatusCode::OK);

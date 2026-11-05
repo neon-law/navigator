@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::seed;
@@ -20,7 +19,12 @@ use store::test_support::mem_surreal;
 use tower::ServiceExt;
 
 const TEMPLATE_CODE: &str = "onboarding__letter";
-const KEY: &str = "api-clause-edits-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_new_person;
 
 async fn build_app() -> (axum::Router, store::surreal::SurrealDb) {
     let surreal = mem_surreal().await;
@@ -43,28 +47,6 @@ async fn build_app() -> (axum::Router, store::surreal::SurrealDb) {
 
 async fn open_project(surreal: &store::surreal::SurrealDb) -> store::projects::Project {
     store::test_support::seed_project(surreal, "Matter").await
-}
-
-async fn bearer(
-    surreal: &store::surreal::SurrealDb,
-    email: &str,
-    role: Role,
-    project: Option<uuid::Uuid>,
-) -> String {
-    let actor = store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(email, email, role),
-    )
-    .await
-    .unwrap();
-    if let Some(project_id) = project {
-        store::projects::add_participation(surreal, project_id, actor.id, "lawyer")
-            .await
-            .unwrap();
-    }
-    let mut s = SessionData::fresh("api-clause-edit-sub", role);
-    s.person_id = Some(actor.id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 async fn seed_notation(surreal: &store::surreal::SurrealDb, project_id: uuid::Uuid) -> uuid::Uuid {
@@ -139,7 +121,7 @@ async fn edit_authz_matrix_and_success() {
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
 
     // client → 403
-    let client = bearer(&surreal, "client@example.com", Role::Client, None).await;
+    let client = bearer_new_person(&surreal, "client@example.com", Role::Client, None).await;
     let r = send(
         &app,
         req(
@@ -153,7 +135,7 @@ async fn edit_authz_matrix_and_success() {
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
 
     // non-participant lawyer → 404
-    let outsider = bearer(&surreal, "outsider@example.com", Role::Lawyer, None).await;
+    let outsider = bearer_new_person(&surreal, "outsider@example.com", Role::Lawyer, None).await;
     let r = send(
         &app,
         req(
@@ -167,7 +149,7 @@ async fn edit_authz_matrix_and_success() {
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
 
     // participant lawyer blank body → 400
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &surreal,
         "lawyer@example.com",
         Role::Lawyer,
@@ -211,7 +193,7 @@ async fn a_clause_from_another_notation_is_404() {
     let notation_id = seed_notation(&surreal, project.id).await;
     let other_notation = seed_notation(&surreal, project.id).await;
     let other_clause = append_clause(&surreal, other_notation, "Elsewhere.").await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &surreal,
         "lawyer@example.com",
         Role::Lawyer,
@@ -237,7 +219,7 @@ async fn participant_lawyer_deletes_a_clause() {
     let project = open_project(&surreal).await;
     let notation_id = seed_notation(&surreal, project.id).await;
     let clause_id = append_clause(&surreal, notation_id, "To remove.").await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &surreal,
         "lawyer@example.com",
         Role::Lawyer,
@@ -261,7 +243,7 @@ async fn participant_lawyer_moves_a_clause() {
     let notation_id = seed_notation(&surreal, project.id).await;
     let first = append_clause(&surreal, notation_id, "First.").await;
     let second = append_clause(&surreal, notation_id, "Second.").await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &surreal,
         "lawyer@example.com",
         Role::Lawyer,

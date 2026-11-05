@@ -13,7 +13,6 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::seed;
@@ -22,7 +21,12 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use workflows::{InMemoryRuntime, StateMachineRuntime};
 
-const KEY: &str = "api-matter-close-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_new_person;
 
 struct Harness {
     app: axum::Router,
@@ -86,30 +90,6 @@ async fn seed_matter(surreal: &store::surreal::SurrealDb, with_client: bool) -> 
     project.id
 }
 
-/// A `Bearer` header for a session of `role`, optionally added to `project` as a
-/// firm-side participant so the matter-scope check admits them.
-async fn bearer(
-    surreal: &store::surreal::SurrealDb,
-    email: &str,
-    role: Role,
-    project: Option<Uuid>,
-) -> String {
-    let actor = store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(email, email, role),
-    )
-    .await
-    .unwrap();
-    if let Some(project_id) = project {
-        store::projects::add_participation(surreal, project_id, actor.id, "lawyer")
-            .await
-            .unwrap();
-    }
-    let mut session = SessionData::fresh("api-close-sub", role);
-    session.person_id = Some(actor.id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&session))
-}
-
 async fn close(
     app: &axum::Router,
     project_id: Uuid,
@@ -131,11 +111,11 @@ async fn close(
 async fn a_participant_lawyer_opens_the_closing_notation() {
     let h = build_app().await;
     let project_id = seed_matter(&h.surreal, true).await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &h.surreal,
         "lawyer@example.com",
         Role::Lawyer,
-        Some(project_id),
+        Some((project_id, "lawyer")),
     )
     .await;
 
@@ -164,7 +144,7 @@ async fn an_admin_bypasses_scope_and_closes() {
     let h = build_app().await;
     let project_id = seed_matter(&h.surreal, true).await;
     // Admin does NOT participate; the scope check bypasses for admin.
-    let admin = bearer(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
 
     let resp = close(&h.app, project_id, Some(&admin)).await;
     assert_eq!(resp.status(), StatusCode::CREATED);
@@ -175,7 +155,7 @@ async fn a_lawyer_outside_the_matter_is_not_found() {
     let h = build_app().await;
     let project_id = seed_matter(&h.surreal, true).await;
     // Lawyer tier, but not a participant of this matter.
-    let outsider = bearer(&h.surreal, "outsider@example.com", Role::Lawyer, None).await;
+    let outsider = bearer_new_person(&h.surreal, "outsider@example.com", Role::Lawyer, None).await;
 
     let resp = close(&h.app, project_id, Some(&outsider)).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -185,7 +165,8 @@ async fn a_lawyer_outside_the_matter_is_not_found() {
 async fn a_client_caller_is_forbidden() {
     let h = build_app().await;
     let project_id = seed_matter(&h.surreal, true).await;
-    let client = bearer(&h.surreal, "client-caller@example.com", Role::Client, None).await;
+    let client =
+        bearer_new_person(&h.surreal, "client-caller@example.com", Role::Client, None).await;
 
     let resp = close(&h.app, project_id, Some(&client)).await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -206,11 +187,11 @@ async fn a_matter_with_no_client_is_a_conflict() {
     // No client participant, but the acting lawyer participates so scope passes
     // and the command reaches its own no-client refusal.
     let project_id = seed_matter(&h.surreal, false).await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &h.surreal,
         "lawyer2@example.com",
         Role::Lawyer,
-        Some(project_id),
+        Some((project_id, "lawyer")),
     )
     .await;
 

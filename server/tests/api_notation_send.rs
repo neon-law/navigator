@@ -15,7 +15,6 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::seed;
@@ -24,7 +23,12 @@ use tower::ServiceExt;
 use workflows::{DispatchingRuntime, InMemoryRuntime, StateMachineRuntime};
 
 const TEMPLATE_CODE: &str = "onboarding__letter";
-const KEY: &str = "api-notation-send-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_new_person;
 /// The fee terms a lawyer writes into the engagement agreement's
 /// custom-clause slot before it can be sent for signature.
 const FEE_CLAUSE: &str = "**Fees.** This matter is billed at $400 per hour against the \
@@ -83,28 +87,6 @@ async fn build_app() -> Harness {
 
 async fn open_project(surreal: &store::surreal::SurrealDb) -> store::projects::Project {
     store::test_support::seed_project(surreal, "Matter").await
-}
-
-async fn bearer(
-    surreal: &store::surreal::SurrealDb,
-    email: &str,
-    role: Role,
-    project: Option<uuid::Uuid>,
-) -> String {
-    let actor = store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(email, email, role),
-    )
-    .await
-    .unwrap();
-    if let Some(project_id) = project {
-        store::projects::add_participation(surreal, project_id, actor.id, "lawyer")
-            .await
-            .unwrap();
-    }
-    let mut s = SessionData::fresh("api-send-sub", role);
-    s.person_id = Some(actor.id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 /// Insert a retainer notation on `project` bound to a fresh client, driven to
@@ -231,7 +213,7 @@ async fn client_is_403() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = seed_lawyer_review_notation(&h, project.id).await;
-    let client = bearer(&h.surreal, "client@example.com", Role::Client, None).await;
+    let client = bearer_new_person(&h.surreal, "client@example.com", Role::Client, None).await;
 
     let resp = post(&h.app, Some(&client), notation_id, "signature").await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -242,7 +224,7 @@ async fn lawyer_outside_the_matter_scope_is_404() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = seed_lawyer_review_notation(&h, project.id).await;
-    let outsider = bearer(&h.surreal, "outsider@example.com", Role::Lawyer, None).await;
+    let outsider = bearer_new_person(&h.surreal, "outsider@example.com", Role::Lawyer, None).await;
 
     let resp = post(&h.app, Some(&outsider), notation_id, "signature").await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -253,7 +235,7 @@ async fn send_before_approve_is_409_document_not_ready() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = seed_lawyer_review_notation(&h, project.id).await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
@@ -274,7 +256,7 @@ async fn approve_then_send_dispatches_and_returns_the_request_id() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = seed_lawyer_review_notation(&h, project.id).await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
@@ -325,7 +307,7 @@ async fn an_unfinished_document_is_refused_and_never_reaches_the_provider() {
     )
     .await
     .unwrap();
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
@@ -388,7 +370,7 @@ async fn a_retainer_with_no_clauses_is_refused_and_never_reaches_the_provider() 
             .await
             .unwrap();
     }
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
@@ -443,7 +425,7 @@ async fn admin_bypasses_scope_and_sends() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = seed_lawyer_review_notation(&h, project.id).await;
-    let admin = bearer(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
 
     let approve = post(&h.app, Some(&admin), notation_id, "approval").await;
     assert_eq!(approve.status(), StatusCode::OK);

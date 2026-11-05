@@ -13,7 +13,6 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::test_support::mem_surreal;
@@ -21,7 +20,12 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use workflows::{DispatchingRuntime, InMemoryRuntime, StateMachineRuntime};
 
-const KEY: &str = "api-transcript-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_opt as bearer;
 
 /// A questionnaire the batch coverage engine can partially cover (mirrors
 /// `transcript_coverage.rs`).
@@ -48,12 +52,6 @@ struct Harness {
     admin: String,
     client: String,
     outsider: String,
-}
-
-fn bearer(person_id: Option<Uuid>, role: Role) -> String {
-    let mut s = SessionData::fresh("api-transcript-sub", role);
-    s.person_id = person_id;
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 async fn harness() -> Harness {

@@ -13,7 +13,6 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::playbooks::{NewPlaybook, Position};
@@ -23,7 +22,28 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use workflows::InMemoryRuntime;
 
-const KEY: &str = "api-contract-review-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_new_person;
+
+/// The contract-review fixtures mint their own actor addresses; the
+/// canonical helper takes the email, so bind the convention here.
+async fn bearer(
+    surreal: &store::surreal::SurrealDb,
+    role: Role,
+    project: Option<(uuid::Uuid, &str)>,
+) -> String {
+    bearer_new_person(
+        surreal,
+        &format!("actor-{}@example.com", Uuid::now_v7()),
+        role,
+        project,
+    )
+    .await
+}
 const BOUNDARY: &str = "----navcontractboundary";
 
 async fn build_app() -> (axum::Router, store::surreal::SurrealDb) {
@@ -96,29 +116,6 @@ async fn seed_playbook(surreal: &store::surreal::SurrealDb, entity_id: Uuid) {
     )
     .await
     .unwrap();
-}
-
-/// A `Bearer` for a person of `role`, optionally a participant of `project`.
-async fn bearer(
-    surreal: &store::surreal::SurrealDb,
-    role: Role,
-    project: Option<(uuid::Uuid, &str)>,
-) -> String {
-    let email = format!("actor-{}@example.com", Uuid::now_v7());
-    let actor = store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(email.clone(), email, role),
-    )
-    .await
-    .unwrap();
-    if let Some((project_id, participation)) = project {
-        store::projects::add_participation(surreal, project_id, actor.id, participation)
-            .await
-            .unwrap();
-    }
-    let mut s = SessionData::fresh("api-contract-sub", role);
-    s.person_id = Some(actor.id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 /// A multipart body carrying only a `contract_text` part (the pasted contract).
