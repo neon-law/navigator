@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use thiserror::Error;
 
+pub mod archives_project;
 pub mod audio;
 pub mod calendar;
 pub mod contacts;
@@ -227,6 +228,20 @@ pub trait StorageService: Send + Sync {
         Ok(false)
     }
 
+    /// The numeric id of the GCP project that owns this handle's bucket —
+    /// the only project identity GCS reports to a storage-scoped credential
+    /// (`buckets.get` returns the number, never the project id). The
+    /// archive-project verification (`crate::archives_project`) compares it
+    /// against `NAVIGATOR_ARCHIVES_GCP_PROJECT_ID` and refuses archive
+    /// writes when the match cannot be confirmed.
+    ///
+    /// The default reports [`StorageError::Unsupported`]: backends with no
+    /// owning-project concept (filesystem, S3) cannot confirm anything, and
+    /// the caller fails closed while the seam is set.
+    async fn bucket_project_number(&self) -> Result<i64, StorageError> {
+        Err(StorageError::Unsupported("bucket owning-project probe"))
+    }
+
     async fn delete(&self, key: &str) -> Result<(), StorageError>;
 
     /// List objects whose key starts with `prefix`, with their byte sizes.
@@ -321,11 +336,31 @@ pub async fn surreal_archives_from_env() -> Result<Arc<dyn StorageService>, Stor
 /// KIND provisions its own dedicated `SeaweedFS` bucket and key pair (ENG-214),
 /// so neither backend falls back to `NAVIGATOR_STORAGE_BUCKET`.
 pub async fn archives_from_env() -> Result<Arc<dyn StorageService>, StorageError> {
-    backend_from_env(
-        GcsStorageConfig::archives_from_env,
-        S3StorageConfig::archives_from_env,
+    archives_from_lookup(|key| std::env::var(key).ok()).await
+}
+
+/// [`archives_from_env`] with every environment read through `get`, so the
+/// lane's fail-closed project verification is testable without mutating
+/// process env.
+///
+/// The verification runs here — the single choke point every archives-lane
+/// caller resolves its handle through — so a
+/// `NAVIGATOR_ARCHIVES_GCP_PROJECT_ID` naming a project the resolved bucket
+/// does not belong to (or that the storage credential cannot confirm) fails
+/// the lane before any object write, rather than after the first archive
+/// object has landed in-project. See [`archives_project`].
+pub async fn archives_from_lookup<F>(get: F) -> Result<Arc<dyn StorageService>, StorageError>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let storage = backend_from_lookup(
+        &get,
+        || GcsStorageConfig::archives_from_lookup(&get),
+        || S3StorageConfig::archives_from_lookup(&get),
     )
-    .await
+    .await?;
+    archives_project::verify_archives_project(storage.as_ref(), &get).await?;
+    Ok(storage)
 }
 
 /// Like [`from_env`], but the GCS bucket comes from

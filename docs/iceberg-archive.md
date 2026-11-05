@@ -160,6 +160,17 @@ metadata beside each table's data. The completion marker is `postgres/_paired/<g
 Bytes stay in `cloud::StorageService` (GCS in prod, `FsStorage` in dev) — the writer goes through the trait, never the
 GCS SDK directly, per [AGENTS.md](../AGENTS.md).
 
+### Offsite archive project
+
+When the archive bucket lives in a GCP project other than the deployment's, set `NAVIGATOR_ARCHIVES_GCP_PROJECT_ID`
+on the workflows-service pod to the archive project's id or numeric project number. Lane resolution
+(`cloud::archives_from_env`) then verifies the bucket's owning project through the storage credential and **refuses
+to write** when the match cannot be confirmed: a numeric value verifies by direct equality against the project
+number GCS reports for the bucket; an id verifies that the bucket is outside the deployment project (a
+storage-scoped credential cannot resolve ids to numbers). The Slack digest annotates the archive project and pins
+its console links with `?project=`. Leave the variable unset for an in-project bucket and on non-GCS backends
+(staging SeaweedFS keeps its existing variable set).
+
 ## Catalog + BigQuery wiring — **operator decision required**
 
 Two ways to make BigQuery read the lake; pick one before building the writer:
