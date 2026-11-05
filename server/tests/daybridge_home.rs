@@ -86,18 +86,12 @@ async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
         ] {
             assert!(html.contains(expected), "{host} missing {expected:?}");
         }
-        // Daybridge is a launched practice brand now, like Vesta,
-        // Misericordia, Abhaya, DeleteYourDebt, and Summons before it: its
-        // footer is the single-focus "practice" variant
-        // (`PublicChrome::is_practice`, keyed off `BrandKey::LIVE`), which
-        // omits the "Our Family" cross-sell and points the copyright at
-        // the firm's own site instead. See `server/tests/vesta_home.rs`'s
-        // `vesta_and_lawyer_shook_omit_the_lawyer_shook_trademark_notice`
-        // for the same shape on an already-launched sibling.
+        // Every Guieb & Shook practice publishes the same family row and
+        // links the copyright to the Firm's own site.
         let footer = html.split("<footer").nth(1).expect("shared footer");
         assert!(
-            !footer.contains("site-footer__family") && !footer.contains("Our family"),
-            "{host} a launched practice brand must not cross-sell the family row: {footer}"
+            footer.contains("site-footer__family") && footer.contains("Our family"),
+            "{host} publishes the shared family row: {footer}"
         );
         assert!(
             footer.contains(r#"href="https://www.guiebshook.com""#),

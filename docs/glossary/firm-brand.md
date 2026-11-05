@@ -19,16 +19,16 @@ key. A Firm may therefore wear any Brand a row names, runtime-created ones inclu
 Brands](house-brand.md). `store::seed` migrates each House Brand into a `brand` row on first boot
 (`store::firms::CLOSED_BRAND_KEYS` is the compiled list it reads) so validation has a catalog from the start.
 
-Every footer names the Firm actually wearing the request's resolved brand, not a compiled constant:
-`webapp::firm_footer::resolve_firm_footer_model` reads the Firm's Entity for the legal name and `firm_brand` for the
-"Our Family" row, in registry order with the current brand flagged, falling back to the compiled family
-(`views::brand::firm_family`) filtered to reachable live brands plus the current brand only when no Firm wears the key —
-so the row is on every page from first boot without advertising an unopened host. The `/app` footer
-(`webapp::firm_footer::FirmFooter`) and the public chrome's footer draw from this one resolved model rather than
-duplicating the lookup or rendering a second Firm's brands. Both also carry the firm's association memberships
-(`views::brand::firm_memberships`) as one "Proud member of the …" line each, linking the association's own site; a
-white-label bundle that renames the firm publishes neither row, because the family and the membership are Guieb & Shook
-PC's.
+Every footer names the Firm wearing the request's resolved Brand. The footer resolver reads its Entity for the legal
+name and its attached Brands for the public "Our Family" row. The canonical Guieb & Shook Entity carries the complete
+compiled family in registry order, plus its runtime-created Brands. Other operators carry their own attached Brands.
+When no Firm wears the key, the compiled family supplies the row. Compiled links include reachable live Brands and the
+current Brand, which is marked as current.
+
+Every Guieb & Shook public footer carries the same family and twelve page links. Design, Blog, Privacy, Terms, and
+Testimonials stay on the current Brand's host. Shared tools, including API, link to Neon's host. The public footer also
+carries the Firm's association memberships. The `/app` footer uses the same resolved legal name in a compact copyright
+line. A renamed operator inherits its own identity and attached Brands.
 
 - Schema: [`firm_brand` in the PostgreSQL schema](../../store/postgres/schema.sql) ·
   [`store::firms`](../../store/src/firms.rs)

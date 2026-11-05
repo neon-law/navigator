@@ -95,7 +95,7 @@ ships green and renders unstyled. Every migrated surface adds its chrome rules i
 3. Semantic class names only; add the matching rules to `server/public/css/theme.css` in the same pull request.
 4. A test beside it rendering the component through `dioxus_ssr` and asserting the aria semantics and theme classes.
    `breadcrumb.rs` is the reference.
-5. Render it in `webapp/src/design.rs`; `gallery_source_mentions_every_exported_component` fails the build otherwise.
+5. Render it in `webapp/src/design.rs`. The component scanner checks gallery coverage.
 6. `cargo nextest run -p webapp --lib && cargo nextest run -p portal --lib`.
 
 ## Forms

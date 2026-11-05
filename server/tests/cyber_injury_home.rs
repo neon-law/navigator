@@ -180,23 +180,6 @@ async fn cyber_injury_testimonials_are_public() {
     }
 }
 
-/// Nautilus is the only privacy-plan card: the retired DeleteYourData.com
-/// sibling card (the same product under its former name) must not resurface
-/// on the home page.
-#[tokio::test]
-async fn cyber_injury_home_no_longer_links_to_delete_your_data() {
-    for host in HOSTS {
-        let (status, html) = page(host, "/").await;
-        assert_eq!(status, StatusCode::OK, "{host}");
-        for banned in ["DeleteYourData.com", "MAKE YOUR DATA HARDER TO FIND."] {
-            assert!(
-                !html.contains(banned),
-                "{host} still carries the retired DeleteYourData card copy {banned:?}"
-            );
-        }
-    }
-}
-
 /// Each practice page answers on the brand's own hosts with its per-page
 /// share identity (the catalog's `head_title` and `og_description` reach the
 /// page as `og:title` and `og:description`; the statement itself renders
