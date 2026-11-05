@@ -356,10 +356,7 @@ cargo run -p cli -- ops assets fonts upload --family eb-garamond \
 
 We redistribute these bytes from our own buckets, so each family's grant travels with it:
 `server/public/fonts/<family>/OFL.txt` carries the upstream notice verbatim, tracked even though the faces are not.
-Lawyer Shook's Tinos is the one family whose faces are tracked instead — see below. Because Lawyer Shook is also the
-portfolio directory, its page head declares the sibling brands' bucket-served faces as well; each card then renders in
-the typeface named by its compiled brand key without importing a sibling token sheet and overwriting Lawyer Shook's
-palette.
+Tinos is the one family whose faces are tracked instead — see below.
 
 The published faces are latin subsets. That is right while the English-only invariant holds, but `views` chose Mukta for
 Abhaya specifically for its Devanagari coverage: a Hindi surface would need those faces taken from the upstream release
@@ -452,12 +449,11 @@ social previews. Publish both files through `navigator site asset upload` before
 The `guieb-shook` palette sets ivory surfaces with navy text in light mode and navy surfaces with ivory text in dark
 mode.
 
-### Lawyer Shook's Tinos
+### Tinos
 
-The `lawyer-shook` house brand uses Tinos under the SIL Open Font License 1.1. The repository carries the Regular and
-Bold WOFF2 faces under `server/public/fonts/tinos/`; no raster mark is required because the public header and footer
-render the LAWYER SHOOK wordmark as text. `portal::dioxus_app` selects these faces for the Lawyer Shook host. It is the
-only brand served from the tracked tree rather than the bucket, so it is the one family absent from
+Tinos is a catalogued typeface under the SIL Open Font License 1.1. The repository carries the Regular and Bold WOFF2
+faces under `server/public/fonts/tinos/`, and a brand row that picks the `tinos` typeface loads them through its token
+stylesheet. It is the only face served from the tracked tree rather than the bucket, so it is the one family absent from
 `BUCKET_FONT_FAMILIES`; `published_font_families_cover_every_bucket_face_the_site_emits` accepts either lane and refuses
 a face delivered by neither. That guard reads both emitters — `portal::dioxus_app`'s per-brand head fragment and
 `views::brand_presentation`'s typeface catalog, which is what `/app/admin/brands/new` still picks a new brand's starting

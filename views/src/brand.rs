@@ -408,13 +408,9 @@ pub struct Branding {
     /// This Brand's verified public profiles and the shared `YouTube` channel.
     /// Empty on a bundle that renames the firm.
     pub firm_social: &'static [FirmSocial],
-    /// The house brands the firm trades under — the footer's "Our Family"
-    /// row, in registry order. [`BrandKey::ALL`] on every house brand, so a
-    /// reader on any one of them sees the other two; empty on a bundle that
-    /// renames the firm, whose footer must not list another firm's brands.
-    /// The live `firm_brand` rows override this when a Firm wears the
-    /// request's key (`webapp::firm_footer`); this is what renders before
-    /// any Firm is seeded, so the row is on every page from first boot.
+    /// The house brands the firm trades under, in registry order. A
+    /// non-empty family marks a house brand, whose footer borrows the firm's
+    /// shared page links; empty on a bundle that renames the firm.
     pub firm_family: &'static [BrandKey],
     /// The firm's registered word mark, spelled the way the register spells it
     /// — `NEON LAW`, not the title-case wordmark the header wears. The footer's
@@ -571,58 +567,10 @@ pub static DELETE_YOUR_DATA_BRANDING: Branding = Branding {
     brand_key: BrandKey::DeleteYourData,
 };
 
-/// The Lawyer Shook house brand: a bare holding page for Guieb & Shook PC, not
-/// an active marketing site. `/` renders only the firm's name, one statement
-/// of what it is, and a sign-in line for an existing client — see
-/// `neon::firm_pages::lawyer_shook_holding_content`. Its web face is still
-/// selected by the per-brand asset head and token stylesheet (Tinos), and
-/// `neon/locales/en/lawyer-shook/services.yaml` remains its `/services`
-/// catalog even though that route is gated off, since the page carries no
-/// per-brand marketing prose to hand-write in Rust.
-pub static LAWYER_SHOOK_BRANDING: Branding = Branding {
-    firm: SiteBrand {
-        site_name: "Lawyer Shook",
-        home_href: "/",
-        tagline: "The Guieb & Shook PC holding page.",
-        postal_address: "5150 Mae Anne Ave Ste 405-9002, Reno, NV 89523",
-        logo_href: "/public/brand/lawyer-shook/logo.svg",
-        social_image: "/public/brand/lawyer-shook/logo.png",
-        nav: &[],
-        is_law_firm: true,
-        legal_entity: "Guieb & Shook PC",
-    },
-    firm_email: "contact@lawyershook.com",
-    support_domain: "lawyershook.com",
-    firm_phone: "+1 510 800 2090",
-    firm_offices: FIRM_OFFICES,
-    firm_attorneys: &[],
-    firm_memberships: FIRM_MEMBERSHIPS,
-    firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
-    consultation_url: SHOOK_CONSULTATION_URL,
-    terms_url: "/terms",
-    privacy_url: "/privacy",
-    base_url: "",
-    primary_domain: "lawyershook.com",
-    firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    // Unused by the rendered page (`neon::firm_pages::lawyer_shook_holding_content`
-    // is the single source of that statement) and by `llms_txt`, which reuses
-    // that same function rather than reading these two fields. Kept accurate
-    // anyway, since a `Branding` value should not carry a stale claim.
-    mission_description: "Lawyer Shook is the holding page for Guieb & Shook PC's LAWYER SHOOK mark, not an active practice. Guieb & Shook PC is an American law firm. We build brands that put the customer not the lawyer first.",
-    service_description: "Lawyer Shook publishes no services or fee schedule here; it is a holding page for Guieb & Shook PC only.",
-    portal_only: false,
-    brand_key: BrandKey::LawyerShook,
-};
-
 /// The Guieb & Shook house brand: the firm's own site. `/` renders the
 /// authored classic-NY homepage from its `home.yaml` — see
 /// `neon::firm_pages::resolve_firm_home_content`. Its web face is selected
-/// by the per-brand asset head and token stylesheet (Tinos), like Lawyer
-/// Shook's.
+/// by the per-brand asset head and token stylesheet (Tinos).
 pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
     firm: SiteBrand {
         site_name: "Guieb & Shook",
@@ -1135,7 +1083,6 @@ pub enum BrandKey {
     #[default]
     Neon,
     DeleteYourData,
-    LawyerShook,
     Vesta,
     Misericordia,
     Abhaya,
@@ -1172,7 +1119,6 @@ impl BrandKey {
         Self::Vesta,
         Self::Misericordia,
         Self::Abhaya,
-        Self::LawyerShook,
         Self::Summons,
         Self::Daybridge,
         Self::DeathAndDivorce,
@@ -1185,7 +1131,6 @@ impl BrandKey {
     ];
 
     /// The brands Guieb & Shook PC trades under: every key but Lex Tecnica's.
-    /// The footer's "Our Family" row on a Guieb & Shook brand lists these.
     pub const GUIEB_SHOOK_FAMILY: &'static [Self] = &[
         Self::Neon,
         Self::DeleteYourData,
@@ -1193,7 +1138,6 @@ impl BrandKey {
         Self::Vesta,
         Self::Misericordia,
         Self::Abhaya,
-        Self::LawyerShook,
         Self::Summons,
         Self::Daybridge,
         Self::DeathAndDivorce,
@@ -1216,7 +1160,6 @@ impl BrandKey {
         Self::Vesta,
         Self::Misericordia,
         Self::Abhaya,
-        Self::LawyerShook,
         Self::Summons,
         Self::Daybridge,
         Self::DeathAndDivorce,
@@ -1241,7 +1184,6 @@ impl BrandKey {
         match self {
             Self::Neon => "neon",
             Self::DeleteYourData => "delete-your-data",
-            Self::LawyerShook => "lawyer-shook",
             Self::Vesta => "vesta",
             Self::Misericordia => "misericordia",
             Self::Abhaya => "abhaya",
@@ -1258,36 +1200,6 @@ impl BrandKey {
         }
     }
 
-    /// The one-line description shown beside this brand in the footer's
-    /// "Our Family" block.
-    ///
-    /// The short names carry no information to a cold reader — "Vesta" and
-    /// "Abhaya" say nothing about wills or visas — so the family list is
-    /// unusable as bare links. These lines are what make it navigable.
-    ///
-    /// `DeleteYourDebt` connects visitors with PandA Law's debt-relief work.
-    #[must_use]
-    pub const fn family_byline(self) -> &'static str {
-        match self {
-            Self::Neon => "flat-fee legal services for emerging tech",
-            Self::DeleteYourData => "protect your personal information",
-            Self::LawyerShook => "Nicholas Shook",
-            Self::Vesta => "estate planning, wills, and trusts",
-            Self::Misericordia => "accidents and injury claims",
-            Self::Abhaya => "visas, green cards, and citizenship",
-            Self::DeleteYourDebt => "debt relief with PandA Law",
-            Self::Summons => "NYC summons defense at OATH hearings",
-            Self::Daybridge => "a brighter way through divorce for couples who agree",
-            Self::DeathAndDivorce => "divorce and probate",
-            Self::Aegis => "criminal defense",
-            Self::Groundwork => "real estate transactions and property disputes",
-            Self::GuiebShook => "attorneys at law",
-            Self::CyberInjuryLaw => "injury claims and cybercrime",
-            Self::LexTecnica => "general counsel for entrepreneurs",
-            Self::IepDefenders => "special education attorneys for your child's IEP",
-        }
-    }
-
     /// Parse a registry key. Runtime-created keys have no compiled hosts.
     #[must_use]
     pub fn parse(key: &str) -> Option<Self> {
@@ -1298,21 +1210,6 @@ impl BrandKey {
     #[must_use]
     pub fn public_home_href(self) -> String {
         format!("https://{}", self.hosts()[0])
-    }
-
-    /// The brand this key's site moved to, if it moved: every served host
-    /// 301s to the matching host of the brand named here.
-    ///
-    /// A moved brand's domain no longer resolves to the cluster (its zone is
-    /// retired), so [`release_brand_hosts`] leaves its hosts off every
-    /// certificate and Ingress rule. The in-process 301 remains for any
-    /// request that still reaches the router.
-    #[must_use]
-    pub const fn moved_to(self) -> Option<Self> {
-        match self {
-            Self::LawyerShook => Some(Self::GuiebShook),
-            _ => None,
-        }
     }
 
     /// This key's home in the deployment named by `deployment_host`.
@@ -1357,11 +1254,7 @@ impl BrandKey {
     /// on.
     ///
     /// A house brand ships only the stems it actually serves; a missing file is
-    /// a loader-test failure, not a first-request panic. Lawyer Shook's `/` is a
-    /// hardcoded bare statement rather than a YAML page (there is no marketing
-    /// copy to edit), so `home` is absent from its list even though `/services`
-    /// still builds from a catalog file — the route is gated off by
-    /// [`Self::publishes_firm_path`], not the file removed.
+    /// a loader-test failure, not a first-request panic.
     #[must_use]
     pub fn catalog_pages(self) -> &'static [&'static str] {
         match self {
@@ -1388,8 +1281,7 @@ impl BrandKey {
                 "data-theft",
                 "theft",
             ],
-            Self::LawyerShook
-            | Self::GuiebShook
+            Self::GuiebShook
             | Self::LexTecnica
             | Self::IepDefenders
             | Self::DeleteYourData
@@ -1407,8 +1299,7 @@ impl BrandKey {
     /// Neon answers Nautilus at `/`, business counsel at `/business`, and its
     /// fee schedule at `/services`; `/disputes` returns 404. DeleteYourData
     /// answers only the pages it has a catalog for (plus `/contact`, which is
-    /// addresses rather than a YAML stem). Lawyer Shook keeps its holding
-    /// notice and practice cards on `/`. Every brand answers `/contact/sent`
+    /// addresses rather than a YAML stem). Every brand answers `/contact/sent`
     /// for its lead form and serves its own Posts at `/blog`, the target of
     /// its footer link; other firm paths 404 on the holding host.
     #[must_use]
@@ -1463,7 +1354,6 @@ impl BrandKey {
         match self {
             Self::Neon => path.trim_end_matches('/') != "/disputes",
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),
-            Self::LawyerShook => matches!(path, "/" | "/testimonials"),
             // Guieb & Shook publishes its services page: the homepage's
             // practice cards link there, so the route must resolve on this
             // host. No other path joins the set.
@@ -1545,7 +1435,6 @@ impl BrandKey {
         Some(match self {
             Self::Neon => "neonlaw.com",
             Self::DeleteYourData => "deleteyourdata.com",
-            Self::LawyerShook => "lawyershook.com",
             Self::Vesta => "vestaestateplanning.com",
             Self::Misericordia => "misericordialaw.com",
             Self::Abhaya => "abhayaimmigration.com",
@@ -1589,8 +1478,7 @@ impl BrandKey {
     /// requested by the same change that approves it. `cli::devx::ship` now
     /// derives certificates and Ingress rules from [`release_brand_hosts`],
     /// the full registry, so every key carries a valid, isolated certificate
-    /// family (ENG-768) in both environments regardless of `is_live()` —
-    /// every key but a moved one, whose domain no longer resolves to the cluster.
+    /// family (ENG-768) in both environments regardless of `is_live()`.
     ///
     /// It gates the footer and host admission; route publication is separate.
     #[must_use]
@@ -1606,7 +1494,6 @@ impl BrandKey {
         match self {
             Self::Neon => &["www.neonlaw.com", "staging.neonlaw.com"],
             Self::DeleteYourData => &["www.deleteyourdata.com", "staging.deleteyourdata.com"],
-            Self::LawyerShook => &["www.lawyershook.com", "staging.lawyershook.com"],
             Self::Vesta => &[
                 "www.vestaestateplanning.com",
                 "staging.vestaestateplanning.com",
@@ -1645,7 +1532,6 @@ impl BrandKey {
         match self {
             Self::Neon => default_branding,
             Self::DeleteYourData => &DELETE_YOUR_DATA_BRANDING,
-            Self::LawyerShook => &LAWYER_SHOOK_BRANDING,
             Self::Vesta => &VESTA_BRANDING,
             Self::Misericordia => &MISERICORDIA_BRANDING,
             Self::Abhaya => &ABHAYA_BRANDING,
@@ -1682,7 +1568,6 @@ impl BrandKey {
             // it already answers on the shared port.
             Self::Neon => None,
             Self::DeleteYourData => Some("NAVIGATOR_LOCAL_DELETE_YOUR_DATA_PORT"),
-            Self::LawyerShook => Some("NAVIGATOR_LOCAL_LAWYER_SHOOK_PORT"),
             Self::Vesta => Some("NAVIGATOR_LOCAL_VESTA_PORT"),
             Self::Misericordia => Some("NAVIGATOR_LOCAL_MISERICORDIA_PORT"),
             Self::Abhaya => Some("NAVIGATOR_LOCAL_ABHAYA_PORT"),
@@ -1767,11 +1652,6 @@ pub fn registered_brand_key(host: &str) -> Option<BrandKey> {
 // [`held_out_host`]'s `404` — never a TLS handshake failure — which is the
 // whole point of separating "the certificate exists" from "the practice may
 // be advertised."
-//
-// The one exception is a moved brand ([`BrandKey::moved_to`]). Its domain
-// no longer resolves to the cluster, so it is left out of [`release_brand_hosts`] and never
-// reaches a certificate or an Ingress rule; the in-process 301 in
-// `portal::canonical_host` stays only for a request that still arrives.
 
 /// Every (key, host) pair the launch gate admits, in registry order: the
 /// approved set crossed with the hosts each approved key serves.
@@ -1811,19 +1691,11 @@ pub fn live_brand_apexes() -> Vec<(BrandKey, &'static str)> {
 /// next release's certificate/Ingress render — with no second hostname list
 /// to keep in sync, the same property [`live_brand_hosts`] already gives the
 /// launch gate.
-///
-/// A key whose site has moved ([`BrandKey::moved_to`]) is left out. Its
-/// domain is retired and never resolves to the load balancer, so its hosts can
-/// never validate on a `ManagedCertificate`. Listing them on the one shared
-/// Firm certificate would let that one domain hold TLS off every live brand:
-/// Google issues a managed certificate only once every domain on it
-/// validates, and GKE recreates it whenever its domain list changes.
 #[must_use]
 pub fn release_brand_hosts() -> Vec<(BrandKey, &'static str)> {
     BrandKey::ALL
         .iter()
         .copied()
-        .filter(|key| key.moved_to().is_none())
         .flat_map(|key| key.hosts().iter().copied().map(move |host| (key, host)))
         .collect()
 }
@@ -1974,7 +1846,7 @@ impl Branding {
         // The same rule for the firm's affiliations: the association
         // affiliation and the house-brand family are Guieb & Shook PC's, so a
         // bundle that renames the firm publishes neither — a footer claiming
-        // another firm's affiliation, or listing its brands as "Our Family",
+        // another firm's affiliation, or borrowing its shared footer links,
         // is the wrong claim under the wrong name. The social profiles follow
         // that rename: the shared YouTube channel and Neon Law's own profiles
         // are not another firm's destinations.
@@ -2219,9 +2091,8 @@ pub fn firm_social() -> &'static [FirmSocial] {
     current().firm_social
 }
 
-/// The house brands the firm trades under, from request-scoped branding —
-/// the footer's "Our Family" row before any Firm row overrides it. Empty on
-/// a bundle that renamed the firm.
+/// The house brands the firm trades under, from request-scoped branding.
+/// Empty on a bundle that renamed the firm.
 #[must_use]
 pub fn firm_family() -> &'static [BrandKey] {
     current().firm_family
@@ -2685,7 +2556,7 @@ mod tests {
             assert_eq!(super::firm_social(), DEFAULT_BRANDING.firm_social);
         })
         .await;
-        for branding in [&DELETE_YOUR_DATA_BRANDING, &LAWYER_SHOOK_BRANDING] {
+        for branding in [&DELETE_YOUR_DATA_BRANDING, &super::GUIEB_SHOOK_BRANDING] {
             assert_eq!(branding.firm_memberships, DEFAULT_BRANDING.firm_memberships);
             assert_eq!(branding.firm_family, BrandKey::GUIEB_SHOOK_FAMILY);
             assert_eq!(branding.firm_social, super::SHARED_SOCIAL);
@@ -3376,7 +3247,7 @@ mod tests {
         assert_eq!(n.children.len(), 1);
     }
 
-    use super::{registered_brand_key, BrandKey, DELETE_YOUR_DATA_BRANDING, LAWYER_SHOOK_BRANDING};
+    use super::{registered_brand_key, BrandKey, DELETE_YOUR_DATA_BRANDING};
 
     /// Every host a key claims resolves back to that same key.
     #[test]
@@ -3579,8 +3450,8 @@ mod tests {
     }
 
     /// [`super::release_brand_hosts`] is the TLS/Ingress release inventory:
-    /// every registered key that has not moved, crossed with its hosts,
-    /// unfiltered by `is_live()`. It must include every live, unmoved host of
+    /// every registered key crossed with its hosts, unfiltered by
+    /// `is_live()`. It must include every live host of
     /// [`super::live_brand_hosts`] — each still gets a certificate — while
     /// also covering every held-out brand's hosts, which `live_brand_hosts`
     /// deliberately omits.
@@ -3590,23 +3461,15 @@ mod tests {
         let expected: Vec<(BrandKey, &str)> = BrandKey::ALL
             .iter()
             .copied()
-            .filter(|key| key.moved_to().is_none())
             .flat_map(|key| key.hosts().iter().copied().map(move |host| (key, host)))
             .collect();
         assert_eq!(released, expected);
-        let moved = BrandKey::ALL
-            .iter()
-            .filter(|key| key.moved_to().is_some())
-            .count();
         assert_eq!(
             released.len(),
-            (BrandKey::ALL.len() - moved) * 2,
+            BrandKey::ALL.len() * 2,
             "every released key serves exactly a production and a staging host"
         );
         for pair in super::live_brand_hosts() {
-            if pair.0.moved_to().is_some() {
-                continue;
-            }
             assert!(
                 released.contains(&pair),
                 "{pair:?} is live and must still be in the release inventory"
@@ -3718,10 +3581,6 @@ mod tests {
             BrandKey::DeleteYourData.local_port_env_var(),
             Some("NAVIGATOR_LOCAL_DELETE_YOUR_DATA_PORT")
         );
-        assert_eq!(
-            BrandKey::LawyerShook.local_port_env_var(),
-            Some("NAVIGATOR_LOCAL_LAWYER_SHOOK_PORT")
-        );
     }
 
     /// The registry brands render distinct chrome, which is the whole point
@@ -3736,22 +3595,6 @@ mod tests {
             DEFAULT_BRANDING.firm.logo_href,
             DELETE_YOUR_DATA_BRANDING.firm.logo_href
         );
-        assert_ne!(
-            DEFAULT_BRANDING.firm.site_name,
-            LAWYER_SHOOK_BRANDING.firm.site_name
-        );
-        assert_eq!(
-            LAWYER_SHOOK_BRANDING.firm.logo_href,
-            "/public/brand/lawyer-shook/logo.svg"
-        );
-        assert_eq!(
-            LAWYER_SHOOK_BRANDING.firm.social_image,
-            "/public/brand/lawyer-shook/logo.png"
-        );
-        assert_eq!(LAWYER_SHOOK_BRANDING.firm.legal_entity, "Guieb & Shook PC");
-        assert_eq!(LAWYER_SHOOK_BRANDING.support_domain, "lawyershook.com");
-        assert!(LAWYER_SHOOK_BRANDING.firm_trademark.is_empty());
-        assert!(LAWYER_SHOOK_BRANDING.firm_trademark_registration.is_empty());
     }
 
     /// Every compiled `Branding` carries the registry key that produced it, so
@@ -3804,7 +3647,6 @@ mod tests {
             BrandKey::DeleteYourData.catalog_pages(),
             &["home", "services"]
         );
-        assert_eq!(BrandKey::LawyerShook.catalog_pages(), &["home", "services"]);
         for key in BrandKey::ALL {
             assert!(
                 key.publishes_firm_path("/blog"),
@@ -3816,10 +3658,6 @@ mod tests {
         assert!(!BrandKey::DeleteYourData.publishes_firm_path("/services"));
         assert!(BrandKey::DeleteYourData.publishes_firm_path("/contact"));
         assert!(!BrandKey::DeleteYourData.publishes_firm_path("/disputes"));
-        assert!(BrandKey::LawyerShook.publishes_firm_path("/"));
-        assert!(!BrandKey::LawyerShook.publishes_firm_path("/services"));
-        assert!(!BrandKey::LawyerShook.publishes_firm_path("/contact"));
-        assert!(!BrandKey::LawyerShook.publishes_firm_path("/disputes"));
         assert!(BrandKey::Neon.publishes_firm_path("/services"));
         assert!(BrandKey::Neon.publishes_firm_path("/business"));
         assert!(!BrandKey::Neon.publishes_firm_path("/disputes"));
@@ -3844,11 +3682,7 @@ mod tests {
                 "{key:?} serves the JSON endpoint"
             );
         }
-        for key in [
-            BrandKey::DeleteYourData,
-            BrandKey::LawyerShook,
-            BrandKey::Summons,
-        ] {
+        for key in [BrandKey::DeleteYourData, BrandKey::Summons] {
             assert!(
                 !key.publishes_firm_path("/free-legal-resources"),
                 "{key:?} has no catalog to serve"

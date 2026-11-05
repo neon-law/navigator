@@ -512,38 +512,6 @@ mod tests {
         );
     }
 
-    /// `DeleteYourDebt`'s byline is a regulatory boundary, not a style choice.
-    ///
-    /// "Defend against debt collectors" describes FDCPA and
-    /// collection-defence work. Wording that promises to settle, reduce, or
-    /// negotiate down a balance describes debt settlement — a separate
-    /// regulated activity under the FTC Telemarketing Sales Rule's
-    /// advance-fee provisions and state debt-adjuster licensing, whose
-    /// attorney exemption is narrower than it is usually assumed to be. A
-    /// copy edit here is a scope change, so it fails the build.
-    #[test]
-    fn no_family_byline_drifts_toward_debt_settlement() {
-        for key in views::brand::BrandKey::ALL {
-            let byline = key.family_byline().to_lowercase();
-            for banned in [
-                "settle",
-                "settlement",
-                "reduce what you owe",
-                "negotiate",
-                "pennies",
-                "write off",
-                "forgive",
-                "eliminate your debt",
-            ] {
-                assert!(
-                    !byline.contains(banned),
-                    "{} byline contains settlement framing {banned:?}: {byline:?}",
-                    key.as_str(),
-                );
-            }
-        }
-    }
-
     /// The seeded `brand` row wears the same wordmark the compiled
     /// `Branding` publishes.
     ///
@@ -591,18 +559,6 @@ mod tests {
         }
     }
 
-    /// Every compiled brand carries a line, so the firm's practice portfolio
-    /// never renders a bare wordmark for a brand the firm actually ships.
-    #[test]
-    fn every_compiled_brand_has_a_byline() {
-        for key in views::brand::BrandKey::ALL {
-            assert!(
-                !key.family_byline().is_empty(),
-                "{} has no family byline",
-                key.as_str(),
-            );
-        }
-    }
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn scoped_fallback_preserves_custom_identity_and_explicit_other_brand() {

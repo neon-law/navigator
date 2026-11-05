@@ -1963,7 +1963,6 @@ async fn owner_lists_the_seeded_practice_and_its_brands() {
     assert!(
         html.contains("neon (www.neonlaw.com)")
             && html.contains("delete-your-data (www.deleteyourdata.com)")
-            && html.contains("lawyer-shook (www.lawyershook.com)")
             && html.contains("vesta (www.vestaestateplanning.com)")
             && html.contains("delete-your-debt (www.deleteyourdebt.com)")
             && html.contains("misericordia (www.misericordialaw.com)")
@@ -7884,7 +7883,7 @@ async fn a_naked_domain_redirects_to_its_own_brands_www() {
     for (apex, expected) in [
         ("neonlaw.com", "https://www.neonlaw.com/"),
         ("deleteyourdata.com", "https://www.deleteyourdata.com/"),
-        ("lawyershook.com", "https://www.lawyershook.com/"),
+        ("guiebshook.com", "https://www.guiebshook.com/"),
     ] {
         let resp = app
             .clone()
@@ -7938,44 +7937,6 @@ async fn the_apex_redirect_keeps_the_path_and_query() {
             .and_then(|value| value.to_str().ok()),
         Some("https://www.neonlaw.com/services?ref=card"),
     );
-}
-
-/// Lawyer Shook's site moved to Guieb & Shook's: each served host 301s to the
-/// same environment's Guieb & Shook host, path and query intact.
-#[tokio::test]
-async fn lawyer_shook_hosts_redirect_to_guieb_shook() {
-    let state = empty_state().await;
-    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-
-    for (host, expected) in [
-        (
-            "www.lawyershook.com",
-            "https://www.guiebshook.com/testimonials?ref=x",
-        ),
-        (
-            "staging.lawyershook.com",
-            "https://staging.guiebshook.com/testimonials?ref=x",
-        ),
-    ] {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/testimonials?ref=x")
-                    .header(header::HOST, host)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY, "{host}");
-        assert_eq!(
-            resp.headers()
-                .get(header::LOCATION)
-                .and_then(|value| value.to_str().ok()),
-            Some(expected),
-        );
-    }
 }
 
 #[tokio::test]
@@ -10323,126 +10284,113 @@ fn page_declares_og_site_name(body: &str, brand: &str) -> bool {
 }
 
 #[derive(Clone, Copy)]
-enum LiveHomeContract {
-    Authored {
-        title: &'static str,
-        copy: &'static str,
-    },
-    Holding {
-        title: &'static str,
-        marker: &'static str,
-    },
+struct LiveHomeContract {
+    title: &'static str,
+    copy: &'static str,
 }
 
 const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
     (
         views::brand::BrandKey::Neon,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Neon Law | Home</title>",
             copy: "Your shell in a connected world.",
         },
     ),
     (
         views::brand::BrandKey::DeleteYourData,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>DeleteYourData.com | Home</title>",
             copy: "Your Life. Less Exposed.",
         },
     ),
     (
         views::brand::BrandKey::DeleteYourDebt,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>DeleteYourDebt.com | Home</title>",
             copy: "A next step beyond debt.",
         },
     ),
     (
         views::brand::BrandKey::Vesta,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Vesta Estate Planning | Home</title>",
             copy: "Your life is part of a larger story.",
         },
     ),
     (
         views::brand::BrandKey::Misericordia,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Misericordia Injury Law | Home</title>",
             copy: "You were hurt. We are here to listen.",
         },
     ),
     (
         views::brand::BrandKey::Abhaya,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Abhaya Immigration | Home</title>",
             copy: "Your next chapter, without fear.",
         },
     ),
     (
-        views::brand::BrandKey::LawyerShook,
-        LiveHomeContract::Holding {
-            title: "<title>Lawyer Shook | Home</title>",
-            marker: "Guieb &#38; Shook PC is an American law firm",
-        },
-    ),
-    (
         views::brand::BrandKey::Summons,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Summons Defense | Home</title>",
             copy: "A city summons. A clear next step.",
         },
     ),
     (
         views::brand::BrandKey::Daybridge,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Daybridge Divorce Law | Home</title>",
             copy: "A brighter way through divorce.",
         },
     ),
     (
         views::brand::BrandKey::DeathAndDivorce,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Death & Divorce | Home</title>",
             copy: "Divorce and probate. A steady hand through what comes next.",
         },
     ),
     (
         views::brand::BrandKey::CyberInjuryLaw,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>CyberInjuryLaw | Home</title>",
             copy: "WE USE AI TO",
         },
     ),
     (
         views::brand::BrandKey::Aegis,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Aegis Criminal Defense | Home</title>",
             copy: "Facing criminal charges? Start with a conversation.",
         },
     ),
     (
         views::brand::BrandKey::Groundwork,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Groundwork Real Estate Law | Home</title>",
             copy: "Before you sign, know where you stand.",
         },
     ),
     (
         views::brand::BrandKey::GuiebShook,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Guieb & Shook | Home</title>",
             copy: "written engagement before work begins",
         },
     ),
     (
         views::brand::BrandKey::LexTecnica,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>Lex Tecnica | Home</title>",
             copy: "A law firm for entrepreneurs, by entrepreneurs.",
         },
     ),
     (
         views::brand::BrandKey::IepDefenders,
-        LiveHomeContract::Authored {
+        LiveHomeContract {
             title: "<title>IEP Defenders | Home</title>",
             copy: "Special education lawyers defending your child",
         },
@@ -10475,29 +10423,16 @@ fn every_live_brand_has_an_explicit_home_page_contract() {
 }
 
 fn assert_live_practice_home(key: views::brand::BrandKey, host: &str, body: &str) {
-    match live_home_contract(key) {
-        LiveHomeContract::Authored { title, copy } => {
-            assert!(body.contains(title), "{host} has the wrong title: {body}");
-            assert!(
-                body.contains(copy),
-                "{host} is missing its authored home copy: {body}"
-            );
-            assert!(
-                !body.contains("Coming Soon"),
-                "{host} must not render a holding page: {body}"
-            );
-        }
-        LiveHomeContract::Holding { title, marker } => {
-            assert!(
-                body.contains(title),
-                "{host} has the wrong holding title: {body}"
-            );
-            assert!(
-                body.contains(marker),
-                "{host} is missing its holding marker: {body}"
-            );
-        }
-    }
+    let LiveHomeContract { title, copy } = live_home_contract(key);
+    assert!(body.contains(title), "{host} has the wrong title: {body}");
+    assert!(
+        body.contains(copy),
+        "{host} is missing its authored home copy: {body}"
+    );
+    assert!(
+        !body.contains("Coming Soon"),
+        "{host} must not render a holding page: {body}"
+    );
     assert!(
         body.contains(&format!("/public/css/brand-{}-tokens.css", key.as_str())),
         "{host} must load its scoped brand tokens: {body}"
@@ -10898,10 +10833,10 @@ async fn assert_unregistered_host_redirects(
 /// and every redirect is followed to its actual target rather than trusted
 /// on the `Location` header alone.
 ///
-/// |                    | default host    | `delete-your-data` host     | `lawyer-shook` host | unknown host  |
+/// |                    | default host    | `delete-your-data` host     | `guieb-shook` host | unknown host  |
 /// | ------------------ | --------------- | ---------------------------- | ------------------ | ------------- |
-/// | marketing path     | 200, own chrome | 200, own chrome              | 200, own chrome (`/` — its only marketing path) | 301 → default |
-/// | `/app`             | 303 → login     | 303 → login (no brand leak)  | 303 → login         | 301 → default |
+/// | marketing path     | 200, own chrome | 200, own chrome              | 200, own chrome    | 301 → default |
+/// | `/app`             | 303 → login     | 303 → login (no brand leak)  | 303 → login        | 301 → default |
 /// | `/public/*` asset  | 200             | 200                          | 200                | 301 → default |
 /// | `/app/health`      | 200             | 200                          | 200                | 200           |
 ///
@@ -11025,9 +10960,6 @@ async fn every_brand_home_publishes_one_lead_form() {
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     for &brand in views::brand::BrandKey::LIVE {
-        if brand.moved_to().is_some() {
-            continue;
-        }
         assert_brand_home_lead_capture(&app, &db, brand).await;
     }
 }
@@ -11216,15 +11148,6 @@ async fn every_registered_host_serves_its_brand_and_its_apex_redirects_home() {
                         Some(format!("https://{}/", key.canonical_host()).as_str()),
                         "{host} redirects to its own brand's home"
                     );
-                } else if let Some(target) = key.moved_to() {
-                    assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY, "{host} moved");
-                    assert_eq!(
-                        resp.headers()
-                            .get(header::LOCATION)
-                            .and_then(|v| v.to_str().ok()),
-                        Some(format!("{}/", target.public_home_href_for(Some(host))).as_str()),
-                        "{host} redirects to the brand it moved to"
-                    );
                 } else {
                     assert_eq!(resp.status(), StatusCode::OK, "{host} /");
                     let body = body_string(resp).await;
@@ -11277,10 +11200,7 @@ async fn every_registered_host_serves_its_brand_and_its_apex_redirects_home() {
     // A live host's crawler documents still name that host as their own
     // absolute base — the gate refuses held-out hosts without collapsing
     // every brand onto the deployment's canonical host.
-    for (key, host) in views::brand::live_brand_hosts() {
-        if key.moved_to().is_some() {
-            continue;
-        }
+    for (_, host) in views::brand::live_brand_hosts() {
         let body = body_string(get_on_host(&app, "/robots.txt", host).await).await;
         assert!(
             body.contains(&format!("Sitemap: https://{host}/sitemap.xml")),

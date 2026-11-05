@@ -41,8 +41,8 @@ authorized lawyers contribute inside the firm. The most useful corpus contributi
   law it implements.
 
 - Maintain a brand catalog. Each public brand keeps its English home and services copy in
-  `neon/locales/en/<brand-key>`; the registered catalogs are `neon/`, `delete-your-data/`, and `lawyer-shook/`. A new
-  catalog must be added through the brand registry with covering tests and attorney review for public legal copy.
+  `neon/locales/en/<brand-key>`; the registered catalogs include `neon/` and `delete-your-data/`. A new catalog must be
+  added through the brand registry with covering tests and attorney review for public legal copy.
 
 ---
 

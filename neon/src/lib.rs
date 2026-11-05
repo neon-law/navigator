@@ -189,7 +189,7 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             .iter()
             .map(|path| (*path).to_string())
             .collect(),
-        BrandKey::LawyerShook | BrandKey::GuiebShook => ["/", "/testimonials"]
+        BrandKey::GuiebShook => ["/", "/testimonials"]
             .iter()
             .map(|path| (*path).to_string())
             .collect(),
@@ -335,30 +335,6 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
                         ),
                     },
                 ],
-                sections: Vec::new(),
-            }
-        }
-        BrandKey::LawyerShook => {
-            // A bare holding page: the same statement
-            // `resolve_firm_home_content` puts on the screen is the whole of
-            // what a crawler reads here too, so this reuses it rather than
-            // keeping a second copy of the sentence in step.
-            let content = firm_pages::resolve_firm_home_content(
-                key.resolve_branding(&views::brand::DEFAULT_BRANDING),
-                None,
-            );
-            let bare = content
-                .bare
-                .as_ref()
-                .expect("invariant: a holding page's home content is always bare");
-            portal::LlmsTxt {
-                title: bare.heading.clone(),
-                summary: bare.paragraph.clone(),
-                pages: vec![portal::LlmsTxtLink {
-                    title: bare.heading.clone(),
-                    path: "/".to_string(),
-                    description: bare.paragraph.clone(),
-                }],
                 sections: Vec::new(),
             }
         }

@@ -179,9 +179,6 @@ pub(crate) fn release_targets(public_host: &str) -> Vec<(BrandKey, &'static str)
     let staging = views::brand::is_staging_host(public_host);
     views::brand::release_brand_hosts()
         .into_iter()
-        // A moved brand is already out of the release inventory: its domain
-        // no longer resolves to the cluster, and the brand it moved to carries
-        // the check.
         .filter(|(_, host)| views::brand::is_staging_host(host) == staging)
         .collect()
 }
@@ -352,7 +349,7 @@ pub(crate) fn run_with<R: CommandRunner>(
         for key in views::brand::BrandKey::ALL
             .iter()
             .copied()
-            .filter(|k| k.is_live() && k.moved_to().is_none() && k.apex().is_some())
+            .filter(|k| k.is_live() && k.apex().is_some())
         {
             reports.push(check_apex_redirect(runner, key, timeout_secs));
         }
@@ -584,10 +581,7 @@ mod tests {
     #[test]
     fn release_targets_covers_the_full_registry_not_only_live_brands() {
         let production = release_targets("navigator.example.invalid");
-        let served = views::brand::BrandKey::ALL
-            .iter()
-            .filter(|key| key.moved_to().is_none())
-            .count();
+        let served = views::brand::BrandKey::ALL.len();
         assert_eq!(production.len(), served);
         // The release inventory is `views::brand::release_brand_hosts`, the
         // full registry, unfiltered by `is_live()` — not merely the live set
@@ -596,7 +590,7 @@ mod tests {
         // to be live, rather than asserting on which ones currently aren't.
         let full_registry: Vec<(BrandKey, &str)> = views::brand::release_brand_hosts()
             .into_iter()
-            .filter(|(key, host)| !views::brand::is_staging_host(host) && key.moved_to().is_none())
+            .filter(|(_, host)| !views::brand::is_staging_host(host))
             .collect();
         assert_eq!(production, full_registry);
         assert!(production.contains(&(BrandKey::Daybridge, "www.daybridgedivorce.com")));
@@ -830,10 +824,7 @@ mod tests {
     #[test]
     fn run_with_checks_apexes_only_on_the_production_environment() {
         // Staging: one call per served release-inventory host, no apex calls.
-        let served = views::brand::BrandKey::ALL
-            .iter()
-            .filter(|key| key.moved_to().is_none())
-            .count();
+        let served = views::brand::BrandKey::ALL.len();
         let mut staging_runner = ScriptedRunner::new(
             (0..served)
                 .map(|_| ok_headers_and_body(200, r#"content="x" property="og:site_name""#))
@@ -847,7 +838,7 @@ mod tests {
         let host_count = served;
         let live_count = views::brand::BrandKey::LIVE
             .iter()
-            .filter(|key| key.moved_to().is_none() && key.apex().is_some())
+            .filter(|key| key.apex().is_some())
             .count();
         let mut outcomes: Vec<CommandOutcome> = (0..host_count)
             .map(|_| ok_headers_and_body(200, r#"content="x" property="og:site_name""#))
@@ -855,7 +846,7 @@ mod tests {
         outcomes.extend(
             BrandKey::LIVE
                 .iter()
-                .filter(|key| key.moved_to().is_none() && key.apex().is_some())
+                .filter(|key| key.apex().is_some())
                 .map(|key| CommandOutcome {
                     exit_code: Some(0),
                     stdout: format!(
@@ -869,12 +860,6 @@ mod tests {
         let production_cfg = ship_config_for("navigator.example.invalid");
         let production_reports = run_with(&mut production_runner, &production_cfg, 10);
         assert_eq!(production_reports.len(), host_count + live_count);
-        assert!(
-            production_reports
-                .iter()
-                .all(|report| report.key.moved_to().is_none()),
-            "retired brands have no host or apex readiness obligation"
-        );
     }
 
     #[test]

@@ -228,7 +228,7 @@ mod tests {
         fn app() -> Element {
             rsx! {
                 SiteHeader {
-                    brand_name: "Lawyer Shook".to_string(),
+                    brand_name: "Summons Defense".to_string(),
                     home_href: "/".to_string(),
                     logo_href: "/public/img/logo.svg".to_string(),
                     destinations: vec![
@@ -248,7 +248,7 @@ mod tests {
         fn app() -> Element {
             rsx! {
                 SiteHeader {
-                    brand_name: "Lawyer Shook".to_string(),
+                    brand_name: "Summons Defense".to_string(),
                     home_href: "/".to_string(),
                     logo_href: "/public/img/logo.svg".to_string(),
                     destinations: vec![SiteNavLink::new("Services", "/#services")],
@@ -264,7 +264,7 @@ mod tests {
         let out = anonymous_html();
         assert!(out.contains(r#"href="/""#), "brand links home: {out}");
         assert!(
-            out.contains("Lawyer Shook home"),
+            out.contains("Summons Defense home"),
             "brand anchor is labelled"
         );
         // The logo is decorative — the brand text and label carry the name.
@@ -276,7 +276,7 @@ mod tests {
         fn app() -> Element {
             rsx! {
                 SiteHeader {
-                    brand_name: "Lawyer Shook".to_string(),
+                    brand_name: "Summons Defense".to_string(),
                     home_href: "/".to_string(),
                     logo_href: String::new(),
                     destinations: vec![SiteNavLink::new("Services", "/services")],
@@ -284,7 +284,10 @@ mod tests {
             }
         }
         let out = ssr(app);
-        assert!(out.contains("Lawyer Shook"), "text wordmark remains: {out}");
+        assert!(
+            out.contains("Summons Defense"),
+            "text wordmark remains: {out}"
+        );
         assert!(!out.contains("site-header__logo"), "no empty logo: {out}");
         assert!(!out.contains("rel=\"icon\""), "no empty favicon: {out}");
     }
@@ -371,7 +374,7 @@ mod tests {
         fn app() -> Element {
             rsx! {
                 SiteHeader {
-                    brand_name: "Lawyer Shook".to_string(),
+                    brand_name: "Summons Defense".to_string(),
                     home_href: "/".to_string(),
                     logo_href: "/public/img/logo.svg".to_string(),
                     destinations: vec![SiteNavLink::new("Blog", "/blog")],
@@ -411,7 +414,7 @@ mod tests {
         fn app() -> Element {
             rsx! {
                 SiteHeader {
-                    brand_name: "Lawyer Shook".to_string(),
+                    brand_name: "Summons Defense".to_string(),
                     home_href: "/".to_string(),
                     logo_href: "/public/img/logo.svg".to_string(),
                     destinations: vec![
@@ -441,13 +444,13 @@ mod tests {
         fn app() -> Element {
             rsx! {
                 SiteHeader {
-                    brand_name: "Lawyer Shook".to_string(),
+                    brand_name: "Summons Defense".to_string(),
                     home_href: "/".to_string(),
                     logo_href: "/public/img/logo.svg".to_string(),
                     destinations: vec![SiteNavLink::new("Blog", "/blog")],
                 }
                 SiteHeader {
-                    brand_name: "Lawyer Shook".to_string(),
+                    brand_name: "Summons Defense".to_string(),
                     home_href: "/".to_string(),
                     logo_href: "/public/img/logo.svg".to_string(),
                     destinations: vec![SiteNavLink::new("Blog", "/blog")],

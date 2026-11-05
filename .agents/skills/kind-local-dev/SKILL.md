@@ -92,7 +92,6 @@ cluster. Restart the compiled `web` process after changing routes, handlers, vie
 | SurrealDB | `18000` |
 | `web`, default brand | `3001` |
 | `web`, `delete-your-data` | `3011` |
-| `web`, lawyer-shook | `3021` |
 
 Locally no DNS serves the brand hostnames, so `web` answers each brand on its own port instead of by `Host:` header. A
 worktree selects a free slot in the `20000`–`21599` ranges (skipping slots held by stopped or orphaned clusters), and

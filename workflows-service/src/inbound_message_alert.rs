@@ -162,7 +162,7 @@ mod tests {
     async fn persisted_receipts_prevent_duplicate_posts_and_cross_firm_notices() {
         let db = store::test_support::mem_surreal().await;
         let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other = store::test_support::seed_firm_with_brand(&db, "lawyer-shook").await;
+        let other = store::test_support::seed_firm_with_brand(&db, "guieb-shook").await;
         let slack = std::sync::Arc::new(workflows::CapturingSlackBot::new());
         let service = super::InboundMessageAlertService::new(
             db.clone(),
@@ -180,7 +180,7 @@ mod tests {
                 if firm_id == firm {
                     "neon"
                 } else {
-                    "lawyer-shook"
+                    "guieb-shook"
                 },
             )
             .await;

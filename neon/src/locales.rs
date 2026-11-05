@@ -82,7 +82,6 @@ const NEON_SERVICES_CATALOG_YAML: &str = include_str!("../locales/en/neon/servic
 const DELETE_YOUR_DATA_HOME_YAML: &str = include_str!("../locales/en/delete-your-data/home.yaml");
 const VESTA_HOME_YAML: &str = include_str!("../locales/en/vesta/home.yaml");
 const VESTA_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/vesta/free-resources.yaml");
-const LAWYER_SHOOK_HOME_YAML: &str = include_str!("../locales/en/lawyer-shook/home.yaml");
 const VESTA_SERVICES_YAML: &str = include_str!("../locales/en/vesta/services.yaml");
 const MISERICORDIA_HOME_YAML: &str = include_str!("../locales/en/misericordia/home.yaml");
 const MISERICORDIA_SERVICES_YAML: &str = include_str!("../locales/en/misericordia/services.yaml");
@@ -120,7 +119,6 @@ const DEATH_AND_DIVORCE_SERVICES_YAML: &str =
     include_str!("../locales/en/death-and-divorce/services.yaml");
 const DELETE_YOUR_DATA_SERVICES_YAML: &str =
     include_str!("../locales/en/delete-your-data/services.yaml");
-const LAWYER_SHOOK_SERVICES_YAML: &str = include_str!("../locales/en/lawyer-shook/services.yaml");
 
 /// The shipped shared catalog, parsed and validated once.
 ///
@@ -169,7 +167,6 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Vesta, "explainer-probate") => {
             Some(include_str!("../locales/en/vesta/explainer-probate.yaml"))
         }
-        (BrandKey::LawyerShook, "home") => Some(LAWYER_SHOOK_HOME_YAML),
         (BrandKey::Vesta, "services") => Some(VESTA_SERVICES_YAML),
         (BrandKey::Misericordia, "home") => Some(MISERICORDIA_HOME_YAML),
         (BrandKey::Misericordia, "services") => Some(MISERICORDIA_SERVICES_YAML),
@@ -238,7 +235,6 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         }
         (BrandKey::DeleteYourData, "home") => Some(DELETE_YOUR_DATA_HOME_YAML),
         (BrandKey::DeleteYourData, "services") => Some(DELETE_YOUR_DATA_SERVICES_YAML),
-        (BrandKey::LawyerShook, "services") => Some(LAWYER_SHOOK_SERVICES_YAML),
         _ => lex_tecnica_catalog_yaml(key, page),
     }
 }
@@ -1327,7 +1323,6 @@ pub fn home_for_host(
             navigator_body: copy.navigator_body,
             navigator_link: copy.navigator_link,
         }),
-        // Lawyer Shook's resolver supplies its firm notice over this catalog.
         bare: None,
         estate: copy
             .estate
@@ -1784,7 +1779,6 @@ mod tests {
     fn architectural_photos_cover_the_homepages_without_substantive_art() {
         for key in [
             BrandKey::Neon,
-            BrandKey::LawyerShook,
             BrandKey::Misericordia,
             BrandKey::DeleteYourDebt,
             BrandKey::Daybridge,
@@ -1853,18 +1847,12 @@ mod tests {
                 _ => None,
             })
             .expect("brand directory");
-        // Neon Law's own site needs no Neon Law card, and the Lawyer Shook
-        // and Guieb & Shook holding pages are firm marks, not services, so
-        // neither is listed.
+        // Neon Law's own site needs no Neon Law card, and the Guieb & Shook
+        // holding page is a firm mark, not a service, so neither is listed.
         let brands: Vec<BrandKey> = BrandKey::GUIEB_SHOOK_FAMILY
             .iter()
             .copied()
-            .filter(|key| {
-                !matches!(
-                    key,
-                    BrandKey::Neon | BrandKey::LawyerShook | BrandKey::GuiebShook
-                )
-            })
+            .filter(|key| !matches!(key, BrandKey::Neon | BrandKey::GuiebShook))
             .collect();
         assert_eq!(cards.len(), brands.len());
         for key in brands {
@@ -2244,7 +2232,6 @@ mod tests {
             BrandKey::Abhaya,
             BrandKey::Daybridge,
             BrandKey::DeathAndDivorce,
-            BrandKey::LawyerShook,
         ] {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             let services = legal_services(branding);
@@ -2439,16 +2426,6 @@ mod tests {
             .discovery_cards
             .iter()
             .any(|card| card[0].contains("DATA THEFT")));
-    }
-
-    /// The services catalog remains brand-safe even though the route is
-    /// gated off by `BrandKey::publishes_firm_path`.
-    #[test]
-    fn lawyer_shook_services_catalog_is_brand_keyed_and_attributed() {
-        let branding = &views::brand::LAWYER_SHOOK_BRANDING;
-        let services_content = legal_services(branding);
-        assert!(services_content.hero_lead.contains("Guieb & Shook PC"));
-        assert!(!services_content.meta_description.contains("flat-fee"));
     }
 
     /// Every word one of these pages renders, flattened, so a claim placed in

@@ -51,7 +51,6 @@ pub const CLOSED_BRAND_KEYS: &[&str] = &[
     "vesta",
     "misericordia",
     "abhaya",
-    "lawyer-shook",
     "summons",
     "daybridge",
     "death-and-divorce",
@@ -2981,7 +2980,7 @@ mod tests {
         let db = mem_surreal().await;
         // `mem_surreal` already seeds every `CLOSED_BRAND_KEYS` entry as a
         // system-wide brand row, so "neon", "delete-your-data", and
-        // "lawyer-shook" all exist before this test attaches any of them.
+        // "guieb-shook" all exist before this test attaches any of them.
         let firm_a = practice(&db, "Practice A").await;
         let firm_b = practice(&db, "Practice B").await;
         attach_brand(&db, crate::persons::Role::Owner, None, firm_a.id, "neon")
@@ -3001,7 +3000,7 @@ mod tests {
             crate::persons::Role::Owner,
             None,
             firm_b.id,
-            "lawyer-shook",
+            "guieb-shook",
         )
         .await
         .unwrap();
@@ -3011,7 +3010,7 @@ mod tests {
             Some(firm_a.id)
         );
         assert_eq!(
-            firm_id_for_brand_key(&db, "lawyer-shook").await.unwrap(),
+            firm_id_for_brand_key(&db, "guieb-shook").await.unwrap(),
             Some(firm_b.id)
         );
         assert_eq!(
@@ -3020,7 +3019,7 @@ mod tests {
         );
         assert_eq!(
             brand_keys_for_firm(&db, firm_b.id).await.unwrap(),
-            vec!["lawyer-shook".to_string()]
+            vec!["guieb-shook".to_string()]
         );
     }
 

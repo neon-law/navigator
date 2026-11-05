@@ -50,8 +50,8 @@ The host ports split into two categories with very different blast radius:
 - **Port-forward ports:** SurrealDB, Restate ingress/admin, SeaweedFS S3, OpenObserve UI and OTLP ingest, and the local
   server — which binds one port per registered brand it can reach locally rather than only one. Every host in
   `views::brand::BrandKey::hosts` is a real production/staging domain, so every non-default brand needs its own local
-  port instead of a `Host:` header a developer's machine has no DNS to send. The house-brand ports are
-  `NAVIGATOR_LOCAL_DELETE_YOUR_DATA_PORT` and `NAVIGATOR_LOCAL_LAWYER_SHOOK_PORT`; `web` binds them alongside `PORT`.
+  port instead of a `Host:` header a developer's machine has no DNS to send. The house-brand port is
+  `NAVIGATOR_LOCAL_DELETE_YOUR_DATA_PORT`; `web` binds it alongside `PORT`.
 - **Create-time NodePort mappings:** ingress HTTP/HTTPS and Rauthy, rendered into `k8s/kind-config.yaml`.
 
 The CLI renders a temporary KIND config and changes only requested `hostPort` values. Port-forward changes, including

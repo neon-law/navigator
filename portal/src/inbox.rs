@@ -1052,10 +1052,10 @@ mod tests {
         let db = store::test_support::mem_surreal().await;
         let storage = storage().await;
         let neon = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let shook = store::test_support::seed_firm_with_brand(&db, "lawyer-shook").await;
+        let shook = store::test_support::seed_firm_with_brand(&db, "guieb-shook").await;
         for (mailbox, firm, brand) in [
             ("support@neonlaw.com", neon, "neon"),
-            ("contact@lawyershook.com", shook, "lawyer-shook"),
+            ("contact@guiebshook.com", shook, "guieb-shook"),
         ] {
             let email = InboundEmail {
                 from: "sender@example.com".into(),
