@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use google_cloud_storage::client::{Client as GcsClient, ClientConfig};
+use google_cloud_storage::http::buckets::get::GetBucketRequest;
 use google_cloud_storage::http::objects::delete::DeleteObjectRequest;
 use google_cloud_storage::http::objects::download::Range;
 use google_cloud_storage::http::objects::get::GetObjectRequest;
@@ -566,6 +567,29 @@ impl StorageService for GcsStorage {
         })
     }
 
+    /// Probe the bucket's retention policy through the JSON API's
+    /// bucket-get (`Client` derefs to the raw [`google_cloud_storage::http::StorageClient`]).
+    /// A bucket with a locked policy cannot replace or delete its objects —
+    /// including by a compromised credential — so every writer on this
+    /// handle must be create-only. An absent policy reads as unlocked; a
+    /// failed probe propagates and fails the run (never silently unlocked).
+    async fn retention_locked(&self) -> Result<bool, StorageError> {
+        let bucket = self
+            .client
+            .get_bucket(&GetBucketRequest {
+                bucket: (*self.bucket).clone(),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| StorageError::Gcs {
+                key: "<bucket-policy>".into(),
+                message: format!("probe the bucket retention policy: {e}"),
+            })?;
+        Ok(bucket
+            .retention_policy
+            .is_some_and(|policy| policy.is_locked.unwrap_or(false)))
+    }
+
     async fn head(&self, key: &str) -> Result<Option<crate::ObjectHead>, StorageError> {
         match self
             .client
@@ -1066,6 +1090,111 @@ mod tests {
             1,
             "zero must be rejected before any unpinned request"
         );
+        Ok(())
+    }
+
+    /// A bucket with a locked retention policy answers `retention_locked`
+    /// true — the condition that selects create-only writes upstream.
+    #[tokio::test]
+    async fn retention_probe_reports_a_locked_bucket_policy(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/navigator"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "navigator",
+                "retentionPolicy": {
+                    "retentionPeriod": "788940000",
+                    "isLocked": true
+                }
+            })))
+            .mount(&server)
+            .await;
+        let storage = GcsStorage::new_from_config(GcsStorageConfig {
+            bucket: "navigator".into(),
+            endpoint: Some(server.uri()),
+        })
+        .await?;
+        assert!(storage.retention_locked().await?);
+        Ok(())
+    }
+
+    /// A policy that exists but is not yet locked still admits the
+    /// overwrite lane — locking is what makes replacement impossible.
+    #[tokio::test]
+    async fn retention_probe_reports_an_unlocked_policy_as_unlocked(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/navigator"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "navigator",
+                "retentionPolicy": {
+                    "retentionPeriod": "3600",
+                    "isLocked": false
+                }
+            })))
+            .mount(&server)
+            .await;
+        let storage = GcsStorage::new_from_config(GcsStorageConfig {
+            bucket: "navigator".into(),
+            endpoint: Some(server.uri()),
+        })
+        .await?;
+        assert!(!storage.retention_locked().await?);
+        Ok(())
+    }
+
+    /// No policy at all — the documented in-project shape — reads as
+    /// unlocked, preserving the existing overwrite semantics.
+    #[tokio::test]
+    async fn retention_probe_reports_an_absent_policy_as_unlocked(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/navigator"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "name": "navigator"
+                })),
+            )
+            .mount(&server)
+            .await;
+        let storage = GcsStorage::new_from_config(GcsStorageConfig {
+            bucket: "navigator".into(),
+            endpoint: Some(server.uri()),
+        })
+        .await?;
+        assert!(!storage.retention_locked().await?);
+        Ok(())
+    }
+
+    /// A failed probe is an error, never a silent "unlocked": overwriting
+    /// on an unprobeable locked bucket is the failure this seam exists to
+    /// prevent.
+    #[tokio::test]
+    async fn retention_probe_fails_closed_on_a_policy_error(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/storage/v1/b/navigator"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let storage = GcsStorage::new_from_config(GcsStorageConfig {
+            bucket: "navigator".into(),
+            endpoint: Some(server.uri()),
+        })
+        .await?;
+        assert!(storage.retention_locked().await.is_err());
         Ok(())
     }
 

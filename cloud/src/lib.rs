@@ -209,6 +209,24 @@ pub trait StorageService: Send + Sync {
         let _ = (key, generation);
         Err(StorageError::Unsupported("generation-pinned object read"))
     }
+
+    /// Whether this handle's bucket carries a **locked** object retention
+    /// policy — the GCS Bucket Lock condition under which replacement as
+    /// well as deletion of an object is rejected. Callers choose
+    /// create-only writes ([`put_immutable`](Self::put_immutable) under
+    /// attempt-unique keys) when it answers true and the documented
+    /// within-generation overwrite when it answers false.
+    ///
+    /// The default answers "no policy" for backends with no bucket-policy
+    /// surface (filesystem, S3). A backend that cannot determine its
+    /// bucket's policy reports the error rather than silently reading as
+    /// unlocked — an unprobeable locked bucket must fail the run, not
+    /// overwrite an immutable object.
+    async fn retention_locked(&self) -> Result<bool, StorageError> {
+        let _ = self;
+        Ok(false)
+    }
+
     async fn delete(&self, key: &str) -> Result<(), StorageError>;
 
     /// List objects whose key starts with `prefix`, with their byte sizes.

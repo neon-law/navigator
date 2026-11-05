@@ -62,9 +62,44 @@ pub fn fingerprint_key(lane: &str, table: &str) -> String {
     format!("{lane}/{table}/_schema.json")
 }
 
+/// Storage key for one attempt-numbered fingerprint sidecar on a
+/// retention-locked lane, where `_schema.json` cannot be rewritten:
+/// `{lane}/{table}/_schema/attempt={n}/fingerprint.json`.
+///
+/// A locked retention policy rejects replacement as well as deletion
+/// (GCS Bucket Lock), so each schema attestation is a new create-only
+/// write and the highest attempt present is the commit point for the
+/// generation.
+#[must_use]
+pub fn fingerprint_attempt_key(lane: &str, table: &str, attempt: u64) -> String {
+    format!("{lane}/{table}/_schema/attempt={attempt}/fingerprint.json")
+}
+
+/// The list prefix that scopes [`fingerprint_attempt_key`].
+#[must_use]
+pub fn fingerprint_attempt_prefix(lane: &str, table: &str) -> String {
+    format!("{lane}/{table}/_schema/attempt=")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{classify, fingerprint_key, DriftDecision, StoredFingerprint};
+    use super::{
+        classify, fingerprint_attempt_key, fingerprint_attempt_prefix, fingerprint_key,
+        DriftDecision, StoredFingerprint,
+    };
+
+    #[test]
+    fn fingerprint_attempt_keys_carry_a_parseable_ordinal_under_one_prefix() {
+        let key = fingerprint_attempt_key("application", "person", 7);
+        assert!(
+            key.starts_with(&fingerprint_attempt_prefix("application", "person")),
+            "the attempt key must live under its list prefix: {key}"
+        );
+        let ordinal = key
+            .strip_prefix(&fingerprint_attempt_prefix("application", "person"))
+            .and_then(|suffix| suffix.parse::<u64>().ok());
+        assert_eq!(ordinal, Some(7));
+    }
 
     fn cols(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| (*s).to_string()).collect()
