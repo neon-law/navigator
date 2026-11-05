@@ -1093,6 +1093,29 @@ mod tests {
         Ok(())
     }
 
+    /// A complete typed-`Bucket` body: the probe deserializes through
+    /// `gcloud_storage`'s model, whose required fields (`id`,
+    /// `projectNumber`, `metageneration`, `location`, `locationType`,
+    /// `storageClass`, `etag`, `requesterPays`) mirror the JSON API's
+    /// bucket resource.
+    fn bucket_body(retention: Option<serde_json::Value>) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "id": "navigator",
+            "name": "navigator",
+            "projectNumber": "123456789",
+            "metageneration": "1",
+            "location": "US",
+            "locationType": "multi-region",
+            "storageClass": "STANDARD",
+            "etag": "CAE=",
+            "requesterPays": false,
+        });
+        if let Some(policy) = retention {
+            body["retentionPolicy"] = policy;
+        }
+        body
+    }
+
     /// A bucket with a locked retention policy answers `retention_locked`
     /// true — the condition that selects create-only writes upstream.
     #[tokio::test]
@@ -1103,13 +1126,12 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/storage/v1/b/navigator"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "name": "navigator",
-                "retentionPolicy": {
+            .respond_with(ResponseTemplate::new(200).set_body_json(bucket_body(Some(
+                serde_json::json!({
                     "retentionPeriod": "788940000",
                     "isLocked": true
-                }
-            })))
+                }),
+            ))))
             .mount(&server)
             .await;
         let storage = GcsStorage::new_from_config(GcsStorageConfig {
@@ -1131,13 +1153,12 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/storage/v1/b/navigator"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "name": "navigator",
-                "retentionPolicy": {
+            .respond_with(ResponseTemplate::new(200).set_body_json(bucket_body(Some(
+                serde_json::json!({
                     "retentionPeriod": "3600",
                     "isLocked": false
-                }
-            })))
+                }),
+            ))))
             .mount(&server)
             .await;
         let storage = GcsStorage::new_from_config(GcsStorageConfig {
@@ -1160,9 +1181,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/storage/v1/b/navigator"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "name": "navigator"
-                })),
+                ResponseTemplate::new(200).set_body_json(bucket_body(None)),
             )
             .mount(&server)
             .await;

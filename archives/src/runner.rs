@@ -532,7 +532,7 @@ mod tests {
         let data_keys = storage
             .keys()
             .into_iter()
-            .filter(|key| key.contains("/data/dt="))
+            .filter(|key| key.starts_with("application/person/data/dt="))
             .collect::<Vec<_>>();
         assert_eq!(
             data_keys.len(),
@@ -552,7 +552,7 @@ mod tests {
             storage
                 .keys()
                 .into_iter()
-                .filter(|key| key.contains("/_schema/attempt="))
+                .filter(|key| key.starts_with("application/person/_schema/attempt="))
                 .count(),
             1,
             "the unchanged rerun reuses the standing attestation"

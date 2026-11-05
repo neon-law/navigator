@@ -97,7 +97,8 @@ mod tests {
         );
         let ordinal = key
             .strip_prefix(&fingerprint_attempt_prefix("application", "person"))
-            .and_then(|suffix| suffix.parse::<u64>().ok());
+            .and_then(|suffix| suffix.split('/').next())
+            .and_then(|ordinal| ordinal.parse::<u64>().ok());
         assert_eq!(ordinal, Some(7));
     }
 
