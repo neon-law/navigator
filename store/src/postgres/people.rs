@@ -65,7 +65,7 @@ pub(crate) async fn by_id(pg: &PostgresDb, id: Uuid) -> Result<Option<Person>, P
 
 pub(crate) async fn by_email(pg: &PostgresDb, email: &str) -> Result<Option<Person>, PersonError> {
     sqlx::query(AssertSqlSafe(format!(
-        "SELECT {COLUMNS} FROM person WHERE email_lower = lower($1)"
+        "SELECT {COLUMNS} FROM person WHERE email = $1::citext"
     )))
     .bind(email.trim())
     .fetch_optional(&pg.0)
@@ -168,7 +168,7 @@ pub(crate) async fn directory_entries(
     let sql = format!(
         "SELECT {COLUMNS}, firm_names FROM person_directory \
          WHERE ($1 = '' OR strpos(lower(name), $1) > 0) \
-           AND ($2 = '' OR strpos(email_lower, $2) > 0) \
+           AND ($2 = '' OR strpos(lower(email::text), $2) > 0) \
            AND ($3::uuid[] IS NULL OR id IN \
                 (SELECT person_id FROM firm_visible_person WHERE firm_id = ANY($3))) \
          ORDER BY {order}"
@@ -193,7 +193,7 @@ pub(crate) async fn directory(
     sort: &[(String, bool)],
 ) -> Result<Vec<Person>, PersonError> {
     let order = directory_order(sort);
-    let sql = format!("SELECT {COLUMNS} FROM person WHERE ($1 = '' OR strpos(lower(name), $1) > 0) AND ($2 = '' OR strpos(email_lower, $2) > 0) ORDER BY {order}");
+    let sql = format!("SELECT {COLUMNS} FROM person WHERE ($1 = '' OR strpos(lower(name), $1) > 0) AND ($2 = '' OR strpos(lower(email::text), $2) > 0) ORDER BY {order}");
     let rows = sqlx::query(AssertSqlSafe(sql))
         .bind(filter_name.to_lowercase())
         .bind(filter_email.to_lowercase())
@@ -214,7 +214,7 @@ pub(crate) async fn search(
 ) -> Result<Vec<Person>, PersonError> {
     let name = name.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("");
     let email = email.map(str::trim).filter(|s| !s.is_empty()).unwrap_or("");
-    let rows = sqlx::query(AssertSqlSafe(format!("SELECT {COLUMNS} FROM person WHERE ($1 = '' OR strpos(lower(name), $1) > 0) AND ($2 = '' OR strpos(email_lower, $2) > 0) ORDER BY name ASC LIMIT $3")))
+    let rows = sqlx::query(AssertSqlSafe(format!("SELECT {COLUMNS} FROM person WHERE ($1 = '' OR strpos(lower(name), $1) > 0) AND ($2 = '' OR strpos(lower(email::text), $2) > 0) ORDER BY name ASC LIMIT $3")))
         .bind(name.to_lowercase())
         .bind(email.to_lowercase())
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
@@ -560,9 +560,7 @@ mod tests;
 fn classify(error: sqlx::Error) -> PersonError {
     if let sqlx::Error::Database(ref database) = error {
         match database.constraint() {
-            Some("person_email_lower_key" | "person_mailbox_pkey") => {
-                return PersonError::EmailTaken
-            }
+            Some("person_email_key" | "person_mailbox_pkey") => return PersonError::EmailTaken,
             Some("person_oidc_subject_key") => return PersonError::OidcSubjectTaken,
             Some("person_microsoft_subject_key") => return PersonError::MicrosoftSubjectTaken,
             Some("person_apple_subject_key") => return PersonError::AppleSubjectTaken,
@@ -618,7 +616,7 @@ pub(crate) async fn create(
     let id = Uuid::now_v7();
     let mut tx = person_transaction(pg, id).await?;
     // The mailbox claim has a Person foreign key, so write the Person first.
-    // Both rows still commit atomically, and `email_lower` remains the
+    // Both rows still commit atomically, and `person_email_key` remains the
     // database-enforced race backstop for concurrent creates.
     let row = insert_person(&mut tx, id, input).await?;
     sqlx::query("INSERT INTO person_mailbox(id, person_id) VALUES (lower($1), $2)")

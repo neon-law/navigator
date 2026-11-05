@@ -44,7 +44,7 @@ fn identity_keys_name_rows_without_values() {
 }
 
 #[test]
-fn the_person_upsert_leaves_the_generated_email_key_to_postgres() {
+fn the_person_upsert_names_no_derived_email_column() {
     let sql = upsert_sql("person", PERSON_COLUMNS);
     assert!(!sql.contains("email_lower"));
     assert!(sql.contains("is_admitted = EXCLUDED.is_admitted"));

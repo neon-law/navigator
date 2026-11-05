@@ -76,6 +76,10 @@ REVOKE ALL ON ALL TABLES IN SCHEMA ag_catalog FROM navigator_app;
 ALTER ROLE navigator_owner IN DATABASE navigator SET session_preload_libraries = 'age';
 ALTER ROLE navigator_app IN DATABASE navigator SET session_preload_libraries = 'age';
 
+-- A Person's email is `citext` (case-insensitive equality and uniqueness).
+-- The extension is trusted, so the migration also creates it when absent.
+CREATE EXTENSION IF NOT EXISTS citext;
+
 -- Objects created before these roles existed (by the bootstrap superuser)
 -- move to the migration login. Extension members stay with their extension,
 -- and owned sequences follow their table.
