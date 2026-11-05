@@ -1,7 +1,8 @@
 //! Civil birth-time resolution with explicit ambiguity and uncertainty.
 
-use chrono::{DateTime, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike, Utc};
+use chrono::{Datelike, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
+use serde::Serialize;
 use std::num::NonZeroU32;
 
 /// A supplied wall clock, IANA zone, and optional explicit UTC-offset choice.
@@ -18,7 +19,7 @@ pub struct LocalBirthTime {
 /// The supplied time and its precision. Personal inputs have no debug output.
 #[derive(Clone)]
 pub enum BirthTime {
-    /// A precise wall clock whose UTC instant must be resolved explicitly.
+    /// A precise wall clock whose universal reference must be resolved explicitly.
     Exact(LocalBirthTime),
     /// An approximate wall clock, with a positive uncertainty on either side.
     Approximate {
@@ -36,11 +37,30 @@ pub enum BirthTime {
     },
 }
 
+/// Time scale of the universal civil calendar label after timezone normalization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BirthTimeScale {
+    /// Greenwich mean solar time; the historical civil-time convention before 1972.
+    Ut1,
+    /// Atomic civil time with the pinned leap-second table, from 1972 onward.
+    Utc,
+}
+
+/// A normalized civil label and its explicit scale. Personal values have no debug output.
+#[derive(Clone, Copy, Serialize)]
+pub struct BirthTimeReference {
+    /// Universal Gregorian calendar label, without a misleading UTC suffix.
+    pub calendar: NaiveDateTime,
+    /// Historical UT1 or modern UTC interpretation.
+    pub scale: BirthTimeScale,
+}
+
 /// A validated resolution retaining the original input and its uncertainty.
 #[derive(Clone)]
 pub struct ResolvedBirthTime {
     original: BirthTime,
-    utc: Option<DateTime<Utc>>,
+    reference: Option<BirthTimeReference>,
     offset_seconds: Option<i32>,
 }
 
@@ -70,7 +90,7 @@ impl BirthTime {
             Self::Unknown { .. } => {
                 return Ok(ResolvedBirthTime {
                     original: self.clone(),
-                    utc: None,
+                    reference: None,
                     offset_seconds: None,
                 });
             }
@@ -103,7 +123,14 @@ impl BirthTime {
         }
         Ok(ResolvedBirthTime {
             original: self.clone(),
-            utc: Some(resolved.with_timezone(&Utc)),
+            reference: Some(BirthTimeReference {
+                calendar: resolved.naive_utc(),
+                scale: if resolved.with_timezone(&Utc).year() < 1972 {
+                    BirthTimeScale::Ut1
+                } else {
+                    BirthTimeScale::Utc
+                },
+            }),
             offset_seconds: Some(offset),
         })
     }
@@ -116,10 +143,17 @@ impl ResolvedBirthTime {
         &self.original
     }
 
-    /// Evaluation instant for exact or approximate clocks; absent for unknown time.
+    /// Universal civil label and scale; absent for an unknown clock.
     #[must_use]
-    pub fn utc(&self) -> Option<DateTime<Utc>> {
-        self.utc
+    pub fn reference(&self) -> Option<BirthTimeReference> {
+        self.reference
+    }
+
+    /// Physical evaluation epoch and explicit UT1, absent for an unknown clock.
+    pub fn instant(&self) -> Result<Option<crate::ChartInstant>, crate::ChartError> {
+        self.reference
+            .map(crate::ChartInstant::from_reference)
+            .transpose()
     }
 
     /// Resolved offset, in seconds east of UTC; absent for unknown time.
@@ -158,6 +192,18 @@ mod tests {
     }
 
     #[test]
+    fn scale_boundary_uses_the_normalized_universal_calendar() {
+        for (hour, minute, scale) in [(18, 59, BirthTimeScale::Ut1), (19, 0, BirthTimeScale::Utc)] {
+            let resolved = BirthTime::Exact(local(1971, 12, 31, hour, minute))
+                .resolve()
+                .expect("synthetic boundary clock");
+            let reference = resolved.reference().expect("known clock");
+            assert_eq!(reference.scale, scale);
+            assert_eq!(reference.calendar.hour(), if hour == 18 { 23 } else { 0 });
+        }
+    }
+
+    #[test]
     fn a_fold_requires_an_explicit_offset() {
         assert!(
             matches!(
@@ -179,8 +225,9 @@ mod tests {
                 .expect("explicit fold offset");
             assert!(
                 resolved
-                    .utc()
-                    .is_some_and(|utc| utc.hour() == hour && utc.minute() == 30),
+                    .reference()
+                    .is_some_and(|reference| reference.calendar.hour() == hour
+                        && reference.calendar.minute() == 30),
                 "the selected fold offset must identify its UTC instant"
             );
             assert!(
@@ -232,7 +279,7 @@ mod tests {
         .resolve()
         .expect("unknown time is representable");
         assert!(
-            resolved.utc().is_none(),
+            resolved.reference().is_none(),
             "an unknown time has no exact UTC instant"
         );
         assert!(
@@ -260,7 +307,7 @@ mod tests {
         .resolve()
         .expect("valid approximate clock");
         assert!(
-            resolved.utc().is_some(),
+            resolved.reference().is_some(),
             "approximate positions can identify their evaluation instant"
         );
         assert!(

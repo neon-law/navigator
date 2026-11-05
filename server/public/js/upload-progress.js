@@ -13,7 +13,13 @@
 // Inert unless `#document-upload-file` is on the page, so it is safe to load
 // on any page — like the other first-party scripts.
 //
+// A selection over the form's file or byte limit never uploads: the script
+// reads the limits from `#document-upload-limit`'s data attributes and shows
+// that element's refusal instead. A 413 from the handler shows its own
+// plain-language body there too.
+//
 // Expected markup (see `webapp/src/lawyer_project_detail.rs`):
+//   <p id="document-upload-limit" data-max-files="50" data-max-bytes="…" hidden>…</p>
 //   <form>
 //     <input type="file" id="document-upload-file" name="file" multiple>
 //     <button type="submit">Upload</button>
@@ -41,6 +47,7 @@
       return;
     }
     var submitButton = form.querySelector('button[type="submit"]');
+    var limit = document.getElementById("document-upload-limit");
 
     var bar = document.createElement("div");
     bar.className = "upload-progress";
@@ -63,6 +70,22 @@
       var totalBytes = 0;
       for (var i = 0; i < input.files.length; i++) {
         totalBytes += input.files[i].size;
+      }
+
+      // A selection over the form's limits is refused here, before a byte
+      // is sent, with the same copy the handler answers in a 413.
+      if (limit) {
+        limit.hidden = true;
+        var maxFiles = Number(limit.getAttribute("data-max-files"));
+        var maxBytes = Number(limit.getAttribute("data-max-bytes"));
+        if (
+          (maxFiles > 0 && input.files.length > maxFiles) ||
+          (maxBytes > 0 && totalBytes > maxBytes)
+        ) {
+          event.preventDefault();
+          limit.hidden = false;
+          return;
+        }
       }
 
       var formData = new FormData(form);
@@ -97,6 +120,23 @@
           fill.style.width = "100%";
           label.textContent = "Upload complete — refreshing…";
           window.location.href = xhr.responseURL || window.location.href;
+        } else if (xhr.status === 413) {
+          // The handler's 413 carries the plain-language refusal; a proxy's
+          // 413 page does not, so fall back to the rendered copy.
+          var plain = (xhr.getResponseHeader("Content-Type") || "").indexOf("text/plain") === 0;
+          bar.hidden = true;
+          if (limit) {
+            if (plain && xhr.responseText) {
+              limit.textContent = xhr.responseText;
+            }
+            limit.hidden = false;
+          } else {
+            label.textContent = plain && xhr.responseText ? xhr.responseText : "Upload refused (413).";
+            bar.hidden = false;
+          }
+          if (submitButton) {
+            submitButton.disabled = false;
+          }
         } else {
           label.textContent = "Upload failed (" + xhr.status + "). Please try again.";
           if (submitButton) {

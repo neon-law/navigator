@@ -891,7 +891,9 @@ mod tests {
             serde_json::from_str(&island_geojson(&lines, &test_provenance()).expect("serializes"))
                 .expect("parses");
         let engine_provenance = ephemeris::lines::geojson::LineProvenance {
-            instant_utc: SPECIMEN_INSTANT.to_string(),
+            instant_utc: Some(SPECIMEN_INSTANT.to_string()),
+            reference: None,
+            time_scales: None,
             time_scale_model: String::new(),
             reference_frame: String::new(),
             delta_t_model: "",

@@ -63,7 +63,7 @@ Six steps, each tagged with its Bloom verb. You are the admin operator; the `nav
 
 - **Create** — stand up a billed project and authenticate.
 - **Predict** — run `--dry-run` and read every API call before sending one.
-- **Identify** — name the twenty-three Google Cloud APIs the provisioner enables.
+- **Identify** — name the twenty-four Google Cloud APIs the provisioner enables.
 - **Explain** — describe the VPC, six core buckets, optional archive/telemetry lanes, private image registry, and
   configured service deployments.
 - **Execute** — bring up the cluster, the static IP, and Fleet membership.
@@ -75,7 +75,7 @@ Each step is tagged with the Bloom verb it exercises (the [Anderson & Krathwohl 
 revision](https://en.wikipedia.org/wiki/Bloom%27s_taxonomy)). You are the admin operator; the `navigator` CLI is the
 instrument. **Create** — stand up a billed Google Cloud project and authenticate so `navigator` can act on your behalf.
 **Predict** — run `navigator ops gcp setup --dry-run` and read every API call the provisioner _would_ make before
-sending one. **Identify** — name the twenty-three Google Cloud APIs the provisioner enables, and why each is needed.
+sending one. **Identify** — name the twenty-four Google Cloud APIs the provisioner enables, and why each is needed.
 **Explain** — describe the VPC, the six core storage buckets and optional archive/telemetry lanes, the private image
 registry, the configured service deployments, and why re-running setup is always safe. **Execute** — bring up the GKE
 Autopilot cluster, the static IP, and Fleet membership with one command. **Verify** — ship the images and confirm the
@@ -436,7 +436,7 @@ navigator ops gcp setup
 
 That is the live resource boundary, per deployment: six core buckets, plus any named archive/telemetry lanes, one
 VPC/subnet pair, one reserved gateway address, one Autopilot cluster, one KMS key, and two deployment service accounts.
-The command also enables the twenty-three required APIs in that runtime project. A completed command is not yet a
+The command also enables the twenty-four required APIs in that runtime project. A completed command is not yet a
 deployed website; `ops ship`, DNS, and the browser checks later in this workshop remain required.
 
 Setup provisions no database and generates no credential, so there is nothing printed to record. The store's own
@@ -528,11 +528,11 @@ Everything from here on provisions a real deployment.
 
 ### The APIs that light up
 
-A real run first enables twenty-three Google Cloud APIs in bounded [Service
+A real run first enables twenty-four Google Cloud APIs in bounded [Service
 Usage](https://cloud.google.com/service-usage/docs/enable-disable) `batchEnable` calls: `compute`, `servicenetworking`,
 `storage`, `iam`, `iamcredentials`, `sts`, `cloudresourcemanager`, `artifactregistry`, `container`, `gkehub`,
 `gkebackup`, `anthosconfigmanagement`, `logging`, `monitoring`, `cloudtrace`, `secretmanager`, `certificatemanager`,
-`identitytoolkit`, `speech`, `drive`, `admin`, `cloudkms`, and `aiplatform`.
+`identitytoolkit`, `speech`, `drive`, `admin`, `cloudkms`, `aiplatform`, and `gmail`.
 
 ---
 
@@ -1242,7 +1242,10 @@ local sign pages, DocuSign-Connect-shaped HMAC-signed completion webhooks; dev a
 provider carries one of two statuses, `EnvelopeStatus`: `sent` (anchors validated against the prepared PDF, PDF stored)
 or `completed` (every recipient signed, documents and certificate filed). There is no third state. Tests fail the loop
 on purpose with the third enum, `Fault` — `send`, `view`, or `webhook` — and the durable envelope keeps its last true
-state across every injected failure.
+state across every injected failure. Before anything is sent, on either provider, `prepare_envelope` groups the
+manifest's fields into per-signer, per-role tabs (`SignatureFieldKind::tabs_key` picks the tab type, the recipient's
+role picks the sign page) and refuses the send with a typed `SignatureError::TabValidation` when a field names no
+recipient, or `SignatureError::AnchorValidation` when the prepared PDF's text lacks the field's `nlsig-` anchor.
 
 ---
 

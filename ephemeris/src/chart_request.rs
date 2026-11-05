@@ -141,8 +141,8 @@ pub enum ChartError {
     /// A convention cannot be fulfilled by the selected provider.
     #[error("unsupported calculation setting: {0}")]
     UnsupportedSetting(&'static str),
-    /// The initial validation domain is 1900-01-01 through 2049-12-31 UTC.
-    #[error("time is outside the validated 1900-2050 UTC interval")]
+    /// The initial validation domain is 1900-01-01 through 2049-12-31 universal civil time.
+    #[error("time is outside the validated 1900-2050 civil interval")]
     OutsideValidatedRange,
     /// Civil-time ambiguity, gap, offset, or leap-second semantics.
     #[error(transparent)]
@@ -163,7 +163,7 @@ impl AstrologyChartRequest {
     }
 
     /// Validate coordinates, conventions, coverage, and the original civil clock.
-    /// The validation window is [1900-01-01, 2050-01-01) UTC.
+    /// The validation window is [1900-01-01, 2050-01-01) in the normalized civil label.
     pub fn resolve(&self) -> Result<ResolvedBirthTime, ChartError> {
         if !self.longitude_deg.is_finite()
             || !self.latitude_deg.is_finite()
@@ -183,8 +183,9 @@ impl AstrologyChartRequest {
         }
         self.settings.validate()?;
         let resolved = self.birth_time.resolve()?;
-        if let Some(utc) = resolved.utc() {
-            if !validated_year(utc.year()) {
+        if let Some(reference) = resolved.reference() {
+            let calendar = reference.calendar;
+            if !validated_year(calendar.year()) {
                 return Err(ChartError::OutsideValidatedRange);
             }
             if let BirthTime::Approximate {
@@ -194,8 +195,8 @@ impl AstrologyChartRequest {
             {
                 let uncertainty = chrono::Duration::seconds(i64::from(uncertainty_seconds.get()));
                 if [
-                    utc.checked_sub_signed(uncertainty),
-                    utc.checked_add_signed(uncertainty),
+                    calendar.checked_sub_signed(uncertainty),
+                    calendar.checked_add_signed(uncertainty),
                 ]
                 .into_iter()
                 .any(|limit| limit.is_none_or(|limit| !validated_year(limit.year())))
@@ -324,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn the_validated_window_is_1900_through_2049_utc() {
+    fn the_validated_window_is_1900_through_2049_universal_civil_time() {
         for year in [1899, 2050] {
             assert!(
                 matches!(

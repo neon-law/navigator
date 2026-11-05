@@ -54,10 +54,14 @@ pub struct KernelProvenance {
 }
 
 /// The models and kernel bytes behind a line set.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct LineProvenance {
-    /// The civil instant the lines describe, ISO-8601 UTC to the second.
-    pub instant_utc: String,
+    /// UTC reading, absent when the original civil label is historical UT1.
+    pub instant_utc: Option<String>,
+    /// Explicit normalized civil label and scale for a resolved chart.
+    pub reference: Option<crate::BirthTimeReference>,
+    /// Physical TT/TDB and Earth-rotation readings for a resolved chart.
+    pub time_scales: Option<crate::ChartTimeScales>,
     /// The time-scale model string from the verifying manifest.
     pub time_scale_model: String,
     /// The reference-frame string from the verifying manifest.
@@ -96,7 +100,9 @@ impl LineProvenance {
             })
             .collect();
         Self {
-            instant_utc: instant_iso_utc(utc),
+            instant_utc: Some(instant_iso_utc(utc)),
+            reference: None,
+            time_scales: None,
             time_scale_model: manifest.time_scale_model.clone(),
             reference_frame: manifest.reference_frame.clone(),
             delta_t_model: DELTA_T_MODEL,
@@ -106,6 +112,24 @@ impl LineProvenance {
             node_convention: NODE_CONVENTION,
             kernels,
         }
+    }
+
+    /// Provenance for [`super::lines_for_instant`], retaining the chart's actual clock scale.
+    #[must_use]
+    pub fn for_instant(manifest: &EphemerisManifest, instant: crate::ChartInstant) -> Self {
+        let scales = instant.time_scales();
+        let mut provenance = Self::new(manifest, instant.epoch());
+        provenance.instant_utc = scales
+            .julian_day_utc
+            .map(|_| instant_iso_utc(instant.epoch()));
+        provenance.reference = Some(scales.reference);
+        provenance.delta_t_reading = Some(super::deltat::DeltaTEstimate {
+            seconds: scales.delta_t_seconds,
+            kind: scales.delta_t_kind,
+            reported_error_seconds: scales.delta_t_reported_error_seconds,
+        });
+        provenance.time_scales = Some(scales);
+        provenance
     }
 }
 

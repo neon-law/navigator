@@ -50,6 +50,11 @@ NAVIGATOR_SURREAL_ARCHIVES_BUCKET = "example-surreal-archives"
 NAVIGATOR_LOGS_BUCKET = "example-automation-home-logs"
 NAVIGATOR_APPLICATIONS_BUCKET = "example-applications"
 NAVIGATOR_ARCHIVES_BUCKET = "example-archives"
+# The offsite Iceberg archive lane: set when the archives bucket lives in a
+# different GCP project than the deployment. Accepts the archive project's
+# id or numeric project number; lane resolution refuses archive writes when
+# the bucket's owning project cannot be confirmed to match.
+NAVIGATOR_ARCHIVES_GCP_PROJECT_ID = "example-archive-project"
 NAVIGATOR_TELEMETRY_BUCKET = "example-automation-home-telemetry"
 
 # --- Images ----------------------------------------------------------------

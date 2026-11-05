@@ -14,6 +14,62 @@ at Google's token endpoint using the configured OAuth client id, plus the client
 Security framework reads and writes both items. `navigator mail login` mints the token. Deployment requires a
 signed-app/Keychain ACL threat model and a managed-host test.
 
+## Provision Gmail for navigator mail
+
+Standing up a Firm includes one Google OAuth client for `navigator mail`. The deployment operator creates it once; each
+lawyer machine then signs in with it. `navigator mail setup`, `navigator mail login`, and a missing refresh token name
+this section when the client or the sign-in is missing.
+
+| Piece | Where it lives |
+| --- | --- |
+| GCP project | The Firm's runtime project, the one `navigator ops gcp setup --project-id` provisions. |
+| Gmail API | `gmail.googleapis.com`, enabled in that project by `navigator ops gcp setup`. |
+| Consent screen | Google Auth Platform, Audience: **Internal**. |
+| OAuth client | Google Auth Platform, Clients: application type **Desktop app**. |
+| Scopes | `gmail.readonly` and `gmail.compose`, nothing else. |
+| Client id | Not a secret; the operator gives it and the project id to each lawyer. |
+| Client secret | Secret Manager secret `navigator-mail-oauth-client-secret` in the same project. |
+
+The project sits in the Firm's Google Workspace organization, which is what lets the consent screen be Internal: only
+the Firm's Workspace accounts can authorize, and Google requires no app verification. The full scope URLs are
+`https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.compose`. The secret's
+payload is the bare client secret string, which `navigator mail login` trims and stores.
+
+### Operator: create the client
+
+1. Check that the project has the Gmail API. `navigator ops gcp setup` enables it with every other required API, and
+   `navigator ops gcp services --project-id <project>` reports drift: one `ok` or `MISSING` line per required API and a
+   nonzero exit when any is disabled. Re-run `navigator ops gcp setup` to enable a missing one.
+2. In the Google Cloud console for that project, open **Google Auth Platform**. Under **Branding**, name the app; under
+   **Audience**, choose **Internal**; under **Data Access**, add the two Gmail scopes above.
+3. Under **Clients**, create an OAuth client of type **Desktop app**. Google offers no public API that creates a Desktop
+   OAuth client, so this step stays in the console and no `ops` verb performs it.
+4. Store the client secret in Secret Manager, pasting it on standard input so it never reaches shell history:
+
+   ```bash
+   gcloud secrets create navigator-mail-oauth-client-secret --project <project> --replication-policy=automatic
+   gcloud secrets versions add navigator-mail-oauth-client-secret --project <project> --data-file=-
+   ```
+
+5. Grant the lawyers group `roles/secretmanager.secretAccessor` on that secret alone.
+
+A different secret name works when every lawyer passes it as `--secret`; the CLI defaults to
+`navigator-mail-oauth-client-secret`.
+
+### Lawyer machine: sign in
+
+```bash
+gcloud auth login
+navigator mail setup --account <lawyer>@<firm-domain> --client-id <oauth-client-id> --project <project>
+navigator mail login
+navigator mail setup
+```
+
+`navigator mail login` runs `gcloud secrets versions access latest --project <project> --secret
+navigator-mail-oauth-client-secret` with the current `gcloud` account, stores the result in the Keychain, and opens
+Google sign-in. The final `navigator mail setup` reports `ok` for the account, client id, and refresh token. A machine
+without Secret Manager access can pass the console's downloaded client JSON with `--client-secret-file` instead.
+
 ## Draft-only setup
 
 Save the Gmail address and OAuth client id once:
