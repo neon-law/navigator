@@ -78,8 +78,8 @@ enforcement only when legally required, and we will tell you when we are permitt
 
 ## Your Privacy Rights
 
-**You always have the right to delete.** You may ask us to access, correct, delete, export, or object to or restrict
-our use of your personal information. To exercise these rights, email support@neonlaw.com, and we will respond within a
+**You always have the right to delete.** You may ask us to access, correct, delete, export, or object to or restrict our
+use of your personal information. To exercise these rights, email support@neonlaw.com, and we will respond within a
 reasonable period. If you are located in a jurisdiction with a privacy statute (such as the GDPR in Europe or the CCPA
 in California), we honor these rights as that law requires.
 
@@ -94,8 +94,8 @@ consent. Browsing this site or sending a general inquiry does not by itself crea
 We make commercially reasonable efforts to safeguard your information, and we keep it only as long as needed for the
 purposes described above or as the law requires. Information you keep in a logged-in account is protected using
 reasonable best practices appropriate to a law firm: commercially reasonable administrative, technical, and physical
-safeguards designed to protect its confidentiality. No system is perfectly secure; if a breach affects your
-information, we will notify you as required by applicable law.
+safeguards designed to protect its confidentiality. No system is perfectly secure; if a breach affects your information,
+we will notify you as required by applicable law.
 
 ## Children's Privacy
 
