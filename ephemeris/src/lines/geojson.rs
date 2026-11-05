@@ -30,8 +30,8 @@ const SIDEREAL_MODEL: &str = "IERS Earth Rotation Angle, IAU 2006 GMST \
 polynomial, IAU 2000B equation of the equinoxes with true obliquity";
 
 /// The lunar-node convention, when the node is among the lines.
-const NODE_CONVENTION: &str = "Moon mean ascending node, Swiss Ephemeris \
-SE_MEAN_NODE convention";
+const NODE_CONVENTION: &str = "Moon mean ascending node, IERS 2003 longitude; \
+IAU 2000B nutation and IAU 2006 true obliquity";
 
 /// One kernel file's verifying identity, copied from the manifest.
 #[derive(Debug, Serialize)]

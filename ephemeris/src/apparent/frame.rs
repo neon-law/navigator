@@ -8,6 +8,7 @@
 //! first) — and is pinned to reference values generated from those sources at
 //! five epochs from 1900 to 2050. IAU 2000B delivers about 1 mas pole
 //! accuracy over 1900-2100, far inside the 1″ verification gate.
+//! ERFA is derived from SOFA; its required notice is in the repository `NOTICE`.
 
 // Literal fidelity: the polynomial coefficients and the anchor tables below
 // are byte-exact transcriptions of the liberfa sources and its %.17e anchor
