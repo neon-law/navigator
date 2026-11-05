@@ -1390,9 +1390,34 @@ mod tests {
                 "20261104120000_sent_email_append_only.sql",
                 include_str!("../postgres/migrations/20261104120000_sent_email_append_only.sql"),
             ),
+            (
+                "20261105120000_inbox_conversation_person_id.sql",
+                include_str!(
+                    "../postgres/migrations/20261105120000_inbox_conversation_person_id.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
+    }
+
+    #[test]
+    fn inbox_conversation_persists_the_sender_person() {
+        let schema = parse_schema(canonical_schema()).expect("canonical SQL parses");
+        let conversation = schema
+            .get("inbox_conversation")
+            .expect("the inbox conversation table");
+        let kind = conversation
+            .columns
+            .get("person_id")
+            .expect("the sender-person link column");
+        assert!(kind.contains("UUID"), "person_id is a UUID: {kind}");
+        assert!(
+            conversation
+                .foreign_keys
+                .contains(&("person_id".to_string(), "person".to_string())),
+            "person_id references person"
+        );
     }
 
     #[test]

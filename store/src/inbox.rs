@@ -159,6 +159,10 @@ pub struct Conversation {
     pub promotional_opt_in: bool,
     pub promotional_opt_out: bool,
     pub email_conversation_id: Option<Uuid>,
+    /// The Person the inbound email sender resolves to — persisted at
+    /// ingest (primary or `person_mailbox` alias match). A lawyer- or
+    /// clerk-tier sender never links here; see `sender_identity`.
+    pub person_id: Option<Uuid>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -247,6 +251,9 @@ pub struct IngestedInbound {
     pub conversation_id: Uuid,
     pub message_id: Uuid,
     pub deduped: bool,
+    /// Whether this delivery wrote the conversation's `person_id` — the
+    /// event a Relationship Log entry records exactly once per thread.
+    pub person_linked: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -452,6 +459,7 @@ struct ConversationRow {
     promotional_opt_in: bool,
     promotional_opt_out: bool,
     email_conversation_id: Option<surrealdb::types::RecordId>,
+    person_id: Option<surrealdb::types::RecordId>,
     inserted_at: surrealdb::types::Datetime,
     updated_at: surrealdb::types::Datetime,
 }
@@ -503,7 +511,7 @@ struct ProjectPick {
 const CONVERSATION_SELECT: &str = "id, firm_id, brand_key, interaction_type, provider_post_id, project_id, channel, external_address, \
     external_name, subject, unread, provider_account, provider_thread_ref, source_page, \
     source_channel, matter_consent, promotional_opt_in, promotional_opt_out, \
-    email_conversation_id, inserted_at, updated_at";
+    email_conversation_id, person_id, inserted_at, updated_at";
 
 const MESSAGE_SELECT: &str =
     "id, conversation_id, parent_message_id, visibility, direction, body, author_person_id, \
@@ -535,6 +543,7 @@ impl ConversationRow {
             promotional_opt_in: self.promotional_opt_in,
             promotional_opt_out: self.promotional_opt_out,
             email_conversation_id: self.email_conversation_id.as_ref().and_then(record_uuid),
+            person_id: self.person_id.as_ref().and_then(record_uuid),
             inserted_at: self.inserted_at.into(),
             updated_at: self.updated_at.into(),
         })
@@ -710,6 +719,7 @@ async fn replay_existing_message(
         conversation_id: message.conversation_id,
         message_id: message.id,
         deduped: true,
+        person_linked: false,
     })
 }
 
@@ -760,7 +770,8 @@ pub async fn ingest_imported(
     let Some(pg) = inbox_authority().await? else {
         return Err(InboxError::PostgresAuthorityRequired);
     };
-    crate::postgres::inbox::ingest_message_on(&pg, direction_value, author_person_id, inbound).await
+    crate::postgres::inbox::ingest_message_on(&pg, direction_value, author_person_id, None, inbound)
+        .await
 }
 
 /// Point an imported Message at its first filed attachment Asset (LAW-238
@@ -778,6 +789,33 @@ pub async fn set_attachment_asset(message_id: Uuid, asset_id: Uuid) -> Result<()
         return Err(InboxError::PostgresAuthorityRequired);
     };
     crate::postgres::inbox::set_attachment_asset_on(&pg, message_id, asset_id).await
+}
+
+/// The guard every email association runs through: a lawyer- or clerk-tier
+/// resolved Person is that firm member's outgoing mail and never the
+/// counterparty of inbound correspondence. The portal's lawyer-mailbox
+/// guard refuses such mail before ingest; this is the store-level backstop
+/// for the doors that bypass it (CLI ingest, imports).
+pub(crate) fn counterparty_decision(person: &persons::Person) -> Option<Uuid> {
+    if person.role.is_lawyer_tier() || person.role.is_clerk() {
+        None
+    } else {
+        Some(person.id)
+    }
+}
+
+/// The inbound email sender's Person on the legacy Surreal lane: primary
+/// or `person_mailbox` alias match (`find_by_any_email`) — never an
+/// address-book claim, and never a lawyer- or clerk-tier sender. Only the
+/// exact, case-insensitive address resolves; near matches do not.
+async fn inbound_counterparty(
+    db: &SurrealDb,
+    external_address: &str,
+) -> Result<Option<Uuid>, InboxError> {
+    Ok(persons::find_by_any_email(db, external_address.trim())
+        .await?
+        .as_ref()
+        .and_then(counterparty_decision))
 }
 
 /// The legacy SurrealDB store behind [`ingest_inbound`] — the webhook-shaped
@@ -811,10 +849,31 @@ async fn ingest_inbound_surreal(
         return replay_existing_message(db, existing).await;
     }
 
-    let conversation = match find_open_thread(db, inbound).await? {
-        Some(existing) => existing,
-        None => create_conversation(db, inbound).await?,
+    let sender_person_id = match inbound.channel {
+        channel::EMAIL => inbound_counterparty(db, inbound.external_address).await?,
+        _ => None,
     };
+    let (conversation, person_linked) =
+        if let Some(existing) = find_open_thread(db, inbound).await? {
+            let linked = sender_person_id.is_some() && existing.person_id.is_none();
+            (existing, linked)
+        } else {
+            let created = create_conversation(db, inbound, sender_person_id).await?;
+            (created, sender_person_id.is_some())
+        };
+    if let (true, Some(person_id)) = (person_linked, sender_person_id) {
+        // First association wins: an existing link is never overwritten,
+        // and the WHERE guard keeps a concurrent ingest from double-writing.
+        db.query(
+            "UPDATE $id SET person_id = $person, updated_at = time::now() \
+             WHERE person_id IS NONE",
+        )
+        .bind(("id", record_id(CONVERSATION, conversation.id)))
+        .bind(("person", record_id("person", person_id)))
+        .await?
+        .check()?;
+        after_write(db, MirrorKey::InboxConversation(conversation.id)).await;
+    }
     if inbound.email_conversation_id.is_some() && conversation.email_conversation_id.is_none() {
         link_email_conversation(db, conversation.id, inbound.email_conversation_id).await?;
     }
@@ -861,6 +920,7 @@ async fn ingest_inbound_surreal(
         conversation_id: conversation.id,
         message_id,
         deduped: false,
+        person_linked,
     })
 }
 
@@ -1015,6 +1075,7 @@ async fn recover_deduped_ingress(
             conversation_id: message.conversation_id,
             message_id: message.id,
             deduped: true,
+            person_linked: false,
         });
     }
     Err(error)
@@ -1588,12 +1649,18 @@ pub(crate) async fn sender_identity(
     conversation: &Conversation,
 ) -> Result<Option<ContactLink>, InboxError> {
     match conversation.channel.as_str() {
-        channel::EMAIL => Ok(
-            persons::find_by_email_ci(db, conversation.external_address.trim())
+        channel::EMAIL => Ok(match conversation.person_id {
+            // The association persisted at ingest answers first; the
+            // address read below only repairs rows that predate it.
+            Some(person_id) => persons::find_by_id(db, person_id)
                 .await?
                 .as_ref()
                 .map(ContactLink::of),
-        ),
+            None => persons::find_by_any_email(db, conversation.external_address.trim())
+                .await?
+                .as_ref()
+                .map(ContactLink::of),
+        }),
         phone if has_phone_counterparty(phone) => {
             Ok(persons::find_by_phone(db, &conversation.external_address)
                 .await?
@@ -1795,7 +1862,7 @@ pub async fn open_sms_conversation(
     };
     let conversation = match find_open_thread(db, &thread).await? {
         Some(existing) => existing,
-        None => create_conversation(db, &thread).await?,
+        None => create_conversation(db, &thread, None).await?,
     };
     let message_id = queue_sms_message(db, &conversation, actor_id, body).await?;
     Ok((conversation.id, message_id))
@@ -3218,6 +3285,7 @@ async fn find_open_thread(
 async fn create_conversation(
     db: &SurrealDb,
     inbound: &IngestInbound<'_>,
+    person_id: Option<Uuid>,
 ) -> Result<Conversation, InboxError> {
     let id = Uuid::now_v7();
     let mut response = db
@@ -3229,7 +3297,8 @@ async fn create_conversation(
              source_page = $source_page, source_channel = $source_channel, \
              matter_consent = $matter_consent, promotional_opt_in = $promotional, \
              promotional_opt_out = false, email_conversation_id = $email_conversation, \
-             inserted_at = time::now(), updated_at = time::now() RETURN {CONVERSATION_SELECT}"
+             person_id = $person, inserted_at = time::now(), updated_at = time::now() \
+             RETURN {CONVERSATION_SELECT}"
         ))
         .bind(("id", record_id(CONVERSATION, id)))
         .bind(("firm", record_id(crate::firms::TABLE, inbound.firm_id)))
@@ -3256,6 +3325,7 @@ async fn create_conversation(
                 .email_conversation_id
                 .map(|id| record_id("email_conversation", id)),
         ))
+        .bind(("person", person_id.map(|id| record_id("person", id))))
         .await?
         .check()?;
     let rows: Vec<ConversationRow> = response.take(0)?;
@@ -3942,6 +4012,60 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored.attachment_asset_id, Some(first));
+    }
+
+    #[tokio::test]
+    async fn an_alias_sender_resolves_to_the_mailbox_holder() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        persons::add_alias(&db, world.client, "client-alias@example.com")
+            .await
+            .unwrap();
+        let message = inbound(
+            world.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "alias-sender-1",
+            "client-alias@example.com",
+        );
+        let ingested = ingest_inbound(&db, &message).await.unwrap();
+        let conversation = conversation_by_id(&db, ingested.conversation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        // The alias sender IS the client: the person_mailbox claim resolves
+        // where the primary-email lookup missed, and the link persists.
+        assert_eq!(conversation.person_id, Some(world.client));
+        let contact = sender_identity(&db, &conversation).await.unwrap().unwrap();
+        assert_eq!(contact.person_id, world.client);
+    }
+
+    #[tokio::test]
+    async fn a_lawyer_or_clerk_sender_never_persists_a_person_link() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        for (role, address) in [
+            (world.lawyer, "lawyer@example.com"),
+            (world.clerk, "clerk@example.com"),
+        ] {
+            let message_id = format!("lawyer-sender-{role}");
+            let message = inbound(
+                world.firm,
+                channel::EMAIL,
+                "fixture-account",
+                &message_id,
+                address,
+            );
+            let ingested = ingest_inbound(&db, &message).await.unwrap();
+            let conversation = conversation_by_id(&db, ingested.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                conversation.person_id, None,
+                "outgoing mail never auto-associates"
+            );
+        }
     }
 
     #[tokio::test]

@@ -1062,6 +1062,7 @@
         "inserted_at": "datetime",
         "interaction_type": "string",
         "matter_consent": "bool",
+        "person_id": "option<record<person>>",
         "project_id": "option<record<project>>",
         "promotional_opt_in": "bool",
         "promotional_opt_out": "bool",
@@ -3142,6 +3143,7 @@
           "inserted_at": "TIMESTAMPTZ",
           "interaction_type": "TEXT",
           "matter_consent": "BOOLEAN",
+          "person_id": "UUID",
           "project_id": "UUID",
           "promotional_opt_in": "BOOLEAN",
           "promotional_opt_out": "BOOLEAN",
@@ -3164,6 +3166,10 @@
             "firm"
           ],
           [
+            "person_id",
+            "person"
+          ],
+          [
             "project_id",
             "project"
           ]
@@ -3172,6 +3178,7 @@
         "references": [
           "email_conversation",
           "firm",
+          "person",
           "project"
         ]
       },

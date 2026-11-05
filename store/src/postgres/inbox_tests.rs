@@ -873,6 +873,60 @@ async fn ingress_count(pg: &PostgresDb) -> i64 {
         .unwrap()
 }
 
+/// AC: the PostgreSQL ingest door persists the alias-resolved sender
+/// Person — primary first, then any `person_mailbox` claim — with the
+/// lawyer-tier guard applied on both legs.
+#[tokio::test]
+async fn ingest_persists_the_alias_resolved_sender_person() {
+    let Some(f) = fixture().await else { return };
+    let client = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO person (id,name,email,role) VALUES ($1,'Client','client@example.com','client')",
+    )
+    .bind(client)
+    .execute(&f.pg.0)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO person_mailbox (id,person_id) VALUES ('client-alias@example.com',$1)")
+        .bind(client)
+        .execute(&f.pg.0)
+        .await
+        .unwrap();
+
+    let alias_mail = inbound(
+        f.firm,
+        channel::EMAIL,
+        "fixture-account",
+        "pg-alias-sender",
+        "client-alias@example.com",
+    );
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &alias_mail)
+        .await
+        .unwrap();
+    let conversation = crate::inbox::conversation_by_id(&f.db, saved.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(conversation.person_id, Some(client));
+
+    // A lawyer-tier sender never links, even when the address resolves.
+    let lawyer_mail = inbound(
+        f.firm,
+        channel::EMAIL,
+        "fixture-account",
+        "pg-lawyer-sender",
+        "lawyer@example.com",
+    );
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &lawyer_mail)
+        .await
+        .unwrap();
+    let conversation = crate::inbox::conversation_by_id(&f.db, saved.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(conversation.person_id, None);
+}
+
 /// AC2: concurrent deliveries of the same provider id converge on one
 /// message; the losers report the winner's ids as deduped, and no orphan
 /// conversation or second ingress row survives.
@@ -1007,6 +1061,7 @@ async fn lawyer_sent_imports_ingest_outbound_with_author() {
         &fixture.pg,
         direction::OUTBOUND,
         Some(fixture.owner),
+        None,
         &inbound(
             fixture.firm,
             channel::EMAIL,
@@ -1139,9 +1194,10 @@ async fn email_import_survives_replay_without_a_message_id() {
             fixture.firm,
             "nick@neonlaw.com",
         );
-        let ingested = pg_inbox::ingest_message_on(&fixture.pg, direction::INBOUND, None, &ingest)
-            .await
-            .unwrap();
+        let ingested =
+            pg_inbox::ingest_message_on(&fixture.pg, direction::INBOUND, None, None, &ingest)
+                .await
+                .unwrap();
         if let Some(first) = first {
             assert!(ingested.deduped, "the replay dedups");
             assert_eq!(ingested.message_id, first.message_id);
@@ -1189,7 +1245,7 @@ async fn linkedin_import_threads_one_conversation_per_export_thread() {
             let ingest =
                 crate::inbox_import::import_message_to_ingest(message, fixture.firm, mailbox);
             let ingested =
-                pg_inbox::ingest_message_on(&fixture.pg, direction_value, author, &ingest)
+                pg_inbox::ingest_message_on(&fixture.pg, direction_value, author, None, &ingest)
                     .await
                     .unwrap();
             pass.push(ingested);
