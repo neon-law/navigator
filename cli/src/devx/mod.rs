@@ -798,6 +798,15 @@ pub enum GcpCmd {
     /// resources, and it refuses a project ID recorded as an environment.
     #[command(subcommand)]
     Hub(GcpHubCmd),
+    /// Report drift between the APIs `ops gcp setup` enables and the APIs
+    /// the project actually has enabled, `gmail.googleapis.com` among them.
+    /// Read-only: it lists the project's enabled services and enables
+    /// nothing. Exits nonzero when any required API is disabled.
+    Services {
+        /// Google Cloud project ID. Falls back to `NAVIGATOR_GCP_PROJECT_ID`.
+        #[arg(long, env = "NAVIGATOR_GCP_PROJECT_ID")]
+        project_id: String,
+    },
     /// Identity-Aware Proxy operations for the `navigator-web`
     /// backend. Run after the GKE Ingress has provisioned the LB.
     #[command(subcommand)]
@@ -1196,6 +1205,9 @@ fn dispatch_with_dns_provider(
                 config.ci_pusher_account_id = v;
             }
             gcp_hub_setup(project_id, dry_run, config)
+        }
+        crate::Command::Ops(crate::OpsCmd::Gcp(GcpCmd::Services { project_id })) => {
+            gcp_services(&project_id)
         }
         crate::Command::Ops(crate::OpsCmd::Gcp(GcpCmd::Iap(IapCmd::Audience {
             project_id,
@@ -1734,6 +1746,39 @@ fn dns_zones(domains: Vec<String>) -> Result<Vec<String>> {
 /// `devx gcp iap audience`: print the IAP audience string for
 /// `IAP_AUDIENCE`. Requires the LB to already exist (apply the gke
 /// overlay first); a 404 surfaces as a clear error.
+/// `ops gcp services`: report which APIs `ops gcp setup` enables are disabled
+/// in `project_id`. Read-only; the fix it names is a setup re-run.
+fn gcp_services(project_id: &str) -> Result<()> {
+    use std::sync::Arc;
+
+    use gcp::client::{GcpClient, TokenProvider};
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime")?;
+    runtime.block_on(async move {
+        let token: Arc<dyn TokenProvider> = gcp::auth::adc_token_provider().await?;
+        let client = GcpClient::new(token);
+        let required = gcp::services::REQUIRED_SERVICES;
+        let missing = gcp::services::missing(&client, project_id, required)
+            .await
+            .context("list the project's enabled APIs")?;
+        print!(
+            "{}",
+            gcp::services::drift_report(project_id, required, &missing)
+        );
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "{} required API(s) disabled in {project_id}",
+                missing.len()
+            ))
+        }
+    })
+}
+
 fn gcp_iap_audience(project_id: &str, service: &str) -> Result<()> {
     use std::sync::Arc;
 

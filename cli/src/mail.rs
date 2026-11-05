@@ -26,6 +26,9 @@ const REFRESH_TOKEN_SERVICE: &str = "com.neonlaw.navigator.gmail.refresh-token";
 /// Keychain service holding the OAuth client secret; the account is the
 /// configured client id.
 const CLIENT_SECRET_SERVICE: &str = "com.neonlaw.navigator.gmail.client-secret";
+/// The operating doc for the Firm's Gmail OAuth client and a lawyer machine's
+/// sign-in. Errors about a missing client or sign-in name it.
+const PROVISIONING_DOC: &str = "docs/mail-cli.md#provision-gmail-for-navigator-mail";
 /// Gmail's 25 MB message limit, measured on the encoded MIME message.
 const MAX_MESSAGE_BYTES: u64 = 25_000_000;
 /// Where `mail save` writes by default: the Project checkout's git-ignored
@@ -1369,7 +1372,7 @@ fn setup_from(account: Option<String>, client_id: Option<String>) -> Result<(Str
     match (account, client_id) {
         (Some(account), Some(client_id)) => Ok((account, client_id)),
         _ => Err(anyhow!(
-            "Gmail is not set up. Run navigator mail setup --account <gmail-address> --client-id <oauth-client-id> to save settings, or set environment overrides (see docs/mail-cli.md): {}",
+            "Gmail is not set up. Run navigator mail setup --account <gmail-address> --client-id <oauth-client-id> to save settings, or set environment overrides. The Firm's OAuth client and this machine's sign-in are in {PROVISIONING_DOC}: {}",
             steps.join("; ")
         )),
     }
@@ -1425,9 +1428,16 @@ fn setup_report(
             "\nnavigator mail setup --account <gmail-address> --client-id <oauth-client-id>\n",
         );
     }
+    if !client_id_set {
+        let _ = writeln!(
+            text,
+            "No OAuth client id yet? The Firm's operator creates one Desktop-app client per Firm; see {PROVISIONING_DOC}."
+        );
+    }
     if keychain == KeychainState::Missing {
-        text.push_str(
-            "\nAuthorize Gmail in the browser and store the refresh token (uses the selected client secret source):\n  navigator mail login\n",
+        let _ = writeln!(
+            text,
+            "\nAuthorize Gmail in the browser and store the refresh token (uses the selected client secret source):\n  navigator mail login\nSign-in steps for a new machine: {PROVISIONING_DOC}."
         );
     }
     text.push_str(
@@ -1517,8 +1527,11 @@ fn refresh_form<'a>(
 
 async fn client() -> Result<GmailClient> {
     let (account, client_id) = configured_setup()?;
-    let refresh_token = keychain_refresh_token(&account)
-        .context("Gmail refresh token unavailable; run navigator mail login")?;
+    let refresh_token = keychain_refresh_token(&account).with_context(|| {
+        format!(
+            "Gmail refresh token unavailable; run navigator mail login (see {PROVISIONING_DOC})"
+        )
+    })?;
     let client_secret = keychain_read(CLIENT_SECRET_SERVICE, &client_id)?;
     let response = reqwest::Client::new()
         .post(GOOGLE_TOKEN_API)
@@ -3105,11 +3118,24 @@ mod tests {
     }
 
     #[test]
+    fn provisioning_doc_anchor_names_a_heading_in_the_mail_doc() {
+        let doc = include_str!("../../docs/mail-cli.md");
+        let (path, anchor) = PROVISIONING_DOC.split_once('#').unwrap();
+        assert_eq!(path, "docs/mail-cli.md");
+        assert_eq!(anchor, "provision-gmail-for-navigator-mail");
+        assert!(doc.contains("\n## Provision Gmail for navigator mail\n"));
+    }
+
+    #[test]
     fn setup_errors_name_every_missing_setting_at_once() {
         let error = setup_from(None, Some(" ".into())).unwrap_err().to_string();
         assert!(
             error.contains("NAVIGATOR_GMAIL_ACCOUNT")
                 && error.contains("NAVIGATOR_GMAIL_CLIENT_ID")
+        );
+        assert!(
+            error.contains("docs/mail-cli.md#provision-gmail-for-navigator-mail"),
+            "the error must name the provisioning doc: {error}"
         );
         assert_eq!(
             setup_from(Some("a@example.test".into()), Some("id".into())).unwrap(),
@@ -3615,10 +3641,18 @@ mod tests {
             assert!(report.text.contains(expected), "missing `{expected}`");
         }
         assert!(!report.text.contains("security add-generic-password"));
+        assert!(report.text.contains(
+            "No OAuth client id yet? The Firm's operator creates one Desktop-app client per Firm; \
+see docs/mail-cli.md#provision-gmail-for-navigator-mail."
+        ));
 
         let missing = setup_report(true, true, false, KeychainState::Missing);
         assert!(!missing.ready);
         assert!(missing.text.contains("navigator mail login"));
+        assert!(missing.text.contains(
+            "Sign-in steps for a new machine: docs/mail-cli.md#provision-gmail-for-navigator-mail."
+        ));
+        assert!(!missing.text.contains("No OAuth client id yet"));
         assert!(missing.text.contains("[optional] OAuth client secret"));
         assert!(!missing.text.contains("security add-generic-password"));
 
