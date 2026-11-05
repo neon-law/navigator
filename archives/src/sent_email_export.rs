@@ -5,20 +5,25 @@
 //! The table lives under [`TABLE_PREFIX`] in the archive bucket, apart from the
 //! full-table `postgres/navigator/sent_email` coverage lineage, and is
 //! **partitioned by day** (`day(sent_at)`): each UTC day is one Parquet data
-//! file, `data/sent_at_day=<date>/part-<sha256>.parquet`, named by the digest
-//! of the day's row ids, listed in its own manifest,
-//! `metadata/day-<date>-<sha256>-m0.avro`. Every snapshot's manifest list
-//! carries the earlier days forward, so the current snapshot holds the whole
-//! trail even after PostgreSQL has purged a day.
+//! file, `data/sent_at_day=<date>/part-<sha256>-<attempt>.parquet`, listed in
+//! its own manifest, `metadata/day-<date>-<sha256>-<attempt>-m0.avro`. The
+//! digest is the SHA-256 of the day's row ids; the attempt suffix makes every
+//! object key new, so no write ever replaces an object. Every snapshot's
+//! manifest list carries the earlier days forward, so the current snapshot
+//! holds the whole trail even after PostgreSQL has purged a day.
 //!
 //! A run is idempotent. A day whose ledger row (`sent_email_export`) already
 //! has the day's digest is skipped. A day that gained a late row is written
 //! again and its earlier manifest dropped from the new snapshot (an Iceberg
 //! overwrite; the prior snapshot still reads the old file). A crash between
-//! the Iceberg commit and the ledger write finds the day's manifest already in
-//! the current snapshot on retry and records the ledger without a second
-//! commit. Metadata objects are written before `version-hint.text`, which
-//! moves last.
+//! the Iceberg commit and the ledger write finds a manifest with the day's
+//! digest already in the current snapshot on retry and records the ledger
+//! without a second commit; a crash before the commit leaves only orphaned,
+//! unreferenced objects. Metadata objects are written before
+//! `version-hint.text`, which moves last. On a retention-locked bucket every
+//! write is create-only (`put_immutable`) and `version-hint.text` is never
+//! written; readers take the highest `v<N>.metadata.json`, as the Archives
+//! writer's do.
 //!
 //! After the export, [`store::sent_emails::postgres::purge`] deletes the rows
 //! of each exported day more than a year old whose count and digest still
@@ -31,7 +36,7 @@ use anyhow::{bail, Context, Result};
 use arrow::array::{ArrayRef, RecordBatch, StringArray, TimestampMicrosecondArray};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, TimeUnit};
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use cloud::{StorageError, StorageService};
+use cloud::StorageService;
 use dbos::{CancellationToken, WorkflowHandle, WorkflowRef, DBOS};
 use iceberg::io::FileIO;
 use iceberg::spec::{
@@ -198,8 +203,16 @@ fn snapshot_id_for(digest: &str) -> Result<i64> {
     i64::from_str_radix(prefix, 16).context("digest is not hex")
 }
 
-fn manifest_name(day: NaiveDate, digest: &str) -> String {
-    format!("day-{day}-{digest}-m0.avro")
+/// A day's manifest. The attempt suffix keeps a retried commit from ever
+/// replacing an object, which a retention-locked bucket refuses.
+fn manifest_name(day: NaiveDate, digest: &str, attempt: &str) -> String {
+    format!("day-{day}-{digest}-{attempt}-m0.avro")
+}
+
+/// What every manifest holding exactly this day's content has in its path,
+/// whichever attempt wrote it.
+fn content_manifest_marker(day: NaiveDate, digest: &str) -> String {
+    format!("/metadata/day-{day}-{digest}-")
 }
 
 fn day_manifest_marker(day: NaiveDate) -> String {
@@ -222,22 +235,12 @@ struct Current {
 }
 
 async fn current(storage: &dyn StorageService, location_base: &str) -> Result<Option<Current>> {
-    let hint = match storage
-        .get(&format!("{TABLE_PREFIX}/metadata/version-hint.text"))
-        .await
-    {
-        Ok(object) => object,
-        Err(StorageError::NotFound(_)) => return Ok(None),
-        Err(error) => return Err(error.into()),
+    // The shared reader follows `version-hint.text`, or on a retention-locked
+    // bucket, where the hint is never written, the highest `v<N>`.
+    let Some((bytes, version)) = crate::iceberg::read_prior_metadata(storage, TABLE_PREFIX).await?
+    else {
+        return Ok(None);
     };
-    let version: u64 = String::from_utf8_lossy(&hint.bytes)
-        .trim()
-        .parse()
-        .context("parse version-hint.text")?;
-    let bytes = storage
-        .get(&format!("{TABLE_PREFIX}/metadata/v{version}.metadata.json"))
-        .await?
-        .bytes;
     let metadata: TableMetadata =
         serde_json::from_slice(&bytes).context("decode sent_email table metadata")?;
     let manifests = match metadata.current_snapshot() {
@@ -289,6 +292,8 @@ struct DayCommit<'a> {
     table_location: &'a str,
     day: NaiveDate,
     digest: &'a str,
+    /// Unique to this attempt; names the manifest and manifest list.
+    attempt: &'a str,
     data_file: &'a str,
     rows: u64,
     file_size: u64,
@@ -320,7 +325,7 @@ async fn author_day(
     let sequence_number = base.last_sequence_number() + 1;
     let io = FileIO::new_with_memory();
 
-    let manifest = manifest_name(commit.day, commit.digest);
+    let manifest = manifest_name(commit.day, commit.digest, commit.attempt);
     let manifest_uri = format!("{}/metadata/{manifest}", commit.table_location);
     let mut writer = ManifestWriterBuilder::new(
         io.new_output(&manifest_uri)?,
@@ -359,7 +364,7 @@ async fn author_day(
         .filter(|m| !m.manifest_path.contains(&marker));
 
     let parent = base.current_snapshot_id();
-    let list_name = format!("snap-{snapshot_id}-{}.avro", commit.digest);
+    let list_name = format!("snap-{snapshot_id}-{}.avro", commit.attempt);
     let list_uri = format!("{}/metadata/{list_name}", commit.table_location);
     let mut list = ManifestListWriter::v2(
         io.new_output(&list_uri)?.writer().await?,
@@ -436,6 +441,30 @@ fn content_type(path: &str) -> &'static str {
     }
 }
 
+/// Write one table object. On a retention-locked bucket every write is
+/// create-only and every key here is new, so nothing is ever replaced; the
+/// mutable `version-hint.text` is the caller's to skip there.
+async fn persist(
+    storage: &dyn StorageService,
+    locked: bool,
+    rel: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    let key = format!("{TABLE_PREFIX}/{rel}");
+    if locked {
+        storage
+            .put_immutable(&key, bytes, content_type(rel))
+            .await
+            .with_context(|| format!("persist {key}"))?;
+    } else {
+        storage
+            .put(&key, bytes, content_type(rel))
+            .await
+            .with_context(|| format!("persist {key}"))?;
+    }
+    Ok(())
+}
+
 /// Export one closed UTC day: write its data file, commit it to the Iceberg
 /// table unless the current snapshot already holds it, and record the ledger.
 ///
@@ -460,32 +489,32 @@ pub async fn export_day(
         return Ok(DayOutcome::Unchanged { rows: count });
     }
     let table_location = format!("{location_base}/{TABLE_PREFIX}");
-    let data_rel = format!("data/{PARTITION_FIELD}={day}/part-{digest}.parquet");
+    let attempt = uuid::Uuid::now_v7().simple().to_string();
+    let data_rel = format!("data/{PARTITION_FIELD}={day}/part-{digest}-{attempt}.parquet");
     let data_file = format!("{table_location}/{data_rel}");
     let current = current(storage, location_base).await?;
-    let manifest = manifest_name(day, &digest);
+    let marker = content_manifest_marker(day, &digest);
     let committed = current.as_ref().and_then(|c| {
         c.manifests
             .iter()
-            .any(|m| m.manifest_path.ends_with(&manifest))
+            .any(|m| m.manifest_path.contains(&marker))
             .then(|| (c.version, c.metadata.current_snapshot_id()))
     });
     let (outcome, version, snapshot_id) = if let Some((version, Some(snapshot_id))) = committed {
         (DayOutcome::Recorded { rows: count }, version, snapshot_id)
     } else {
+        let locked = storage
+            .retention_locked()
+            .await
+            .context("probe the archive bucket's retention policy")?;
         let bytes = crate::encode_parquet(&batch(&rows)?)?;
-        storage
-            .put(
-                &format!("{TABLE_PREFIX}/{data_rel}"),
-                &bytes,
-                content_type(&data_rel),
-            )
-            .await?;
+        persist(storage, locked, &data_rel, &bytes).await?;
         let (files, version, snapshot_id) = author_day(
             &DayCommit {
                 table_location: &table_location,
                 day,
                 digest: &digest,
+                attempt: &attempt,
                 data_file: &data_file,
                 rows: count,
                 file_size: bytes.len() as u64,
@@ -495,9 +524,10 @@ pub async fn export_day(
         )
         .await?;
         for (path, bytes) in &files {
-            storage
-                .put(&format!("{TABLE_PREFIX}/{path}"), bytes, content_type(path))
-                .await?;
+            if locked && path == "metadata/version-hint.text" {
+                continue;
+            }
+            persist(storage, locked, path, bytes).await?;
         }
         (
             DayOutcome::Committed {

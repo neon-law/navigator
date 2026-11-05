@@ -57,17 +57,19 @@ PostgreSQL keeps one year. The daily [Sent Email Export](glossary/sent-email-exp
 ```text
 gs://<NAVIGATOR_ARCHIVES_BUCKET>/email/sent_email/
   metadata/version-hint.text, v<N>.metadata.json
-  metadata/snap-<snapshot-id>-<sha256>.avro     # manifest list: every day so far
-  metadata/day-<YYYY-MM-DD>-<sha256>-m0.avro     # one manifest per day
-  data/sent_at_day=<YYYY-MM-DD>/part-<sha256>.parquet
+  metadata/snap-<snapshot-id>-<attempt>.avro             # manifest list: every day so far
+  metadata/day-<YYYY-MM-DD>-<sha256>-<attempt>-m0.avro   # one manifest per day
+  data/sent_at_day=<YYYY-MM-DD>/part-<sha256>-<attempt>.parquet
 ```
 
-A re-run is idempotent. An unchanged day matches its ledger digest and writes nothing. A day that gained a row is
-written again under its new digest, and the new snapshot drops that day's old manifest (an Iceberg overwrite). A crash
-between the Iceberg commit and the ledger write finds the day already in the current snapshot and records the ledger
-without committing twice. Every snapshot carries earlier days forward, so the current snapshot holds the whole trail
-after PostgreSQL has purged a day. The table lives apart from the full-table `postgres/navigator/sent_email` coverage
-lineage and is never pruned.
+Every key is new to its attempt, so the export never replaces an object. On a retention-locked bucket each write is
+create-only and `version-hint.text` is never written; readers take the highest `v<N>.metadata.json`. A re-run is
+idempotent. An unchanged day matches its ledger digest and writes nothing. A day that gained a row is written again
+under its new digest, and the new snapshot drops that day's old manifest (an Iceberg overwrite). A crash between the
+Iceberg commit and the ledger write finds the day already in the current snapshot and records the ledger without
+committing twice. Every snapshot carries earlier days forward, so the current snapshot holds the whole trail after
+PostgreSQL has purged a day. The table lives apart from the full-table `postgres/navigator/sent_email` coverage lineage
+and is never pruned.
 
 Enable it on `web`, beside `NAVIGATOR_DBOS_ENABLED=true`, with `NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED=true` (only
 `true` opts in; any other non-empty value fails the boot). It runs in `web` because that is the process `ops ship` gives

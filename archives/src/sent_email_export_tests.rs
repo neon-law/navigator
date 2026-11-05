@@ -259,6 +259,41 @@ async fn the_run_purges_an_exported_day_past_the_year_but_the_table_keeps_it() {
     assert!(source.pending(now).await.unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn a_retention_locked_bucket_gets_only_new_objects_and_no_version_hint() {
+    let Some((pg, _raw)) = database().await else {
+        return;
+    };
+    let storage = crate::test_support::CollisionStorage::locked();
+    let now = Utc::now();
+    let day = now.date_naive() - Days::new(2);
+    send(&pg, noon(day)).await;
+    // `CollisionStorage::locked` panics on a plain `put` or `delete`, and its
+    // `put_immutable` refuses an existing key.
+    export_day(&pg, storage.as_ref(), BASE, day, now)
+        .await
+        .unwrap();
+    send(&pg, noon(day) + TimeDelta::hours(1)).await;
+    let late = export_day(&pg, storage.as_ref(), BASE, day, now)
+        .await
+        .unwrap();
+    assert!(
+        matches!(late, DayOutcome::Committed { rows: 2, .. }),
+        "{late:?}"
+    );
+
+    assert!(!storage.contains(&format!("{TABLE_PREFIX}/metadata/version-hint.text")));
+    let current = current(storage.as_ref(), BASE).await.unwrap().unwrap();
+    assert_eq!(current.version, 2, "the reader found v2 without a hint");
+    assert_eq!(current.manifests.len(), 1, "the late row replaced its day");
+    assert_eq!(
+        export_day(&pg, storage.as_ref(), BASE, day, now)
+            .await
+            .unwrap(),
+        DayOutcome::Unchanged { rows: 2 }
+    );
+}
+
 #[test]
 fn the_schedule_has_one_slot_a_day_and_only_true_enables_it() {
     let slot = daily::slot(
