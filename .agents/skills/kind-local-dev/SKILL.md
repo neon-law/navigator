@@ -7,24 +7,23 @@ description: >-
 
 # KIND-based local development
 
-The `navigator` CLI (`cli::devx`) drives both the "host runs `web`" developer loop and the "full stack in KIND"
-CI-shaped flow; there is no Makefile. Docker, KIND, `kubectl`, Helm, and the Restate CLI must be installed, and `docker
-info` must succeed. Do not add shell-script wrappers or substitute one-off local containers for the Kubernetes topology.
-In-cluster Store specifics are in [`docs/test-database.md`](../../../docs/test-database.md); the cluster config and its
-`extraPortMappings` are in [`k8s/kind-config.yaml`](../../../k8s/kind-config.yaml).
+The `navigator` CLI (`cli::devx`) drives both the host-`web` loop and the full-stack KIND flow; there is no Makefile.
+Install Docker, KIND, `kubectl`, Helm, and the Restate CLI; `docker info` must succeed. Do not add shell-script wrappers
+or substitute one-off local containers for the Kubernetes topology. In-cluster Store specifics are in
+[`docs/test-database.md`](../../../docs/test-database.md); the cluster config and its `extraPortMappings` are in
+[`k8s/kind-config.yaml`](../../../k8s/kind-config.yaml).
 
 ## Worktree-first
 
-Every code change starts in a **New Worktree** in Codex or Claude. The worktree is the isolated task checkout; a topic
-branch is still the PR's Git reference. Codex starts worktrees at a detached `HEAD`; Claude may create a branch with its
-worktree. Both are normal.
+Every code change starts in a **New Worktree** in Codex or Claude. The worktree is the isolated checkout; a topic branch
+is the PR's Git reference. Codex starts worktrees at a detached `HEAD`; Claude may create a branch. Both are normal.
 
 Before the first edit, inspect `git worktree list --porcelain`: the current `pwd -P` must be a non-primary `worktree`
 entry. If it is not, do not create a branch or worktree or edit files; stop and say so. Never hand-create another
 checkout to repair it.
 
-Fetch and rebase onto `origin/main` before the first edit and again before every push. Rebase rather than merge (PRs
-squash, and merge commits are disabled), and sign it, because an unsigned commit cannot enter the merge queue.
+Fetch and rebase onto `origin/main` before the first edit and again before every push. Rebase, not merge (PRs squash,
+merge commits are disabled), and sign it: an unsigned commit cannot enter the merge queue.
 
 ```bash
 rtk git fetch origin
@@ -49,12 +48,12 @@ set -a; source .devx/env; set +a
 cargo run -p neon
 ```
 
-Under `--runtime kind`, `worktree-env up` creates or reuses a cluster keyed to the worktree path, applies the SurrealDB
-schema, assigns a stable port slot, and writes `.devx/env` plus `.devx/worktree.json`. Under `--runtime native`, each
-worktree keeps the same descriptor and slot contract for its own Restate and web processes, while one host-level
-registry owns the shared SurrealDB, Rauthy, and SeaweedFS processes. Each native worktree gets its own database and
-SeaweedFS bucket/key set, and the registry records process identity and worktree claims so teardown and sweep never
-signal a recycled or unrelated live process.
+- `--runtime kind`: creates or reuses a cluster keyed to the worktree path, applies the SurrealDB schema, assigns a
+  stable port slot, and writes `.devx/env` plus `.devx/worktree.json`.
+- `--runtime native`: each worktree keeps the same descriptor and slot contract for its own Restate and web processes;
+  one host-level registry owns the shared SurrealDB, Rauthy, and SeaweedFS processes. Each worktree gets its own
+  database and SeaweedFS bucket/key set. The registry records process identity and worktree claims, so teardown and
+  sweep never signal a recycled or unrelated live process.
 
 Host `web` and its worker share one store and one Restate journal per worktree; parallel worktrees do not. Source
 `.devx/env` before every local command that must target this checkout. It is the complete local application environment;
@@ -67,11 +66,11 @@ cargo run -p cli -- dev worktree-env down --path "$PWD"
 
 `worktree-env down` removes this checkout's port-forwards, cluster or native tenants, and `.devx` state, and never
 touches another worktree's. Run it at handoff: a leftover cluster keeps binding its slot's ports, and a leftover native
-claim keeps its tenant alive until `sweep` identifies it as orphaned.
+claim keeps its tenant alive until `sweep` finds it orphaned.
 
 ## The shared dependency tier
 
-`dev up` owns the dependency tier directly and binds `web` to the default port rather than a derived one:
+`dev up` owns the dependency tier directly and binds `web` to the default port:
 
 ```bash
 cargo run --release -p cli -- dev up
@@ -93,15 +92,15 @@ cluster. Restart the compiled `web` process after changing routes, handlers, vie
 | `web`, default brand | `3001` |
 | `web`, `delete-your-data` | `3011` |
 
-Locally no DNS serves the brand hostnames, so `web` answers each brand on its own port instead of by `Host:` header. A
-worktree selects a free slot in the `20000`–`21599` ranges (skipping slots held by stopped or orphaned clusters), and
-its three brand ports move with that slot. Always read the selected values from that worktree's `.devx/env`.
+No local DNS serves the brand hostnames, so `web` answers each brand on its own port, not by `Host:` header. A worktree
+selects a free slot in the `20000`–`21599` ranges (skipping slots held by stopped or orphaned clusters), and its three
+brand ports move with that slot. Always read the values from that worktree's `.devx/env`.
 
 SurrealDB is the store. Its connection contract is `NAVIGATOR_SURREAL_ENDPOINT`, `_NAMESPACE`, and `_DATABASE`, written
 into `.devx/env`. Its schema is applied, not migrated: one idempotent `DEFINE` file (`store/src/schema/navigator.surql`)
 plus a `schema_version` record.
 
-PostgreSQL is replacing SurrealDB. The app does not connect to it yet. To run the image beside the existing tier, start
+PostgreSQL is replacing SurrealDB; the app does not connect to it yet. To run the image beside the existing tier, start
 the worktree on the Postgres overlay and port-forward to an ephemeral loopback port:
 
 ```bash
@@ -117,7 +116,7 @@ kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
 The image and its pin are in the [`postgres`](../postgres/SKILL.md) skill.
 
 Forgejo is opt-in the same way: `cargo run -p cli -- dev forgejo up` adds the retained PostgreSQL server, Forgejo, and
-an Actions runner to the sourced tier, signing in through its Rauthy, and `dev forgejo smoke` proves it. See
+an Actions runner to the sourced tier, signing in through its Rauthy; `dev forgejo smoke` proves it. See
 [`docs/forgejo-kind.md`](../../../docs/forgejo-kind.md).
 
 ## Verification
@@ -149,26 +148,25 @@ worktree's task-owned cluster and port-forwards. Never prune Docker volumes with
 [`docs/agent-workflows.md`](../../../docs/agent-workflows.md#resource-cleanup) for cleanup details.
 
 On Codex-provisioned macOS worktrees, Gatekeeper may open repeated `Verifying "<binary>"…` windows the first time each
-freshly built executable runs. The sandboxed host stamps `com.apple.provenance` on every executable Cargo writes, and
-Gatekeeper scans each once. Take no action: do not strip the attribute, disable Gatekeeper or SIP, notarize test
-binaries, or wrap Cargo in a shell script. Builds are unaffected. Tracked in
-[navigator#570](https://github.com/neon-law-source-code/navigator/issues/570).
+freshly built executable runs (the sandboxed host stamps `com.apple.provenance` on every executable Cargo writes).
+Builds are unaffected. Take no action: do not strip the attribute, disable Gatekeeper or SIP, notarize test binaries, or
+wrap Cargo in a shell script. Tracked in [navigator#570](https://github.com/neon-law-source-code/navigator/issues/570).
 
 ## The load-bearing rules
 
 - **Use the CLI's watching server for interactive previews.** Reuse the configured worktree environment, source
   `.devx/env`, then run `cargo run -p cli -- dev serve`. Rust and catalog saves rebuild and restart the server; static
-  assets refresh the browser without compilation. Keep it running through the edit-and-check loop and use the assigned
-  brand port from `.devx/env`. Follow [web-preview](../web-preview/SKILL.md) to verify automatic refresh and the page.
+  assets refresh the browser without compilation. Keep it running through the edit-and-check loop on the brand port from
+  `.devx/env`. Follow [web-preview](../web-preview/SKILL.md) to verify automatic refresh and the page.
 - **We standardize on KIND.** Do not install another local-Kubernetes flavor (minikube, k3d, Docker Desktop k8s); the
   manifests, port mappings, and `cli::devx` orchestration all assume KIND.
 - **The in-cluster store is ephemeral.** SurrealDB runs memory-backed, so restarting its pod wipes the database, and
   SeaweedFS is a disposable single-node store. Every developer starts from the same blank state. Production points
   `NAVIGATOR_SURREAL_ENDPOINT` at a hosted SurrealDB until the PostgreSQL swap lands. The Postgres overlay is the
-  exception: it keeps a 1 GiB PVC, so its data survives a pod restart.
-- **`web` reaches the in-cluster store over a host port-forward.** The host-side `dev serve` process needs the
-  environment `dev up` writes: `set -a; source .devx/env; set +a`. The port-forward (`127.0.0.1:18000`) plus that env
-  block is the bridge. "Ready cluster but `web` can't connect" almost always means the env was not sourced.
+  exception: its 1 GiB PVC survives a pod restart.
+- **`web` reaches the in-cluster store over a host port-forward** (`127.0.0.1:18000`) plus the env block `dev up`
+  writes: `set -a; source .devx/env; set +a`. "Ready cluster but `web` can't connect" almost always means the env was
+  not sourced.
 - **Screenshots go to `/tmp/navigator-screenshots/`, never the repo** (`mkdir -p` first).
 
 ## Anti-patterns

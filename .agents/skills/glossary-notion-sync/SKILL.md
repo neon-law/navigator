@@ -14,10 +14,8 @@ The two copies are not peers:
   by `navigator glossary list` / `navigator glossary show <term>`. A definition is not real until it lands here.
 - **The Notion page is the reading and proposing surface** for colleagues without a checkout. Find it with a Notion
   search for the page titled **Glossary**; its URL is a private firm coordinate and stays out of this repository. Every
-  push rewrites it wholesale, so an edit made there survives only until the next push unless someone pulls it into the
-  repository first.
-
-Say so when handing someone the page, so nobody mistakes the overwritten copy for the glossary.
+  push rewrites it wholesale, so an edit made there is lost unless pulled into the repository first. Say so when handing
+  someone the page.
 
 ## The mechanical contract
 
@@ -66,8 +64,8 @@ page over the directory: it has absolute GitHub URLs, flowed paragraphs, and no 
 1. `notion-fetch` the page and diff it against `cargo run -p cli --quiet -- glossary notion` output. Ignore Notion's
    own re-serialization: it returns a Markdown table as a native `<table>` block and drops blank lines between blocks.
    What remains is what somebody typed.
-2. **Read every difference before applying it.** Notion holds the firm's real matters, and this repository is public.
-   A definition from Notion may name a client, a matter, or a Project code. The no-client-data rule in
+2. **Read every difference before applying it.** Notion holds real matters and this repository is public, so a Notion
+   definition may name a client, a matter, or a Project code. The no-client-data rule in
    [`AGENTS.md`](../../../AGENTS.md) governs the destination: rewrite the example as a mechanism ("a Project's publish")
    or use a synthetic code. If a real code is in the Notion text, say where and let a human decide.
 3. Apply the wording to `docs/glossary/<slug>.md` in its own idiom: sibling links, hard wrap at 120. A new term is a new
@@ -90,6 +88,5 @@ page over the directory: it has absolute GitHub URLs, flowed paragraphs, and no 
 - **Don't rename a term to fix its wording.** Change the body; a slug change is a cross-cutting rename (grep
   `glossary/<slug>.md` first).
 - **Don't add a second Notion page** for part of the vocabulary. One page mirrors one directory.
-- **Don't paste Notion's text into the files.** Follow the pull procedure above.
 - **Don't push from a dirty or unrebased worktree.** The page claims to be generated from `main`; generate it from a
   checkout current with `origin/main`.

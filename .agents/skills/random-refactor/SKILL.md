@@ -10,7 +10,7 @@ description: >-
 Read [`docs/public-contributor-safety.md`](../../../docs/public-contributor-safety.md),
 [`docs/rust-programming.md`](../../../docs/rust-programming.md), and [`.agents/skills/rust/SKILL.md`](../rust/SKILL.md)
 first. Code is the source of truth. Comments, docs, tests, Presentations, and Workshops describe today. Git already
-holds rejected alternatives. One opportunistic pass over one file — not a sweep, and not a substitute for
+holds rejected alternatives. One opportunistic pass over one file: not a sweep, and not a substitute for
 [`implement-issue`](../implement-issue/SKILL.md), [`review`](../review/SKILL.md), or
 [`author-docs`](../author-docs/SKILL.md). This file must not grow.
 

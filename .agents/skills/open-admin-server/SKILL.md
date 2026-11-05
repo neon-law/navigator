@@ -12,8 +12,8 @@ Read [`kind-local-dev`](../kind-local-dev/SKILL.md), [`docs/access-model.md`](..
 
 Authentication comes from OIDC; authorization comes from `persons.role`. A first verified sign-in with a supported
 provider and an email creates a Client without Project participation. The configured `NAVIGATOR_BOOTSTRAP_OWNER_EMAIL`
-creates an Owner. A local development Lawyer still needs a role grant before signing in. Seed Lawyer into the worktree's
-environment-owned `navigator` database:
+creates an Owner. A local Lawyer needs a role grant before signing in; seed it into the worktree's environment-owned
+`navigator` database:
 
 ```bash
 cargo run -p cli -- dev grant-lawyer

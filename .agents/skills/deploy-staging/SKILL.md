@@ -3,7 +3,7 @@ name: deploy-staging
 description: >-
   Roll the neon-law-stg deployment onto a Navigator release tag by hand and verify it, or verify staging is wholly on a
   tag without changing anything. Use when the user wants staging updated, rolled, re-rolled, restarted after a secret
-  change, or recovered outside release-deploy.yml — "push the hotfix to staging", "put staging on 26.9.30", "verify
+  change, or recovered outside release-deploy.yml: "push the hotfix to staging", "put staging on 26.9.30", "verify
   staging". Staging goes first; for both rows, run this, verify it, then use deploy-production.
 ---
 
@@ -18,10 +18,9 @@ whether a `release-deploy` run for this tag is in flight (`gh run list --workflo
 roll by hand beside one.
 
 Follow [`docs/manual-roll.md`](../../../docs/manual-roll.md) with `ROW=neon-law-stg` and `ROW_RESTATE_ENV=staging`. It
-carries the whole sequence: sessions, grants, tag choice, the tagged CLI, the validators, the image check, the offline
-plan, Restate, verification, rollback, and cleanup. The offline plan renders local manifests only; it does not check
-live drift, cloud authentication, image availability, Secrets, assets, Restate, or public endpoints. What follows is
-specific to this row.
+carries the whole sequence, from sessions and grants through verification, rollback, and cleanup. Its offline plan
+renders local manifests only; it does not check live drift, cloud authentication, image availability, Secrets, assets,
+Restate, or public endpoints. What follows is specific to this row.
 
 ## Why staging first
 
@@ -40,9 +39,8 @@ Read every line rather than the exit status alone. Capture the outgoing tag befo
 ## When release-deploy fails at `ops ship`
 
 The workflow runs `ops ship --quiet`, so the Actions log says only `ship FAILED (exit N) — id <run>-<attempt> …
-transcript saved to the private sink`. The real error is in that transcript. Read it with the gcloud CLI: ask the user
-to authenticate it (`gcloud auth login`) if it is not already, pin the staging project for the shell, and never run
-`gcloud config set`.
+transcript saved to the private sink`. Read that transcript with the gcloud CLI: ask the user to authenticate it
+(`gcloud auth login`) if it is not already, pin the staging project for the shell, and never run `gcloud config set`.
 
 ```bash
 gsutil ls -r gs://<sink-bucket>/ship/ | grep <run-id>

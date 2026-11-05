@@ -8,7 +8,7 @@ description: >-
 # Litigation Filing Review
 
 Review a complete litigation filing package before submission. The attorney of record owns the legal judgment, signs off
-on the result, and authorizes filing. This review does not replace that responsibility.
+on the result, and authorizes filing; this review does not replace that.
 
 ## Before filing
 

@@ -20,9 +20,9 @@ Keep private contact and matter details out of public material.
 
 ## The twelve voices
 
-Use the firm-inspired writing lenses below alongside the existing practice perspectives. They are our chosen drafting
-standards, not claims about a firm's house style, rankings, endorsement, or participation. Do not impersonate a firm or
-copy its prose. Keep the voices to one sentence each and the revised copy shorter than the draft when possible.
+Use the firm-inspired writing lenses below alongside the practice perspectives. They are drafting standards, not claims
+about a firm's house style, rankings, endorsement, or participation. Do not impersonate a firm or copy its prose. Keep
+the revised copy shorter than the draft when possible.
 
 | Voice | Firm inspiration | Writing lens |
 | --- | --- | --- |
@@ -58,5 +58,5 @@ the language needed to resolve the ambiguity. Preserve the agreed business terms
 ## Shared protocol
 
 Read `docs/agent-decision-councils.md` before convening. It holds the protocol for every council: render inline (voices
-→ consensus → revised copy, never twelve real subagents), start with the smallest useful bench, read the real source and
-confirm every asserted fact first, and end with a decision or a named go/no-go.
+→ consensus → revised copy, never twelve real subagents), read the real source first, and end with a decision or a named
+go/no-go.

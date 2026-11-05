@@ -38,19 +38,18 @@ implementation, and shipping. Keep client data out of the repository and fixture
 For every selected issue, in the same worktree:
 
 1. Re-ground its full issue and comment history with [`implement-issue`](../implement-issue/SKILL.md) and verify it
-   against the refreshed baseline. An issue already satisfied on `origin/main` closes under the triage rule and stays
-   out of this PR. So does a duplicate, superseded, or blocked issue; close it only under the same certainty, otherwise
-   comment.
+   against the refreshed baseline. An issue already satisfied on `origin/main`, duplicate, superseded, or blocked stays
+   out of this PR; close it or comment on it under the triage rule.
 2. State the smallest behavior, covering test, and exact files before editing. Use TDD and the relevant repository
    skills. Stay within the issue's acceptance criteria. Verify with focused tests and, when applicable, the documented
    UI workflow.
 3. Commit that issue's implementation and proof before starting the next. Stage explicit paths and use a Conventional
-   Commit subject. Keep issue titles and project names out of commits and all public surfaces.
+   Commit subject.
 
 Update Linear project progress and triage fields only from verified findings: what shipped, what remains blocked, which
 issues closed from shipped code, which received an uncertainty comment, and which this PR addresses. Keep issue titles,
-project or initiative names, and Linear URLs out of public material. A Linear comment may cite paths and tests; it
-follows [`docs/public-contributor-safety.md`](../../../docs/public-contributor-safety.md).
+project or initiative names, and Linear URLs out of commits and all public material. A Linear comment may cite paths and
+tests; it follows [`docs/public-contributor-safety.md`](../../../docs/public-contributor-safety.md).
 
 Implemented issues stay open until merge. List their bare identifiers, with the right team prefix, in one PR body
 trailer:
@@ -67,7 +66,6 @@ issue. Keep unrelated changes out of the branch. Leave auto-merge and the merge 
 
 Then follow the PR until the required checks on its head are green. When a check fails, fix it within the selected
 issues, amend the corresponding issue commit where practical (otherwise add a focused follow-up commit), push, and wait
-again. When the required checks are green, stop. Report the PR link, green checks, issue identifiers, commit subjects,
-test evidence, issues closed from shipped code, issues that received an uncertainty comment, and any blocker that kept
-CI from going green. When Linear or GitHub is unavailable, finish the repository work and name the blocked external
-action.
+again. Once green, stop and report the PR link, green checks, issue identifiers, commit subjects, test evidence, issues
+closed from shipped code, issues that received an uncertainty comment, and any blocker that kept CI from going green.
+When Linear or GitHub is unavailable, finish the repository work and name the blocked external action.

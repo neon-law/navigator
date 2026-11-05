@@ -8,13 +8,10 @@ description: >-
 # Embedding screenshots in a PR body from the CLI
 
 An `<img src="/tmp/…">` in a `gh`-created body renders **broken** (it resolves to `https://github.com/tmp/…`, a 404).
-`AGENTS.md` rules out committing the capture, pushing an image-hosting branch, or cutting a release/tag to host it.
+Use the **user-attachments** store instead: one request authenticated with `gh auth token` (an OAuth token with push
+access to the target repository).
 
-Use the **user-attachments** store instead, reached with one authenticated request. It needs an OAuth token with push
-access to the target repository, which is what `gh auth token` returns.
-
-Do not use the `drogers0/gh-image` extension. It replays a browser-cookie upload flow and cannot target this repository;
-the token route below skips that flow entirely.
+Do not use the `drogers0/gh-image` extension: it replays a browser-cookie upload flow and cannot target this repository.
 
 ## The recipe
 
@@ -46,8 +43,8 @@ Upload **all** of a PR's images in one pass, then run a single `gh pr edit`.
 
 ## Verify the render, not the asset URL
 
-**Do not verify by curling the asset URL with the token.** An OAuth token is not a web session, so the request follows a
-redirect and returns about 39 KB of `text/html`. That looks like a broken upload but is not one.
+**Do not verify by curling the asset URL with the token.** An OAuth token is not a web session, so the request returns
+about 39 KB of redirected `text/html` that looks like a broken upload.
 
 Ask GitHub's renderer instead. A working asset resolves to an `<img>` on `objects-origin.github.com` with a signed
 `X-Amz-Signature` and `response-content-type=image/…`:
@@ -64,8 +61,8 @@ gh api /markdown -X POST -f mode=gfm -f context=neon-law/navigator \
   embedded.
 - **URL-encode `content_type`.** A bare `+` in `image/svg+xml` arrives as a space and is rejected.
 - **Upload to `uploads.github.com`**, not the web host.
-- **Assets inherit repository visibility.** On a private or internal repository, an anonymous fetch gets a 302; that is
-  correct, not a failure.
+- **Assets inherit repository visibility.** On a private or internal repository, an anonymous fetch gets a 302, which is
+  correct.
 - The token needs **push access** to `repository_id`. A `404` from the upload endpoint means the token lacks it (or the
   parameter is missing), not that the URL is wrong.
 - **Never** commit the capture, push an image-hosting branch, or create a release/tag to host it (see [[web-preview]]

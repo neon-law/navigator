@@ -9,7 +9,7 @@ description: >-
 
 Tightbeam coordinates the agents; Linear holds the work; GitHub holds the code. The unit of work is a **Linear
 project**, delivered as one pull request: one signed Conventional Commit per issue, a `Closes ENG-a, ENG-b, ...`
-trailer, and a milestone as the roadmap. Every step defers to the repo's own skills, so agents work as a human would:
+trailer, and a milestone as the roadmap. Every step defers to the repo's own skills:
 [`implement-issue`](../implement-issue/SKILL.md), [`create-pr`](../create-pr/SKILL.md), [`review`](../review/SKILL.md),
 [`fix-checks`](../fix-checks/SKILL.md), [`stay-in-repo`](../stay-in-repo/SKILL.md), and the [Rust
 guardrails](../rust/SKILL.md).
@@ -23,29 +23,28 @@ guardrails](../rust/SKILL.md).
 | PDO | `pdo:<project>` | Coordinates all after the PO: council, tests, code, review, PR. Retired on delivery. |
 | Coder, reviewer | `coder:<project>`, `reviewer:<project>` | One assignment each, answering to the PDO. |
 
-A Product Delivery Owner is the one individual directly responsible for delivering one assigned task, here a project. It
-is not a matter or Firm [DRI](../../../docs/glossary/directly-responsible-individual-dri.md), which is legal-domain
-accountability stored on `person_project_role` and `person_firm_role`. Tightbeam has no PDO field yet: name the PDO in
-the work item title and the brief.
+A Product Delivery Owner is the one individual directly responsible for delivering one project. It is not a matter or
+Firm [DRI](../../../docs/glossary/directly-responsible-individual-dri.md) (legal-domain accountability stored on
+`person_project_role` and `person_firm_role`). Tightbeam has no PDO field: name the PDO in the work item title and the
+brief.
 
 ## The loop
 
 1. **Read.** The PO reads the Linear project: description, milestone, every issue with its relations and comments. For
    each issue it checks origin/main for already-shipped work and returns a verdict. It hands the PDO a grounded issue
-   list in merge order, with blocked and decision-only issues set aside and named. The PO edits and opens nothing.
+   list in merge order, naming blocked and decision-only issues set aside. The PO edits and opens nothing.
 2. **Hire.** Main files one work item for the project (`work-item-create --title "<project> (PDO)" --key <project>`),
    spawns the PDO, and assigns it (`assign` or `dispatch --work-item`). The PDO coordinates; Main watches.
 3. **Council.** Before any code, the PDO runs the Engineering Council inline over the project's design and test plan,
    per [`council`](../council/SKILL.md) and
    [`docs/agent-decision-councils.md`](../../../docs/agent-decision-councils.md): read the real source, convene the
-   voices, close on one decision. The outcome is a test-first plan per issue: the failing tests to write, the seams they
+   voices, close on one decision. The outcome is a test-first plan per issue: the failing tests, the seams they
    exercise, and the order. A real fork goes to Main, then the user. The council is one response, not twelve sessions.
-4. **Code, test first.** The PDO delivers as many of the project's issues as it can, in merge order, with full TDD. It
-   hires a coder who works in one worktree, signed-rebased on `origin/main`. Per issue, the coder writes the failing
-   tests from the council plan, watches them fail, makes them pass, and makes exactly one signed commit, with a
-   `triage-issue` comment on the issue before its commit. An issue it cannot finish cleanly gets no commit: the PDO
-   names it as left over, with the reason, and moves on. The coder runs `navigator validate` before pushing; the
-   workspace suite is CI's job.
+4. **Code, test first.** The PDO delivers as many issues as it can, in merge order, with full TDD. It hires a coder
+   who works in one worktree, signed-rebased on `origin/main`. Per issue, the coder writes the failing tests from the
+   council plan, watches them fail, makes them pass, and makes exactly one signed commit, with a `triage-issue` comment
+   on the issue before its commit. An issue it cannot finish cleanly gets no commit: the PDO names it as left over, with
+   the reason, and moves on. The coder runs `navigator validate` before pushing; the workspace suite is CI's job.
 5. **Review.** The PDO hires one fresh reviewer, never the author. The reviewer is read-only: it reproduces each issue's
    claim, checks the diff against the issue and the glossary, and files a verdict on the exact head SHA. Findings go
    back to the coder; the reviewer never pushes. Where a fix changes the design, the PDO re-convenes the council.

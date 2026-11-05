@@ -63,13 +63,13 @@ To limit a filing run to one folder, pass `--only documents/cases` or `--only do
 `project sync` archives the bytes as a global Authority, writes the pointer `blobs/cases/<file>.yaml` or
 `blobs/rules/<file>.yaml` carrying its `authority_id`, removes the staging sidecar, and keeps the bytes in `documents/`,
 ignored by Git. An exact citation with the same archived bytes reuses its global Authority; different bytes under that
-citation require review. Equal bytes alone do not establish identity. To correct a field on an Authority already filed,
-use `navigator site authorities update`. To file one without a checkout, use `navigator site authorities create`.
+citation require review, and equal bytes alone do not establish identity. To correct a field on an Authority already
+filed, use `navigator site authorities update`. To file one without a checkout, use `navigator site authorities create`.
 
 ## 4. Commit the pointer only
 
 Run `navigator project gate` before pushing; it refuses tracked raw bytes and staging sidecars. Commit only the `.yaml`
-pointer under `blobs/`; the root `.gitignore` keeps everything under `documents/` out.
+pointer under `blobs/` (the root `.gitignore` excludes `documents/`).
 
 A fresh clone gets the bytes back with `navigator project sync`, which verifies each against the pointer's `sha256`.
 

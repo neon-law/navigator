@@ -7,15 +7,14 @@ description: >-
 
 # Surreal migrations
 
-**SurrealDB is being replaced by PostgreSQL.** This skill covers the store that still runs today. Before designing a new
-table or a large schema change, read the [`postgres`](../postgres/SKILL.md) skill and prefer a shape that ports cleanly
-to relational tables (nouns become tables, per the glossary).
+**SurrealDB is being replaced by PostgreSQL.** This skill covers the running Surreal store. Before designing a new table
+or a large schema change, read the [`postgres`](../postgres/SKILL.md) skill and prefer a shape that ports cleanly to
+relational tables (nouns become tables, per the glossary).
 
-Before beginning, always ground in the code, its tests, and the [glossary](../../../docs/glossary).
-
-Read the module docs in [`store/src/schema/mod.rs`](../../../store/src/schema/mod.rs) and the "Production database"
-section of [`docs/cloud-operations.md`](../../../docs/cloud-operations.md) before acting. The schema states the present;
-it is not a chain of steps, so any change to existing data is your job.
+Before acting, read the code, its tests, the [glossary](../../../docs/glossary), the module docs in
+[`store/src/schema/mod.rs`](../../../store/src/schema/mod.rs), and the "Production database" section of
+[`docs/cloud-operations.md`](../../../docs/cloud-operations.md). The schema states the present, not a chain of steps, so
+any change to existing data is your job.
 
 ## What applying the schema does and does not do
 
@@ -27,11 +26,10 @@ another build reports as in sync while disagreeing.
 Applying converges *definitions*. It never touches an existing row:
 
 - `DEFINE TABLE IF NOT EXISTS` deliberately leaves an existing table's rows alone.
-- `DEFAULT` on a `DEFINE FIELD` is a **write-time** default. It supplies a value for rows written after the definition
-  lands. It does not reach back into rows written before it, which keep no value for that field at all.
+- `DEFAULT` on a `DEFINE FIELD` is a **write-time** default. Rows written before the definition keep no value for that
+  field.
 
-So adding a required field is two changes, not one: the definition, and a backfill for the rows that predate it.
-Backfills stay explicit one-shot jobs.
+So adding a required field takes two changes: the definition, and an explicit one-shot backfill for older rows.
 
 **A green workspace proves nothing here.** Every test opens a fresh embedded engine, so every row it reads was written
 by the current schema and carries every field. The only databases that hold pre-field rows are staging and production,
@@ -44,11 +42,10 @@ and nothing in CI resembles them.
 2. **Bump `SCHEMA_VERSION`** in [`store/src/schema/mod.rs`](../../../store/src/schema/mod.rs), same change.
 3. **Make the read tolerate a missing value, or backfill before the read ships.** A row struct field typed bare `T`
    fails to read a row that lacks it (`Expected bool, got none`), and on a boot path that crash-loops the binary. Type
-   the field `Option<T>` and collapse it in the `into_*` conversion (`.unwrap_or_default()`); this survives a backfill
-   that has not run yet. A backfill alone leaves reads failing between deploy and job.
+   the field `Option<T>` and collapse it in the `into_*` conversion (`.unwrap_or_default()`), so reads survive until the
+   backfill runs; a backfill alone leaves reads failing between deploy and job.
 4. **Cover the historical row.** Write a test that creates a record without the new field (raw `CREATE` or `UPDATE
-   ... UNSET`), then reads it through the same accessor production uses. Without it, the suite only sees rows the
-   current schema wrote.
+   ... UNSET`), then reads it through the same accessor production uses.
 5. **Write the backfill.** Idempotent and guarded on the old value, so re-running it is safe and it cannot overwrite a
    real value:
 

@@ -19,8 +19,8 @@ cp "documents/Work Product/drafts/<code>.docx" "documents/Work Product/drafts/<c
 open -a "Microsoft Word" "documents/Work Product/drafts/<code>.docx"
 ```
 
-The baseline copy is what the lawyer's edits are measured against. Make it in the same step as the export, before Word
-opens the file. `--preview` keeps every `{{placeholder}}` verbatim, which is what lets an edit map back to the template.
+The baseline copy measures the lawyer's edits; make it with the export, before Word opens the file. `--preview` keeps
+every `{{placeholder}}` verbatim so an edit maps back to the template.
 
 Tell the lawyer three things:
 

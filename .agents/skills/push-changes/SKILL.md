@@ -12,27 +12,27 @@ Before naming a table, field, state, or UI concept, follow the **Find the term f
 
 ## The rule
 
-"Push changes" means finish the pull request through merge. The job ends when the pull request is merged and local
-`main` is current.
+"Push changes" means finish the pull request through merge: the job ends when it is merged and local `main` is current.
 
 1. Inspect `git status --short --branch` and review the diff. Before committing, attach work on `main` or a detached
-   HEAD to a fresh topic branch with `git switch -c <branch>`; this retains local commits and uncommitted work. Reuse an
-   existing topic branch when continuing its pull request. Stage only the requested source and document pointers; keep
-   document bytes, notes, credentials, and client data out of Git. Run `navigator project gate`, then make a signed
-   commit with `git commit -S`. Commit work in progress before rebasing; never stash or commit on `main`.
+   HEAD to a fresh topic branch with `git switch -c <branch>`; this retains local commits and uncommitted work. Reuse
+   the existing topic branch and pull request when continuing an earlier attempt. Stage only the requested source and
+   document pointers; keep document bytes, notes, credentials, and client data out of Git. Run `navigator project gate`,
+   then make a signed commit with `git commit -S`. Commit work in progress before rebasing; never stash or commit on
+   `main`.
 2. Fetch `origin/main`, then run `git rebase -S origin/main` on the topic branch. Never push to `main`. Follow
    [pull-changes](../pull-changes/SKILL.md) for conflict handling and squash-merged duplicates, keeping rebased commits
    signed. If a conflict cannot be resolved safely, abort the rebase and report it.
 3. Run `navigator project gate` again, then `git push --force-with-lease -u origin <branch>`. Never use plain
-   `--force`. Reuse the same branch and existing pull request when continuing an earlier attempt.
-4. Open a pull request against `main`, ready for review. Inspect the origin URL to choose the forge. On GitHub, use
-   `gh pr create --base main`. Respect App-owned automatic squash auto-merge: the `automerge` workflow arms it about ten
-   to fifteen seconds after the pull request opens, so a read in the first seconds shows `null` on a pull request about
-   to be armed. Wait for that run (`gh run list --workflow automerge.yml --branch <branch>`, then `gh run watch
-   <run-id>`) before you read `gh pr view <number> --json autoMergeRequest,state`, and confirm it is armed or the state
-   is already `MERGED`. If the finished run left it unarmed, inspect the run's log and report a policy or permission
-   blocker instead of merging manually. On another forge, use its equivalent ready-for-review and merge-when-checks-pass
-   controls and verify the pull request's merge policy.
+   `--force`.
+4. Open a pull request against `main`, ready for review. Inspect the origin URL to choose the forge. On GitHub, use `gh
+   pr create --base main`. The `automerge` workflow arms App-owned squash auto-merge about ten to fifteen seconds after
+   the pull request opens, so an earlier read shows `null`. Wait for that run (`gh run list --workflow automerge.yml
+   --branch <branch>`, then `gh run watch <run-id>`) before you read `gh pr view <number> --json
+   autoMergeRequest,state`, and confirm it is armed or the state is already `MERGED`. If the finished run left it
+   unarmed, inspect the run's log and report a policy or permission blocker instead of merging manually. On another
+   forge, use its equivalent ready-for-review and merge-when-checks-pass controls and verify the pull request's merge
+   policy.
 5. Wait for the required checks and the actual merge. On GitHub, use `gh pr checks <number> --watch`, then poll
    `gh pr view <number> --json state,mergeCommit` until `state` is `MERGED`; green checks alone do not finish the job.
    On another forge, watch its required checks and verify its merged state. Fix failed checks on this branch. If main
