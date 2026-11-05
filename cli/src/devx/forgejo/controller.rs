@@ -859,6 +859,11 @@ pub(in crate::devx) fn run(options: &Options) -> Result<()> {
             .build()?,
     };
     telemetry::register_forgejo_controller();
+    serve(&mut controller, options.once, options.interval)
+}
+
+/// Tick until stopped; with `once`, one whole pass including its launches.
+fn serve(controller: &mut Controller, once: bool, interval: Duration) -> Result<()> {
     loop {
         let result = controller.tick();
         telemetry::record_forgejo_tick(
@@ -879,19 +884,19 @@ pub(in crate::devx) fn run(options: &Options) -> Result<()> {
             ),
             Err(error) => {
                 tracing::error!(target: "forgejo", event = "forgejo.controller.tick", outcome = "error", error = %error, "runner controller tick failed");
-                if options.once {
+                if once {
                     return Err(error);
                 }
             }
         }
-        if options.once {
+        if once {
             // Wait for this tick's launches so `--once` is a whole pass.
             while !controller.in_flight().0.is_empty() {
                 std::thread::sleep(Duration::from_secs(2));
             }
             return Ok(());
         }
-        std::thread::sleep(options.interval);
+        std::thread::sleep(interval);
     }
 }
 
@@ -1444,6 +1449,66 @@ mod tests {
         // fatal; the unreadable queue is.
         let error = controller.tick().unwrap_err();
         assert!(error.to_string().contains("403"), "{error}");
+        drop(controller);
+        drop(server_runtime);
+    }
+
+    fn idle_controller(origin: &str) -> Controller {
+        Controller {
+            cluster: Arc::new(LaunchCluster::default()),
+            forgejo: Forgejo::new(origin, "operator".into()).unwrap(),
+            registry: Registry::new(origin, "operator".into()).unwrap(),
+            origin: origin.to_owned(),
+            token: "operator".into(),
+            egress_host: Vec::new(),
+            egress_ip: vec!["8.8.8.8".into()],
+            dns: Ipv4Addr::new(169, 254, 20, 10),
+            max_runners: 4,
+            in_flight: Arc::default(),
+            repositories: HashMap::new(),
+            mirrored: HashSet::new(),
+            unowned_registrations: BTreeSet::new(),
+            observer: Observer::new(),
+            runtime: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        }
+    }
+
+    /// `--once` is one whole pass: an empty queue succeeds, an unreadable
+    /// one fails the command.
+    #[test]
+    fn once_serves_a_single_pass_and_reports_its_failure() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server_runtime = tokio::runtime::Runtime::new().unwrap();
+        let (empty, refused) = server_runtime.block_on(async {
+            let empty = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/admin/actions/runners/jobs"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .expect(1)
+                .mount(&empty)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/admin/actions/runners"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .mount(&empty)
+                .await;
+            let refused = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(503))
+                .mount(&refused)
+                .await;
+            (empty, refused)
+        });
+        let mut controller = idle_controller(&empty.uri());
+        serve(&mut controller, true, Duration::ZERO).unwrap();
+        drop(controller);
+        let mut controller = idle_controller(&refused.uri());
+        assert!(serve(&mut controller, true, Duration::ZERO).is_err());
         drop(controller);
         drop(server_runtime);
     }

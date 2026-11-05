@@ -258,7 +258,10 @@ impl Registry {
 pub(in crate::devx) fn run(url: &str, version: &str) -> Result<()> {
     let token = std::env::var("FORGEJO_TOKEN")
         .context("FORGEJO_TOKEN must be configured on the trusted operator host")?;
-    let registry = Registry::new(url, token)?;
+    mirror(&Registry::new(url, token)?, version)
+}
+
+fn mirror(registry: &Registry, version: &str) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -441,5 +444,32 @@ mod tests {
                 "{origin}"
             );
         }
+    }
+
+    #[test]
+    fn the_mirror_verb_reports_a_present_release_and_a_refused_registry() {
+        let server_runtime = tokio::runtime::Runtime::new().unwrap();
+        let (present, refused) = server_runtime.block_on(async {
+            let present = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::path_regex("^/api/packages/"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&present)
+                .await;
+            let refused = MockServer::start().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(500))
+                .mount(&refused)
+                .await;
+            (present, refused)
+        });
+        let registry = |server: &MockServer| {
+            Registry::new(&server.uri(), "operator".into())
+                .unwrap()
+                .with_source("https://github.invalid/")
+        };
+        mirror(&registry(&present), VERSION).unwrap();
+        assert!(mirror(&registry(&refused), VERSION).is_err());
+        drop(server_runtime);
     }
 }
