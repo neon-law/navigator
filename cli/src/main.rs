@@ -1101,6 +1101,16 @@ enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Read the Project's onboarding status: pitch or official.
+    Lifecycle {
+        /// Project code. Defaults to project.name in navigator.yaml.
+        project_code: Option<String>,
+        /// Emit the onboarding status as JSON.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Start or read the finance aggregate run.
     Finance {
         #[command(subcommand)]
@@ -6084,6 +6094,13 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             project_code,
             json,
         } => projects::status::run(host.host.as_deref(), project_code.as_deref(), json).await,
+        ProjectsCmd::Lifecycle {
+            host,
+            project_code,
+            json,
+        } => {
+            projects::lifecycle_read::run(host.host.as_deref(), project_code.as_deref(), json).await
+        }
         ProjectsCmd::Finance { action } => match action {
             FinanceCmd::Run { project_code, host } => {
                 projects::finance::run(host.host.as_deref(), project_code.as_deref()).await

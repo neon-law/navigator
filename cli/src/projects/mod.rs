@@ -30,6 +30,7 @@ pub mod forge_github;
 pub mod gate;
 pub mod ics;
 pub mod lifecycle;
+pub mod lifecycle_read;
 pub mod local_bytes;
 pub mod manifest;
 pub mod matter;
