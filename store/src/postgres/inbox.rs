@@ -1913,7 +1913,8 @@ pub(crate) async fn intake_detail_on(
 }
 
 /// Shared body of both intake lists: decorate conversations with delivery,
-/// phone contact, assignee, and the next action.
+/// phone contact, assignee, the next action, the persisted sender Person,
+/// and the latest-message preview.
 async fn intake_rows(
     pg: &PostgresDb,
     db: &SurrealDb,
@@ -1922,12 +1923,16 @@ async fn intake_rows(
     assigned: bool,
 ) -> Result<Vec<IntakeRow>, InboxError> {
     let can_send_default = matches!(role, Role::Lawyer | Role::Clerk);
+    let people = inbox::person_badges(db, &conversations).await?;
     let mut listed = Vec::with_capacity(conversations.len());
     for conversation in conversations {
         let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
         let assignee_name = inbox::assignee_label(db, conversation.project_id).await?;
-        let (direction, has_attachments) =
-            latest_direction_and_attachments_on(pg, conversation.id).await?;
+        let (direction, has_attachments, preview) =
+            latest_row_facts_on(pg, conversation.id).await?;
+        let person = conversation
+            .person_id
+            .and_then(|person_id| people.get(&person_id).cloned());
         listed.push(IntakeRow {
             contact: inbox::sender_identity(db, &conversation).await?,
             id: conversation.id,
@@ -1949,6 +1954,8 @@ async fn intake_rows(
             external_name: conversation.external_name,
             subject: conversation.subject,
             direction,
+            preview,
+            person,
             has_attachments,
             updated_at: conversation.updated_at,
         });
@@ -1956,26 +1963,33 @@ async fn intake_rows(
     Ok(listed)
 }
 
-/// The two per-conversation aggregates the list view's filters match rows on
+/// The three per-conversation aggregates the list view matches rows on
 /// (LAW-238 D3): the direction of the conversation's most recent message
-/// (`occurred_at, id` order; empty when it has none), and whether any message
-/// carries a filed attachment. One round trip per conversation, the same
-/// fan-out shape `latest_outbound_state_on` already follows.
-async fn latest_direction_and_attachments_on(
+/// (`occurred_at, id` order; empty when it has none), whether any message
+/// carries a filed attachment, and that same message's preview snippet. One
+/// round trip per conversation, the same fan-out shape
+/// `latest_outbound_state_on` already follows.
+async fn latest_row_facts_on(
     pg: &PostgresDb,
     conversation_id: Uuid,
-) -> Result<(String, bool), InboxError> {
-    let row = sqlx::query_as::<_, (Option<String>, bool)>(
+) -> Result<(String, bool, Option<String>), InboxError> {
+    let row = sqlx::query_as::<_, (Option<String>, bool, Option<String>)>(
         "SELECT (SELECT direction FROM message WHERE conversation_id = $1 \
          ORDER BY occurred_at DESC, id DESC LIMIT 1), \
          EXISTS(SELECT 1 FROM message WHERE conversation_id = $1 \
-         AND attachment_asset_id IS NOT NULL)",
+         AND attachment_asset_id IS NOT NULL), \
+         (SELECT left(body, 400) FROM message WHERE conversation_id = $1 \
+         ORDER BY occurred_at DESC, id DESC LIMIT 1)",
     )
     .bind(conversation_id)
     .fetch_one(&pg.0)
     .await
     .map_err(db_error)?;
-    Ok((row.0.unwrap_or_default(), row.1))
+    Ok((
+        row.0.unwrap_or_default(),
+        row.1,
+        row.2.as_deref().and_then(inbox::preview_snippet),
+    ))
 }
 
 pub(crate) async fn list_project_on(
