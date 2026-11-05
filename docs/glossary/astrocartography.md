@@ -9,6 +9,6 @@ Astrocartography presents astrological angular lines over a geographic map for p
 instant to locations where celestial bodies rise, set, culminate, or reach the lower meridian. An
 [Ephemeris](ephemeris.md) and explicit time and coordinate settings supply the inputs to a calculated map.
 
-The design gallery uses public-domain land geometry and clearly labeled invented overlays. It demonstrates projection,
-line visibility, selection, and a text alternative. It supplies no calculated birth map or relocation advice and stores
-no personal information.
+The design gallery uses public-domain land geometry and a calculated fixed reference, with explicit source provenance.
+It demonstrates projection, line visibility, selection, and a text alternative. The reference does not use a person's
+birth information and supplies no personal relocation advice.

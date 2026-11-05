@@ -16,6 +16,7 @@
 //! the kernel-gated test in `webapp/tests/specimen_fixture.rs` re-casts the
 //! same instant through the engine and compares.
 
+use crate::ephemeris_labels::{body_display_name, body_symbol, line_body_named};
 use std::sync::LazyLock;
 
 use dioxus::prelude::*;
@@ -180,10 +181,6 @@ struct SpecimenRow {
     body: String,
     angle: String,
     points: Vec<[f64; 2]>,
-}
-
-fn line_body_named(name: &str) -> Option<LineBody> {
-    LINE_BODIES.iter().copied().find(|body| body.name() == name)
 }
 
 fn angle_named(name: &str) -> Option<Angle> {
@@ -428,40 +425,6 @@ fn body_index(body: LineBody) -> usize {
         .iter()
         .position(|candidate| *candidate == body)
         .unwrap_or(0)
-}
-
-fn body_symbol(body: LineBody) -> &'static str {
-    match body {
-        LineBody::Sun => "☉",
-        LineBody::Moon => "☽",
-        LineBody::Mercury => "☿",
-        LineBody::Venus => "♀",
-        LineBody::Mars => "♂",
-        LineBody::Jupiter => "♃",
-        LineBody::Saturn => "♄",
-        LineBody::Uranus => "♅",
-        LineBody::Neptune => "♆",
-        LineBody::Pluto => "♇",
-        LineBody::Chiron => "⚷",
-        LineBody::MeanNode => "☊",
-    }
-}
-
-fn body_display_name(body: LineBody) -> &'static str {
-    match body {
-        LineBody::Sun => "Sun",
-        LineBody::Moon => "Moon",
-        LineBody::Mercury => "Mercury",
-        LineBody::Venus => "Venus",
-        LineBody::Mars => "Mars",
-        LineBody::Jupiter => "Jupiter",
-        LineBody::Saturn => "Saturn",
-        LineBody::Uranus => "Uranus",
-        LineBody::Neptune => "Neptune",
-        LineBody::Pluto => "Pluto",
-        LineBody::Chiron => "Chiron",
-        LineBody::MeanNode => "North Node",
-    }
 }
 
 /// A short reflection prompt per body, in the specimen's register. The four

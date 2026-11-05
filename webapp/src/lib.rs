@@ -44,6 +44,7 @@ pub mod contract_review;
 pub mod conversation;
 pub mod csrf;
 pub mod design;
+mod ephemeris_labels;
 pub mod sandbox;
 // Server-only: the DocuSign consent callback is returned inline from
 // `portal` rather than a Dioxus router, so it renders its component through

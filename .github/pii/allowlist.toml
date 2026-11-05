@@ -280,3 +280,7 @@ values = ["Barycentric Dynamical Time"]
 [[values]]
 reason = "Decimal mantissa of the fixed J2000 Moshier Mars declination in ephemeris/fixtures/swisseph_state_reference.json, reproduced by its standalone probe; not a payment-card number."
 values = ["182683376822295"]
+
+[[values]]
+reason = "Decimal mantissa of Pluto's JPL DE440 declination at the fixed synthetic J2000 gallery reference in webapp/src/assets/chart-specimen.json; reproducible by chart_specimen.rs, not a payment-card number."
+values = ["394297246614602"]
