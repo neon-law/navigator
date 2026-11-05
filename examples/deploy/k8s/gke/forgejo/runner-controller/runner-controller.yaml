@@ -120,10 +120,13 @@ spec:
             - ops
             - forgejo
             - runner-controller
-            - --url=YOUR_FORGEJO_ORIGIN
+            - --url=YOUR_FORGEJO_ROOT_URL
             - --runner-namespace=navigator-forgejo-runners
-            - --egress-host=YOUR_FORGEJO_HOST
-            - --egress-host=YOUR_NAVIGATOR_HOST
+            # A job reaches only Forgejo and the Navigator host its
+            # `navigator.yaml` names. Add an --egress-host per extra Brand host
+            # a Project pins.
+            - --egress-host=NAVIGATOR_FORGEJO_HOST
+            - --egress-host=NAVIGATOR_PUBLIC_HOST
           env:
             - name: OTEL_SERVICE_NAME
               value: navigator-forgejo-runner-controller

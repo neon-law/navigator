@@ -153,6 +153,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "workflows",
     "workflows-service",
     "zip",
+    "zstd",
 ];
 
 /// Dependencies a member pins itself instead of inheriting, as
