@@ -227,8 +227,11 @@ pub async fn persist_contents_in(
     contents: String,
     commit_sha: String,
 ) -> Result<Persisted, TemplateSourceError> {
-    // Validate with the same rule set `navigator project gate` runs. Refuse on
-    // any blocking violation — a notation must never open from bad paper.
+    // Validate with the same rule set `navigator project gate` runs for a
+    // template — the notation set over the canonical question registry, less
+    // the rules that need a checkout on disk (`rules::CHECKOUT_ONLY_RULE_CODES`, which
+    // the gate runs locally). Refuse on any blocking violation — a notation
+    // must never open from bad paper.
     //
     // The file is presented under the bare `<code>.md` name, not its
     // `<blueprint-directory>/<code>.md` repo path: a Project repo template is a
@@ -241,11 +244,7 @@ pub async fn persist_contents_in(
         path: std::path::PathBuf::from(format!("{code}.md")),
         contents: contents.clone(),
     };
-    let violations: Vec<rules::Violation> = rules::navigator_default_rules_with_codes(&[])
-        .iter()
-        .flat_map(|rule| rule.lint(&source))
-        .filter(|v| rules::severity_for_code(v.code) == rules::Severity::Error)
-        .collect();
+    let violations = rules::blocking_violations_without_checkout(&source);
     if !violations.is_empty() {
         return Err(TemplateSourceError::Invalid {
             code: code.to_string(),
