@@ -79,10 +79,17 @@ longitude differences wrap across zero. The apparent solver applies light time, 
 nutation. It does not apply gravitational light deflection or atmospheric refraction. Position lookup evaluates native
 SPK polynomials rather than interpolating a daily table.
 
-Provenance distinguishes UTC, TT, TDB, and modeled UT1. The existing sidereal layer approximates TT by TDB within about
-1.7 ms when subtracting delta-T. Its delta-T convention is recorded separately from the orbital source. Future UTC and
-Earth rotation follow pinned models and do not promise future observed precision. Calculation errors omit birth input
-and derived position values; personal request and response types have no debug formatting.
+Provenance distinguishes UTC, TT, TDB, and modeled UT1. Earth rotation uses TT minus [Delta T](delta-t.md), with pinned
+USNO observations and forecasts and explicit extrapolation beyond the published forecast. Historical dates before 1955
+use the published Espenak-Meeus polynomials. The quoted source error is separate from a guaranteed model error; missing
+errors and extrapolation are not labeled zero uncertainty. Precession, nutation, and node series use TDB as a TT
+approximation within about 1.7 ms. Future UTC follows the pinned clock model. Calculation errors omit birth input and
+derived positions; personal request and response types have no debug formatting.
+
+The calculation provenance and cache identity include every numerical model and the original Earth-rotation source URLs,
+retrieval UTC, upstream snapshot identity, SHA-256, and byte count. These public source data are verified and normalized
+at compile time; requests perform no source-network calls. The source contract is in
+[`ephemeris/data/usno/README.md`](../../ephemeris/data/usno/README.md).
 
 Run the synthetic full-inventory benchmark with exact manifest files available locally:
 

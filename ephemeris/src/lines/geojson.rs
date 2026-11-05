@@ -20,9 +20,8 @@ use crate::loader::EphemerisManifest;
 use hifitime::Epoch;
 
 /// The ΔT model behind UT1, verbatim provenance (see [`super::deltat`]).
-pub(crate) const DELTA_T_MODEL: &str = "Espenak & Meeus (2006) polynomials to 1955, \
-Astronomical Almanac table with fourth-order Bessel interpolation \
-1955-2028, Stephenson-Morrison-Hohenkerk (2016) future blend";
+pub(crate) const DELTA_T_MODEL: &str = "USNO pinned 2026-11-05 snapshot, linear observation/forecast interpolation; \
+terminal-segment extrapolation without a reported error bound; Espenak-Meeus historical polynomials before 1955";
 
 /// The sidereal model behind the MC/IC longitudes, verbatim provenance
 /// (see [`super::sidereal`]).
@@ -65,6 +64,10 @@ pub struct LineProvenance {
     pub reference_frame: String,
     /// The ΔT model behind UT1 and the horizon geometry.
     pub delta_t_model: &'static str,
+    /// Actual observation/forecast/extrapolation classification and quoted error.
+    pub delta_t_reading: Option<super::deltat::DeltaTEstimate>,
+    /// Verified source data identities, independent of the orbital kernels.
+    pub delta_t_sources: &'static [super::deltat::DeltaTDataFile],
     /// The sidereal model behind the MC/IC longitudes.
     pub sidereal_model: &'static str,
     /// The lunar-node convention, when the node is rendered.
@@ -97,6 +100,8 @@ impl LineProvenance {
             time_scale_model: manifest.time_scale_model.clone(),
             reference_frame: manifest.reference_frame.clone(),
             delta_t_model: DELTA_T_MODEL,
+            delta_t_reading: super::deltat::delta_t_estimate(utc.to_jde_utc_days()),
+            delta_t_sources: super::deltat::delta_t_sources(),
             sidereal_model: SIDEREAL_MODEL,
             node_convention: NODE_CONVENTION,
             kernels,
@@ -230,7 +235,7 @@ mod tests {
     fn test_manifest() -> EphemerisManifest {
         EphemerisManifest {
             version: crate::MANIFEST_VERSION,
-            time_scale_model: "Espenak-Meeus/Almanac dT".to_owned(),
+            time_scale_model: "synthetic UTC/TT/TDB model".to_owned(),
             reference_frame: "ICRF/J2000, IAU 2006/2000B of-date".to_owned(),
             files: vec![crate::loader::EphemerisFile {
                 upstream_version: "synthetic fixture".to_owned(),
@@ -368,7 +373,7 @@ mod tests {
         assert_eq!(provenance_json["instant_utc"], "2026-10-30T12:00:00Z");
         assert_eq!(
             provenance_json["time_scale_model"],
-            "Espenak-Meeus/Almanac dT"
+            "synthetic UTC/TT/TDB model"
         );
         assert_eq!(
             provenance_json["reference_frame"],
