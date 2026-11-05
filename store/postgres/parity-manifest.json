@@ -1865,7 +1865,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 152,
+    "table_count": 153,
     "tables": {
       "address": {
         "columns": {
