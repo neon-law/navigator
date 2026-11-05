@@ -236,7 +236,6 @@ pub mod testimonials;
 pub mod time_entries;
 pub mod timers;
 pub mod trust;
-pub mod visitor_analytics;
 pub mod xero_invoices;
 
 #[cfg(feature = "test-support")]
