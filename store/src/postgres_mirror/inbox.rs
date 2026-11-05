@@ -25,8 +25,8 @@ struct Table {
 const TABLES: &[Table] = &[
     Table {
         name: "inbox_conversation",
-        columns: "id,firm_id,brand_key,interaction_type,provider_post_id,project_id,channel,external_address,external_name,subject,unread,provider_account,provider_thread_ref,source_page,source_channel,matter_consent,promotional_opt_in,promotional_opt_out,email_conversation_id,inserted_at,updated_at",
-        references: "id,firm_id,project_id,email_conversation_id",
+        columns: "id,firm_id,brand_key,interaction_type,provider_post_id,project_id,channel,external_address,external_name,subject,unread,provider_account,provider_thread_ref,source_page,source_channel,matter_consent,promotional_opt_in,promotional_opt_out,email_conversation_id,person_id,inserted_at,updated_at",
+        references: "id,firm_id,project_id,email_conversation_id,person_id",
         immutable: false,
     },
     Table {
@@ -420,7 +420,7 @@ const CONVERSATION_BY_ID: &str = "SELECT id, firm_id, brand_key, interaction_typ
      provider_post_id, project_id, channel, external_address, external_name, subject, \
      unread, provider_account, provider_thread_ref, source_page, source_channel, \
      matter_consent, promotional_opt_in, promotional_opt_out, email_conversation_id, \
-     inserted_at, updated_at FROM inbox_conversation WHERE id = $1";
+     person_id, inserted_at, updated_at FROM inbox_conversation WHERE id = $1";
 
 const MESSAGE_BY_ID: &str = "SELECT id, conversation_id, parent_message_id, visibility, \
      direction, body, author_person_id, provider_message_id, provider_ref, delivery_state, \
@@ -450,6 +450,7 @@ struct ConversationImage {
     promotional_opt_in: bool,
     promotional_opt_out: bool,
     email_conversation_id: Option<Uuid>,
+    person_id: Option<Uuid>,
     inserted_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -476,6 +477,7 @@ impl ConversationImage {
             promotional_opt_in: row.promotional_opt_in,
             promotional_opt_out: row.promotional_opt_out,
             email_conversation_id: row.email_conversation_id,
+            person_id: row.person_id,
             inserted_at: micros(row.inserted_at),
             updated_at: micros(row.updated_at),
         }
@@ -502,6 +504,7 @@ impl ConversationImage {
             promotional_opt_in: row.try_get("promotional_opt_in")?,
             promotional_opt_out: row.try_get("promotional_opt_out")?,
             email_conversation_id: row.try_get("email_conversation_id")?,
+            person_id: row.try_get("person_id")?,
             inserted_at: row.try_get("inserted_at")?,
             updated_at: row.try_get("updated_at")?,
         })

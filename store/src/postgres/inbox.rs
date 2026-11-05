@@ -77,7 +77,7 @@ fn db_error(error: sqlx::Error) -> InboxError {
 const CONVERSATION_COLUMNS: &str = "id, firm_id, brand_key, interaction_type, provider_post_id, \
     project_id, channel, external_address, external_name, subject, unread, provider_account, \
     provider_thread_ref, source_page, source_channel, matter_consent, promotional_opt_in, \
-    promotional_opt_out, email_conversation_id, inserted_at, updated_at";
+    promotional_opt_out, email_conversation_id, person_id, inserted_at, updated_at";
 
 /// The read image of a Message: the columns `store::inbox`'s Surreal reads
 /// select. The alert trio stays delivery-alert surface, outside the reads
@@ -115,6 +115,7 @@ fn conversation(row: &sqlx::postgres::PgRow) -> Result<Conversation, sqlx::Error
         promotional_opt_in: row.try_get("promotional_opt_in")?,
         promotional_opt_out: row.try_get("promotional_opt_out")?,
         email_conversation_id: row.try_get("email_conversation_id")?,
+        person_id: row.try_get("person_id")?,
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -211,14 +212,125 @@ async fn insert_message(
     Ok(id)
 }
 
+/// The inbound email sender's Person under the PostgreSQL People mirror:
+/// primary first, then any `person_mailbox` alias claim — the same exact,
+/// case-insensitive resolution `persons::find_by_any_email` serves on the
+/// Surreal lane. The [`crate::inbox::counterparty_decision`] guard applies
+/// here too: a lawyer- or clerk-tier sender never links.
+pub(crate) async fn inbound_counterparty_on(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    inbound: &IngestInbound<'_>,
+) -> Result<Option<Uuid>, InboxError> {
+    resolve_or_create_sender_on(pg, db, inbound.external_address, inbound.external_name).await
+}
+
+/// The shared resolve-or-create behind ingest and the backfill, in the
+/// PostgreSQL People mirror: primary first, then any `person_mailbox`
+/// alias claim — the same exact, case-insensitive resolution
+/// `persons::find_by_any_email` serves on the Surreal lane. The
+/// [`crate::inbox::counterparty_decision`] guard applies here too: a
+/// lawyer- or clerk-tier sender never links. A sender no Person claims
+/// becomes a new client-tier Person in the same engine — `find_or_create`
+/// re-checks under the unique `email_lower` backstop, so a concurrent
+/// create collapses — and the Surreal projection stays fresh for
+/// alias-aware reads.
+pub(crate) async fn resolve_or_create_sender_on(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    external_address: &str,
+    display_name: Option<&str>,
+) -> Result<Option<Uuid>, InboxError> {
+    let address = external_address.trim();
+    let person = match crate::postgres::people::by_email(pg, address).await? {
+        Some(person) => Some(person),
+        None => {
+            match crate::postgres::people::mailbox_holder(pg, address.to_lowercase().as_str())
+                .await?
+            {
+                Some(holder) => crate::postgres::people::by_id(pg, holder).await?,
+                None => None,
+            }
+        }
+    };
+    if let Some(person) = person {
+        // A known lawyer- or clerk-tier sender is outgoing mail: decision
+        // None, and certainly no second Person for the same address.
+        return Ok(crate::inbox::counterparty_decision(&person));
+    }
+    let created = crate::postgres::people::find_or_create(
+        pg,
+        db,
+        &crate::persons::NewPerson::new(
+            crate::inbox::sender_display_name(display_name, address),
+            address,
+        ),
+    )
+    .await
+    .map_err(|error| InboxError::Db(error.to_string()))?;
+    Ok(Some(created.id))
+}
+
+/// Backfills `person_id` on still-unassociated email conversations — the
+/// same resolve-or-create the ingest uses — and reports how many
+/// conversations gained a link. Idempotent: only rows with `person_id IS
+/// NULL` are selected, so a re-run finds nothing and writes nothing.
+pub(crate) async fn backfill_person_links_on(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+) -> Result<u64, InboxError> {
+    let unassociated: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, external_address, external_name FROM inbox_conversation \
+         WHERE channel = $1 AND person_id IS NULL",
+    )
+    .bind(channel::EMAIL)
+    .fetch_all(&pg.0)
+    .await
+    .map_err(db_error)?;
+    let mut linked = 0u64;
+    for (conversation_id, external_address, external_name) in unassociated {
+        let Some(person_id) =
+            resolve_or_create_sender_on(pg, db, &external_address, external_name.as_deref())
+                .await?
+        else {
+            continue;
+        };
+        // First association wins: the WHERE guard keeps a concurrent
+        // ingest or backfill pass from double-writing.
+        let updated = sqlx::query(
+            "UPDATE inbox_conversation SET person_id = $2, updated_at = now() \
+             WHERE id = $1 AND person_id IS NULL",
+        )
+        .bind(conversation_id)
+        .bind(person_id)
+        .execute(&pg.0)
+        .await
+        .map_err(db_error)?
+        .rows_affected();
+        if updated > 0 {
+            linked += 1;
+            crate::inbox::record_association_log(
+                db,
+                conversation_id,
+                Some(person_id),
+                channel::EMAIL,
+                &external_address,
+            )
+            .await;
+        }
+    }
+    Ok(linked)
+}
+
 /// The ingest entry for provider-webhook-shaped deliveries: direction
 /// `inbound`, no author, exactly `store::inbox::ingest_inbound`'s contract.
 #[cfg(test)]
 pub(crate) async fn ingest_inbound_on(
     pg: &PostgresDb,
+    db: &SurrealDb,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
-    ingest_message_on(pg, direction::INBOUND, None, inbound).await
+    ingest_threaded_on(pg, db, inbound, None).await
 }
 
 /// The inbound ingest entry behind `store::inbox::ingest_inbound` (`thread`
@@ -226,24 +338,56 @@ pub(crate) async fn ingest_inbound_on(
 /// reference chain, nearest ancestor first).
 pub(crate) async fn ingest_threaded_on(
     pg: &PostgresDb,
+    db: &SurrealDb,
     inbound: &IngestInbound<'_>,
     thread: Option<&[String]>,
 ) -> Result<IngestedInbound, InboxError> {
-    ingest_on(pg, direction::INBOUND, None, inbound, thread).await
+    let sender_person_id = match inbound.channel {
+        channel::EMAIL => inbound_counterparty_on(pg, db, inbound).await?,
+        _ => None,
+    };
+    let ingested = ingest_on(
+        pg,
+        direction::INBOUND,
+        None,
+        sender_person_id,
+        inbound,
+        thread,
+    )
+    .await?;
+    crate::inbox::record_association_log(
+        db,
+        ingested.conversation_id,
+        ingested.person_linked.then_some(sender_person_id).flatten(),
+        inbound.channel,
+        inbound.external_address,
+    )
+    .await;
+    Ok(ingested)
 }
 
 /// The direction-aware ingest entry. Inbound traffic behaves exactly like
-/// `ingest_inbound_on`; lawyer-sent imports (LAW-238 D1) arrive with direction
-/// `outbound` and the mailbox owner as author. Delivery is `received` —
-/// historical mail is already delivered — and `dispatch_queued` never
-/// re-sends it, because only `queued` is dispatched.
+/// `ingest_threaded_on` without references; lawyer-sent imports (LAW-238 D1)
+/// arrive with direction `outbound` and the mailbox owner as author — no
+/// counterparty resolution. Delivery is `received` — historical mail is
+/// already delivered — and `dispatch_queued` never re-sends it, because only
+/// `queued` is dispatched.
 pub(crate) async fn ingest_message_on(
     pg: &PostgresDb,
     direction_value: &str,
     author_person_id: Option<Uuid>,
+    sender_person_id: Option<Uuid>,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
-    ingest_on(pg, direction_value, author_person_id, inbound, None).await
+    ingest_on(
+        pg,
+        direction_value,
+        author_person_id,
+        sender_person_id,
+        inbound,
+        None,
+    )
+    .await
 }
 
 // The transactional ingest mirrors the Surreal `ingest_inbound` flow step
@@ -254,6 +398,7 @@ async fn ingest_on(
     pg: &PostgresDb,
     direction_value: &str,
     author_person_id: Option<Uuid>,
+    sender_person_id: Option<Uuid>,
     inbound: &IngestInbound<'_>,
     thread: Option<&[String]>,
 ) -> Result<IngestedInbound, InboxError> {
@@ -293,9 +438,23 @@ async fn ingest_on(
         Some(existing) => existing,
         None => match find_open_thread_on(&mut *tx, inbound).await? {
             Some(existing) => existing,
-            None => create_conversation_on(&mut *tx, inbound).await?,
+            None => create_conversation_on(&mut *tx, inbound, sender_person_id).await?,
         },
     };
+    let person_linked = sender_person_id.is_some() && conversation.person_id.is_none();
+    if let (true, Some(person_id)) = (person_linked, sender_person_id) {
+        // First association wins: an existing link is never overwritten,
+        // and the WHERE guard keeps a concurrent ingest from double-writing.
+        sqlx::query(
+            "UPDATE inbox_conversation SET person_id = $2, updated_at = now() \
+             WHERE id = $1 AND person_id IS NULL",
+        )
+        .bind(conversation.id)
+        .bind(person_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    }
     if let Some(email_conversation_id) = inbound.email_conversation_id {
         if conversation.email_conversation_id.is_none() {
             sqlx::query(
@@ -404,6 +563,7 @@ async fn ingest_on(
         conversation_id: conversation.id,
         message_id,
         deduped: false,
+        person_linked,
     })
 }
 
@@ -498,6 +658,7 @@ pub(crate) async fn ingest_fi_message_in(
         conversation_id,
         message_id,
         deduped: existing.is_some(),
+        person_linked: false,
     })
 }
 
@@ -516,7 +677,10 @@ async fn fi_conversation_id_in(
     match find_open_thread_on(&mut *connection, inbound).await? {
         Some(conversation) => Ok(conversation.id),
         // Start unassigned so pin_fi_project_in records the initial None-to-Project audit.
-        None => Ok(create_conversation_on(&mut *connection, inbound).await?.id),
+        // Historical imports never auto-create a counterparty.
+        None => Ok(create_conversation_on(&mut *connection, inbound, None)
+            .await?
+            .id),
     }
 }
 
@@ -589,6 +753,7 @@ async fn deduped_ingest(pg: &PostgresDb, message_id: Uuid) -> Result<IngestedInb
         conversation_id: existing.conversation_id,
         message_id: existing.id,
         deduped: true,
+        person_linked: false,
     })
 }
 
@@ -696,15 +861,16 @@ async fn find_open_thread_on(
 async fn create_conversation_on(
     executor: impl sqlx::PgExecutor<'_>,
     inbound: &IngestInbound<'_>,
+    person_id: Option<Uuid>,
 ) -> Result<crate::inbox::Conversation, InboxError> {
     let id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO inbox_conversation (id, firm_id, brand_key, interaction_type, provider_post_id, \
          project_id, channel, external_address, external_name, subject, unread, provider_account, \
          provider_thread_ref, source_page, source_channel, matter_consent, promotional_opt_in, \
-         promotional_opt_out, email_conversation_id, inserted_at, updated_at) \
+         promotional_opt_out, email_conversation_id, person_id, inserted_at, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $17, $6, $7, $8, $9, TRUE, $10, $11, $12, $13, $14, $15, \
-         FALSE, $16, now(), now())",
+         FALSE, $16, $18, now(), now())",
     )
     .bind(id)
     .bind(inbound.firm_id)
@@ -723,6 +889,7 @@ async fn create_conversation_on(
     .bind(inbound.promotional_opt_in)
     .bind(inbound.email_conversation_id)
     .bind(inbound.project_id)
+    .bind(person_id)
     .execute(executor)
     .await
     .map_err(db_error)?;
@@ -746,6 +913,7 @@ async fn create_conversation_on(
         promotional_opt_in: inbound.promotional_opt_in,
         promotional_opt_out: false,
         email_conversation_id: inbound.email_conversation_id,
+        person_id,
         inserted_at: Utc::now(),
         updated_at: Utc::now(),
     })
@@ -1286,7 +1454,7 @@ pub(crate) async fn open_sms_conversation_on(
     };
     let conversation = match find_open_thread_on(&pg.0, &thread).await? {
         Some(existing) => existing,
-        None => create_conversation_on(&pg.0, &thread).await?,
+        None => create_conversation_on(&pg.0, &thread, None).await?,
     };
     let message_id = queue_sms_message_on(pg, db, &conversation, actor_id, body).await?;
     Ok((conversation.id, message_id))
@@ -1846,7 +2014,8 @@ pub(crate) async fn intake_detail_on(
 }
 
 /// Shared body of both intake lists: decorate conversations with delivery,
-/// phone contact, assignee, and the next action.
+/// phone contact, assignee, the next action, the persisted sender Person,
+/// and the latest-message preview.
 async fn intake_rows(
     pg: &PostgresDb,
     db: &SurrealDb,
@@ -1855,12 +2024,16 @@ async fn intake_rows(
     assigned: bool,
 ) -> Result<Vec<IntakeRow>, InboxError> {
     let can_send_default = matches!(role, Role::Lawyer | Role::Clerk);
+    let people = inbox::person_badges(db, &conversations).await?;
     let mut listed = Vec::with_capacity(conversations.len());
     for conversation in conversations {
         let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
         let assignee_name = inbox::assignee_label(db, conversation.project_id).await?;
-        let (direction, has_attachments) =
-            latest_direction_and_attachments_on(pg, conversation.id).await?;
+        let (direction, has_attachments, preview) =
+            latest_row_facts_on(pg, conversation.id).await?;
+        let person = conversation
+            .person_id
+            .and_then(|person_id| people.get(&person_id).cloned());
         listed.push(IntakeRow {
             contact: inbox::sender_identity(db, &conversation).await?,
             id: conversation.id,
@@ -1882,6 +2055,8 @@ async fn intake_rows(
             external_name: conversation.external_name,
             subject: conversation.subject,
             direction,
+            preview,
+            person,
             has_attachments,
             updated_at: conversation.updated_at,
         });
@@ -1889,26 +2064,33 @@ async fn intake_rows(
     Ok(listed)
 }
 
-/// The two per-conversation aggregates the list view's filters match rows on
+/// The three per-conversation aggregates the list view matches rows on
 /// (LAW-238 D3): the direction of the conversation's most recent message
-/// (`occurred_at, id` order; empty when it has none), and whether any message
-/// carries a filed attachment. One round trip per conversation, the same
-/// fan-out shape `latest_outbound_state_on` already follows.
-async fn latest_direction_and_attachments_on(
+/// (`occurred_at, id` order; empty when it has none), whether any message
+/// carries a filed attachment, and that same message's preview snippet. One
+/// round trip per conversation, the same fan-out shape
+/// `latest_outbound_state_on` already follows.
+async fn latest_row_facts_on(
     pg: &PostgresDb,
     conversation_id: Uuid,
-) -> Result<(String, bool), InboxError> {
-    let row = sqlx::query_as::<_, (Option<String>, bool)>(
+) -> Result<(String, bool, Option<String>), InboxError> {
+    let row = sqlx::query_as::<_, (Option<String>, bool, Option<String>)>(
         "SELECT (SELECT direction FROM message WHERE conversation_id = $1 \
          ORDER BY occurred_at DESC, id DESC LIMIT 1), \
          EXISTS(SELECT 1 FROM message WHERE conversation_id = $1 \
-         AND attachment_asset_id IS NOT NULL)",
+         AND attachment_asset_id IS NOT NULL), \
+         (SELECT left(body, 400) FROM message WHERE conversation_id = $1 \
+         ORDER BY occurred_at DESC, id DESC LIMIT 1)",
     )
     .bind(conversation_id)
     .fetch_one(&pg.0)
     .await
     .map_err(db_error)?;
-    Ok((row.0.unwrap_or_default(), row.1))
+    Ok((
+        row.0.unwrap_or_default(),
+        row.1,
+        row.2.as_deref().and_then(inbox::preview_snippet),
+    ))
 }
 
 pub(crate) async fn list_project_on(
