@@ -8,7 +8,7 @@
 //! HTTP with an admin `SessionData` bearer — the same blob the CLI
 //! presents — so the JSON contract the CLI parses is pinned here, fast,
 //! without spawning the binary (the binary round-trip lives in
-//! `cli/tests/llc_formation_e2e.rs`). CI-safe: the `StubSignatureProvider`
+//! `cli/tests/llc_formation_e2e.rs`). CI-safe: the `FakeSignatureProvider`
 //! records the send, so nothing reaches DocuSign.
 
 use std::sync::Arc;
@@ -66,7 +66,7 @@ async fn build_app() -> axum::Router {
         storage,
         workflow_runtime,
         questionnaire_runtime: runtime,
-        signature_provider: Arc::new(portal::signature::StubSignatureProvider::new()),
+        signature_provider: Arc::new(portal::signature::FakeSignatureProvider::new()),
         email,
         ..portal::test_support::app_state(surreal.clone()).await
     };

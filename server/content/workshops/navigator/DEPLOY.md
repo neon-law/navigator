@@ -1224,6 +1224,7 @@ protected alongside it.
 | Dash0 endpoint | `DASH0_ENDPOINT` | Optional staging-only integration declaration |
 | Dash0 dataset | `DASH0_DATASET` | Required with `DASH0_ENDPOINT` |
 | Dash0 token | `DASH0_TOKEN` | Encrypted Secret Manager input; required with `DASH0_ENDPOINT` |
+| Signature provider | `NAVIGATOR_SIGNATURE_PROVIDER` | `fake`/`docusign`; unset fails boot; fake refuses production |
 | DocuSign endpoint | `DOCUSIGN_BASE_URL` | Declares DocuSign; demo in dev, live in production |
 | DocuSign account | `DOCUSIGN_ACCOUNT_ID` | Environment-specific account |
 | DocuSign JWT IDs | `DOCUSIGN_INTEGRATION_KEY`, `DOCUSIGN_USER_ID` | Preferred auth path |
@@ -1234,6 +1235,14 @@ protected alongside it.
 | Xero tenant | `XERO_TENANT_ID`, `XERO_BASE_URL` | All Xero values select real billing |
 | Xero OAuth client | `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET` | Otherwise stub billing |
 | Xero OAuth token | `XERO_TOKEN_URL`, `XERO_SCOPE`, `XERO_ACCESS_TOKEN` | Otherwise stub billing |
+
+The signature provider is a closed enum, `SignatureProviderKind`: `fake` (the local signature loop — envelopes on disk,
+local sign pages, DocuSign-Connect-shaped HMAC-signed completion webhooks; dev and CI only, refuses production) or
+`docusign` (the real eSignature REST API). There is no implicit default: unset refuses to boot. An envelope on the fake
+provider carries one of two statuses, `EnvelopeStatus`: `sent` (anchors validated against the prepared PDF, PDF stored)
+or `completed` (every recipient signed, documents and certificate filed). There is no third state. Tests fail the loop
+on purpose with the third enum, `Fault` — `send`, `view`, or `webhook` — and the durable envelope keeps its last true
+state across every injected failure.
 
 ---
 

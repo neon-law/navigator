@@ -172,15 +172,19 @@ pub fn page_count(pdf: &[u8]) -> Result<usize, PassageError> {
 /// How many times `quote` appears in the document's text layer.
 /// Whitespace is normalised on both sides; nothing else is.
 ///
+/// This is a text-only search: a font declaring no glyph widths cannot
+/// yield a horizontal extent, but it still yields text, so an
+/// unmeasurable font does not refuse the count the way it refuses
+/// [`locate`].
+///
 /// # Errors
-/// [`PassageError::Pdf`], [`PassageError::EmptyQuote`], or
-/// [`PassageError::UnmeasurableFont`].
+/// [`PassageError::Pdf`] or [`PassageError::EmptyQuote`].
 pub fn occurrence_count(pdf: &[u8], quote: &str) -> Result<usize, PassageError> {
     let needle = normalise(quote);
     if needle.is_empty() {
         return Err(PassageError::EmptyQuote);
     }
-    let doc = extract(&load(pdf)?)?;
+    let doc = extract(&load(pdf)?);
     Ok(doc.matches(&needle).len())
 }
 
@@ -198,7 +202,13 @@ pub fn locate(pdf: &[u8], quote: &str, ordinal: usize) -> Result<PassageLocation
     if needle.is_empty() {
         return Err(PassageError::EmptyQuote);
     }
-    let doc = extract(&load(pdf)?)?;
+    let doc = extract(&load(pdf)?);
+    // Positions downstream of an unmeasurable font are approximations,
+    // and a highlight asserting one is a lie. Text-only search
+    // ([`occurrence_count`]) can still count matches; this cannot.
+    if let Some(font) = doc.unmeasurable_fonts.first() {
+        return Err(PassageError::UnmeasurableFont { font: font.clone() });
+    }
     let hits = doc.matches(&needle);
     let occurrences = hits.len();
     if occurrences == 0 {
@@ -289,6 +299,12 @@ struct ExtractedText {
     origin: Vec<Option<usize>>,
     glyphs: Vec<Glyph>,
     boxes: Vec<PageBox>,
+    /// Fonts the document shows text with but declares no widths for,
+    /// in first-appearance order. Their glyphs' extents — and every
+    /// extent after them on the line — are unmeasurable, so only
+    /// text-only searches may read this document; [`locate`] refuses
+    /// it before any approximate box can escape.
+    unmeasurable_fonts: Vec<String>,
 }
 
 impl ExtractedText {
@@ -358,15 +374,23 @@ fn normalise(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn extract(doc: &Document) -> Result<ExtractedText, PassageError> {
+fn extract(doc: &Document) -> ExtractedText {
     let mut glyphs: Vec<Glyph> = Vec::new();
     let mut boxes: Vec<PageBox> = Vec::new();
+    let mut unmeasurable_fonts: Vec<String> = Vec::new();
     let mut line_counter = 0usize;
 
     for (page_index, page_id) in doc.get_pages().into_values().enumerate() {
         boxes.push(media_box(doc, page_id));
         let fonts = page_fonts(doc, page_id);
-        let runs = walk_page(doc, page_id, &fonts)?;
+        let runs = walk_page(doc, page_id, &fonts);
+        for run in &runs {
+            if let Some(font) = &run.unmeasurable_font {
+                if !unmeasurable_fonts.contains(font) {
+                    unmeasurable_fonts.push(font.clone());
+                }
+            }
+        }
         for line in into_lines(runs) {
             line_counter += 1;
             for mut g in line {
@@ -420,12 +444,13 @@ fn extract(doc: &Document) -> Result<ExtractedText, PassageError> {
         norm_origin.push(o);
     }
 
-    Ok(ExtractedText {
+    ExtractedText {
         chars: norm_chars,
         origin: norm_origin,
         glyphs,
         boxes,
-    })
+        unmeasurable_fonts,
+    }
 }
 
 /// Group a page's runs into visual lines: top to bottom by baseline,
@@ -553,6 +578,11 @@ struct Run {
     x0: f64,
     tolerance: f64,
     glyphs: Vec<Glyph>,
+    /// The first font in this run that declared no glyph widths, if
+    /// any. Positions after such a glyph cannot be trusted, so only
+    /// text-only searches may look past it (`occurrence_count`);
+    /// anything that returns rects refuses the document instead.
+    unmeasurable_font: Option<String>,
 }
 
 #[derive(Clone)]
@@ -581,14 +611,10 @@ impl Default for TextState {
 }
 
 #[allow(clippy::too_many_lines)]
-fn walk_page(
-    doc: &Document,
-    page_id: ObjectId,
-    fonts: &BTreeMap<String, Font>,
-) -> Result<Vec<Run>, PassageError> {
+fn walk_page(doc: &Document, page_id: ObjectId, fonts: &BTreeMap<String, Font>) -> Vec<Run> {
     let data = doc.get_page_content(page_id);
     let Ok(content) = Content::decode(&data) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
 
     let mut runs: Vec<Run> = Vec::new();
@@ -650,7 +676,7 @@ fn walk_page(
                 if let Some(Object::String(bytes, _)) =
                     op.operands.iter().find(|o| matches!(o, Object::String(..)))
                 {
-                    let run = show(bytes, &ts, fonts, &mut tm, ctm)?;
+                    let run = show(bytes, &ts, fonts, &mut tm, ctm);
                     push_run(&mut runs, run);
                 }
             }
@@ -659,14 +685,16 @@ fn walk_page(
                     continue;
                 };
                 let mut glyphs: Vec<Glyph> = Vec::new();
+                let mut unmeasurable: Option<String> = None;
                 let mut start: Option<(f64, f64, f64)> = None;
                 for item in items {
                     match item {
                         Object::String(bytes, _) => {
-                            let run = show(bytes, &ts, fonts, &mut tm, ctm)?;
+                            let run = show(bytes, &ts, fonts, &mut tm, ctm);
                             if start.is_none() {
                                 start = Some((run.baseline, run.x0, run.tolerance));
                             }
+                            unmeasurable = unmeasurable.or(run.unmeasurable_font);
                             glyphs.extend(run.glyphs);
                         }
                         other => {
@@ -685,6 +713,7 @@ fn walk_page(
                             x0,
                             tolerance,
                             glyphs,
+                            unmeasurable_font: unmeasurable,
                         },
                     );
                 }
@@ -692,7 +721,7 @@ fn walk_page(
             _ => {}
         }
     }
-    Ok(runs)
+    runs
 }
 
 fn push_run(runs: &mut Vec<Run>, run: Run) {
@@ -702,13 +731,15 @@ fn push_run(runs: &mut Vec<Run>, run: Run) {
 }
 
 /// Lay out one shown string, advancing the text matrix as it goes.
+/// Never fails: a font that cannot be measured still yields text, and
+/// the refusal is recorded on the run for `locate` to raise later.
 fn show(
     bytes: &[u8],
     ts: &TextState,
     fonts: &BTreeMap<String, Font>,
     tm: &mut Matrix,
     ctm: Matrix,
-) -> Result<Run, PassageError> {
+) -> Run {
     let font = ts.font.as_ref().and_then(|n| fonts.get(n));
     let (origin_x, origin_y) = tm.then(ctm).apply(0.0, 0.0);
     let mut run = Run {
@@ -716,13 +747,23 @@ fn show(
         x0: origin_x,
         tolerance: (ts.size * 0.5).max(1.0),
         glyphs: Vec::new(),
+        unmeasurable_font: None,
     };
     let Some(font) = font else {
-        return Ok(run);
+        return run;
     };
 
     for (code, text, is_single_space) in font.decode(bytes) {
-        let w0 = font.width(code)?;
+        // A font declaring no widths still decodes to text — the
+        // advance and extent are what need measuring. Record the
+        // refusal on the run instead of aborting the page: the text
+        // layer stays searchable, and `locate` (which returns rects)
+        // refuses the document before any approximate box escapes.
+        let (w0, unmeasurable) = match font.width(code) {
+            Ok(w) => (w, None),
+            Err(_) => (0.0, Some(font.name.clone())),
+        };
+        run.unmeasurable_font = run.unmeasurable_font.or(unmeasurable);
         let advance = (w0 * ts.size
             + ts.char_spacing
             + if is_single_space {
@@ -749,7 +790,7 @@ fn show(
         }
         *tm = Matrix::translate(advance, 0.0).then(*tm);
     }
-    Ok(run)
+    run
 }
 
 // ---------------------------------------------------------------------
@@ -1233,7 +1274,7 @@ fn extract_single_page(doc: &Document, page_id: ObjectId) -> Result<Vec<u8>, Pas
 
 /// A page attribute, taken from the page or inherited from its
 /// ancestors in the original tree.
-fn inherited(doc: &Document, page: &Dictionary, key: &[u8]) -> Option<Object> {
+pub(crate) fn inherited(doc: &Document, page: &Dictionary, key: &[u8]) -> Option<Object> {
     let mut node = Some(page.clone());
     while let Some(dict) = node {
         if let Ok(value) = dict.get(key) {
@@ -1250,7 +1291,7 @@ fn inherited(doc: &Document, page: &Dictionary, key: &[u8]) -> Option<Object> {
 
 /// Deep-copy an object into `out`, remapping every reference it reaches
 /// and reusing an already-copied object rather than duplicating it.
-fn copy_object(
+pub(crate) fn copy_object(
     doc: &Document,
     out: &mut Document,
     obj: &Object,

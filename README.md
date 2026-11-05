@@ -32,6 +32,12 @@ You can see the omnichannel inbox, social scheduling, case management, notations
 `.env.example` to `.env` to add your own Meta, TikTok, or other provider keys, and use your own brand. To have Navigator
 skinned for your firm, [contact us](https://www.neonlaw.com/contact). We help you write token-efficient prompts.
 
+The signature loop runs locally with no DocuSign credentials: `NAVIGATOR_SIGNATURE_PROVIDER` defaults to `fake`, whose
+envelopes persist under `$HOME/.navigator/fake-signature`, whose sign pages are served locally, and whose completion
+webhooks are HMAC-signed and verified fail-closed — set `DOCUSIGN_HMAC_KEY` to loop them into the local receiver. To
+rehearse the REAL provider against DocuSign demo, run `script/ceremony-docusign.sh` after filling the `DOCUSIGN_*`
+block; it is the one credentialed piece and never runs in CI.
+
 The source and the three sample matters are cloned anonymously from public GitHub repositories:
 [`neon-law/navigator`](https://github.com/neon-law/navigator) and the read-only `neon-law/sample-*` snapshots. No GitHub
 account or token is needed.

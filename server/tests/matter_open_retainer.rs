@@ -2,7 +2,7 @@
 //! Dev e2e for "open a matter for an existing client."
 //!
 //! Drives the real HTTP path (`POST /app/projects`, selecting an existing
-//! `Role::Client` as the client DRI) against `StubSignatureProvider`, so
+//! `Role::Client` as the client DRI) against `FakeSignatureProvider`, so
 //! nothing reaches DocuSign and the test is CI-safe.
 //!
 //! Opening a matter opens the **matter, and only the matter**: the Project
@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use portal::signature::StubSignatureProvider;
+use portal::signature::FakeSignatureProvider;
 use portal::AppState;
 use store::seed;
 use store::test_support::mem_surreal;
@@ -48,7 +48,7 @@ async fn build_app(
 ) -> (
     axum::Router,
     store::surreal::SurrealDb,
-    Arc<StubSignatureProvider>,
+    Arc<FakeSignatureProvider>,
 ) {
     let repo_root = std::env::temp_dir().join(format!(
         "navigator-matter-open-repos-{tag}-{}",
@@ -77,7 +77,7 @@ async fn build_app(
         email.clone(),
         storage.clone(),
     ));
-    let stub = Arc::new(StubSignatureProvider::new());
+    let stub = Arc::new(FakeSignatureProvider::new());
     let state = AppState {
         storage,
         workflow_runtime,

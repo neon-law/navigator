@@ -32,7 +32,7 @@ async fn admin_state(surreal: store::surreal::SurrealDb) -> portal::admin::Admin
     portal::admin::AdminState {
         surreal: surreal.clone(),
         workflow_runtime: runtime.clone(),
-        signature_provider: Arc::new(portal::signature::StubSignatureProvider::new()),
+        signature_provider: Arc::new(portal::signature::FakeSignatureProvider::new()),
         retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
         questionnaire_runtime: inner,
         assets_storage: storage.clone(),

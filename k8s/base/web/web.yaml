@@ -202,6 +202,17 @@ spec:
             # path never exercises — so opaque stubs are safe here. The
             # GKE production overlay replaces the env list wholesale with
             # real Secret-backed values plus NAVIGATOR_EMAIL_BACKEND=sendgrid.
+            # The KIND harness runs the explicit local signature loop:
+            # envelopes on disk, local sign pages, Connect-shaped HMAC
+            # webhooks — no DocuSign credentials anywhere. Production's
+            # GKE overlay replaces this env list wholesale with
+            # NAVIGATOR_SIGNATURE_PROVIDER=docusign.
+            - name: NAVIGATOR_SIGNATURE_PROVIDER
+              value: fake
+            # The fake provider's durable envelope root. Explicit so the
+            # container never depends on HOME being set.
+            - name: NAVIGATOR_FAKE_SIGNATURE_DIR
+              value: /tmp/navigator/fake-signature
             - name: SENDGRID_API_KEY
               value: SG.kind-stub
             - name: SENDGRID_INBOUND_SECRET

@@ -160,12 +160,12 @@ pub trait SignatureProvider: Send + Sync {
 }
 ```
 
-`StubSignatureProvider` records every call to an internal `Mutex<Vec<…>>`; tests assert on it, and it is what dev runs
-against when `DOCUSIGN_*` env vars are unset. `DocuSignSignatureProvider`
+`FakeSignatureProvider` records every call to an internal `Mutex<Vec<…>>`; tests assert on it, and it is what a boot
+runs when `NAVIGATOR_SIGNATURE_PROVIDER=fake` — the explicit local signature loop. `DocuSignSignatureProvider`
 ([`portal/src/signature.rs`](../portal/src/signature.rs)) is already a live, shipped implementation of the same trait —
-[`portal::hosting`](../portal/src/hosting.rs) selects it automatically whenever the `DOCUSIGN_*` env vars are
-configured, and falls back to the stub only when they are unset. Both use the same `Arc<dyn SignatureProvider>` in
-[`portal::AppState`](../portal/src/lib.rs), consistent with
+[`portal::hosting`](../portal/src/hosting.rs) selects between them through the one environment value
+`NAVIGATOR_SIGNATURE_PROVIDER`, which accepts only `fake` or `docusign` and refuses to boot otherwise. Both use the same
+`Arc<dyn SignatureProvider>` in [`portal::AppState`](../portal/src/lib.rs), consistent with
 [`docs/provider-environment-parity.md`](provider-environment-parity.md)'s description of DocuSign as live per-deployment
 infrastructure rather than a future swap-in.
 
