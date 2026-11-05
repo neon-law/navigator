@@ -48,9 +48,9 @@ pub struct KernelProvenance {
     pub retrieved_at: chrono::DateTime<chrono::Utc>,
     /// Verified file length in bytes.
     pub bytes: u64,
-    /// Human-readable coverage start (TDB).
+    /// Proleptic Gregorian coverage start (TDB).
     pub coverage_start: String,
-    /// Human-readable coverage end (TDB).
+    /// Proleptic Gregorian coverage end (TDB).
     pub coverage_end: String,
 }
 
@@ -240,7 +240,7 @@ mod tests {
                 sha256: "a1b2c3".to_owned(),
                 bytes: 11,
                 source: "https://example.test/de440.bsp".to_owned(),
-                coverage_start: "1549-12-21".to_owned(),
+                coverage_start: "1549-12-31".to_owned(),
                 coverage_end: "2650-01-25".to_owned(),
             }],
         }
@@ -377,7 +377,7 @@ mod tests {
         let kernels = provenance_json["kernels"].as_array().expect("kernels");
         assert_eq!(kernels[0]["name"], "de440.bsp");
         assert_eq!(kernels[0]["sha256"], "a1b2c3");
-        assert_eq!(kernels[0]["coverage_start"], "1549-12-21");
+        assert_eq!(kernels[0]["coverage_start"], "1549-12-31");
         assert_eq!(provenance_json["delta_t_model"], DELTA_T_MODEL);
         assert_eq!(provenance_json["sidereal_model"], SIDEREAL_MODEL);
         assert_eq!(provenance_json["node_convention"], NODE_CONVENTION);

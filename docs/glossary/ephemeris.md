@@ -16,10 +16,10 @@ remain request-local; the public birth form resolves a place and time without pe
 
 Navigator computes positions itself instead of calling an external provider. The `ephemeris` workspace crate reads
 NASA/JPL DAF/SPK kernels and interpolates barycentric positions in kilometers, so a chart is reproducible from pinned
-kernel bytes plus the conversion settings recorded here.
+kernel bytes plus the conversion settings recorded here. Source coverage dates use proleptic Gregorian TDB.
 
-- **Kernels** — `de440.bsp` (type-2 Chebyshev segments), covered 1549-12-21 through 2650-01-25 TDB, plus a JPL
-  Horizons-generated SPK for 2060 Chiron (type-21 modified-difference-array segments), covered 1899-12-31 through
+- **Kernels** — `de440.bsp` (type-2 Chebyshev segments), covered 1549-12-31 through 2650-01-25 TDB, plus a JPL
+  Horizons-generated SPK for 2060 Chiron (type-21 modified-difference-array segments), covered 1899-12-30 through
   2050-01-02 TDB. Kernel files stay outside the repository; `ephemeris/manifest.json` pins each file's SHA-256 digest,
   byte size, source URL, retrieval UTC, upstream version, and coverage window.
 - **Loading** — the boot-time loader verifies every file's byte size and SHA-256 before parsing and refuses any

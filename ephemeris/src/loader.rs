@@ -99,9 +99,9 @@ pub struct EphemerisFile {
     pub bytes: u64,
     /// Where the file was downloaded from.
     pub source: String,
-    /// Human-readable coverage start (TDB), for example `1549-12-21`.
+    /// Proleptic Gregorian coverage start (TDB), for example `1549-12-31`.
     pub coverage_start: String,
-    /// Human-readable coverage end (TDB), for example `2650-01-25`.
+    /// Proleptic Gregorian coverage end (TDB), for example `2650-01-25`.
     pub coverage_end: String,
 }
 
