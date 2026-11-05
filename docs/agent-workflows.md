@@ -86,7 +86,21 @@ When a dirty tree is ready to land:
    an unresolved review thread blocks auto-merge just as a red check does. Answer every comment through [Address a PR
    comment](#address-a-pr-comment) — fix it or reply with the reason not to — and resolve its thread. Report the PR only
    once every thread is answered.
-9. Clean up task-owned local resources before ending the session. See [Resource cleanup](#resource-cleanup).
+9. Watch the PR merge, then watch continuous deployment for the merge commit. A merged PR is not delivered until its
+   `deploy` run for that exact commit reaches a verdict. An ordinary commit ends at `release-version` with
+   `publishable=false`; a version bump goes on to publish and dispatch `release-deploy`, which must ship staging and
+   production. Report the merge commit, the run URL, and its conclusion; a failed or missing run is unfinished work.
+
+   ```bash
+   gh pr checks <pr> --watch
+   gh pr view <pr> --json state,mergeCommit
+   gh run list --workflow deploy.yml --commit <merge-sha> --json databaseId,url,conclusion
+   gh run watch <run-id> --exit-status
+   ```
+
+   In a Project repository, `navigator project repository push` does this for you: it follows the required check and
+   merge, then watches the merge commit's deployment run.
+10. Clean up task-owned local resources before ending the session. See [Resource cleanup](#resource-cleanup).
 
 If the work should become multiple PRs, decide that before committing. Use the Engineering Council for real sequencing
 questions.
