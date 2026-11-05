@@ -156,7 +156,7 @@ pub async fn app_state(surreal: store::surreal::SurrealDb) -> AppState {
         questionnaire_runtime: Arc::new(workflows::InMemoryRuntime::new()),
         signature_provider: Arc::new(crate::signature::StubSignatureProvider::new()),
         billing_provider: Arc::new(crate::billing::StubBillingProvider::new()),
-        integration_providers: Arc::new(crate::integrations::UnconfiguredIntegrations),
+        integration_providers: Arc::new(crate::integrations::UnconfiguredIntegrations::default()),
         runtime_kms: Arc::new(cloud::NoRuntimeKms),
         contract_reviewer: Arc::new(crate::contract_review::StubContractReviewer),
         esignature_webhook_secret: None,

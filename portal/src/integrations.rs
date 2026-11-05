@@ -10,7 +10,10 @@
 //!
 //! Errors here are mechanism-only. A caller learns that a credential is not
 //! configured, that the Project has no owning Firm, or that the provider
-//! refused — never the token, the ciphertext, or the provider's own body.
+//! refused — never the token, the ciphertext, or the provider's own body. An
+//! unconfigured runtime names the deployment variable it lacks and the
+//! operator step that supplies it: those are deployment coordinates, not
+//! credentials, and naming them is what lets an operator act on the outcome.
 
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -26,8 +29,8 @@ use store::surreal::SurrealDb;
 /// Why a Project's provider client could not be built or used.
 #[derive(Debug, thiserror::Error)]
 pub enum IntegrationError {
-    #[error("this deployment has no Firm integration runtime configured")]
-    NotConfigured,
+    #[error("this deployment's integration runtime is not configured: {0}")]
+    NotConfigured(String),
     #[error("the Firm has not configured this provider credential")]
     CredentialMissing,
     #[error("the project has no owning Firm")]
@@ -48,7 +51,7 @@ impl IntegrationError {
     #[must_use]
     pub const fn slug(&self) -> &'static str {
         match self {
-            Self::NotConfigured => "runtime_not_configured",
+            Self::NotConfigured(_) => "runtime_not_configured",
             Self::CredentialMissing => "credential_missing",
             Self::CredentialUnusable => "credential_unusable",
             Self::NoFirm => "no_owning_firm",
@@ -56,6 +59,96 @@ impl IntegrationError {
             Self::Provider => "provider_unavailable",
             Self::Db(_) => "database_error",
         }
+    }
+
+    /// The operator-facing detail a door reports beside the slug: the missing
+    /// deployment configuration and the step that supplies it. Only the
+    /// unconfigured runtime carries one — every other outcome either names
+    /// its own remedy (`credential_missing`) or would have to describe a
+    /// credential to say more.
+    #[must_use]
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            Self::NotConfigured(detail) => Some(detail),
+            _ => None,
+        }
+    }
+}
+
+/// Where the operator steps for every runtime gap below are written down.
+const RUNTIME_DOC: &str = "docs/third-party-integrations.md#provisioning-the-integration-runtime";
+
+/// Which piece of the Firm integration runtime (Notion and Slack) a
+/// deployment lacks. [`from_env`] reads them in this order, so the first gap
+/// is the one reported.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FirmRuntimeGap {
+    /// `NAVIGATOR_RUNTIME_KMS_KEY` is unset — every local checkout and KIND
+    /// cluster.
+    #[default]
+    RuntimeKmsKey,
+    /// The runtime key is set but `NAVIGATOR_NOTION_DATABASE_ID` is not.
+    NotionDatabase,
+    /// Both coordinates are set but no application-default credential
+    /// resolved for the workload.
+    WorkloadCredential,
+}
+
+impl FirmRuntimeGap {
+    /// The missing configuration and the operator step that supplies it.
+    #[must_use]
+    pub fn detail(self) -> String {
+        match self {
+            Self::RuntimeKmsKey => format!(
+                "NAVIGATOR_RUNTIME_KMS_KEY is unset; Notion and Slack need it and \
+                 NAVIGATOR_NOTION_DATABASE_ID in the deployment's secrets.enc.yaml, then \
+                 `navigator ops secrets apply --deployment <row>` and \
+                 `navigator ops ship --deployment <row> --restart-only` (see {RUNTIME_DOC})"
+            ),
+            Self::NotionDatabase => format!(
+                "NAVIGATOR_NOTION_DATABASE_ID is unset; add it to the deployment's \
+                 secrets.enc.yaml beside NAVIGATOR_RUNTIME_KMS_KEY, then \
+                 `navigator ops secrets apply --deployment <row>` and \
+                 `navigator ops ship --deployment <row> --restart-only` (see {RUNTIME_DOC})"
+            ),
+            Self::WorkloadCredential => format!(
+                "no application-default credential resolved for NAVIGATOR_RUNTIME_KMS_KEY; \
+                 bind the web pod's Kubernetes service account to the runtime GCP service \
+                 account through Workload Identity and grant it \
+                 roles/cloudkms.cryptoKeyEncrypterDecrypter on that key (see {RUNTIME_DOC})"
+            ),
+        }
+    }
+}
+
+/// The detail for a calendar runtime missing `missing` of
+/// [`cloud::calendar::CALENDAR_CONFIGURATION_KEYS`].
+fn calendar_gap(missing: &str) -> String {
+    format!(
+        "{missing} unset; the Project calendar uses the Workspace service account Drive uses: \
+         set NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER in the deployment's config.toml and \
+         NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON in its secrets.enc.yaml, authorize \
+         the account's client id for https://www.googleapis.com/auth/calendar under \
+         domain-wide delegation, then `navigator ops secrets apply --deployment <row>` \
+         (see {RUNTIME_DOC})"
+    )
+}
+
+/// Map the deployment's calendar configuration to a provider or the outcome
+/// that names what is missing. A half configuration is unconfigured, not an
+/// unusable credential: the operator's remedy is the missing key.
+fn calendar_from_resolution(
+    resolution: Result<Option<cloud::GoogleCalendar>, cloud::CalendarError>,
+) -> Result<Arc<dyn cloud::CalendarService>, IntegrationError> {
+    match resolution {
+        Ok(Some(calendar)) => Ok(Arc::new(calendar)),
+        Ok(None) => Err(IntegrationError::NotConfigured(calendar_gap(
+            &cloud::calendar::CALENDAR_CONFIGURATION_KEYS.join(" and "),
+        ))),
+        Err(cloud::CalendarError::MissingConfig(missing)) => {
+            Err(IntegrationError::NotConfigured(calendar_gap(&missing)))
+        }
+        Err(_) => Err(IntegrationError::CredentialUnusable),
     }
 }
 
@@ -101,22 +194,32 @@ pub trait IntegrationProviders: Send + Sync {
         _surreal: &SurrealDb,
         _project_id: Uuid,
     ) -> Result<Arc<dyn cloud::CalendarService>, IntegrationError> {
-        match store::project_calendar::calendar_from_env().await {
-            Ok(Some(calendar)) => Ok(Arc::new(calendar)),
-            Ok(None) => Err(IntegrationError::NotConfigured),
-            Err(_) => Err(IntegrationError::CredentialUnusable),
-        }
+        calendar_from_resolution(store::project_calendar::calendar_from_env().await)
     }
 }
 
-/// The default for a deployment with no runtime KMS key and no provider
-/// account — every local checkout and every KIND cluster.
+/// The resolver for a deployment missing part of the Firm integration
+/// runtime. The default is the missing runtime KMS key — every local
+/// checkout and every KIND cluster.
 ///
 /// It refuses rather than falling back to an environment token. A fallback is
 /// exactly the shape the Firm-secret boundary forbids: it would let a Project
 /// reach a credential its Firm never wrote.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct UnconfiguredIntegrations;
+pub struct UnconfiguredIntegrations {
+    gap: FirmRuntimeGap,
+}
+
+impl UnconfiguredIntegrations {
+    #[must_use]
+    pub const fn missing(gap: FirmRuntimeGap) -> Self {
+        Self { gap }
+    }
+
+    fn refusal(self) -> IntegrationError {
+        IntegrationError::NotConfigured(self.gap.detail())
+    }
+}
 
 #[async_trait]
 impl IntegrationProviders for UnconfiguredIntegrations {
@@ -125,7 +228,7 @@ impl IntegrationProviders for UnconfiguredIntegrations {
         _surreal: &SurrealDb,
         _project_id: Uuid,
     ) -> Result<Arc<dyn cloud::NotionService>, IntegrationError> {
-        Err(IntegrationError::NotConfigured)
+        Err(self.refusal())
     }
 
     async fn slack(
@@ -133,7 +236,7 @@ impl IntegrationProviders for UnconfiguredIntegrations {
         _surreal: &SurrealDb,
         _project_id: Uuid,
     ) -> Result<Arc<dyn cloud::SlackService>, IntegrationError> {
-        Err(IntegrationError::NotConfigured)
+        Err(self.refusal())
     }
 }
 
@@ -244,19 +347,25 @@ pub async fn runtime_kms_from_env() -> Arc<dyn cloud::RuntimeKms> {
 pub async fn from_env() -> Arc<dyn IntegrationProviders> {
     let Ok(config) = cloud::GoogleKmsConfig::from_env() else {
         tracing::info!("firm integrations: unconfigured (NAVIGATOR_RUNTIME_KMS_KEY unset)");
-        return Arc::new(UnconfiguredIntegrations);
+        return Arc::new(UnconfiguredIntegrations::missing(
+            FirmRuntimeGap::RuntimeKmsKey,
+        ));
     };
     let Ok(database) = cloud::NotionDatabaseConfig::from_lookup(|key| std::env::var(key).ok())
     else {
         tracing::info!("firm integrations: unconfigured (NAVIGATOR_NOTION_DATABASE_ID unset)");
-        return Arc::new(UnconfiguredIntegrations);
+        return Arc::new(UnconfiguredIntegrations::missing(
+            FirmRuntimeGap::NotionDatabase,
+        ));
     };
     let Ok(tokens) = cloud::AdcTokenSource::new().await else {
         tracing::warn!(
             "firm integrations: unconfigured (a runtime KMS key is set but no \
              application-default credential resolved)"
         );
-        return Arc::new(UnconfiguredIntegrations);
+        return Arc::new(UnconfiguredIntegrations::missing(
+            FirmRuntimeGap::WorkloadCredential,
+        ));
     };
     tracing::info!("firm integrations: FirmIntegrations (runtime KMS + Notion database)");
     Arc::new(FirmIntegrations::new(
@@ -331,30 +440,70 @@ impl IntegrationProviders for FakeIntegrations {
 
 #[cfg(test)]
 mod tests {
-    use super::{IntegrationError, IntegrationProviders, UnconfiguredIntegrations};
+    use super::{
+        calendar_from_resolution, FirmRuntimeGap, IntegrationError, IntegrationProviders,
+        UnconfiguredIntegrations,
+    };
     use uuid::Uuid;
 
     /// A deployment with no runtime key refuses rather than reaching for a
-    /// deployment-wide provider token. The refusal is the contract: a Project
-    /// must never reach a credential its Firm did not write.
+    /// deployment-wide provider token, and the refusal names the variable the
+    /// operator has to set. The refusal is the contract: a Project must never
+    /// reach a credential its Firm did not write.
     #[tokio::test]
-    async fn an_unconfigured_deployment_refuses_both_providers() {
+    async fn an_unconfigured_deployment_refuses_both_providers_naming_the_missing_key() {
         let surreal = store::test_support::mem_surreal().await;
-        let providers = UnconfiguredIntegrations;
-        assert!(matches!(
+        let providers = UnconfiguredIntegrations::default();
+        for error in [
             providers.notion(&surreal, Uuid::now_v7()).await.err(),
-            Some(IntegrationError::NotConfigured)
-        ));
-        assert!(matches!(
             providers.slack(&surreal, Uuid::now_v7()).await.err(),
-            Some(IntegrationError::NotConfigured)
+        ] {
+            let error = error.expect("an unconfigured runtime refuses");
+            assert_eq!(error.slug(), "runtime_not_configured");
+            let detail = error.detail().expect("the refusal names its gap");
+            assert!(detail.contains("NAVIGATOR_RUNTIME_KMS_KEY"), "{detail}");
+            assert!(detail.contains("navigator ops secrets apply"), "{detail}");
+        }
+    }
+
+    #[test]
+    fn each_firm_runtime_gap_names_its_own_configuration() {
+        assert!(FirmRuntimeGap::NotionDatabase
+            .detail()
+            .starts_with("NAVIGATOR_NOTION_DATABASE_ID is unset"));
+        assert!(FirmRuntimeGap::WorkloadCredential
+            .detail()
+            .contains("Workload Identity"));
+    }
+
+    #[test]
+    fn an_unconfigured_calendar_names_the_missing_workspace_keys() {
+        let error = calendar_from_resolution(Ok(None)).err().unwrap();
+        assert_eq!(error.slug(), "runtime_not_configured");
+        let detail = error.detail().unwrap();
+        assert!(detail.starts_with(
+            "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER and \
+             NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON unset"
         ));
+
+        let half = calendar_from_resolution(Err(cloud::CalendarError::MissingConfig(
+            "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON".into(),
+        )))
+        .err()
+        .unwrap();
+        assert_eq!(half.slug(), "runtime_not_configured");
+        assert!(half
+            .detail()
+            .unwrap()
+            .starts_with("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON unset"));
     }
 
     #[test]
     fn every_error_carries_a_slug_and_no_credential_detail() {
         for error in [
-            IntegrationError::NotConfigured,
+            IntegrationError::NotConfigured(FirmRuntimeGap::RuntimeKmsKey.detail()),
+            IntegrationError::NotConfigured(FirmRuntimeGap::NotionDatabase.detail()),
+            IntegrationError::NotConfigured(FirmRuntimeGap::WorkloadCredential.detail()),
             IntegrationError::CredentialMissing,
             IntegrationError::NoFirm,
             IntegrationError::NoSuchProject,

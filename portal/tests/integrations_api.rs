@@ -27,7 +27,7 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     fixture_with_integrations(std::sync::Arc::new(
-        portal::integrations::UnconfiguredIntegrations,
+        portal::integrations::UnconfiguredIntegrations::default(),
     ))
     .await
 }
@@ -246,6 +246,10 @@ async fn an_unconfigured_runtime_reports_the_slug_instead_of_provisioning() {
     let result = first_result(&body);
     assert_eq!(result["project_code"], f.project_code.as_str());
     assert_eq!(result["outcome"], "runtime_not_configured");
+    let detail = result["detail"]
+        .as_str()
+        .expect("the outcome names its gap");
+    assert!(detail.contains("NAVIGATOR_RUNTIME_KMS_KEY"), "{detail}");
 }
 
 #[tokio::test]
