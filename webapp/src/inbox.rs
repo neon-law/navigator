@@ -1033,7 +1033,7 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
         } else {
             "inbox-table__row"
         };
-        let mut selected = selected.clone();
+        let mut selected = selected;
         let row_id = row.id.clone();
         rsx! {
             tr {
@@ -1262,7 +1262,7 @@ fn inbox_rail(page: &InboxPage) -> Element {
 /// The reading pane: always present, so the grid keeps its three columns
 /// and focus has a stable target. Its content fetches per selection.
 #[component]
-fn InboxPane(selected: ReadOnlySignal<Option<String>>, project_code: Option<String>) -> Element {
+fn InboxPane(selected: ReadSignal<Option<String>>, project_code: Option<String>) -> Element {
     rsx! {
         section { id: "inbox-pane", class: "inbox-pane",
             "aria-label": "Conversation reading pane",
@@ -1295,11 +1295,11 @@ fn InboxPaneThread(conversation_id: String, project_code: Option<String>) -> Ele
     })?;
     let view = match &*resource.read() {
         Some(Ok(page)) => {
-            let href = project_code
-                .as_ref()
-                .map(|code| format!("/app/projects/{code}/inbox/{conversation_id}"))
-                .unwrap_or_else(|| format!("/app/inbox/{conversation_id}"));
-            inbox_pane_body(page, href)
+            let href = project_code.as_ref().map_or_else(
+                || format!("/app/inbox/{conversation_id}"),
+                |code| format!("/app/projects/{code}/inbox/{conversation_id}"),
+            );
+            inbox_pane_body(page, &href)
         }
         Some(Err(_)) => {
             rsx! { p { class: "inbox-pane__empty", "Could not load the conversation." } }
@@ -1325,7 +1325,7 @@ async fn pane_conversation(
 /// The reading pane's transcript: the conversation's header facts and
 /// messages, sharing the thread body's message article. Actions stay on
 /// the full-width thread route the pane links to.
-pub fn inbox_pane_body(page: &InboxThreadPage, href: String) -> Element {
+pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
     let unread = if page.unread { "Unread" } else { "Read" };
     let messages = page.messages.iter().map(inbox_message_article);
     rsx! {
