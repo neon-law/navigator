@@ -2944,10 +2944,13 @@ a.nav-link:hover {
   margin: 0;
 }
 
-/* Firm inbox: a full-width, Gmail-style table. One dense row per
+/* Firm inbox: a full-width, Gmail-style surface. One dense row per
  * conversation; unread rows are bold with a dot, and the subject link is
- * stretched over the whole row so the entire row opens the thread. */
-#inbox {
+ * stretched over the whole row so the entire row opens the thread. The
+ * thread page opts out of the page cap too, so reading a conversation is
+ * as wide as scanning the list. */
+#inbox,
+#inbox-thread {
   max-width: none;
   width: 100%;
   padding-inline: clamp(0.75rem, 2vw, 1.5rem);
