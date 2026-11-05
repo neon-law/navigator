@@ -2695,7 +2695,8 @@ enum SiteCmd {
         /// repository root.
         #[arg(requires = "model_name")]
         seed_file: Option<PathBuf>,
-        /// Replace every field represented in each matching seed record.
+        /// Replace every field represented in each matching seed record,
+        /// including a Person record's `role`.
         #[arg(long)]
         overwrite: bool,
         /// Show the per-record reconciliation plan without writing anything.

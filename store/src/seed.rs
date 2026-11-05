@@ -570,8 +570,9 @@ pub struct ReconcileRecord {
     /// operator did not choose (ENG-518). `None` for every other seed model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jurisdiction: Option<String>,
-    /// Plan-time cautions that do not stop the write, such as a new Person
-    /// whose name already belongs to another Person (LAW-169). Dry run only.
+    /// Cautions that do not stop the write, such as a new Person whose name
+    /// already belongs to another Person (LAW-169, dry run only) or a Person
+    /// seed `role` that differs and waits on `--overwrite` (LAW-275).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
@@ -932,6 +933,72 @@ async fn authorize_person_project_scope(
     }))
 }
 
+/// The rule a Person seed `role` follows (LAW-275). Omitted means `client`
+/// on a create and leaves an existing Person's tier alone, so a re-import
+/// never demotes anyone. `lawyer` and `clerk` are firm-side tiers: the
+/// record's `email` must sit on a domain a Brand approves
+/// ([`crate::brand_domains`]). `owner` and `admin` are never seeded; the
+/// people editor assigns them under the bootstrap-owner guards. Every record
+/// is checked before any is written, so a refused document writes nothing.
+async fn check_seed_roles(surreal: &SurrealDb, records: &[PersonRec]) -> anyhow::Result<()> {
+    use crate::persons::Role;
+    let mut policy = None;
+    for rec in records {
+        match rec.role {
+            None | Some(Role::Client) => {}
+            Some(role @ (Role::Owner | Role::Admin)) => anyhow::bail!(
+                "person seed {:?}: role `{}` cannot be seeded; seed `client`, `lawyer`, or \
+                 `clerk`, and assign owner or admin in the people editor",
+                rec.email,
+                role.as_str()
+            ),
+            Some(role @ (Role::Lawyer | Role::Clerk)) => {
+                if policy.is_none() {
+                    policy = Some(crate::brand_domains::current(surreal).await?);
+                }
+                let policy = policy.as_ref().expect("policy loaded above");
+                if !policy.admits(&rec.email) {
+                    anyhow::bail!(
+                        "person seed {:?}: role `{}` requires an email on a Brand's domain \
+                         (the host of a Brand website URL); approved domains: {}",
+                        rec.email,
+                        role.as_str(),
+                        if policy.is_empty() {
+                            "none".to_string()
+                        } else {
+                            policy.domains().collect::<Vec<_>>().join(", ")
+                        }
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `actor` may write `role` onto a Person. A live write it may not
+/// make is refused rather than silently dropped; a dry run reports it as a
+/// warning so a validation-only session can still plan the document.
+fn seed_role_authority(
+    actor: &ReconcileActor<'_>,
+    email: &str,
+    role: crate::persons::Role,
+) -> anyhow::Result<Option<String>> {
+    if actor.may_change_roles && role.authority_rank() <= actor.actor_role.authority_rank() {
+        return Ok(None);
+    }
+    let message = format!(
+        "person seed {email:?}: this session cannot assign role `{}`; an Owner or Admin \
+         session must import it",
+        role.as_str()
+    );
+    if actor.dry_run {
+        Ok(Some(message))
+    } else {
+        Err(anyhow::anyhow!(message))
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 async fn reconcile_people(
     surreal: &SurrealDb,
@@ -949,20 +1016,32 @@ async fn reconcile_people(
         actor_role: actor.actor_role,
         may_change_roles: actor.may_change_roles,
     };
-    for rec in parse_seed::<PersonRec>(yaml, SeedModel::Person, &["email"])? {
+    let records = parse_seed::<PersonRec>(yaml, SeedModel::Person, &["email"])?;
+    check_seed_roles(surreal, &records).await?;
+    for rec in records {
         let key = rec.email.clone();
         let name = rec.name.clone();
         let existing = find_person_for_record(surreal, &rec).await?;
         let new_aliases = rec.wanted_aliases(&rec.email, None);
         match existing {
             None => {
+                let mut warnings = Vec::new();
+                if let Some(role) = rec
+                    .role
+                    .filter(|role| *role != crate::persons::Role::Client)
+                {
+                    warnings.extend(seed_role_authority(actor, &key, role)?);
+                }
                 if !actor.dry_run {
                     let created = crate::people_commands::create_person(
                         surreal,
                         &crate::people_commands::CreatePersonCommand {
                             name: rec.name,
                             email: rec.email,
-                            role: String::new(),
+                            role: rec
+                                .role
+                                .map(|role| role.as_str().to_string())
+                                .unwrap_or_default(),
                             given_name: None,
                             family_name: None,
                             middle_name: None,
@@ -983,11 +1062,9 @@ async fn reconcile_people(
                         .await?;
                     }
                 }
-                let warnings = if actor.dry_run {
-                    same_name_warnings(surreal, &name).await?
-                } else {
-                    Vec::new()
-                };
+                if actor.dry_run {
+                    warnings.extend(same_name_warnings(surreal, &name).await?);
+                }
                 report.created += 1;
                 report.records.push(ReconcileRecord {
                     key,
@@ -996,11 +1073,25 @@ async fn reconcile_people(
                     ..ReconcileRecord::default()
                 });
             }
-            Some(_) if !overwrite => {
+            Some(existing) if !overwrite => {
+                // A differing role is named, never applied without --overwrite.
+                let warnings = rec
+                    .role
+                    .filter(|role| *role != existing.role)
+                    .map(|role| {
+                        format!(
+                            "this Person's role is `{}`; the record's `{}` applies only with --overwrite",
+                            existing.role.as_str(),
+                            role.as_str()
+                        )
+                    })
+                    .into_iter()
+                    .collect();
                 report.unchanged += 1;
                 report.records.push(ReconcileRecord {
                     key,
                     action: ReconcileAction::Unchanged,
+                    warnings,
                     ..ReconcileRecord::default()
                 });
             }
@@ -1034,6 +1125,10 @@ async fn reconcile_people(
                 if !missing_aliases.is_empty() {
                     changed_fields.push("emails".to_string());
                 }
+                let mut warnings = Vec::new();
+                if let Some(role) = rec.role.filter(|role| *role != existing.role) {
+                    warnings.extend(seed_role_authority(actor, &key, role)?);
+                }
                 if changed_fields.is_empty() {
                     report.unchanged += 1;
                     report.records.push(ReconcileRecord {
@@ -1047,6 +1142,7 @@ async fn reconcile_people(
                         key,
                         action: ReconcileAction::Changed,
                         changed_fields,
+                        warnings,
                         ..ReconcileRecord::default()
                     });
                     if !actor.dry_run {
@@ -1091,7 +1187,11 @@ async fn update_person_from_seed(
         &crate::people_commands::UpdatePersonCommand {
             name: Some(rec.name),
             email: Some(rec.email),
-            role: String::new(),
+            // Blank keeps the existing tier: an omitted role never demotes.
+            role: rec
+                .role
+                .map(|role| role.as_str().to_string())
+                .unwrap_or_default(),
             given_name: None,
             family_name: None,
             middle_name: None,
@@ -1811,6 +1911,9 @@ fn person_changed_fields(existing: &crate::persons::Person, incoming: &PersonRec
     }
     if existing.profile_image_url != incoming.profile_image_url {
         fields.push("profile_image_url".to_string());
+    }
+    if incoming.role.is_some_and(|role| role != existing.role) {
+        fields.push("role".to_string());
     }
     fields
 }
@@ -3590,6 +3693,10 @@ struct PersonRec {
     /// Further addresses the same Person answers to, kept as aliases.
     #[serde(default)]
     emails: Vec<String>,
+    /// The Person's system-wide tier. Omitted means `client` on a create and
+    /// leaves an existing Person's tier alone; see [`check_seed_roles`].
+    #[serde(default)]
+    role: Option<crate::persons::Role>,
 }
 
 impl PersonRec {
@@ -3666,6 +3773,11 @@ async fn record_aliases(
 
 async fn seed_persons(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
     for rec in parse::<PersonRec>(canonical::PERSON, "Person.yaml")? {
+        anyhow::ensure!(
+            rec.role.is_none(),
+            "Person.yaml: {:?} carries a role; the canonical seed assigns roles in User.yaml",
+            rec.email
+        );
         let email = rec.email.clone();
         let before = crate::persons::find_by_email_ci(surreal, &email).await?;
         crate::persons::find_or_create(
@@ -4706,6 +4818,234 @@ records:
                 .name,
             "Updated Name"
         );
+    }
+
+    /// Approve `firm.example.com` as a Brand domain by giving the fixture
+    /// `neon` Brand that website URL.
+    async fn approve_brand_domain(surreal: &crate::surreal::SurrealDb) {
+        let brand = crate::brands::find_by_key(surreal, "neon")
+            .await
+            .unwrap()
+            .expect("fixture brand");
+        crate::brands::set_website_url(
+            surreal,
+            Role::Owner,
+            brand.id,
+            Some("https://firm.example.com"),
+        )
+        .await
+        .unwrap();
+    }
+
+    fn role_person_yaml(email: &str, role: &str) -> String {
+        format!(
+            "lookup_fields:\n  - email\nrecords:\n  - email: {email}\n    name: Co Counsel\n    role: {role}\n"
+        )
+    }
+
+    async fn stored_role(surreal: &crate::surreal::SurrealDb, email: &str) -> Role {
+        persons::find_by_email_ci(surreal, email)
+            .await
+            .unwrap()
+            .expect("person")
+            .role
+    }
+
+    #[tokio::test]
+    async fn operator_person_seed_role_lawyer_on_a_brand_domain_is_created_as_lawyer() {
+        let surreal = mem_surreal().await;
+        approve_brand_domain(&surreal).await;
+        let yaml = role_person_yaml("counsel@firm.example.com", "lawyer");
+
+        let dry = ReconcileActor {
+            dry_run: true,
+            ..unrestricted_actor()
+        };
+        let plan = reconcile_yaml(&surreal, SeedModel::Person, &yaml, "Firm", false, &dry)
+            .await
+            .expect("plan a lawyer on a Brand domain");
+        assert_eq!(plan.records[0].action, ReconcileAction::New);
+
+        reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &yaml,
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("import a lawyer on a Brand domain");
+        assert_eq!(
+            stored_role(&surreal, "counsel@firm.example.com").await,
+            Role::Lawyer
+        );
+    }
+
+    #[tokio::test]
+    async fn operator_person_seed_role_lawyer_off_every_brand_domain_is_refused() {
+        let surreal = mem_surreal().await;
+        approve_brand_domain(&surreal).await;
+        let yaml = format!(
+            "{}  - email: counsel@elsewhere.example\n    name: Outside\n    role: lawyer\n",
+            person_yaml("first@example.com", "First")
+        );
+
+        let error = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &yaml,
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect_err("a lawyer off every Brand domain is refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("requires an email on a Brand's domain"),
+            "{message}"
+        );
+        assert!(message.contains("firm.example.com"), "{message}");
+        // The refusal is checked before any record is written.
+        assert!(persons::find_by_email_ci(&surreal, "first@example.com")
+            .await
+            .unwrap()
+            .is_none());
+
+        let admin = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &role_person_yaml("boss@firm.example.com", "admin"),
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect_err("admin is never seeded");
+        assert!(admin.to_string().contains("cannot be seeded"));
+    }
+
+    #[tokio::test]
+    async fn operator_person_seed_without_a_role_creates_a_client_and_keeps_an_existing_tier() {
+        let surreal = mem_surreal().await;
+        approve_brand_domain(&surreal).await;
+        reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &person_yaml("client@example.com", "Plain Client"),
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("import without a role");
+        assert_eq!(
+            stored_role(&surreal, "client@example.com").await,
+            Role::Client
+        );
+
+        reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &role_person_yaml("counsel@firm.example.com", "lawyer"),
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("seed a lawyer");
+        reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &person_yaml("counsel@firm.example.com", "Renamed Counsel"),
+            "Firm",
+            true,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("overwrite without a role");
+        assert_eq!(
+            stored_role(&surreal, "counsel@firm.example.com").await,
+            Role::Lawyer
+        );
+    }
+
+    #[tokio::test]
+    async fn operator_person_seed_changes_an_existing_role_only_under_overwrite() {
+        let surreal = mem_surreal().await;
+        approve_brand_domain(&surreal).await;
+        let email = "counsel@firm.example.com";
+        reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &person_yaml(email, "Co Counsel"),
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("seed a client");
+        let promote = role_person_yaml(email, "lawyer");
+
+        let held = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &promote,
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("import without overwrite");
+        assert_eq!(held.records[0].action, ReconcileAction::Unchanged);
+        assert!(held.records[0].warnings[0].contains("--overwrite"));
+        assert_eq!(stored_role(&surreal, email).await, Role::Client);
+
+        let no_authority = ReconcileActor {
+            may_change_roles: false,
+            ..unrestricted_actor()
+        };
+        let refused = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &promote,
+            "Firm",
+            true,
+            &no_authority,
+        )
+        .await
+        .expect_err("a session without role authority is refused, not ignored");
+        assert!(refused.to_string().contains("cannot assign role"));
+        assert_eq!(stored_role(&surreal, email).await, Role::Client);
+
+        let changed = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &promote,
+            "Firm",
+            true,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("overwrite the role");
+        assert_eq!(changed.records[0].action, ReconcileAction::Changed);
+        assert!(changed.records[0]
+            .changed_fields
+            .contains(&"role".to_string()));
+        assert_eq!(stored_role(&surreal, email).await, Role::Lawyer);
+
+        reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &role_person_yaml(email, "client"),
+            "Firm",
+            true,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("an explicit client demotes under overwrite");
+        assert_eq!(stored_role(&surreal, email).await, Role::Client);
     }
 
     #[tokio::test]

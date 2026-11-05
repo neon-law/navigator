@@ -271,7 +271,12 @@ refuses the start. Keep the bootstrap Owner address in its secret configuration;
 - **Clerks** — supervised non-lawyer firm workers, role `clerk`, also using lowercase `*@neonlaw.com` emails in
   canonical seed data. They are not a member of the Lawyer tier.
 - **Clients** — any seeded non-firm person, role `client`. Email is the client's real address; no domain restriction.
-  `client@neonlaw.com` in the KIND fixture below is the sole local exception to that non-firm-address rule.
+- **`site import person`** reads an optional `role:` per record (`store::seed::check_seed_roles`). Omitted means
+  `client` on a create and leaves an existing Person's role alone. `lawyer` and `clerk` require the record's email to
+  sit on a Brand's approved domain, the host of a Brand website URL
+  ([`store::brand_domains`](../store/src/brand_domains.rs)); any other domain is refused. `owner` and `admin` are never
+  imported. A role that differs from an existing Person's is applied only with `--overwrite`, by a session that may
+  assign it; without `--overwrite` the record stays unchanged and carries a warning.
 - **The KIND-only Rauthy fixture** seeds one account per role, each with password `password`: `owner@neonlaw.com`,
   `admin@neonlaw.com`, `lawyer@neonlaw.com`, `clerk@neonlaw.com`, and `client@neonlaw.com` (per
   [`open-admin-server`](../.agents/skills/open-admin-server/SKILL.md)). Four of the five are seeded onto one demo
