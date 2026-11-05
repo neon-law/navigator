@@ -528,10 +528,10 @@ mod tests {
             counsel_signature("<!--COUNSEL-SIGNATURE-->\n"),
             Some(CounselSignature::Draft)
         );
-        let signed = signed_counsel_signature(" Pat  Sample--Jones ");
+        let signed = signed_counsel_signature(" Pat  Sample--Jones "); // pii-scan: allow — synthetic signer name
         assert_eq!(
             counsel_signature(&signed),
-            Some(CounselSignature::Signed("Pat Sample-Jones".into()))
+            Some(CounselSignature::Signed("Pat Sample-Jones".into())) // pii-scan: allow — synthetic signer name
         );
         assert_eq!(counsel_signature("<!-- counsel-signatures -->"), None);
         assert_eq!(counsel_signature(SIGNER_BOX), None);
