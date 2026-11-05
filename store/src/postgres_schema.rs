@@ -1425,6 +1425,12 @@ mod tests {
                 "20261105000000_person_email_citext.sql",
                 include_str!("../postgres/migrations/20261105000000_person_email_citext.sql"),
             ),
+            (
+                "20261105120000_index_message_provider_message_id.sql",
+                include_str!(
+                    "../postgres/migrations/20261105120000_index_message_provider_message_id.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
