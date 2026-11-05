@@ -104,6 +104,7 @@ pub(crate) mod lawyer_mailbox;
 pub(crate) mod matter_caption_api;
 pub(crate) mod module_records_api;
 pub(crate) mod pages_api;
+mod private_chart;
 pub(crate) mod project_billing_api;
 pub(crate) mod project_billing_forms;
 pub(crate) mod project_costs_api;
@@ -963,7 +964,12 @@ pub fn bootstrap_with_forgejo_oidc(
             )),
         &state.sessions,
         &state.auth,
-    );
+    )
+    .layer(axum::middleware::from_fn(crate::private_chart::no_store));
+    let api = api.layer(axum::middleware::from_fn_with_state(
+        crate::private_chart::ChartCalculator::from_env(),
+        crate::private_chart::inject_calculator,
+    ));
     // API documentation — the Swagger UI shell (at `/app/api` and its
     // shorter public-footer alias `/api`) and the OpenAPI document at
     // `/app/api/openapi.json`. Unlike `api::routes()` above, these mount with

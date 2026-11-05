@@ -8559,6 +8559,7 @@ dependencies = [
  "dioxus-core",
  "dioxus-server",
  "dotenvy",
+ "ephemeris",
  "flate2",
  "forms",
  "futures",

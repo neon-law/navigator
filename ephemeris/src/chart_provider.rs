@@ -127,6 +127,28 @@ impl AstrologyChartProvider {
                 return Ok(Arc::clone(&entry.value));
             }
         }
+        let result = self.calculate_uncached(request)?;
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| ChartError::CacheUnavailable)?;
+        if cache.len() >= self.capacity.get() {
+            cache.pop_front();
+        }
+        cache.push_back(CachedChart {
+            key,
+            value: Arc::clone(&result),
+        });
+        Ok(result)
+    }
+
+    /// Calculate without reading or retaining any shared result cache entry.
+    /// Only the caller owns the returned input and result; dropping it releases both.
+    pub fn calculate_uncached(
+        &self,
+        request: &AstrologyChartRequest,
+    ) -> Result<Arc<AstrologyChartResponse>, ChartError> {
+        let time = request.resolve()?;
         let instant = time.instant()?;
         let epoch = instant.map(ChartInstant::epoch);
         let positions = epoch
@@ -178,17 +200,6 @@ impl AstrologyChartProvider {
             positions,
             angles,
             provenance,
-        });
-        let mut cache = self
-            .cache
-            .lock()
-            .map_err(|_| ChartError::CacheUnavailable)?;
-        if cache.len() >= self.capacity.get() {
-            cache.pop_front();
-        }
-        cache.push_back(CachedChart {
-            key,
-            value: Arc::clone(&result),
         });
         Ok(result)
     }
@@ -456,6 +467,28 @@ mod tests {
             0.0,
             0.0,
         )
+    }
+
+    #[test]
+    fn request_local_calculation_does_not_read_or_retain_shared_results() {
+        let provider = provider(2);
+        let input = request();
+        let shared = provider.calculate(&input).expect("shared reference chart");
+        let private = provider.calculate_uncached(&input).expect("private chart");
+        assert!(
+            !Arc::ptr_eq(&shared, &private),
+            "private requests must bypass cache reads"
+        );
+        let released = Arc::downgrade(&private);
+        drop(private);
+        assert!(
+            released.upgrade().is_none(),
+            "provider must not retain private input or result"
+        );
+        assert!(Arc::ptr_eq(
+            &shared,
+            &provider.calculate(&input).expect("cached reference")
+        ));
     }
 
     #[test]
