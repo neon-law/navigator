@@ -2819,11 +2819,12 @@ a.nav-link:hover {
 }
 
 /* Three-pane inbox grid (desktop): the folder rail, the conversation list,
- * and a flexible reading-pane track. The list spans the reading track until
- * the in-place reading pane exists; when it does, the pane takes the third
- * column and the list narrows. Modeled on the glossary sticky-sidebar grid.
- * Below 60rem the grid collapses: the rail stacks above the list and the
- * thread remains its own navigable page. */
+ * and the in-place reading pane. The pane is always rendered — before a row
+ * is selected it explains itself — so the grid keeps one shape and the pane
+ * heading is a stable focus target. Modeled on the glossary sticky-sidebar
+ * grid. Below 60rem the grid collapses: the rail stacks above the list and
+ * the pane stacks under it, while the thread remains its own navigable page
+ * for deep links. */
 @media (min-width: 60rem) {
   #inbox {
     display: grid;
@@ -2846,7 +2847,12 @@ a.nav-link:hover {
   }
 
   #inbox .inbox-list {
-    grid-column: 2 / -1;
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  #inbox .inbox-pane {
+    grid-column: 3;
     min-width: 0;
   }
 }
@@ -2985,6 +2991,111 @@ a.nav-link:hover {
 
 .inbox-table__delivery {
   font-weight: 400;
+}
+
+/* The selected row keeps a left-edge bar — a non-color cue paired with
+ * aria-current="true" on the row — so selection never lives in fill alone. */
+.inbox-table__row--selected {
+  background: var(--nav-color-surface-raised);
+  box-shadow: inset 0.2rem 0 0 var(--nav-color-primary);
+}
+
+/* The latest-message snippet sits under the subject link; the wrapping
+ * overrides the dense table cell's nowrap, clamped to two lines. */
+.inbox-table__preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  color: var(--nav-color-text-muted);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+/* The persisted email→Person association from ingest: a muted pill beside
+ * the sender. It records the stored match, not the row's view-time contact
+ * lookup. */
+.inbox-person-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 999px;
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+/* The reading pane card: bordered like the table shell, its transcript
+ * scrolling inside the card instead of stretching the page. On narrow
+ * screens it stacks under the list with a plain top margin. */
+#inbox .inbox-pane {
+  border: 1px solid var(--nav-color-border);
+  border-radius: 0.5rem;
+  background: var(--nav-color-surface);
+  padding: 0.75rem 1rem;
+}
+
+@media (max-width: 59.999rem) {
+  #inbox .inbox-pane {
+    margin-top: 1rem;
+  }
+}
+
+.inbox-pane__title {
+  margin: 0 0 0.5rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* The outline is drawn only for keyboard focus, never for the programmatic
+ * move that follows a click — WCAG 2.4.7 without the double cue. */
+.inbox-pane__title:focus-visible {
+  outline: 2px solid var(--nav-color-primary);
+  outline-offset: 2px;
+}
+
+.inbox-pane__empty,
+.inbox-pane__meta {
+  color: var(--nav-color-text-muted);
+  margin: 0.25rem 0;
+}
+
+.inbox-pane__thread h3 {
+  margin: 0.25rem 0;
+  color: var(--nav-color-text);
+}
+
+.inbox-pane__thread article {
+  border-top: 1px solid var(--nav-color-border);
+  padding: 0.75rem 0;
+  color: var(--nav-color-text);
+}
+
+.inbox-pane__thread article p {
+  margin: 0.35rem 0;
+  white-space: pre-wrap;
+}
+
+.inbox-pane__thread article time {
+  display: block;
+  color: var(--nav-color-text-muted);
+  font-size: 0.75rem;
+}
+
+.inbox-pane__thread {
+  max-height: calc(100vh - 12rem);
+  overflow-y: auto;
 }
 
 /* Matter-lifecycle warning badge on the lawyer projects list (no retainer / no
