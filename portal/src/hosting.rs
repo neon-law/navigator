@@ -274,6 +274,18 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         crate::policy::PolicyClient::embedded().context("compiling embedded Rego policy")?;
     tracing::info!("policy client configured");
 
+    let esignature_webhook_secret = std::env::var("DOCUSIGN_WEBHOOK_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let esignature_hmac_key = std::env::var("DOCUSIGN_HMAC_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    tracing::info!(
+        path_secret = esignature_webhook_secret.is_some(),
+        hmac_key = esignature_hmac_key.is_some(),
+        "e-signature webhook auth configured"
+    );
+
     // Explicit, fail-closed selection: `NAVIGATOR_SIGNATURE_PROVIDER`
     // must name `fake` or `docusign`. An unset or unknown value refuses
     // to boot — a "send for signature" button that quietly wrote fake
@@ -290,10 +302,26 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
                 tracing::info!(
                     "signature provider: FakeSignatureProvider (local signature loop; no DocuSign credentials)"
                 );
-                std::sync::Arc::new(
-                    crate::signature::FakeSignatureProvider::from_dev_dir()
-                        .context("locating the fake provider's envelope directory")?,
-                )
+                let mut fake = crate::signature::FakeSignatureProvider::from_dev_dir()
+                    .context("locating the fake provider's envelope directory")?;
+                // Loop the completion webhook back into this portal's own
+                // receiver when the receiver can verify it: without
+                // `DOCUSIGN_HMAC_KEY` the receiver refuses every delivery,
+                // so an unverifiable loop is worse than none — completion
+                // then reads straight from the provider instead.
+                if let Some(key) = &esignature_hmac_key {
+                    let secret = esignature_webhook_secret
+                        .clone()
+                        .unwrap_or_else(|| "local".to_string());
+                    fake = fake.with_webhook(crate::signature::WebhookTarget {
+                        url: format!("http://127.0.0.1:{}/webhook/esignature/{secret}", cfg.port),
+                        hmac_key: key.clone().into_bytes(),
+                    });
+                    tracing::info!(
+                        "fake provider completion webhooks loop back to this portal's receiver"
+                    );
+                }
+                std::sync::Arc::new(fake)
             }
             crate::signature::SignatureProviderKind::DocuSign => {
                 let ds =

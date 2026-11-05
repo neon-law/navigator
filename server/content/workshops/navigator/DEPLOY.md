@@ -1240,7 +1240,9 @@ The signature provider is a closed enum, `SignatureProviderKind`: `fake` (the lo
 local sign pages, DocuSign-Connect-shaped HMAC-signed completion webhooks; dev and CI only, refuses production) or
 `docusign` (the real eSignature REST API). There is no implicit default: unset refuses to boot. An envelope on the fake
 provider carries one of two statuses, `EnvelopeStatus`: `sent` (anchors validated against the prepared PDF, PDF stored)
-or `completed` (every recipient signed, documents and certificate filed). There is no third state.
+or `completed` (every recipient signed, documents and certificate filed). There is no third state. Tests fail the loop
+on purpose with the third enum, `Fault` — `send`, `view`, or `webhook` — and the durable envelope keeps its last true
+state across every injected failure.
 
 ---
 
