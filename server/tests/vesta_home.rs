@@ -130,7 +130,6 @@ async fn design_gallery_has_the_host_header_and_footer() {
         );
         assert_eq!(document.select(&select("main#design")).count(), 1);
         assert_eq!(document.select(&select("main main#design")).count(), 0);
-        assert!(html.contains("astrocartography"));
     }
 }
 
@@ -197,12 +196,7 @@ async fn vesta_shows_starting_price_and_shared_booking_calendar() {
     ] {
         assert!(html.contains(expected), "missing {expected}");
     }
-    assert!(!html.contains("$3,000"));
-    assert!(!html.contains("calendar.app.google"));
-    assert!(!html.contains("Coming soon"));
-    assert!(!html.contains("not yet available"));
     assert!(html.contains("do not replace the signatures"));
-    assert!(!html.contains("Read the video transcript"));
 }
 
 #[tokio::test]

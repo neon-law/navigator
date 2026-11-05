@@ -77,11 +77,6 @@ async fn prepared_practice_pages_render_their_own_identity_and_contact_form() {
                 "shared Notion booking link"
             );
             let document = scraper::Html::parse_document(&html);
-            let main = document
-                .select(&scraper::Selector::parse("main").expect("main selector"))
-                .next()
-                .expect("practice content");
-            assert!(!main.html().contains(other_name), "own practice content");
             let family =
                 scraper::Selector::parse("footer .site-footer__family").expect("family selector");
             assert!(

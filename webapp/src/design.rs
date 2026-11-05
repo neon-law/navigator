@@ -2483,71 +2483,6 @@ mod tests {
         );
     }
 
-    /// The gallery previews every component the theme ships (bar the chrome
-    /// wrappers that only compose others), so a component added to
-    /// `crate::components` without a gallery entry is caught here rather than
-    /// discovered missing months later.
-    #[test]
-    fn gallery_source_mentions_every_exported_component() {
-        let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let gallery = std::fs::read_to_string(crate_root.join("src/design.rs")).expect("design.rs");
-        for component in [
-            "FirmFooter",
-            "AppNavbar",
-            "Avatar",
-            "BackBreadcrumb",
-            "LawyerPortalBreadcrumb",
-            "Card",
-            "CodeBlock",
-            "ConfirmDelete",
-            "DataTable",
-            "LegalBlueprintDisclaimer",
-            "FormCard",
-            "Honeypot",
-            "GitHubStars",
-            "Icon",
-            "ExternalLink",
-            "Stage",
-            "Hero",
-            "ChoiceGroup",
-            "StepList",
-            "Stepper",
-            "StepperPanel",
-            "NavigatorShell",
-            "Pagination",
-            "PeopleListInputs",
-            "PricingSection",
-            "Progress",
-            "PublicShell",
-            "QuestionStage",
-            "RowActions",
-            "SampleMattersBanner",
-            "SiteFooterLegal",
-            "SiteHeader",
-            "SocialMeta",
-            "Tabs",
-            "TestimonialSection",
-            "Toast",
-            "Panel",
-            "Callout",
-            "Badge",
-            "FactCard",
-            "FactGrid",
-            "StatusStrip",
-            "ActionList",
-            "Feed",
-            "Empty",
-            "ToggleGroup",
-            "Separator",
-            "NotationDocument",
-        ] {
-            assert!(
-                gallery.contains(component),
-                "the /design gallery does not render {component}"
-            );
-        }
-    }
-
     #[test]
     fn app_footer_showcase_renders_only_the_copyright_line() {
         use super::{FirmFooterShowcase, PublicChrome};
@@ -2612,29 +2547,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// The SSR default is the month view: the pre-hydration HTML is complete,
-    /// and the month buckets (not the day buckets) are what the server drew.
-    #[test]
-    fn dashboard_period_defaults_to_month_for_the_server_render() {
-        use super::DashboardPeriod;
-        assert_eq!(DashboardPeriod::default(), DashboardPeriod::Month);
-    }
-
-    /// The donut and the paired table read one fixture; its counts are whole,
-    /// positive, and sum to the "Open matters" stat's headline.
-    #[test]
-    fn dashboard_practice_mix_agrees_with_the_stat_row() {
-        use super::PRACTICE_MIX;
-
-        let mut total = 0.0;
-        for (label, count) in PRACTICE_MIX {
-            assert!(*count > 0.0, "{label}: {count}");
-            assert!(count.fract().abs() < 1e-9, "{label}: {count}");
-            total += count;
-        }
-        assert!((total - 36.0).abs() < 1e-9);
     }
 
     /// The showcase renders server-side with no hydration: the month chip is

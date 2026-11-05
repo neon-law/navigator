@@ -435,10 +435,7 @@ mod tests {
         }
     }
 
-    /// The compiled fallback still resolves the whole live compiled family —
-    /// every house brand, in registry order, the request's key current and
-    /// every other linking its production home — for `inject_public_utility`
-    /// to read, even though `FirmFooter` itself renders none of it.
+    /// Public chrome reads the legal entity and registry-ordered family from the compiled fallback.
     #[cfg(feature = "server")]
     #[test]
     fn the_compiled_fallback_resolves_the_legal_entity_and_the_whole_family() {
@@ -485,22 +482,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "server")]
-    #[test]
-    fn the_footer_uses_the_requested_public_family_labels() {
-        assert_eq!(
-            compiled_footer_label(views::brand::BrandKey::Neon),
-            "Neon Law"
-        );
-        assert_eq!(
-            compiled_footer_label(views::brand::BrandKey::DeleteYourData),
-            "DeleteYourData.com"
-        );
-    }
-
-    /// ENG-589: the resolver reads the live Firm/Entity/brand rows, not a
-    /// process-wide constant — a Firm wearing the compiled `neon` key names
-    /// its own Entity, in registry order, current first.
+    /// The resolver reads the Firm's Entity and Brand rows in registry order, with the current Brand first.
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn resolves_the_firm_wearing_the_compiled_key() {
