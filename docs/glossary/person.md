@@ -7,7 +7,8 @@ A human contact. The system-wide tier — `owner`, `admin`, `lawyer`, `clerk`, o
 `role` field, not on the OIDC token. The Rauthy / Google id_token carries only `sub` and `email`; the callback handler
 links that pair to a Person via the presenting provider's own subject column — `oidc_subject` for the primary slot,
 `microsoft_subject`, or `apple_subject` — and reads `role` from the DB. `lawyer` means a person licensed to practice law
-authorized for Navigator legal work, not a firm email or source-forge membership. See
+authorized for Navigator legal work, not a firm email or source-forge membership. `site import person` accepts an
+optional `role:`, allowing `lawyer` or `clerk` only on a Brand's approved email domain. See
 [`docs/access-model`](../access-model.md) and [`docs/oidc`](../oidc.md).
 
 The PostgreSQL `person` table holds the model, and [`store::persons`](../../store/src/persons.rs) is its public
