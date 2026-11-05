@@ -1,6 +1,7 @@
 ---
 title: "Official"
-description: "Official is the onboarding reading of a matter whose onboarding document completed a signature loop Navigator sent."
+description: >-
+  Official is the onboarding reading of a matter whose onboarding document completed a signature loop Navigator sent.
 ---
 
 The [Onboarding](onboarding.md) reading of a matter whose onboarding notation has a completed envelope on a signature

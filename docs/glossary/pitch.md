@@ -1,6 +1,8 @@
 ---
 title: "Pitch"
-description: "Pitch is the onboarding reading of a matter whose onboarding document has not completed a signature loop Navigator sent."
+description: >-
+  Pitch is the onboarding reading of a matter whose onboarding document has not completed a signature loop Navigator
+  sent.
 ---
 
 The [Onboarding](onboarding.md) reading of a matter that is not yet [Official](official.md): its onboarding notation has
