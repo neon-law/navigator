@@ -27,7 +27,8 @@ kernel bytes plus the conversion settings recorded here. Source coverage dates u
   serves development and tests, and production storage (for example an object store) remains an open decision the trait
   keeps reversible.
 - **Time standard** — civil UTC converts to TDB through hifitime: UTC→TAI applies hifitime's built-in leap-second table
-  (TAI−UTC is 37 s from 2017: 27 inserted leap seconds plus the initial 10 s; pre-1972 UTC drift is modeled), TAI→TT
+  (TAI−UTC is 37 s from 2017: 27 inserted leap seconds plus the initial 10 s). Before 1972 this pinned model uses
+  TAI−UTC = 0 and omits fractional UTC adjustments; historical civil-clock interpretation remains unvalidated. TAI→TT
   adds the fixed 32.184 s offset, and TT→TDB adds the periodic relativistic term (amplitude ≈ 1.6 ms). Classical delta-T
   (TT−UT1) is not consumed by the lookup; SPK segments are functions of TDB only, and delta-T belongs to Earth-rotation
   quantities such as the ascendant and midheaven, computed by later layers.
