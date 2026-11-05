@@ -26,7 +26,7 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     fixture_with_integrations(std::sync::Arc::new(
-        portal::integrations::UnconfiguredIntegrations,
+        portal::integrations::UnconfiguredIntegrations::default(),
     ))
     .await
 }

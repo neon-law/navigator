@@ -17,13 +17,13 @@
 //! persists and validates the template source, enforces the same
 //! engagement-first rule `notation create` enforces, and opens the
 //! questionnaire's state machine on the matter — the draft page leads with
-//! the hand-off to it. `--offline` stays what it always was: a **lint**,
-//! not a preview — a from-scratch local render of the same
+//! the hand-off to it. `--offline` is a **lint**, not a preview: it runs
+//! the blocking rule set `navigator project gate` runs, prints each
+//! violation as `path:line CODE: message`, and exits non-zero on any. Only
+//! a clean template goes on to a from-scratch local render of the same
 //! [`portal::dioxus_app::notation_preview_router`] the firm's public site
 //! mounts, with no store connection, no run, and browser-only
-//! persistence. Good for catching a malformed questionnaire or workflow
-//! spec before it ever reaches a Project; not a substitute for the real
-//! run.
+//! persistence; that render is not a substitute for the real run.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -86,10 +86,15 @@ pub async fn run(file: &Path, offline: bool, port: u16, host_override: Option<&s
         }
     );
 
-    let (draft_id, run_id, url) =
-        crate::remote::create_notation_draft(Some(host), &project_code, &slug, &found.src)
-            .await
-            .context("pushing the draft")?;
+    let (draft_id, run_id, url) = crate::remote::create_notation_draft(
+        Some(host),
+        &project_code,
+        &slug,
+        &code_for(&found.path),
+        &found.src,
+    )
+    .await
+    .context("pushing the draft")?;
 
     if let Some(run_id) = run_id {
         eprintln!("    draft {draft_id} — run {run_id} is open on the matter");
@@ -151,12 +156,29 @@ pub(crate) fn open_browser(url: &str) -> bool {
     opened.is_ok_and(|status| status.success())
 }
 
-/// Render `found`'s show page on `port` until the process is interrupted —
-/// the offline lint. Named for what it is: a local render of the same
-/// router the public site mounts, with no store connection and no claim to
-/// be the surface a client will see. `port` `0` asks the OS for a free one,
-/// so two lints can run at once.
+/// The offline lint: run the blocking rule set over `found`, print every
+/// violation, and fail on any — then, only for a clean template, render its
+/// show page on `port` until the process is interrupted. The render is a
+/// local copy of the router the public site mounts, with no store
+/// connection and no claim to be the surface a client will see. `port` `0`
+/// asks the OS for a free one, so two lints can run at once.
 async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()> {
+    eprintln!("==> lint (offline): {}", found.path.display());
+    let violations = lint(found);
+    if !violations.is_empty() {
+        // The findings are the command's output, so they go to stdout, where
+        // a caller capturing it reads them; the banners stay on stderr.
+        for violation in &violations {
+            println!("{violation}");
+        }
+        anyhow::bail!(
+            "{} has {} blocking rule violation(s); a draft push refuses it until they are fixed",
+            found.path.display(),
+            violations.len()
+        );
+    }
+    eprintln!("    no blocking rule violations");
+
     let doc = portal::notation_preview_doc::from_markdown(
         slug,
         &found.path.display().to_string(),
@@ -182,7 +204,7 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
         .with_context(|| format!("binding {addr}"))?;
     let bound = listener.local_addr().context("reading the bound port")?;
 
-    eprintln!("==> lint (offline): {title}");
+    eprintln!("==> local render: {title}");
     eprintln!(
         "    {} question(s), {} workflow state(s), from {}{}",
         questions,
@@ -219,6 +241,23 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
         .await
         .context("serving the lint")?;
     Ok(())
+}
+
+/// Every blocking violation in `found`, under the rule set `navigator
+/// project gate` runs. A checkout file is linted at its own path, so the
+/// rules that read the files around it (`M057`'s relative links) resolve
+/// as they do in the gate. A bundled file has no checkout around it, so it
+/// gets the server's set, which leaves those rules out.
+fn lint(found: &Resolved) -> Vec<rules::Violation> {
+    let source = rules::SourceFile {
+        path: found.path.clone(),
+        contents: found.src.clone(),
+    };
+    if found.bundled {
+        rules::blocking_violations_without_checkout(&source)
+    } else {
+        rules::blocking_violations(&source)
+    }
 }
 
 /// The preview surface: the real show-page router, the client bundle's own
@@ -480,6 +519,17 @@ fn normalized_stem(path: &Path) -> String {
     key
 }
 
+/// The template `code` a draft push names: the file stem exactly as the
+/// checkout spells it, which is the name `navigator project gate` lints it
+/// under. The server stores it under this code rather than reversing the
+/// slug, which cannot recover which hyphens were underscores.
+fn code_for(path: &Path) -> String {
+    path.file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// The `{slug}` this template is served at — its filename in the kebab-case
 /// every file-derived URL segment uses ([`views::slug::to_url`]), so the
 /// local URL is the shape the published one would be.
@@ -496,8 +546,8 @@ fn slug_for(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        embedded, normalized_stem, open_browser, read_project_manifest, resolve_template, router,
-        slug_for, PUBLIC_CSS, PUBLIC_JS,
+        code_for, embedded, lint, normalized_stem, open_browser, read_project_manifest,
+        resolve_template, router, run_offline_lint, slug_for, PUBLIC_CSS, PUBLIC_JS,
     };
     use axum::http::StatusCode;
     use std::path::Path;
@@ -877,5 +927,45 @@ mod tests {
         // Headless CI has no browser to open; the printed URL is the real
         // interface, so either outcome here is correct.
         let _ = open_browser("http://127.0.0.1:9/never-opened");
+    }
+
+    /// LAW-274: `--offline` lints before it renders. A template with a
+    /// blocking violation fails at once — it never binds a port and waits
+    /// for Ctrl-C — and the failure counts what the printed lines name.
+    #[tokio::test]
+    async fn offline_lint_fails_on_a_violation_before_serving_anything() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("Sample-Letter.md");
+        std::fs::write(&file, TEMPLATE).expect("write");
+        let found = resolve_template(dir.path(), &file).expect("resolves");
+
+        let violations = lint(&found);
+        assert!(
+            violations.iter().any(|v| v.code == "N103"),
+            "the gate's filename rule fires: {violations:?}"
+        );
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_offline_lint(&found, "sample-letter", 0),
+        )
+        .await
+        .expect("the lint returns instead of serving");
+        let err = outcome.expect_err("a violation fails the lint");
+        assert!(
+            err.to_string()
+                .contains(&format!("{} blocking rule violation(s)", violations.len())),
+            "{err}"
+        );
+    }
+
+    /// The draft push names the template by its file stem, spelled as the
+    /// checkout spells it — never the hyphenated slug.
+    #[test]
+    fn a_push_names_the_template_by_its_file_stem() {
+        assert_eq!(
+            code_for(Path::new("templates/acme_co__engagement_letter.md")),
+            "acme_co__engagement_letter"
+        );
     }
 }

@@ -58,26 +58,11 @@ struct ReferenceTable {
 const J2000_JD: f64 = 2_451_545.0;
 
 #[test]
-fn checked_in_manifest_pins_both_kernels() {
+fn checked_in_manifest_is_valid_before_source_io() {
     let manifest: EphemerisManifest = serde_json::from_str(MANIFEST_JSON).expect("manifest parses");
-    assert_eq!(manifest.version, 1);
-    assert_eq!(manifest.files.len(), 2, "DE440 and Chiron are pinned");
-    assert_eq!(manifest.files[0].name, "de440.bsp");
-    assert_eq!(manifest.files[0].bytes, 119_799_808);
-    assert_eq!(
-        manifest.files[0].sha256,
-        "a4ce9bf9b3282becc9f4b2ac3cebe03a2ae7599981aabd7265fd8482fff7c4b5"
-    );
-    assert_eq!(manifest.files[1].name, "chiron.bsp");
-    assert_eq!(manifest.files[1].bytes, 2_791_424);
-    // The time-scale model is reproducibility provenance: it must name the
-    // leap-second source, the TAI→TT offset, and the TDB periodic term.
-    for term in ["leap-second", "32.184", "periodic"] {
-        assert!(
-            manifest.time_scale_model.contains(term),
-            "time_scale_model must document {term}"
-        );
-    }
+    manifest
+        .validate()
+        .expect("checked-in source manifest must be bootable");
 }
 
 #[test]

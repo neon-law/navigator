@@ -913,8 +913,15 @@ jobs:
           # PR #373: pure decision seams in cli/store) and its workspace job
           # printed 92.36% line coverage (36312 missed of 475292) on
           # 2026-11-03 — short of the floor — so the constants held at 92.2 and
-          # the campaign falls back to re-scoping the target. The 92.2 floor is
-          # the merge gate from this change onward.
+          # the campaign falls back to re-scoping the target. The protective
+          # attempt then landed portal DB-harness tests (increment 7, PR #415:
+          # time-tracking and integration-door scenarios) and its workspace job
+          # printed 92.25% line coverage (37833 missed of 488144) on
+          # 2026-11-05 — short of the floor, main's +12,852-line drift window
+          # outrunning the ~900 converted lines — so the constants held at 92.2
+          # again, and the margin on this floor is down to 0.05 points: one
+          # drift window with no net coverage gain fails every PR through this
+          # gate. The 92.2 floor is the merge gate from this change onward.
           #
           # Raising the floor means moving three constants together — here,
           # `docs/agent-workflows.md`, and `docs/oss-install.md` — so raise it

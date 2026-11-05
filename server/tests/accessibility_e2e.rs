@@ -265,6 +265,9 @@ const PORTAL_ARCHETYPE_ROUTES: &[&str] = &[
     "/app/admin/clauses/governing_law",
     // A person detail page: a read view rather than a list or a form.
     "/app/admin/entities",
+    // The omnichannel inbox: a folder rail of filter navs beside a dense
+    // conversation table — a composition no other archetype carries.
+    "/app/inbox",
 ];
 
 /// The lawyer create forms, scoped to the form body.

@@ -38,15 +38,22 @@ use serde::{Deserialize, Serialize};
 use crate::admin::AdminState;
 use crate::session::SessionData;
 
-/// POST body — the template's own slug and raw Markdown source. Nothing
-/// else: the title, the questionnaire, and the workflow are all read back
-/// out of `source` itself, the same projection
+/// POST body — the template's own slug, its file stem, and raw Markdown
+/// source. Nothing else: the title, the questionnaire, and the workflow are
+/// all read back out of `source` itself, the same projection
 /// [`crate::notation_preview_doc::from_markdown`] runs for every other
 /// caller, so a client cannot claim a title the document itself disagrees
 /// with.
 #[derive(Debug, Deserialize)]
 pub struct NewNotationDraftBody {
     pub slug: String,
+    /// The template `code`: the file stem the author's checkout names it
+    /// by, so the server lints and stores it under the name the gate saw.
+    /// The slug cannot stand in for it — `to_url` folds every underscore
+    /// to a hyphen, and no inverse recovers which were which. Absent from
+    /// an older CLI, which falls back to [`template_code_for_slug`].
+    #[serde(default)]
+    pub code: Option<String>,
     pub source: String,
 }
 
@@ -91,7 +98,13 @@ pub async fn create_notation_draft_post(
     // caller happened to send.
     let doc = crate::notation_preview_doc::from_markdown(slug, "", source);
 
-    let code = template_code_for_slug(slug);
+    let code = match body.code.as_deref().map(str::trim) {
+        None | Some("") => template_code_for_slug(slug),
+        Some(code) if code.contains(['/', '\\']) || code.starts_with('.') => {
+            return (StatusCode::BAD_REQUEST, "code must be a bare file stem").into_response();
+        }
+        Some(code) => code.to_string(),
+    };
     let template = match persist_pushed_template(&state, project_id, &code, source).await {
         Ok(template) => template,
         Err(response) => return response,
@@ -187,19 +200,41 @@ async fn persist_pushed_template(
             tracing::warn!(%code, count = violations.len(), "notation draft push: template refused");
             Err((
                 StatusCode::UNPROCESSABLE_ENTITY,
-                format!(
-                    "template `{code}` has {} blocking rule violation(s); fix it and retry — \
-                     or lint it with `navigator notation preview --offline`",
-                    violations.len()
-                ),
+                refusal_body(&code, &violations),
             )
                 .into_response())
         }
+        Err(store::template_source::TemplateSourceError::Composition(reason)) => Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "template `{code}` did not compose its Clauses: {reason}. The server resolves \
+                 Clause references against the Clause Library at push time, which a local \
+                 lint cannot see."
+            ),
+        )
+            .into_response()),
         Err(e) => {
             tracing::error!(error = %e, %project_id, "notation draft push: template persist failed");
             Err((StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response())
         }
     }
+}
+
+/// The 422 body for a refused template: a summary line, then every blocking
+/// violation as `path:line CODE: message`, the line `navigator project gate`
+/// prints for the same finding. The path is the bare `<code>.md` the server
+/// linted, so it names the author's file by its stem.
+fn refusal_body(code: &str, violations: &[rules::Violation]) -> String {
+    let mut body = format!(
+        "template `{code}` has {} blocking rule violation(s); fix it and retry — or lint it \
+         with `navigator notation preview --offline`",
+        violations.len()
+    );
+    for violation in violations {
+        body.push('\n');
+        body.push_str(&violation.to_string());
+    }
+    body
 }
 
 /// Open the real notation run a pushed preview backs: the same
@@ -744,5 +779,126 @@ mod tests {
         );
         assert_eq!(notation.questionnaire_snapshot, Some(expected));
         assert_eq!(notation.template_body_sha256, original.body_sha256);
+    }
+
+    /// A participating lawyer's session on a fresh matter, plus the
+    /// matter's code — what every push test below acts as.
+    async fn lawyer_on(fixture: &str) -> (AdminState, uuid::Uuid, String, SessionData) {
+        let (state, project_id) = fixtures(fixture).await;
+        let code = store::projects::find_by_id(&state.surreal, project_id)
+            .await
+            .expect("read project")
+            .expect("project exists")
+            .code;
+        let person = store::persons::create(
+            &state.surreal,
+            &store::persons::NewPerson::new("Previewing Lawyer", "lawyer@example.com"),
+        )
+        .await
+        .expect("person");
+        store::projects::add_participation(&state.surreal, project_id, person.id, "lawyer")
+            .await
+            .expect("participation");
+        let mut session = SessionData::fresh("lawyer@example.com", store::persons::Role::Lawyer);
+        session.person_id = Some(person.id);
+        (state, project_id, code, session)
+    }
+
+    async fn push(
+        state: AdminState,
+        project_code: &str,
+        session: SessionData,
+        body: serde_json::Value,
+    ) -> (StatusCode, String) {
+        let response = tower::ServiceExt::oneshot(
+            router(state),
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/app/projects/{project_code}/notations/draft"))
+                .header("content-type", "application/json")
+                .extension(session)
+                .body(axum::body::Body::from(body.to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            String::from_utf8(body.to_vec()).expect("utf-8 body"),
+        )
+    }
+
+    /// LAW-274: a refused push names every blocking violation as the gate
+    /// prints it — `path:line CODE: message` — not just a count.
+    #[tokio::test]
+    async fn a_refused_push_lists_every_blocking_violation_as_the_gate_prints_it() {
+        let (state, _project_id, project_code, session) = lawyer_on("draft-violations").await;
+        let source = ONBOARDING_SOURCE.replace("title: ", "titel: ");
+
+        let (status, body) = push(
+            state,
+            &project_code,
+            session,
+            serde_json::json!({ "slug": "bad-name", "code": "Bad-Name", "source": source }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        let mut lines = body.lines();
+        let summary = lines.next().expect("a summary line");
+        assert!(
+            summary.starts_with("template `Bad-Name` has 2 blocking rule violation(s)"),
+            "{body}"
+        );
+        let listed: Vec<&str> = lines.collect();
+        assert_eq!(listed.len(), 2, "one line per violation: {body}");
+        assert!(
+            listed.contains(
+                &"Bad-Name.md:1 N103: Filename `Bad-Name` is not snake_case. Rename to `bad_name.md`."
+            ),
+            "{body}"
+        );
+        assert!(
+            listed
+                .iter()
+                .any(|line| line.starts_with("Bad-Name.md:") && line.contains(" N101: ")),
+            "{body}"
+        );
+    }
+
+    /// LAW-274: the server stores and lints a pushed template under the
+    /// file stem the CLI sends, not a code guessed back from the slug —
+    /// `to_url` turned `acme_co` into `acme-co`, and `N103` then refused a
+    /// name the author never wrote.
+    #[tokio::test]
+    async fn a_push_is_addressed_by_the_file_stem_it_names() {
+        let (state, _project_id, project_code, session) = lawyer_on("draft-file-stem").await;
+        let surreal = state.surreal.clone();
+
+        let (status, body) = push(
+            state,
+            &project_code,
+            session,
+            serde_json::json!({
+                "slug": "acme-co--onboarding",
+                "code": "acme_co__onboarding",
+                "source": ONBOARDING_SOURCE,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let created: NotationDraftCreated = serde_json::from_str(&body).expect("json body");
+        let notation = store::notations::find_by_id(&surreal, created.notation_id.expect("run"))
+            .await
+            .expect("read notation")
+            .expect("notation");
+        let template = store::templates::find_by_id(&surreal, notation.template_id)
+            .await
+            .expect("read template")
+            .expect("template");
+        assert_eq!(template.code, "acme_co__onboarding");
     }
 }

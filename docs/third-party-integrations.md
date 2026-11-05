@@ -77,7 +77,8 @@ The consolidated setup command is the CLI client for these admin-tier provider d
 
 | Command | Door |
 | --- | --- |
-| `navigator project setup <code>` / `--all` | Authenticated Drive, GitHub, Slack, and Notion doors |
+| `navigator project setup <code>` / `--all` | Authenticated Drive, GitHub, Slack, calendar, and Notion doors |
+| `navigator project deadline sync` | Authenticated calendar deadline-mirror door |
 
 They carry their own noun rather than nesting under `projects`, for the reason `project-surfaces` does: the `projects`
 policy rule admits any authenticated caller several segments deep, so a provisioning path nested there would be
@@ -91,8 +92,40 @@ full outcome vocabulary, and how the CLI's exit code follows the typed outcome r
 Each provider response is one outcome slug per Project and nothing else. No page id, no channel id, no provider URL:
 those are the Firm-private coordinates this boundary exists to keep on the firm side, and they are recorded on the
 Project row for the surfaces entitled to read them. Setup reports `created` or `adopted` for provider resources and
-`created` or `present` for Drive and GitHub. With no runtime KMS key, setup reports `runtime_not_configured` and never
+`created` or `present` for Drive and GitHub. A deployment missing part of a provider's runtime reports
+`runtime_not_configured` with a `detail` naming the missing variable and the operator step that supplies it, and never
 falls back to a deployment-wide token; a Project can access only credentials its Firm wrote.
+
+### Provisioning the integration runtime
+
+Standing up a Firm on a deployment includes its integration runtime. Each provider door reads deployment configuration
+first and a Firm credential second; until the first exists, the door reports `runtime_not_configured` and its `detail`
+names the gap.
+
+- **Notion and Slack** need `NAVIGATOR_RUNTIME_KMS_KEY` and `NAVIGATOR_NOTION_DATABASE_ID` in `secrets.enc.yaml`. The
+  operator creates the runtime key and grants the runtime service account `roles/cloudkms.cryptoKeyEncrypterDecrypter`
+  on it through Workload Identity. Both providers share one resolver, so both need both variables even when a Firm uses
+  only Slack. A pod with no application-default credential for the key reports that gap instead.
+- **Calendar** needs `NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER` in `config.toml` and
+  `NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON` in `secrets.enc.yaml`. Project calendars belong to the deployment's
+  Workspace delegated user, the service account Drive uses, so the Drive attachment in
+  [`DEPLOY.md`](../server/content/workshops/navigator/DEPLOY.md) supplies both. The calendar is not a Firm credential. A
+  Workspace administrator also authorizes that account's client id for `https://www.googleapis.com/auth/calendar` under
+  domain-wide delegation. Delegation grants each scope separately, so a deployment authorized only for Drive passes this
+  check and then fails its calendar calls. A calendar with one of its two variables set reports the other.
+
+After setting the values, apply and restart the deployment:
+
+```bash
+navigator ops secrets apply --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --dry-run
+navigator ops secrets apply --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+navigator ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --restart-only
+```
+
+Then the Firm's Admin DRI stores its `notion_token` and `slack_bot_token` (see [Firm-owned integration
+credentials](#firm-owned-integration-credentials)), and `navigator project setup <code>` reports `created` or `adopted`
+for each provider. [`deployment-secrets.md`](deployment-secrets.md#brand-social-accounts-and-runtime-kms) covers
+creating the runtime key and entering secret values.
 
 The Slack ensure door invites nobody — the adapter takes only provider-issued member ids, Navigator stores none, and it
 will not turn a participation row or an email address into an invite, so the Firm's own Slack membership governs who
