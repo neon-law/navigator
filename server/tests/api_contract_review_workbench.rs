@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use portal::session::SessionData;
 use portal::AppState;
 use store::persons::Role;
 use store::playbooks::{NewPlaybook, Position};
@@ -22,20 +21,16 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use workflows::{DispatchingRuntime, InMemoryRuntime, IntakeArtifact};
 
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_opt as bearer;
+
 struct Harness {
     app: axum::Router,
     admin_state: portal::admin::AdminState,
     surreal: store::surreal::SurrealDb,
     admin_bearer: String,
-}
-
-fn bearer(person_id: Option<Uuid>, role: Role) -> String {
-    let mut s = SessionData::fresh("api-cr-sub", role);
-    s.person_id = person_id;
-    format!(
-        "Bearer {}",
-        portal::SessionStore::new(portal::test_support::TEST_SESSION_KEY).encode(&s)
-    )
 }
 
 async fn harness() -> Harness {

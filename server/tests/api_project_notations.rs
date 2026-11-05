@@ -15,8 +15,6 @@ mod notation_fixture;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
-use portal::SessionStore;
 use store::persons::Role;
 use tower::ServiceExt;
 
@@ -31,7 +29,12 @@ fn amendment_template() -> String {
 }
 
 /// Signing key shared by the app's `SessionStore` and the bearers the tests mint.
-const KEY: &str = "api-project-notations-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_new_person;
 
 // These tests mutate one process-wide repository root and invoke git in that
 // shared directory. LLVM-instrumented macOS test processes can otherwise race
@@ -59,30 +62,6 @@ async fn build_app() -> (axum::Router, store::surreal::SurrealDb) {
 
 async fn open_project(surreal: &store::surreal::SurrealDb) -> store::projects::Project {
     store::test_support::seed_project(surreal, "Matter").await
-}
-
-/// A `Bearer` header for a session of `role`, optionally scoped to `project`
-/// with a firm-side participation row.
-async fn bearer(
-    surreal: &store::surreal::SurrealDb,
-    email: &str,
-    role: Role,
-    project: Option<uuid::Uuid>,
-) -> String {
-    let actor = store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(email, email, role),
-    )
-    .await
-    .unwrap();
-    if let Some(project_id) = project {
-        store::projects::add_participation(surreal, project_id, actor.id, "lawyer")
-            .await
-            .unwrap();
-    }
-    let mut s = SessionData::fresh("api-notation-sub", role);
-    s.person_id = Some(actor.id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 /// POST the JSON body to the notation door, optionally authenticated.
@@ -136,7 +115,7 @@ async fn client_is_403_and_opens_nothing() {
     let (app, surreal) = build_app().await;
     let project = open_project(&surreal).await;
     commit_template(&project.code, "amendment", amendment_template().as_bytes());
-    let client = bearer(&surreal, "client@example.com", Role::Client, None).await;
+    let client = bearer_new_person(&surreal, "client@example.com", Role::Client, None).await;
 
     let resp = post_notation(
         &app,
@@ -158,7 +137,7 @@ async fn lawyer_outside_the_matter_scope_is_404_and_opens_nothing() {
     commit_template(&project.code, "amendment", amendment_template().as_bytes());
     // Lawyer tier, but not a participant in this matter: the scope gate collapses
     // to a bare 404 so the door never discloses the out-of-scope matter.
-    let outsider = bearer(&surreal, "outsider@example.com", Role::Lawyer, None).await;
+    let outsider = bearer_new_person(&surreal, "outsider@example.com", Role::Lawyer, None).await;
 
     let resp = post_notation(
         &app,
@@ -179,11 +158,11 @@ async fn participant_lawyer_opens_a_notation_and_returns_201_json() {
     let project = open_project(&surreal).await;
     let project_id = project.id;
     commit_template(&project.code, "amendment", amendment_template().as_bytes());
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project_id),
+        Some((project_id, "lawyer")),
     )
     .await;
 
@@ -226,7 +205,7 @@ async fn admin_bypasses_scope_and_opens_a_notation() {
     let project_id = project.id;
     commit_template(&project.code, "amendment", amendment_template().as_bytes());
     // Admin does NOT participate in the matter; the scope check bypasses for admin.
-    let admin = bearer(&surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_new_person(&surreal, "admin@example.com", Role::Admin, None).await;
 
     let resp = post_notation(
         &app,
@@ -507,15 +486,15 @@ async fn code_spellings_match_the_openapi_schema_and_write_only_for_one_valid_co
     let project = open_project(&surreal).await;
     let project_id = project.id;
     commit_template(&project.code, "amendment", amendment_template().as_bytes());
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project_id),
+        Some((project_id, "lawyer")),
     )
     .await;
-    let client = bearer(&surreal, "client@example.com", Role::Client, None).await;
-    let outsider = bearer(&surreal, "outsider@example.com", Role::Lawyer, None).await;
+    let client = bearer_new_person(&surreal, "client@example.com", Role::Client, None).await;
+    let outsider = bearer_new_person(&surreal, "outsider@example.com", Role::Lawyer, None).await;
     let schema =
         portal::openapi::document()["components"]["schemas"]["CreateNotationRequest"].clone();
     let email = "libra@example.com";

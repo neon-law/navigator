@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use portal::session::SessionData;
 use portal::AppState;
 use store::persons::Role;
 use store::seed;
@@ -22,6 +21,11 @@ use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use uuid::Uuid;
 use workflows::{DispatchingRuntime, InMemoryRuntime, StateMachineRuntime};
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer;
 
 const TEMPLATE_CODE: &str = "onboarding__letter";
 
@@ -35,15 +39,6 @@ struct Fixture {
     outsider: String,
     /// A client-tier caller.
     client: String,
-}
-
-fn bearer(person_id: Uuid, role: Role) -> String {
-    let mut session = SessionData::fresh("api-reask-sub", role);
-    session.person_id = Some(person_id);
-    format!(
-        "Bearer {}",
-        portal::SessionStore::new(portal::test_support::TEST_SESSION_KEY).encode(&session)
-    )
 }
 
 async fn build_fixture() -> Fixture {
