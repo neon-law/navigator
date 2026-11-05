@@ -1,10 +1,7 @@
 ---
 name: triage-issue
-description: >
-  Deprecated plan-only entry point for one Linear issue. Use only when the user explicitly asks to triage, validate, or
-  plan one issue without implementing it. Run the grounding and adjudication phases from `implement-issue`, comment the
-  test-driven plan in Linear when the issue remains valid, and stop before code. Use `implement-issue` when code is
-  wanted, `triage-projects` for the portfolio, and `author-linear-issue` to create or rewrite an issue.
+description: >-
+  Verify and plan one Linear issue without implementation. Use implement-issue when code is requested.
 ---
 
 # `/triage-issue`: plan one issue without code

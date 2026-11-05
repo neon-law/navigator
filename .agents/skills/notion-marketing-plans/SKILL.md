@@ -1,9 +1,8 @@
 ---
 name: notion-marketing-plans
 description: >-
-  Create or update private firm marketing plans in Notion, keeping campaign strategy and business planning out of the
-  open-source repository. Use when asked to save marketing feedback, audience research, or a campaign plan. Public
-  website copy edits use marketing-copy.
+  Save private marketing strategy, campaign plans, and audience research in Notion. Use marketing-copy for public
+  website prose.
 ---
 
 # Private marketing plans in Notion

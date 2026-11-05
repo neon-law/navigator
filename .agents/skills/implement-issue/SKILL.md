@@ -1,10 +1,8 @@
 ---
 name: implement-issue
-description: >
-  Ground and implement one Linear issue in its own Navigator worktree, then open a ready pull request. Use when the user
-  asks to implement, pick up, start, or build ENG-NN, whether or not it has already been triaged. Refresh from
-  origin/main, read the full issue, verify it against shipped code and tests, adjudicate it, make the smallest
-  test-driven change, and open the PR ready for review. Do not use for portfolio triage or a plan-only request.
+description: >-
+  Verify and implement one Linear issue in an isolated worktree, then open a ready PR. Use triage-issue for plan- only
+  requests.
 ---
 
 # `/implement-issue`: ground and implement one issue

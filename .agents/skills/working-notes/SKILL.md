@@ -1,9 +1,7 @@
 ---
 name: working-notes
-description: >
-  Preserve work in flight across sessions in a private, git-ignored handoff note. Trigger before ending a session with
-  unfinished work, near compaction, or when the lawyer requests a handoff. Synced verbatim into every Project
-  repository's `.agents/skills/`; this canonical copy lives in Navigator's own `.agents/skills/`.
+description: >-
+  Preserve unfinished work in a private, ignored handoff note before ending a session or compacting context.
 ---
 
 # Working notes

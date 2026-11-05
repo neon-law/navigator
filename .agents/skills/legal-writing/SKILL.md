@@ -1,13 +1,8 @@
 ---
 name: legal-writing
-description: >
-  Fleet-wide discipline for legal writing that becomes work product (memos, letters, briefs, and responses): the answer
-  first, plain language, every sentence proved against a saved source, and argument written for its reader. Trigger
-  whenever drafting or revising a memo, client letter, brief, or written response the firm will stand behind. Kept
-  identical, byte for byte, in every Project repository's `.agents/skills/`; this canonical copy lives in Navigator's
-  own `.agents/skills/`. Not the [[legal-council]] copy-review bench (that shapes notation-bound template language
-  before it hardens) and not [[litigation-filing-review]] (that is the attorney-of-record filing gate); this is the
-  standard both of them assume the underlying prose already meets.
+description: >-
+  Draft or revise legal work product with a clear answer, verified sources, and precise next steps. Filing review uses
+  litigation-filing-review.
 ---
 
 # Legal writing
@@ -49,9 +44,7 @@ through the source-preservation procedure below.
 Open a memo, letter, or brief with the answer and recommended action. Name the decisive fact, any uncertainty that
 changes the action, the deadline, and the ask. A reader who stops after the first paragraph still knows what to do.
 
-Recommend one course. Refuse "it depends" unless the next clause says what it depends on and when the matter will know:
-a fact still to be confirmed, a ruling still pending, a deadline not yet reached. "It depends, and we will know once
-opposing counsel answers the interrogatory due the 14th" belongs on page one. "It depends" alone declines to write.
+Recommend one course. State the fact or pending event that could change it and when that uncertainty can be resolved.
 
 ## Every sentence is proved
 
@@ -84,8 +77,7 @@ no saved original is flagged as unverifiable and goes no further until it is sav
 
 ## Filing a document into a matter
 
-Filing is the most common operation in a Project repository and the one an agent most often does unattended. A wrongly
-filed client document is worse than an error, so do not guess.
+Verify the Project, document kind, visibility, and revision before filing.
 
 - **Repository coordinate.** A Project has one repository, stored as a whole URL on the Project
   (`project.repository_url`), never composed from a host, an organization, and the Project code. Read it off the
@@ -166,16 +158,6 @@ We are the experts, so we say less. Applies to email and letters to opposing cou
 - Tell a vendor what to do; do not ask its view.
 - Short is not vague. A notice carries what the rule requires. An ex parte notice states the relief, date, time, place,
   and whether the other side will oppose.
-
-Example, a call confirmation:
-
-> **Service.** We accept service of the amended complaint by email at the address on the docket. No further service is
-> needed.
->
-> **Schedule.** Initial disclosures are due November 6. We propose a 21-day extension for written discovery responses.
->
-> **Ex parte notice.** We will apply ex parte on November 9 at 9:00 a.m. in Department 12 to continue the hearing.
-> Please tell us by Friday at noon whether you will oppose. We will stipulate in writing if you agree by that time.
 
 ## Research order
 

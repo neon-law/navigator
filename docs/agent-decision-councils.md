@@ -7,7 +7,7 @@ cost. Skip councils for mechanical, trivial, or decided work.
 ## The three councils
 
 - **Engineering Council** — the people who build Neon Law Navigator. Use for architecture, refactors, abstractions, and
-  doc clarity. The normal form is the full twelve voices.
+  doc clarity. Use Virgo plus the relevant voices; expand for a full or broad review.
 - **Legal Council** — the counsels who draft legal copy. Use before copy becomes a template, prompt, email, or
   engagement paragraph. Default to Capricorn + Scorpio; use the full twelve for mission-level or unusual practice-area
   copy.
@@ -50,7 +50,7 @@ with consensus and one action. The other voices contribute one concrete sentence
 - ♒ Aquarius, platform engineer: surface the broader systems pattern.
 - ♓ Pisces, original author/migration engineer: preserve what already works.
 
-Output shape: Virgo opens, facts if useful, eleven voices, Virgo closes with consensus, then the concrete action.
+Output shape: Virgo opens, selected voices respond, and Virgo closes with consensus and one action.
 
 ## Legal Council
 

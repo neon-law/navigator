@@ -26,5 +26,5 @@ actual merge proves completion. The generated Forgejo workflow currently gates p
 through Forgejo CI remain unavailable. Report its missing post-merge run as unverified; keep source handover pending.
 
 Read the report's review URL, merge commit, deployment URL, conclusion, and job results. A failed or missing deployment
-is unresolved work even after merge. Portal publishing is retired; a successful `publish` no-op proves no application.
-Report any unverified stage explicitly. Do not change source authority or remove the other forge as part of this verb.
+is unresolved work even after merge. The deployment run proves application; a `publish` no-op does not. Report any
+unverified stage explicitly. Do not change source authority or remove the other forge as part of this verb.

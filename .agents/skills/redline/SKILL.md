@@ -1,10 +1,8 @@
 ---
 name: redline
-description: >
-  Create or revise a Word redline while preserving the source document's voice, structure, numbering, and formatting and
-  retaining requested substantive changes. Trigger when comparing an original DOCX with a prior redline, producing true
-  tracked changes, minimizing drafting churn, or restoring the document's native party voice. Do not use for code diffs,
-  citation checking, or a clean rewrite that does not need tracked changes.
+description: >-
+  Create or revise tracked Word changes while preserving the source voice, structure, formatting, and requested
+  substance.
 ---
 
 # Redline

@@ -1,11 +1,8 @@
 ---
 name: rust
-description: >
-  Workspace Rust guardrails. Trigger on the sharpest moments: a change that adds `unsafe`, `unwrap`, `expect`, or
-  `panic!` outside `main()`/tests; introducing a new public API, error type, or module; reaching for a different web
-  framework, store client, or async runtime (we standardize on Axum + PostgreSQL + Tokio, migrating off SurrealDB); or
-  wiring a new binary's `main()`. Read [`docs/rust-programming.md`](../../../docs/rust-programming.md) before acting; it
-  is authoritative.
+description: >-
+  Apply workspace Rust rules when changing public APIs, errors, modules, binaries, runtimes, or production panic and
+  unsafe behavior.
 ---
 
 # Rust guardrails
@@ -27,7 +24,7 @@ description: >
   aliases; git holds the past. Keep only the *why* behind a live invariant or migration.
 - **A removal removes the whole seam.** In the same change, delete the types, catalog and manifest entries, fixtures,
   CSS, tests, and docs that existed only for the removed caller, plus any enum variant or constant left with no member.
-  Then `git grep -n '<removed-name>'` must return nothing but the guard test asserting it is gone.
+  Then `git grep -n '<removed-name>'` must return no obsolete references. Test the surviving behavior.
 - **Opportunistic file pass:** [`random-refactor`](../random-refactor/SKILL.md).
 
 Everything else, including where we differ from Google's Rust Style Guide, is in

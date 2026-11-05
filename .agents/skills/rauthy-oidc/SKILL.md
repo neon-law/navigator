@@ -1,11 +1,8 @@
 ---
 name: rauthy-oidc
-description: >
-  Rauthy as Navigator's non-production OIDC identity provider: bootstrap fixtures, the single-public-issuer bridge,
-  Authorization Code + PKCE, JWKS verification, id_token decoding, and persons-table linking. Trigger when editing
-  `k8s/staging/rauthy.yaml`, `k8s/overlays/kind/rauthy/`, the Rauthy loopback sidecar, OIDC client configuration,
-  `/auth/callback`, or the `oauth2` and `jsonwebtoken` crates. Identity providers stay pluggable and application code
-  stays spec-compliant.
+description: >-
+  Maintain local and staging OIDC discovery, fixtures, callbacks, token validation, and identity linking. Keep providers
+  configurable.
 ---
 
 # Rauthy and OIDC

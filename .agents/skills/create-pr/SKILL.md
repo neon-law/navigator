@@ -1,13 +1,7 @@
 ---
 name: create-pr
-description: >
-  Turn a dirty working tree into a clean pull request against `main`: survey every change, group the files into
-  Conventional Commits by blast radius (one concern per commit), run the gate, branch off `main`, capture a visual for
-  any user-visible change, push, and open the PR ready for review, not as a draft. Trigger when the user says
-  "/create-pr", "create a PR", "open a pull request", "commit and PR these changes", "group these into commits and ship
-  them", or has a dirty working tree they want landed, and as the ship step of
-  [`implement-issue`](../implement-issue/SKILL.md). Stops once the PR is open and every review comment on it is
-  answered; building images and deploying to prod is a separate flow.
+description: >-
+  Gate and sign repository changes, open a ready PR, verify automatic merge configuration, and address review comments.
 ---
 
 # create-pr
@@ -46,8 +40,8 @@ Rules:
   human-facing status, history, diffs, and PR summaries. Keep raw `git` for porcelain, plumbing, revision values,
   rebases, and exact checks; keep raw `gh` for API/JSON, patches, auth tokens, and exact PR body or URL operations.
 - Group by blast radius: one reviewable concern per commit, staging each path explicitly.
-- **If the change removes anything, sweep before pushing.** `git grep -n '<removed-name>'` returns nothing apart from
-  the test that guards its absence. Manifest entries, fixtures, and doc prose hide half-removals; see [[rust]].
+- **If the change removes anything, sweep before pushing.** `git grep -n '<removed-name>'` returns no obsolete
+  references. Test the surviving behavior. Manifest entries, fixtures, and doc prose hide half-removals; see [[rust]].
 - **Link the Linear issue by identifier only.** Put one magic-word trailer in the PR body, `Closes ENG-1234`, so Linear
   links the PR and completes the issue on merge. Keep the identifier out of the PR title, which becomes the squash-merge
   subject. The roadmap stays private: no `linear.app` URL (its path carries the title as a slug); no issue title,

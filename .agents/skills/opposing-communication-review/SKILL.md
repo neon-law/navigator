@@ -1,10 +1,8 @@
 ---
 name: opposing-communication-review
-description: >
-  Review substantive Communications with an opposing party or Counsel from the recipient's perspective. Trigger for
-  incoming and outgoing correspondence, before-send drafts, and messages already sent, including the surrounding thread
-  and attachments. Scale routine acknowledgments to their stakes. This review never sends a message or changes a
-  deadline, filing, calendar, or client-visible record.
+description: >-
+  Review opposing-party correspondence from the recipient's perspective, including drafts, threads, and attachments.
+  This review sends nothing and changes no records.
 ---
 
 # Review opposing-party Communications

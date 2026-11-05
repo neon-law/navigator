@@ -1,9 +1,8 @@
 ---
 name: local-task-loop
-description: >
-  Run Navigator code tasks in an isolated worktree, use its generated local environment, and verify application changes
-  with focused checks and browser tests. Use when implementing or debugging a Navigator feature locally; use the
-  dedicated issue, PR, deployment, or preview skill when that workflow is the main request.
+description: >-
+  Implement or debug Navigator in an isolated worktree with task-owned services, focused tests, and browser checks for
+  UI changes.
 ---
 
 # Navigator local task loop

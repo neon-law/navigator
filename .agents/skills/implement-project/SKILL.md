@@ -1,9 +1,7 @@
 ---
 name: implement-project
-description: >
-  Implement every open Linear issue in one Engineering project, one per commit, then open a ready pull request. Use when
-  asked to implement a Linear project or all issues in a project. Reconcile project and issue state with shipped code
-  first; do not duplicate already merged work.
+description: >-
+  Verify and implement all open issues in one Linear project, one commit per issue, then open a ready PR.
 ---
 
 # `/implement-project`: complete one Linear project

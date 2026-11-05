@@ -13,7 +13,7 @@ delegating these issue implementations. Keep the parent available to coordinate 
 
 1. Refresh `origin/main`, inspect both LAW and Engineering portfolios, and reconcile candidates against shipped code,
    merged PRs, open PR paths, and active worktrees. Follow triage-projects' ranking and evidence requirements. Propose
-   tracker corrections without applying them. Its prompt-only ending is replaced by dispatch in this workflow.
+   tracker corrections without applying them. Continue directly to dispatch.
 2. Select independent, ready issues. Reserve each issue's exact paths before dispatch. Defer overlapping paths and
    dependencies until preceding work lands; exclude work already linked to an open PR. Keep a private session ledger of
    identifiers, verdicts, path reservations, agent/worktree assignments, PR URLs, validation, and blockers.
