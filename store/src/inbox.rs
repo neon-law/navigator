@@ -743,7 +743,7 @@ pub async fn ingest_inbound(
             .await
             .map_err(|error| InboxError::Db(error.to_string()))?;
         }
-        return Box::pin(crate::postgres::inbox::ingest_inbound_on(&pg, inbound)).await;
+        return Box::pin(crate::postgres::inbox::ingest_inbound_on(&pg, db, inbound)).await;
     }
     Box::pin(ingest_inbound_surreal(db, inbound)).await
 }
@@ -804,18 +804,208 @@ pub(crate) fn counterparty_decision(person: &persons::Person) -> Option<Uuid> {
     }
 }
 
+/// The Relationship Log action an inbound association records: identity
+/// provenance on the lawyer-acknowledged feed — automation never writes
+/// typed `relationship` or `entity_role` edges from correspondence.
+pub(crate) const INBOUND_ASSOCIATION_ACTION: &str = "inbound_email_associated";
+
+/// The Person name an auto-created sender takes: the RFC From display name
+/// when present, the address itself otherwise.
+pub(crate) fn sender_display_name<'a>(display: Option<&'a str>, address: &'a str) -> &'a str {
+    display
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| address.trim())
+}
+
 /// The inbound email sender's Person on the legacy Surreal lane: primary
 /// or `person_mailbox` alias match (`find_by_any_email`) — never an
 /// address-book claim, and never a lawyer- or clerk-tier sender. Only the
-/// exact, case-insensitive address resolves; near matches do not.
+/// exact, case-insensitive address resolves; near matches do not. A sender
+/// no Person claims becomes a new client-tier Person: the CRM grows from
+/// correspondence, and a duplicate collapses later through `person_merge`.
 async fn inbound_counterparty(
     db: &SurrealDb,
-    external_address: &str,
+    inbound: &IngestInbound<'_>,
 ) -> Result<Option<Uuid>, InboxError> {
-    Ok(persons::find_by_any_email(db, external_address.trim())
+    resolve_or_create_sender(db, inbound.external_address, inbound.external_name).await
+}
+
+/// The shared resolve-or-create behind ingest and the backfill: primary or
+/// `person_mailbox` alias match (`find_by_any_email`) — never an
+/// address-book claim, and never a lawyer- or clerk-tier sender. Only the
+/// exact, case-insensitive address resolves; near matches do not. A sender
+/// no Person claims becomes a new client-tier Person: the CRM grows from
+/// correspondence, and a duplicate collapses later through `person_merge`.
+pub(crate) async fn resolve_or_create_sender(
+    db: &SurrealDb,
+    external_address: &str,
+    display_name: Option<&str>,
+) -> Result<Option<Uuid>, InboxError> {
+    let address = external_address.trim();
+    let resolved = persons::find_by_any_email(db, address).await?;
+    if let Some(person) = resolved {
+        // A known lawyer- or clerk-tier sender is outgoing mail: decision
+        // None, and certainly no second Person for the same address.
+        return Ok(counterparty_decision(&person));
+    }
+    let created = persons::create(
+        db,
+        &persons::NewPerson::new(sender_display_name(display_name, address), address),
+    )
+    .await
+    .map_err(|error| InboxError::Db(error.to_string()))?;
+    Ok(Some(created.id))
+}
+
+/// Appends the Relationship Log entry for a conversation's first Person
+/// association — advisory, post-commit, best-effort: a failed entry warns
+/// and never fails the ingest, and an identical replay entry is skipped
+/// (the `exists` dedup the seed import uses). `person_id` is None when no
+/// link was newly made (guard rejection, non-email channel, replay).
+pub(crate) async fn record_association_log(
+    db: &SurrealDb,
+    conversation_id: Uuid,
+    person_id: Option<Uuid>,
+    channel: &str,
+    address: &str,
+) {
+    let Some(person_id) = person_id else {
+        return;
+    };
+    let entry = crate::relationship_logs::NewRelationshipLog {
+        actor_person_id: None,
+        subject_type: crate::relationship_logs::PERSON_SUBJECT.to_string(),
+        subject_id: person_id,
+        action: INBOUND_ASSOCIATION_ACTION.to_string(),
+        detail: format!("inbox_conversation:{conversation_id} {channel} sender {address}"),
+        project_id: None,
+    };
+    match crate::relationship_logs::exists(db, &entry).await {
+        Ok(true) => {}
+        Ok(false) => {
+            if let Err(error) = crate::relationship_logs::record(db, &entry).await {
+                tracing::warn!(
+                    %error,
+                    %conversation_id,
+                    "relationship log entry for the inbox association stalled"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                %conversation_id,
+                "relationship log dedup check stalled"
+            );
+        }
+    }
+}
+
+/// The backfill reads only what identity needs: the conversation, the
+/// address that owns it, and the display name the first message recorded.
+#[derive(SurrealValue)]
+struct UnassociatedConversation {
+    id: surrealdb::types::RecordId,
+    external_address: String,
+    external_name: Option<String>,
+}
+
+/// Links still-unassociated email conversations to the Person the address
+/// resolves to today — the same resolve-or-create the ingest uses — and
+/// reports how many conversations gained a link.
+///
+/// Idempotent: only rows with `person_id IS NONE` are selected, so a
+/// re-run finds nothing and writes nothing. Associations the backfill
+/// makes behave like ingest associations: guarded against lawyer- and
+/// clerk-tier senders, logged once on the Relationship Log, never edges.
+///
+/// # Errors
+///
+/// Propagates any database error, including the fail-closed authority
+/// probe error.
+pub async fn backfill_person_links(db: &SurrealDb) -> Result<u64, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::backfill_person_links_on(&pg, db)).await;
+    }
+    backfill_person_links_surreal(db).await
+}
+
+/// The legacy SurrealDB backfill behind [`backfill_person_links`].
+async fn backfill_person_links_surreal(db: &SurrealDb) -> Result<u64, InboxError> {
+    let mut response = db
+        .query(format!(
+            "SELECT id, external_address, external_name FROM {CONVERSATION} \
+             WHERE channel = $channel AND person_id IS NONE"
+        ))
+        .bind(("channel", channel::EMAIL.to_string()))
         .await?
-        .as_ref()
-        .and_then(counterparty_decision))
+        .check()?;
+    let unassociated: Vec<UnassociatedConversation> = response.take(0)?;
+    let mut linked = 0u64;
+    for row in unassociated {
+        let Some(conversation_id) = record_uuid(&row.id) else {
+            continue;
+        };
+        let Some(person_id) =
+            resolve_or_create_sender(db, &row.external_address, row.external_name.as_deref())
+                .await?
+        else {
+            continue;
+        };
+        db.query("UPDATE $id SET person_id = $person, updated_at = time::now()")
+            .bind(("id", record_id(CONVERSATION, conversation_id)))
+            .bind(("person", record_id("person", person_id)))
+            .await?
+            .check()?;
+        linked += 1;
+        record_association_log(
+            db,
+            conversation_id,
+            Some(person_id),
+            channel::EMAIL,
+            &row.external_address,
+        )
+        .await;
+        after_write(db, MirrorKey::InboxConversation(conversation_id)).await;
+    }
+    Ok(linked)
+}
+
+/// Resolves the counterparty Person, finds or creates the open thread, and
+/// persists the first association — the identity core of inbound ingest,
+/// shared by every lane that ingests from a live counterparty. Returns the
+/// conversation, whether this ingest newly linked it, and the resolved Person.
+async fn associate_counterparty(
+    db: &SurrealDb,
+    inbound: &IngestInbound<'_>,
+) -> Result<(Conversation, bool, Option<Uuid>), InboxError> {
+    let sender_person_id = match inbound.channel {
+        channel::EMAIL => inbound_counterparty(db, inbound).await?,
+        _ => None,
+    };
+    let (conversation, person_linked) =
+        if let Some(existing) = find_open_thread(db, inbound).await? {
+            let linked = sender_person_id.is_some() && existing.person_id.is_none();
+            (existing, linked)
+        } else {
+            let created = create_conversation(db, inbound, sender_person_id).await?;
+            (created, sender_person_id.is_some())
+        };
+    if let (true, Some(person_id)) = (person_linked, sender_person_id) {
+        // First association wins: an existing link is never overwritten,
+        // and the WHERE guard keeps a concurrent ingest from double-writing.
+        db.query(
+            "UPDATE $id SET person_id = $person, updated_at = time::now() \
+             WHERE person_id IS NONE",
+        )
+        .bind(("id", record_id(CONVERSATION, conversation.id)))
+        .bind(("person", record_id("person", person_id)))
+        .await?
+        .check()?;
+        after_write(db, MirrorKey::InboxConversation(conversation.id)).await;
+    }
+    Ok((conversation, person_linked, sender_person_id))
 }
 
 /// The legacy SurrealDB store behind [`ingest_inbound`] — the webhook-shaped
@@ -849,31 +1039,8 @@ async fn ingest_inbound_surreal(
         return replay_existing_message(db, existing).await;
     }
 
-    let sender_person_id = match inbound.channel {
-        channel::EMAIL => inbound_counterparty(db, inbound.external_address).await?,
-        _ => None,
-    };
-    let (conversation, person_linked) =
-        if let Some(existing) = find_open_thread(db, inbound).await? {
-            let linked = sender_person_id.is_some() && existing.person_id.is_none();
-            (existing, linked)
-        } else {
-            let created = create_conversation(db, inbound, sender_person_id).await?;
-            (created, sender_person_id.is_some())
-        };
-    if let (true, Some(person_id)) = (person_linked, sender_person_id) {
-        // First association wins: an existing link is never overwritten,
-        // and the WHERE guard keeps a concurrent ingest from double-writing.
-        db.query(
-            "UPDATE $id SET person_id = $person, updated_at = time::now() \
-             WHERE person_id IS NONE",
-        )
-        .bind(("id", record_id(CONVERSATION, conversation.id)))
-        .bind(("person", record_id("person", person_id)))
-        .await?
-        .check()?;
-        after_write(db, MirrorKey::InboxConversation(conversation.id)).await;
-    }
+    let (conversation, person_linked, sender_person_id) =
+        associate_counterparty(db, inbound).await?;
     if inbound.email_conversation_id.is_some() && conversation.email_conversation_id.is_none() {
         link_email_conversation(db, conversation.id, inbound.email_conversation_id).await?;
     }
@@ -916,12 +1083,21 @@ async fn ingest_inbound_surreal(
         .bind(("id", record_id(CONVERSATION, conversation.id)))
         .await;
     after_write(db, MirrorKey::InboxConversation(conversation.id)).await;
-    Ok(IngestedInbound {
+    let ingested = IngestedInbound {
         conversation_id: conversation.id,
         message_id,
         deduped: false,
         person_linked,
-    })
+    };
+    record_association_log(
+        db,
+        ingested.conversation_id,
+        ingested.person_linked.then_some(sender_person_id).flatten(),
+        inbound.channel,
+        inbound.external_address,
+    )
+    .await;
+    Ok(ingested)
 }
 
 /// The attachments linked to one Inbox Message, in provider order.
@@ -4068,6 +4244,150 @@ mod tests {
         }
     }
 
+    /// Counts Person rows holding an exact email — the auto-create dedup
+    /// probe for the tests below.
+    async fn person_count(db: &SurrealDb, email: &str) -> i64 {
+        let mut response = db
+            .query("SELECT VALUE count() FROM person WHERE email = $email GROUP ALL")
+            .bind(("email", email))
+            .await
+            .expect("person count query")
+            .check()
+            .expect("person count check");
+        // `SELECT VALUE count()` yields bare numbers — one per GROUP ALL
+        // group, and no row at all when nothing matches, which is zero.
+        let counts: Vec<i64> = response.take(0).expect("person count decode");
+        counts.first().copied().unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn an_unknown_sender_persists_a_created_person_and_one_relationship_log() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let message = inbound(
+            world.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "unknown-sender-1",
+            "new-counterparty@example.com",
+        );
+        let ingested = ingest_inbound(&db, &message).await.unwrap();
+        let conversation = conversation_by_id(&db, ingested.conversation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        // Exactly one Person appears: named from the RFC From display name,
+        // the sender's address as primary email, client-tier by default.
+        let created = persons::find_by_any_email(&db, "new-counterparty@example.com")
+            .await
+            .unwrap()
+            .expect("created person");
+        assert_eq!(conversation.person_id, Some(created.id));
+        assert_eq!(person_count(&db, "new-counterparty@example.com").await, 1);
+        assert_eq!(created.name, "Sender");
+        assert_eq!(created.role, Role::Client);
+        // One Relationship Log entry — the lawyer-acknowledged feed — and
+        // never a typed relationship edge.
+        let logs = crate::relationship_logs::all(&db).await.unwrap();
+        let associations: Vec<_> = logs
+            .iter()
+            .filter(|log| log.action == INBOUND_ASSOCIATION_ACTION)
+            .collect();
+        assert_eq!(associations.len(), 1);
+        assert_eq!(associations[0].subject_type, "person");
+        assert_eq!(associations[0].subject_id, created.id);
+    }
+
+    #[tokio::test]
+    async fn a_reingest_from_the_same_address_creates_no_second_person_or_log() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        for message_id in ["unknown-sender-2", "unknown-sender-3"] {
+            let message = inbound(
+                world.firm,
+                channel::EMAIL,
+                "fixture-account",
+                message_id,
+                "repeat-counterparty@example.com",
+            );
+            let ingested = ingest_inbound(&db, &message).await.unwrap();
+            let conversation = conversation_by_id(&db, ingested.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(conversation.person_id.is_some());
+        }
+        // The resolver dedups: one Person and one Relationship Log entry no
+        // matter how many deliveries arrive from the same address.
+        assert_eq!(
+            person_count(&db, "repeat-counterparty@example.com").await,
+            1
+        );
+        let logs = crate::relationship_logs::all(&db).await.unwrap();
+        assert_eq!(
+            logs.iter()
+                .filter(|log| log.action == INBOUND_ASSOCIATION_ACTION)
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_backfill_links_unassociated_conversations_and_reruns_without_effect() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let ingested = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::EMAIL,
+                "fixture-account",
+                "backfill-1",
+                "archived.correspondent@example.com",
+            ),
+        )
+        .await
+        .unwrap();
+        // A row that predates the association: the ingest above already
+        // created the Person, so the backfill must re-resolve the same
+        // address, not re-create it.
+        db.query("UPDATE $id SET person_id = NONE")
+            .bind(("id", record_id(CONVERSATION, ingested.conversation_id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        let linked = backfill_person_links(&db).await.unwrap();
+        assert_eq!(linked, 1);
+        assert_eq!(
+            person_count(&db, "archived.correspondent@example.com").await,
+            1
+        );
+        let conversation = conversation_by_id(&db, ingested.conversation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(conversation.person_id.is_some());
+        // One Relationship Log entry still: the backfill's association is
+        // the same fact the ingest already logged, and the entry dedups.
+        let logs = crate::relationship_logs::all(&db).await.unwrap();
+        assert_eq!(
+            logs.iter()
+                .filter(|log| log.action == INBOUND_ASSOCIATION_ACTION)
+                .count(),
+            1
+        );
+
+        // Idempotent: a re-run finds nothing unassociated left.
+        let again = backfill_person_links(&db).await.unwrap();
+        assert_eq!(again, 0, "a re-run finds nothing left to link");
+        assert_eq!(
+            person_count(&db, "archived.correspondent@example.com").await,
+            1
+        );
+    }
+
     #[tokio::test]
     async fn redelivered_attachments_do_not_duplicate_links() {
         let db = mem_surreal().await;
@@ -5118,7 +5438,9 @@ mod tests {
         let db = mem_surreal().await;
         let world = world(&db).await;
 
-        // Email resolves by the address a Person records.
+        // Email resolves by the address a Person records — and an unknown
+        // sender grows the CRM: the ingest itself created Pat's Person, so
+        // the lookup (not a create) names it here.
         let email = ingest_inbound(
             &db,
             &inbound(
@@ -5131,7 +5453,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let pat = person(&db, "Pat Sender", "pat.sender@example.com", Role::Client).await;
+        let pat = persons::find_by_any_email(&db, "pat.sender@example.com")
+            .await
+            .unwrap()
+            .expect("the ingest auto-created the unknown sender's Person")
+            .id;
         let rows = list_intake(&db, world.owner).await.unwrap();
         let row = rows
             .iter()
