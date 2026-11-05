@@ -2,9 +2,10 @@
 //! inline SVG (issue: dashboard graphing).
 //!
 //! Every chart is a presentational component: data arrives through props
-//! shaped like `analytics::PeriodTotal`/`DimensionTotal`, so the analytics
-//! server function can feed them later without a reshaping layer, and the
-//! component computes nothing about where the data came from. There is no
+//! shaped as label/value aggregates (a point's label plus its numeric value),
+//! so any aggregate-reading server function can feed them without a reshaping
+//! layer, and the component computes nothing about where the data came from.
+//! There is no
 //! JavaScript charting dependency — the SVG is complete in the
 //! server-rendered HTML, following the construction `astrology_chart` proves
 //! out (SSR-safe elements, no hydration-required drawing, no interop).
@@ -36,8 +37,8 @@ const RAMP_LEN: usize = 6;
 /// The gridline fractions a value axis draws, top to bottom.
 const GRID_FRACTIONS: [f64; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 
-/// One point in a time series — mirrors `analytics::PeriodTotal`, widened to
-/// carry an ISO date label for the companion table.
+/// One point in a time series — a label plus a value, widened to carry an ISO
+/// date label for the companion table.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct SeriesPoint {
     /// The bucket's label — `2026-07-09` for a daily bucket, `2026-07` for a
@@ -56,8 +57,8 @@ impl SeriesPoint {
     }
 }
 
-/// A named series — one line, one bar set, or one donut's slices. Mirrors
-/// `analytics::DimensionTotal`'s shape so the same feed can build it.
+/// A named series — one line, one bar set, or one donut's slices. The same
+/// shape any aggregate feed can build.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Series {
     /// The axis legend and companion-table column header.

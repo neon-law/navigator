@@ -160,7 +160,7 @@ pub async fn app_state_with_email(
         signature_provider: Arc::new(portal::signature::StubSignatureProvider::new()),
         billing_provider: Arc::new(portal::billing::StubBillingProvider::new()),
         contract_reviewer: Arc::new(portal::contract_review::StubContractReviewer),
-        integration_providers: Arc::new(portal::integrations::UnconfiguredIntegrations),
+        integration_providers: Arc::new(portal::integrations::UnconfiguredIntegrations::default()),
         runtime_kms: Arc::new(cloud::NoRuntimeKms),
         esignature_webhook_secret: None,
         esignature_hmac_key: None,

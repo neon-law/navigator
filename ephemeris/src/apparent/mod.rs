@@ -17,8 +17,8 @@
 //!
 //! The mean lunar node is a point of lunar orbital geometry rather than a
 //! physical body, so it bypasses that chain: [`node`] derives its longitude
-//! from Moshier's mean elements plus a DE431-fit correction and reports it in
-//! the Swiss Ephemeris `SE_MEAN_NODE` convention (see [`mean_node`]).
+//! from the IERS 2003 mean longitude and reports it on the true equinox
+//! of date (see [`mean_node`]).
 
 pub(crate) mod aberration;
 pub(crate) mod frame;
@@ -38,19 +38,35 @@ use crate::time::TdbSeconds;
 /// Returns SPK lookup errors when a body is unknown or the requested instant
 /// (including the light-time lookback) falls outside kernel coverage, and the
 /// light-time convergence error from [`light_time`].
-pub(crate) fn direction_icrf(
+struct GeocentricDirection {
+    unit: [f64; 3],
+    distance_km: f64,
+}
+
+fn direction_icrf(
     ephemeris: &Ephemeris,
     body: Body,
     t: TdbSeconds,
-) -> Result<[f64; 3], EphemerisError> {
+) -> Result<GeocentricDirection, EphemerisError> {
     if body == Body::Earth {
         return Err(EphemerisError::EarthAsGeocentricTarget);
     }
     let earth_bary_km = ephemeris.barycentric_position(Body::Earth, t)?;
     let solution = light_time::light_time_corrected(ephemeris, body, t, &earth_bary_km)?;
+    let distance_km = solution.geometric_km[0]
+        .hypot(solution.geometric_km[1])
+        .hypot(solution.geometric_km[2]);
+    if !distance_km.is_finite() || distance_km <= 0.0 {
+        return Err(EphemerisError::InvalidGeocentricDirection);
+    }
     let earth_velocity_km_s = aberration::earth_velocity_km_s(ephemeris, t)?;
-    let unit = unit_vector(solution.geometric_km);
-    Ok(aberration::aberrate(unit, &earth_velocity_km_s))
+    let unit = solution
+        .geometric_km
+        .map(|component| component / distance_km);
+    Ok(GeocentricDirection {
+        unit: aberration::aberrate(unit, &earth_velocity_km_s),
+        distance_km,
+    })
 }
 
 /// The apparent geocentric position of `body` at `t`: where it appears in the
@@ -66,25 +82,45 @@ pub(crate) fn direction_icrf(
 ///
 /// Rejects Earth with [`EphemerisError::EarthAsGeocentricTarget`], since the
 /// observer has no direction from itself. Also returns SPK lookup failures
-/// and light-time non-convergence from [`direction_icrf`].
+/// and light-time non-convergence from the light-time solution.
 pub fn apparent_geocentric(
     ephemeris: &Ephemeris,
     body: Body,
     t: TdbSeconds,
 ) -> Result<ApparentPosition, EphemerisError> {
-    let icrf = direction_icrf(ephemeris, body, t)?;
-    let rotation = frame::bias_precession_nutation(t);
-    let obliquity = frame::true_obliquity(t);
-    Ok(ApparentPosition::from_direction(
-        &icrf, &rotation, obliquity,
-    ))
+    apparent_geocentric_state(ephemeris, body, t).map(|state| state.position)
 }
 
-/// The apparent mean lunar node at `t`, in the Swiss Ephemeris
-/// `SE_MEAN_NODE` convention: the Moon's mean ascending node, referred to the
-/// true equinox of date, with latitude exactly zero and RA/Dec from the
+/// Apparent geocentric angles and their light-time-corrected range.
+#[derive(Clone, Copy)]
+pub struct ApparentState {
+    /// Apparent directions on the true equator and ecliptic of date, degrees.
+    pub position: ApparentPosition,
+    /// Geocentric distance to the emission-time position, kilometers.
+    pub distance_km: f64,
+}
+
+/// Evaluate angles and distance through one shared light-time solution.
+/// Returns SPK, light-time, and degenerate-direction errors without a fallback.
+pub fn apparent_geocentric_state(
+    ephemeris: &Ephemeris,
+    body: Body,
+    t: TdbSeconds,
+) -> Result<ApparentState, EphemerisError> {
+    let direction = direction_icrf(ephemeris, body, t)?;
+    let rotation = frame::bias_precession_nutation(t);
+    let obliquity = frame::true_obliquity(t);
+    Ok(ApparentState {
+        position: ApparentPosition::from_direction(&direction.unit, &rotation, obliquity),
+        distance_km: direction.distance_km,
+    })
+}
+
+/// The apparent mean lunar node at `t`, using IERS 2003: the Moon's mean
+/// ascending node, referred to the true equinox of date, with latitude
+/// exactly zero and RA/Dec from the
 /// true-of-date ecliptic longitude. See [`node`] for the full convention and
-/// the Swiss Ephemeris equivalence proof.
+/// the IERS reference and independent Swiss Ephemeris validation.
 ///
 /// Unlike [`apparent_geocentric`], no ephemeris kernels are involved: the
 /// node follows from lunar orbital geometry alone.
@@ -189,13 +225,32 @@ mod tests {
         let t = DAY / 2.0;
         let direction = direction_icrf(&ephemeris, Body::Moon, TdbSeconds(t))
             .expect("synthetic bodies resolve");
+        let state = apparent_geocentric_state(&ephemeris, Body::Moon, TdbSeconds(t))
+            .expect("synthetic light-time state resolves");
+        let expected_distance = (1_000_000.0 + v * t) / (1.0 + v / light_time::C_KM_S);
+        assert!(
+            (state.distance_km - expected_distance).abs() < 1e-6,
+            "reported distance must use the emission position, not the arrival position"
+        );
         // The direction is exactly +x: the body is on the x axis, the observer
         // is fixed, and the aberration therefore contributes nothing.
         assert!(
-            direction[0] > 0.999_999_999
-                && direction[1].abs() < 1e-15
-                && direction[2].abs() < 1e-15,
-            "expected the unit +x direction, got {direction:?}"
+            direction.unit[0] > 0.999_999_999
+                && direction.unit[1].abs() < 1e-15
+                && direction.unit[2].abs() < 1e-15,
+            "the emission direction must be unit +x for the stationary observer"
+        );
+    }
+
+    #[test]
+    fn a_zero_geocentric_direction_is_an_error_instead_of_nonfinite_angles() {
+        let zero = [0.0, 0.0];
+        let earth = synthetic_type2(399, 0, -DAY, 2.0 * DAY, &[(0.0, DAY, &zero, &zero, &zero)]);
+        let sun = synthetic_type2(10, 0, -DAY, 2.0 * DAY, &[(0.0, DAY, &zero, &zero, &zero)]);
+        let ephemeris = Ephemeris::new(vec![earth, sun]);
+        assert!(
+            apparent_geocentric(&ephemeris, Body::Sun, TdbSeconds(0.0)).is_err(),
+            "a zero source direction must not become a successful nonfinite position"
         );
     }
 

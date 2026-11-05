@@ -1564,6 +1564,7 @@ erDiagram
         uuid id
         datetime inserted_at
         string outcome
+        uuid person_id
         uuid project_id
         string recipient
         string sender
@@ -1572,6 +1573,16 @@ erDiagram
         string subject
         string template_slug
         datetime updated_at
+    }
+    sent_email_export {
+        string content_sha256
+        string data_file
+        datetime day
+        datetime exported_at
+        int metadata_version
+        datetime purged_at
+        int row_count
+        int snapshot_id
     }
     signature {
         json completed_signer_roles

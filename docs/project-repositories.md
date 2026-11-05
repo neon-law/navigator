@@ -557,7 +557,9 @@ recorded-identity check; this command does not claim a distributed exactly-once 
 target Project's owning Firm and then reads that Firm's typed provider credential (`store::firm_secrets`) — there is no
 deployment-wide fallback. Until the Firm's Admin DRI has stored a `slack_bot_token` / `notion_token`
 (`/app/admin/firms/{id}` → **Integration secrets**, ENG-491), every one of these commands reports `credential_missing`
-for that Firm's Projects, and a deployment with no runtime KMS key at all reports `runtime_not_configured`.
+for that Firm's Projects. A deployment missing its integration runtime reports `runtime_not_configured`, and the row's
+`detail` names the missing variable and the step that supplies it; see [provisioning the integration
+runtime](third-party-integrations.md#provisioning-the-integration-runtime).
 
 **Exit codes reflect the typed outcome, not just the HTTP status.** Every door answers HTTP 200 with a per-Project
 `{"project_code", "outcome", "detail"?}` row (`credential_missing`, `provider_unavailable`, `conflict`, `renamed`,

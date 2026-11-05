@@ -9,12 +9,10 @@
 //! outside the repository.
 //!
 //! The comparison runs at the project's binding line gate (0.01°, the same
-//! gate as the Swiss Ephemeris anchors), not byte equality: DE440's bytes are
-//! stable, but the Chiron kernel is regenerated per request by the JPL
-//! Horizons API, and the manifest documents each regeneration as
-//! solution-equivalent while changing the digest. Rendering the fixture into
-//! SVG paths *is* deterministic, so byte-level stability is enforced
-//! separately by the golden path snapshot in
+//! gate as the Swiss Ephemeris anchors). Both kernel files must match the
+//! exact manifest pins; regenerated Horizons files require separate validation
+//! before their pins can change. Rendering the fixture into SVG paths is
+//! deterministic and covered by the golden path snapshot in
 //! `webapp/src/astrocartography.rs`.
 
 use ephemeris::lines::{lines_for, Angle};
@@ -29,54 +27,15 @@ fn specimen_epoch() -> Epoch {
     Epoch::maybe_from_gregorian_utc(2000, 1, 1, 12, 0, 0, 0).expect("valid specimen instant")
 }
 
-/// Lowercase hex digits, matching the ephemeris loader's digest format.
-const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
-
-/// SHA-256 of a kernel file in the data dir, hex-encoded.
-fn kernel_sha256(name: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let dir = std::env::var_os(DATA_DIR_ENV).expect("data dir checked above");
-    let bytes = std::fs::read(std::path::Path::new(&dir).join(name))
-        .unwrap_or_else(|e| panic!("{name} readable: {e}"));
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        hex.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
-        hex.push(char::from(HEX_DIGITS[usize::from(byte & 0x0F)]));
-    }
-    hex
-}
-
 #[test]
 fn specimen_fixture_matches_the_engine_at_the_specimen_instant() {
     if std::env::var_os(DATA_DIR_ENV).is_none() {
         eprintln!("skipping: {DATA_DIR_ENV} is unset, so the real kernels are not available");
         return;
     }
-    // The manifest pins one particular Horizons fetch of chiron.bsp, but
-    // Horizons regenerates the file on every request (solution-equivalent
-    // bytes, new digest — documented in the manifest's source note), so a
-    // locally re-fetched kernel can never reproduce the pinned digest. For
-    // this solution-equivalence gate the digest is re-pinned to the local
-    // kernel: the checksum still guards against a corrupt file, while the
-    // 0.01° comparison below is the binding check. Provenance pinning stays
-    // enforced by the ephemeris crate's own tests and its fixtures.
-    let mut manifest: serde_json::Value =
+    let manifest: EphemerisManifest =
         serde_json::from_str(include_str!("../../ephemeris/manifest.json"))
             .expect("manifest parses");
-    let chiron_sha = kernel_sha256("chiron.bsp");
-    for entry in manifest["files"]
-        .as_array_mut()
-        .expect("manifest files array")
-    {
-        if entry["name"] == "chiron.bsp" {
-            entry["sha256"] = chiron_sha.clone().into();
-        }
-    }
-    let manifest: EphemerisManifest =
-        serde_json::from_value(manifest).expect("re-pinned manifest parses");
     let store = FilesystemStore::from_env().expect("data dir present");
     let loaded = load(&store, &manifest).expect("kernels load and verify");
 

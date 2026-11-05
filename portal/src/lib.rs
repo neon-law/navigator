@@ -216,7 +216,6 @@ pub(crate) use store::test_support::twilio as twilio_registry_harness;
 pub mod twilio_resolution;
 pub mod twilio_sms;
 pub mod twilio_voice;
-pub mod visitor_analytics;
 pub mod webhook_auth;
 pub mod welcome;
 pub mod workshops;
@@ -1483,8 +1482,6 @@ pub fn bootstrap_with_forgejo_oidc(
             }),
         );
 
-    let visitor_analytics_state =
-        visitor_analytics::VisitorAnalyticsState::new(state.surreal.clone());
     // #641 Phase 3 (admin cluster): the lawyer entity-types directory renders
     // through Dioxus, replacing the read view. Same auth + embedded Rego policy gate.
     let dioxus_entity_types = dioxus_app::entity_types_router(
@@ -1656,17 +1653,6 @@ pub fn bootstrap_with_forgejo_oidc(
     let dioxus_schedules = dioxus_app::csrf_page_router(
         dioxus_app::LAWYER_SCHEDULES_PATH,
         webapp::schedules::LawyerSchedules,
-        state.surreal.clone(),
-        state.sessions.clone(),
-        state.policy.clone(),
-        state.auth.clone(),
-    );
-    // #956 Phase 4: the visitor-analytics dashboard renders through Dioxus at
-    // `/app/admin/analytics`. Read-only, so it rides the plain listing router; the
-    // admin-only gate lives in the loader, which commits a real 403.
-    let dioxus_analytics = dioxus_app::admin_listing_router(
-        dioxus_app::ADMIN_ANALYTICS_PATH,
-        webapp::analytics::AdminAnalytics,
         state.surreal.clone(),
         state.sessions.clone(),
         state.policy.clone(),
@@ -1869,7 +1855,7 @@ pub fn bootstrap_with_forgejo_oidc(
         // ENG-221: the Owner/Admin matter directory at `/app/admin/projects` —
         // every matter's code, name, status, and accountable lawyer, reached
         // without a participation row on any of them. Sortable, so it rides the
-        // same seam `/app/admin/people` and `/app/admin/analytics` do; the admin-tier
+        // same seam `/app/admin/people` does; the admin-tier
         // gate lives in the loader, which commits a real 403.
         dioxus_app::sortable_admin_listing_router(
             dioxus_app::ADMIN_MATTER_DIRECTORY_PATH,
@@ -2031,11 +2017,9 @@ pub fn bootstrap_with_forgejo_oidc(
         dioxus_playbooks,
         dioxus_playbook_new,
         dioxus_playbook_edit,
-        // The cron-schedule reference and the visitor-analytics dashboard
-        // (#956 Phase 4) render through Dioxus at `/app/admin/schedules` and
-        // `/app/admin/analytics`; the manual-run `POST`s stay on `cron_schedules`.
+        // The cron-schedule reference (#956 Phase 4) renders through Dioxus at
+        // `/app/admin/schedules`; the manual-run `POST`s stay on `cron_schedules`.
         dioxus_schedules,
-        dioxus_analytics,
         dioxus_admin_leads,
         dioxus_admin_people,
         dioxus_app_forms,
@@ -2262,10 +2246,6 @@ pub fn bootstrap_with_forgejo_oidc(
                 .make_span_with(http_request_span)
                 .on_response(record_http_response_status),
         )
-        .layer(axum::middleware::from_fn_with_state(
-            visitor_analytics_state,
-            visitor_analytics::count_public_visit,
-        ))
         .layer(SetRequestIdLayer::new(X_REQUEST_ID, MakeRequestUuid)))
 }
 

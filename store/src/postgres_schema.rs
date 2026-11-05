@@ -1386,6 +1386,10 @@ mod tests {
                 "20261104000000_create_person_directory_views.sql",
                 include_str!("../postgres/migrations/20261104000000_create_person_directory_views.sql"),
             ),
+            (
+                "20261104120000_sent_email_append_only.sql",
+                include_str!("../postgres/migrations/20261104120000_sent_email_append_only.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
@@ -1401,6 +1405,7 @@ mod tests {
             "subject",
             "sender",
             "project_id",
+            "person_id",
             "template_slug",
             "body",
             "outcome",
@@ -1410,6 +1415,21 @@ mod tests {
             "updated_at",
         ] {
             assert!(email.columns.contains_key(column), "sent_email.{column}");
+        }
+        let ledger = schema
+            .get("sent_email_export")
+            .expect("Sent Email Export ledger");
+        for column in [
+            "day",
+            "row_count",
+            "content_sha256",
+            "data_file",
+            "purged_at",
+        ] {
+            assert!(
+                ledger.columns.contains_key(column),
+                "sent_email_export.{column}"
+            );
         }
         for column in ["sent_at", "inserted_at", "updated_at"] {
             assert_eq!(email.columns[column], "TIMESTAMPTZ");

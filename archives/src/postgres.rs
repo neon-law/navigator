@@ -140,6 +140,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "inbox_triage",
     "inbox_attachment_receipt",
     "sent_email",
+    "sent_email_export",
     "email_receipt",
     "email_delivery",
     "email_delivery_attempt",
