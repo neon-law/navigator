@@ -679,6 +679,7 @@ erDiagram
         datetime inserted_at
         string interaction_type
         boolean matter_consent
+        uuid person_id
         uuid project_id
         boolean promotional_opt_in
         boolean promotional_opt_out
@@ -1874,6 +1875,7 @@ erDiagram
     firm }o--|| inbox_attachment_receipt : references
     email_conversation }o--|| inbox_conversation : references
     firm }o--|| inbox_conversation : references
+    person }o--|| inbox_conversation : references
     project }o--|| inbox_conversation : references
     message }o--|| inbox_delivery_attempt : references
     firm }o--|| inbox_ingress : references
