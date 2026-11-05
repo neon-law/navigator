@@ -208,7 +208,7 @@ fn parent(column: &str, id: Uuid) -> Option<MirrorKey> {
         "email_conversation_id" => MirrorKey::EmailConversation(id),
         "conversation_id" => MirrorKey::InboxConversation(id),
         "parent_message_id" | "message_id" => MirrorKey::InboxMessage(id),
-        "author_person_id" | "actor_person_id" => MirrorKey::Person(id),
+        "person_id" | "author_person_id" | "actor_person_id" => MirrorKey::Person(id),
         "attachment_asset_id" | "asset_id" => MirrorKey::Asset(id),
         "communication_id" => MirrorKey::Communication(id),
         _ => return None,

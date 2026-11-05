@@ -943,7 +943,11 @@ async fn ingest_persists_the_alias_resolved_sender_person() {
     let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &alias_mail)
         .await
         .unwrap();
-    let conversation = crate::inbox::conversation_by_id(&f.db, saved.conversation_id)
+    // The PG ingest persists the association in PostgreSQL; the direct PG
+    // read asserts that persistence without depending on the deployment's
+    // inbox-authority switch (unset here, so the surreal surface reads a
+    // lane this ingest never writes).
+    let conversation = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
         .await
         .unwrap()
         .unwrap();
@@ -960,7 +964,7 @@ async fn ingest_persists_the_alias_resolved_sender_person() {
     let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &lawyer_mail)
         .await
         .unwrap();
-    let conversation = crate::inbox::conversation_by_id(&f.db, saved.conversation_id)
+    let conversation = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
         .await
         .unwrap()
         .unwrap();
@@ -1090,19 +1094,19 @@ async fn threaded_ingest_joins_referenced_conversations_within_the_project() {
         "client@example.com",
     );
     root.project_id = Some(fixture.project);
-    let first = pg_inbox::ingest_threaded_on(&fixture.pg, &root, Some(&[]))
+    let first = pg_inbox::ingest_threaded_on(&fixture.pg, &fixture.db, &root, Some(&[]))
         .await
         .unwrap();
 
     // The Firm's reply: another sender, In-Reply-To names the root.
     let reply = inbound_with(&root, None, "lawyer@firm.example", "reply@firm.example");
     let refs = ["root@example.com".to_string()];
-    let joined = pg_inbox::ingest_threaded_on(&fixture.pg, &reply, Some(&refs))
+    let joined = pg_inbox::ingest_threaded_on(&fixture.pg, &fixture.db, &reply, Some(&refs))
         .await
         .unwrap();
     assert!(!joined.deduped);
     assert_eq!(joined.conversation_id, first.conversation_id);
-    let redelivered = pg_inbox::ingest_threaded_on(&fixture.pg, &reply, Some(&refs))
+    let redelivered = pg_inbox::ingest_threaded_on(&fixture.pg, &fixture.db, &reply, Some(&refs))
         .await
         .unwrap();
     assert!(redelivered.deduped);
@@ -1119,7 +1123,7 @@ async fn threaded_ingest_joins_referenced_conversations_within_the_project() {
         "never-ingested@other.example".to_string(),
         "reply@firm.example".to_string(),
     ];
-    let chained = pg_inbox::ingest_threaded_on(&fixture.pg, &later, Some(&chain))
+    let chained = pg_inbox::ingest_threaded_on(&fixture.pg, &fixture.db, &later, Some(&chain))
         .await
         .unwrap();
     assert_eq!(chained.conversation_id, first.conversation_id);
@@ -1127,7 +1131,7 @@ async fn threaded_ingest_joins_referenced_conversations_within_the_project() {
     // The same reference from another Project starts its own Conversation.
     let mut elsewhere = inbound_with(&root, None, "lawyer@firm.example", "elsewhere@firm.example");
     elsewhere.project_id = Some(other_project);
-    let scoped = pg_inbox::ingest_threaded_on(&fixture.pg, &elsewhere, Some(&refs))
+    let scoped = pg_inbox::ingest_threaded_on(&fixture.pg, &fixture.db, &elsewhere, Some(&refs))
         .await
         .unwrap();
     assert_ne!(scoped.conversation_id, first.conversation_id);
@@ -1135,7 +1139,7 @@ async fn threaded_ingest_joins_referenced_conversations_within_the_project() {
     // No matching reference and a new sender: a new Conversation.
     let unrelated = inbound_with(&root, None, "stranger@example.com", "unrelated@example.com");
     let unknown = ["other-thread@example.com".to_string()];
-    let fresh = pg_inbox::ingest_threaded_on(&fixture.pg, &unrelated, Some(&unknown))
+    let fresh = pg_inbox::ingest_threaded_on(&fixture.pg, &fixture.db, &unrelated, Some(&unknown))
         .await
         .unwrap();
     assert_ne!(fresh.conversation_id, first.conversation_id);
@@ -1153,10 +1157,10 @@ async fn threaded_ingest_joins_referenced_conversations_within_the_project() {
         "b@example.com",
         "gm-2@example.com",
     );
-    let one = pg_inbox::ingest_threaded_on(&fixture.pg, &gmail_one, Some(&[]))
+    let one = pg_inbox::ingest_threaded_on(&fixture.pg, &fixture.db, &gmail_one, Some(&[]))
         .await
         .unwrap();
-    let two = pg_inbox::ingest_threaded_on(&fixture.pg, &gmail_two, Some(&[]))
+    let two = pg_inbox::ingest_threaded_on(&fixture.pg, &fixture.db, &gmail_two, Some(&[]))
         .await
         .unwrap();
     assert_eq!(one.conversation_id, two.conversation_id);
@@ -4194,7 +4198,7 @@ async fn a_backfill_links_unassociated_conversations_and_reruns_without_effect()
         .unwrap();
     assert_eq!(linked, 1);
     let person_rows: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM person WHERE email_lower = lower($1)")
+        sqlx::query_scalar("SELECT count(*) FROM person WHERE email = $1::citext")
             .bind("archived.correspondent@example.com")
             .fetch_one(f.pg.pool())
             .await
@@ -4216,7 +4220,7 @@ async fn a_backfill_links_unassociated_conversations_and_reruns_without_effect()
         .unwrap();
     assert_eq!(again, 0, "a re-run finds nothing left to link");
     let person_rows: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM person WHERE email_lower = lower($1)")
+        sqlx::query_scalar("SELECT count(*) FROM person WHERE email = $1::citext")
             .bind("archived.correspondent@example.com")
             .fetch_one(f.pg.pool())
             .await

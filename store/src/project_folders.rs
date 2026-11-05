@@ -211,7 +211,21 @@ pub async fn bind(
             .as_database_error()
             .is_some_and(|db| db.code().as_deref() == Some("23505"))
         {
-            return Err(ProjectFolderError::BindingConflict);
+            // The global `drive_folder_id` unique can fire before the
+            // `(project_id, slot)` arbiter: two identical concurrent binds
+            // then report a conflict the contract says must converge. Drop
+            // the aborted transaction, re-read the slot, and return the
+            // persisted row only when it is exactly the requested binding.
+            drop(tx);
+            return converged_or_conflict(
+                pg,
+                project_id,
+                slot,
+                drive_folder_id,
+                parent_id,
+                parent_drive_folder_id,
+            )
+            .await;
         }
         return Err(error.into());
     }
@@ -231,6 +245,45 @@ pub async fn bind(
     }
     tx.commit().await?;
     Ok(saved)
+}
+
+/// Converge a lost concurrent-bind race, or report the real conflict.
+///
+/// The database pins provider identity globally, so a 23505 can surface
+/// from the `drive_folder_id` unique before the `(project_id, slot)`
+/// arbiter applies — two identical concurrent binds then look like a
+/// conflict even though the contract is to converge. The loser re-reads
+/// its slot on a fresh connection: the persisted row is returned only
+/// when it is exactly the requested binding; anything else (a different
+/// drive, a different parent, another project's claim on the drive)
+/// stays a [`ProjectFolderError::BindingConflict`].
+async fn converged_or_conflict(
+    pg: &PostgresDb,
+    project_id: Uuid,
+    slot: ProjectFolderSlot,
+    drive_folder_id: &str,
+    parent_id: Option<Uuid>,
+    parent_drive_folder_id: Option<&str>,
+) -> Result<ProjectFolder, ProjectFolderError> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM project_folder WHERE project_id=$1 AND slot=$2"
+    )))
+    .bind(project_id)
+    .bind(slot.key())
+    .fetch_optional(pg.pool())
+    .await?;
+    let Some(row) = row else {
+        return Err(ProjectFolderError::BindingConflict);
+    };
+    let saved = from_row(&row)?;
+    if saved.drive_folder_id == drive_folder_id
+        && saved.parent_id == parent_id
+        && saved.parent_drive_folder_id.as_deref() == parent_drive_folder_id
+    {
+        Ok(saved)
+    } else {
+        Err(ProjectFolderError::BindingConflict)
+    }
 }
 
 /// Read a folder only after successful provider verification.
