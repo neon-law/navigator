@@ -171,6 +171,102 @@ pub fn is_signer_box(html: &str) -> bool {
         .is_some_and(|inner| inner.trim().eq_ignore_ascii_case("signer-box"))
 }
 
+/// Where counsel signs a court filing: the author writes this marker in its
+/// own paragraph. Both renders draw it as italic `/s/ DRAFT` on a signature
+/// rule (the paragraph's bottom border), with `DRAFT` highlighted, until a
+/// final render names counsel through [`signed_counsel_signature`].
+pub const COUNSEL_SIGNATURE: &str = "<!-- counsel-signature -->";
+
+/// What a counsel signature line prints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CounselSignature {
+    /// A draft: `/s/ DRAFT`, with `DRAFT` highlighted.
+    Draft,
+    /// A final render: `/s/` and counsel's name.
+    Signed(String),
+}
+
+impl CounselSignature {
+    /// The text the line prints after `/s/ `.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Draft => "DRAFT",
+            Self::Signed(name) => name,
+        }
+    }
+}
+
+/// The marker a final render writes in place of [`COUNSEL_SIGNATURE`]: the
+/// same line, signed `/s/ <name>`. A `--` cannot sit inside an HTML comment,
+/// so the name is written with single hyphens.
+#[must_use]
+pub fn signed_counsel_signature(name: &str) -> String {
+    let mut name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    while name.contains("--") {
+        name = name.replace("--", "-");
+    }
+    format!("<!-- counsel-signature: {name} -->")
+}
+
+/// `body` with every draft counsel signature signed `/s/ <name>`.
+#[must_use]
+pub fn sign_counsel_signatures(body: &str, name: &str) -> String {
+    let signed = signed_counsel_signature(name);
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(start) = rest.find("<!--") {
+        let Some(length) = rest[start..].find("-->").map(|end| end + "-->".len()) else {
+            break;
+        };
+        let comment = &rest[start..start + length];
+        out.push_str(&rest[..start]);
+        if counsel_signature(comment) == Some(CounselSignature::Draft) {
+            out.push_str(&signed);
+        } else {
+            out.push_str(comment);
+        }
+        rest = &rest[start + length..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether `body` still carries a draft counsel signature.
+#[must_use]
+pub fn has_draft_counsel_signature(body: &str) -> bool {
+    body.split("<!--").skip(1).any(|after| {
+        after.find("-->").is_some_and(|end| {
+            counsel_signature(&format!("<!--{}-->", &after[..end])) == Some(CounselSignature::Draft)
+        })
+    })
+}
+
+/// Read a raw HTML token as a counsel signature marker, in any case or inner
+/// spacing: bare is a draft, `counsel-signature: <name>` is signed.
+#[must_use]
+pub fn counsel_signature(html: &str) -> Option<CounselSignature> {
+    let inner = html
+        .trim()
+        .strip_prefix("<!--")?
+        .strip_suffix("-->")?
+        .trim();
+    let lower = inner.to_ascii_lowercase();
+    let rest = lower.strip_prefix("counsel-signature")?;
+    if rest.trim().is_empty() {
+        return Some(CounselSignature::Draft);
+    }
+    let name = inner["counsel-signature".len()..]
+        .trim_start()
+        .strip_prefix(':')?
+        .trim();
+    if name.is_empty() {
+        Some(CounselSignature::Draft)
+    } else {
+        Some(CounselSignature::Signed(name.to_string()))
+    }
+}
+
 /// Whether `html` is a `<br>` tag. Spacing and a trailing slash are free
 /// (`<br>`, `<br/>`, `<br />`), and the name is case-insensitive. A cell
 /// uses this where a Markdown hard break cannot sit inside a table.
@@ -420,6 +516,37 @@ mod tests {
         assert!(!is_signer_box("<!-- keep -->"));
         assert!(!is_signer_box("<!-- signer box -->"));
         assert!(!is_signer_box("signer-box"));
+    }
+
+    #[test]
+    fn a_counsel_signature_is_a_draft_until_a_name_signs_it() {
+        assert_eq!(
+            counsel_signature(COUNSEL_SIGNATURE),
+            Some(CounselSignature::Draft)
+        );
+        assert_eq!(
+            counsel_signature("<!--COUNSEL-SIGNATURE-->\n"),
+            Some(CounselSignature::Draft)
+        );
+        let signed = signed_counsel_signature(" Pat  Sample--Jones ");
+        assert_eq!(
+            counsel_signature(&signed),
+            Some(CounselSignature::Signed("Pat Sample-Jones".into()))
+        );
+        assert_eq!(counsel_signature("<!-- counsel-signatures -->"), None);
+        assert_eq!(counsel_signature(SIGNER_BOX), None);
+
+        let body = format!("<!-- keep -->\nSubmitted,\n\n{COUNSEL_SIGNATURE}\n\n{SIGNER_BOX}\n");
+        assert!(has_draft_counsel_signature(&body));
+        let final_body = sign_counsel_signatures(&body, "Pat Sample");
+        assert!(!has_draft_counsel_signature(&final_body));
+        assert_eq!(
+            final_body,
+            format!(
+                "<!-- keep -->\nSubmitted,\n\n{}\n\n{SIGNER_BOX}\n",
+                signed_counsel_signature("Pat Sample")
+            )
+        );
     }
 
     #[test]

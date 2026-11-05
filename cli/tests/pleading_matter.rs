@@ -367,6 +367,61 @@ fn pending_assignments_are_refused_by_final_pdf_and_word_without_writing() {
     }
 }
 
+/// LAW-239: a draft's counsel signature is `/s/ DRAFT` with `DRAFT` and the
+/// open date highlighted; the final render signs `/s/ <matter.counsel.name>`
+/// on the same rule.
+#[test]
+fn a_counsel_signature_is_draft_in_a_preview_and_signed_in_a_final_render() {
+    let work = matter_tree();
+    let template = work.path().join("templates/notice_of_compliance.md");
+    let text = fs::read_to_string(&template).unwrap();
+    fs::write(
+        &template,
+        format!("{text}\nRespectfully submitted,\n\n<!-- counsel-signature -->\n\nPat Sample\n"),
+    )
+    .unwrap();
+
+    let preview = work.path().join("preview.docx");
+    let result = Command::new(cargo_bin("navigator"))
+        .args(["notation", "word"])
+        .arg(&template)
+        .args(["--preview", "--out"])
+        .arg(&preview)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", stderr(&result));
+    let document = docx_part(&fs::read(&preview).unwrap(), "word/document.xml");
+    assert!(
+        document.contains(
+            "<w:i/><w:highlight w:val=\"yellow\"/></w:rPr><w:t xml:space=\"preserve\">DRAFT</w:t>"
+        ),
+        "{document}"
+    );
+    assert!(
+        document.contains(
+            "<w:highlight w:val=\"yellow\"/></w:rPr><w:t xml:space=\"preserve\">{{custom_datetime__verification_date}}</w:t>"
+        ),
+        "{document}"
+    );
+    assert_eq!(document.matches("<w:pBdr>").count(), 1, "{document}");
+
+    let out = work.path().join("final.docx");
+    let result = render("word", &template, &out);
+    assert!(result.status.success(), "{}", stderr(&result));
+    let document = docx_part(&fs::read(&out).unwrap(), "word/document.xml");
+    assert!(
+        document.contains("<w:i/></w:rPr><w:t xml:space=\"preserve\">/s/ Pat Sample</w:t>"),
+        "{document}"
+    );
+    assert_eq!(document.matches("<w:pBdr>").count(), 1, "{document}");
+    assert!(!document.contains("DRAFT"), "{document}");
+    assert!(!document.contains("w:highlight"), "{document}");
+
+    let bytes = pdf_of(&work, "notice_of_compliance.md");
+    assert_eq!(pdf::occurrence_count(&bytes, "/s/ Pat Sample").unwrap(), 1);
+    assert_eq!(pdf::occurrence_count(&bytes, "DRAFT").unwrap(), 0);
+}
+
 #[test]
 fn explicit_pending_assignments_still_preview() {
     let work = matter_tree();

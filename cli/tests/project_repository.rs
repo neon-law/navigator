@@ -122,6 +122,7 @@ const SYNCED_SKILL_NAMES: &[&str] = &[
     "push-changes",
     "push-to-navigator",
     "word-editing",
+    "court-filing-drafts",
 ];
 
 fn workspace_root() -> PathBuf {

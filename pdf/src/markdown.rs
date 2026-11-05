@@ -106,6 +106,21 @@ pub fn to_typst(body: &str) -> String {
             Event::Html(html) | Event::InlineHtml(html) if word::paper::is_signer_box(&html) => {
                 out.push_str(SIGNER_BOX_TYPST);
             }
+            // A counsel signature: italic `/s/` and the name on a signature
+            // rule, `DRAFT` washed yellow until a final render names
+            // counsel. Alone on its line it is its own paragraph.
+            Event::Html(html) if word::paper::counsel_signature(&html).is_some() => {
+                if let Some(signature) = word::paper::counsel_signature(&html) {
+                    out.push_str("\n\n");
+                    out.push_str(&counsel_signature_typst(&signature));
+                    out.push_str("\n\n");
+                }
+            }
+            Event::InlineHtml(html) if word::paper::counsel_signature(&html).is_some() => {
+                if let Some(signature) = word::paper::counsel_signature(&html) {
+                    out.push_str(&counsel_signature_typst(&signature));
+                }
+            }
             // The one HTML token honored: a top-level `<!-- pagebreak -->`
             // comment forces a Typst page break (used to start a signature
             // block on its own page). Inside a container (table cell, block
@@ -399,6 +414,21 @@ pub fn bold_answer(value: &str) -> String {
 /// about an inch and a half, sized to the line it sits on.
 const SIGNER_BOX_TYPST: &str =
     "#box(width: 1.5in, height: 0.75em, stroke: (bottom: 0.5pt + black))";
+
+/// A counsel signature line: italic `/s/` and the name in a three-and-a-half
+/// inch box whose bottom stroke is the signature rule. A draft's `DRAFT` is
+/// washed yellow.
+fn counsel_signature_typst(signature: &word::paper::CounselSignature) -> String {
+    let name = escape_text(signature.name()).replace('/', "\\/");
+    let name = if *signature == word::paper::CounselSignature::Draft {
+        format!("#highlight(fill: rgb(\"{PLACEHOLDER_HIGHLIGHT}\"))[{name}]")
+    } else {
+        name
+    };
+    format!(
+        "#box(width: 3.5in, inset: (bottom: 2pt), stroke: (bottom: 0.5pt + black))[#emph[\\/s\\/ {name}]]"
+    )
+}
 
 /// The wash behind an unanswered `{{placeholder}}`. A soft highlighter
 /// yellow: loud enough that nobody signs or sends a document with a blank
@@ -711,6 +741,32 @@ mod tests {
 | Articles of Organization | $75.00 |\n\
 | **Total state filing fees** | **$425.00** |";
         crate::render(&to_typst(md)).expect("a converted table must compile through Typst");
+    }
+
+    /// LAW-239: a draft's counsel signature is italic `/s/ DRAFT` on a
+    /// bottom-stroke rule with `DRAFT` washed yellow; a signed one names
+    /// counsel and washes nothing; a judge's plain rule is left alone.
+    #[test]
+    fn a_counsel_signature_sits_on_its_rule_and_compiles() {
+        let draft = to_typst(&format!(
+            "Respectfully submitted,\n\n{}\n\nPat Sample\n\nJUDGE: ______\n",
+            word::paper::COUNSEL_SIGNATURE
+        ));
+        assert!(
+            draft.contains(
+                "#box(width: 3.5in, inset: (bottom: 2pt), stroke: (bottom: 0.5pt + black))\
+                 [#emph[\\/s\\/ #highlight(fill: rgb(\"#fff3a3\"))[DRAFT]]]"
+            ),
+            "{draft}"
+        );
+        assert!(draft.contains("JUDGE: \\_\\_\\_\\_\\_\\_"), "{draft}");
+        assert_eq!(draft.matches("#highlight").count(), 1, "{draft}");
+        crate::render(&draft).expect("a draft signature compiles through Typst");
+
+        let signed = to_typst(&word::paper::signed_counsel_signature("Pat Sample"));
+        assert!(signed.contains("[#emph[\\/s\\/ Pat Sample]]"), "{signed}");
+        assert!(!signed.contains("#highlight"), "{signed}");
+        crate::render(&signed).expect("a signed signature compiles through Typst");
     }
 
     #[test]

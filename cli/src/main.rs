@@ -8440,21 +8440,8 @@ fn run_render(
     else {
         return ExitCode::from(2);
     };
-    // Final documents only: unless this is a preview, the filled text
-    // carries nothing a person is still meant to complete. Missing facts
-    // route to the questionnaire state that answers them.
-    if !preview {
-        let unfinished = rules::final_document::scan(&body);
-        if !unfinished.is_empty() {
-            for finding in &unfinished {
-                eprintln!("navigator: rendered {finding}");
-            }
-            eprintln!(
-                "navigator: a final render carries no unfinished text; answer the questionnaire, \
-                 or pass `--preview` for a highlighted draft"
-            );
-            return ExitCode::from(1);
-        }
+    if !preview && !final_body_is_finished(&body) {
+        return ExitCode::from(1);
     }
 
     let Ok(letterhead) =
@@ -8497,6 +8484,31 @@ fn run_render(
         ))
     );
     ExitCode::SUCCESS
+}
+
+/// Final documents only: the filled text carries nothing a person is still
+/// meant to complete, and no draft counsel signature. Missing facts route to
+/// the questionnaire state that answers them. Prints each refusal.
+fn final_body_is_finished(body: &str) -> bool {
+    if word::paper::has_draft_counsel_signature(body) {
+        eprintln!(
+            "navigator: a counsel signature is signed from the Project's `matter.counsel.name`, \
+             which only a pleading reads; render this draft with `--preview`"
+        );
+        return false;
+    }
+    let unfinished = rules::final_document::scan(body);
+    if unfinished.is_empty() {
+        return true;
+    }
+    for finding in &unfinished {
+        eprintln!("navigator: rendered {finding}");
+    }
+    eprintln!(
+        "navigator: a final render carries no unfinished text; answer the questionnaire, \
+         or pass `--preview` for a highlighted draft"
+    );
+    false
 }
 
 /// Binds `firm.legal_name` to the Project's Firm legal name unless the
@@ -8634,6 +8646,13 @@ fn pleading_body(
     let certificate = projects::service::certificate_for(file, contents, preview)?
         .map(|certificate| format!("\n\n{certificate}"))
         .unwrap_or_default();
+    // A draft's counsel signature prints `/s/ DRAFT`; a final render signs
+    // it `/s/ <counsel>` from `matter.counsel.name`.
+    let body = if preview {
+        body
+    } else {
+        word::paper::sign_counsel_signatures(&body, &projects::matter::counsel_name(file)?)
+    };
     Ok(format!("{caption}{body}{certificate}"))
 }
 
@@ -8697,6 +8716,7 @@ fn render_notation_artifact(
                 source_revision: source_revision.as_deref(),
                 pleading,
                 provenance: Some(provenance),
+                preview,
             },
         )
         .map_err(|error| format!("render Word document: {error}"));
