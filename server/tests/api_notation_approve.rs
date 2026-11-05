@@ -189,7 +189,7 @@ async fn participant_lawyer_approves_and_advances_past_lawyer_review() {
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 

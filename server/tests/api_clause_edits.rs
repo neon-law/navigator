@@ -171,7 +171,7 @@ async fn edit_authz_matrix_and_success() {
         &surreal,
         "lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
     let r = send(
@@ -215,7 +215,7 @@ async fn a_clause_from_another_notation_is_404() {
         &surreal,
         "lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -241,7 +241,7 @@ async fn participant_lawyer_deletes_a_clause() {
         &surreal,
         "lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -265,7 +265,7 @@ async fn participant_lawyer_moves_a_clause() {
         &surreal,
         "lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 

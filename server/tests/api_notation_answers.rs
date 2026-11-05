@@ -214,7 +214,7 @@ async fn participant_lawyer_answers_the_step_and_gets_the_next() {
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -260,7 +260,7 @@ async fn out_of_order_question_code_is_409() {
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 

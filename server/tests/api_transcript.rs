@@ -136,26 +136,10 @@ async fn seed_coverage_notation(h: &Harness) -> Uuid {
     )
     .await
     .unwrap();
-    let project = seed_project(h).await;
+    let project = store::test_support::seed_project_surreal(&h.surreal, "Matter").await;
     store::notations::create(
         &h.surreal,
         &store::notations::NewNotation::new(template.id, person.id, project, "BEGIN"),
-    )
-    .await
-    .unwrap()
-    .id
-}
-
-async fn seed_project(h: &Harness) -> Uuid {
-    store::projects::create(
-        &h.surreal,
-        &store::projects::NewProject {
-            code: format!("matter-{}", Uuid::now_v7()),
-            name: "Matter".into(),
-            status: "open".into(),
-            entity_id: store::test_support::seed_entity(&h.surreal).await,
-            ..Default::default()
-        },
     )
     .await
     .unwrap()

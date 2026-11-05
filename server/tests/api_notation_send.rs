@@ -257,7 +257,7 @@ async fn send_before_approve_is_409_document_not_ready() {
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -278,7 +278,7 @@ async fn approve_then_send_dispatches_and_returns_the_request_id() {
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -329,7 +329,7 @@ async fn an_unfinished_document_is_refused_and_never_reaches_the_provider() {
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -392,7 +392,7 @@ async fn a_retainer_with_no_clauses_is_refused_and_never_reaches_the_provider() 
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 

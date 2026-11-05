@@ -156,7 +156,7 @@ async fn a_blank_body_is_400() {
         &surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -173,7 +173,7 @@ async fn participant_lawyer_appends_a_clause() {
         &surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 

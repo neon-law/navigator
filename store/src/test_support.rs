@@ -283,6 +283,34 @@ pub async fn seed_project_surreal(surreal: &crate::surreal::SurrealDb, name: &st
     seed_project_row(surreal, name).await.id
 }
 
+/// [`seed_project`] attached to a firm — what the inbox/triage fixtures
+/// need. `None` seeds an unattached matter.
+///
+/// # Panics
+///
+/// If seeding the entity or the project fails.
+pub async fn seed_project_on_firm(
+    surreal: &crate::surreal::SurrealDb,
+    firm_id: Option<Uuid>,
+    name: &str,
+) -> crate::projects::Project {
+    let entity_id = seed_entity(surreal).await;
+    let code_id = Uuid::now_v7();
+    crate::projects::create(
+        surreal,
+        &crate::projects::NewProject {
+            code: crate::projects::code_from_name(name, code_id),
+            name: name.to_string(),
+            status: "open".to_string(),
+            entity_id,
+            firm_id,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("seed project on firm")
+}
+
 async fn seed_project_row(
     surreal: &crate::surreal::SurrealDb,
     name: &str,

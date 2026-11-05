@@ -197,7 +197,7 @@ async fn participant_lawyer_dispatches_the_intake_and_reports_the_recipient() {
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -220,7 +220,7 @@ async fn dispatched_intake_uses_the_project_code_in_its_route() {
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 

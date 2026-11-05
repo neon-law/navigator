@@ -1111,24 +1111,6 @@ mod tests {
     use std::sync::Arc;
     use uuid::Uuid;
 
-    async fn seed_project(surreal: &crate::surreal::SurrealDb) -> Uuid {
-        let id = Uuid::now_v7();
-        let __dri = crate::test_support::dri_person(surreal).await;
-        crate::projects::create(
-            surreal,
-            &crate::projects::NewProject {
-                code: format!("communication-{id}"),
-                name: "Test Matter".into(),
-                status: "open".into(),
-                entity_id: crate::test_support::seed_entity(surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
     fn args<'a>(project_id: Uuid, ch: &'a str, dir: &'a str, body: &'a str) -> IngestArgs<'a> {
         IngestArgs {
             project_id,
@@ -1147,7 +1129,7 @@ mod tests {
     #[tokio::test]
     async fn historical_messages_without_email_metadata_remain_readable() {
         let db = crate::surreal::test_support::mem().await;
-        let project = seed_project(&db).await;
+        let project = crate::test_support::seed_project_surreal(&db, "Test Matter").await;
         let created = ingest(
             &db,
             &args(
@@ -1180,7 +1162,7 @@ mod tests {
     #[tokio::test]
     async fn receipt_projection_uses_earliest_instant_and_only_the_same_project() {
         let db = crate::surreal::test_support::mem().await;
-        let project = seed_project(&db).await;
+        let project = crate::test_support::seed_project_surreal(&db, "Test Matter").await;
         let outbound = ingest(
             &db,
             &args(
@@ -1215,7 +1197,7 @@ mod tests {
             sent.receipt_acknowledged_at.as_deref(),
             Some("2026-06-08T12:00:00+03:00")
         );
-        let other = seed_project(&db).await;
+        let other = crate::test_support::seed_project_surreal(&db, "Test Matter").await;
         super::move_to_project(&db, earliest.communication_id, other)
             .await
             .unwrap();
@@ -1233,7 +1215,7 @@ mod tests {
     #[tokio::test]
     async fn ingest_inserts_a_spine_row() {
         let surreal = crate::surreal::test_support::mem().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
 
         let out = ingest(
             &surreal,
@@ -1265,7 +1247,7 @@ mod tests {
     async fn a_call_is_logged_internal_with_agreements_until_an_email_confirms_them() {
         use super::{confirm_agreements, record_call, CallDetails, NewCall};
         let surreal = crate::surreal::test_support::mem().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
 
         let unknown = ingest(
             &surreal,
@@ -1367,7 +1349,7 @@ mod tests {
     async fn a_note_is_internal_without_a_counterparty_and_never_client_visible() {
         use super::{for_project, log_note, NewNote};
         let surreal = crate::surreal::test_support::mem().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
 
         let note = log_note(
             &surreal,
@@ -1413,7 +1395,7 @@ mod tests {
     #[tokio::test]
     async fn ingest_dedupes_on_channel_and_source_ref() {
         let surreal = crate::surreal::test_support::mem().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
 
         let mut a = args(project_id, channel::EMAIL_INBOUND, direction::INBOUND, "hi");
         a.source_ref = Some("msg-abc@mail.example.com");
@@ -1432,8 +1414,10 @@ mod tests {
     #[tokio::test]
     async fn ingest_refuses_source_ref_replay_across_projects() {
         let surreal = crate::surreal::test_support::mem().await;
-        let first_project = seed_project(&surreal).await;
-        let second_project = seed_project(&surreal).await;
+        let first_project =
+            crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
+        let second_project =
+            crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
         let mut first = args(
             first_project,
             channel::EMAIL_INBOUND,
@@ -1462,7 +1446,7 @@ mod tests {
     #[tokio::test]
     async fn same_source_ref_different_channel_is_distinct() {
         let surreal = crate::surreal::test_support::mem().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
 
         let mut inbound = args(project_id, channel::EMAIL_INBOUND, direction::INBOUND, "q");
         inbound.source_ref = Some("ref-1");
@@ -1488,7 +1472,7 @@ mod tests {
         // be refused, or one client message can land twice in their own
         // privileged thread.
         let surreal = crate::surreal::test_support::mem().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
         let mut first = args(
             project_id,
             channel::EMAIL_INBOUND,
@@ -1524,7 +1508,7 @@ mod tests {
     #[tokio::test]
     async fn null_source_ref_never_dedupes() {
         let surreal = crate::surreal::test_support::mem().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
 
         // Two comments with no external id are distinct events. This also
         // holds the `(channel, source_ref)` unique index honest: an absent
@@ -1559,7 +1543,7 @@ mod tests {
     #[tokio::test]
     async fn client_visible_excludes_internal_firm_notes() {
         let surreal = crate::surreal::test_support::mem().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
 
         // A client-facing inbound message and a firm-internal note.
         ingest(
@@ -1604,7 +1588,7 @@ mod tests {
     #[tokio::test]
     async fn for_project_returns_thread_oldest_first() {
         let surreal = crate::surreal::test_support::mem().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
 
         let mut later = args(
             project_id,
@@ -1641,7 +1625,7 @@ mod tests {
     async fn purge_for_project_deletes_the_log_and_its_raw_payload() {
         let surreal = crate::surreal::test_support::mem().await;
         let storage = fs_storage().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
 
         // A raw .eml payload stored as a content-addressed asset, referenced by
         // an inbound-email communication.
@@ -1702,8 +1686,9 @@ mod tests {
 
         // now, an old close (11 years ago → expired), a recent close (kept).
         let now: DateTime<Utc> = "2026-06-08T00:00:00Z".parse().unwrap();
-        let old_project = seed_project(&surreal).await;
-        let recent_project = seed_project(&surreal).await;
+        let old_project = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
+        let recent_project =
+            crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
         set_closed_at(&surreal, old_project, "2015-01-01T00:00:00Z").await;
         set_closed_at(&surreal, recent_project, "2025-12-01T00:00:00Z").await;
 
