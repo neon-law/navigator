@@ -256,7 +256,9 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
         .await
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let storage = FsStorage::new(dir.path()).await.unwrap();
+    let storage = ZeroDelete {
+        inner: FsStorage::new(dir.path()).await.unwrap(),
+    };
     let base = "memory://coverage";
     let paired = export_pair(
         source("navigator", &navigator, &nav_coverage),
@@ -662,11 +664,60 @@ impl StorageService for RefuseWrites {
         }
         self.inner.put(key, bytes, content_type).await
     }
+    async fn put_immutable(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        content_type: &str,
+    ) -> Result<cloud::ImmutableObject, StorageError> {
+        if key.contains(self.refused) {
+            return Err(StorageError::Unsupported("synthetic archive write failure"));
+        }
+        self.inner.put_immutable(key, bytes, content_type).await
+    }
     async fn get(&self, key: &str) -> Result<StoredObject, StorageError> {
         self.inner.get(key).await
     }
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
         self.inner.delete(key).await
+    }
+    async fn list(&self, prefix: &str) -> Result<Vec<ObjectListing>, StorageError> {
+        self.inner.list(prefix).await
+    }
+    async fn signed_url(
+        &self,
+        key: &str,
+        ttl: std::time::Duration,
+    ) -> Result<String, StorageError> {
+        self.inner.signed_url(key, ttl).await
+    }
+}
+
+/// The drill's main storage: forwards everything to a tempdir `FsStorage`
+/// except `delete`, which panics — an undisturbed paired publication is
+/// the proof that the export path never deletes.
+struct ZeroDelete {
+    inner: FsStorage,
+}
+
+#[async_trait::async_trait]
+impl StorageService for ZeroDelete {
+    async fn put(&self, key: &str, bytes: &[u8], content_type: &str) -> Result<(), StorageError> {
+        self.inner.put(key, bytes, content_type).await
+    }
+    async fn put_immutable(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        content_type: &str,
+    ) -> Result<cloud::ImmutableObject, StorageError> {
+        self.inner.put_immutable(key, bytes, content_type).await
+    }
+    async fn get(&self, key: &str) -> Result<StoredObject, StorageError> {
+        self.inner.get(key).await
+    }
+    async fn delete(&self, key: &str) -> Result<(), StorageError> {
+        panic!("the paired coverage drill must never delete: {key}");
     }
     async fn list(&self, prefix: &str) -> Result<Vec<ObjectListing>, StorageError> {
         self.inner.list(prefix).await
