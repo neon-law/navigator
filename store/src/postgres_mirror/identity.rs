@@ -51,6 +51,7 @@ const ENTITY_COLUMNS: &[&str] = &[
     "url",
     "avatar_url",
     "xero_id",
+    "metadata",
     "firm_anchor_key",
     "inserted_at",
     "updated_at",
@@ -184,6 +185,7 @@ struct EntityImage {
     url: Option<String>,
     avatar_url: Option<String>,
     xero_id: Option<String>,
+    metadata: Option<serde_json::Value>,
     firm_anchor_key: Option<String>,
     inserted_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -200,6 +202,7 @@ impl EntityImage {
             url: row.url.clone(),
             avatar_url: row.avatar_url.clone(),
             xero_id: row.xero_id.clone(),
+            metadata: row.metadata.clone(),
             firm_anchor_key: row.firm_anchor_key.clone(),
             inserted_at: micros(row.inserted_at),
             updated_at: micros(row.updated_at),
@@ -216,6 +219,7 @@ impl EntityImage {
             url: row.try_get("url")?,
             avatar_url: row.try_get("avatar_url")?,
             xero_id: row.try_get("xero_id")?,
+            metadata: row.try_get("metadata")?,
             firm_anchor_key: row.try_get("firm_anchor_key")?,
             inserted_at: row.try_get("inserted_at")?,
             updated_at: row.try_get("updated_at")?,
@@ -485,6 +489,7 @@ async fn upsert_entity(pg: &PostgresDb, entity: &EntityImage) -> Result<Mirrored
         .bind(&entity.url)
         .bind(&entity.avatar_url)
         .bind(&entity.xero_id)
+        .bind(&entity.metadata)
         .bind(&entity.firm_anchor_key)
         .bind(entity.inserted_at)
         .bind(entity.updated_at)

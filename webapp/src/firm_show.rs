@@ -113,6 +113,9 @@ pub struct FirmFields {
     pub name: String,
     pub status: String,
     pub entity_name: String,
+    /// The linked Entity's employer identification number.
+    #[serde(default)]
+    pub ein: Option<String>,
     pub brand_keys: Vec<String>,
     /// The current Admin DRI's name and email, when exactly one eligible
     /// designation exists.
@@ -272,13 +275,22 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         return Ok(base);
     };
 
-    let entity_name = match firm.entity_id {
+    let entity = match firm.entity_id {
         Some(entity_id) => store::entities::find_by_id(&surreal, entity_id)
             .await
-            .map_err(|error| ServerFnError::new(error.to_string()))?
-            .map_or_else(|| "Unlinked entity".to_string(), |entity| entity.name),
-        None => "Unlinked entity".to_string(),
+            .map_err(|error| ServerFnError::new(error.to_string()))?,
+        None => None,
     };
+    let entity_name = entity.as_ref().map_or_else(
+        || "Unlinked entity".to_string(),
+        |entity| entity.name.clone(),
+    );
+    let ein = entity
+        .as_ref()
+        .and_then(|entity| entity.metadata.as_ref())
+        .and_then(|metadata| metadata.get("ein"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     let brand_keys = store::firms::brand_keys_for_firm(&surreal, firm.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -506,6 +518,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
             name: firm.name,
             status: firm.status,
             entity_name,
+            ein,
             brand_keys,
             admin_dri,
             admin_dri_problem,
@@ -597,6 +610,12 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                 h1 { "{fields.name}" }
                 p { class: "page-subtitle",
                     "Entity: {fields.entity_name}. Status: {fields.status}."
+                }
+                if let Some(ein) = &fields.ein {
+                    p { class: "firm-ein", style: "font-size: 1.25rem; font-weight: 600;",
+                        "Employer identification number (EIN): "
+                        span { style: "font-variant-numeric: tabular-nums; user-select: all;", "{ein}" }
+                    }
                 }
                 if fields.can_edit {
                     p {
@@ -847,6 +866,20 @@ mod tests {
                 role == ViewerRole::Owner
             );
         }
+    }
+
+    #[test]
+    fn ein_is_prominent_in_the_firm_header_and_absent_when_unset() {
+        let with_ein = render(Some(FirmFields {
+            name: "Example Firm".into(),
+            ein: Some("12-3456789".into()),
+            ..Default::default()
+        }));
+        assert!(with_ein.contains("Employer identification number (EIN):"));
+        assert!(with_ein.contains("12-3456789"));
+        assert!(with_ein.find("12-3456789").unwrap() < with_ein.find("</header>").unwrap());
+        let without_ein = render(Some(FirmFields::default()));
+        assert!(!without_ein.contains("Employer identification number (EIN):"));
     }
 
     #[test]

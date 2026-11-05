@@ -3927,3 +3927,6 @@ LEFT JOIN LATERAL (
 -- Email ingest threads a delivery into the Conversation of a Message it names in
 -- In-Reply-To or References, looked up by that Message's RFC 5322 Message-ID.
 CREATE INDEX message_provider_message_id ON message (provider_message_id) WHERE provider_message_id IS NOT NULL;
+
+-- Migration: 20261105140000_entity_metadata.sql
+ALTER TABLE entity ADD COLUMN metadata JSONB CHECK (metadata IS NULL OR jsonb_typeof(metadata) = 'object');

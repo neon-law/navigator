@@ -1342,6 +1342,7 @@ async fn update_entity_from_seed(
             entity_type_id: Some(entity_type_id),
             jurisdiction_id: Some(jurisdiction_id),
             xero_id: None,
+            metadata: None,
         },
     )
     .await
@@ -2083,6 +2084,7 @@ async fn seed_canonical_into(
     seed_entity_types(surreal, r).await?;
     rename_legacy_firm_entity(surreal).await?;
     seed_entities(surreal, canonical::ENTITY, "Entity.yaml", r).await?;
+    seed_firm_ein(surreal).await?;
     // The practice's Firm needs an existing `role = admin` person for its
     // Admin DRI (ENG-499: creation is atomic with one), so persons and their
     // roles must be seeded first.
@@ -3212,6 +3214,16 @@ async fn wait_for_seed_entity(surreal: &SurrealDb, name: &str) -> anyhow::Result
     })
     .await
     .map_err(|_| anyhow::anyhow!("concurrent seed claim has no visible Entity: {name}"))??;
+    Ok(())
+}
+
+/// The public EIN supplied for the corporation also known as Shook Law PC.
+/// The canonical seed runs in staging and production; only a missing EIN is filled.
+async fn seed_firm_ein(surreal: &SurrealDb) -> anyhow::Result<()> {
+    let entity_id = crate::entities::firm_anchor_holder(surreal, &FIRM_ENTITY_NAME.to_lowercase())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("seed: firm Entity anchor missing"))?;
+    crate::entities::seed_ein(surreal, entity_id, "81-3099614").await?;
     Ok(())
 }
 
@@ -6747,6 +6759,82 @@ records:
             .collect::<Vec<_>>();
         expected.sort();
         assert_eq!(names, expected);
+        let firm = crate::entities::find_by_name(&surreal, super::FIRM_ENTITY_NAME)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            firm.metadata
+                .as_ref()
+                .and_then(|m| m.get("ein"))
+                .and_then(serde_json::Value::as_str),
+            Some("81-3099614")
+        );
+        let other = crate::entities::find_by_name(&surreal, super::LEX_FIRM_ENTITY_NAME)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(other.metadata, None);
+    }
+
+    #[tokio::test]
+    async fn firm_ein_seed_targets_the_anchor_even_when_an_unprotected_namesake_exists() {
+        let db = mem_surreal().await;
+        let mut report = super::SeedReport::default();
+        super::seed_jurisdictions(&db, &mut report).await.unwrap();
+        super::seed_entity_types(&db, &mut report).await.unwrap();
+        let entity_type = crate::entity_types::find_by_name(&db, "Limited Liability Company")
+            .await
+            .unwrap()
+            .unwrap();
+        let jurisdiction = crate::jurisdictions::find_by_name(&db, "Nevada")
+            .await
+            .unwrap()
+            .unwrap();
+        let namesake = crate::entities::create(
+            &db,
+            &crate::entities::NewEntity {
+                name: super::FIRM_ENTITY_NAME.into(),
+                entity_type_id: entity_type.id,
+                jurisdiction_id: jurisdiction.id,
+                phone: None,
+                url: None,
+                xero_id: None,
+                firm_anchor_key: None,
+            },
+        )
+        .await
+        .unwrap();
+        super::seed_entities(&db, super::canonical::ENTITY, "Entity.yaml", &mut report)
+            .await
+            .unwrap();
+        super::seed_firm_ein(&db).await.unwrap();
+        assert_eq!(
+            crate::entities::find_by_id(&db, namesake.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .metadata,
+            None
+        );
+        let anchor_id =
+            crate::entities::firm_anchor_holder(&db, &super::FIRM_ENTITY_NAME.to_lowercase())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_ne!(anchor_id, namesake.id);
+        let anchor = crate::entities::find_by_id(&db, anchor_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            anchor
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("ein"))
+                .and_then(serde_json::Value::as_str),
+            Some("81-3099614")
+        );
     }
 
     /// A Florida P.A. is a distinct designation under Ch. 621, Fla. Stat.,

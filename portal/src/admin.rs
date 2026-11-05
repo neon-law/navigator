@@ -2447,6 +2447,7 @@ async fn entities_update(
         entity_type_id: Some(input.entity_type_id),
         jurisdiction_id: Some(input.jurisdiction_id),
         xero_id: Some(input.xero_id),
+        metadata: None,
     };
     match store::entity_commands::update_entity(&s.surreal, id, &s.bootstrap_company, &command)
         .await

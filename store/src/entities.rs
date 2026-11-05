@@ -90,6 +90,8 @@ pub struct Entity {
     /// entity's Xero contact is entered directly rather than synced by the
     /// billing workflow.
     pub xero_id: Option<String>,
+    /// Private supplemental attributes, such as `ein`, stored on this Entity.
+    pub metadata: Option<serde_json::Value>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// The lowercased name when this row is the firm anchor, `None`
@@ -119,6 +121,7 @@ struct EntityRow {
     url: Option<String>,
     avatar_url: Option<String>,
     xero_id: Option<String>,
+    metadata: Option<serde_json::Value>,
     firm_anchor_key: Option<String>,
     inserted_at: surrealdb::types::Datetime,
     updated_at: surrealdb::types::Datetime,
@@ -138,6 +141,7 @@ impl EntityRow {
             url: self.url,
             avatar_url: self.avatar_url,
             xero_id: self.xero_id,
+            metadata: self.metadata,
             inserted_at: self.inserted_at.into(),
             updated_at: self.updated_at.into(),
             firm_anchor_key: self.firm_anchor_key,
@@ -148,7 +152,7 @@ impl EntityRow {
 /// The projection every read shares, so one field list describes the
 /// row and a new column cannot reach [`EntityRow`] from only one query.
 const SELECT: &str = "id, name, entity_type_id, jurisdiction_id, phone, url, avatar_url, \
-                      xero_id, firm_anchor_key, inserted_at, updated_at";
+                      xero_id, metadata, firm_anchor_key, inserted_at, updated_at";
 
 /// What a write stores. `firm_anchor_key` is computed by
 /// `entity_commands`, never supplied by a request body.
@@ -556,6 +560,26 @@ pub async fn set_avatar_url(
     mirrored(db, Ok(row.and_then(EntityRow::into_entity))).await
 }
 
+/// Fill a missing EIN from an approved public firm seed, preserving existing attributes.
+pub(crate) async fn seed_ein(db: &SurrealDb, id: Uuid, ein: &str) -> Result<(), EntityError> {
+    let mut response = writing(|| {
+        db.query(format!(
+            "UPDATE $id SET metadata.ein = $ein, updated_at = time::now() \
+             WHERE metadata.ein IS NONE RETURN {SELECT}"
+        ))
+        .bind(("id", record_id(TABLE, id)))
+        .bind(("ein", ein.to_string()))
+    })
+    .await?;
+    let rows: Vec<EntityRow> = response.take(0)?;
+    mirrored(
+        db,
+        Ok(rows.into_iter().next().and_then(EntityRow::into_entity)),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Move `firm_anchor_key` onto — or off — the entity carrying `id`,
 /// returning the saved row.
 ///
@@ -771,8 +795,23 @@ pub async fn update(
     id: Uuid,
     input: &NewEntity,
 ) -> Result<Option<Entity>, EntityError> {
+    update_with_metadata(db, id, input, None).await
+}
+
+/// Update Entity fields and optionally replace its metadata in the same write.
+/// Omission preserves metadata; an empty object clears it.
+///
+/// # Errors
+///
+/// Returns the same database and firm-anchor errors as [`update`].
+pub(crate) async fn update_with_metadata(
+    db: &SurrealDb,
+    id: Uuid,
+    input: &NewEntity,
+    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<Option<Entity>, EntityError> {
     let claimed = take_claim(db, id, input.firm_anchor_key.as_deref()).await?;
-    let written = update_row(db, id, input).await;
+    let written = update_row(db, id, input, metadata).await;
     // `Ok(None)` is the refused rename, not a write — a claim taken for it
     // has to go back, or one refused edit would strand the anchor.
     if claimed && !matches!(written, Ok(Some(_))) {
@@ -786,14 +825,17 @@ async fn update_row(
     db: &SurrealDb,
     id: Uuid,
     input: &NewEntity,
+    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Result<Option<Entity>, EntityError> {
     let mut response = writing(|| {
         db.query(format!(
-            "UPDATE $id SET {WRITE_FIELDS} \
+            "UPDATE $id SET {WRITE_FIELDS}, \
+             metadata = IF $metadata IS NONE THEN metadata ELSE $metadata END \
              WHERE name = $name OR firm_anchor_key IS NONE \
              RETURN {SELECT}"
         ))
         .bind(("id", record_id(TABLE, id)))
+        .bind(("metadata", metadata.cloned().map(serde_json::Value::Object)))
         .bind(("name", input.name.trim().to_string()))
         .bind((
             "entity_type_id",
@@ -933,8 +975,9 @@ const DEPENDENT_TABLES: [(&str, &str); 5] = [
 mod tests {
     use super::{
         all, create, delete_unless_firm_anchor, dependents, find_by_id, find_by_ids, find_by_name,
-        firm_anchor_exists, firm_anchor_holder, set_avatar_url, update, AlreadyExistsError,
-        EntityError, ErrorDetails, NewEntity, CLAIM, CLAIM_TABLE, RELEASE, TABLE, WRITE_FIELDS,
+        firm_anchor_exists, firm_anchor_holder, seed_ein, set_avatar_url, update,
+        update_with_metadata, AlreadyExistsError, EntityError, ErrorDetails, NewEntity, CLAIM,
+        CLAIM_TABLE, RELEASE, TABLE, WRITE_FIELDS,
     };
     use super::{classify_write, prime_claim_table};
     use crate::surreal::test_support::mem;
@@ -1016,6 +1059,58 @@ mod tests {
             None,
             "an absent value reads as no avatar, not a deserialization failure"
         );
+    }
+
+    #[tokio::test]
+    async fn seeded_ein_fills_missing_values_and_preserves_other_metadata_and_existing_ein() {
+        let db = mem().await;
+        let row = create(&db, &input("Example LLC")).await.unwrap();
+        seed_ein(&db, row.id, "12-3456789").await.unwrap();
+        assert_eq!(
+            find_by_id(&db, row.id).await.unwrap().unwrap().metadata,
+            Some(serde_json::json!({"ein": "12-3456789"}))
+        );
+        let metadata = serde_json::json!({"registration": {"state": "NV"}});
+        update_with_metadata(&db, row.id, &input("Example LLC"), metadata.as_object())
+            .await
+            .unwrap()
+            .unwrap();
+        seed_ein(&db, row.id, "12-3456789").await.unwrap();
+        let saved = find_by_id(&db, row.id).await.unwrap().unwrap();
+        assert_eq!(
+            saved.metadata,
+            Some(serde_json::json!({
+                "ein": "12-3456789", "registration": {"state": "NV"}
+            }))
+        );
+        seed_ein(&db, row.id, "98-7654321").await.unwrap();
+        assert_eq!(find_by_id(&db, row.id).await.unwrap().unwrap(), saved);
+    }
+
+    #[tokio::test]
+    async fn reads_an_entity_without_metadata_and_preserves_metadata_on_ordinary_updates() {
+        let db = mem().await;
+        let created = create(&db, &input("Example LLC")).await.unwrap();
+        db.query("UPDATE $id UNSET metadata")
+            .bind(("id", record_id(TABLE, created.id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert_eq!(
+            find_by_id(&db, created.id).await.unwrap().unwrap().metadata,
+            None
+        );
+        let metadata = serde_json::json!({"ein": "12-3456789", "nested": {"label": "sample"}});
+        update_with_metadata(&db, created.id, &input("Example LLC"), metadata.as_object())
+            .await
+            .unwrap()
+            .unwrap();
+        let updated = update(&db, created.id, &input("Renamed LLC"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.metadata, Some(metadata));
     }
 
     #[tokio::test]

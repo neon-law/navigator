@@ -70,6 +70,10 @@ pub struct UpdateEntityCommand {
     /// send an empty string to clear it.
     #[serde(default)]
     pub xero_id: Option<String>,
+    /// Replace the supplemental JSON object. Omit to preserve it; `{}` clears it.
+    /// `ein`, when present, must be a string formatted as NN-NNNNNNN.
+    #[serde(default)]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug)]
@@ -311,6 +315,23 @@ pub async fn update_entity(
     firm_anchor: &str,
     input: &UpdateEntityCommand,
 ) -> Result<Entity, EntityCommandError> {
+    if let Some(ein) = input.metadata.as_ref().and_then(|m| m.get("ein")) {
+        let valid = ein.as_str().is_some_and(|value| {
+            value.len() == 10
+                && value.bytes().enumerate().all(|(i, byte)| {
+                    if i == 2 {
+                        byte == b'-'
+                    } else {
+                        byte.is_ascii_digit()
+                    }
+                })
+        });
+        if !valid {
+            return Err(EntityCommandError::Invalid(
+                "EIN must be a string formatted as NN-NNNNNNN.",
+            ));
+        }
+    }
     let existing = entities::find_by_id(surreal, id)
         .await?
         .ok_or(EntityCommandError::NotFound)?;
@@ -359,7 +380,7 @@ pub async fn update_entity(
         }
     }
 
-    if let Some(updated) = entities::update(
+    if let Some(updated) = entities::update_with_metadata(
         surreal,
         id,
         &NewEntity {
@@ -374,6 +395,7 @@ pub async fn update_entity(
             xero_id,
             firm_anchor_key: anchor_key,
         },
+        input.metadata.as_ref(),
     )
     .await?
     {
@@ -511,6 +533,98 @@ mod tests {
             entity_type_id: Some(type_id),
             jurisdiction_id: Some(jur_id),
             xero_id: None,
+            metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_round_trips_preserves_other_fields_and_can_be_cleared() {
+        let (db, type_id, jur_id) = fixture().await;
+        let entity = create_entity(
+            &db,
+            "Example Firm",
+            &command("Example Firm", type_id, jur_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(entity.metadata, None);
+        let metadata = serde_json::json!({"ein": "12-3456789", "registration": {"state": "NV"}});
+        let patch: UpdateEntityCommand = serde_json::from_value(serde_json::json!({
+            "metadata": metadata
+        }))
+        .unwrap();
+        let saved = update_entity(&db, entity.id, "Example Firm", &patch)
+            .await
+            .unwrap();
+        assert_eq!(saved.metadata.as_ref(), Some(&metadata));
+        assert_eq!(saved.name, entity.name);
+        let read = entities::find_by_id(&db, entity.id).await.unwrap().unwrap();
+        assert_eq!(read.metadata.as_ref(), Some(&metadata));
+        let untouched = update_entity(
+            &db,
+            entity.id,
+            "Example Firm",
+            &UpdateEntityCommand {
+                xero_id: Some("external-contact".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(untouched.metadata.as_ref(), Some(&metadata));
+        let cleared = update_entity(
+            &db,
+            entity.id,
+            "Example Firm",
+            &UpdateEntityCommand {
+                metadata: Some(serde_json::Map::new()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.metadata, Some(serde_json::json!({})));
+        assert_eq!(cleared.xero_id.as_deref(), Some("external-contact"));
+    }
+
+    #[tokio::test]
+    async fn invalid_ein_is_refused_without_mutating_the_entity() {
+        let (db, type_id, jur_id) = fixture().await;
+        let entity = create_entity(
+            &db,
+            "Example Firm",
+            &command("Example Firm", type_id, jur_id),
+        )
+        .await
+        .unwrap();
+        for ein in [
+            serde_json::json!(123_456_789),
+            serde_json::json!("123456789"),
+            serde_json::json!("12-345678x"),
+            serde_json::Value::Null,
+        ] {
+            let patch =
+                serde_json::from_value(serde_json::json!({"metadata": {"ein": ein}})).unwrap();
+            assert!(matches!(
+                update_entity(&db, entity.id, "Example Firm", &patch).await,
+                Err(EntityCommandError::Invalid(_))
+            ));
+        }
+        assert_eq!(
+            entities::find_by_id(&db, entity.id).await.unwrap().unwrap(),
+            entity
+        );
+        for metadata in [
+            serde_json::json!([]),
+            serde_json::json!("value"),
+            serde_json::json!(1),
+        ] {
+            assert!(
+                serde_json::from_value::<UpdateEntityCommand>(serde_json::json!({
+                    "metadata": metadata
+                }))
+                .is_err()
+            );
         }
     }
 
@@ -1082,6 +1196,7 @@ mod tests {
                 entity_type_id: None,
                 jurisdiction_id: Some(other_jurisdiction),
                 xero_id: None,
+                metadata: None,
             },
         )
         .await
