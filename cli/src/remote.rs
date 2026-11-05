@@ -985,6 +985,31 @@ struct StreamingSessionStatus {
     received_bytes: u64,
 }
 
+/// The deployment answered `401 Unauthorized`: the session expired or never
+/// authenticated. It says nothing about whether a document exists, so a
+/// caller reports it as a session failure, never as a missing document.
+#[derive(Debug)]
+pub(crate) struct SessionRefused {
+    pub(crate) detail: String,
+}
+
+impl std::fmt::Display for SessionRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the deployment refused the session (401 Unauthorized)")?;
+        if !self.detail.is_empty() {
+            write!(f, ": {}", self.detail)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for SessionRefused {}
+
+/// Whether `error` is a [`SessionRefused`].
+pub(crate) fn is_session_refused(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<SessionRefused>().is_some()
+}
+
 /// Authenticated client for the one Project's document-sync operations.
 pub(crate) struct DocumentClient {
     base: String,
@@ -1113,6 +1138,11 @@ impl DocumentClient {
             .with_context(|| format!("GET {url}"))?;
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(anyhow::Error::new(SessionRefused {
+                detail: first_line(&text),
+            }));
+        }
         if !status.is_success() {
             return Err(anyhow!(
                 "no revision of `{slug}` is visible on this matter: {status}: {}",
@@ -1120,6 +1150,18 @@ impl DocumentClient {
             ));
         }
         serde_json::from_str(&text).context("parse document revisions response")
+    }
+
+    /// The same deployment, Project, and transport with a freshly minted
+    /// bearer — the gate's renewal after a CI session lapses mid-run.
+    pub(crate) fn with_token(&self, token: String) -> Self {
+        Self {
+            base: self.base.clone(),
+            token,
+            client: self.client.clone(),
+            project_id: self.project_id,
+            project_code: self.project_code.clone(),
+        }
     }
 
     /// Every asset row the caller's lens can see, with storage presence and
