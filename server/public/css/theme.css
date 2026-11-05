@@ -2805,14 +2805,92 @@ a.nav-link:hover {
   margin: 0;
 }
 
-/* Firm inbox: a full-width, Gmail-style table. One dense row per
+/* Firm inbox: a full-width, Gmail-style surface. One dense row per
  * conversation; unread rows are bold with a dot, and the subject link is
- * stretched over the whole row so the entire row opens the thread. */
-#inbox {
+ * stretched over the whole row so the entire row opens the thread. The
+ * thread page opts out of the page cap too, so reading a conversation is
+ * as wide as scanning the list. */
+#inbox,
+#inbox-thread {
   max-width: none;
   width: 100%;
   padding-inline: clamp(0.75rem, 2vw, 1.5rem);
   box-sizing: border-box;
+}
+
+/* Three-pane inbox grid (desktop): the folder rail, the conversation list,
+ * and a flexible reading-pane track. The list spans the reading track until
+ * the in-place reading pane exists; when it does, the pane takes the third
+ * column and the list narrows. Modeled on the glossary sticky-sidebar grid.
+ * Below 60rem the grid collapses: the rail stacks above the list and the
+ * thread remains its own navigable page. */
+@media (min-width: 60rem) {
+  #inbox {
+    display: grid;
+    grid-template-columns: 14rem minmax(0, 1fr) minmax(0, 1.5fr);
+    gap: 1.5rem;
+    align-items: start;
+  }
+
+  /* Loading and error early-returns render a lone paragraph in main; give it
+   * the full row instead of dropping it into the 14rem rail track. */
+  #inbox > p {
+    grid-column: 1 / -1;
+  }
+
+  #inbox .inbox-rail {
+    position: sticky;
+    top: 1.5rem;
+    max-height: calc(100vh - 3rem);
+    overflow-y: auto;
+  }
+
+  #inbox .inbox-list {
+    grid-column: 2 / -1;
+    min-width: 0;
+  }
+}
+
+.inbox-rail__group {
+  margin-bottom: 1.25rem;
+}
+
+.inbox-rail__title {
+  margin: 0 0 0.25rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inbox-rail__group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.inbox-rail__link {
+  display: block;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--nav-radius-sm);
+  color: var(--nav-color-text-muted);
+}
+
+.inbox-rail__link:hover,
+.inbox-rail__link:focus-visible {
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+}
+
+/* The active filter keeps a non-color cue (weight and a rail-edge bar) along
+ * with the background, and aria-current names it to assistive technology —
+ * WCAG 1.4.1 does not let selection live in color alone. */
+.inbox-rail__link--active {
+  background: var(--nav-color-surface-raised);
+  border-left: 0.2rem solid var(--nav-color-primary);
+  color: var(--nav-color-text);
+  font-weight: 600;
 }
 
 .inbox-table__scroll {

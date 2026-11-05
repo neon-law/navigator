@@ -319,6 +319,37 @@ fn filter_href(
     }
 }
 
+/// One `(label, href, active)` triple for [`inbox_rail_group`].
+type RailOption = (String, String, bool);
+
+fn rail_option(label: &str, href: String, active: bool) -> RailOption {
+    (label.to_string(), href, active)
+}
+
+/// One folder-rail group: a titled nav of stacked filter links, each carrying
+/// `aria-current` when it is the filter in effect. The URL-query hrefs are
+/// unchanged from the inline filter rows this rail replaced, so links stay
+/// shareable and the browser e2e selectors keep working.
+fn inbox_rail_group(aria_label: &str, title: &str, options: &[RailOption]) -> Element {
+    rsx! {
+        nav { class: "inbox-rail__group", "aria-label": "{aria_label}",
+            h2 { class: "inbox-rail__title", "{title}" }
+            ul {
+                for (label, href, active) in options.iter() {
+                    li {
+                        a {
+                            class: if *active { "inbox-rail__link inbox-rail__link--active" } else { "inbox-rail__link" },
+                            href: "{href}",
+                            "aria-current": active.then_some("true"),
+                            "{label}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(any(feature = "server", test))]
 fn channel_matches(row_channel: &str, selected: Option<&str>) -> bool {
     selected.is_none_or(|channel| channel == row_channel)
@@ -959,6 +990,110 @@ pub fn inbox_list_body(page: &InboxPage) -> Element {
             }
         }
     });
+    // Folder-rail link sets: one option per value of each filter, with the
+    // filter in effect marked active. Hrefs keep the URL-query semantics.
+    let channel_href = |channel: Option<&str>| {
+        filter_href(
+            &page.base_href,
+            channel,
+            page.brand_filter.as_deref(),
+            page.unread_only,
+            page.direction_filter.as_deref(),
+            page.attachments_only,
+        )
+    };
+    let brand_href = |brand: Option<&str>| {
+        filter_href(
+            &page.base_href,
+            page.channel_filter.as_deref(),
+            brand,
+            page.unread_only,
+            page.direction_filter.as_deref(),
+            page.attachments_only,
+        )
+    };
+    let unread_href = |unread: bool| {
+        filter_href(
+            &page.base_href,
+            page.channel_filter.as_deref(),
+            page.brand_filter.as_deref(),
+            unread,
+            page.direction_filter.as_deref(),
+            page.attachments_only,
+        )
+    };
+    let direction_href = |direction: Option<&str>| {
+        filter_href(
+            &page.base_href,
+            page.channel_filter.as_deref(),
+            page.brand_filter.as_deref(),
+            page.unread_only,
+            direction,
+            page.attachments_only,
+        )
+    };
+    let attachment_href = |attachments: bool| {
+        filter_href(
+            &page.base_href,
+            page.channel_filter.as_deref(),
+            page.brand_filter.as_deref(),
+            page.unread_only,
+            page.direction_filter.as_deref(),
+            attachments,
+        )
+    };
+    let mut channel_options = vec![rail_option(
+        "All channels",
+        channel_href(None),
+        page.channel_filter.is_none(),
+    )];
+    for channel in &page.channels {
+        channel_options.push(rail_option(
+            channel,
+            channel_href(Some(channel.as_str())),
+            page.channel_filter.as_deref() == Some(channel.as_str()),
+        ));
+    }
+    let mut brand_options = vec![rail_option(
+        "All Brands",
+        brand_href(None),
+        page.brand_filter.is_none(),
+    )];
+    for brand in &page.brands {
+        brand_options.push(rail_option(
+            brand,
+            brand_href(Some(brand.as_str())),
+            page.brand_filter.as_deref() == Some(brand.as_str()),
+        ));
+    }
+    let unread_options = vec![
+        rail_option("All messages", unread_href(false), !page.unread_only),
+        rail_option("Unread only", unread_href(true), page.unread_only),
+    ];
+    let mut direction_options = vec![rail_option(
+        "Any direction",
+        direction_href(None),
+        page.direction_filter.is_none(),
+    )];
+    for direction in ["inbound", "outbound", "internal"] {
+        direction_options.push(rail_option(
+            direction,
+            direction_href(Some(direction)),
+            page.direction_filter.as_deref() == Some(direction),
+        ));
+    }
+    let attachment_options = vec![
+        rail_option(
+            "Any attachment state",
+            attachment_href(false),
+            !page.attachments_only,
+        ),
+        rail_option(
+            "With attachments",
+            attachment_href(true),
+            page.attachments_only,
+        ),
+    ];
     rsx! {
         document::Title { "{firm_name} | {title}" }
         document::Meta { name: "description", content: "Firm and project conversations." }
@@ -969,52 +1104,21 @@ pub fn inbox_list_body(page: &InboxPage) -> Element {
             logo: page.logo.clone(),
         }
         main { id: "inbox", class: "nav-theme",
-            header { class: "page-header",
-                h1 { "{title}" }
-                a { href: crate::communication_dashboard::PARKED_CALLS_PATH, "Parked calls" }
-                p { class: "page-subtitle",
-                    "Every email, text, and message to the firm, newest first."
-                }
-                nav { aria_label: "Filter inbox by channel",
-                    a { href: filter_href(&page.base_href, None, page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "All channels" }
-                    for channel in page.channels.iter() {
-                        " · "
-                        a { href: filter_href(&page.base_href, Some(channel), page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "{channel}" }
-                    }
-                    if let Some(selected) = page.channel_filter.as_ref() {
-                        " · Showing {selected}"
-                    }
-                }
-                nav { aria_label: "Filter inbox by Brand",
-                    a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), None, page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "All Brands" }
-                    for brand in page.brands.iter() {
-                        " · " a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), Some(brand), page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "{brand}" }
-                    }
-                    if let Some(selected) = page.brand_filter.as_ref() {
-                        " · Showing Brand {selected}"
+            aside { class: "inbox-rail", "aria-label": "Inbox folders",
+                { inbox_rail_group("Filter inbox by channel", "Channel", &channel_options) }
+                { inbox_rail_group("Filter inbox by Brand", "Brand", &brand_options) }
+                { inbox_rail_group("Inbox unread filter", "Unread", &unread_options) }
+                { inbox_rail_group("Inbox direction filter", "Direction", &direction_options) }
+                { inbox_rail_group("Inbox attachments filter", "Attachments", &attachment_options) }
+            }
+            div { class: "inbox-list",
+                header { class: "page-header",
+                    h1 { "{title}" }
+                    a { href: crate::communication_dashboard::PARKED_CALLS_PATH, "Parked calls" }
+                    p { class: "page-subtitle",
+                        "Every email, text, and message to the firm, newest first."
                     }
                 }
-            }
-            nav { aria_label: "Inbox unread filter",
-                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), false, page.direction_filter.as_deref(), page.attachments_only), "All messages" }
-                " · "
-                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), true, page.direction_filter.as_deref(), page.attachments_only), "Unread only" }
-            }
-            nav { aria_label: "Inbox direction filter",
-                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, None, page.attachments_only), "Any direction" }
-                for direction in ["inbound", "outbound", "internal"] {
-                    " · "
-                    a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, Some(direction), page.attachments_only), "{direction}" }
-                }
-                if let Some(selected) = page.direction_filter.as_ref() {
-                    " · Showing {selected}"
-                }
-            }
-            nav { aria_label: "Inbox attachments filter",
-                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), false), "Any attachment state" }
-                " · "
-                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), true), "With attachments" }
-            }
             if let Some(error) = page.error.clone() {
                 p { class: "page-subtitle", "{error}" }
             }
@@ -1040,6 +1144,7 @@ pub fn inbox_list_body(page: &InboxPage) -> Element {
                         }
                         tbody { {rows} }
                     }
+                }
                 }
             }
         }
@@ -1935,8 +2040,25 @@ mod tests {
         page.brands = vec!["neon".into()];
         let html = dioxus_ssr::render_element(inbox_list_body(&page));
         assert!(html.contains("Choose a project first."), "{html}");
-        assert!(html.contains("Showing instagram"), "{html}");
-        assert!(html.contains("Showing Brand neon"), "{html}");
+        // The filters live in the folder rail; the active filter is marked on
+        // its own link with aria-current rather than narrated beside the row.
+        assert!(
+            html.contains("<aside class=\"inbox-rail\" aria-label=\"Inbox folders\">"),
+            "{html}"
+        );
+        assert_eq!(html.matches("aria-current=\"true\"").count(), 5, "{html}");
+        assert!(
+            html.contains(
+                "inbox-rail__link--active\" href=\"/app/inbox?channel=instagram&#38;brand=neon\" aria-current=\"true\">instagram</a>"
+            ),
+            "{html}"
+        );
+        assert!(
+            html.contains(
+                "inbox-rail__link--active\" href=\"/app/inbox?channel=instagram&#38;brand=neon\" aria-current=\"true\">neon</a>"
+            ),
+            "{html}"
+        );
         assert!(html.contains("No conversations yet."), "{html}");
     }
 
