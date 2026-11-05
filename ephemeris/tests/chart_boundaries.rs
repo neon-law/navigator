@@ -1,4 +1,4 @@
-//! Exact source coverage and complete-chart behavior at the declared UTC boundaries.
+//! Exact source coverage and complete-chart behavior at the declared universal civil boundaries.
 
 use ephemeris::{
     AstrologyChartProvider, AstrologyChartRequest, BirthTime, EphemerisManifest, FilesystemStore,
@@ -7,7 +7,7 @@ use ephemeris::{
 use std::num::NonZeroUsize;
 
 #[test]
-fn full_inventory_is_available_at_both_validated_utc_boundaries() {
+fn full_inventory_is_available_at_both_validated_civil_boundaries() {
     if std::env::var_os(DATA_DIR_ENV).is_none() {
         eprintln!("skipping: pinned reference kernels are unavailable");
         return;
@@ -32,7 +32,7 @@ fn full_inventory_is_available_at_both_validated_utc_boundaries() {
         );
         assert!(
             provider.calculate(&input).is_ok(),
-            "declared UTC boundaries need source coverage for light time and centered rates"
+            "declared universal civil boundaries need source coverage for light time and centered rates"
         );
     }
 }
