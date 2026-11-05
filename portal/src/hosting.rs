@@ -296,46 +296,53 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     // persist + correlate.
     let signature_kind = crate::signature::SignatureProviderKind::from_env()
         .context("selecting the signature provider")?;
-    let signature_provider: std::sync::Arc<dyn crate::signature::SignatureProvider> =
-        match signature_kind {
-            crate::signature::SignatureProviderKind::Fake => {
+    let (signature_provider, fake_signature_dir): (
+        std::sync::Arc<dyn crate::signature::SignatureProvider>,
+        Option<std::path::PathBuf>,
+    ) = match signature_kind {
+        crate::signature::SignatureProviderKind::Fake => {
+            tracing::info!(
+                "signature provider: FakeSignatureProvider (local signature loop; no DocuSign credentials)"
+            );
+            let mut fake = crate::signature::FakeSignatureProvider::from_dev_dir()
+                .context("locating the fake provider's envelope directory")?;
+            // The fake's sign pages are served by this portal itself: the
+            // URL the signer is redirected to is one on this server,
+            // backed by the pages the fake writes to disk.
+            fake =
+                fake.with_signing_base_url(format!("http://127.0.0.1:{}/fake-signature", cfg.port));
+            let dir = fake.root().to_owned();
+            // Loop the completion webhook back into this portal's own
+            // receiver when the receiver can verify it: without
+            // `DOCUSIGN_HMAC_KEY` the receiver refuses every delivery,
+            // so an unverifiable loop is worse than none — completion
+            // then reads straight from the provider instead.
+            if let Some(key) = &esignature_hmac_key {
+                let secret = esignature_webhook_secret
+                    .clone()
+                    .unwrap_or_else(|| "local".to_string());
+                fake = fake.with_webhook(crate::signature::WebhookTarget {
+                    url: format!("http://127.0.0.1:{}/webhook/esignature/{secret}", cfg.port),
+                    hmac_key: key.clone().into_bytes(),
+                });
                 tracing::info!(
-                    "signature provider: FakeSignatureProvider (local signature loop; no DocuSign credentials)"
+                    "fake provider completion webhooks loop back to this portal's receiver"
                 );
-                let mut fake = crate::signature::FakeSignatureProvider::from_dev_dir()
-                    .context("locating the fake provider's envelope directory")?;
-                // Loop the completion webhook back into this portal's own
-                // receiver when the receiver can verify it: without
-                // `DOCUSIGN_HMAC_KEY` the receiver refuses every delivery,
-                // so an unverifiable loop is worse than none — completion
-                // then reads straight from the provider instead.
-                if let Some(key) = &esignature_hmac_key {
-                    let secret = esignature_webhook_secret
-                        .clone()
-                        .unwrap_or_else(|| "local".to_string());
-                    fake = fake.with_webhook(crate::signature::WebhookTarget {
-                        url: format!("http://127.0.0.1:{}/webhook/esignature/{secret}", cfg.port),
-                        hmac_key: key.clone().into_bytes(),
-                    });
-                    tracing::info!(
-                        "fake provider completion webhooks loop back to this portal's receiver"
-                    );
-                }
-                std::sync::Arc::new(fake)
             }
-            crate::signature::SignatureProviderKind::DocuSign => {
-                let ds =
-                    crate::signature::DocuSignSignatureProvider::from_env().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "NAVIGATOR_SIGNATURE_PROVIDER=docusign requires DOCUSIGN_BASE_URL \
-                         and DOCUSIGN_ACCOUNT_ID (+ DOCUSIGN_ACCESS_TOKEN or the JWT-grant \
-                         vars — docs/docusign-esignature.md)"
-                        )
-                    })?;
-                tracing::info!("signature provider: DocuSignSignatureProvider");
-                std::sync::Arc::new(ds)
-            }
-        };
+            (std::sync::Arc::new(fake), Some(dir))
+        }
+        crate::signature::SignatureProviderKind::DocuSign => {
+            let ds = crate::signature::DocuSignSignatureProvider::from_env().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "NAVIGATOR_SIGNATURE_PROVIDER=docusign requires DOCUSIGN_BASE_URL \
+                     and DOCUSIGN_ACCOUNT_ID (+ DOCUSIGN_ACCESS_TOKEN or the JWT-grant \
+                     vars — docs/docusign-esignature.md)"
+                )
+            })?;
+            tracing::info!("signature provider: DocuSignSignatureProvider");
+            (std::sync::Arc::new(ds), None)
+        }
+    };
 
     // Firm-private provider resolution: the real resolver when both a
     // runtime KMS key and a parent Notion database are configured, else a
@@ -556,6 +563,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         workflow_runtime,
         questionnaire_runtime,
         signature_provider,
+        fake_signature_dir,
         billing_provider,
         integration_providers,
         runtime_kms,

@@ -161,6 +161,7 @@ pub async fn app_state(surreal: store::surreal::SurrealDb) -> AppState {
         contract_reviewer: Arc::new(crate::contract_review::StubContractReviewer),
         esignature_webhook_secret: None,
         esignature_hmac_key: None,
+        fake_signature_dir: None,
         email: Arc::new(crate::email::CapturingEmail::new()),
         attachment_scanner: Arc::new(crate::attachment_scanner::FakeAttachmentScanner::clean()),
         inbound_email_secret: None,

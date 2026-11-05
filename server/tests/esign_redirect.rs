@@ -27,6 +27,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use portal::session::{SessionData, SESSION_COOKIE_NAME};
+use portal::signature::SignatureProvider;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::seed;
@@ -35,8 +36,8 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 const TEMPLATE_CODE: &str = "onboarding__letter";
-const ENVELOPE_ID: &str = "env-refer-out-1";
 const KEY: &str = "test-session-key-not-for-production";
+const CLIENT_EMAIL: &str = "libra@example.com";
 
 /// A composed router over a seeded store carrying one matter with a signer,
 /// a co-client, an outsider, and both a participating and a non-participating
@@ -44,10 +45,12 @@ const KEY: &str = "test-session-key-not-for-production";
 ///
 /// The handle is returned rather than re-derived by the caller: each
 /// `mem_surreal()` opens its own engine, so a second call would hand back an
-/// empty store in which this notation does not exist. The stub
-/// `SignatureProvider` is the default in `test_support::app_state`, so
-/// `create_recipient_view` returns a deterministic
-/// `https://stub.docusign.local/...` URL with no network call.
+/// empty store in which this notation does not exist. The fixture sends a
+/// rendered anchor PDF through the `FakeSignatureProvider` before recording
+/// the signature request, so the envelope the route redirects to is one the
+/// provider actually holds — `create_recipient_view` resolves to the fake's
+/// own sign page on this server's loopback (`http://127.0.0.1:3001/…`), the
+/// same arrangement `hosting` wires in a dev boot.
 struct Fixture {
     app: axum::Router,
     surreal: store::surreal::SurrealDb,
@@ -55,6 +58,9 @@ struct Fixture {
     /// The same handle the router holds, so a test can read back the
     /// `RecipientView` the handler actually built.
     provider: Arc<portal::signature::FakeSignatureProvider>,
+    /// The provider-issued envelope id the route redirects to — minted by
+    /// the fake's `send_for_signature`, not invented.
+    envelope_id: String,
     notation_id: Uuid,
     template_id: Uuid,
     project_id: Uuid,
@@ -139,11 +145,23 @@ async fn build() -> Fixture {
     .unwrap()
     .id;
 
-    let provider = Arc::new(portal::signature::FakeSignatureProvider::new());
+    let provider = Arc::new(
+        portal::signature::FakeSignatureProvider::new()
+            .with_signing_base_url("http://127.0.0.1:3001/fake-signature".to_owned()),
+    );
+    // The envelope the route redirects to must be one the provider holds:
+    // send the rendered anchor PDF through the fake first, then record the
+    // provider-issued id against the notation.
+    let request_id = provider
+        .send_for_signature(notation_id, &anchor_pdf(), &signing_manifest())
+        .await
+        .unwrap();
+    let envelope_id = request_id.0;
     let state = AppState {
         storage,
         sessions: SessionStore::new(KEY),
         signature_provider: provider.clone(),
+        fake_signature_dir: Some(provider.root().to_owned()),
         ..portal::test_support::app_state(surreal.clone()).await
     };
     Fixture {
@@ -151,6 +169,7 @@ async fn build() -> Fixture {
         surreal,
         sessions: SessionStore::new(KEY),
         provider,
+        envelope_id,
         notation_id,
         template_id: tmpl.id,
         project_id: project.id,
@@ -189,10 +208,63 @@ async fn record_envelope(f: &Fixture) {
         &f.surreal,
         f.notation_id,
         store::signatures::SignatureProvider::DocuSign,
-        ENVELOPE_ID,
+        &f.envelope_id,
     )
     .await
     .unwrap();
+}
+
+/// A real Typst-rendered PDF whose text layer carries the manifest's
+/// anchor — the same invisible-white-text expansion the retainer walk
+/// produces, so the fake's anchor validation sees what production sees.
+fn anchor_pdf() -> Vec<u8> {
+    pdf::render("= Test retainer\n\n#text(fill: white, size: 4pt)[nlsig-client-signature-1]\n")
+        .expect("anchor PDF renders")
+}
+
+/// One captive client recipient signing one signature field.
+fn signing_manifest() -> portal::signature::SignatureManifest {
+    portal::signature::SignatureManifest {
+        recipients: vec![portal::signature::SignatureRecipient {
+            role: "client".into(),
+            email: CLIENT_EMAIL.into(),
+            name: "Libra".into(),
+            routing_order: 1,
+            client_user_id: Some("notation-client".into()),
+        }],
+        fields: vec![portal::signature::SignatureField {
+            recipient_role: "client".into(),
+            kind: portal::signature::SignatureFieldKind::Signature,
+            anchor: "nlsig-client-signature-1".into(),
+        }],
+    }
+}
+
+#[tokio::test]
+async fn the_redirect_target_resolves_to_the_signer_s_own_page() {
+    // The fake's redirect URL must be a URL that exists: the dev server
+    // serves the page the fake wrote, for the envelope and recipient in
+    // the path — the last step of "the signer opens a URL that resolves".
+    let f = build().await;
+    record_envelope(&f).await;
+
+    let response = get(
+        &f,
+        &client_sign_uri(f.notation_id),
+        &cookie_for(&f.sessions, Role::Client, f.signer),
+    )
+    .await;
+    let location = location_of(&response);
+    let path = location
+        .strip_prefix("http://127.0.0.1:3001")
+        .expect("the redirect points at the dev sign-page route");
+
+    let page = get(&f, path, &cookie_for(&f.sessions, Role::Client, f.signer)).await;
+    assert_eq!(
+        page.status(),
+        StatusCode::OK,
+        "the sign page the redirect names exists: {path}"
+    );
 }
 
 /// Drive the route at `uri` with a session cookie and a `Host` header. The
@@ -250,11 +322,11 @@ async fn the_signer_is_redirected_to_the_provider() {
     .await;
     let location = location_of(&response);
     assert!(
-        location.starts_with("https://stub.docusign.local/signing/"),
-        "the signer is sent to the provider's own site, not shown a page here: {location}"
+        location.starts_with("http://127.0.0.1:3001/fake-signature/"),
+        "the signer is sent to the provider's own sign page, not shown a page here: {location}"
     );
     assert!(
-        location.contains(ENVELOPE_ID),
+        location.contains(&f.envelope_id),
         "the recipient view is for this envelope: {location}"
     );
     // No HTML at all — the whole point of #1010. A body here would mean
@@ -336,7 +408,7 @@ async fn a_non_participant_lawyer_is_not_found_and_a_participating_one_succeeds(
     )
     .await;
     assert!(
-        location_of(&allowed).starts_with("https://stub.docusign.local/signing/"),
+        location_of(&allowed).starts_with("http://127.0.0.1:3001/fake-signature/"),
         "the existing /app/lawyer behavior is preserved for a participant",
     );
 }

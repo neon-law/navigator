@@ -427,6 +427,12 @@ pub struct FakeSignatureProvider {
     /// delivery is HMAC-signed with the same scheme
     /// [`crate::esignature_webhook`] verifies fail-closed.
     webhook: Option<WebhookTarget>,
+    /// The base URL the dev server serves this fake's sign pages from
+    /// (`http://127.0.0.1:{port}/fake-signature`, wired by `hosting`).
+    /// Set, `create_recipient_view` hands back a URL a browser can open;
+    /// unset — direct construction in tests — it hands back the page's
+    /// `file://` path.
+    signing_base_url: Option<String>,
     /// Failures this fake produces on purpose, before any incidental
     /// network error could. Default: none armed.
     faults: Faults,
@@ -488,6 +494,18 @@ impl Faults {
     }
 }
 
+/// A path- and URL-safe slug for a recipient's sign page: every
+/// non-alphanumeric byte collapses to `-`, so the page's file name can
+/// never traverse out of the fake's directory and the URL the signer
+/// opens maps one-to-one onto the file. Idempotent, so the dev sign-page
+/// route can slug an incoming segment again and land on the same file.
+pub(crate) fn recipient_slug(email: &str) -> String {
+    email
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 impl FakeSignatureProvider {
     /// A fake whose envelopes persist under a fresh throwaway directory.
     /// For tests that do not care where envelopes land.
@@ -506,6 +524,7 @@ impl FakeSignatureProvider {
             recipient_views: Mutex::new(Vec::new()),
             root: root.into(),
             webhook: None,
+            signing_base_url: None,
             faults: Faults::default(),
         }
     }
@@ -517,6 +536,15 @@ impl FakeSignatureProvider {
     #[must_use]
     pub fn with_webhook(mut self, target: WebhookTarget) -> Self {
         self.webhook = Some(target);
+        self
+    }
+
+    /// Serve this fake's sign pages from `base` — the dev server's own
+    /// loopback route (`hosting` wires this), so the URL the signer is
+    /// redirected to is one a browser can actually open.
+    #[must_use]
+    pub fn with_signing_base_url(mut self, base: String) -> Self {
+        self.signing_base_url = Some(base);
         self
     }
 
@@ -779,14 +807,10 @@ impl FakeSignatureProvider {
     /// hands it out: a real file at a real path, so the URL the signer
     /// opens exists.
     fn signing_page_path(&self, envelope_id: &str, email: &str) -> PathBuf {
-        let recipient_slug: String = email
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
         self.root
             .join("signing")
             .join(envelope_id)
-            .join(format!("{recipient_slug}.html"))
+            .join(format!("{}.html", recipient_slug(email)))
     }
 
     /// Write the per-recipient sign page and a copy of the document it
@@ -989,7 +1013,18 @@ impl SignatureProvider for FakeSignatureProvider {
             })?;
             self.write_signing_page(&envelope, &view.email)?;
         }
-        Ok(format!("file://{}", page.display()))
+        match &self.signing_base_url {
+            // When the dev server serves the fake's pages, the redirect
+            // target is a URL on this server — a browser can open it.
+            // Direct construction (tests, the loop harness) hands back
+            // the on-disk page path instead: the caller opens it directly.
+            Some(base) => Ok(format!(
+                "{base}/{}/{}",
+                request_id.0,
+                recipient_slug(&view.email)
+            )),
+            None => Ok(format!("file://{}", page.display())),
+        }
     }
 
     async fn fetch_completed_documents(
