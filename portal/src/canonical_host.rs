@@ -204,9 +204,8 @@ fn sign_in_detour(cfg: &CanonicalHost, host: &str, uri: &axum::http::Uri) -> Opt
     // Only the provider redirect detours through the callback origin, the one
     // redirect URI every provider knows, and is handed back afterwards.
     if cfg.is_handoff_host(host) {
-        return provider_entry.then(|| {
-            crate::host_handoff::brand_host_login_redirect(origin, host, path_and_query)
-        });
+        return provider_entry
+            .then(|| crate::host_handoff::brand_host_login_redirect(origin, host, path_and_query));
     }
     // Any other host signs in on the callback origin itself.
     if login_entry || (app_entry && !cfg.is_handoff_host(host)) {

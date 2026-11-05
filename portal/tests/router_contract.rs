@@ -1057,17 +1057,31 @@ async fn a_brand_host_detours_only_its_provider_leg() {
     let provider = get_on_host(&app, VESTA_HOST, "/auth/login/oidc?return_to=/app/projects").await;
     assert_eq!(provider.status(), StatusCode::SEE_OTHER);
     let target = url::Url::parse(&location(&provider)).unwrap();
-    assert_eq!(target.origin().ascii_serialization(), "http://localhost:3001");
+    assert_eq!(
+        target.origin().ascii_serialization(),
+        "http://localhost:3001"
+    );
     assert_eq!(target.path(), "/auth/login/oidc");
     let query: std::collections::HashMap<_, _> = target.query_pairs().into_owned().collect();
-    assert_eq!(query.get("return_host").map(String::as_str), Some(VESTA_HOST));
-    assert_eq!(query.get("return_to").map(String::as_str), Some("/app/projects"));
-    assert!(query.get("handoff_nonce").is_some_and(|nonce| nonce.len() >= 16));
+    assert_eq!(
+        query.get("return_host").map(String::as_str),
+        Some(VESTA_HOST)
+    );
+    assert_eq!(
+        query.get("return_to").map(String::as_str),
+        Some("/app/projects")
+    );
+    assert!(query
+        .get("handoff_nonce")
+        .is_some_and(|nonce| nonce.len() >= 16));
     assert!(provider
         .headers()
         .get_all("set-cookie")
         .iter()
-        .any(|cookie| cookie.to_str().unwrap().starts_with("navigator_handoff_nonce=")));
+        .any(|cookie| cookie
+            .to_str()
+            .unwrap()
+            .starts_with("navigator_handoff_nonce=")));
 }
 
 /// The callback origin itself keeps the immediate provider redirect.
