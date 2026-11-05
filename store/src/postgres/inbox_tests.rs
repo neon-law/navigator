@@ -943,7 +943,11 @@ async fn ingest_persists_the_alias_resolved_sender_person() {
     let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &alias_mail)
         .await
         .unwrap();
-    let conversation = crate::inbox::conversation_by_id(&f.db, saved.conversation_id)
+    // The PG ingest persists the association in PostgreSQL; the direct PG
+    // read asserts that persistence without depending on the deployment's
+    // inbox-authority switch (unset here, so the surreal surface reads a
+    // lane this ingest never writes).
+    let conversation = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
         .await
         .unwrap()
         .unwrap();
@@ -960,7 +964,7 @@ async fn ingest_persists_the_alias_resolved_sender_person() {
     let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &lawyer_mail)
         .await
         .unwrap();
-    let conversation = crate::inbox::conversation_by_id(&f.db, saved.conversation_id)
+    let conversation = pg_inbox::conversation_by_id_on(&f.pg, saved.conversation_id)
         .await
         .unwrap()
         .unwrap();
@@ -4194,7 +4198,7 @@ async fn a_backfill_links_unassociated_conversations_and_reruns_without_effect()
         .unwrap();
     assert_eq!(linked, 1);
     let person_rows: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM person WHERE email_lower = lower($1)")
+        sqlx::query_scalar("SELECT count(*) FROM person WHERE email = $1::citext")
             .bind("archived.correspondent@example.com")
             .fetch_one(f.pg.pool())
             .await
@@ -4216,7 +4220,7 @@ async fn a_backfill_links_unassociated_conversations_and_reruns_without_effect()
         .unwrap();
     assert_eq!(again, 0, "a re-run finds nothing left to link");
     let person_rows: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM person WHERE email_lower = lower($1)")
+        sqlx::query_scalar("SELECT count(*) FROM person WHERE email = $1::citext")
             .bind("archived.correspondent@example.com")
             .fetch_one(f.pg.pool())
             .await
