@@ -65,3 +65,6 @@ Rules:
 - **Wait for the review comments, then answer them.** Greptile and human reviewers post after CI starts, and an
   unresolved thread blocks auto-merge like a red check. Address every comment with [[review-pr]] (fix it, or reply with
   the reason not to) and resolve its thread. The PR is not done, or reported done, until every thread is answered.
+- **Watch it merge, then watch it deploy.** Follow the PR to its merge commit, then follow that commit's `deploy` run
+  to a verdict, and `release-deploy` too when the commit is a release. Report the merge commit, run URL, and conclusion.
+  See [Create a PR](../../../docs/agent-workflows.md#create-a-pr) step 9 for the commands.
