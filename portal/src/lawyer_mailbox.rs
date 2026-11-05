@@ -10,9 +10,10 @@
 //! Conversation projects onto the matter's Communications like any other
 //! Inbox thread.
 //!
-//! A message whose RFC From belongs to a lawyer-tier or clerk Person is that
-//! person's own outgoing mail, not correspondence the mailbox received, so it
-//! never ingests as inbound — the same guard the support lane applies.
+//! A message whose RFC From resolves — primary or `person_mailbox` alias —
+//! to a lawyer-tier or clerk Person is that person's own outgoing mail, not
+//! correspondence the mailbox received, so it never ingests as inbound — the
+//! same guard the support lane applies.
 //!
 //! Configuration: `NAVIGATOR_LAWYER_MAILBOXES` (comma-separated addresses;
 //! the first entry is the canonical provider account) and
@@ -130,7 +131,9 @@ async fn ingest_for_config(
         return Ok(None);
     };
     let from = extract_addr(&email.from);
-    if let Some(person) = store::persons::find_by_email_ci(db, &from)
+    // Alias-aware: a firm member writing from a personal alias is still
+    // that firm member, so the guard resolves `person_mailbox` claims too.
+    if let Some(person) = store::persons::find_by_any_email(db, &from)
         .await
         .map_err(|error| error.to_string())?
     {
@@ -328,7 +331,20 @@ mod tests {
             &NewPerson::with_role("Assistant", "clerk@neonlaw.com", Role::Clerk),
         )
         .await;
-        let ingested = ingest_for_config(&db, &storage, &clerk_mail, Some(config))
+        let ingested = ingest_for_config(&db, &storage, &clerk_mail, Some(config.clone()))
+            .await
+            .unwrap();
+        assert!(ingested.is_none());
+        // An alias of the lawyer's mailbox resolves to the same lawyer.
+        let lawyer = store::persons::find_by_email_ci(&db, "nick@neonlaw.com")
+            .await
+            .unwrap()
+            .expect("the lawyer exists");
+        store::persons::add_alias(&db, lawyer.id, "nick+intake@neonlaw.com")
+            .await
+            .unwrap();
+        let alias_mail = email("Nick <nick+intake@neonlaw.com>", "Nick <nick@neonlaw.com>");
+        let ingested = ingest_for_config(&db, &storage, &alias_mail, Some(config))
             .await
             .unwrap();
         assert!(ingested.is_none());

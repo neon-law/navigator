@@ -293,6 +293,7 @@ async fn native_triage_assignment_respects_source_and_target_scope() {
     let Some(f) = fixture().await else { return };
     let saved = pg_inbox::ingest_inbound_on(
         &f.pg,
+        &f.db,
         &inbound(
             f.firm,
             channel::EMAIL,
@@ -423,6 +424,7 @@ async fn native_contact_link_preserves_a_persons_existing_number() {
         .unwrap();
     let sms = pg_inbox::ingest_inbound_on(
         &f.pg,
+        &f.db,
         &inbound(
             f.firm,
             channel::SMS,
@@ -462,8 +464,12 @@ async fn native_voice_ingest_preserves_transcripts_and_provider_replay() {
     );
     input.visibility = Some("private");
     input.body = "Synthetic voice transcript.";
-    let first = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
-    let replay = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let first = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
+        .await
+        .unwrap();
+    let replay = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
+        .await
+        .unwrap();
     assert!(!first.deduped);
     assert!(replay.deduped);
     assert_eq!(first.conversation_id, replay.conversation_id);
@@ -564,6 +570,7 @@ async fn native_contact_link_is_idempotent_and_refuses_number_takeover() {
     let number = format!("+{}", 15_555_550_124_u64);
     let sms = pg_inbox::ingest_inbound_on(
         &f.pg,
+        &f.db,
         &inbound(f.firm, channel::SMS, &account, "contact-link", &number),
     )
     .await
@@ -630,6 +637,7 @@ async fn native_contact_link_is_idempotent_and_refuses_number_takeover() {
     assert_eq!(detail.contact.unwrap().person_id, contact.id);
     let email_thread = pg_inbox::ingest_inbound_on(
         &f.pg,
+        &f.db,
         &inbound(f.firm, channel::EMAIL, "mailbox", "email-not-sms", email),
     )
     .await
@@ -873,6 +881,60 @@ async fn ingress_count(pg: &PostgresDb) -> i64 {
         .unwrap()
 }
 
+/// AC: the PostgreSQL ingest door persists the alias-resolved sender
+/// Person — primary first, then any `person_mailbox` claim — with the
+/// lawyer-tier guard applied on both legs.
+#[tokio::test]
+async fn ingest_persists_the_alias_resolved_sender_person() {
+    let Some(f) = fixture().await else { return };
+    let client = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO person (id,name,email,role) VALUES ($1,'Client','client@example.com','client')",
+    )
+    .bind(client)
+    .execute(&f.pg.0)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO person_mailbox (id,person_id) VALUES ('client-alias@example.com',$1)")
+        .bind(client)
+        .execute(&f.pg.0)
+        .await
+        .unwrap();
+
+    let alias_mail = inbound(
+        f.firm,
+        channel::EMAIL,
+        "fixture-account",
+        "pg-alias-sender",
+        "client-alias@example.com",
+    );
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &alias_mail)
+        .await
+        .unwrap();
+    let conversation = crate::inbox::conversation_by_id(&f.db, saved.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(conversation.person_id, Some(client));
+
+    // A lawyer-tier sender never links, even when the address resolves.
+    let lawyer_mail = inbound(
+        f.firm,
+        channel::EMAIL,
+        "fixture-account",
+        "pg-lawyer-sender",
+        "lawyer@example.com",
+    );
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &lawyer_mail)
+        .await
+        .unwrap();
+    let conversation = crate::inbox::conversation_by_id(&f.db, saved.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(conversation.person_id, None);
+}
+
 /// AC2: concurrent deliveries of the same provider id converge on one
 /// message; the losers report the winner's ids as deduped, and no orphan
 /// conversation or second ingress row survives.
@@ -882,6 +944,7 @@ async fn concurrent_replays_dedup_race_safely() {
         return;
     };
     let pg = Arc::new(fixture.pg);
+    let db = fixture.db;
     let inbound = inbound(
         fixture.firm,
         channel::EMAIL,
@@ -893,9 +956,10 @@ async fn concurrent_replays_dedup_race_safely() {
     let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..8 {
         let pg = pg.clone();
+        let db = db.clone();
         let inbound = inbound.clone();
         tasks.spawn(async move {
-            pg_inbox::ingest_inbound_on(&pg, &inbound)
+            pg_inbox::ingest_inbound_on(&pg, &db, &inbound)
                 .await
                 .expect("ingest")
         });
@@ -935,10 +999,10 @@ async fn threading_partitions_by_the_surreal_key() {
         "sender@example.com",
     );
 
-    let first = pg_inbox::ingest_inbound_on(&fixture.pg, &base)
+    let first = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &base)
         .await
         .unwrap();
-    let replay = pg_inbox::ingest_inbound_on(&fixture.pg, &base)
+    let replay = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &base)
         .await
         .unwrap();
     assert!(replay.deduped);
@@ -946,7 +1010,7 @@ async fn threading_partitions_by_the_surreal_key() {
 
     // Same account and thread, different counterparty: a new conversation.
     let other_party = inbound_with(&base, None, "someone-else@example.com", "msg-2");
-    let second = pg_inbox::ingest_inbound_on(&fixture.pg, &other_party)
+    let second = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &other_party)
         .await
         .unwrap();
     assert!(!second.deduped);
@@ -954,7 +1018,7 @@ async fn threading_partitions_by_the_surreal_key() {
 
     // Same counterparty, different thread reference: a new conversation.
     let other_thread = inbound_with(&base, Some("thread-9"), "sender@example.com", "msg-3");
-    let third = pg_inbox::ingest_inbound_on(&fixture.pg, &other_thread)
+    let third = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &other_thread)
         .await
         .unwrap();
     assert!(!third.deduped);
@@ -962,7 +1026,7 @@ async fn threading_partitions_by_the_surreal_key() {
 
     // Same counterparty and thread reference: threaded together.
     let same_thread = inbound_with(&base, Some("thread-9"), "sender@example.com", "msg-4");
-    let fourth = pg_inbox::ingest_inbound_on(&fixture.pg, &same_thread)
+    let fourth = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &same_thread)
         .await
         .unwrap();
     assert_eq!(fourth.conversation_id, third.conversation_id);
@@ -984,10 +1048,10 @@ async fn replay_reports_existing_ids_and_exits_clean() {
         "msg-1",
         "sender@example.com",
     );
-    let first = pg_inbox::ingest_inbound_on(&fixture.pg, &inbound)
+    let first = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &inbound)
         .await
         .unwrap();
-    let second = pg_inbox::ingest_inbound_on(&fixture.pg, &inbound)
+    let second = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &inbound)
         .await
         .unwrap();
     assert!(second.deduped);
@@ -1007,6 +1071,7 @@ async fn lawyer_sent_imports_ingest_outbound_with_author() {
         &fixture.pg,
         direction::OUTBOUND,
         Some(fixture.owner),
+        None,
         &inbound(
             fixture.firm,
             channel::EMAIL,
@@ -1044,6 +1109,7 @@ async fn attribution_projects_moves_and_dedups() {
     };
     let ingested = pg_inbox::ingest_inbound_on(
         &fixture.pg,
+        &fixture.db,
         &inbound(
             fixture.firm,
             channel::EMAIL,
@@ -1139,9 +1205,10 @@ async fn email_import_survives_replay_without_a_message_id() {
             fixture.firm,
             "nick@neonlaw.com",
         );
-        let ingested = pg_inbox::ingest_message_on(&fixture.pg, direction::INBOUND, None, &ingest)
-            .await
-            .unwrap();
+        let ingested =
+            pg_inbox::ingest_message_on(&fixture.pg, direction::INBOUND, None, None, &ingest)
+                .await
+                .unwrap();
         if let Some(first) = first {
             assert!(ingested.deduped, "the replay dedups");
             assert_eq!(ingested.message_id, first.message_id);
@@ -1189,7 +1256,7 @@ async fn linkedin_import_threads_one_conversation_per_export_thread() {
             let ingest =
                 crate::inbox_import::import_message_to_ingest(message, fixture.firm, mailbox);
             let ingested =
-                pg_inbox::ingest_message_on(&fixture.pg, direction_value, author, &ingest)
+                pg_inbox::ingest_message_on(&fixture.pg, direction_value, author, None, &ingest)
                     .await
                     .unwrap();
             pass.push(ingested);
@@ -1258,7 +1325,7 @@ async fn raw_storage_key_persists_on_imported_messages() {
         "sender@example.com",
     );
     ingest.raw_storage_key = Some("mail/1761800000-notice.eml");
-    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &ingest)
+    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &ingest)
         .await
         .unwrap();
     let message = pg_inbox::message_by_id_on(&fixture.pg, ingested.message_id)
@@ -1281,6 +1348,7 @@ async fn attachment_slot_is_first_wins() {
     };
     let ingested = pg_inbox::ingest_inbound_on(
         &fixture.pg,
+        &fixture.db,
         &inbound(
             fixture.firm,
             channel::EMAIL,
@@ -1332,6 +1400,7 @@ async fn promotional_opt_out_suppresses_queued_sends() {
     };
     let ingested = pg_inbox::ingest_inbound_on(
         &fixture.pg,
+        &fixture.db,
         &inbound(
             fixture.firm,
             channel::EMAIL,
@@ -1390,6 +1459,7 @@ async fn alert_lifecycle_reserves_once_and_never_regresses() {
     };
     let ingested = pg_inbox::ingest_inbound_on(
         &fixture.pg,
+        &fixture.db,
         &inbound(
             fixture.firm,
             channel::EMAIL,
@@ -1441,6 +1511,7 @@ async fn unsupported_channels_are_refused() {
     };
     let error = pg_inbox::ingest_inbound_on(
         &fixture.pg,
+        &fixture.db,
         &inbound(
             fixture.firm,
             "carrier_pigeon",
@@ -1480,7 +1551,7 @@ async fn targeted_ingest_preserves_project_scope_and_all_attachments() {
             sha256: sha,
         });
     }
-    let first = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+    let first = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &input)
         .await
         .unwrap();
     let conversation = pg_inbox::conversation_by_id_on(&fixture.pg, first.conversation_id)
@@ -1498,7 +1569,7 @@ async fn targeted_ingest_preserves_project_scope_and_all_attachments() {
         (Some(fixture.project), 2),
         "targeted ingest retains its Project and every provider attachment"
     );
-    let replay = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+    let replay = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &input)
         .await
         .unwrap();
     assert_eq!(replay.message_id, first.message_id);
@@ -1511,7 +1582,7 @@ async fn targeted_ingest_preserves_project_scope_and_all_attachments() {
     assert_eq!(links, 2, "replay must not duplicate attachment links");
     input.project_id = None;
     input.provider_message_id = "unassigned-seed";
-    let unassigned = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+    let unassigned = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &input)
         .await
         .unwrap();
     assert_ne!(
@@ -1528,7 +1599,7 @@ async fn assigned_email(fixture: &Fixture, provider_id: &str) -> crate::inbox::I
         provider_id,
         "sender@example.com",
     );
-    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &input)
         .await
         .unwrap();
     pg_inbox::assign_on(
@@ -2019,7 +2090,7 @@ async fn native_social_replies_keep_private_threads_private_through_dispatch() {
     input.interaction_type = Some("comment");
     input.provider_post_id = Some("synthetic-post");
     input.visibility = Some("private");
-    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &fixture.db, &input)
         .await
         .unwrap();
     assert!(matches!(
@@ -2336,7 +2407,7 @@ async fn bare_attachment_ids_and_metadata_are_not_firm_receipt_evidence() {
     input.attachments = vec![attachment.clone()];
     assert!(
         matches!(
-            pg_inbox::ingest_inbound_on(&f.pg, &input).await,
+            pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input).await,
             Err(InboxError::Denied)
         ),
         "an arbitrary bare Asset ID and caller metadata must not grant attachment access"
@@ -2348,7 +2419,9 @@ async fn bare_attachment_ids_and_metadata_are_not_firm_receipt_evidence() {
     );
     input.attachments.clear();
     input.provider_message_id = "empty-message";
-    let saved = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
+        .await
+        .unwrap();
     assert!(matches!(
         pg_inbox::link_message_assets_on(
             &f.pg,
@@ -2441,7 +2514,9 @@ async fn trusted_clean_bytes_claims_are_firm_scoped_and_do_not_bypass_exact_proj
         "sender@example.com",
     );
     input.attachments = vec![first.clone()];
-    let saved = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
+        .await
+        .unwrap();
     assert_eq!(
         pg_inbox::message_assets_on(&f.pg, f.firm, saved.message_id)
             .await
@@ -2453,7 +2528,7 @@ async fn trusted_clean_bytes_claims_are_firm_scoped_and_do_not_bypass_exact_proj
     input.project_id = Some(f.project);
     assert!(
         matches!(
-            pg_inbox::ingest_inbound_on(&f.pg, &input).await,
+            pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input).await,
             Err(InboxError::Denied)
         ),
         "a staging receipt cannot authorize a bare Asset in an attributed Project"
@@ -2542,11 +2617,15 @@ async fn native_triage_public_doors_preserve_canonical_inbox_authority() {
         "a@example.test",
     );
     input.brand_key = Some("native-a");
-    let one = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let one = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
+        .await
+        .unwrap();
     input.brand_key = Some("native-b");
     input.provider_message_id = "triage-b";
     input.external_address = "b@example.test";
-    let two = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let two = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
+        .await
+        .unwrap();
     match case.as_str() {
         "brand" => {
             let rows = crate::inbox::list_intake_in_brand(&f.db, f.owner, "native-a")
@@ -2754,7 +2833,9 @@ async fn existing_x_rows_survive_the_linkedin_import_migration() {
         "x-before-linkedin",
         "synthetic-x-sender",
     );
-    let before = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let before = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
+        .await
+        .unwrap();
     // Model the deployed X schema before the new import column exists.
     sqlx::query("ALTER TABLE message DROP COLUMN raw_storage_key")
         .execute(f.pg.pool())
@@ -2776,7 +2857,9 @@ async fn existing_x_rows_survive_the_linkedin_import_migration() {
     linkedin.provider_message_id = "linkedin-after-migration";
     linkedin.provider_account = "synthetic-linkedin-account";
     linkedin.external_address = "synthetic-linkedin-sender";
-    let imported = pg_inbox::ingest_inbound_on(&f.pg, &linkedin).await.unwrap();
+    let imported = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &linkedin)
+        .await
+        .unwrap();
     assert!(pg_inbox::message_by_id_on(&f.pg, imported.message_id)
         .await
         .unwrap()
@@ -2795,8 +2878,12 @@ async fn native_voice_ingest_deduplicates_and_projects_to_the_call_spine() {
         "CAnative-voice",
         "+15555550456",
     );
-    let first = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
-    let repeated = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let first = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
+        .await
+        .unwrap();
+    let repeated = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
+        .await
+        .unwrap();
     assert_eq!(first.message_id, repeated.message_id);
     pg_inbox::assign_on(&f.pg, &f.db, f.owner, first.conversation_id, f.project)
         .await
@@ -3386,7 +3473,9 @@ async fn voice_reply_fixture() -> Option<(Fixture, Uuid, Uuid)> {
         "+12025550101",
     );
     input.project_id = Some(f.project);
-    let saved = pg_inbox::ingest_inbound_on(&f.pg, &input).await.unwrap();
+    let saved = pg_inbox::ingest_inbound_on(&f.pg, &f.db, &input)
+        .await
+        .unwrap();
     Some((f, clerk, saved.conversation_id))
 }
 
@@ -3943,4 +4032,66 @@ async fn fi_reviewed_state(
         .fetch_one(f.pg.pool())
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn a_backfill_links_unassociated_conversations_and_reruns_without_effect() {
+    let Some(f) = fixture().await else {
+        return;
+    };
+    let saved = pg_inbox::ingest_inbound_on(
+        &f.pg,
+        &f.db,
+        &inbound(
+            f.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "backfill-pg-1",
+            "archived.correspondent@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+    // A row that predates the association: the ingest above already
+    // created the Person, so the backfill must re-resolve the same
+    // address, not re-create it.
+    sqlx::query("UPDATE inbox_conversation SET person_id = NULL WHERE id = $1")
+        .bind(saved.conversation_id)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+
+    let linked = pg_inbox::backfill_person_links_on(&f.pg, &f.db)
+        .await
+        .unwrap();
+    assert_eq!(linked, 1);
+    let person_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM person WHERE email_lower = lower($1)")
+            .bind("archived.correspondent@example.com")
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(person_rows, 1);
+    // One Relationship Log entry still: the backfill's association is the
+    // same fact the ingest already logged, and the entry dedups.
+    let logs = crate::relationship_logs::all(&f.db).await.unwrap();
+    assert_eq!(
+        logs.iter()
+            .filter(|log| log.action == crate::inbox::INBOUND_ASSOCIATION_ACTION)
+            .count(),
+        1
+    );
+
+    // Idempotent: a re-run finds nothing unassociated left.
+    let again = pg_inbox::backfill_person_links_on(&f.pg, &f.db)
+        .await
+        .unwrap();
+    assert_eq!(again, 0, "a re-run finds nothing left to link");
+    let person_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM person WHERE email_lower = lower($1)")
+            .bind("archived.correspondent@example.com")
+            .fetch_one(f.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(person_rows, 1);
 }
