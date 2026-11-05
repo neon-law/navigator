@@ -639,6 +639,16 @@
         "accessible": true
       },
       {
+        "action": "derived",
+        "relation": {
+          "schema": "public",
+          "name": "firm_visible_person",
+          "kind": "view",
+          "accessible": true
+        },
+        "reason": "Plain view over person_firm_role, person_project_role and project, all exported; rebuilt by migration 20261104000000_create_person_directory_views.sql."
+      },
+      {
         "action": "export",
         "schema": "public",
         "name": "git_access_token",
@@ -994,6 +1004,16 @@
         "name": "person_delegate",
         "kind": "table",
         "accessible": true
+      },
+      {
+        "action": "derived",
+        "relation": {
+          "schema": "public",
+          "name": "person_directory",
+          "kind": "view",
+          "accessible": true
+        },
+        "reason": "Plain view over person, person_firm_role and firm, all exported; rebuilt by migration 20261104000000_create_person_directory_views.sql."
       },
       {
         "action": "export",
