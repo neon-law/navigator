@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 
@@ -266,14 +266,47 @@ pub async fn export_pair(
         databases,
         cross_database_atomic: false,
     };
-    storage
-        .put(
-            &format!("postgres/_paired/{generation}.json"),
-            &serde_json::to_vec_pretty(&manifest)?,
-            "application/json",
-        )
-        .await?;
-    Ok(manifest)
+    let marker_key = format!("postgres/_paired/{generation}.json");
+    write_paired_manifest(storage, &marker_key, &manifest).await
+}
+
+/// Publish the generation's `PairedManifest` at its commit-point marker
+/// key. On a retention-locked lane the marker is a create-only write and
+/// is never rewritten: losing the create race means the generation was
+/// already committed, and the standing manifest is returned instead.
+async fn write_paired_manifest(
+    storage: &dyn cloud::StorageService,
+    key: &str,
+    manifest: &PairedManifest,
+) -> Result<PairedManifest> {
+    let bytes = serde_json::to_vec_pretty(manifest)?;
+    let locked = storage
+        .retention_locked()
+        .await
+        .context("probe the archive bucket's retention policy")?;
+    if locked {
+        if storage
+            .put_immutable(key, &bytes, "application/json")
+            .await
+            .is_err()
+        {
+            // The marker exists — this generation is already committed.
+            // Never rewrite it; read back the standing manifest.
+            let standing = storage
+                .get(key)
+                .await
+                .with_context(|| format!("read the standing paired manifest at {key}"))?;
+            let committed: PairedManifest = serde_json::from_slice(&standing.bytes)
+                .with_context(|| format!("parse the standing paired manifest at {key}"))?;
+            return Ok(committed);
+        }
+    } else {
+        storage
+            .put(key, &bytes, "application/json")
+            .await
+            .with_context(|| format!("write the paired manifest marker at {key}"))?;
+    }
+    Ok(manifest.clone())
 }
 
 struct ExtractedDatabase {
@@ -374,4 +407,41 @@ fn hex_component(value: &str) -> String {
             let _ = write!(output, "{byte:02x}");
             output
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{write_paired_manifest, PairedManifest};
+    use crate::test_support::CollisionStorage;
+    use cloud::StorageService;
+
+    /// The marker is the generation's commit point: on a retention-locked
+    /// lane an existing marker is never rewritten — the standing manifest
+    /// is returned instead.
+    #[tokio::test]
+    async fn the_paired_marker_is_never_rewritten_on_a_locked_lane() {
+        let storage = CollisionStorage::locked();
+        let generation = uuid::Uuid::new_v4();
+        let key = format!("postgres/_paired/{generation}.json");
+        let committed = PairedManifest {
+            generation,
+            databases: Vec::new(),
+            cross_database_atomic: false,
+        };
+
+        let first = write_paired_manifest(storage.as_ref(), &key, &committed)
+            .await
+            .unwrap();
+        let standing = storage.get(&key).await.unwrap().bytes;
+
+        let rerun = write_paired_manifest(storage.as_ref(), &key, &committed)
+            .await
+            .unwrap();
+        assert_eq!(rerun, first, "the standing manifest is the run's answer");
+        assert_eq!(
+            storage.get(&key).await.unwrap().bytes,
+            standing,
+            "the marker was rewritten"
+        );
+    }
 }

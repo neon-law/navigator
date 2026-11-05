@@ -21,6 +21,11 @@ pub mod postgres;
 pub mod runner;
 pub mod snapshot;
 pub mod tables;
+/// Test doubles for the crate's storage interactions. `pub` so the
+/// integration drills (`archives/tests/`) share the exact double the
+/// unit tests use — the same convention as `store::surreal::test_support`.
+#[doc(hidden)]
+pub mod test_support;
 pub mod workflow;
 
 pub use self::iceberg::{
@@ -34,7 +39,10 @@ pub use self::iceberg::{
 // keep working unchanged.
 pub use billing::gcp_cost::{BillingClient, CostReport, CostRow};
 pub use digest::{render_archives_slack, DiagnosticReport, SnapshotEntry};
-pub use drift::{classify, fingerprint_key, DriftDecision, StoredFingerprint};
+pub use drift::{
+    classify, fingerprint_attempt_key, fingerprint_attempt_prefix, fingerprint_key, DriftDecision,
+    StoredFingerprint,
+};
 pub use generic::{batch_from_rows, fingerprint};
 pub use parquet_io::encode_parquet;
 pub use runner::{cost_phase, open_resources, snapshot_all, SnapshotSummary, TableFailure};

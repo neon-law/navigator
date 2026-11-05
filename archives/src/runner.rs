@@ -24,8 +24,9 @@ use billing::gcp_cost::{
 
 use crate::tables::{fetch_batch, is_safe_archive_table_name, source_tables};
 use crate::{
-    batch_from_rows, classify, encode_parquet, fingerprint, fingerprint_key, snapshot_key,
-    DriftDecision, SnapshotConfig, SnapshotEntry, StoredFingerprint, ALL_TABLES, APPLICATION_LANE,
+    batch_from_rows, classify, encode_parquet, fingerprint, fingerprint_attempt_key,
+    fingerprint_attempt_prefix, fingerprint_key, snapshot_key, DriftDecision, SnapshotConfig,
+    SnapshotEntry, StoredFingerprint, ALL_TABLES, APPLICATION_LANE,
 };
 
 /// One table that failed to snapshot, with the rendered error so the
@@ -186,39 +187,60 @@ async fn snapshot_table(
     let decision = classify(prev_fp.as_ref(), &current_fp)?;
 
     let bytes = encode_parquet(&batch)?;
-    let cfg = SnapshotConfig::now(APPLICATION_LANE, table);
-    let key = scheduled_for.map_or_else(
-        || snapshot_key(&cfg),
-        |scheduled| {
-            format!(
-                "{}/{}/data/dt={}/run={}/snapshot.parquet",
-                APPLICATION_LANE,
-                table,
-                scheduled.date_naive(),
-                scheduled.format("%H%M")
+    let fingerprint_due = needs_fingerprint_write(prev_fp.as_ref(), &decision);
+    let fingerprint_bytes = fingerprint_due.then(|| {
+        serde_json::to_vec_pretty(&StoredFingerprint {
+            table: table.to_string(),
+            columns: current_fp,
+        })
+        .context("serialize fingerprint")
+    });
+    let destination = resolve_destination(
+        storage,
+        APPLICATION_LANE,
+        table,
+        scheduled_for,
+        fingerprint_due,
+    )
+    .await?;
+    if destination.immutable {
+        storage
+            .put_immutable(
+                &destination.data_key,
+                &bytes,
+                "application/vnd.apache.parquet",
             )
-        },
-    );
-    storage
-        .put(&key, &bytes, "application/vnd.apache.parquet")
-        .await
-        .with_context(|| format!("upload {key}"))?;
-
-    if needs_fingerprint_write(prev_fp.as_ref(), &decision) {
-        write_fingerprint(
-            storage,
-            &StoredFingerprint {
-                table: table.to_string(),
-                columns: current_fp,
-            },
-        )
-        .await?;
+            .await
+            .with_context(|| format!("upload {}", destination.data_key))?;
+        if let Some((key, fp_bytes)) = destination.fingerprint_key.zip(fingerprint_bytes) {
+            let fp_bytes = fp_bytes?;
+            storage
+                .put_immutable(&key, &fp_bytes, "application/json")
+                .await
+                .with_context(|| format!("write fingerprint at {key}"))?;
+        }
+    } else {
+        storage
+            .put(
+                &destination.data_key,
+                &bytes,
+                "application/vnd.apache.parquet",
+            )
+            .await
+            .with_context(|| format!("upload {}", destination.data_key))?;
+        if let Some((key, fp_bytes)) = destination.fingerprint_key.zip(fingerprint_bytes) {
+            let fp_bytes = fp_bytes?;
+            storage
+                .put(&key, &fp_bytes, "application/json")
+                .await
+                .with_context(|| format!("write fingerprint at {key}"))?;
+        }
     }
 
     tracing::info!(
         table,
         rows,
-        key = %key,
+        key = %destination.data_key,
         bytes = bytes.len(),
         decision = ?decision,
         "snapshot uploaded"
@@ -227,7 +249,7 @@ async fn snapshot_table(
         table: table.to_string(),
         rows,
         bytes: bytes.len(),
-        key,
+        key: destination.data_key.clone(),
         drift: decision,
     }))
 }
@@ -328,34 +350,267 @@ async fn read_fingerprint(
         Ok(obj) => {
             let parsed: StoredFingerprint = serde_json::from_slice(&obj.bytes)
                 .with_context(|| format!("parse stored fingerprint at {key}"))?;
-            Ok(Some(parsed))
+            return Ok(Some(parsed));
         }
-        Err(StorageError::NotFound(_)) => Ok(None),
-        Err(other) => Err(other).with_context(|| format!("read fingerprint at {key}")),
+        Err(StorageError::NotFound(_)) => {}
+        Err(other) => return Err(other).with_context(|| format!("read fingerprint at {key}")),
     }
+    // A retention-locked bucket never rewrites `_schema.json`; its
+    // fingerprints are attempt-keyed and the highest attempt present is
+    // the commit point for the schema attestation.
+    let prefix = fingerprint_attempt_prefix(APPLICATION_LANE, table);
+    let mut ordinals = storage
+        .list(&prefix)
+        .await
+        .with_context(|| format!("list fingerprint attempts under {prefix}"))?
+        .into_iter()
+        .filter_map(|object| attempt_of(&object.key))
+        .collect::<Vec<u64>>();
+    ordinals.sort_unstable();
+    let Some(&ordinal) = ordinals.last() else {
+        return Ok(None);
+    };
+    let key = fingerprint_attempt_key(APPLICATION_LANE, table, ordinal);
+    let obj = storage
+        .get(&key)
+        .await
+        .with_context(|| format!("read fingerprint attempt at {key}"))?;
+    let parsed: StoredFingerprint = serde_json::from_slice(&obj.bytes)
+        .with_context(|| format!("parse stored fingerprint at {key}"))?;
+    Ok(Some(parsed))
 }
 
-async fn write_fingerprint(storage: &dyn StorageService, fp: &StoredFingerprint) -> Result<()> {
-    let key = fingerprint_key(APPLICATION_LANE, &fp.table);
-    let bytes = serde_json::to_vec_pretty(fp).context("serialize fingerprint")?;
-    storage
-        .put(&key, &bytes, "application/json")
+/// Where one run's bytes and fingerprint stand: the two keys and whether
+/// the destination bucket enforces create-only writes.
+struct SnapshotDestination {
+    data_key: String,
+    fingerprint_key: Option<String>,
+    immutable: bool,
+}
+
+/// Resolve the destination for one snapshot on `storage`. A retention-
+/// locked bucket rejects replacement as well as deletion (GCS Bucket
+/// Lock), so every write there is create-only under an attempt-unique
+/// key: a rerun of a scheduled slot lands a new `attempt=<n>` instead of
+/// replacing the committed bytes, and an unscheduled run's uuid-partitioned
+/// key from `snapshot_key` is attempt-unique by construction. The unlocked
+/// lane has no policy and keeps the documented within-generation overwrite
+/// on fixed keys.
+async fn resolve_destination(
+    storage: &dyn StorageService,
+    lane: &'static str,
+    table: &str,
+    scheduled_for: Option<DateTime<Utc>>,
+    fingerprint_due: bool,
+) -> Result<SnapshotDestination> {
+    let locked = storage
+        .retention_locked()
         .await
-        .with_context(|| format!("write fingerprint at {key}"))?;
-    Ok(())
+        .context("probe the archive bucket's retention policy")?;
+    let fingerprint_key = match (locked, fingerprint_due) {
+        (_, false) => None,
+        (false, true) => Some(fingerprint_key(lane, table)),
+        (true, true) => {
+            let ordinal = next_attempt(storage, &fingerprint_attempt_prefix(lane, table)).await?;
+            Some(fingerprint_attempt_key(lane, table, ordinal))
+        }
+    };
+    let (data_key, immutable) = match (locked, scheduled_for) {
+        (true, Some(scheduled)) => {
+            let prefix = data_slot_prefix(lane, table, scheduled);
+            let ordinal = next_attempt(storage, &prefix).await?;
+            (format!("{prefix}{ordinal}/snapshot.parquet"), true)
+        }
+        // An unscheduled run's data key is uuid-partitioned by
+        // `snapshot_key` — attempt-unique by construction.
+        (true, None) => (snapshot_key(&SnapshotConfig::now(lane, table)), true),
+        (false, _) => (slot_key(lane, table, scheduled_for), false),
+    };
+    Ok(SnapshotDestination {
+        data_key,
+        fingerprint_key,
+        immutable,
+    })
+}
+
+/// The fixed overwrite-lane key for one run: a scheduled slot's
+/// `run=<HHMM>` partition or an unscheduled uuid partition.
+fn slot_key(lane: &'static str, table: &str, scheduled_for: Option<DateTime<Utc>>) -> String {
+    scheduled_for.map_or_else(
+        || snapshot_key(&SnapshotConfig::now(lane, table)),
+        |scheduled| {
+            format!(
+                "{}/{}/data/dt={}/run={}/snapshot.parquet",
+                lane,
+                table,
+                scheduled.date_naive(),
+                scheduled.format("%H%M")
+            )
+        },
+    )
+}
+
+/// The attempt-ordinal list prefix for one scheduled run slot.
+fn data_slot_prefix(lane: &str, table: &str, scheduled: DateTime<Utc>) -> String {
+    format!(
+        "{lane}/{table}/data/dt={}/run={}/attempt=",
+        scheduled.date_naive(),
+        scheduled.format("%H%M")
+    )
+}
+
+/// The next attempt ordinal for `prefix`: one higher than the highest
+/// attempt already present, so a scheduled rerun never collides with a
+/// committed attempt on a retention-locked bucket.
+async fn next_attempt(storage: &dyn StorageService, prefix: &str) -> Result<u64> {
+    let ordinals = storage
+        .list(prefix)
+        .await
+        .with_context(|| format!("list attempts under {prefix}"))?
+        .iter()
+        .filter_map(|object| attempt_of(&object.key))
+        .collect::<Vec<u64>>();
+    let highest = ordinals.iter().max().copied().unwrap_or(0);
+    Ok(highest + 1)
+}
+
+/// The `attempt=<n>` ordinal embedded in an attempt-keyed object, or
+/// `None` for the plain overwrite-lane shapes. Matches both the data
+/// layout (`…/run=0930/attempt=12/snapshot.parquet`) and the schema
+/// layout (`…/_schema/attempt=7/fingerprint.json`).
+fn attempt_of(key: &str) -> Option<u64> {
+    let segment = key
+        .split('/')
+        .find(|segment| segment.starts_with("attempt="))?;
+    segment.strip_prefix("attempt=")?.parse().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        merge_cost_rows, needs_fingerprint_write, open_storage, snapshot_all, SnapshotSummary,
-        TableFailure,
+        attempt_of, merge_cost_rows, needs_fingerprint_write, open_storage, snapshot_all,
+        SnapshotSummary, TableFailure,
     };
     use crate::{fetch_batch, fingerprint, DriftDecision, StoredFingerprint};
     use arrow::array::{Array, StringArray};
     use billing::gcp_cost::CostRow;
-    use cloud::FsStorage;
+    use chrono::{TimeZone, Utc};
+    use cloud::{FsStorage, StorageService};
     use std::path::Path;
+
+    #[test]
+    fn attempt_of_reads_the_attempt_segment() {
+        assert_eq!(
+            attempt_of(
+                "application/person/data/dt=2026-11-04/run=0930/attempt=12/snapshot.parquet"
+            ),
+            Some(12)
+        );
+        assert_eq!(
+            attempt_of("application/person/_schema/attempt=7/fingerprint.json"),
+            Some(7)
+        );
+        assert_eq!(
+            attempt_of("application/person/data/dt=2026-11-04/run=0930/snapshot.parquet"),
+            None,
+            "no attempt segment means no ordinal"
+        );
+    }
+
+    /// On a retention-locked bucket a rerun of a scheduled slot must land
+    /// a new attempt instead of replacing the committed bytes, and the
+    /// unchanged rerun must reuse the standing schema attestation rather
+    /// than writing a second one.
+    #[tokio::test]
+    async fn the_locked_lane_lands_each_slot_rerun_on_a_new_attempt_key() {
+        use crate::test_support::CollisionStorage;
+
+        let db = store::surreal::test_support::mem().await;
+        db.query(
+            "CREATE person:analyst SET \
+             name = 'Analyst', email = 'analyst@example.com', role = 'client'",
+        )
+        .await
+        .unwrap();
+
+        let storage = CollisionStorage::locked();
+        let scheduled = Utc.with_ymd_and_hms(2026, 11, 4, 9, 30, 0).unwrap();
+        let first = snapshot_all(&db, storage.as_ref(), Some(scheduled)).await;
+        assert!(
+            first.failures.is_empty(),
+            "first run: {:#?}",
+            first.failures
+        );
+        let second = snapshot_all(&db, storage.as_ref(), Some(scheduled)).await;
+        assert!(second.failures.is_empty(), "rerun: {:#?}", second.failures);
+
+        let data_keys = storage
+            .keys()
+            .into_iter()
+            .filter(|key| key.starts_with("application/person/data/dt="))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            data_keys.len(),
+            2,
+            "each rerun lands its own attempt: {data_keys:?}"
+        );
+        let ordinals = data_keys
+            .iter()
+            .filter_map(|key| attempt_of(key))
+            .collect::<std::collections::BTreeSet<u64>>();
+        assert_eq!(
+            ordinals,
+            [1, 2].into_iter().collect(),
+            "attempts number from 1: {data_keys:?}"
+        );
+        assert_eq!(
+            storage
+                .keys()
+                .into_iter()
+                .filter(|key| key.starts_with("application/person/_schema/attempt="))
+                .count(),
+            1,
+            "the unchanged rerun reuses the standing attestation"
+        );
+    }
+
+    /// The unlocked lane keeps its documented shape: a rerun of a
+    /// scheduled slot replaces the slot's snapshot in place, leaving one
+    /// object under the data prefix.
+    #[tokio::test]
+    async fn the_unlocked_lane_keeps_one_snapshot_key_per_slot_across_reruns() {
+        let db = store::surreal::test_support::mem().await;
+        db.query(
+            "CREATE person:analyst SET \
+             name = 'Analyst', email = 'analyst@example.com', role = 'client'",
+        )
+        .await
+        .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = FsStorage::new(dir.path()).await.unwrap();
+        let scheduled = Utc.with_ymd_and_hms(2026, 11, 4, 9, 30, 0).unwrap();
+        let first = snapshot_all(&db, &storage, Some(scheduled)).await;
+        assert!(
+            first.failures.is_empty(),
+            "first run: {:#?}",
+            first.failures
+        );
+        let second = snapshot_all(&db, &storage, Some(scheduled)).await;
+        assert!(second.failures.is_empty(), "rerun: {:#?}", second.failures);
+
+        let listed = storage.list("application/person/data/").await.unwrap();
+        assert_eq!(
+            listed.len(),
+            1,
+            "the overwrite lane replaces the slot's snapshot in place"
+        );
+        assert!(
+            listed[0].key.ends_with("/run=0930/snapshot.parquet"),
+            "{}",
+            listed[0].key
+        );
+    }
 
     #[tokio::test]
     async fn postgres_only_source_does_not_require_surreal_coordinates() {
