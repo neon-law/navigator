@@ -3,14 +3,14 @@ name: deploy-production
 description: >-
   Roll the neon-law-prod deployment onto a Navigator release tag by hand and verify it, or verify production is wholly
   on a tag without changing anything. Use when the user wants production updated, promoted, rolled back, restarted after
-  a secret change, or recovered outside release-deploy.yml — "now do prod", "promote that to production", "roll
+  a secret change, or recovered outside release-deploy.yml: "now do prod", "promote that to production", "roll
   www.neonlaw.com back". This row serves real client matters, so staging must already serve the same tag.
 ---
 
 # Roll production
 
 Roll `neon-law-prod` onto a release tag. The tag is the argument. This row serves `www.neonlaw.com` and holds real
-client matters, so the bar for touching it is higher than for staging in the ways set out below.
+client matters.
 
 `.github/workflows/release-deploy.yml` rolls every stable tag to production unattended once staging passes, and holds
 every prerelease tag at staging. Use this skill when a person rolls instead. Check first whether a `release-deploy` run
@@ -39,10 +39,9 @@ cluster or prove image, Secret, IAM, asset, or endpoint readiness; complete the 
 
 ## Confirm before the first mutation
 
-The offline dry-run, validators, image check, and verification script perform no writes; run them freely. The offline
-plan itself makes no cloud calls. Before the first production change, state its tag, the two Deployments, the CronJobs,
-and the outgoing tag; then get a clear yes. Staging authorization does not cover production, and approval for one roll
-does not cover a later roll.
+The offline dry-run, validators, image check, and verification script perform no writes; run them freely. Before the
+first production change, state its tag, the two Deployments, the CronJobs, and the outgoing tag; then get a clear yes.
+Staging authorization does not cover production, and approval for one roll does not cover a later roll.
 
 ## This row holds real files
 

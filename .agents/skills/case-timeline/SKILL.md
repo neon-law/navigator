@@ -17,8 +17,8 @@ navigator glossary show "Deadline"
 
 A litigation case record is its docket: a numbered list of typed entries, each naming what was filed or served, by whom,
 on what date, and the document on file for it. Navigator stores that list as Docket Entries, and the matter page renders
-them joined with the matter's Deadlines in date order. The timeline is never a hand-edited memo: a memo goes stale the
-week the other side files, and a table the store already models is not kept twice.
+them joined with the matter's Deadlines in date order. Never keep the timeline as a hand-edited memo: it goes stale and
+duplicates rows the store already models.
 
 ## 1. Read what is already recorded
 
@@ -32,8 +32,7 @@ writing. An entry number already on the case is the same entry; recording it aga
 
 ## 2. File the document first
 
-A Docket Entry names the document on file for it. File that document before recording the entry, so the entry is never
-*source pending* longer than it has to be:
+File the entry's document before recording the entry, so the entry is *source pending* no longer than necessary:
 
 - A court's CM/ECF notice: `navigator project docket ingest <notice.eml>` files the free-look PDF under
   `documents/Docket Filings/DKT NNNN - <title>.pdf`, its Pointer under `blobs/`, and records a linked Docket Entry for
@@ -59,7 +58,7 @@ navigator project docket add \
 - **The entry number is the court's**, as text: `29`, or `29-1` for an attachment. Never renumber.
 - **The kind is closed.** Pick from `pleading`, `motion`, `opposition`, `reply`, `order`, `notice`, `stipulation`,
   `discovery_request`, `discovery_response`, `subpoena`, `expert_disclosure`, `hearing`, `trial`, `appeal`,
-  `settlement`, and `other`. `other` is for an entry that is genuinely none of the rest, not a shortcut.
+  `settlement`, and `other`. Use `other` only when none of the rest fits.
 - **The case comes from `navigator.yaml`.** The entry joins the case named under `dockets:` (or `matter.case_number`).
   With several, pass `--docket <case number>`. A matter with no case row yet gets one opened from that number on the
   first write, captioned from `matter:`.
@@ -98,10 +97,10 @@ navigator project docket supersede <hearing entry id> \
 
 Do not record a continuance until the order or the signed stipulation exists; file it and pass it as `--slug`.
 
-A date the entry *sets for a party* — a response due, a brief due, a deadline the order imposes — is not a Docket Entry.
-Hand it to the `deadline` skill, which records it once through `navigator project deadline` with its authority. The
-`deadline` skill's `--calendar-role hearing` remains for a reminder about an appearance, but the docket is where the
-appearance's date lives; a Deadline row never stands in for the entry.
+A date the entry *sets for a party* (a response due, a brief due, a deadline the order imposes) is not a Docket Entry.
+Hand it to the `deadline` skill, which records it once through `navigator project deadline` with its authority. Its
+`--calendar-role hearing` is only a reminder about an appearance; the appearance's date lives on the docket, and a
+Deadline row never stands in for the entry.
 
 ## 5. Check the matter page
 
@@ -111,8 +110,8 @@ Entry only when its Document is client-visible, and a deadline only when it has 
 
 ## 6. Calls and other off-system contact
 
-A phone call with opposing counsel, a court clerk, or the client is a Communication, not a document. Log it from the
-note you took, and it joins the matter's conversation beside the email and text it belongs with:
+A phone call with opposing counsel, a court clerk, or the client is a Communication, not a document. Log it from your
+note; it joins the matter's conversation beside the related email and texts:
 
 ```bash
 navigator project communication create \

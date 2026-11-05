@@ -48,10 +48,9 @@ smallest decision needed. Do not claim the whole project complete while required
 
 ## Verify and open one pull request
 
-After the last valid issue commit, survey the full diff and commit list. Run focused tests as each issue is implemented,
-the required user-visible verification, teaching-surface advisory, and the final `navigator validate` gate. Do not rerun
-the workspace suite at PR preparation. Rebase on current `origin/main`, resolve only changes grounded in the issue
-acceptance, and verify the commits remain one per issue.
+After the last valid issue commit, survey the full diff and commit list. Run the required user-visible verification, the
+teaching-surface advisory, and the final `navigator validate` gate; do not rerun the workspace suite. Rebase on current
+`origin/main`, resolve only changes grounded in the issue acceptance, and verify the commits remain one per issue.
 
 Follow `create-pr` for screenshots of user-visible behavior, safe public prose, push, and one non-draft pull request
 against `main`. Include one closing trailer per issue actually completed by that pull request; use a non-closing

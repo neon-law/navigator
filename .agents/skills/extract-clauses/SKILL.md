@@ -39,21 +39,21 @@ For arbitration, inspect these decisions independently:
 - Remedies, fees, confidentiality exceptions, service method, and provisional court relief.
 - Jury/court waivers and independent-counsel disclosures where present.
 
-Not every decision needs an input. Fixed choices remain visible in the source and define its scope. A parameterized
-jurisdiction does not establish legal suitability there. Existing templates may deliberately bind law and seat to the
-same state; preserve that behavior during extraction and describe it rather than introducing a new question silently. A
-settlement-dispute provision and a lawyer-client malpractice provision need separate sources when their effects differ.
+Not every decision needs an input; fixed choices stay visible in the source and define its scope. A parameterized
+jurisdiction does not establish legal suitability there. When a template binds law and seat to the same state, preserve
+and describe that behavior; do not silently add a question. A settlement-dispute provision and a lawyer-client
+malpractice provision need separate sources when their effects differ.
 
 ## Extract and verify
 
 1. Add a context-specific, pinned source with its permitted `kind`, named typed inputs, and complete body. Preserve
    existing source versions; use a new version for changed wording.
 2. Declare its alias and bindings in the Template, replacing only the extracted body with `{{> alias}}`. Include a
-   reference in the body for every declaration. Nested references are currently unsupported.
+   reference in the body for every declaration. Nested references are unsupported.
 3. Compare the compiled body with the original bytes before editing; add the original hash to the composition
-   regression test in `forms/tests/clauses.rs`. For intended wording changes, explain them and verify separately rather
-   than blessing a new hash as an unchanged extraction.
-4. Exercise materially independent inputs and verify the exceptions and disclosures survive rendering. Verify required
+   regression test in `forms/tests/clauses.rs`. Explain and verify an intended wording change separately; never bless a
+   new hash as an unchanged extraction.
+4. Exercise materially independent inputs and verify the exceptions and disclosures survive rendering, and that required
    unanswered inputs remain placeholders and fail the final-document check.
 5. Run focused composition tests and `cargo run -p cli --quiet -- project gate`; inspect its automatic formatting edits.
 

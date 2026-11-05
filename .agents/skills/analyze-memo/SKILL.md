@@ -11,10 +11,10 @@ description: >
 Before naming a record or UI concept, follow **Find the term first** in `AGENTS.md`.
 
 Read the exact document, its previous version, and the saved sources it relies on. Follow [[legal-writing]] for source
-proof and [[record-search]] when checking the matter record. Keep the review and document bytes in the Project's
-approved stores. The Project repository carries reusable Drafts and Pointers, never completed work product.
+proof and [[record-search]] for the matter record. Keep the review and document bytes in the Project's approved stores;
+the Project repository carries reusable Drafts and Pointers, never completed work product.
 
-Review in this order. Report a missing source or unavailable previous version as a gap rather than assuming it agrees.
+Review in this order. Report a missing source or unavailable previous version as a gap; do not assume it agrees.
 
 ## 1. Visibility
 
@@ -55,13 +55,13 @@ correction. If rendering or a page cannot be inspected, report that limitation b
 After correction approval, save the final document under `documents/Work Product/<Subfolder>/YYYY.MM.DD_<name>`. Choose
 the subfolder and stable name from the matter's existing organization. Follow [[legal-writing]] for the upload or
 `navigator project sync`; explicitly keep visibility internal, verify the stored revision, and review and commit only
-its Pointer. Keep document bytes out of Git. A correction approval alone never authorizes a client release.
+its Pointer. Keep document bytes out of Git.
 
 ## 7. Report and authorization
 
 Lead with findings, ordered by consequence. For each, name the passage, supporting source or gap, proposed correction,
 and other documents affected. State what was checked and what remains unverified, including the rendered pages.
 
-A review request authorizes findings and proposed corrections. Apply corrections only on the lawyer's go-ahead; preserve
-that boundary even when the issue appears obvious. Report corrected documents and verification results after the
-approved work is complete. Sending, filing with a tribunal, and client release require their own authorization.
+A review request authorizes findings and proposed corrections. Apply corrections only on the lawyer's go-ahead, even
+when the issue appears obvious. Then report corrected documents and verification results. Sending, filing with a
+tribunal, and client release require their own authorization.

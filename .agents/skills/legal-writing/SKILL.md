@@ -9,16 +9,16 @@ description: >-
 
 Before naming a table, field, state, or UI concept, follow the **Find the term first** section in `AGENTS.md`.
 
-Follow [[human-readable]]: answer first, one idea per sentence, jargon defined inline, and short lists for prose that
-does not fit a compact table. Write for the client or lawyer who must act on the answer.
+Follow [[human-readable]]: answer first, one idea per sentence, jargon defined inline, short lists where a table would
+be too wide. Write for the client or lawyer who must act on the answer.
 
 ## Memo notations
 
-A memo is a notation. Author its reusable source at `templates/<code>.md` as `kind: memo` in the Project repository. Use
-the Project's chosen `drafts/` directory when its blueprints live there. Keep client data and matter facts out of Git:
-use placeholders for facts and keep their answers, cited originals, and produced work product in Navigator.
+A memo is a notation. Author its reusable source at `templates/<code>.md` as `kind: memo` in the Project repository, or
+in the Project's `drafts/` directory when its blueprints live there. Keep client data and matter facts out of Git: use
+placeholders for facts, and keep answers, cited originals, and produced work product in Navigator.
 
-Enclose these minimal frontmatter keys in YAML delimiters, using the memo's title and governing jurisdiction:
+Enclose these minimal frontmatter keys in YAML delimiters, with the memo's title and governing jurisdiction:
 
 ```yaml
 kind: memo
@@ -35,21 +35,19 @@ Run `navigator project gate`, review and commit the source, then push a preview 
 templates/<code>.md`. Preview stores a draft for review; it does not run a notation or produce a filed document. Do not
 substitute a document upload for authoring the notation's source.
 
-Keep lines within 120 columns. Use short lists for prose cells that make a table too wide. Preserve exact statute
-numbers and citations when reflowing; verify the gate's edits before committing. Save and check each cited original
-through the source-preservation procedure below.
+Keep lines within 120 columns. Preserve exact statute numbers and citations when reflowing; verify the gate's edits
+before committing. Save and check each cited original through *Source preservation* below.
 
 ## Page one carries the decision
 
-Open a memo, letter, or brief with the answer and recommended action. Name the decisive fact, any uncertainty that
-changes the action, the deadline, and the ask. A reader who stops after the first paragraph still knows what to do.
-
-Recommend one course. State the fact or pending event that could change it and when that uncertainty can be resolved.
+Open a memo, letter, or brief with the answer and one recommended course. Name the decisive fact, the deadline, the ask,
+and any uncertainty that could change the action, with when it resolves. A reader who stops after the first paragraph
+still knows what to do.
 
 ## Every sentence is proved
 
-Every sentence is proved and every source saved. Every fact in the draft carries one of three labels, visible to the
-supervising lawyer before the draft becomes work product:
+Every fact in the draft carries one of three labels, visible to the supervising lawyer before the draft becomes work
+product:
 
 - **Documented:** pinned to a source with a pinpoint cite (page, paragraph, or exhibit line).
 - **Client-asserted:** attributed to the client's own account, not independently verified.
@@ -57,7 +55,7 @@ supervising lawyer before the draft becomes work product:
 
 Open, quote verbatim, and check the treatment of every authority before relying on it. Never cite from a snippet, a
 headnote, or memory. State odds as bands tied to named fact scenarios ("likely if the signature is authenticated,
-unlikely if it is not"), never as a bare point estimate. The band tells the next reader which fact would change it.
+unlikely if it is not"), never as a bare point estimate, so the reader sees which fact would change it.
 
 **Nothing goes in a filing the lawyer does not believe true.** Candor comes before advocacy.
 
@@ -68,12 +66,12 @@ no saved original is flagged as unverifiable and goes no further until it is sav
 
 - **Law** (a case, statute, regulation, or rule) is saved as an Authority: `navigator site authorities create
   --class <class> --citation <citation> --title <title> --file <archived-copy>`. Set `--checked-on` to the date the
-  source was actually opened and checked, not the date the memo was drafted. An Authority is global reference data
-  shared by every matter that cites it, never a bare git-committed file.
+  source was opened and checked, not the drafting date. An Authority is global reference data shared by every matter
+  that cites it, never a bare git-committed file.
 - **Matter-specific material** (a filed document, a produced page, an opposing brief, correspondence) is saved as a
   matter document, scoped to its matter, never as a global Authority.
-- No field yet records the date and source a matter document was captured from. Record both in `--description`. Do
-  not invent a workaround field or convention.
+- Record a matter document's capture date and source in `--description`; no field holds them. Do not invent a
+  workaround field or convention.
 
 ## Filing a document into a matter
 
@@ -81,19 +79,17 @@ Verify the Project, document kind, visibility, and revision before filing.
 
 - **Repository coordinate.** A Project has one repository, stored as a whole URL on the Project
   (`project.repository_url`), never composed from a host, an organization, and the Project code. Read it off the
-  Project's show page in the portal, which renders the stored URL verbatim (or nothing). No CLI command prints it:
-  `navigator project doctor --project <code>` is an offline diagnosis and does not report it. If no URL is recorded, do
-  not guess an organization.
+  Project's show page in the portal, which renders the stored URL verbatim (or nothing). No CLI command prints it
+  (`navigator project doctor --project <code>` is an offline diagnosis). If no URL is recorded, do not guess an
+  organization.
 - **Direct upload versus staged sync.** `navigator site document upload --project <code> --file <path> --kind <kind>`
   files one document immediately through the API; use it for a single filing during a session. `navigator project sync`
   is the batch path: it uploads files staged under a checkout's `documents/` folder, which the root `.gitignore` keeps
   out of Git, and writes each document's pointer under `blobs/`.
-- **Direct upload records a Pointer in its Project checkout.** When `navigator site document upload` runs from
-  the matching Project repository, it writes only `blobs/<slug>.yaml` and also prints the Pointer. The legal document
-  bytes stay in Navigator storage. Review and commit the pointer; run `navigator project gate --check` to reconcile
-  every live row this login can see, or `navigator project sync` to catch up the whole matter.
-- **Outside the matching checkout**, direct upload prints the Pointer without writing a file. Run it from the
-  Project repository when you want the Pointer staged there.
+- **Direct upload records a Pointer in its Project checkout.** Run from the matching Project repository, `navigator
+  site document upload` writes only `blobs/<slug>.yaml` and prints the Pointer; outside it, it only prints the Pointer.
+  The document bytes stay in Navigator storage. Review and commit the pointer; run `navigator project gate --check` to
+  reconcile every live row this login can see, or `navigator project sync` to catch up the whole matter.
 - **Filename.** No convention is enforced on `--file`. Use a stable name a lawyer would recognize on sight (the caption
   or subject, compressed), since `--slug` defaults to it.
 - **Kind.** One of `letter`, `filing`, `will`, `trust`, `directive`, `agreement`, `pleading`, `onboarding`,
@@ -104,10 +100,9 @@ Verify the Project, document kind, visibility, and revision before filing.
 - **Visibility.** `--visibility internal` (default) or `--visibility client`, the client-visible lane.
 - **Metadata.** `document upload` has no `--metadata` flag. The committed pointer carries only `kind`, `visibility`,
   and the current revision's `version`, `asset_id`, `created_at`, `sha256`, and `size_bytes`. `--description` lands on
-  the server-side asset row, not the pointer; record capture provenance there (see *Source preservation*).
+  the server-side asset row, not the pointer (see *Source preservation*).
 - **Source extension.** `--slug` must end in the uploaded file's own extension, case-insensitively (`--slug
-  motion.pdf` for `motion.pdf`, never a bare `motion`). A slug that drops or mismatches the extension is refused before
-  any network call, naming the fix:
+  motion.pdf` for `motion.pdf`, never a bare `motion`). Otherwise it is refused before any network call:
 
   ```text
   document slug `motion` must carry the source extension from `motion.pdf`; use `motion.pdf` so it can be
@@ -117,9 +112,8 @@ Verify the Project, document kind, visibility, and revision before filing.
 - **Pointer path and revision verification.** The pointer lives at `blobs/<slug>.yaml` once written. Confirm a revision
   landed with `navigator site document log blobs/<slug>.yaml`. It prints the revision chain, newest first, marking the
   operative row with `*`. That table is the verification step, not the exit code.
-- **Login.** `navigator site login --host <host>` opens a browser-loopback flow. Its start URL is percent-encoded, so a
-  literal `&` between query parameters reaches the browser intact. Where the browser will not launch, pass
-  `--no-browser` to print the URL and open it by hand. The token is stored at `~/.navigator.json`.
+- **Login.** `navigator site login --host <host>` opens a browser-loopback flow. Where the browser will not launch,
+  pass `--no-browser` to print the URL and open it by hand. The token is stored at `~/.navigator.json`.
 
 ## A court paper reads as delivered to the judge
 
@@ -140,8 +134,8 @@ presenting a pleading as ready to file:
 
 Write for this judge, this record, and this hearing. Before filing, the draft states:
 
-- **The other side's best argument, at its strongest.** Steelman it, then answer it. An understated opposing argument
-  is one the judge first hears from opposing counsel, at the worst moment.
+- **The other side's best argument, at its strongest.** Steelman it, then answer it, so the judge does not first hear
+  it from opposing counsel.
 - **The thirty-second story.** If the theory of the matter cannot be told in the walk to the podium, it is not ready
   to argue.
 - **The record that has to exist.** Name the declaration, exhibit, or transcript page the argument stands on before

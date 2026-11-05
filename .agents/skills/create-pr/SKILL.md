@@ -15,8 +15,7 @@ Read, in order:
 - **[docs/agent-workflows.md → Create a PR](../../../docs/agent-workflows.md#create-a-pr)**: the whole flow (survey,
   group into commits with the Conventional Commit type table, run the gate, branch, commit, capture a visual, push, open
   the PR), plus the `gh auth` recipe for an unauthenticated shell.
-- **[docs/gitops.md](../../../docs/gitops.md)**: branch → PR → auto-merge. `main` is squash-merge-only. Ready PRs from
-  this repository arm auto-merge automatically.
+- **[docs/gitops.md](../../../docs/gitops.md)**: branch → PR → auto-merge. `main` is squash-merge-only.
 
 Rules:
 
@@ -24,7 +23,7 @@ Rules:
   once. The CLI names the linked worktree's PR branch in place; it creates a sibling only when started from the primary
   checkout outside the app workflow.
 - Run the content gate, then open the PR. Do not re-run the workspace tests, the `features` harness, or coverage here;
-  they ran while the change was written, and CI runs them again. Use the CLI crate when `navigator` is not on `PATH`:
+  CI runs them. Use the CLI crate when `navigator` is not on `PATH`:
 
   ```bash
   navigator validate
@@ -53,9 +52,8 @@ Rules:
   embed it in the PR body via [[pr-image-upload]] (one `curl` to the tenant's `user-attachments` store, authenticated by
   `gh auth token`). Use `curl`, not the `gh-image` extension, which cannot target this host. **Default to a GIF of the
   real interaction** ([[web-preview]] §5); use a still only when nothing moves (no keypress, click, or state
-  transition). Videos and animated walkthroughs must be screen recordings of the actual running Navigator website and
-  its real interaction states. Do not use AI-generated video, motion graphics, mockups, or synthetic animations as
-  product footage.
+  transition). Videos and animations must record the real running Navigator website; never use AI-generated video,
+  motion graphics, mockups, or synthetic animations as product footage.
 - For authenticated screenshots, follow the worktree login flow in [[open-admin-server]]: grant lawyer against the
   same store as `web`, then sign in through Rauthy for a real session cookie.
 - **Audit the teaching surfaces (advisory).** Before pushing, run [[author-docs]] against what this branch changed.
@@ -64,7 +62,6 @@ Rules:
   repository arm App-owned squash auto-merge without a label. Then check `gh pr view --json autoMergeRequest,state`; an
   already-green PR may merge immediately. Report the PR URL and whether it merged or auto-merge is armed. Use `--draft`
   when the user asks to hold the PR. Required checks and resolved review threads still govern merging.
-- **Wait for the review comments, then answer them.** Greptile and any human reviewer post after CI starts, and an
-  unresolved thread blocks auto-merge as surely as a red check. Wait for the review to land, then address every comment
-  with [[review-pr]] — fix it or reply with the reason not to — and resolve its thread. The PR is not done, and is not
-  reported as done, until every thread is answered.
+- **Wait for the review comments, then answer them.** Greptile and human reviewers post after CI starts, and an
+  unresolved thread blocks auto-merge like a red check. Address every comment with [[review-pr]] (fix it, or reply with
+  the reason not to) and resolve its thread. The PR is not done, or reported done, until every thread is answered.

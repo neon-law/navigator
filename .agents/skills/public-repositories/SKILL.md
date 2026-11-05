@@ -16,8 +16,8 @@ Read [`docs/licensing.md`](../../../docs/licensing.md), [`docs/gitops.md`](../..
 - A **publish workflow in a public repository** grants `id-token: write` and writes its coordinates into a public
   Actions log. Pass the deployment's applications bucket, publisher service account, and Workload Identity provider as
   repository **secrets**, never variables: GitHub redacts a secret's text but not a variable's, and two of the three
-  contain the deployment's GCP project identity. Secrets reduce disclosure; the Workload Identity binding on Google's
-  side is the access control. See [`docs/project-repositories.md`](../../../docs/project-repositories.md).
+  contain the deployment's GCP project identity. The Workload Identity binding on Google's side is the access control.
+  See [`docs/project-repositories.md`](../../../docs/project-repositories.md).
 - An IAM condition confines a Project's publisher to **one** `<code>/portal` prefix, and its service account derives
   from the deployment's GCP project id, so one deployment carries one Project's portal publisher. Provisioning a second
   Project against the same publisher is refused, because repointing would silently revoke the first Project's publish.

@@ -7,7 +7,7 @@ description: >-
 
 # PostgreSQL
 
-Before beginning, always ground in the code, its tests, and the [glossary](../../../docs/glossary).
+Ground in the code, its tests, and the [glossary](../../../docs/glossary) first.
 
 Use PostgreSQL relational models and ordered SQLx migrations for new storage work. Prefer supported PostgreSQL writes
 through the domain accessor. [Storage models and writes](../../../docs/storage-models.md) records authority selection
@@ -27,8 +27,7 @@ handlers and the runtime importer perform no DDL. Deployment configuration selec
   [`k8s/forgejo/database/kustomization.yaml`](../../../k8s/forgejo/database/kustomization.yaml), and
   [`k8s/overlays/postgres-spike/kustomization.yaml`](../../../k8s/overlays/postgres-spike/kustomization.yaml).
   `cli/tests/staging_manifests.rs` fails when they drift.
-- **Recipe, tests, and build context:** [`images/postgres/`](../../../images/postgres/README.md). This repository is the
-  image's source.
+- **Recipe, tests, and build context:** [`images/postgres/`](../../../images/postgres/README.md).
 - **Weekly publish:** [`postgres-image.yml`](../../../.github/workflows/postgres-image.yml) builds, tests, signs, and
   publishes, then opens a pull request moving every pin with
   [`scripts/postgres-image-pin.sh`](../../../scripts/postgres-image-pin.sh).
@@ -48,12 +47,11 @@ application dependency, not part of the image.
 
 ## Rules
 
-- **Pin by digest, everywhere at once.** `k8s/postgres/` (the retained `navigator-postgres` StatefulSet) and
-  `k8s/overlays/postgres-spike/` (the disposable `postgres-spike`) each carry the digest. Move them together. Never use
-  a tag or `latest` in a shared environment.
-- **Change the recipe here.** Edit `images/postgres/` in a pull request; `postgres-image.yml` builds and smoke-tests
-  both architectures on it, and publishes on merge. Move pins only with `scripts/postgres-image-pin.sh`, never by hand
-  editing one file.
+- **Pin by digest, everywhere at once.** `k8s/postgres/` (the retained `navigator-postgres` StatefulSet),
+  `k8s/overlays/postgres-spike/` (the disposable `postgres-spike`), and the other pins above move together. Never use a
+  tag or `latest` in a shared environment.
+- **Change the recipe here.** Edit `images/postgres/` in a pull request; `postgres-image.yml` smoke-tests both
+  architectures on it and publishes on merge. Move pins only with `scripts/postgres-image-pin.sh`, never by hand.
 - **No committed credentials.** The spike's `POSTGRES_PASSWORD: synthetic` is a disposable local/CI fixture. The
   retained StatefulSet reads `navigator-postgres-auth` and `navigator-postgres-tls`, which a Deployment Operator
   provisions through the environment's secret path. Clients use `sslmode=verify-full`, carry the
