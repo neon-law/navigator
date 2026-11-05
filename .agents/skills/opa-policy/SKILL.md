@@ -1,11 +1,7 @@
 ---
 name: opa-policy
-description: >
-  Embedded Rego (OPA policy language, evaluated in-process by Regorus) as the authorization decision point for `web`.
-  Trigger when writing or modifying Rego (`portal/policy/navigator.rego` or its `_test.rego`), touching
-  `portal::policy::require_policy` or `PolicyClient`, adding a new `/app/...` route that needs policy enforcement, or
-  when someone mentions OPA. Also trigger before reaching for a role-based authorization library: authz routes through
-  Rego.
+description: >-
+  Implement authorization through embedded Rego and PolicyClient. Use for policy changes and protected app routes.
 ---
 
 # Embedded Rego authorization

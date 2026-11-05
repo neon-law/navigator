@@ -1,13 +1,8 @@
 ---
 name: kind-local-dev
-description: >
-  Local Kubernetes-in-Docker (KIND) workflow for the navigator workspace: cluster lifecycle, ingress, port-forwarding,
-  and the "host runs `web`, deps run in cluster" iteration pattern via the `navigator` CLI. Trigger when running any
-  `navigator` orchestration subcommand (`dev up`, `dev down`, `dev deploy`, `dev kind up`, `dev kind down`, `dev e2e`,
-  `dev logs`, `dev worktree-env`, `dev serve`), editing `k8s/kind-config.yaml`, debugging an in-cluster service from the
-  host, or onboarding the cluster from a fresh machine. Also trigger before installing a different local-Kubernetes
-  flavor (we standardize on KIND), before proposing to run, preview, screenshot, or manually exercise the app, and
-  before local runtime orchestration. Follow the current AGENTS.md authorization and worktree-runtime contract.
+description: >-
+  Manage task-owned KIND environments, ports, and services. Use for local orchestration, app previews, and browser
+  checks.
 ---
 
 # KIND-based local development

@@ -318,6 +318,10 @@ navigator ops postgres backfill --resume <run-id> --json  # continue a run from 
 - **Plan.** `--dry-run` compares every mirror in registry order and lists, per table, the rows a run would write (by
   UUID), the batches they need, and the differing and PostgreSQL-only rows it would leave. It writes nothing, not even a
   run record. The same stores give the same plan.
+- **Source tables.** The dry-run report includes every live source table, its row count, and its disposition:
+  `mirrored`, `derived`, `recreated_metadata`, or `unsupported`. Empty unsupported tables stay visible. Populated
+  unsupported tables block both planning and import. Derived tables rebuild from canonical rows, and `schema_version` is
+  recreated by target migrations. Missing inventory metadata fails closed; an empty inventory must be explicit.
 - **Source fields.** Whole-row record mirrors refuse source fields without a declared preservation mapping, including
   explicit nulls and empty values. The error gives the registered table and field count only. Declared JSON content is
   preserved recursively; absent optional fields retain their null mapping. Consumed source-key metadata supplies the row

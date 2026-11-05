@@ -537,11 +537,43 @@ pub struct UncoveredTable {
     pub rows: usize,
 }
 
+/// How a source table participates in the canonical PostgreSQL import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceDisposition {
+    Mirrored,
+    Derived,
+    RecreatedMetadata,
+    Unsupported,
+}
+
+impl SourceDisposition {
+    /// Stable machine-readable spelling used by the operator report.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Mirrored => "mirrored",
+            Self::Derived => "derived",
+            Self::RecreatedMetadata => "recreated_metadata",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+/// One live source table's row count and import disposition, without row values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceTableCoverage {
+    pub table: String,
+    pub rows: usize,
+    pub disposition: SourceDisposition,
+}
+
 /// A deterministic, read-only account of what a backfill would write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     pub batch_size: usize,
     pub tables: Vec<TablePlan>,
+    /// Complete live source inventory, sorted by table name.
+    pub source_tables: Vec<SourceTableCoverage>,
     /// Source orphans and target parent rows still absent, grouped by table and field.
     pub unresolved_references: Vec<crate::postgres_mirror::records::UnresolvedReference>,
 }
@@ -604,12 +636,13 @@ pub async fn plan(
             });
         }
     }
-    ensure_source_coverage(surreal, &covered).await?;
+    let source_tables = ensure_source_coverage(surreal, &covered).await?;
     let unresolved_references =
         crate::postgres_mirror::records::unresolved_references(surreal, pg).await?;
     Ok(Plan {
         batch_size,
         tables,
+        source_tables,
         unresolved_references,
     })
 }
@@ -628,31 +661,62 @@ async fn mirror_coverage(
 }
 
 /// Fail closed if a live source table contains rows outside mirror coverage.
-/// Derived views are excluded because their rows are rebuilt from canonical
-/// source tables; analytical archives are not considered import coverage.
+/// Derived views rebuild from canonical rows; analytical archives are not import coverage.
 async fn ensure_source_coverage(
     surreal: &SurrealDb,
     covered: &BTreeSet<&'static str>,
-) -> Result<(), BackfillError> {
-    let tables: Option<BTreeMap<String, String>> = surreal
-        .query("RETURN (INFO FOR DB).tables")
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|_| BackfillError::SourceInventory)?
-        .take(0)
-        .map_err(|_| BackfillError::SourceInventory)?;
+) -> Result<Vec<SourceTableCoverage>, BackfillError> {
+    let inventory = source_inventory(surreal, covered).await?;
+    let uncovered: Vec<_> = inventory
+        .iter()
+        .filter(|table| table.disposition == SourceDisposition::Unsupported && table.rows > 0)
+        .map(|table| UncoveredTable {
+            table: table.table.clone(),
+            rows: table.rows,
+        })
+        .collect();
+    if uncovered.is_empty() {
+        Ok(inventory)
+    } else {
+        Err(BackfillError::UncoveredTables(uncovered))
+    }
+}
+
+fn required_source_tables(
+    tables: Option<BTreeMap<String, String>>,
+) -> Result<BTreeMap<String, String>, BackfillError> {
+    tables.ok_or(BackfillError::SourceInventory)
+}
+
+/// Count every live source table, including empty tables and explicit exclusions.
+async fn source_inventory(
+    surreal: &SurrealDb,
+    covered: &BTreeSet<&'static str>,
+) -> Result<Vec<SourceTableCoverage>, BackfillError> {
+    let tables = required_source_tables(
+        surreal
+            .query("RETURN (INFO FOR DB).tables")
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .map_err(|_| BackfillError::SourceInventory)?
+            .take(0)
+            .map_err(|_| BackfillError::SourceInventory)?,
+    )?;
     let derived: BTreeSet<String> = crate::schema::derived_tables()
         .into_iter()
         .map(|table| table.name)
         .collect();
-    let mut uncovered = Vec::new();
-    for table in tables.unwrap_or_default().keys() {
-        if covered.contains(table.as_str())
-            || derived.contains(table)
-            || RECREATED_SOURCE_METADATA.contains(&table.as_str())
-        {
-            continue;
-        }
+    let mut inventory = Vec::new();
+    for table in tables.keys() {
+        let disposition = if derived.contains(table) {
+            SourceDisposition::Derived
+        } else if RECREATED_SOURCE_METADATA.contains(&table.as_str()) {
+            SourceDisposition::RecreatedMetadata
+        } else if covered.contains(table.as_str()) {
+            SourceDisposition::Mirrored
+        } else {
+            SourceDisposition::Unsupported
+        };
         let mut response = surreal
             .query("SELECT VALUE count() FROM type::table($table) GROUP ALL")
             .bind(("table", table.clone()))
@@ -662,31 +726,25 @@ async fn ensure_source_coverage(
         let counts: Vec<surrealdb::types::Value> = response
             .take(0)
             .map_err(|_| BackfillError::SourceTableRead(table.clone()))?;
-        let rows = match counts.into_iter().next() {
-            None => 0,
-            Some(value) => {
-                let value = value.into_json_value();
-                let count = value
+        let rows = match counts.as_slice() {
+            [] => 0,
+            [value] => {
+                let value = value.clone().into_json_value();
+                value
                     .as_u64()
                     .or_else(|| value.get("count").and_then(serde_json::Value::as_u64))
                     .and_then(|count| usize::try_from(count).ok())
-                    .ok_or_else(|| BackfillError::SourceTableCount(table.clone()))?;
-                count
+                    .ok_or_else(|| BackfillError::SourceTableCount(table.clone()))?
             }
+            _ => return Err(BackfillError::SourceTableCount(table.clone())),
         };
-        if rows > 0 {
-            uncovered.push(UncoveredTable {
-                table: table.clone(),
-                rows,
-            });
-        }
+        inventory.push(SourceTableCoverage {
+            table: table.clone(),
+            rows,
+            disposition,
+        });
     }
-    uncovered.sort_by(|left, right| left.table.cmp(&right.table));
-    if uncovered.is_empty() {
-        Ok(())
-    } else {
-        Err(BackfillError::UncoveredTables(uncovered))
-    }
+    Ok(inventory)
 }
 
 /// Where a run stands after one invocation.

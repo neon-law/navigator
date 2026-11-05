@@ -1,13 +1,7 @@
 ---
 name: bulk-contact-upload
-description: >
-  Turn a raw list of organizations and the people who work at them into a valid Neon Law Navigator bulk-import payload,
-  then load it through the `bulk_import` MCP tool, which calls the shared `import` engine. Use this when someone hands
-  you a contact list (names, emails, titles, phone numbers, org names) and wants those people and their organizations
-  created as `persons` and `entities` with the links between them. Trigger on "bulk import these contacts", "load this
-  list of people and orgs", or "create these as clients", or when Navigator MCP is asked to add several people at once.
-  Skip for a single person (use `create_person`) or for opening a matter or Project (the per-engagement onboarding
-  flow).
+description: >-
+  Import multiple people and organizations through Navigator bulk_import. Use create_person for a single person.
 ---
 
 # Bulk contact upload

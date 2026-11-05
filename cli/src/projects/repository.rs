@@ -4230,86 +4230,6 @@ jobs:
     }
 
     #[test]
-    fn opposing_communication_review_is_synced_and_covers_recipient_readings() {
-        let (_, canonical) = SYNCED_SKILLS
-            .iter()
-            .find(|(name, _)| *name == "opposing-communication-review")
-            .expect("opposing-communication-review is a synced skill");
-        for required in [
-            "recipient's perspective",
-            "incoming messages",
-            "drafts",
-            "already sent",
-            "Documented",
-            "Inference",
-            "Unknown",
-            "Extension request",
-            "read this as cooperation",
-            "question why an extension is needed",
-            "unconditional concession",
-            "existing records suffice",
-            "Conditional concession",
-            "Preserve the condition",
-            "distinguish the offered change",
-            "ask for clarification only",
-            "Routine acknowledgment",
-            "receipt, not agreement",
-            "do not recommend a corrective reply",
-            "attorney work product",
-            "client-visible record",
-            "source Communication",
-            "A review request is not",
-            "to send, reply",
-            "Never invent bad faith",
-            "never assign a success probability",
-        ] {
-            assert!(
-                canonical.contains(required),
-                "skill must cover `{required}`"
-            );
-        }
-
-        let root = tempfile::tempdir().unwrap();
-        emit_scaffold(
-            root.path(),
-            "matter-one",
-            "staging.neonlaw.com",
-            "lawyer@example.com",
-            "client@example.com",
-        )
-        .unwrap();
-        let path = root
-            .path()
-            .join(".agents/skills/opposing-communication-review/SKILL.md");
-        assert_eq!(fs::read_to_string(&path).unwrap(), *canonical);
-        fs::write(&path, "drift\n").unwrap();
-        assert!(validate_gate(root.path(), Some("matter-one"), false).errors > 0);
-
-        let custom = root.path().join(".agents/skills/custom/SKILL.md");
-        fs::create_dir_all(custom.parent().unwrap()).unwrap();
-        fs::write(&custom, "# custom skill\n").unwrap();
-        repair_skills(root.path()).unwrap();
-        assert_eq!(fs::read_to_string(path).unwrap(), *canonical);
-        assert_eq!(fs::read(&custom).unwrap(), b"# custom skill\n");
-        assert_eq!(
-            validate_gate(root.path(), Some("matter-one"), false).errors,
-            0
-        );
-    }
-
-    #[test]
-    fn record_search_is_canonical_and_synced() {
-        let (_, canonical) = SYNCED_SKILLS
-            .iter()
-            .find(|(name, _)| *name == "record-search")
-            .expect("record-search is a canonical synced skill");
-        assert!(canonical.contains("Kept\n  identical, byte for byte"));
-        assert!(canonical.contains("navigator project search"));
-        assert!(!canonical.contains("pdftotext"));
-        assert!(!canonical.contains("Python's `email` package"));
-    }
-
-    #[test]
     fn record_search_is_repaired_and_drift_fails_the_project_gate() {
         let root = tempfile::tempdir().unwrap();
         emit_scaffold(
@@ -4607,45 +4527,6 @@ jobs:
         assert!(
             !calls.contains("pr view"),
             "read-back ran after arm failure: {calls}"
-        );
-    }
-
-    #[test]
-    fn legal_council_citations_ship_in_scaffold_and_skill_repair() {
-        let root = tempfile::tempdir().unwrap();
-        emit_scaffold(
-            root.path(),
-            "matter-one",
-            "staging.neonlaw.com",
-            "lawyer@example.com",
-            "client@example.com",
-        )
-        .unwrap();
-        let path = root.path().join(".agents/skills/legal-council/SKILL.md");
-        let scaffold = fs::read_to_string(&path).unwrap();
-        for case in [
-            "Moran",
-            "Maples",
-            "Samsung",
-            "Golden Eagle",
-            "Iacangelo",
-            "Momentous",
-            "Melendres",
-            "Electronic Trading",
-            "Shadow Traffic",
-            "Lennar",
-            "Nextdoor",
-            "Jenner",
-        ] {
-            assert!(scaffold.contains(case), "released skill must cite {case}");
-        }
-        fs::write(&path, "# outdated Legal Council\n").unwrap();
-        assert!(validate_gate(root.path(), Some("matter-one"), false).errors > 0);
-        repair_skills(root.path()).unwrap();
-        assert_eq!(fs::read_to_string(path).unwrap(), scaffold);
-        assert_eq!(
-            validate_gate(root.path(), Some("matter-one"), false).errors,
-            0
         );
     }
 

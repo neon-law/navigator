@@ -1,14 +1,8 @@
 ---
 name: observability
-description: >
-  How Neon Law Navigator emits telemetry and how to debug a durable-execution failure fast. Every binary shares one
-  seam, `telemetry::init` (stdout logs, JSON in prod, plus OTLP traces and metrics when `OTEL_EXPORTER_OTLP_ENDPOINT` is
-  set), and everything lands in BigQuery (structured logs via a Cloud Logging sink; traces and metrics via an OTel
-  Collector to Cloud Trace and Monitoring). Trigger when adding a span, metric, or log field, instrumenting a handler or
-  workflow, wiring a new binary's main, debugging a missing nightly or periodic job or a silent trigger, running
-  `navigator ops doctor`, or touching the OTel Collector or BigQuery sink. The one rule: instrument identifiers and
-  counts, never content. A notation_id, service, outcome, duration, or status code is fine; a client name, answer body,
-  email address, or document body must never enter a span, metric, or log. Skip for one-off println debugging.
+description: >-
+  Add or diagnose telemetry, triggers, OTel, and BigQuery logging. Record identifiers and counts; exclude client
+  content.
 ---
 
 # Observability

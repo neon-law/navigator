@@ -1,11 +1,8 @@
 ---
 name: surreal-migrations
-description: >
-  Change the SurrealDB schema safely: add, retype, or remove a field in `store/src/schema/navigator.surql`, bump
-  `SCHEMA_VERSION`, and ship the backfill that the applied-schema model cannot perform for you. Trigger when the user
-  says "add a field", "change the schema", "write a migration", "backfill", "retype a column", or when a change edits
-  `navigator.surql` or a row struct that reads it. Covers why a green test suite proves nothing about staging and
-  production.
+description: >-
+  Change the active SurrealDB schema with versioning, tolerant reads, and explicit backfills. Use postgres for new
+  storage design.
 ---
 
 # Surreal migrations

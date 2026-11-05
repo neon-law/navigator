@@ -1,11 +1,8 @@
 ---
 name: stay-in-repo
-description: >
-  Confines an agent session to the current repository's own checkout: never read, search, or write to a sibling
-  checkout, another Project's repository, the home directory, or system temp. Trigger at the start of every session in a
-  Navigator Project repository (a Portal or notation-template checkout), and whenever a task seems to need something
-  from outside the current tree. Synced verbatim into every Project repository's `.agents/skills/`; this canonical copy
-  lives in Navigator's own `.agents/skills/`.
+description: >-
+  Keep Project repository work inside its own checkout. Use at session start and before accessing files outside the
+  tree.
 ---
 
 # Stay inside this repository

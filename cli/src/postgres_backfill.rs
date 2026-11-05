@@ -175,6 +175,11 @@ fn plan_json(
 ) -> serde_json::Value {
     let mut result = json!({
         "mode": "backfill-dry-run",
+        "source_tables": plan.source_tables.iter().map(|table| json!({
+            "table": table.table,
+            "rows": table.rows,
+            "disposition": table.disposition.label(),
+        })).collect::<Vec<_>>(),
         "batch_size": plan.batch_size,
         "missing": plan.missing(),
         "tables": plan.tables.iter().map(|table| json!({
@@ -230,6 +235,16 @@ fn plan_text(
 ) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
+    let _ = writeln!(out, "source inventory:");
+    for table in &plan.source_tables {
+        let _ = writeln!(
+            out,
+            "  {}: {} row(s), {}",
+            table.table,
+            table.rows,
+            table.disposition.label()
+        );
+    }
     let _ = writeln!(
         out,
         "{:<28} {:<28} {:>8} {:>8} {:>8} {:>9} {:>6} {:>8}",
@@ -494,9 +509,55 @@ mod tests {
     }
 
     #[test]
+    fn dry_run_reports_full_source_coverage_without_row_values() {
+        use store::postgres_backfill::{SourceDisposition, SourceTableCoverage};
+        let plan = Plan {
+            batch_size: 10,
+            tables: vec![],
+            unresolved_references: vec![],
+            source_tables: vec![
+                SourceTableCoverage {
+                    table: "person".into(),
+                    rows: 3,
+                    disposition: SourceDisposition::Mirrored,
+                },
+                SourceTableCoverage {
+                    table: "schema_version".into(),
+                    rows: 1,
+                    disposition: SourceDisposition::RecreatedMetadata,
+                },
+                SourceTableCoverage {
+                    table: "empty_fixture".into(),
+                    rows: 0,
+                    disposition: SourceDisposition::Unsupported,
+                },
+                SourceTableCoverage {
+                    table: "derived_fixture".into(),
+                    rows: 2,
+                    disposition: SourceDisposition::Derived,
+                },
+            ],
+        };
+        let rendered = plan_json(&plan, None);
+        assert_eq!(
+            rendered["source_tables"],
+            json!([
+                {"table":"person", "rows":3, "disposition":"mirrored"},
+                {"table":"schema_version", "rows":1, "disposition":"recreated_metadata"},
+                {"table":"empty_fixture", "rows":0, "disposition":"unsupported"},
+                {"table":"derived_fixture", "rows":2, "disposition":"derived"},
+            ])
+        );
+        let text = plan_text(&plan, None);
+        assert!(text.contains("schema_version: 1 row(s), recreated_metadata"));
+        assert!(text.contains("empty_fixture: 0 row(s), unsupported"));
+    }
+
+    #[test]
     fn object_verification_reports_each_storage_lane_without_exposing_keys() {
         use store::postgres_backfill::AssetObjectVerification;
         let plan = Plan {
+            source_tables: vec![],
             batch_size: 10,
             tables: vec![],
             unresolved_references: vec![],
@@ -564,6 +625,7 @@ mod tests {
     fn reports_name_rows_by_uuid_and_reason_only() {
         let id = Uuid::new_v4().to_string();
         let plan = Plan {
+            source_tables: vec![],
             batch_size: 2,
             unresolved_references: vec![store::postgres_mirror::records::UnresolvedReference {
                 table: "relationship",
@@ -699,6 +761,7 @@ mod tests {
     #[test]
     fn asset_verification_is_reported_by_count_only() {
         let plan = Plan {
+            source_tables: vec![],
             batch_size: 50,
             unresolved_references: vec![],
             tables: vec![],

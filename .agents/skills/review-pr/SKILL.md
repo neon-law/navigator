@@ -1,10 +1,7 @@
 ---
 name: review-pr
-description: >
-  Address a requested pull-request comment against the real code at the PR head. Read the thread, source, and covering
-  test; reproduce behavioral claims in the right KIND-backed environment; apply only the minimum valid fix; prove it;
-  then reply and resolve that thread. Trigger when the user asks to address or review a PR comment, a Greptile finding,
-  or a named review thread. For several comments, repeat this narrow action for each one without combining their scopes.
+description: >-
+  Resolve one PR review comment: verify the claim, apply the minimum fix, prove it, reply, and resolve the thread.
 ---
 
 # `/review-pr`: address a PR comment

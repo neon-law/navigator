@@ -3228,6 +3228,7 @@ pub fn design_router() -> Router {
         .route(
             DESIGN_PATH,
             get(render_handler)
+                .layer(from_fn(inject_public_utility))
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(reject_unadvertised_design_sort)),
         )

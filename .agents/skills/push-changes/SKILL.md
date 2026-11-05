@@ -1,9 +1,7 @@
 ---
 name: push-changes
-description: >
-  Rebase, gate, sign, and push a Project repository change through a ready pull request against main, then wait for
-  merge. Trigger on "push changes", "push this", "ship it", or "land it". Synced verbatim into every Project
-  repository's `.agents/skills/`; this canonical copy lives in Navigator's own `.agents/skills/`.
+description: >-
+  Rebase, gate, sign, and push a Project repository change through a ready PR, then wait for merge.
 ---
 
 # Push changes

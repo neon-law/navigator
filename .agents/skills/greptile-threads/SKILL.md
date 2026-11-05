@@ -1,10 +1,8 @@
 ---
 name: greptile-threads
-description: >
-  Bring every Greptile review thread on an open pull request up to date: list the unresolved threads, settle each one
-  (fix it through review-pr, or decline it with evidence), then reply and resolve it so auto-merge is no longer blocked.
-  Trigger when the user asks to update, answer, clear, or resolve the Greptile threads or comments on a PR, or when a
-  ready PR with green checks still shows `mergeStateStatus: BLOCKED`.
+description: >-
+  Address unresolved Greptile PR threads with evidence, reply, and resolve handled findings. Use when review threads
+  block merge.
 ---
 
 # `/greptile-threads`: update a PR's Greptile threads

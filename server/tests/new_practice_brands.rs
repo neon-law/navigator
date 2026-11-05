@@ -76,9 +76,14 @@ async fn prepared_practice_pages_render_their_own_identity_and_contact_form() {
                 html.contains(views::brand::SHOOK_CONSULTATION_URL),
                 "shared Notion booking link"
             );
+            let document = scraper::Html::parse_document(&html);
+            let family =
+                scraper::Selector::parse("footer .site-footer__family").expect("family selector");
             assert!(
-                !html.contains(other_name),
-                "unlaunched sibling is not advertised"
+                document
+                    .select(&family)
+                    .any(|row| row.html().contains(other_name)),
+                "shared firm directory includes sibling brands"
             );
             assert!(
                 html.contains(&format!("brand-{}-tokens.css", key.as_str())),

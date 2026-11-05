@@ -1,10 +1,7 @@
 ---
 name: glossary-notion-sync
-description: >
-  Sync [`docs/glossary/`](../../../docs/glossary/README.md) (one Markdown file per term) with its mirror page in Notion,
-  in either direction. Trigger when asked to push the glossary to Notion, pull a Notion glossary edit back into the
-  repository, or refresh the Notion copy after a term changes. The repository is the source of truth; Notion is where a
-  colleague reads and proposes. A pull is a pull request, never a paste.
+description: >-
+  Sync docs/glossary with its Notion mirror. Git is authoritative; incoming edits land through a PR.
 ---
 
 # Syncing the glossary with Notion

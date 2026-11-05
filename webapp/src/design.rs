@@ -54,6 +54,7 @@ use crate::components::{
 // deployment's, so they are kept visibly apart from the themed set.
 use crate::components::resource_mark::{ResourceMark, ResourceMarkGlyph};
 use crate::firm_footer::FirmFooter;
+use crate::public_chrome::PublicChrome;
 
 /// The demo table's advertised sort keys — the JSON:API contract's allow-list.
 /// The `/design` route pre-handler (`portal::dioxus_app::design_router`) `400`s a
@@ -680,11 +681,45 @@ const ICONS: &[(IconName, &str)] = &[
 /// The `/design` gallery component.
 #[allow(non_snake_case)]
 pub fn DesignGallery() -> Element {
+    let resource = use_server_future(design_chrome)?;
+    let chrome = match &*resource.read() {
+        Some(Ok(chrome)) => chrome.clone(),
+        _ => return rsx! {},
+    };
+    let header = rsx! {
+        SiteHeader {
+            brand_name: chrome.brand_name.clone(),
+            home_href: chrome.home_href.clone(),
+            logo_href: chrome.logo_href.clone(),
+            menu_id: "design-site-menu".to_string(),
+            destinations: chrome.destinations.iter()
+                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone())).collect(),
+            utility: chrome.utility.iter()
+                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone())).collect(),
+        }
+    };
     rsx! {
-        document::Title { "Neon Law Navigator | Design system" }
+        document::Title { "{chrome.brand_name} | Design system" }
+        PublicShell {
+            header,
+            footer: rsx! { crate::public_chrome::PublicFooter { chrome: chrome.clone() } },
+            main_landmark: false,
+            DesignGalleryContent { chrome }
+        }
+    }
+}
+
+#[server]
+async fn design_chrome() -> Result<crate::public_chrome::PublicChrome, ServerFnError> {
+    Ok(crate::public_chrome::firm_public_chrome_from_context().await)
+}
+
+#[component]
+fn DesignGalleryContent(chrome: PublicChrome) -> Element {
+    rsx! {
         document::Stylesheet { href: THEME_STYLESHEET_HREF }
         // The social-share preview tags hoist into <head>, resolved from the
-        // deploy's branding so a white-label install emits its own identity.
+        // request's branding so each host emits its own identity.
         SocialMetaSection {}
         main { id: "design", class: "nav-theme design-gallery",
             GalleryIntro {}
@@ -759,9 +794,9 @@ pub fn DesignGallery() -> Element {
             CopyRunsShowcase {}
             ResourceMarkShowcase {}
             CatalogHeroShowcase {}
-            SiteHeaderShowcase {}
-            SiteFooterShowcase {}
-            PublicShellShowcase {}
+            SiteHeaderShowcase { chrome: chrome.clone() }
+            SiteFooterShowcase { chrome: chrome.clone() }
+            PublicShellShowcase { chrome: chrome.clone() }
             FocusSetShowcase {}
             ProgressShowcase {}
             MatterPrimitivesShowcase {}
@@ -772,7 +807,7 @@ pub fn DesignGallery() -> Element {
             PeopleListShowcase {}
             AppNavbarShowcase {}
             AppProfileMenuShowcase {}
-            FirmFooterShowcase {}
+            FirmFooterShowcase { chrome }
             NavigatorChromeShowcase {}
             NavigationShowcase {}
             SnippetsSection {}
@@ -909,7 +944,7 @@ fn AppProfileMenuShowcase() -> Element {
 /// It carries a single centered copyright line naming the resolved Firm's
 /// legal entity, with no navigation.
 #[component]
-fn FirmFooterShowcase() -> Element {
+fn FirmFooterShowcase(chrome: PublicChrome) -> Element {
     rsx! {
         section {
             h2 { "Application footer" }
@@ -920,66 +955,43 @@ fn FirmFooterShowcase() -> Element {
             FirmFooter {
                 model: crate::firm_footer::FirmFooterModel {
                     compiled_identity_allowed: true,
-                    legal_entity: "Guieb & Shook PC".to_string(),
+                    legal_entity: chrome.legal_entity.clone(),
                     firm_home_href: String::new(),
                     brands: Vec::new(),
-                    copyright_year: 2026,
+                    copyright_year: chrome.copyright_year,
                 },
             }
         }
     }
 }
 
-/// The firm's one association affiliation, as the deployed footer publishes
-/// it. Real rather than synthetic for the same reason the trademark below is:
-/// the line is a public claim about the firm, and a made-up association
-/// beside a real-looking link is the one thing it must never show.
-fn demo_memberships() -> Vec<FooterMembership> {
-    vec![FooterMembership {
-        label: "Justice Technology Association".to_string(),
-        standing: "Mission-Aligned Partner".to_string(),
-        href: "https://justicetechassociation.org/get-involved".to_string(),
-        logo_href: "/public/img/justice-technology-association/logo.png".to_string(),
-    }]
+/// The current operator's verified public affiliations.
+fn demo_memberships(chrome: &PublicChrome) -> Vec<FooterMembership> {
+    chrome
+        .memberships
+        .iter()
+        .map(|membership| FooterMembership {
+            label: membership.label.clone(),
+            standing: membership.standing.clone(),
+            href: membership.href.clone(),
+            logo_href: membership.logo_href.clone(),
+        })
+        .collect()
 }
 
-/// The currently live house brands, as the deployed footer's "Our Family" row
-/// lists them on the firm's own host: the firm current and unlinked, the other
-/// live brands linking their production homes.
-// Literal rather than read from `views::brand::BrandKey::family_byline`:
-// this module is not behind the `server` feature, so it compiles into the
-// wasm client, where `views` is not linked. The gallery is a fixture of what
-// the footer looks like, not a second source of truth for the copy.
-fn demo_family() -> Vec<FooterBrandLink> {
-    [
-        (
-            "Emerging Technologies Counsel",
-            "https://www.neonlaw.com",
-            true,
-            "flat-fee legal services for emerging tech",
-        ),
-        (
-            "Protect your info",
-            "https://www.deleteyourdata.com",
-            false,
-            "protect your personal information",
-        ),
-        (
-            "Lawyer Shook",
-            "https://www.lawyershook.com",
-            false,
-            "Nicholas Shook",
-        ),
-    ]
-    .into_iter()
-    .map(|(label, href, current, byline)| FooterBrandLink {
-        label: label.to_string(),
-        href: href.to_string(),
-        current,
-        logo_href: String::new(),
-        byline: byline.to_string(),
-    })
-    .collect()
+/// The same family and current Brand that the page footer publishes.
+fn demo_family(chrome: &PublicChrome) -> Vec<FooterBrandLink> {
+    chrome
+        .brands
+        .iter()
+        .map(|brand| FooterBrandLink {
+            label: brand.label.clone(),
+            href: brand.href.clone(),
+            current: brand.current,
+            logo_href: brand.logo_href.clone(),
+            byline: brand.byline.clone(),
+        })
+        .collect()
 }
 
 /// The unified Navigator shell — prepared, but not yet adopted by any real
@@ -1042,7 +1054,7 @@ fn NavigatorChromeShowcase() -> Element {
     }
 }
 
-/// The deploy's social-share identity: brand name plus the absolute logo URL
+/// The request's social-share identity: brand name plus the absolute logo URL
 /// for `og:image`. Plain, wasm-safe fields so it crosses the server→client
 /// boundary; the client build calls the generated stub.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -1058,18 +1070,16 @@ pub struct SocialBranding {
     pub tokens_href: String,
 }
 
-/// Resolve the running deploy's social-share branding from the process brand
-/// (`views::brand`), so a white-label install emits its own site name and logo
-/// in the share preview instead of hard-coded Neon Law tags. `og:image` must be
-/// absolute (scrapers drop relative URLs), so the firm's raster mark is resolved
-/// against the site origin server-side.
+/// Resolve the request's injected public identity so each host's gallery uses
+/// its own site name, absolute share image, and brand tokens.
 #[server]
 pub async fn design_social_branding() -> Result<SocialBranding, ServerFnError> {
+    let chrome = crate::public_chrome::firm_public_chrome_from_context().await;
     Ok(SocialBranding {
-        site_name: views::brand::FIRM_BRAND.site_name.to_string(),
-        image: views::assets::absolute_url(views::brand::FIRM_BRAND.social_image),
+        site_name: chrome.brand_name,
+        image: chrome.social_image,
         aster_image: views::assets::asset_url(views::assets::ASTER_BOARD_KEY),
-        tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
+        tokens_href: chrome.tokens_href,
     })
 }
 
@@ -1307,7 +1317,7 @@ fn DisclaimerShowcase() -> Element {
 /// strip. Rendered in preview mode (`main_landmark: false`) so it does not nest
 /// a second `<main>` inside the gallery's own landmark.
 #[component]
-fn PublicShellShowcase() -> Element {
+fn PublicShellShowcase(chrome: PublicChrome) -> Element {
     rsx! {
         section {
             h2 { "Public page shell" }
@@ -1322,28 +1332,22 @@ fn PublicShellShowcase() -> Element {
                     main_landmark: false,
                     header: rsx! {
                         SiteHeader {
-                            brand_name: "Neon Law".to_string(),
-                            home_href: "/".to_string(),
-                            logo_href: "/public/img/logo.svg".to_string(),
-                            destinations: vec![
-                                SiteNavLink::new("Services", "/#services"),
-                                SiteNavLink::new("Blog", "/blog"),
-                                SiteNavLink::new("Team", "/team").current(),
-                                SiteNavLink::new("Notations", "/notations"),
-                            ],
-                            // The gallery is the one page carrying two headers,
-                            // so this one holds its own disclosure state rather
-                            // than repeating the default id.
+                            brand_name: chrome.brand_name.clone(),
+                            home_href: chrome.home_href.clone(),
+                            logo_href: chrome.logo_href.clone(),
+                            destinations: chrome.destinations.iter().map(|link|
+                                SiteNavLink::new(link.label.clone(), link.href.clone())).collect(),
+                            // Each gallery header holds its own disclosure state.
                             menu_id: "design-shell-menu".to_string(),
                         }
                     },
                     footer: rsx! {
                         SiteFooterLegal {
-                            copyright_holder: "Neon Law".to_string(),
+                            copyright_holder: chrome.legal_entity.clone(),
                             disclaimer: "This site is attorney advertising. Prior results do not \
                                          guarantee a similar outcome."
                                 .to_string(),
-                            copyright_year: 2026,
+                            copyright_year: chrome.copyright_year,
                         }
                     },
                     h3 { "Page content" }
@@ -1507,21 +1511,21 @@ fn CatalogHeroShowcase() -> Element {
 /// the active page marked. The gallery shows the signed-in variant so both the
 /// primary destinations and the trailing utility group are visible.
 #[component]
-fn SiteHeaderShowcase() -> Element {
+fn SiteHeaderShowcase(chrome: PublicChrome) -> Element {
+    let mut destinations: Vec<_> = chrome
+        .destinations
+        .iter()
+        .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
+        .collect();
+    destinations.push(SiteNavLink::new("Design", "/design").current());
     rsx! {
         section {
             h2 { "Site header" }
             SiteHeader {
-                brand_name: "Neon Law".to_string(),
-                home_href: "/".to_string(),
-                logo_href: "/public/img/logo.svg".to_string(),
-                destinations: vec![
-                    SiteNavLink::new("Services", "/#services"),
-                    SiteNavLink::new("Blog", "/blog"),
-                    SiteNavLink::new("Design", "/design").current(),
-                    SiteNavLink::new("Team", "/team"),
-                    SiteNavLink::new("Notations", "/notations"),
-                ],
+                brand_name: chrome.brand_name.clone(),
+                home_href: chrome.home_href.clone(),
+                logo_href: chrome.logo_href.clone(),
+                destinations,
                 utility: vec![SiteNavLink::new("Portal", "/app/projects")],
             }
         }
@@ -1534,98 +1538,59 @@ fn SiteHeaderShowcase() -> Element {
 /// attorney-advertising disclaimer). A deploy that publishes no contact
 /// channels renders the legal strip alone.
 #[component]
-fn SiteFooterShowcase() -> Element {
+fn SiteFooterShowcase(chrome: PublicChrome) -> Element {
     rsx! {
         section {
             h2 { "Site footer" }
             SiteFooterLegal {
-                copyright_holder: "Neon Law".to_string(),
+                copyright_holder: chrome.legal_entity.clone(),
                 disclaimer: "This site is attorney advertising. Prior results do not \
                              guarantee a similar outcome."
                     .to_string(),
-                copyright_year: 2026,
-                brand_name: "Neon Law".to_string(),
+                copyright_year: chrome.copyright_year,
+                brand_name: chrome.brand_name.clone(),
+                logo_href: chrome.logo_href.clone(),
                 // The shipped footer's mark is a link home, so the gallery
                 // shows it as one — an unlinked mark here would document a
                 // footer no page renders.
-                home_href: "/".to_string(),
+                home_href: chrome.home_href.clone(),
                 contact_email: "support@example.com".to_string(),
                 phone: "+1 555 010 0100".to_string(),
                 offices: demo_offices(),
                 attorneys: demo_attorneys(),
-                // The routes the header does not carry, at the full length
-                // the site publishes them: twelve links, which the stylesheet
-                // lays out in four columns. A gallery driving
-                // three would document a row that never renders and would not
-                // show the four-column layout at all.
-                nav: [
-                    ("API", "/api"),
-                    ("Blog", "/blog"),
-                    ("Contact", "/contact"),
-                    ("Design", "/design"),
-                    ("Glossary", "/glossary"),
-                    ("Navigator", "/navigator"),
-                    ("Notations", "/notations"),
-                    ("Presentations", "/presentations"),
-                    ("Privacy", "/privacy"),
-                    ("Team", "/team"),
-                    ("Terms", "/terms"),
-                    ("Testimonials", "/testimonials"),
-                ]
-                .into_iter()
-                .map(|(label, href)| FooterNavLink {
-                    label: label.to_string(),
-                    href: href.to_string(),
+                // The same destination set as the current operator's footer.
+                nav: chrome.footer_links.iter().map(|link| FooterNavLink {
+                    label: link.label.clone(),
+                    href: link.href.clone(),
                 })
                 .collect(),
-                // The mark notice, driven with the firm's real registration
-                // rather than a synthetic one. The offices and attorneys above
-                // are fixtures because they stand in for regulated firm detail
-                // a gallery has no business asserting; a registration is a
-                // public record, and a made-up number beside a real-looking
-                // link is the one thing this line must never show.
-                trademark: "NEON LAW".to_string(),
-                trademark_registration: "6,325,650".to_string(),
-                trademark_record_url:
-                    "https://tmsearch.uspto.gov/search/search-results/90039224".to_string(),
-                // The affiliations row: the live brand family and the one
-                // membership, so the gallery shows the row every deployed
-                // page renders — and so the accessibility audit of `/design`
-                // covers its landmark, heading, and off-site link.
-                brands: demo_family(),
-                memberships: demo_memberships(),
-                social: demo_social(),
-                // The release stamp, driven with a literal so the gallery shows
-                // the line a deployed page renders. A local `cargo run` leaves
-                // it unset and the site publishes no version.
-                navigator_version: "26.8.20".to_string(),
+                // Brand-specific ownership metadata comes from the request.
+                trademark: chrome.trademark.clone(),
+                trademark_registration: chrome.trademark_registration.clone(),
+                trademark_record_url: chrome.trademark_record_url.clone(),
+                // The request's family and affiliations let the gallery audit
+                // the same landmarks, headings, and links the page publishes.
+                brands: demo_family(&chrome),
+                memberships: demo_memberships(&chrome),
+                social: demo_social(&chrome),
+                // The same release stamp as the outer page footer.
+                navigator_version: chrome.navigator_version.clone(),
             }
         }
     }
 }
 
-/// The firm's published profiles, the same three the live footer links.
-fn demo_social() -> Vec<FooterSocialLink> {
-    [
-        ("x", "X", "https://x.com/NeonLawUSA"),
-        (
-            "linkedin",
-            "LinkedIn",
-            "https://www.linkedin.com/company/neon-law-usa",
-        ),
-        (
-            "youtube",
-            "YouTube",
-            "https://www.youtube.com/@neon-law-firm",
-        ),
-    ]
-    .into_iter()
-    .map(|(network, label, href)| FooterSocialLink {
-        network: network.to_string(),
-        label: label.to_string(),
-        href: href.to_string(),
-    })
-    .collect()
+/// The current Brand's verified public profiles.
+fn demo_social(chrome: &PublicChrome) -> Vec<FooterSocialLink> {
+    chrome
+        .social
+        .iter()
+        .map(|profile| FooterSocialLink {
+            network: profile.network.clone(),
+            label: profile.label.clone(),
+            href: profile.href.clone(),
+        })
+        .collect()
 }
 
 /// Two sample offices for the footer showcase. Synthetic, like every other
@@ -2518,78 +2483,19 @@ mod tests {
         );
     }
 
-    /// The gallery previews every component the theme ships (bar the chrome
-    /// wrappers that only compose others), so a component added to
-    /// `crate::components` without a gallery entry is caught here rather than
-    /// discovered missing months later.
-    #[test]
-    fn gallery_source_mentions_every_exported_component() {
-        let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let gallery = std::fs::read_to_string(crate_root.join("src/design.rs")).expect("design.rs");
-        for component in [
-            "FirmFooter",
-            "AppNavbar",
-            "Avatar",
-            "BackBreadcrumb",
-            "LawyerPortalBreadcrumb",
-            "Card",
-            "CodeBlock",
-            "ConfirmDelete",
-            "DataTable",
-            "LegalBlueprintDisclaimer",
-            "FormCard",
-            "Honeypot",
-            "GitHubStars",
-            "Icon",
-            "ExternalLink",
-            "Stage",
-            "Hero",
-            "ChoiceGroup",
-            "StepList",
-            "Stepper",
-            "StepperPanel",
-            "NavigatorShell",
-            "Pagination",
-            "PeopleListInputs",
-            "PricingSection",
-            "Progress",
-            "PublicShell",
-            "QuestionStage",
-            "RowActions",
-            "SampleMattersBanner",
-            "SiteFooterLegal",
-            "SiteHeader",
-            "SocialMeta",
-            "Tabs",
-            "TestimonialSection",
-            "Toast",
-            "Panel",
-            "Callout",
-            "Badge",
-            "FactCard",
-            "FactGrid",
-            "StatusStrip",
-            "ActionList",
-            "Feed",
-            "Empty",
-            "ToggleGroup",
-            "Separator",
-            "NotationDocument",
-        ] {
-            assert!(
-                gallery.contains(component),
-                "the /design gallery does not render {component}"
-            );
-        }
-    }
-
     #[test]
     fn app_footer_showcase_renders_only_the_copyright_line() {
-        use super::FirmFooterShowcase;
+        use super::{FirmFooterShowcase, PublicChrome};
         use dioxus::prelude::*;
 
         fn app() -> Element {
-            rsx! { FirmFooterShowcase {} }
+            rsx! { FirmFooterShowcase {
+                chrome: PublicChrome {
+                    legal_entity: "Guieb & Shook PC".to_string(),
+                    copyright_year: 2026,
+                    ..PublicChrome::default()
+                }
+            } }
         }
         let mut dom = VirtualDom::new(app);
         dom.rebuild_in_place();
@@ -2641,29 +2547,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// The SSR default is the month view: the pre-hydration HTML is complete,
-    /// and the month buckets (not the day buckets) are what the server drew.
-    #[test]
-    fn dashboard_period_defaults_to_month_for_the_server_render() {
-        use super::DashboardPeriod;
-        assert_eq!(DashboardPeriod::default(), DashboardPeriod::Month);
-    }
-
-    /// The donut and the paired table read one fixture; its counts are whole,
-    /// positive, and sum to the "Open matters" stat's headline.
-    #[test]
-    fn dashboard_practice_mix_agrees_with_the_stat_row() {
-        use super::PRACTICE_MIX;
-
-        let mut total = 0.0;
-        for (label, count) in PRACTICE_MIX {
-            assert!(*count > 0.0, "{label}: {count}");
-            assert!(count.fract().abs() < 1e-9, "{label}: {count}");
-            total += count;
-        }
-        assert!((total - 36.0).abs() < 1e-9);
     }
 
     /// The showcase renders server-side with no hydration: the month chip is

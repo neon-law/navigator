@@ -1,12 +1,8 @@
 ---
 name: tightbeam-linear-loop
-description: >
-  Solve a whole Linear project in one go with Tightbeam: the product-owner reads the project and its issues, a Product
-  Delivery Owner (PDO) coordinates everything else, and an Engineering Council review sharpens the test plan before any
-  code is written, so the work lands as one pull request with one signed commit per issue. Trigger when asked to "run
-  the code machine", "have the PO and PDO do this Linear project", or to start, resume, or inspect that loop. Skip for a
-  single issue done by hand (use [`implement-issue`](../implement-issue/SKILL.md)) and for any session that is itself
-  working an assigned card.
+description: >-
+  Run a Linear project through the Tightbeam product-owner and delivery-owner workflow, with council review and one
+  signed commit per issue.
 ---
 
 # Tightbeam + Linear: one project, one PR

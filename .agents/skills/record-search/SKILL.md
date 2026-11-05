@@ -1,11 +1,8 @@
 ---
 name: record-search
-description: >
-  Answer "where in the record does it say X" with exact matches and an explicit list of what was and was not searched.
-  Trigger whenever asked to find, cite, or confirm a fact, phrase, name, or event in a Project's documents, filings,
-  correspondence, transcripts, or notes, and before stating that the record does or does not contain something. Kept
-  identical, byte for byte, in every Project repository's `.agents/skills/`; this canonical copy lives in Navigator's
-  own `.agents/skills/`.
+description: >-
+  Find exact support in a Project's record. Report matches and search scope before confirming a record fact or its
+  absence.
 ---
 
 # Record search

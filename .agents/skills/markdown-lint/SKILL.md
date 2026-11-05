@@ -1,9 +1,7 @@
 ---
 name: markdown-lint
-description: >
-  Lint every `.md` file in the workspace with the navigator CLI (M-family rules plus the S101 120-character line limit).
-  Trigger when adding or editing any Markdown file (READMEs, `docs/`, `AGENTS.md`, blog posts under `server/content/`)
-  and before committing `.md` changes. Use the workspace's own binary; never hand-roll a different linter.
+description: >-
+  Validate Markdown changes with Navigator's own project gate, including frontmatter and the 120-character line limit.
 ---
 
 # Markdown linting via the navigator CLI

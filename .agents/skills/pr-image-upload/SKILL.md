@@ -1,14 +1,8 @@
 ---
 name: pr-image-upload
-description: >
-  Embed a local screenshot or GIF into a `github.com` PR (or issue) body so it actually RENDERS, driven from the CLI: no
-  drag-drop, no committing the file, no image-hosting branch, no release/tag. One `curl` uploads the `/tmp` capture to
-  the `user-attachments` store using nothing but `gh auth token`, and returns a real
-  `https://github.com/user-attachments/assets/…` URL to drop into the body. Trigger as the embed half of [[create-pr]]'s
-  walkthrough step (after [[web-preview]] captures the visual), when a reviewer comment on a PR asks for a "live
-  walkthrough"/screenshot during [[review-pr]], or any time you have a `/tmp` image that must appear in a PR/issue body
-  or comment. Capture lives in [[web-preview]] (a walkthrough defaults to a GIF of the real interaction, a still only
-  for a genuinely static change); this skill only hosts and embeds it.
+description: >-
+  Upload a local screenshot or GIF to GitHub user attachments and embed it in a PR or issue. Capture through web-
+  preview.
 ---
 
 # Embedding screenshots in a PR body from the CLI
