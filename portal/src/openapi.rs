@@ -103,6 +103,7 @@ pub fn document_with_base(base: &str) -> Value {
     add_upload_session_operations(&mut document);
     add_inbox_import_operation(&mut document);
     add_fi_import_operation(&mut document);
+    add_private_chart_operation(&mut document);
     add_inbox_attachment_operation(&mut document);
     document["paths"]["/app/api/projects/{id}/section-counts"] = serde_json::json!({
       "get": {
@@ -120,6 +121,54 @@ pub fn document_with_base(base: &str) -> Value {
       }
     });
     document
+}
+
+fn add_private_chart_operation(document: &mut Value) {
+    let local = json!({"type":"string", "description":"Civil date and clock without a UTC offset"});
+    let zone = json!({"type":"string", "description":"Pinned IANA time-zone name"});
+    let offset = json!({"type":"integer", "description":"Explicit seconds east of UTC for a repeated clock"});
+    let body_names: Vec<_> = ephemeris::lines::LINE_BODIES
+        .into_iter()
+        .map(ephemeris::lines::LineBody::name)
+        .collect();
+    document["paths"]["/app/api/projects/{id}/astrology-chart"] = json!({"post": {
+        "operationId":"calculatePrivateAstrologyChart", "tags":["Projects"],
+        "summary":"Calculate one private, request-local Astrology Chart",
+        "description":"Requires Project participation and consent for personal reflection. Client and lawyer-tier participants may calculate; Clerk and read-only client viewing sessions are refused. Cookie callers require a CSRF token. Inputs belong in this JSON body only. Verified local JPL kernels are required. Neither birth inputs nor results enter a shared result cache or standing store; this operation creates no saved chart, history, or export. Responses and refusals are private, no-store.",
+        "parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],
+        "requestBody":{"required":true,"content":{"application/json":{"schema":{
+            "type":"object","additionalProperties":false,
+            "required":["consent","purpose","birth_time","longitude_deg","latitude_deg","bodies"],
+            "properties":{
+                "consent":{"type":"boolean","enum":[true]},
+                "purpose":{"type":"string","enum":["personal_reflection"]},
+                "birth_time":{"oneOf":[
+                    {"type":"object","additionalProperties":false,"required":["precision","local","zone"],"properties":{
+                        "precision":{"type":"string","enum":["exact"]},"local":local,"zone":zone,"offset_seconds":offset}},
+                    {"type":"object","additionalProperties":false,"required":["precision","local","zone","uncertainty_seconds"],"properties":{
+                        "precision":{"type":"string","enum":["approximate"]},"local":local,"zone":zone,"offset_seconds":offset,
+                        "uncertainty_seconds":{"type":"integer","minimum":1,"maximum":4_294_967_295_u64}}},
+                    {"type":"object","additionalProperties":false,"required":["precision","date","zone"],"properties":{
+                        "precision":{"type":"string","enum":["unknown"]},"date":{"type":"string","format":"date"},"zone":zone}}
+                ]},
+                "longitude_deg":{"type":"number","minimum":-180,"maximum":180},
+                "latitude_deg":{"type":"number","minimum":-90,"maximum":90},
+                "bodies":{"type":"array","uniqueItems":true,"maxItems":body_names.len(),"items":{"type":"string","enum":body_names}},
+                "houses":{"type":"string","enum":["none","equal","whole_sign"],"default":"none"}
+            }
+        }}}},
+        "responses":{
+            "200":{"description":"Private calculated chart with equivalent rendering values, precision, and calculation provenance. Unknown time has no calculated positions or instant; approximate time has no houses. Tropical, geocentric, true-of-date, mean node, and no refraction conventions are explicit in metadata.",
+                "headers":{"Cache-Control":{"schema":{"type":"string"},"description":"private, no-store"}},
+                "content":{"application/json":{"schema":{"type":"object","required":["positions","house_cusps","precision","metadata"]}}}},
+            "400":{"description":"Malformed input, unsupported purpose or house selection, or query parameters"},
+            "401":{"description":"Unauthenticated"},"403":{"description":"CSRF, read-only view, or session scope refused"},
+            "404":{"description":"Project unavailable or outside the participant's permitted lens"},
+            "413":{"description":"Request body exceeds 16 KiB"},
+            "422":{"description":"Consent required, invalid birth time, location, or body selection, or calculation unavailable for input"},
+            "503":{"description":"Verified local calculation sources are unavailable"}
+        }
+    }});
 }
 
 fn upload_session_schema() -> Value {

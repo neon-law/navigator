@@ -497,10 +497,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // + 2 for call-queue and Brand-report role admission.
     // 665 + 2 = 667.
     // + 3 for mapped Fi history: Lawyer admission, denied tiers, and exact shape.
-    // 667 + 3 = 670.
+    // The inventory includes private chart admission and scoped-CI denial.
     assert_eq!(
         test_names.len(),
-        670,
+        672,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

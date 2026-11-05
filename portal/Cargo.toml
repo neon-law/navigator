@@ -29,6 +29,7 @@ dioxus-core.workspace = true
 dioxus-server.workspace = true
 dbos.workspace = true
 dotenvy.workspace = true
+ephemeris.workspace = true
 flate2.workspace = true
 forms.workspace = true
 gateway.workspace = true

@@ -16,7 +16,7 @@ ci_matter_content_denied if {
     input.path[0] == "app"
     input.path[1] == "api"
     input.path[2] == "projects"
-    input.path[4] in {"docket", "deadlines", "documents", "matter"}
+    input.path[4] in {"docket", "deadlines", "documents", "matter", "astrology-chart"}
     count(input.path) == 5
 }
 
@@ -2025,4 +2025,15 @@ route_allow if {
     input.path == ["app", "lawyers"]
     input.method == "GET"
     is_lawyer(input.session)
+}
+
+# Private chart calculations require Project participation in the handler.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "astrology-chart"
+    count(input.path) == 5
+    input.method == "POST"
+    is_authenticated(input.session)
 }

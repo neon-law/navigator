@@ -3313,3 +3313,22 @@ test_brand_communications_admits_admin_but_not_lawyer if {
     authz.allow with input as {"path": ["app", "admin", "communications"], "method": "GET", "session": admin_session}
     not authz.allow with input as {"path": ["app", "admin", "communications"], "method": "GET", "session": lawyer_session}
 }
+
+# Participation and the viewer lens are rechecked by the private calculation handler.
+test_private_chart_route_admits_authenticated_calculation_only if {
+    path := ["app", "api", "projects", "synthetic", "astrology-chart"]
+    authz.allow with input as {"path": path, "method": "POST", "session": client_session}
+    authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+    authz.allow with input as {"path": path, "method": "POST", "session": clerk_session}
+    not authz.allow with input as {"path": path, "method": "PUT", "session": client_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": null}
+    not authz.allow with input as {"path": array.concat(path, ["extra"]), "method": "POST", "session": client_session}
+}
+
+test_ci_cannot_calculate_private_charts_even_with_owner_tier if {
+    session := object.union(owner_session, {"source": "ci", "scope": {"project_id": "synthetic"}})
+    not authz.allow with input as {
+        "path": ["app", "api", "projects", "synthetic", "astrology-chart"],
+        "method": "POST", "session": session,
+    }
+}
