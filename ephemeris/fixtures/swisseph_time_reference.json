@@ -1,0 +1,200 @@
+{
+  "swisseph_version": "2.10.03",
+  "rows": [
+    {
+      "year": 1900,
+      "delta_t_seconds": -2.79,
+      "jd_tt": 2415020.4999677083,
+      "jd_ut1": 2415020.5,
+      "gast_degrees": 100.18829752212265,
+      "sun_flags": 2052,
+      "sun_ra_degrees": 281.04598184947554,
+      "ascendant_degrees": 191.08385546790976,
+      "midheaven_degrees": 99.3622565713216
+    },
+    {
+      "year": 1950,
+      "delta_t_seconds": 29.07,
+      "jd_tt": 2433282.5003364584,
+      "jd_ut1": 2433282.5,
+      "gast_degrees": 100.07488892096515,
+      "sun_flags": 2052,
+      "sun_ra_degrees": 280.88476600539246,
+      "ascendant_degrees": 190.96066315074026,
+      "midheaven_degrees": 99.2579484615906
+    },
+    {
+      "year": 1955,
+      "delta_t_seconds": 31.07,
+      "jd_tt": 2435108.5003596065,
+      "jd_ut1": 2435108.5,
+      "gast_degrees": 99.87223882846958,
+      "sun_flags": 2052,
+      "sun_ra_degrees": 280.65571870587274,
+      "ascendant_degrees": 190.7407878794267,
+      "midheaven_degrees": 99.07133601697407
+    },
+    {
+      "year": 1965,
+      "delta_t_seconds": 35.738,
+      "jd_tt": 2438761.5004136343,
+      "jd_ut1": 2438761.5,
+      "gast_degrees": 100.43336716334503,
+      "sun_flags": 2052,
+      "sun_ra_degrees": 281.27755856707176,
+      "ascendant_degrees": 191.34875383001727,
+      "midheaven_degrees": 99.58877124349017
+    },
+    {
+      "year": 1971,
+      "delta_t_seconds": 41.17,
+      "jd_tt": 2440952.5004765047,
+      "jd_ut1": 2440952.5,
+      "gast_degrees": 99.99353037170542,
+      "sun_flags": 2052,
+      "sun_ra_degrees": 280.7855668038433,
+      "ascendant_degrees": 190.87223850886554,
+      "midheaven_degrees": 99.18315749944948
+    },
+    {
+      "year": 1972,
+      "delta_t_seconds": 42.227,
+      "jd_tt": 2441317.5004882407,
+      "jd_ut1": 2441317.499999502,
+      "gast_degrees": 99.75568206814124,
+      "sun_flags": 2052,
+      "sun_ra_degrees": 280.51354697884864,
+      "ascendant_degrees": 190.61435393543718,
+      "midheaven_degrees": 98.9639750257697
+    },
+    {
+      "year": 2000,
+      "delta_t_seconds": 63.8285,
+      "jd_tt": 2451544.5007428704,
+      "jd_ut1": 2451544.5000041146,
+      "gast_degrees": 99.96573417993203,
+      "sun_flags": 2052,
+      "sun_ra_degrees": 280.72605379104317,
+      "ascendant_degrees": 190.841522489921,
+      "midheaven_degrees": 99.15803498360832
+    }
+  ],
+  "conventions": "Proleptic Gregorian civil midnight; pre-1972 input UT1, 1972 onward UTC; injected matched NASA/USNO delta-T, Moshier without data files. TT/UT1 conversion budget 0.0001 s; GAST and direction budget 1 arcsecond.",
+  "upstream_revision": "175e1fcb3108bcd5c0d146c803f51dcf23508012",
+  "probe_sha256": "65e0956f0d74850419f78b29c0c054d1d7dc9a6c7c3ffc609cb1b990e81cc8fe",
+  "source_repository": "https://github.com/aloistr/swisseph",
+  "source_revision": "175e1fcb3108bcd5c0d146c803f51dcf23508012",
+  "source_manifest": {
+    "version": "2.10.03",
+    "retrieved_at": "2026-11-05T02:42:19.465202+00:00",
+    "files": [
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/Makefile",
+        "sha256": "1f872c7fb49d45577452caea3bf09c62945e8ba67389f38556827d059e3be805",
+        "bytes": 2732
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/LICENSE",
+        "sha256": "b6345743292c516d07799dfad46f1a641e5270da2160cc4d6bd54594d6faa991",
+        "bytes": 2371
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swetest.c",
+        "sha256": "98e0059e65e91252955327c3c162ef541c06c7bd03dc7c54891bb73fd516a468",
+        "bytes": 144165
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swedate.c",
+        "sha256": "6790e989a003cb6422080d9aecf3c6567a25030f5b5647fd749e5b16422cfac7",
+        "bytes": 20063
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swehouse.c",
+        "sha256": "384c1d7b2a8bcef9f2cf16f7fbf02e7aa18f372bc11320874a5543b92aed95d9",
+        "bytes": 112151
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swejpl.c",
+        "sha256": "44014e260ae9ab2b1e8f413bb8a35fa270e369e3fb4907cd137ae103d2a8d0c2",
+        "bytes": 33480
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swemmoon.c",
+        "sha256": "1d5f5ef9a95cf9a2f395b6334a58c63851ce0512d65bf08e49d3caf0a9fecb00",
+        "bytes": 61388
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swemplan.c",
+        "sha256": "d13502ca7b92e3e32317b67ba7f012d92fabd1d358c3394c094d5515a3567caa",
+        "bytes": 27880
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/sweph.c",
+        "sha256": "80761ccfae7cd7207a33559d8898b9c5386cced609cfaebbbbf050f7a80ddc4f",
+        "bytes": 290642
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swephlib.c",
+        "sha256": "d41eb2f396163fedd574749de02a25e8547b4e1e4c66783d47ccc0c7e4885a05",
+        "bytes": 164395
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swecl.c",
+        "sha256": "ab46bdc303978523c69d814d236432541ff48cb410b756ef78cc1e8d2b2be303",
+        "bytes": 225794
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swehel.c",
+        "sha256": "7b4be28627afd22b059389abc4ef679b7259a0bcb9d0510e7ca3825901754b93",
+        "bytes": 123264
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swejpl.h",
+        "sha256": "f61ae6173b150f456540afba68500989c642506822e0397cf99c2cb7f50aac0d",
+        "bytes": 3995
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/sweodef.h",
+        "sha256": "a2ace0fc0ea81ffbf9eb0a7f9fc1c1446d98f07d3a170a2c54b8ef4908325462",
+        "bytes": 10838
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swephexp.h",
+        "sha256": "dd8e74e2853915a316041397f31730219b7910333be6bba3934fd77130335f22",
+        "bytes": 40932
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swedll.h",
+        "sha256": "cc33c8a26c28d7cba817012040f4ff68260b378d2149d66bf2c341cbb80549d1",
+        "bytes": 17785
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/sweph.h",
+        "sha256": "8e44b9c00d23a0b583581f17fc6798ea376649d2517abbb556ee1b1aff6a138a",
+        "bytes": 34361
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swephlib.h",
+        "sha256": "29a151bb0c6adcb73fa73eff805b498c26bdffbb81e82d55e1b50f79218ea82a",
+        "bytes": 7786
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swehouse.h",
+        "sha256": "7a91a007a4de0900ed6d234d74da421b2372d245b09a2ba8b74d6e2e054a200c",
+        "bytes": 3702
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swemptab.h",
+        "sha256": "dc7595b81bd49e86a6204ed1e0a041c410a9de5c068fd1d90d350a82d604fb85",
+        "bytes": 311984
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swenut2000a.h",
+        "sha256": "83b0a2f569174b56c8e26971b00f85f5ae52265b34c1c53436c7122e0f1faad7",
+        "bytes": 68486,
+        "retrieved_at": "2026-11-05T02:43:30.311258+00:00"
+      }
+    ]
+  },
+  "generator": "generators/time_reference.c"
+}

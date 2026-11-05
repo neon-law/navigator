@@ -195,8 +195,25 @@ pub fn lines_for(
     loaded: &LoadedEphemeris,
     utc: Epoch,
 ) -> Result<Vec<AngularLine>, crate::EphemerisError> {
-    let t = utc_to_tdb(utc);
-    let gast = sidereal::gast_degrees(utc);
+    lines_at(loaded, utc, sidereal::gast_degrees(utc))
+}
+
+/// Lines for a resolved chart instant, preserving historical UT1 and physical TT/TDB.
+///
+/// Returns the same source-coverage and apparent-position errors as [`lines_for`].
+pub fn lines_for_instant(
+    loaded: &LoadedEphemeris,
+    instant: crate::ChartInstant,
+) -> Result<Vec<AngularLine>, crate::EphemerisError> {
+    lines_at(loaded, instant.epoch(), sidereal::gast_degrees_for(instant))
+}
+
+fn lines_at(
+    loaded: &LoadedEphemeris,
+    epoch: Epoch,
+    gast: f64,
+) -> Result<Vec<AngularLine>, crate::EphemerisError> {
+    let t = utc_to_tdb(epoch);
 
     // Four lines per body: two culmination meridians and two horizon-curve
     // semicircles.

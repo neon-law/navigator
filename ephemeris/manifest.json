@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "time_scale_model": "UTC\u2192TAI uses hifitime 4.3's pinned IERS leap-second model; TAI\u2212UTC is 37 s from 2017 under the pinned table (27 inserted leap seconds plus the initial 10 s). TAI\u2192TT adds 32.184 s. TT\u2192TDB adds the periodic relativistic term, bounded by approximately 1.7 ms. Before 1972 the model uses TAI−UTC = 0 and omits fractional UTC adjustments; historical civil-clock interpretation remains unvalidated. Proleptic UTC and future UTC follow this versioned model, not a live Earth-rotation observation. SPK interpolation is a function of TDB. Earth-rotation angles use the separately recorded delta-T model.",
+  "time_scale_model": "Resolved civil birth labels before 1972 are UT1: TT = UT1 + the pinned delta-T model. This convention approximates historical civil UTC; fractional 1961-1971 UTC adjustments are not reconstructed. From 1972, UTC\u2192TAI uses hifitime 4.3.1 IERS leap seconds; TAI\u2212UTC is 37 s from 2017 (27 inserted leaps plus initial 10 s). TT = TAI + 32.184 s. TT\u2192TDB adds the periodic relativistic term, bounded by about 1.7 ms. Raw proleptic UTC Epoch APIs use TAI\u2212UTC = 0 before 1972 and do not interpret historical civil clocks. Future UTC follows the pinned table, not live observations. SPK interpolation uses physical TDB; chart Earth rotation retains explicit UT1.",
   "reference_frame": "ICRF/J2000 (SPK frame id 1)",
   "files": [
     {

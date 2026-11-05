@@ -5,15 +5,16 @@
 //! 1. **UTC→TAI** — hifitime's built-in model (TAI−UTC is 37 seconds from
 //!    2017: 27 inserted leap seconds plus the initial 10 seconds). Before 1972,
 //!    this pinned model uses TAI−UTC = 0; fractional historical UTC adjustments
-//!    are absent. Historical civil-clock interpretation remains unvalidated.
+//!    are absent. Resolved historical birth clocks use the separate UT1-based
+//!    [`crate::ChartInstant`] path.
 //! 2. **TAI→TT** — the fixed 32.184 s offset of Terrestrial Time.
 //! 3. **TT→TDB** — the periodic relativistic term (amplitude ≈ 1.6 ms) that
 //!    converts the geoid clock to the solar-system barycenter clock the
 //!    ephemeris integrator reports.
 //!
 //! The classical ΔT = TT−UT1 is **not** consumed here: SPK segments are
-//! functions of TDB only. ΔT belongs to Earth-rotation quantities (the
-//! ascendant and midheaven), which later layers compute.
+//! functions of TDB only. The historical chart-clock path separately uses ΔT
+//! to resolve its UT1 input into a physical TT epoch.
 
 use hifitime::Epoch;
 
