@@ -1281,10 +1281,10 @@ fn preflight(brand: &Site, rt: &HostRuntime) {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_ports, should_host_billing_canary, should_host_billing_digest,
-        should_host_deadline_mirror, should_host_dri_digest, should_host_general_nag,
-        should_host_notation_reset, should_host_project_recovery, should_host_purchase_activation,
-        should_host_retention_purge, should_host_source_imports, sent_email_export_source,
+        bind_ports, sent_email_export_source, should_host_billing_canary,
+        should_host_billing_digest, should_host_deadline_mirror, should_host_dri_digest,
+        should_host_general_nag, should_host_notation_reset, should_host_project_recovery,
+        should_host_purchase_activation, should_host_retention_purge, should_host_source_imports,
     };
 
     /// The export opens PostgreSQL and the archive bucket only when the
