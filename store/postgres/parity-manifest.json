@@ -480,13 +480,20 @@
       "extra_column": null,
       "extra_table": null,
       "missing_column": null,
+      "missing_table": "esignature_webhook_journal",
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": null,
       "missing_table": "schema_version",
       "table": null
     }
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 112,
+    "table_count": 113,
     "tables": {
       "address": {
         "city": "string",
@@ -919,6 +926,18 @@
         "id": "record",
         "inserted_at": "datetime",
         "name": "string",
+        "updated_at": "datetime"
+      },
+      "esignature_webhook_journal": {
+        "attempts": "int",
+        "consumed_at": "option<datetime>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "last_error": "option<string>",
+        "payload": "string",
+        "provider": "string",
+        "provider_id": "string",
+        "status": "string",
         "updated_at": "datetime"
       },
       "estate_asset": {

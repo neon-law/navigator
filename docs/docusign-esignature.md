@@ -228,17 +228,15 @@ emailed link — regardless of `delivery`.
 ## Completion webhook + HMAC
 
 DocuSign Connect POSTs to `/webhook/esignature/:secret`. The handler verifies the raw-body HMAC
-(`X-DocuSign-Signature-1`) **before** parsing, journals the verified receipt, classifies the event
-(`completed` → `signature_received`; `declined`/`voided`/`expired` → `signature_declined`;
-everything else → 200 no-op), and consumes it through one resumable path: signal the workflow,
-stamp the signature row, and — on completion — archive the signed PDF + Certificate of Completion
-to object storage.
+(`X-DocuSign-Signature-1`) **before** parsing, journals the verified receipt, classifies the event (`completed` →
+`signature_received`; `declined`/`voided`/`expired` → `signature_declined`; everything else → 200 no-op), and consumes
+it through one resumable path: signal the workflow, stamp the signature row, and — on completion — archive the signed
+PDF + Certificate of Completion to object storage.
 
-Journaling is what makes consumption durable (ENG-787): the verified receipt is written **before**
-it is consumed, a mid-delivery crash or a failed phase leaves the receipt pending with the failure
-named, and every boot replays pending receipts through the same consumption path — delivery is
-recoverable, not best-effort. A redelivery of an already-consumed event is answered from the
-journal with 200 and the workflow is never signaled twice.
+Journaling is what makes consumption durable (ENG-787): the verified receipt is written **before** it is consumed, a
+mid-delivery crash or a failed phase leaves the receipt pending with the failure named, and every boot replays pending
+receipts through the same consumption path — delivery is recoverable, not best-effort. A redelivery of an
+already-consumed event is answered from the journal with 200 and the workflow is never signaled twice.
 
 A `recipient-completed` event signals nothing. It reads the event's `recipientId` (the signer's routing order) back
 against the template's `signers:` order and records that role in `signature.completed_signer_roles`. Once `client` is

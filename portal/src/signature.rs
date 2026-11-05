@@ -1369,6 +1369,32 @@ pub struct DocuSignSignatureProvider {
 }
 
 impl DocuSignSignatureProvider {
+    /// The eSignature API request URL. DocuSign endpoints are HTTPS; a
+    /// plain-HTTP base is refused unless its host is loopback, which is
+    /// how tests point the provider at a local mock server — the same
+    /// https-unless-loopback rule the CLI applies to authenticated
+    /// deployment transfers. Account and envelope ids never travel in
+    /// cleartext to a non-loopback host.
+    fn request_url(&self, path: &str) -> Result<reqwest::Url, SignatureError> {
+        let url = reqwest::Url::parse(&format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        ))
+        .map_err(|_| {
+            SignatureError::Provider(format!("docusign base URL is not a valid URL: {path}"))
+        })?;
+        let loopback = url
+            .host_str()
+            .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"));
+        if url.scheme() != "https" && !loopback {
+            return Err(SignatureError::Provider(
+                "docusign base URL must be HTTPS".to_string(),
+            ));
+        }
+        Ok(url)
+    }
+
     /// Build a provider that authenticates with a static OAuth bearer
     /// (`DOCUSIGN_ACCESS_TOKEN`). The simple local/demo path; the token
     /// expires in ~8h and is not refreshed.
@@ -1546,16 +1572,13 @@ impl DocuSignSignatureProvider {
         envelope_id: &str,
         which: &str,
     ) -> Result<Vec<u8>, SignatureError> {
-        let url = format!(
-            "{}/v2.1/accounts/{}/envelopes/{}/documents/{}",
-            self.base_url.trim_end_matches('/'),
-            self.account_id,
-            envelope_id,
-            which
-        );
+        let url = self.request_url(&format!(
+            "v2.1/accounts/{}/envelopes/{}/documents/{which}",
+            self.account_id, envelope_id
+        ))?;
         let resp = self
             .http
-            .get(&url)
+            .get(url)
             .bearer_auth(self.bearer_token().await?)
             .send()
             .await
@@ -1596,14 +1619,10 @@ impl SignatureProvider for DocuSignSignatureProvider {
         pdf: &[u8],
         manifest: &SignatureManifest,
     ) -> Result<SignatureRequestId, SignatureError> {
-        let url = format!(
-            "{}/v2.1/accounts/{}/envelopes",
-            self.base_url.trim_end_matches('/'),
-            self.account_id
-        );
+        let url = self.request_url(&format!("v2.1/accounts/{}/envelopes", self.account_id))?;
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             // Idempotency at the provider boundary: the same notation
             // never creates two envelopes, even under a concurrent
             // double-send. DocuSign honors this key for 24h.
@@ -1635,12 +1654,10 @@ impl SignatureProvider for DocuSignSignatureProvider {
         request_id: &SignatureRequestId,
         view: &RecipientView,
     ) -> Result<String, SignatureError> {
-        let url = format!(
-            "{}/v2.1/accounts/{}/envelopes/{}/views/recipient",
-            self.base_url.trim_end_matches('/'),
-            self.account_id,
-            request_id.0
-        );
+        let url = self.request_url(&format!(
+            "v2.1/accounts/{}/envelopes/{}/views/recipient",
+            self.account_id, request_id.0
+        ))?;
         // `authenticationMethod` is the audit label DocuSign records for
         // how the signer was authenticated upstream; "none" means the app
         // (Neon Law Navigator, behind its own OIDC login) vouched for them. The
@@ -1655,7 +1672,7 @@ impl SignatureProvider for DocuSignSignatureProvider {
         });
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             .bearer_auth(self.bearer_token().await?)
             .json(&body)
             .send()
@@ -1680,18 +1697,16 @@ impl SignatureProvider for DocuSignSignatureProvider {
         request_id: &SignatureRequestId,
         return_url: &str,
     ) -> Result<String, SignatureError> {
-        let url = format!(
-            "{}/v2.1/accounts/{}/envelopes/{}/views/sender",
-            self.base_url.trim_end_matches('/'),
-            self.account_id,
-            request_id.0
-        );
+        let url = self.request_url(&format!(
+            "v2.1/accounts/{}/envelopes/{}/views/sender",
+            self.account_id, request_id.0
+        ))?;
         // The sender view carries no recipient identity — only where the
         // console sends the browser when the sender closes it.
         let body = serde_json::json!({ "returnUrl": return_url });
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             .bearer_auth(self.bearer_token().await?)
             .json(&body)
             .send()
@@ -2039,6 +2054,22 @@ mod tests {
             "signer@example.com",
             "Signer",
         )
+    }
+
+    #[tokio::test]
+    async fn plain_http_base_is_refused_outside_loopback() {
+        // The provider transmits account and envelope ids in the request
+        // URL; a plain-HTTP base must fail the call rather than send them
+        // in cleartext. Loopback bases keep the wiremock tests working.
+        let ds = docusign("http://demo.docusign.net/restapi".into());
+        let err = ds
+            .create_sender_view(
+                &SignatureRequestId("env-1".into()),
+                "https://app.example/return",
+            )
+            .await
+            .expect_err("plain-http base must be refused");
+        assert!(err.to_string().contains("must be HTTPS"));
     }
 
     #[test]

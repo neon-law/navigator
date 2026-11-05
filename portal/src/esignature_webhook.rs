@@ -274,11 +274,14 @@ pub async fn webhook(
     // table has never named cannot be replayed (correlation is the
     // signature row), so journaling it would be an unrecoverable row.
     // A terminal event cannot precede the send that records that row.
-    let provider = store::signatures::SignatureProvider::DocuSign;
-    let Some(signature) =
-        store::signatures::by_provider(&state.surreal, provider, &payload.data.envelope_id)
-            .await
-            .map_err(|e| WebhookError::Database(e.to_string()))?
+    let signature_provider = store::signatures::SignatureProvider::DocuSign;
+    let Some(signature) = store::signatures::by_provider(
+        &state.surreal,
+        signature_provider,
+        &payload.data.envelope_id,
+    )
+    .await
+    .map_err(|e| WebhookError::Database(e.to_string()))?
     else {
         tracing::warn!(
             envelope_id = %payload.data.envelope_id,
@@ -294,7 +297,7 @@ pub async fn webhook(
     // nothing is lost before the receipt exists.
     let receipt = store::signature_webhook_journal::journal_verified_receipt(
         &state.surreal,
-        provider,
+        signature_provider,
         &payload.data.envelope_id,
         terminal_state.as_str(),
         &String::from_utf8_lossy(&body),
