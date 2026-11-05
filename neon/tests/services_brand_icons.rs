@@ -1,6 +1,6 @@
 //! Every brand in the public directory renders its registered, bundled icon.
 //! Neon Law itself is left out: the directory already sits on Neon Law's site.
-//! Lawyer Shook is left out: the directory lists practices, not the holding page.
+//! Guieb & Shook is left out: the directory lists practices, not the holding page.
 //!
 //! The icon is the tracked `/public/brand/...` mark the app serves itself, not
 //! an assets-bucket URL: tracked marks are never uploaded to the bucket, so a
@@ -42,12 +42,7 @@ async fn services_directory_renders_every_brand_icon() {
     let brands: Vec<BrandKey> = BrandKey::GUIEB_SHOOK_FAMILY
         .iter()
         .copied()
-        .filter(|key| {
-            !matches!(
-                key,
-                BrandKey::Neon | BrandKey::LawyerShook | BrandKey::GuiebShook
-            )
-        })
+        .filter(|key| !matches!(key, BrandKey::Neon | BrandKey::GuiebShook))
         .collect();
     assert_eq!(
         html.matches("class=\"fm-card__logo\"").count(),
@@ -64,10 +59,6 @@ async fn services_directory_renders_every_brand_icon() {
     assert!(
         !directory.contains("fm-chip"),
         "brand cards carry no practice-area pills: {directory}"
-    );
-    assert!(
-        !directory.contains("lawyer-shook") && !directory.contains("Meet Lawyer Shook"),
-        "Lawyer Shook is not a services-directory card: {directory}"
     );
     for key in brands {
         let branding = key.resolve_branding(&DEFAULT_BRANDING);

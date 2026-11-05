@@ -3283,8 +3283,7 @@ async fn rename_legacy_firm_entity(surreal: &SurrealDb) -> anyhow::Result<()> {
 ///
 /// `store` cannot depend on `views`, so each row copies four compiled
 /// facts: the key (`views::brand::BrandKey::as_str`), the published
-/// wordmark (`SiteBrand::site_name`, which the footer's "Our Family" list
-/// renders from the seeded row), the typeface id
+/// wordmark (`SiteBrand::site_name`), the typeface id
 /// (`BrandKey::default_typeface`), and the primary hex for a light directory canvas
 /// (usually `BrandKey::default_palette().light.primary`). `webapp::firm_footer`'s
 /// `every_compiled_brand_seeds_its_published_wordmark` holds the wordmark
@@ -3355,13 +3354,6 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
         name: "Abhaya Immigration",
         typeface: "mukta",
         primary_hex: "#1F4E79",
-    },
-    CompiledBrand {
-        key: "lawyer-shook",
-        website_url: "https://www.lawyershook.com",
-        name: "Lawyer Shook",
-        typeface: "tinos",
-        primary_hex: "#5c5100",
     },
     // The public Summons Defense wordmark is a brand of Guieb & Shook PC, so
     // this row copies the public name rendered by `SUMMONS_BRANDING`.

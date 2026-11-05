@@ -1319,7 +1319,7 @@ mod tests {
     async fn the_queue_lists_awaiting_rows_and_hides_the_rest() {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other = crate::test_support::seed_firm_with_brand(&db, "lawyer-shook").await;
+        let other = crate::test_support::seed_firm_with_brand(&db, "summons").await;
         let owner = person(&db, "Queue Owner", Role::Owner).await;
         let lawyer = person(&db, "Queue Lawyer", Role::Lawyer).await;
         member(&db, lawyer, firm, FirmMembership::Lawyer).await;
@@ -1524,7 +1524,7 @@ mod tests {
         assert_eq!(conversation.project_id, Some(corrected.id));
 
         // The correction crosses Firms at its own peril.
-        let other = crate::test_support::seed_firm_with_brand(&db, "lawyer-shook").await;
+        let other = crate::test_support::seed_firm_with_brand(&db, "summons").await;
         let foreign =
             crate::test_support::seed_project_on_firm(&db, Some(other), "Foreign Matter").await;
         let (open_row, _) = needs_human_with_suggestion(&db, firm, "override-foreign", None).await;
@@ -1849,7 +1849,7 @@ mod tests {
     async fn a_triage_record_cannot_claim_another_messages_firm() {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other = crate::test_support::seed_firm_with_brand(&db, "lawyer-shook").await;
+        let other = crate::test_support::seed_firm_with_brand(&db, "summons").await;
         let message = inbound(&db, firm, "email", "foreign-record-claim").await;
         let result = record(
             &db,

@@ -4892,24 +4892,24 @@ Sign: {{client.signature}}";
             store::persons::Role::Owner,
             None,
             anchor.id,
-            "lawyer-shook",
+            "guieb-shook",
         )
         .await
-        .expect("detach lawyer-shook from the seed practice");
+        .expect("detach guieb-shook from the seed practice");
         store::firms::attach_brand(
             &surreal,
             store::persons::Role::Owner,
             None,
             other.id,
-            "lawyer-shook",
+            "guieb-shook",
         )
         .await
-        .expect("other firm wears lawyer-shook");
+        .expect("other firm wears guieb-shook");
 
         let email = format!("walk-other-firm-{}@example.com", Uuid::now_v7());
         let resp = Box::pin(start_walk_on_brand(
             state,
-            &views::brand::LAWYER_SHOOK_BRANDING,
+            &views::brand::GUIEB_SHOOK_BRANDING,
             &email,
         ))
         .await;
@@ -4919,7 +4919,7 @@ Sign: {{client.signature}}";
             .await
             .expect("project lookup")
             .expect("project row inserted");
-        assert_eq!(project.brand, "lawyer-shook");
+        assert_eq!(project.brand, "guieb-shook");
         assert_eq!(project.firm_id, Some(other.id));
         assert_ne!(project.firm_id, Some(anchor.id));
     }

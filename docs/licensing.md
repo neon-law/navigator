@@ -76,10 +76,10 @@ agreements are not rewritten by this document.
 
 ## Trademarks
 
-NEON LAW, U.S. Reg. No. 6,325,650, is owned by Neon Law IP LLC. DELETEYOURDATA.COM and LAWYER SHOOK are marks of Shook
-Law PC. Neither license grants general trademark permission; Apache-2.0 section 6 states that limit for the Apache
-option. Configure a fork's branding through `views::brand_bundle`; copyright permission does not authorize presenting a
-deployment as Neon Law.
+NEON LAW, U.S. Reg. No. 6,325,650, is owned by Neon Law IP LLC. DELETEYOURDATA.COM is a mark of Shook Law PC. Neither
+license grants general trademark permission; Apache-2.0 section 6 states that limit for the Apache option. Configure a
+fork's branding through `views::brand_bundle`; copyright permission does not authorize presenting a deployment as Neon
+Law.
 
 <!-- Draft — pending review by counsel. -->
 Lex Tecnica and IEP Defenders material belongs to Lex Tecnica, Ltd.: the page copy, logos, names, marks, and brand

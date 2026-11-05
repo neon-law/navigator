@@ -30,9 +30,9 @@ not cover it. Government form material remains subject to its issuing
 agency's terms; Neon Law IP LLC claims no copyright in the agency's material.
 
 The license grants rights in copyright, not in trademarks. NEON LAW,
-U.S. Reg. No. 6,325,650, is owned by Neon Law IP LLC. DELETEYOURDATA.COM and
-LAWYER SHOOK are marks of Guieb & Shook PC. Neither license grants general
-permission to use those marks. Apache-2.0 section 6 states that limit for the
+U.S. Reg. No. 6,325,650, is owned by Neon Law IP LLC. DELETEYOURDATA.COM is a
+mark of Guieb & Shook PC. Neither license grants general permission to use
+those marks. Apache-2.0 section 6 states that limit for the
 Apache option. Configure a fork's branding through
 views::brand_bundle rather than presenting it as Neon Law.
 
@@ -47,7 +47,7 @@ or use it, or the names LEX TECNICA or IEP DEFENDERS. Permission must come from
 Lex Tecnica, Ltd. in writing.
 
 Names and logos of other companies, including the service providers this project
-integrates with and the practice names shown on lawyershook.com, belong to their
+integrates with and the practice names Guieb & Shook PC uses, belong to their
 owners. THIRD-PARTY-NOTICES.txt lists them. This project grants no right to use any of
 them, and code that integrates with a provider's API stays under the license above.
 

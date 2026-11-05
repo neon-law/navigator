@@ -261,9 +261,9 @@ pub struct BareStatement {
     pub sign_in: Vec<CopyRun>,
     /// Overrides the shared footer's wordmark for this bare page only. Empty
     /// leaves the footer naming the current brand, as everywhere else; a
-    /// holding page for a house brand's own mark (Lawyer Shook) sets this to
-    /// the firm's legal name, since the bare page otherwise carries no other
-    /// mention of who actually renders it.
+    /// holding page for a house brand's own mark sets this to the firm's
+    /// legal name, since the bare page otherwise carries no other mention of
+    /// who actually renders it.
     #[serde(default)]
     pub footer_wordmark: String,
 }

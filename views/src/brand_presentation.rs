@@ -368,42 +368,6 @@ pub const PALETTE: &[Palette] = &[
         },
     },
     Palette {
-        id: "lawyer-shook",
-        label: "Legal pad",
-        light: PaletteScheme {
-            primary: "#5c5100",
-            primary_hover: "#443c00",
-            primary_active: "#2e2900",
-            on_primary: "#fff9a8",
-            on_brand: "#272300",
-            link: "#443c00",
-            link_hover: "#2e2900",
-            surface_subtle: "#fffbd1",
-            bg: Some("#fff9a8"),
-            surface: Some("#fff9a8"),
-            surface_raised: Some("#fffbd1"),
-            text: Some("#272300"),
-            text_muted: Some("#5b5528"),
-            border: Some("#c9bd55"),
-        },
-        dark: PaletteScheme {
-            primary: "#fff176",
-            primary_hover: "#fff7a8",
-            primary_active: "#fffbd1",
-            on_primary: "#272300",
-            on_brand: "#272300",
-            link: "#fff176",
-            link_hover: "#fff7a8",
-            surface_subtle: "#403900",
-            bg: Some("#272300"),
-            surface: Some("#332e00"),
-            surface_raised: Some("#403900"),
-            text: Some("#fffbd1"),
-            text_muted: Some("#e5dc8a"),
-            border: Some("#8f842d"),
-        },
-    },
-    Palette {
         id: "guieb-shook",
         label: "Navy and ivory",
         light: PaletteScheme {
@@ -778,7 +742,6 @@ impl BrandKey {
             Self::DeleteYourData => {
                 typeface_by_id("plus-jakarta-sans").expect("plus-jakarta-sans is catalogued")
             }
-            Self::LawyerShook => typeface_by_id("tinos").expect("tinos is catalogued"),
             Self::GuiebShook | Self::Vesta => {
                 typeface_by_id("eb-garamond").expect("eb-garamond is catalogued")
             }
@@ -827,7 +790,6 @@ impl BrandKey {
             // display face would not.
             Self::Neon
             | Self::DeleteYourData
-            | Self::LawyerShook
             | Self::GuiebShook
             | Self::Vesta
             | Self::Abhaya
@@ -850,7 +812,6 @@ impl BrandKey {
             Self::DeleteYourData => {
                 palette_by_id("delete-your-data").expect("delete-your-data is catalogued")
             }
-            Self::LawyerShook => palette_by_id("lawyer-shook").expect("lawyer-shook is catalogued"),
             Self::GuiebShook => palette_by_id("guieb-shook").expect("guieb-shook is catalogued"),
             Self::LexTecnica => palette_by_id("lex-tecnica").expect("lex-tecnica is catalogued"),
             Self::Vesta => palette_by_id("vesta").expect("vesta is catalogued"),
@@ -1418,8 +1379,8 @@ mod tests {
             BrandKey::DeleteYourData.default_palette().id,
             "delete-your-data"
         );
-        assert_eq!(BrandKey::LawyerShook.default_typeface().id, "tinos");
-        assert_eq!(BrandKey::LawyerShook.default_palette().id, "lawyer-shook");
+        assert_eq!(BrandKey::GuiebShook.default_typeface().id, "eb-garamond");
+        assert_eq!(BrandKey::GuiebShook.default_palette().id, "guieb-shook");
         assert_eq!(
             BrandKey::IepDefenders.default_typeface().id,
             "source-sans-3"
@@ -1439,11 +1400,11 @@ mod tests {
         let css = tokens_stylesheet(
             typeface_by_id("tinos").unwrap(),
             None,
-            palette_by_id("lawyer-shook").unwrap(),
+            palette_by_id("guieb-shook").unwrap(),
         );
         assert!(css.contains("font-family:'Tinos'"), "{css}");
-        assert!(css.contains("--nav-color-primary: #5c5100"), "{css}");
-        assert!(css.contains("--nav-color-bg: #fff9a8"), "{css}");
+        assert!(css.contains("--nav-color-primary: #1f3a5f"), "{css}");
+        assert!(css.contains("--nav-color-bg: #f7f3e8"), "{css}");
         assert!(
             css.contains("/public/fonts/tinos/Tinos-Regular.woff2"),
             "{css}"

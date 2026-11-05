@@ -31,7 +31,7 @@ files for defined credentials, contact data, cloud coordinates, secret-file name
 metadata. The source audit does not establish ownership, permission, or completeness of release artifacts.
 Per-deployment rows now live outside the repository. `deployments/` tracks only a synthetic example, and the [exclusion
 manifest](../../.public-snapshot-exclude) has no entries. On the current review basis, P001 reports no image-metadata
-findings for the brand PNGs at B1, B12, B17, B21, and B26. Their provenance remains unverified.
+findings for the brand PNGs at B1, B12, B21, and B26. Their provenance remains unverified.
 
 Snapshot: [`navigator ops public-snapshot`](../public-snapshot.md) builds a deterministic, parentless root commit from a
 merged `main` commit. Record the candidate's commit SHA and tree hash with the release, not in this document.
@@ -1649,8 +1649,6 @@ assets retain their upstream notice review separately; the synthetic PDF needs e
 | logo.svg | B14 | Unverified | R; U | Owner/release/counsel |
 | door.svg | B15 | Unverified | R; U | Owner/release/counsel |
 | mark.svg | B16 | Unverified | R; U | Owner/release/counsel |
-| logo.png | B17 | Unverified | R; U | Owner/release/counsel |
-| logo.svg | B18 | Unverified | R; U | Owner/release/counsel |
 | logo.svg | B19 | Unverified | R; U | Owner/release/counsel |
 | logo.svg | B20 | Unverified | R; U | Owner/release/counsel |
 | vesta.png | B21 | Unverified | R; U | Owner/release/counsel |
@@ -1702,10 +1700,6 @@ B14: [logo.svg](../../server/public/brand/delete-your-debt/logo.svg)
 B15: [door.svg](../../server/public/brand/groundwork/door.svg)
 
 B16: [mark.svg](../../server/public/brand/groundwork/mark.svg)
-
-B17: [logo.png](../../server/public/brand/lawyer-shook/logo.png)
-
-B18: [logo.svg](../../server/public/brand/lawyer-shook/logo.svg)
 
 B19: [logo.svg](../../server/public/brand/misericordia/logo.svg)
 

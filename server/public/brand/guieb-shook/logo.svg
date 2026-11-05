@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="166 91 718 418" width="100%" height="100%" role="img" aria-labelledby="logo-title logo-description">
   <title id="logo-title">Guieb &amp; Shook</title>
-  <desc id="logo-description">Equal-height handwritten G and Lawyer Shook S with a smaller centered cursive ampersand, in blue on a transparent background, with light blue strokes in dark mode.</desc>
+  <desc id="logo-description">Equal-height handwritten G and S with a smaller centered cursive ampersand, in blue on a transparent background, with light blue strokes in dark mode.</desc>
   <style>
     @media (prefers-color-scheme: dark) {
       .strokes { stroke: #a9c4e8; }
