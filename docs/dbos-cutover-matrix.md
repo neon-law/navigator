@@ -3,48 +3,74 @@
 This inventory follows services bound by `workflows-service/src/main.rs` and `workflows-service/src/registry.rs`;
 registered DBOS workflows alone do not prove that callers, CronJobs, or data paths have switched engines.
 
+## How to read this checklist
+
+Implementation and caller selection are separate from deployment acceptance. A DBOS workflow can be registered while its
+callers still select Restate. Optional workflow switches default off. External callers selecting DBOS require the
+authenticated ingress URL and token and fail closed when either is missing. Keep the Restate bindings until the handover
+gate below passes. Source and integration-test coverage do not establish which engine a deployment currently uses.
+
 ## Durable workflows
 
-- **EmailSummary** — `portal/src/inbound_email.rs` hands archived email receipts to the worker. Restate only;
-  needs authenticated handoff, a PostgreSQL receipt path, and provider-accept recovery proof.
-- **Archives** — `archives/src/bin/trigger.rs`. DBOS UTC-slot schedule in PR #1326;
-  pending-run accounting and PostgreSQL export parity remain.
-- **BillingCanary** — `billing-workflows/src/bin/trigger.rs`. DBOS implementation exists; caller selection
-  and authenticated execution/recovery proof remain.
-- **BillingDigest** — `billing-workflows/src/bin/billing_digest_trigger.rs`. Shipped on DBOS in #1317;
-  pending Restate runs must be accounted for.
-- **ReconcileInvoices** — Billing trigger, Portal schedule, and manual API. DBOS adapter and authenticated
-  ingress exist; finish PostgreSQL path and legacy-run accounting.
-- **DriDigest** — `workflows-service/src/bin/dri-digest-trigger.rs`. DBOS schedule exists; caller routing
-  and PostgreSQL/runtime parity remain.
-- **FinanceAggregate** — Portal manual action in `portal/src/api.rs`. DBOS adapter and identity-claim
-  ingress exist; verify PG source, blobs, migration, and legacy-run accounting.
-- **GeneralNag** — `workflows-service/src/bin/general-nag.rs`. DBOS schedule exists; caller gate and
-  pending Restate accounting remain.
-- **InboundMessageAlert** — `portal/src/inbox.rs`. Restate only; needs durable event identity, authenticated
-  handoff, authorization preservation, and deduped notification recovery.
-- **NightlyProjectUpdate** — `workflows-service/src/bin/nightly-project-update-trigger.rs`. DBOS parent,
-  registered children, and authenticated date handoff exist. PostgreSQL tests cover invite and notice replay.
-- **NightlyProjectUpdateMembership** — Parent tag child for channel membership and closed-channel archive.
-  Stable date/Project identity; channel resolution and invite are separate safe checkpoints. Archive, create, and adopt
-  crash tests remain.
-- **NightlyProjectUpdateSlack** — Parent tag child for canvas and daily notice. Stable date/Project identity;
-  canvas and receipt-backed notice are separate checkpoints. Canvas crash replay remains.
-- **NightlyProjectUpdateRepository** — Parent tag child for repository and release governance. Stable
-  date/Project identity; split surface, governance, pin, and update effects and test Forgejo recovery.
-- **NotationReset** — Portal cron schedule and worker trigger. DBOS schedule exists; caller selection,
-  PostgreSQL authority, and pending Restate accounting remain.
-- **SocialPublisher** — `portal/src/blog_api.rs`. Restate only; needs permission-preserving handoff, stable
-  publication identity, and KMS/provider receipt recovery.
-- **SocialPublishReconciler** — `workflows-service/src/bin/social-publish-reconciler-trigger.rs`. Restate
-  only; needs DBOS schedule/caller and provider receipt recovery.
+- **EmailSummary** — DBOS workflow, authenticated ingress, receipt-keyed caller handoff. Remaining: PostgreSQL
+  receipt path, provider recovery, enablement and retained runs.
+- **Archives** — DBOS UTC-slot workflow and worker schedule. Remaining: Complete export/parity, deployed schedule
+  selection and retained runs.
+- **BillingCanary** — DBOS workflow and opt-in schedule. Remaining: Provider-effect recovery, deployed selection and
+  retained runs.
+- **BillingDigest** — DBOS workflow and opt-in schedule. Remaining: Deployed selection and retained runs.
+- **ReconcileInvoices** — DBOS adapter, identity-claim ingress and caller selection. Remaining: PostgreSQL source
+  parity, deployed selection and retained runs.
+- **DriDigest** — DBOS schedule and trigger selection. Remaining: PostgreSQL/runtime parity, deployed selection and
+  retained runs.
+- **FinanceAggregate** — DBOS adapter, identity-claim ingress and Portal caller selection. Remaining: PostgreSQL
+  source/blob parity, migrations and retained runs.
+- **GeneralNag** — DBOS schedule and trigger selection. Remaining: Deployed selection, effect recovery and retained
+  runs.
+- **InboundMessageAlert** — DBOS workflow, authenticated ingress and Message-keyed caller selection. Remaining:
+  Notification recovery, deployed selection and retained runs.
+- **NightlyProjectUpdate** — DBOS parent, tagged children and authenticated date handoff. Remaining: Deployed
+  selection and retained parent/child runs.
+- **NightlyProjectUpdateMembership** — DBOS child with separate channel-resolution and invite checkpoints.
+  Remaining: Archive/create/adopt recovery and retained runs.
+- **NightlyProjectUpdateSlack** — DBOS child with separate canvas and receipt-backed notice checkpoints. Remaining:
+  Canvas recovery and retained runs.
+- **NightlyProjectUpdateRepository** — DBOS child for repository and release governance. Remaining: Split effect
+  recovery, Forgejo parity and retained runs.
+- **NotationReset** — DBOS schedule and trigger selection. Remaining: PostgreSQL authority, deployed selection and
+  retained runs.
+- **SocialPublisher** — DBOS workflow, authenticated ingress and publication-keyed caller selection. Remaining:
+  KMS/provider receipts, cancellation, deployed selection and retained runs.
+- **SocialPublishReconciler** — DBOS schedule, authenticated ingress and trigger selection. Remaining: Provider
+  receipt recovery, deployed selection and retained runs.
+- **SandboxCreditReset** — Restate registration. Remaining: DBOS port, callers, data parity and recovery.
+- **InboundTriage** — Restate registration. Remaining: DBOS port, callers, data parity and recovery.
+- **YoutubeCommentsPoller** — Restate registration. Remaining: DBOS port, callers, data parity and recovery.
+
+The implementations and bindings are in `workflows-service/src/main.rs`, `dbos_*.rs`, and `registry.rs`. Shared caller
+selection lives in `workflows/src/trigger.rs`; callers include the Portal, trigger binaries, CLI, and webapp. Verify the
+configured switch at every entry point before removing a trigger or binding.
 
 ## Virtual objects
 
-- **notation** — Portal questionnaire and workflow APIs. Restate only; move keyed state and ordering to
-  PostgreSQL transactions and cover the object events and side effects.
-- **project-slack** — Project Slack channel operations. Restate only; replace keyed serialization with
-  PostgreSQL transactions/locking and prove concurrent recovery.
+- **notation** — DBOS transition workflow, PostgreSQL state/locking and authenticated routes. Remaining: Complete
+  data/effect parity, concurrent signals, deployed selection and retained object state.
+- **project-slack** — DBOS workflow, authenticated ingress and caller selection. Remaining: Concurrent recovery,
+  provider effects, deployed selection and retained object state.
+
+`workflows-service/src/dbos_notation.rs` and `dbos_project_slack.rs` implement the object ports; `dbos_ingress.rs`
+exposes their authenticated routes. Their presence does not prove old object state or invocations can be discarded.
+
+## PostgreSQL data gate
+
+Apply ordered SQLx migrations before boot. A mirror copies data without transferring write authority. Select each
+domain's supported PostgreSQL accessor only after parent rows, complete source-field coverage, application parity, and
+rollback disposition are verified. See [storage models and writes](storage-models.md).
+
+Run the read-only [Mirror Backfill](postgres-tooling.md#mirror-backfill) preflight against the complete source. Account
+for unexpected populated tables, explicit derived/metadata exclusions, exact identities, references, timestamps, and
+object bytes. Rehearse bounded import, interruption/resume, idempotency and reconciliation before changing authority. An
+archive of raw rows is not a canonical application import.
 
 ## Release gate
 
@@ -56,8 +82,8 @@ references, and test restart/replay against PostgreSQL. This document authorizes
 ## Read-only preservation audit
 
 Run `navigator ops restate handover-audit --environment <configured-name>` against an explicitly selected Restate CLI
-environment. The command reads aggregate invocation statuses, completed failure counts, state-entry counts, and
-journal-entry counts across that environment. It never reads object keys, journal bodies, results, or payloads. Unknown
+environment. The command reads aggregate invocation statuses, completed failure counts, state-entry counts, and journal-
+entry counts across that environment. It never reads object keys, journal bodies, results, or payloads. Unknown
 statuses, malformed counts, missing responses, and query failures stop the audit. Retained invocations, including
 successful completions and their idempotency evidence, object state, or journals produce a nonzero exit and require
 preservation and reconciliation.
