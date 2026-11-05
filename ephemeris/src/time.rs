@@ -2,8 +2,8 @@
 //!
 //! The chain is UTC→TAI→TT→TDB, all through `hifitime`:
 //!
-//! 1. **UTC→TAI** — hifitime's built-in leap-second table (27 seconds as of
-//!    2017, the table's last entry). For dates before 1972 hifitime models the
+//! 1. **UTC→TAI** — hifitime's built-in model (TAI−UTC is 37 seconds from
+//!    2017: 27 inserted leap seconds plus the initial 10 seconds). For dates before 1972 hifitime models the
 //!    pre-leap-second UTC drift, so 1900+ birth data converts on the same code
 //!    path as modern dates.
 //! 2. **TAI→TT** — the fixed 32.184 s offset of Terrestrial Time.

@@ -16,17 +16,36 @@
 pub mod apparent;
 pub mod lines;
 
+mod birth_time;
+mod chart_angles;
+mod chart_provider;
+mod chart_request;
 mod daf;
 mod error;
 mod loader;
 mod spk;
 mod time;
 
-pub use apparent::{apparent_geocentric, mean_node, ApparentPosition};
+pub use apparent::{
+    apparent_geocentric, apparent_geocentric_state, mean_node, ApparentPosition, ApparentState,
+};
 pub use error::EphemerisError;
 pub use loader::{
     load, EphemerisFile, EphemerisManifest, EphemerisStore, FilesystemStore, LoadedEphemeris,
-    DATA_DIR_ENV,
+    DATA_DIR_ENV, MANIFEST_VERSION,
 };
 pub use spk::{Body, Ephemeris, SpkFile};
 pub use time::{utc_to_tdb, utc_to_tdb_from_parts, TdbSeconds};
+
+pub use birth_time::{BirthTime, BirthTimeError, LocalBirthTime, ResolvedBirthTime};
+
+pub use chart_request::{
+    AstrologyChartRequest, AtmosphericRefraction, Ayanamsa, ChartError, ChartSettings,
+    CoordinateFrame, HouseSystem, NorthNode, ObserverOrigin, Zodiac,
+};
+
+pub use chart_angles::ChartAngles;
+
+pub use chart_provider::{
+    AstrologyChartProvider, AstrologyChartResponse, BodyPosition, ChartProvenance, ChartTimeScales,
+};
