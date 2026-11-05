@@ -15,6 +15,7 @@
 pub mod apparent;
 pub mod lines;
 
+mod astrocartography;
 mod birth_time;
 mod chart_angles;
 mod chart_provider;
@@ -57,4 +58,9 @@ pub use chart_time::{ChartInstant, ChartTimeScales};
 
 pub use lines::deltat::{
     delta_t_estimate, delta_t_sources, DeltaTDataFile, DeltaTEstimate, DeltaTKind,
+};
+
+pub use astrocartography::{
+    AstrocartographyGeometry, GeographicLine, GeometryConvention, GeometryPointRow,
+    GeometryProvenance,
 };
