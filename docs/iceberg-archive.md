@@ -238,7 +238,8 @@ change that adds one updates this file in the same pull request:
   closed and posts the failure to Slack.
 
 A draft gives every view an empty reconstruction reason, and the archive refuses an empty reason. A reviewer must write
-how each view is rebuilt before it can ship. The current manifest has no views.
+how each view is rebuilt before it can ship. `person_directory` and `firm_visible_person` are derived this way: each is
+a plain view over exported tables, rebuilt by its migration.
 
 ## Recovery: physical backups first
 
