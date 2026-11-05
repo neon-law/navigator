@@ -602,6 +602,15 @@ fn register_firm_matter_routes(r: Router<AdminState>, prefix: &str) -> Router<Ad
             &format!("{prefix}/notations/{{id}}/sign"),
             get(crate::esign_view::sign_get),
         )
+        // The sender's own window on the envelope: the provider's
+        // sender-view console for this notation's envelope — its status,
+        // every recipient's signing state, the webhook delivery. The
+        // sender-side observability seam (ENG-787); the handler 404s any
+        // non-lawyer session.
+        .route(
+            &format!("{prefix}/notations/{{id}}/sender-view"),
+            get(crate::esign_view::sender_view_get),
+        )
         .route(
             &format!("{prefix}/notations/{{id}}/documents/{{doc_id}}"),
             get(crate::documents::download),

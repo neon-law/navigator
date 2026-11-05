@@ -264,8 +264,131 @@ fn redirect_to_provider(signing_url: &str) -> Option<Response> {
     if (parsed.scheme() != "https" || !parsed.has_host()) && !loopback_http {
         return None;
     }
+
     let location = HeaderValue::from_str(parsed.as_str()).ok()?;
     Some((StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response())
+}
+
+/// `GET /app/lawyer/notations/:id/sender-view` — mint the sender-view URL
+/// for this notation's envelope and send the browser to it: the page where
+/// the *sender* watches the envelope (its status, every recipient's signing
+/// state, and — for the fake — what the webhook delivery did). The
+/// sender-side observability seam: without it the sender learns an
+/// envelope's state only from the completion webhook, or not at all.
+///
+/// Lawyer tier only: the sender is the lawyer who sent the envelope, and
+/// the route is registered only under `/app/lawyer`. Participation gates
+/// the lookup exactly as [`sign_get`] applies it — a lawyer not on the
+/// matter reads a `404`. A notation never sent for signature is a `409`:
+/// there is no envelope to observe yet. Like the recipient view, the URL
+/// is minted fresh per request and never cached — a window, not a state.
+pub async fn sender_view_get(
+    State(state): State<AdminState>,
+    Extension(session): Extension<SessionData>,
+    headers: HeaderMap,
+    AxumPath(notation_id): AxumPath<Uuid>,
+) -> Response {
+    // A client session has no sender view to open. Same refusal
+    // discipline as the identity gate below: `404`, never `403` —
+    // existence is not confirmed to the caller.
+    if !session.role.is_lawyer_tier() {
+        return (StatusCode::NOT_FOUND, "notation not found").into_response();
+    }
+
+    let Some(notation_row) = store::notations::find_by_id(&state.surreal, notation_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return (StatusCode::NOT_FOUND, "notation not found").into_response();
+    };
+
+    // (1) Participation, firm lens only — this route is never registered
+    // for the client lens, so the check is the lawyer one verbatim.
+    match store::access::can_see_project_as_lawyer(
+        &state.surreal,
+        session.person_id,
+        session.role,
+        notation_row.project_id,
+    )
+    .await
+    {
+        Ok(true) => {}
+        Ok(false) => return (StatusCode::NOT_FOUND, "notation not found").into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, %notation_id, "esign_view: participation check failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    // (2) The envelope must already exist (the retainer walk records the
+    // id in `signatures` when it parks at `sent_for_signature__pending`).
+    // No id → nothing has been sent, so there is nothing to observe.
+    let Some(request_id) = store::signatures::request_id_for_notation(&state.surreal, notation_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return (
+            StatusCode::CONFLICT,
+            "this matter has not been sent for signature yet",
+        )
+            .into_response();
+    };
+
+    // Back to the lawyer's own step page when the console closes — a
+    // courtesy, same as the signer's `return_url`, never a mechanism.
+    let base = crate::openapi::base_url_for(
+        headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok()),
+    );
+    let return_url = format!(
+        "{}/app/lawyer/notations/{notation_id}/step",
+        base.trim_end_matches('/')
+    );
+
+    match state
+        .signature_provider
+        .create_sender_view(
+            &crate::signature::SignatureRequestId(request_id),
+            &return_url,
+        )
+        .await
+    {
+        Ok(view_url) => redirect_to_provider(&view_url).unwrap_or_else(|| {
+            tracing::error!(
+                %notation_id,
+                "esign_view: provider returned a sender-view URL that is not an absolute https URL"
+            );
+            (
+                StatusCode::BAD_GATEWAY,
+                "could not open the sender view; please retry",
+            )
+                .into_response()
+        }),
+        Err(e) => {
+            tracing::error!(error = %e, %notation_id, "esign_view: sender view failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                "could not open the sender view; please retry",
+            )
+                .into_response()
+        }
+    }
+}
+
+/// The envelope ids the fake mints (`fake-<notation uuid>-<sequence>`) are
+/// alphanumeric-plus-dash. Anything else never came from the fake — and
+/// reading a page for it would serve a path that escapes the fake's
+/// directory: the path extractor decodes `%2F` inside a segment, so a
+/// hostile id can carry `/` (and `..`) into `join`. Refused before the
+/// join, not after.
+fn envelope_id_is_safe(envelope_id: &str) -> bool {
+    !envelope_id.is_empty()
+        && envelope_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 /// The fake provider's per-recipient sign page, served by this portal in
@@ -280,6 +403,9 @@ pub(crate) async fn fake_signing_page(
     let Some(dir) = state.fake_signature_dir else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if !envelope_id_is_safe(&envelope_id) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     // The same slug discipline the file was written under — idempotent,
     // so a URL carrying either the raw email or an already-slugged
     // segment resolves, and no path segment can escape the directory.
@@ -287,6 +413,28 @@ pub(crate) async fn fake_signing_page(
         .join("signing")
         .join(&envelope_id)
         .join(format!("{}.html", crate::signature::recipient_slug(&email)));
+    match tokio::fs::read_to_string(&page).await {
+        Ok(html) => ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// The fake provider's sender page, served by this portal in dev: the URL
+/// the lawyer is redirected to is one on this server, backed by the page
+/// the fake (re)generated when the sender view was minted. Same refusal
+/// discipline as [`fake_signing_page`] — `404` when the fake is not the
+/// running provider or the envelope has no sender page.
+pub(crate) async fn fake_sender_page(
+    State(state): State<AppState>,
+    AxumPath(envelope_id): AxumPath<String>,
+) -> Response {
+    let Some(dir) = state.fake_signature_dir else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !envelope_id_is_safe(&envelope_id) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let page = dir.join("signing").join(&envelope_id).join("sender.html");
     match tokio::fs::read_to_string(&page).await {
         Ok(html) => ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
