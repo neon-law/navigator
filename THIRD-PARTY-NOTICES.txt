@@ -7,8 +7,8 @@ open-source components listed below, each governed by its own licence, reproduce
 here in full.
 
 Font licensing is separate from this notice: the GORP Serif web font is documented in
-server/public/fonts/gorp-serif/LICENSE.txt, and the Lawyer Shook Tinos face is governed
-by pdf/assets/fonts/Tinos/OFL.txt.
+server/public/fonts/gorp-serif/LICENSE.txt, and the Tinos face is governed by
+pdf/assets/fonts/Tinos/OFL.txt.
 
 Names and marks. The licence above covers this project's source and templates. It does
 not cover anyone's names or marks, and nothing here grants a right to use one.
@@ -21,11 +21,11 @@ public API is first-party work under the licence above. A provider's own SDKs,
 documentation, assets, and terms are not part of this project, are not reproduced in it,
 and stay under that provider's terms.
 
-The Lawyer Shook family. lawyershook.com presents these practice names used by Guieb & Shook
-PC: Abhaya Immigration, Aegis Criminal Defense, CyberInjuryLaw, Daybridge Divorce Law,
+Guieb & Shook PC practice names. Guieb & Shook PC uses these practice names:
+Abhaya Immigration, Aegis Criminal Defense, CyberInjuryLaw, Daybridge Divorce Law,
 Death & Divorce, DeleteYourData.com, DeleteYourDebt.com, Groundwork Real Estate Law,
-Lawyer Shook, Misericordia Injury Law, Summons Defense, and Vesta Estate Planning. Whatever
-rights Guieb & Shook PC or its affiliates hold in those names are reserved, and this project
+Misericordia Injury Law, Summons Defense, and Vesta Estate Planning. Whatever rights
+Guieb & Shook PC or its affiliates hold in those names are reserved, and this project
 grants none. NEON LAW is addressed in NOTICE.
 
 Other organizations. Justice Technology Association appears as a membership badge, and

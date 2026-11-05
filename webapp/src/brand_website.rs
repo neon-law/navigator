@@ -48,11 +48,6 @@ const COMPILED_SITES: &[CompiledSite] = &[
         live: true,
     },
     CompiledSite {
-        key: "lawyer-shook",
-        www: "www.lawyershook.com",
-        live: true,
-    },
-    CompiledSite {
         key: "summons",
         www: "www.summonsdefense.nyc",
         live: true,
@@ -216,7 +211,6 @@ mod tests {
                 "misericordia",
                 "abhaya",
                 "delete-your-debt",
-                "lawyer-shook",
                 "summons",
                 "daybridge",
                 "death-and-divorce",

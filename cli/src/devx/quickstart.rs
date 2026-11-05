@@ -209,7 +209,6 @@ fn summary(cfg: &KindConfig, root: &Path) -> String {
 Navigator is running on this machine.
 
   Neon Law website      {web}
-  Shook Law website     http://localhost:{shook}
   DeleteYourData        http://localhost:{dyd}
   Forgejo               http://localhost:{forgejo}/
   PostgreSQL            127.0.0.1:{postgres} (TLS; synthetic logins in the navigator-forgejo-kind Secret)
@@ -226,7 +225,6 @@ we help you write token-efficient prompts.
 
 Ctrl-C stops the website. `navigator dev worktree-env down --path {root}`
 removes the cluster.",
-        shook = cfg.lawyer_shook_web_port,
         dyd = cfg.delete_your_data_web_port,
         forgejo = cfg.forgejo_port,
         postgres = cfg.postgres_port,
@@ -340,7 +338,6 @@ mod tests {
     fn the_summary_names_every_slot_port_and_the_next_steps() {
         let mut cfg = KindConfig::from_env();
         cfg.web_port = 20_637;
-        cfg.lawyer_shook_web_port = 21_337;
         cfg.delete_your_data_web_port = 20_337;
         cfg.forgejo_port = 21_437;
         cfg.postgres_port = 21_537;
@@ -348,7 +345,6 @@ mod tests {
         let text = summary(&cfg, Path::new("/Users/someone/.navigator/quickstart"));
         for expected in [
             "http://localhost:20637\n",
-            "http://localhost:21337\n",
             "http://localhost:20337\n",
             "http://localhost:21437/\n",
             "127.0.0.1:21537 (TLS",

@@ -62,21 +62,12 @@ is served by the redirect service, which sends both its apex and `www` host to t
 | `iep.neonlaw.com` / `lex-tecnica.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
 | `staging-iep.neonlaw.com` / `staging-lex-tecnica.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `neonlaw.org` / `www.neonlaw.org` | the redirect service | `https://www.neonlaw.com` (path-preserving 301) |
-| `lawyershook.com` | retired | no records |
 
 The `neonlaw.com` apex is not a deployment entry: it carries a `URL` record that 301s to `https://www.neonlaw.com`,
 which is a record inside the production zone. It is the Apex→www row of the record table below. It must not appear on a
 GKE `ManagedCertificate`: the name does not resolve to the load balancer, and a Google-managed certificate stays in
 `Provisioning` until every listed name validates. The `neonlaw.org` zone has its own host-dispatched redirect service so
 deep links survive the domain migration.
-
-A **moved brand** — a key whose `views::brand::BrandKey::moved_to` names the brand it moved to — is no longer served by
-the cluster. Lawyer Shook moved to Guieb & Shook, and the `lawyershook.com` zone is retired: it carries no web or mail
-records. The release inventory (`views::brand::release_brand_hosts()`) leaves a moved brand out, so none of its hosts
-reaches a `ManagedCertificate` or an Ingress rule in either environment, and every roll deletes its old
-`navigator-web-<key>` certificate. That matters because the brand hosts share one certificate, `navigator-firm`: Google
-issues it only once every listed name validates, and GKE recreates it whenever its domain list changes, so a name that
-no longer resolves to the load balancer would hold TLS off every brand on it.
 
 Lex Tecnica's two brands, Lex Tecnica and IEP Defenders, are served on `neonlaw.com` subdomains rather than domains of
 their own: `lex-tecnica` and `iep` in production, `staging-lex-tecnica` and `staging-iep` on staging. They have no apex
@@ -375,10 +366,9 @@ Workspace as usual.
 ## Grounding TLS in the release inventory
 
 A next release must carry every registered house brand's certificate, not only the launched ones.
-`views::brand::release_brand_hosts()` is the compiled keys of `views::brand::BrandKey::ALL`, less any moved brand,
-crossed with the hosts each one serves (`www.<domain>` and `staging.<domain>`) — the **release inventory**
-`cli::devx::ship` reads to render every brand's `ManagedCertificate` and Ingress rule, in both environments, whether or
-not that brand has launched. A moved brand is never on it.
+`views::brand::release_brand_hosts()` is the compiled keys of `views::brand::BrandKey::ALL`, crossed with the hosts each
+one serves (`www.<domain>` and `staging.<domain>`) — the **release inventory** `cli::devx::ship` reads to render every
+brand's `ManagedCertificate` and Ingress rule, in both environments, whether or not that brand has launched.
 
 This is a deliberate split from `views::brand::BrandKey::LIVE`, the **launch gate** — the approved list that controls
 the request router's host admission, the crawler's `robots.txt`/sitemap base, the apex redirect, and the footer's "Our
@@ -406,7 +396,7 @@ staged transition, never in place:
 4. Patch `navigator-firm` to the target set, then wait for the same two conditions again. The status must name the new
    set, so a lingering `Active` for the old domains does not count.
 5. The roll continues. Its rendered annotation drops `navigator-firm-next`, and the roll deletes the object after the
-   apply along with the moved brands' certificates.
+   apply along with the retired brand certificates.
 
 Each wait is bounded by `--certificate-timeout-minutes` on `ops ship` and `--timeout-minutes` on the pre-roll, 45
 minutes by default. New Google-managed certificates took 20 to 40 minutes per environment on 2026-11-04. A wait that

@@ -609,14 +609,6 @@ static PLUS_JAKARTA_SANS_HEAD: std::sync::LazyLock<String> = std::sync::LazyLock
     )
 });
 
-static TINOS_HEAD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    font_head_fragment(
-        "Tinos",
-        "/public/fonts/tinos/Tinos-Regular.woff2",
-        "/public/fonts/tinos/Tinos-Bold.woff2",
-    )
-});
-
 /// `@font-face` head for a brand whose display face differs from its body
 /// face. Both are preloaded: a heading set in a face the browser has not
 /// fetched is the flash this fragment exists to prevent, and the display
@@ -680,26 +672,6 @@ static DAYBRIDGE_HEAD: std::sync::LazyLock<String> =
 static DEATH_AND_DIVORCE_HEAD: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| bucket_font_head("Pirata One", "pirata-one/PirataOne"));
 
-/// Lawyer Shook is the portfolio directory, so its cards need every sibling
-/// brand's face in addition to the page's own Tinos. Keep this list explicit:
-/// a card may name only a compiled brand face, and loading a brand's token
-/// sheet here would also overwrite the holding page's palette.
-static LAWYER_SHOOK_HEAD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!(
-        "{}{}{}{}{}{}{}{}{}{}",
-        *TINOS_HEAD,
-        *GORP_HEAD,
-        *PLUS_JAKARTA_SANS_HEAD,
-        bucket_font_head("EB Garamond", "eb-garamond/EBGaramond"),
-        bucket_font_head("Source Sans 3", "source-sans-3/SourceSans3"),
-        bucket_font_head("Source Serif 4", "source-serif-4/SourceSerif4"),
-        *ABHAYA_HEAD,
-        *DELETE_YOUR_DEBT_HEAD,
-        *SUMMONS_HEAD,
-        *DEATH_AND_DIVORCE_HEAD,
-    )
-});
-
 /// The `@font-face` head fragment a page wears when this process serves
 /// `key` — the preload and declarations injected at the end of every rendered
 /// `<head>`.
@@ -714,7 +686,6 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
     match key {
         views::brand::BrandKey::Neon => &GORP_HEAD,
         views::brand::BrandKey::DeleteYourData => &PLUS_JAKARTA_SANS_HEAD,
-        views::brand::BrandKey::LawyerShook => &LAWYER_SHOOK_HEAD,
         views::brand::BrandKey::GuiebShook | views::brand::BrandKey::LexTecnica => {
             &GUIEB_SHOOK_HEAD
         }
@@ -5737,7 +5708,7 @@ mod tests {
     }
 
     #[test]
-    fn the_tinos_head_declares_the_lawyer_shook_faces() {
+    fn the_tinos_head_declares_both_weights() {
         let fragment = font_head_fragment(
             "Tinos",
             "/public/fonts/tinos/Tinos-Regular.woff2",
@@ -5747,27 +5718,6 @@ mod tests {
         assert!(fragment.contains("Tinos-Regular.woff2"), "{fragment}");
         assert!(fragment.contains("Tinos-Bold.woff2"), "{fragment}");
         assert_eq!(fragment.matches("font-family:'Tinos'").count(), 2);
-    }
-
-    #[test]
-    fn the_lawyer_shook_head_declares_every_portfolio_face() {
-        let fragment = font_head(views::brand::BrandKey::LawyerShook);
-        for family in [
-            "GORP Serif",
-            "Plus Jakarta Sans",
-            "Tinos",
-            "EB Garamond",
-            "Source Sans 3",
-            "Source Serif 4",
-            "Mukta",
-            "Public Sans",
-            "Libre Franklin",
-        ] {
-            assert!(
-                fragment.contains(&format!("font-family:'{family}'")),
-                "Lawyer Shook omits {family}: {fragment}"
-            );
-        }
     }
 
     /// A hostile asset origin cannot break out of the `<style>` element it is

@@ -69,9 +69,9 @@ deployment's `config.toml` as `NAVIGATOR_GATEWAY_IP`, and `gcloud compute addres
 
 `<deployment>` and `<deployment>` both resolve to that address and are served by this deployment's Ingress, each with
 its own `ManagedCertificate` Active, and every other registered brand host the same way — the release inventory covers
-all of them, launched or not, except a moved brand, which the cluster no longer serves; see [`dns.md`'s Grounding TLS in
-the release inventory](dns.md#grounding-tls-in-the-release-inventory). This deployment's Ingress serves the complete
-public route table at `<deployment>`; there is no separate marketing-site deployment or publishing tool.
+all of them, launched or not; see [`dns.md`'s Grounding TLS in the release
+inventory](dns.md#grounding-tls-in-the-release-inventory). This deployment's Ingress serves the complete public route
+table at `<deployment>`; there is no separate marketing-site deployment or publishing tool.
 
 Each deployment serves its own host, and the host says what the deployment is. `<deployment>` is production: the firm at
 the root, over real matters. Staging serves `<deployment>` over sample data, so a visitor never has to guess which one

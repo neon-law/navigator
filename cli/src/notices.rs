@@ -267,8 +267,8 @@ pub fn render(notices: &Notices) -> String {
          open-source components listed below, each governed by its own licence, reproduced\n\
          here in full.\n\n\
          Font licensing is separate from this notice: the GORP Serif web font is documented in\n\
-         server/public/fonts/gorp-serif/LICENSE.txt, and the Lawyer Shook Tinos face is governed\n\
-         by pdf/assets/fonts/Tinos/OFL.txt.\n\n\
+         server/public/fonts/gorp-serif/LICENSE.txt, and the Tinos face is governed by\n\
+         pdf/assets/fonts/Tinos/OFL.txt.\n\n\
          Names and marks. The licence above covers this project's source and templates. It does\n\
          not cover anyone's names or marks, and nothing here grants a right to use one.\n\
          \n\
@@ -280,11 +280,11 @@ pub fn render(notices: &Notices) -> String {
          documentation, assets, and terms are not part of this project, are not reproduced in it,\n\
          and stay under that provider's terms.\n\
          \n\
-         The Lawyer Shook family. lawyershook.com presents these practice names used by Guieb & Shook\n\
-         PC: Abhaya Immigration, Aegis Criminal Defense, CyberInjuryLaw, Daybridge Divorce Law,\n\
+         Guieb & Shook PC practice names. Guieb & Shook PC uses these practice names:\n\
+         Abhaya Immigration, Aegis Criminal Defense, CyberInjuryLaw, Daybridge Divorce Law,\n\
          Death & Divorce, DeleteYourData.com, DeleteYourDebt.com, Groundwork Real Estate Law,\n\
-         Lawyer Shook, Misericordia Injury Law, Summons Defense, and Vesta Estate Planning. Whatever\n\
-         rights Guieb & Shook PC or its affiliates hold in those names are reserved, and this project\n\
+         Misericordia Injury Law, Summons Defense, and Vesta Estate Planning. Whatever rights\n\
+         Guieb & Shook PC or its affiliates hold in those names are reserved, and this project\n\
          grants none. NEON LAW is addressed in NOTICE.\n\
          \n\
          Other organizations. Justice Technology Association appears as a membership badge, and\n\

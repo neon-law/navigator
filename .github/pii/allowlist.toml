@@ -59,7 +59,6 @@ values = [
   "neonlaw.com",
   "neonlaw.org",
   "shook.family",
-  "lawyershook.com",
   "guiebshook.com",
   "cyberinjurylaw.com",
   "deleteyourdata.com",
@@ -150,7 +149,7 @@ values = [
 
 [[names]]
 reason = "The firm's principal, by name; public in the bar directories."
-values = ["Nick Shook", "Nicholas Shook", "Nicholas Richard Shook", "Lawyer Shook"]
+values = ["Nick Shook", "Nicholas Shook", "Nicholas Richard Shook"]
 
 [[names]]
 reason = "A Neon Law team member, by name; published on the public /team page."

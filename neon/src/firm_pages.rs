@@ -1498,8 +1498,7 @@ fn resolve_firm_contact_content(
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),
-        BrandKey::LawyerShook
-        | BrandKey::Vesta
+        BrandKey::Vesta
         | BrandKey::Misericordia
         | BrandKey::Abhaya
         | BrandKey::DeleteYourDebt
@@ -1584,7 +1583,6 @@ pub(crate) fn resolve_firm_home_content(
                 ..Default::default()
             }
         }
-        BrandKey::LawyerShook => lawyer_shook_holding_content(branding),
         // Guieb & Shook reads its own `home.yaml` like every other practice
         // brand; only the account invitation stays closed on the firm's own
         // site — an existing test pins that.
@@ -1612,93 +1610,6 @@ pub(crate) fn resolve_firm_home_content(
 /// Brands that collect a contact request directly on their home page.
 fn home_lead_capture(branding: &views::brand::Branding) -> webapp::lead_capture::LeadCaptureCopy {
     locales::lead_capture(branding)
-}
-
-/// The firm's notice and sign-in line, followed by the practice cards from
-/// Lawyer Shook's home catalog, over the shared footer.
-fn lawyer_shook_holding_content(branding: &views::brand::Branding) -> webapp::home::HomeContent {
-    let legal_entity = branding.firm.legal_entity;
-    let paragraph = format!(
-        "{legal_entity} is an American law firm. We build brands that put the customer not \
-         the lawyer first."
-    );
-    let mut content = webapp::home::HomeContent {
-        head_title: format!("{legal_entity} | Home"),
-        meta_description: paragraph.clone(),
-        bare: Some(webapp::home::BareStatement {
-            heading: legal_entity.to_string(),
-            paragraph,
-            // The footer's wordmark otherwise carries this brand's own name
-            // ("Lawyer Shook"); the firm's holding page reads as the firm,
-            // so its footer names the legal entity instead.
-            footer_wordmark: legal_entity.to_string(),
-            sign_in: vec![
-                webapp::home::CopyRun {
-                    text: "Sign in ".to_string(),
-                    emphasis: false,
-                    href: None,
-                },
-                webapp::home::CopyRun {
-                    text: "here".to_string(),
-                    emphasis: false,
-                    // Absolute against the deployment's own origin, not this
-                    // host's: `/auth/login` sets the one-shot pre-auth cookie
-                    // on whichever host serves it, and the OIDC callback lands
-                    // only on `OAUTH_REDIRECT_URI`'s host, so a login started
-                    // on the holding page's own host would arrive at the
-                    // callback without its cookie. Where no `NAV_BASE_URL` is
-                    // configured (dev, tests) this stays the relative path.
-                    href: Some(views::assets::absolute_url("/auth/login")),
-                },
-                webapp::home::CopyRun {
-                    text: " if you are an active client.".to_string(),
-                    emphasis: false,
-                    href: None,
-                },
-            ],
-        }),
-        ..locales::home(branding)
-    };
-    content.practices_heading = "Our Family".to_string();
-    content.practices = portfolio_practices(locales::home(branding).practices);
-    content
-}
-
-/// The parent firm's directory is derived from the compiled registry so a
-/// newly registered brand cannot silently disappear from the holding page.
-/// Every registered house brand appears here, including practices whose
-/// public hosts still follow the launch gate. Sorted alphabetically by name
-/// rather than registry order, since this is a directory for a reader to
-/// scan, not a ranking.
-fn portfolio_practices(copy: Vec<webapp::home::PracticeLink>) -> Vec<webapp::home::PracticeLink> {
-    let descriptions: std::collections::HashMap<String, String> = copy
-        .into_iter()
-        .map(|practice| (practice.href, practice.body))
-        .collect();
-    // Guieb & Shook's own practices only: Lex Tecnica's brands are another
-    // firm's.
-    let mut practices: Vec<webapp::home::PracticeLink> = views::brand::BrandKey::GUIEB_SHOOK_FAMILY
-        .iter()
-        .copied()
-        .filter(|key| !matches!(key, BrandKey::LawyerShook | BrandKey::GuiebShook))
-        .map(|key| {
-            let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
-            webapp::home::PracticeLink {
-                mark: webapp::components::PracticeMark::Scales,
-                heading: branding.firm.site_name.to_string(),
-                body: descriptions
-                    .get(&key.public_home_href())
-                    .cloned()
-                    .unwrap_or_else(|| key.family_byline().to_string()),
-                href: key.public_home_href(),
-                logo_href: branding.firm.logo_href.to_string(),
-                font_family: key.default_typeface().stack.to_string(),
-                primary_color: key.default_palette().light.primary.to_string(),
-            }
-        })
-        .collect();
-    practices.sort_by(|a, b| a.heading.cmp(&b.heading));
-    practices
 }
 
 #[cfg(test)]
@@ -1783,114 +1694,10 @@ mod home_page_tests {
             assert!(href.starts_with("https://www.nyc.gov/"), "{href}");
         }
     }
-
-    #[test]
-    fn lawyer_shook_home_carries_its_practice_descriptions_from_its_catalog() {
-        let content = resolve_firm_home_content(&views::brand::LAWYER_SHOOK_BRANDING, None);
-        let misericordia = content
-            .practices
-            .iter()
-            .find(|practice| practice.heading == "Misericordia Injury Law")
-            .expect("Misericordia is in the brand directory");
-        assert!(misericordia.body.contains("wrongful death"));
-        let cyber = content
-            .practices
-            .iter()
-            .find(|practice| practice.heading == "CyberInjuryLaw")
-            .expect("Cyber Injury Law is in the brand directory");
-        for term in ["cybercrime", "AI"] {
-            assert!(cyber.body.contains(term), "missing {term}");
-        }
-        for heading in ["Aegis Criminal Defense", "Groundwork Real Estate Law"] {
-            assert!(
-                content
-                    .practices
-                    .iter()
-                    .any(|practice| practice.heading == heading),
-                "missing {heading}"
-            );
-        }
-    }
 }
 
 #[cfg(test)]
-mod lawyer_shook_holding_page_tests {
-    use super::lawyer_shook_holding_content;
-
-    #[test]
-    fn the_home_page_is_a_bare_statement_naming_the_firm() {
-        let content = lawyer_shook_holding_content(&views::brand::LAWYER_SHOOK_BRANDING);
-        let bare = content
-            .bare
-            .expect("Lawyer Shook's home page is the bare-statement variant");
-        assert_eq!(bare.heading, "Guieb & Shook PC");
-        assert_eq!(content.head_title, "Guieb & Shook PC | Home");
-        assert!(bare
-            .paragraph
-            .contains("Guieb & Shook PC is an American law firm"));
-        assert!(bare
-            .paragraph
-            .contains("We build brands that put the customer not the lawyer first."));
-        assert!(
-            !bare.paragraph.contains("Lawyer Shook"),
-            "{}",
-            bare.paragraph
-        );
-        // The footer names the firm, not this brand's own "Lawyer Shook" mark.
-        assert_eq!(bare.footer_wordmark, "Guieb & Shook PC");
-        // The firm's notice leads into every admitted brand door.
-        assert!(content.service.is_none());
-        let headings: Vec<&str> = content
-            .practices
-            .iter()
-            .map(|practice| practice.heading.as_str())
-            .collect();
-        assert!(
-            !headings.contains(&"IEP Defenders"),
-            "a held-out practice must have no public portfolio door"
-        );
-        assert_eq!(
-            headings,
-            vec![
-                "Abhaya Immigration",
-                "Aegis Criminal Defense",
-                "CyberInjuryLaw",
-                "Daybridge Divorce Law",
-                "Death & Divorce",
-                "DeleteYourData.com",
-                "DeleteYourDebt.com",
-                "Groundwork Real Estate Law",
-                "Misericordia Injury Law",
-                "Neon Law",
-                "Summons Defense",
-                "Vesta Estate Planning",
-            ],
-            "the directory is alphabetical, not registry order"
-        );
-        assert!(content
-            .practices
-            .iter()
-            .all(|practice| !practice.logo_href.is_empty()
-                && !practice.font_family.is_empty()
-                && !practice.primary_color.is_empty()));
-        let summons = content
-            .practices
-            .iter()
-            .find(|practice| practice.href == "https://www.summonsdefense.nyc")
-            .expect("Lawyer Shook links its Summons Defense NYC practice");
-        assert_eq!(summons.heading, "Summons Defense");
-        assert_eq!(summons.body, "NYC summons defense at OATH hearings");
-        assert!(content.provenance.is_none());
-        // The one link on the page: an existing client's way to `/app`.
-        let sign_in_text: String = bare.sign_in.iter().map(|run| run.text.as_str()).collect();
-        assert!(sign_in_text.contains("Sign in"));
-        assert!(sign_in_text.contains("active client"));
-        assert!(bare.sign_in.iter().any(|run| run
-            .href
-            .as_deref()
-            .is_some_and(|href| href.ends_with("/auth/login"))));
-    }
-
+mod guieb_shook_home_tests {
     #[test]
     fn guieb_shook_home_does_not_open_the_account_invitation() {
         let content = super::resolve_firm_home_content(&views::brand::GUIEB_SHOOK_BRANDING, None);
@@ -2488,48 +2295,5 @@ mod catalog_projection_tests {
         assert_eq!(card.category, "");
         assert_eq!(card.category_slug, "");
         assert_eq!(card.href, "/notations/estate-signing-preparation");
-    }
-
-    #[test]
-    fn the_portfolio_names_practices_from_the_catalog_or_the_family_byline() {
-        let described = views::brand::BrandKey::ALL
-            .iter()
-            .copied()
-            .find(|key| {
-                !matches!(
-                    key,
-                    views::brand::BrandKey::LawyerShook | views::brand::BrandKey::GuiebShook
-                )
-            })
-            .expect("a third brand exists in the portfolio");
-        let href = described.public_home_href();
-        let practices = portfolio_practices(vec![webapp::home::PracticeLink {
-            mark: webapp::components::PracticeMark::Scales,
-            heading: "Whatever".into(),
-            body: "Authored description from the brand's own home.".into(),
-            href: href.clone(),
-            logo_href: String::new(),
-            font_family: String::new(),
-            primary_color: String::new(),
-        }]);
-
-        assert!(!practices.is_empty());
-        // The authored description reaches the practice whose href it names;
-        // every other practice keeps its family byline.
-        assert!(practices.iter().any(|practice| practice.href == href
-            && practice.body == "Authored description from the brand's own home."));
-        assert!(practices
-            .iter()
-            .filter(|practice| practice.href != href)
-            .all(|practice| !practice.body.is_empty()));
-        // The holding brands never appear in the portfolio.
-        assert!(!practices.iter().any(
-            |practice| practice.href == views::brand::BrandKey::LawyerShook.public_home_href()
-        ));
-        // Sorted by heading, so the catalog order is presentation-stable.
-        let headings: Vec<&str> = practices.iter().map(|p| p.heading.as_str()).collect();
-        let mut sorted = headings.clone();
-        sorted.sort_unstable();
-        assert_eq!(headings, sorted);
     }
 }

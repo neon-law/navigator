@@ -360,7 +360,7 @@ mod tests {
             Some("Words for litigation.title.")
         );
         assert_eq!(
-            catalog.lookup("lawyer-shook", "litigation.title"),
+            catalog.lookup("vesta", "litigation.title"),
             Some("Words for litigation.title.")
         );
         assert_eq!(catalog.lookup("neon", "nobody.authored.this"), None);

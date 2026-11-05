@@ -49,13 +49,6 @@ DeleteYourData.com (`delete-your-data/`):
 | `neon/locales/en/delete-your-data/home.yaml` | `/` |
 | `neon/locales/en/delete-your-data/services.yaml` | Router copy; `/services` returns 404 |
 
-Lawyer Shook (`lawyer-shook/`):
-
-| File | Page |
-| --- | --- |
-| `neon/locales/en/lawyer-shook/home.yaml` | `/` practice cards beneath the firm's notice |
-| `neon/locales/en/lawyer-shook/services.yaml` | `/services` (kept valid; the route is not published on that host) |
-
 Guieb & Shook (`guieb-shook/`):
 
 | File | Page |
@@ -101,11 +94,6 @@ offers in-person meetings in Brooklyn. Guieb & Shook PC remains the site's opera
 the lawyers, scope, and fees. The homepage, services catalog, Neon gateway, and brand descriptions share this scope and
 make no outcome promise. The two-column homepage uses Public Sans and the registered green palette.
 
-Lawyer Shook's `/` combines the firm notice and client sign-in written in Rust
-(`neon::firm_pages::lawyer_shook_holding_content`) with Neon Law and Vesta practice cards from its home catalog. It uses
-the shared footer treatment used by Neon Law and Vesta, including the link to Guieb & Shook PC and the common closing
-line.
-
 Neon's `team.yaml` lists Nick Shook and Waleed Amer, each linked to a short individual profile with a LinkedIn link. The
 `profiles` map keys each biography by its public route. Profiles do not repeat the directory heading or copy a full
 service biography.
@@ -126,8 +114,8 @@ Nevada-qualified-trustee, tax, conflict, and execution-formality limits. Blockch
 while the automated backend in [`solana-attestation`](solana-attestation.md) remains unshipped; a record does not
 replace required signing or notarization.
 
-Neon's estate-planning gateway and the Lawyer Shook practice card introduce Vesta's estate planning and Nevada trust
-work. The gateway directs visitors to Vesta for the service details and written engagement terms.
+Neon's estate-planning gateway introduces Vesta's estate planning and Nevada trust work. The gateway directs visitors to
+Vesta for the service details and written engagement terms.
 
 Source review dated October 13, 2026: [Simon Law Group's process
 guide](https://www.simonattorneys.com/nj-trust-estate-planning-process-timeline) separates the consultation, drafting,
@@ -221,13 +209,11 @@ documents for a review without supplying jurisdiction-specific deadlines or conc
 Their purchased domains are registered for `www` and `staging` hosts and enter the release certificate inventory. They
 stay outside `BrandKey::LIVE` until DNS and TLS readiness are verified. Analytics is unconfigured, so neither site loads
 another brand's tracking script. Local previews use `NAVIGATOR_LOCAL_AEGIS_PORT` and `NAVIGATOR_LOCAL_GROUNDWORK_PORT`.
-Public family links appear when the launch gate admits each brand. Lawyer Shook's holding-page directory lists every
-registered house brand, including Aegis and Groundwork, so the portfolio stays complete while those hosts follow the
-launch gate.
+Public family links appear when the launch gate admits each brand.
 
 Which stems a key ships is [`BrandKey::catalog_pages`](../views/src/brand.rs). DeleteYourData.com publishes its annual
 product on `/` and office details at `/contact`; `/services` returns 404. Its services catalog is loaded when the shared
-router builds its brand map. Lawyer Shook answers `/` alone. Other firm paths 404 on that host.
+router builds its brand map.
 
 `views::locales` is the typed schema. `navigator project gate` deserializes each file as the page its stem names, so a
 missing field or an unknown stem fails the gate before a brand crate can load it. The advertising guards in
@@ -327,9 +313,9 @@ The catalog is compiled into the brand crate with `include_str!`. A merged YAML 
 compiles `neon`.
 
 Every registered house brand publishes a Lead form on its home page. Neon uses the Nautilus enrollment form and Summons
-keeps its intake form; the other layouts show the shared form inline, including Cyber Injury and Lawyer Shook. Each form
-posts to `/leads` with the request's CSRF token and source path. Email is required, phone is optional, and SMS consent
-is a separate choice. The route test submits a synthetic inquiry from every live brand and verifies its attribution.
+keeps its intake form; the other layouts show the shared form inline, including Cyber Injury. Each form posts to
+`/leads` with the request's CSRF token and source path. Email is required, phone is optional, and SMS consent is a
+separate choice. The route test submits a synthetic inquiry from every live brand and verifies its attribution.
 
 Misericordia focuses on compassionate personal injury representation: vehicle collisions, premises injuries,
 catastrophic injuries, wrongful death, elder care abuse and neglect, and medical negligence. Cyber Injury Law reviews
@@ -347,6 +333,6 @@ request contact; document collection and assistant-led intake follow separately.
 session or accept document uploads. `/contact` provides the shared contact surface.
 
 Neon's `/services` brand cards resolve their registered logos through the shared asset resolver. The directory lists
-every house brand except Neon Law and Lawyer Shook, and those cards carry no practice-area pills. Website design uses
+every house brand except Neon Law and Guieb & Shook, and those cards carry no practice-area pills. Website design uses
 descriptive labels without decorative zero-padded numbering; see
 [website-style](../.agents/skills/website-style/SKILL.md).
