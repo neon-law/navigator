@@ -72,13 +72,6 @@ impl PacerAdapter {
         })
     }
 
-    /// The portal base this run was bound to.
-    #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))] // tests assert the binding
-    pub(crate) fn base_url(&self) -> &str {
-        &self.base_url
-    }
-
     /// The docket-report URL for one case number: the configured base, a
     /// constant path, and the docket percent-encoded into the query
     /// string. The host is project config (`scrapers:` in `navigator.yaml`,
@@ -486,7 +479,12 @@ mod tests {
         assert_eq!(adapter.site(), &site());
         assert_eq!(adapter.credential_key(), "pacer");
         assert!(adapter.requires_login(), "PACER runs behind the account");
-        assert_eq!(adapter.base_url(), DEFAULT_BASE_URL);
+        assert!(
+            adapter
+                .docket_report_url("12-345")
+                .starts_with(DEFAULT_BASE_URL),
+            "the adapter binds the configured base"
+        );
     }
 
     #[tokio::test]

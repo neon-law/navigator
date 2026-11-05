@@ -406,9 +406,10 @@ mod tests {
     };
     use crate::scraper::adapter::{find_adapter, SiteAdapter, SiteKey};
     use crate::scraper::credentials::{parse_portal_logins, LoginPresence};
-    use crate::scraper::intake::RecordingIntake;
     use crate::scraper::retry::RetryPolicy;
-    use crate::scraper::testing::{MockAdapter, MockFetcher, StubClock, StubSessions};
+    use crate::scraper::testing::{
+        MockAdapter, MockFetcher, RecordingIntake, StubClock, StubSessions,
+    };
     use crate::scraper::{NoticeQuery, ScraperDeps};
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
