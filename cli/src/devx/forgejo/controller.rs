@@ -1172,4 +1172,277 @@ mod tests {
         assert_eq!(controller.recover().unwrap(), 1);
         drop(server_runtime);
     }
+
+    /// A cluster that accepts every launch: an isolated namespace, a Job that
+    /// succeeds at once, and a two-line runner log.
+    #[derive(Default)]
+    struct LaunchCluster {
+        created: Mutex<Vec<String>>,
+        deleted: Mutex<Vec<String>>,
+    }
+
+    impl Cluster for LaunchCluster {
+        fn namespace(&self) -> &'static str {
+            "runners"
+        }
+        fn create(&self, object: &Value) -> Result<()> {
+            self.created
+                .lock()
+                .unwrap()
+                .push(object["kind"].as_str().unwrap_or_default().to_owned());
+            Ok(())
+        }
+        fn job(&self, _: &str) -> Result<Option<Value>> {
+            Ok(Some(
+                json!({"metadata": {"uid": "job-uid"}, "status": {"succeeded": 1}}),
+            ))
+        }
+        fn unsuspend(&self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn delete_job(&self, name: &str) -> Result<()> {
+            self.deleted.lock().unwrap().push(name.to_owned());
+            Ok(())
+        }
+        fn runner_namespace(&self) -> Result<Value> {
+            Ok(json!({"metadata": {"labels": {
+                "navigator.neonlaw.org/runner-network-policy": "enforced",
+                "pod-security.kubernetes.io/enforce": "restricted"
+            }}}))
+        }
+        fn network_policies(&self) -> Result<Value> {
+            Ok(json!({"items": []}))
+        }
+        fn runner_jobs(&self) -> Result<Vec<Value>> {
+            Ok(Vec::new())
+        }
+        fn job_log(&self, _: &str) -> Result<String> {
+            Ok("step one\n\nstep two\n".into())
+        }
+    }
+
+    /// One queued job in `o/a`: the tick mirrors the release its commit pins,
+    /// starts exactly one isolated runner, forwards its log, removes it, and
+    /// reports the repository's runs and its missed CD once each.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn a_tick_runs_each_waiting_job_once_and_reports_the_repository() {
+        use wiremock::matchers::{method, path, path_regex, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let now = chrono::Utc::now();
+        let ago = |minutes: i64| (now - chrono::TimeDelta::minutes(minutes)).to_rfc3339();
+        let server_runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = server_runtime.block_on(async {
+            let server = MockServer::start().await;
+            let get = |route: &str, body: Value| {
+                Mock::given(method("GET"))
+                    .and(path(route.to_owned()))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            };
+            get(
+                "/api/v1/admin/actions/runners/jobs",
+                json!([{"repo_id": 3, "status": "waiting"}, {"repo_id": 3, "status": "running"}]),
+            )
+            .mount(&server)
+            .await;
+            get("/api/v1/repositories/3", json!({"full_name": "o/a"}))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/repos/o/a/actions/runs"))
+                .and(query_param("status", "waiting"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "workflow_runs": [{"id": 11, "commit_sha": "abc123", "status": "waiting"}]
+                })))
+                .with_priority(1)
+                .mount(&server)
+                .await;
+            get(
+                "/api/v1/repos/o/a/actions/runs",
+                json!({"workflow_runs": [
+                    {"id": 11, "index_in_repo": 4, "status": "waiting", "event": "pull_request",
+                     "workflow_id": "gate.yml", "created": ago(10)},
+                    {"id": 12, "index_in_repo": 3, "status": "running", "event": "push",
+                     "workflow_id": "cd.yml", "created": ago(12), "started": ago(11)},
+                    {"id": 13, "index_in_repo": 2, "status": "failure", "event": "push",
+                     "workflow_id": "gate.yml", "commit_sha": "abc123", "created": ago(30),
+                     "started": ago(29), "stopped": ago(20)},
+                    {"id": 14, "index_in_repo": 1, "status": "success", "event": "pull_request",
+                     "workflow_id": "gate.yml", "created": ago(40), "started": ago(39),
+                     "stopped": ago(35)},
+                ]}),
+            )
+            .mount(&server)
+            .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/repos/o/a/raw/navigator.yaml"))
+                .and(query_param("ref", "abc123"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("version: 26.11.5\n"))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path_regex("^/api/packages/navigator/generic/navigator/26.11.5/"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(2)
+                .mount(&server)
+                .await;
+            get("/api/v1/admin/actions/runners", json!([]))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/repos/o/a/actions/runners"))
+                .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                    "id": 7, "uuid": "d012e532-c826-4e1d-adb8-58207c520f1b",
+                    "token": "synthetic-runner-token"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            get(
+                "/api/v1/repos/o/a/actions/runners/7",
+                json!({"id": 7, "uuid": "d012e532-c826-4e1d-adb8-58207c520f1b",
+                       "owner_id": 0, "repo_id": 3, "ephemeral": true, "status": "idle"}),
+            )
+            .mount(&server)
+            .await;
+            Mock::given(method("DELETE"))
+                .and(path("/api/v1/repos/o/a/actions/runners/7"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(1)
+                .mount(&server)
+                .await;
+            get(
+                "/api/v1/repos/search",
+                json!({"data": [{"full_name": "o/a"}, {"full_name": "not-a-scope"}]}),
+            )
+            .mount(&server)
+            .await;
+            get(
+                "/api/v1/repos/o/a/contents/.forgejo/workflows/cd.yml",
+                json!({"name": "cd.yml"}),
+            )
+            .mount(&server)
+            .await;
+            get(
+                "/api/v1/repos/o/a/branches/main",
+                json!({"commit": {"id": "deadbeef", "timestamp": ago(60)}}),
+            )
+            .mount(&server)
+            .await;
+            server
+        });
+        let cluster = Arc::new(LaunchCluster::default());
+        let mut observer = Observer::new();
+        observer.started = now - chrono::TimeDelta::hours(1);
+        let mut controller = Controller {
+            cluster: cluster.clone(),
+            forgejo: Forgejo::new(&server.uri(), "operator".into()).unwrap(),
+            registry: Registry::new(&server.uri(), "operator".into()).unwrap(),
+            origin: server.uri(),
+            token: "operator".into(),
+            egress_host: Vec::new(),
+            egress_ip: vec!["8.8.8.8".into()],
+            dns: Ipv4Addr::new(169, 254, 20, 10),
+            max_runners: 4,
+            in_flight: Arc::default(),
+            repositories: HashMap::new(),
+            mirrored: HashSet::new(),
+            unowned_registrations: BTreeSet::new(),
+            observer,
+            runtime: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        };
+
+        let report = controller.tick().unwrap();
+        assert_eq!(
+            report,
+            TickReport {
+                waiting: 1,
+                launched: 1,
+                orphans_cleaned: 0
+            }
+        );
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !controller.in_flight().0.is_empty() {
+            assert!(Instant::now() < deadline, "the launch never finished");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            *cluster.created.lock().unwrap(),
+            ["Job", "ServiceAccount", "Secret", "NetworkPolicy"]
+        );
+        let deleted = cluster.deleted.lock().unwrap().clone();
+        assert_eq!(deleted.len(), 1);
+        assert!(is_runner_job_name(&deleted[0]));
+        assert!(controller.mirrored.contains("26.11.5"));
+        let key = |id: u64| ("o/a".to_owned(), id);
+        assert!(controller.observer.queued.contains(&key(11)));
+        assert!(controller.observer.running.contains(&key(12)));
+        assert!(controller.observer.finished.contains(&key(13)));
+        assert!(controller.observer.finished.contains(&key(14)));
+        assert_eq!(controller.observer.with_cd.get("o/a"), Some(&true));
+        assert!(!controller.observer.watched.contains("not-a-scope"));
+
+        // A second tick with an idle runner of ours already registered for
+        // `o/a` starts nothing more; the repository and release are cached.
+        controller.in_flight().0.insert(
+            "forgejo-job-0123456789abcdef0123456789abcdef".into(),
+            Launch {
+                repository: "o/a".into(),
+                registration: Some(7),
+            },
+        );
+        let report = controller.tick().unwrap();
+        assert_eq!(report.launched, 0);
+        assert_eq!(report.waiting, 1);
+        drop(controller);
+        drop(server_runtime);
+    }
+
+    #[test]
+    fn a_tick_fails_when_the_waiting_queue_cannot_be_read() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server_runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = server_runtime.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/admin/actions/runners/jobs"))
+                .respond_with(ResponseTemplate::new(403))
+                .mount(&server)
+                .await;
+            server
+        });
+        let mut controller = Controller {
+            cluster: Arc::new(LaunchCluster::default()),
+            forgejo: Forgejo::new(&server.uri(), "operator".into()).unwrap(),
+            registry: Registry::new(&server.uri(), "operator".into()).unwrap(),
+            origin: server.uri(),
+            token: "operator".into(),
+            egress_host: Vec::new(),
+            egress_ip: vec!["8.8.8.8".into()],
+            dns: Ipv4Addr::new(169, 254, 20, 10),
+            max_runners: 4,
+            in_flight: Arc::default(),
+            repositories: HashMap::new(),
+            mirrored: HashSet::new(),
+            unowned_registrations: BTreeSet::new(),
+            observer: Observer::new(),
+            runtime: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        };
+        // Recovery's own failure (the registrations read) is logged, not
+        // fatal; the unreadable queue is.
+        let error = controller.tick().unwrap_err();
+        assert!(error.to_string().contains("403"), "{error}");
+        drop(controller);
+        drop(server_runtime);
+    }
 }

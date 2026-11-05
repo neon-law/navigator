@@ -304,4 +304,84 @@ mod tests {
         assert!(api.job("missing").unwrap().is_none());
         drop(runtime);
     }
+
+    #[test]
+    fn identities_policies_logs_and_deletes_stay_in_the_runner_namespace() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(async {
+            let server = MockServer::start().await;
+            for collection in [
+                "/api/v1/namespaces/runners/secrets",
+                "/api/v1/namespaces/runners/serviceaccounts",
+                "/apis/networking.k8s.io/v1/namespaces/runners/networkpolicies",
+            ] {
+                Mock::given(method("POST"))
+                    .and(path(collection))
+                    .respond_with(ResponseTemplate::new(201))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            }
+            Mock::given(method("GET"))
+                .and(path("/api/v1/namespaces/runners"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"metadata": {"name": "runners"}})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(
+                    "/apis/networking.k8s.io/v1/namespaces/runners/networkpolicies",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": []})))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/namespaces/runners/pods"))
+                .and(query_param("labelSelector", "job-name=forgejo-job-x"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    json!({"items": [{"metadata": {"name": "forgejo-job-x-abcde"}}]}),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/namespaces/runners/pods"))
+                .and(query_param("labelSelector", "job-name=forgejo-job-y"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items": []})))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/namespaces/runners/pods/forgejo-job-x-abcde/log"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("step one\n"))
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/apis/batch/v1/namespaces/runners/jobs/forgejo-job-x"))
+                .respond_with(ResponseTemplate::new(404))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/apis/batch/v1/namespaces/runners/jobs/forgejo-job-y"))
+                .respond_with(ResponseTemplate::new(403))
+                .mount(&server)
+                .await;
+            server
+        });
+        let api = cluster(&server);
+        assert_eq!(api.namespace(), "runners");
+        for kind in ["Secret", "ServiceAccount", "NetworkPolicy"] {
+            api.create(&json!({"kind": kind, "metadata": {"namespace": "runners"}}))
+                .unwrap();
+        }
+        assert_eq!(api.runner_namespace().unwrap()["metadata"]["name"], "runners");
+        assert_eq!(api.network_policies().unwrap(), json!({"items": []}));
+        assert_eq!(api.job_log("forgejo-job-x").unwrap(), "step one\n");
+        // A Job whose pod is already gone has an empty log.
+        assert_eq!(api.job_log("forgejo-job-y").unwrap(), "");
+        api.delete_job("forgejo-job-x").unwrap();
+        assert!(api.delete_job("forgejo-job-y").is_err());
+        drop(runtime);
+    }
 }

@@ -69,17 +69,12 @@ fn event_body(get: impl Fn(&str) -> Option<String>, gate: Outcome) -> Result<Val
     }))
 }
 
-/// Exchange the run's token, find the bound Project, and post the event.
-pub async fn notify(dir: &Path, gate: Outcome) -> Result<()> {
-    let manifest = super::manifest::read(dir).context("navigator.yaml is missing or invalid")?;
-    let host = super::manifest::non_empty(manifest.host.as_deref())
-        .ok_or_else(|| anyhow!("navigator.yaml has no host"))?;
-    let body = event_body(|name| std::env::var(name).ok(), gate)?;
-    let (base, token) = crate::remote::resolve_ci_document(&host).await?;
+/// Post `body` as the main-push event of the one Project the CI session sees.
+async fn post(base: &str, token: &str, body: &Value) -> Result<()> {
     let client = reqwest::Client::new();
     let projects: Value = client
         .get(format!("{base}/app/api/projects"))
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .send()
         .await?
         .error_for_status()
@@ -94,12 +89,23 @@ pub async fn notify(dir: &Path, gate: Outcome) -> Result<()> {
         .to_owned();
     client
         .post(format!("{base}/app/api/projects/{id}/events/main-push"))
-        .bearer_auth(&token)
-        .json(&body)
+        .bearer_auth(token)
+        .json(body)
         .send()
         .await?
         .error_for_status()
         .context("report the push to main")?;
+    Ok(())
+}
+
+/// Exchange the run's token, find the bound Project, and post the event.
+pub async fn notify(dir: &Path, gate: Outcome) -> Result<()> {
+    let manifest = super::manifest::read(dir).context("navigator.yaml is missing or invalid")?;
+    let host = super::manifest::non_empty(manifest.host.as_deref())
+        .ok_or_else(|| anyhow!("navigator.yaml has no host"))?;
+    let body = event_body(|name| std::env::var(name).ok(), gate)?;
+    let (base, token) = crate::remote::resolve_ci_document(&host).await?;
+    post(&base, &token, &body).await?;
     println!(
         "Reported this push to the Project channel ({})",
         gate.as_str()
@@ -151,5 +157,50 @@ mod tests {
     fn a_run_without_a_commit_reports_nothing() {
         assert!(event_body(env(&[("GITHUB_SHA", "not-hex!")]), Outcome::Pass).is_err());
         assert!(event_body(env(&[]), Outcome::Pass).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_event_goes_to_the_one_project_the_session_sees() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .and(header("authorization", "Bearer ci-session"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"id": "p-1"}])))
+            .mount(&server)
+            .await;
+        let body = json!({"short_sha": "abcdef0", "gate": "pass"});
+        Mock::given(method("POST"))
+            .and(path("/app/api/projects/p-1/events/main-push"))
+            .and(body_json(body.clone()))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+        post(&server.uri(), "ci-session", &body).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_session_that_sees_no_project_reports_nothing() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let error = post(&server.uri(), "ci-session", &json!({}))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no Project"), "{error}");
     }
 }

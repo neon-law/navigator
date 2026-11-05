@@ -60,6 +60,32 @@ fn read_file(kube: &Kube, pod: &str, path: &str) -> Result<Option<Vec<u8>>> {
     Ok(output.status.success().then_some(output.stdout))
 }
 
+/// The repository's tasks, newest first, paged until run `number` is passed.
+async fn listed_tasks(forgejo: &Forgejo, repository: &str, number: u64) -> Result<Vec<Value>> {
+    let mut tasks = Vec::new();
+    for page in 1..=10 {
+        let listed = forgejo
+            .get(&format!(
+                "/repos/{repository}/actions/tasks?limit=50&page={page}"
+            ))
+            .await?
+            .unwrap_or(Value::Null);
+        let batch = listed["workflow_runs"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let done = batch.len() < 50
+            || batch
+                .iter()
+                .any(|task| task["run_number"].as_u64() < Some(number));
+        tasks.extend(batch);
+        if done {
+            break;
+        }
+    }
+    Ok(tasks)
+}
+
 pub(in crate::devx) fn run(
     repository: &str,
     number: u64,
@@ -75,26 +101,7 @@ pub(in crate::devx) fn run(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let mut tasks = Vec::new();
-    for page in 1..=10 {
-        let listed = runtime
-            .block_on(forgejo.get(&format!(
-                "/repos/{repository}/actions/tasks?limit=50&page={page}"
-            )))?
-            .unwrap_or(Value::Null);
-        let batch = listed["workflow_runs"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let done = batch.len() < 50
-            || batch
-                .iter()
-                .any(|task| task["run_number"].as_u64() < Some(number));
-        tasks.extend(batch);
-        if done {
-            break;
-        }
-    }
+    let tasks = runtime.block_on(listed_tasks(&forgejo, repository, number))?;
     let found = tasks_of_run(&tasks, number);
     if found.is_empty() {
         bail!("run {number} of {repository} has no started job; a queued job has no log yet");
@@ -150,5 +157,32 @@ mod tests {
         let compressed = zstd::stream::encode_all(text.as_bytes(), 3).unwrap();
         assert_eq!(decode(&compressed).unwrap(), text);
         assert_eq!(decode(text.as_bytes()).unwrap(), text);
+    }
+
+    #[tokio::test]
+    async fn task_pages_are_read_until_the_run_is_passed() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let page = |run: u64| {
+            json!({"workflow_runs": (0..50)
+                .map(|id| json!({"id": run * 100 + id, "name": "gate", "run_number": run}))
+                .collect::<Vec<_>>()})
+        };
+        for (number, body) in [("1", page(9)), ("2", page(4))] {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/repos/o/a/actions/tasks"))
+                .and(query_param("page", number))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let forgejo = Forgejo::new(&server.uri(), "operator".into()).unwrap();
+        let tasks = listed_tasks(&forgejo, "o/a", 5).await.unwrap();
+        assert_eq!(tasks.len(), 100);
+        assert!(tasks_of_run(&tasks, 5).is_empty());
+        assert_eq!(tasks_of_run(&tasks, 4).len(), 50);
     }
 }
