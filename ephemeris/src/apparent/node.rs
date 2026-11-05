@@ -57,7 +57,7 @@ mod tests {
         let expected = (-5.973_618_440_951_302_f64).to_degrees().rem_euclid(360.0);
         assert!(
             (actual - expected).abs() < 1e-10,
-            "mean node {actual} vs IERS reference {expected}"
+            "mean node must match the IERS reference within 1e-10 degrees"
         );
     }
 
@@ -75,9 +75,8 @@ mod tests {
         let expected_lon = (mean_node_longitude_degrees(t) + dpsi.to_degrees()).rem_euclid(360.0);
         assert!(
             (position.lon_deg - expected_lon).abs() < 1e-12,
-            "node longitude {} vs expected {expected_lon}",
-            position.lon_deg
+            "node longitude must include nutation within 1e-12 degrees"
         );
-        assert_eq!(position.lat_deg, 0.0, "node latitude is exactly zero");
+        assert!(position.lat_deg == 0.0, "node latitude is exactly zero");
     }
 }
