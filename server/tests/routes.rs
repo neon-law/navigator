@@ -1004,6 +1004,11 @@ async fn admin_page_is_visible_only_to_owner_and_admin() {
         // the administrative surfaces.
         assert!(html.contains("<h1>Admin</h1>"), "{html}");
         assert!(html.contains("href=\"/app/admin/people\""), "{html}");
+        // The hub links to Plausible, the firm's hosted analytics provider.
+        assert!(
+            html.contains("href=\"https://plausible.io/sites\""),
+            "{html}"
+        );
         assert!(
             !html.contains("<table"),
             "the landing must not embed the people table: {html}",

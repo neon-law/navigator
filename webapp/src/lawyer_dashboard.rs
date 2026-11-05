@@ -783,10 +783,11 @@ fn DashboardDetails(role: ViewerRole) -> Element {
                 div {
                     h3 { class: "admin-details__heading", "Operations" }
                     ul {
-                        // Visitor analytics is admin-only; a lawyer must
-                        // not be offered a link the route will refuse.
+                        // The Plausible link is admin-only; a lawyer must
+                        // not be offered it. It leaves the app, so it opens
+                        // in a new tab with no opener handle.
                         if role.is_admin_tier() {
-                            li { a { href: "/app/admin/analytics", "Visitor analytics" } }
+                            li { a { href: "https://plausible.io/sites", target: "_blank", rel: "noopener", "Plausible" } }
                         }
                         li { a { href: "/app/admin/schedules", "Cron schedules" } }
                     }
@@ -1044,9 +1045,9 @@ mod tests {
     }
 
     #[test]
-    fn visitor_analytics_is_offered_to_an_admin_and_withheld_from_lawyer() {
+    fn plausible_is_offered_to_an_admin_and_withheld_from_lawyer() {
         let lawyer = dioxus_ssr::render_element(lawyer_dashboard_body(&view()));
-        assert!(!lawyer.contains("/app/admin/analytics"), "{lawyer}");
+        assert!(!lawyer.contains("plausible.io/sites"), "{lawyer}");
         // Every lawyer still gets the non-admin operations links.
         assert!(lawyer.contains("/app/admin/schedules"), "{lawyer}");
 
@@ -1054,7 +1055,12 @@ mod tests {
             role: ViewerRole::Admin,
             ..view()
         }));
-        assert!(admin.contains("/app/admin/analytics"), "{admin}");
+        assert!(
+            admin.contains(r#"href="https://plausible.io/sites""#),
+            "{admin}"
+        );
+        assert!(admin.contains(r#"target="_blank""#), "{admin}");
+        assert!(admin.contains(r#"rel="noopener""#), "{admin}");
     }
 
     /// The navbar the workbench renders is the shared `/app` row: the workbench
