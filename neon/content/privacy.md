@@ -1,3 +1,7 @@
+# Privacy Policy
+
+_Last updated: November 5, 2026._
+
 Privacy is a fundamental human right. This policy explains what we collect, why we collect it, who we share it with, and
 the choices you have.
 
@@ -13,6 +17,15 @@ the choices you have.
   cookies, and limited server log data such as your IP address.
 - **Your legal matter:** the documents and communications you send us, which may be stored in our secured Google shared
   drive.
+
+## Web Analytics
+
+Our public websites use Plausible Analytics, a privacy-first, cookieless analytics service, to understand how the sites
+are used. Plausible records the pages you visit, the site or campaign link that brought you here (such as referral links
+and UTM parameters), your browser and operating system type, your device type, and your approximate location (country,
+region, or city). It does not use cookies and does not store your IP address: the address is used only to distinguish
+unique visits in an aggregate count and is never stored. We cannot use this data to identify you, and we do not use it
+for advertising.
 
 ## How We Use Your Information
 
@@ -65,8 +78,10 @@ enforcement only when legally required, and we will tell you when we are permitt
 
 ## Your Privacy Rights
 
-**You always have the right to delete.** You may ask us to access, correct, or delete your personal information. To
-exercise these rights, email support@neonlaw.com.
+**You always have the right to delete.** You may ask us to access, correct, delete, export, or object to or restrict
+our use of your personal information. To exercise these rights, email support@neonlaw.com, and we will respond within a
+reasonable period. If you are located in a jurisdiction with a privacy statute (such as the GDPR in Europe or the CCPA
+in California), we honor these rights as that law requires.
 
 ## Attorney-Client Privilege
 
@@ -77,8 +92,10 @@ consent. Browsing this site or sending a general inquiry does not by itself crea
 ## Data Security and Retention
 
 We make commercially reasonable efforts to safeguard your information, and we keep it only as long as needed for the
-purposes described above or as the law requires. No system is perfectly secure; if a breach affects your information, we
-will notify you as required by applicable law.
+purposes described above or as the law requires. Information you keep in a logged-in account is protected using
+reasonable best practices appropriate to a law firm: commercially reasonable administrative, technical, and physical
+safeguards designed to protect its confidentiality. No system is perfectly secure; if a breach affects your
+information, we will notify you as required by applicable law.
 
 ## Children's Privacy
 
