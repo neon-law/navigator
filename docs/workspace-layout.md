@@ -48,6 +48,16 @@ build if one reaches for `store`, `workflows`, or the auth machinery. A page tha
 
 `web` binds `3001`. OpenObserve owns the worktree-selected UI port (5080 by default).
 
+## The inbox slice
+
+The omnichannel inbox is the store → portal → webapp slice with the widest surface: `store/src/inbox.rs` (plus
+`inbox_triage.rs`) owns the PostgreSQL accessors, `portal/src/inbound_email.rs` and `lawyer_mailbox.rs` own the SendGrid
+Inbound Parse seams, `portal/src/email_threads.rs` and `portal/src/inbox.rs` own the authenticated APIs, and
+`webapp/src/inbox.rs` and `webapp/src/inbox_triage.rs` own the Dioxus routes under `/app/inbox`. Inbound email resolves
+its sender to a Person at ingest and persists that association; automation writes identity and Relationship Log rows,
+never typed graph edges. [`omnichannel-inbox`](../.agents/skills/omnichannel-inbox/SKILL.md) maps the modules; [the
+email docs](email-events-pipeline.md) cover the outbound event pipeline and summary workflow.
+
 ## Adding a new crate
 
 A new Cargo member must also enter every affected `images/Containerfile.*` `COPY` list. The `word` member additionally
