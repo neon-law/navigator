@@ -94,6 +94,38 @@ async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
     assert_public_native_lifecycle(&f).await;
     assert_public_native_private_triage(&f).await;
     assert_public_native_call_and_fi_triage_coordination(&f).await;
+    assert_public_native_preview_and_person(&f).await;
+}
+
+/// The native list carries the latest-message preview and the persisted
+/// email→Person association through the same IntakeRow the SurrealDB lane
+/// builds.
+async fn assert_public_native_preview_and_person(f: &Fixture) {
+    let mut input = inbound(
+        f.firm,
+        channel::EMAIL,
+        "synthetic-email-account",
+        "native-preview-email",
+        "preview-sender@example.com",
+    );
+    input.brand_key = Some("neon");
+    let saved = crate::inbox::ingest_inbound(&f.db, &input).await.unwrap();
+    let rows = crate::inbox::list_intake(&f.db, f.owner).await.unwrap();
+    let row = rows
+        .iter()
+        .find(|row| row.id == saved.conversation_id)
+        .unwrap_or_else(|| panic!("native intake list answers the ingested conversation"));
+    assert_eq!(row.preview.as_deref(), Some("Hello from outside."));
+    let person = row
+        .person
+        .as_ref()
+        .unwrap_or_else(|| panic!("the persisted sender Person badge"));
+    let created = crate::persons::find_by_any_email(&f.db, "preview-sender@example.com")
+        .await
+        .unwrap()
+        .unwrap_or_else(|| panic!("the native ingest resolved the sender to a Person"));
+    assert_eq!(person.person_id, created.id);
+    assert_eq!(person.name, "Sender");
 }
 
 async fn assert_public_native_private_triage(f: &Fixture) {

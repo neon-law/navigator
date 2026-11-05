@@ -10,7 +10,7 @@
 //! check for Lawyers/Clerks. A Lawyer approval is not a send. System
 //! acknowledgments only confirm persisted intake.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -318,6 +318,15 @@ pub struct IntakeRow {
     /// Whether any message on the conversation carries a filed attachment.
     /// What the `?attachments=true` filter matches rows on.
     pub has_attachments: bool,
+    /// Opening snippet of the conversation's most recent message (same
+    /// `occurred_at, id` order as [`IntakeRow::direction`]), whitespace
+    /// collapsed and ellipsized — what a list row renders beneath the
+    /// subject. None when the conversation has no messages or the body is
+    /// blank.
+    pub preview: Option<String>,
+    /// The Person the inbound sender resolved to at ingest, when one was
+    /// persisted — display only, as [`IntakeRow::contact`] is.
+    pub person: Option<PersonBadge>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -339,6 +348,15 @@ impl ContactLink {
             role: person.role.as_str().to_string(),
         }
     }
+}
+
+/// The Person an inbound conversation's sender resolved to at ingest — the
+/// association persisted on the conversation (`conversation.person_id`),
+/// surfaced display-only. A resolved identity is provenance, not authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PersonBadge {
+    pub person_id: Uuid,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2483,12 +2501,16 @@ async fn intake_rows(
     }
     let actor = load_person(db, actor_id).await?;
     let conversations = visible_conversations(db, &actor, brand).await?;
+    let people = person_badges(db, &conversations).await?;
     let mut rows = Vec::with_capacity(conversations.len());
     for conversation in conversations {
         let contact = sender_identity(db, &conversation).await?;
         let delivery_state = latest_outbound_state(db, conversation.id).await?;
         let assignee = assignee_label(db, conversation.project_id).await?;
         let messages = messages_for(db, conversation.id).await?;
+        let person = conversation
+            .person_id
+            .and_then(|person_id| people.get(&person_id).cloned());
         rows.push(IntakeRow {
             contact,
             id: conversation.id,
@@ -2510,6 +2532,8 @@ async fn intake_rows(
             external_name: conversation.external_name,
             subject: conversation.subject,
             direction: latest_direction(&messages),
+            preview: latest_preview(&messages),
+            person,
             has_attachments: has_attachments(&messages),
             updated_at: conversation.updated_at,
         });
@@ -2972,11 +2996,15 @@ pub async fn list_project(
         .into_iter()
         .filter_map(ConversationRow::into_conversation)
         .collect();
+    let people = person_badges(db, &conversations).await?;
     let mut listed = Vec::new();
     for conversation in conversations {
         let contact = sender_identity(db, &conversation).await?;
         let delivery_state = latest_outbound_state(db, conversation.id).await?;
         let messages = messages_for(db, conversation.id).await?;
+        let person = conversation
+            .person_id
+            .and_then(|person_id| people.get(&person_id).cloned());
         listed.push(IntakeRow {
             contact,
             id: conversation.id,
@@ -2998,6 +3026,8 @@ pub async fn list_project(
             external_name: conversation.external_name,
             subject: conversation.subject,
             direction: latest_direction(&messages),
+            preview: latest_preview(&messages),
+            person,
             has_attachments: has_attachments(&messages),
             updated_at: conversation.updated_at,
         });
@@ -3878,6 +3908,68 @@ fn has_attachments(messages: &[Message]) -> bool {
     messages
         .iter()
         .any(|message| message.attachment_asset_id.is_some())
+}
+
+/// How much of a message body a list row previews.
+pub(crate) const PREVIEW_CHAR_LIMIT: usize = 120;
+
+/// The preview snippet for a conversation's most recent message, under the
+/// same `occurred_at, id` convention as [`latest_direction`].
+pub(crate) fn latest_preview(messages: &[Message]) -> Option<String> {
+    preview_snippet(&messages.last()?.body)
+}
+
+/// One message body's row-preview text: whitespace collapsed to single
+/// spaces, then ellipsized past [`PREVIEW_CHAR_LIMIT`]. A blank body
+/// previews as nothing.
+pub(crate) fn preview_snippet(body: &str) -> Option<String> {
+    let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(if trimmed.chars().count() <= PREVIEW_CHAR_LIMIT {
+        trimmed.to_string()
+    } else {
+        format!(
+            "{}\u{2026}",
+            trimmed
+                .chars()
+                .take(PREVIEW_CHAR_LIMIT)
+                .collect::<String>()
+        )
+    })
+}
+
+/// The conversations' persisted sender associations as Person badges,
+/// batched into one lookup. Conversations without a persisted association
+/// badge as nothing.
+pub(crate) async fn person_badges(
+    db: &SurrealDb,
+    conversations: &[Conversation],
+) -> Result<HashMap<Uuid, PersonBadge>, InboxError> {
+    let ids: Vec<Uuid> = conversations
+        .iter()
+        .filter_map(|conversation| conversation.person_id)
+        .collect();
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let people = persons::find_by_ids(db, &ids)
+        .await
+        .map_err(|error| InboxError::Db(error.to_string()))?;
+    Ok(people
+        .into_iter()
+        .map(|person| {
+            (
+                person.id,
+                PersonBadge {
+                    person_id: person.id,
+                    name: person.name,
+                },
+            )
+        })
+        .collect())
 }
 
 pub(crate) async fn assignee_label(
@@ -5542,6 +5634,88 @@ mod tests {
             row.contact.as_ref().map(|c| c.role.as_str()),
             Some("client")
         );
+    }
+
+    #[test]
+    fn a_preview_collapses_whitespace_and_ellipsizes_past_the_limit() {
+        assert_eq!(
+            preview_snippet("  Multi\nline \t body  ").as_deref(),
+            Some("Multi line body")
+        );
+        let long = "x".repeat(PREVIEW_CHAR_LIMIT + 5);
+        let snippet = preview_snippet(&long).unwrap();
+        assert_eq!(snippet.chars().count(), PREVIEW_CHAR_LIMIT + 1);
+        assert!(snippet.ends_with('\u{2026}'));
+        assert_eq!(preview_snippet("   \n\t ").as_deref(), None);
+        assert_eq!(preview_snippet("").as_deref(), None);
+    }
+
+    #[tokio::test]
+    async fn rows_carry_the_latest_message_preview_and_the_persisted_person() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let first = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::EMAIL,
+                "fixture-account",
+                "email-preview-1",
+                "client@example.com",
+            ),
+        )
+        .await
+        .unwrap();
+        // A second message on the same conversation moves the preview to it.
+        let mut reply = inbound(
+            world.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "email-preview-2",
+            "client@example.com",
+        );
+        reply.body = "A later reply.";
+        reply.email_conversation_id = Some(first.conversation_id);
+        let _ = ingest_inbound(&db, &reply).await.unwrap();
+
+        let rows = list_intake(&db, world.owner).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.id == first.conversation_id)
+            .unwrap();
+        assert_eq!(row.preview.as_deref(), Some("A later reply."));
+        let created = persons::find_by_any_email(&db, "client@example.com")
+            .await
+            .unwrap()
+            .expect("ingest resolved the sender to a Person");
+        let person = row.person.as_ref().expect("the persisted Person badge");
+        assert_eq!(person.person_id, created.id);
+        // The fixture already holds a client-tier Person at this address, so
+        // ingest resolved to it instead of creating one — the badge mirrors
+        // the persisted Person's own name, not the message's display name.
+        assert_eq!(person.name, created.name);
+
+        // SMS ingests persist no association, so no badge — even when the
+        // phone still resolves a contact at view time.
+        let text = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::SMS,
+                "account",
+                "sms-preview-1",
+                "+15555550123",
+            ),
+        )
+        .await
+        .unwrap();
+        let rows = list_intake(&db, world.owner).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.id == text.conversation_id)
+            .unwrap();
+        assert_eq!(row.person, None);
+        assert_eq!(row.preview.as_deref(), Some("Hello from outside."));
     }
 
     #[tokio::test]

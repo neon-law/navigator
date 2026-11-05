@@ -2435,9 +2435,41 @@ async fn lawyer_workbench_card_opens_the_unified_inbox() {
         Some("channel=sms&brand=neon&unread=true")
     );
     capture_inbox_frames(&c, capture_dir, 16..24).await;
+    // In-page selection: activating the row's link renders the thread in the
+    // reading pane — the URL stays on the list route, the workspace keeps its
+    // three panes, and the full-width thread stays one navigation away for
+    // deep links and mobile.
     activate_inbox_link(&c, &format!("#inbox-row-{} a", saved.conversation_id)).await;
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#inbox-pane .inbox-pane__thread"))
+        .await
+        .unwrap_or_else(|error| panic!("the reading pane never filled: {error}"));
+    assert!(
+        c.current_url()
+            .await
+            .unwrap()
+            .path()
+            .ends_with("/app/inbox"),
+        "row selection must not navigate away from the list"
+    );
+    c.find(Locator::Css("#inbox"))
+        .await
+        .expect("#inbox stays mounted");
+    c.find(Locator::Css(&format!(
+        "#inbox-row-{}",
+        saved.conversation_id
+    )))
+    .await
+    .expect("the selected row stays in the list");
     wait_for_text(&c, "synthetic-receiving-account", Duration::from_secs(10)).await;
     wait_for_text(&c, "synthetic-sender", Duration::from_secs(10)).await;
+    c.find(Locator::Css(&format!(
+        "#inbox-pane a[href='/app/inbox/{}']",
+        saved.conversation_id
+    )))
+    .await
+    .expect("the reading pane links to the full-width thread");
     capture_inbox_frames(&c, capture_dir, 24..32).await;
     c.close().await.unwrap();
 }
