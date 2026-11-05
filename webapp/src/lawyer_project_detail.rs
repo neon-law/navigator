@@ -48,7 +48,7 @@ use crate::project_tasks::{AssigneeChoice, TaskRow, TasksTab};
 
 #[cfg(feature = "server")]
 use crate::lawyer_project_documents::{
-    asset_kind_choices, service_lines, visibility_word, LawyerDocRevision,
+    asset_kind_choices, service_lines, upload_form_limits, visibility_word, LawyerDocRevision,
 };
 #[cfg(feature = "server")]
 use crate::lawyer_project_notations::project_notation_board;
@@ -234,6 +234,9 @@ pub struct LawyerDetailView {
     /// `rules::kind::Kind::valid_for(Lane::Asset)` value, computed
     /// server-side so the wasm client never needs the `rules` crate.
     pub asset_kind_choices: Vec<(String, String)>,
+    /// The upload form's file and byte limits and the copy stating them.
+    #[serde(default)]
+    pub upload_limits: crate::lawyer_project_documents::UploadFormLimits,
     pub csrf_token: String,
     /// The matter calendar's active sort, read from `?sort=`/`?dir=` and
     /// normalised to the advertised columns.
@@ -774,6 +777,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         error,
         active_tab,
         asset_kind_choices: asset_kind_choices(),
+        upload_limits: upload_form_limits(),
         csrf_token,
         calendar_sort,
         calendar_dir,
@@ -1065,6 +1069,18 @@ pub fn LawyerProjectDetail() -> Element {
                             // its `name` ("file"), so this needs its own id to stay
                             // unique against any other file field on the page.
                             document::Script { src: "/public/js/upload-progress.js", defer: true }
+                            // `upload-progress.js` reads the limits here and shows this
+                            // refusal instead of sending a selection over them; the
+                            // handler answers the same copy with a 413.
+                            p {
+                                id: "document-upload-limit",
+                                class: "nav-alert nav-alert--danger",
+                                role: "alert",
+                                hidden: true,
+                                "data-max-files": "{view.upload_limits.max_files}",
+                                "data-max-bytes": "{view.upload_limits.max_bytes}",
+                                "{view.upload_limits.refusal}"
+                            }
                             FormCard {
                                 title: "Upload documents".to_string(),
                                 action: "/app/projects/{view.code}/documents/upload",
@@ -1074,7 +1090,7 @@ pub fn LawyerProjectDetail() -> Element {
                                 csrf_token: Some(csrf.clone()),
                                 fields: vec![
                                     Field::file("Files", "file").id("document-upload-file").required().multiple()
-                                        .help("Select one file or several — each is filed as its own document."),
+                                        .help(view.upload_limits.help.clone()),
                                     Field::select(
                                         "Kind",
                                         "kind",

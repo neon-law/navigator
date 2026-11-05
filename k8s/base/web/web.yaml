@@ -285,7 +285,7 @@ metadata:
   namespace: navigator
   annotations:
     # ingress-nginx's compiled-in default (1m) sits in front of the app's
-    # own document-batch ceiling (portal::project_documents::MAX_BATCH_BYTES,
+    # own document-batch ceiling (store::documents::MAX_UPLOAD_FORM_BYTES,
     # 500 MB) — without raising it here, a large scanned-PDF upload never
     # reaches the pod at all. Headroom above 500 MB covers multipart
     # boundary/header overhead across a full batch.

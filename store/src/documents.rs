@@ -134,12 +134,83 @@ pub fn streaming_upload_size_message(actual: usize) -> String {
 #[must_use]
 pub fn document_upload_size_message_for_kind(kind: &str, actual: usize) -> String {
     let max = max_document_upload_bytes(kind);
-    let next = if kind == "transcript" {
-        "Files over this limit upload through the resumable streaming lane, which `navigator site document upload` routes automatically."
+    let streaming = human_bytes(MAX_STREAMING_UPLOAD_BYTES);
+    format!(
+        "Document upload exceeds the maximum of {max} bytes; received {actual} bytes. Files over \
+         this limit, up to {streaming}, upload through the resumable streaming lane, which \
+         `navigator site document upload` and `navigator project sync` route automatically."
+    )
+}
+
+/// Most files one submission of the matter Documents tab's upload form may
+/// carry.
+///
+/// The batch is held in memory until the whole multipart body has been read
+/// (`kind` and `description` post after the files), so the ceiling bounds an
+/// authenticated session's memory. Fifty is far above a realistic discovery
+/// batch and far below anything that threatens the pod.
+pub const MAX_UPLOAD_FORM_FILES: usize = 50;
+
+/// Most bytes one submission of the upload form may carry across every file
+/// in it. One 500 MiB file and fifty 10 MiB files cost the same memory, so the
+/// per-file ceiling is this same number. The web ingress's `proxy-body-size`
+/// sits above it so the app, not the proxy, answers an oversized batch.
+pub const MAX_UPLOAD_FORM_BYTES: usize = 500 * 1024 * 1024;
+
+/// A byte count in whole binary units (`500 MiB`, `1 GiB`), the way the
+/// limits table and the refusal copy state every limit.
+#[must_use]
+pub fn human_bytes(bytes: usize) -> String {
+    const MIB: usize = 1024 * 1024;
+    const GIB: usize = 1024 * MIB;
+    if bytes >= GIB && bytes.is_multiple_of(GIB) {
+        format!("{} GiB", bytes / GIB)
+    } else if bytes >= MIB && bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
     } else {
-        "Court hearing audio and similar recordings may be filed with `--kind transcript`, up to 104857600 bytes."
-    };
-    format!("Document upload exceeds the maximum of {max} bytes; received {actual} bytes. {next}")
+        format!("{bytes} bytes")
+    }
+}
+
+/// The plain-language refusal for an upload-form submission over
+/// [`MAX_UPLOAD_FORM_FILES`] or [`MAX_UPLOAD_FORM_BYTES`]: what was refused,
+/// the limits, and another way to send the files.
+#[must_use]
+pub fn upload_form_limit_message() -> String {
+    let files = MAX_UPLOAD_FORM_FILES;
+    let batch = human_bytes(MAX_UPLOAD_FORM_BYTES);
+    let streaming = human_bytes(MAX_STREAMING_UPLOAD_BYTES);
+    format!(
+        "Nothing was uploaded. One upload can carry at most {files} files and {batch} in total. \
+         Send the files in smaller groups. A single file over {batch}, up to {streaming}, can be \
+         filed with `navigator site document upload`; for anything larger, arrange another way \
+         to receive it."
+    )
+}
+
+/// The document upload limits table, one row per upload path, rendered from
+/// the constants that enforce each limit. The documentation states this table
+/// verbatim, and a test pins it, so the page cannot drift from the code.
+#[must_use]
+pub fn upload_limits_markdown_table() -> String {
+    let buffered = human_bytes(MAX_DOCUMENT_UPLOAD_BYTES);
+    let transcript = human_bytes(MAX_MEDIA_DOCUMENT_UPLOAD_BYTES);
+    let streaming = human_bytes(MAX_STREAMING_UPLOAD_BYTES);
+    let form_files = MAX_UPLOAD_FORM_FILES;
+    let form_bytes = human_bytes(MAX_UPLOAD_FORM_BYTES);
+    let drive_files = crate::drive_import::MAX_FILES;
+    let drive_file = human_bytes(crate::drive_import::MAX_FILE_BYTES);
+    let drive_total = human_bytes(crate::drive_import::MAX_TOTAL_BYTES);
+    format!(
+        "| Path | Per file | Per batch | Per matter |\n\
+         | --- | --- | --- | --- |\n\
+         | Upload form on the matter's Documents tab | {form_bytes} | {form_files} files, {form_bytes} in total | no limit |\n\
+         | `navigator site document upload` | {streaming} | one file per run | no limit |\n\
+         | `navigator project sync` | {streaming} | no limit; each staged file is its own upload | no limit |\n\
+         | `POST /app/api/projects/{{id}}/documents` | {buffered}; {transcript} for kind `transcript` | one file per request | no limit |\n\
+         | Upload session (`.../documents/upload-session`) | {streaming} | one file per session | no limit |\n\
+         | Drive dropbox import | {drive_file} | {drive_files} files, {drive_total} in total | no limit |\n"
+    )
 }
 
 /// The Pointer path must retain the uploaded filename's extension.
@@ -1803,9 +1874,63 @@ mod tests {
         let message = document_upload_size_message_for_kind("memo", 30_000_000);
         assert!(message.contains(&MAX_DOCUMENT_UPLOAD_BYTES.to_string()));
         assert!(message.contains("30000000"));
-        assert!(message.contains("--kind transcript"));
+        assert!(message.contains(&human_bytes(MAX_STREAMING_UPLOAD_BYTES)));
+        assert!(message.contains("navigator site document upload"));
         let message = document_upload_size_message_for_kind("transcript", 200_000_000);
         assert!(message.contains(&MAX_MEDIA_DOCUMENT_UPLOAD_BYTES.to_string()));
+    }
+
+    #[test]
+    fn human_bytes_states_whole_binary_units() {
+        assert_eq!(human_bytes(MAX_DOCUMENT_UPLOAD_BYTES), "25 MiB");
+        assert_eq!(human_bytes(MAX_UPLOAD_FORM_BYTES), "500 MiB");
+        assert_eq!(human_bytes(MAX_STREAMING_UPLOAD_BYTES), "1 GiB");
+        assert_eq!(human_bytes(1_000), "1000 bytes");
+    }
+
+    #[test]
+    fn upload_form_refusal_names_both_limits_and_another_way() {
+        let message = upload_form_limit_message();
+        assert!(message.contains(&format!("{MAX_UPLOAD_FORM_FILES} files")));
+        assert!(message.contains(&human_bytes(MAX_UPLOAD_FORM_BYTES)));
+        assert!(message.contains(&human_bytes(MAX_STREAMING_UPLOAD_BYTES)));
+        assert!(message.contains("navigator site document upload"));
+    }
+
+    #[test]
+    fn the_web_ingress_admits_a_full_upload_form_batch() {
+        // An ingress body cap at or below the batch limit answers an
+        // oversized batch with the proxy's own 413 page, which carries none
+        // of the refusal copy.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../k8s/base/web/web.yaml");
+        let manifest = std::fs::read_to_string(&path).expect("k8s/base/web/web.yaml");
+        let value = manifest
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("nginx.ingress.kubernetes.io/proxy-body-size:")
+            })
+            .expect("the web ingress sets proxy-body-size")
+            .trim()
+            .trim_matches('"');
+        let megabytes: usize = value
+            .strip_suffix('m')
+            .expect("proxy-body-size in megabytes")
+            .parse()
+            .expect("a whole number of megabytes");
+        assert!(megabytes * 1024 * 1024 > MAX_UPLOAD_FORM_BYTES);
+    }
+
+    #[test]
+    fn the_upload_limits_documentation_states_the_enforced_constants() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/project-repositories.md");
+        let doc = std::fs::read_to_string(&path).expect("docs/project-repositories.md");
+        let table = upload_limits_markdown_table();
+        assert!(
+            doc.contains(&table),
+            "docs/project-repositories.md must carry the limits table exactly as \
+             `store::documents::upload_limits_markdown_table` renders it:\n{table}"
+        );
     }
 
     #[test]
