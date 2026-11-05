@@ -895,6 +895,8 @@ mod tests {
             time_scale_model: String::new(),
             reference_frame: String::new(),
             delta_t_model: "",
+            delta_t_reading: None,
+            delta_t_sources: &[],
             sidereal_model: "",
             node_convention: "",
             kernels: Vec::new(),

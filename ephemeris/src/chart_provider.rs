@@ -17,7 +17,8 @@ use std::{
 
 const DAY_SECONDS: f64 = 86_400.0;
 const RATE_STEP_SECONDS: f64 = 30.0;
-const ALGORITHM: &str = "navigator-local-SPK/apparent-IAU2006-2000B/IERS2003-node/chart-v1";
+const ALGORITHM: &str =
+    "navigator-local-SPK/apparent-IAU2006-2000B/IERS2003-node/USNO-deltaT/chart-v2";
 
 /// One body's apparent geocentric state. Orbital points have no physical range.
 #[derive(Clone, Serialize)]
@@ -53,10 +54,14 @@ pub struct ChartTimeScales {
     pub julian_day_tt: f64,
     /// Barycentric Dynamical Time Julian day used by SPK interpolation.
     pub julian_day_tdb: f64,
-    /// Earth-rotation model's UT1 Julian day, with TDB used as TT to within 1.7 ms.
+    /// Earth-rotation model's UT1 Julian day, calculated as TT minus delta-T.
     pub model_julian_day_ut1: f64,
     /// Model TT minus UT1, seconds, evaluated at UTC.
     pub delta_t_seconds: f64,
+    /// Observation, forecast, or explicitly unbounded extrapolation.
+    pub delta_t_kind: crate::lines::deltat::DeltaTKind,
+    /// Quoted source error, not a guaranteed model/interpolation bound.
+    pub delta_t_reported_error_seconds: Option<f64>,
 }
 
 /// Source bytes and actual numerical conventions behind a private chart result.
@@ -72,6 +77,8 @@ pub struct ChartProvenance {
     pub tzdb_version: &'static str,
     /// Delta-T model used for Earth rotation.
     pub delta_t_model: &'static str,
+    /// Verified Earth-rotation data snapshots, separate from the SPK sources.
+    pub delta_t_sources: &'static [crate::lines::deltat::DeltaTDataFile],
     /// Apparent sidereal model used for local angles.
     pub sidereal_model: &'static str,
     /// Mean-node model.
@@ -176,9 +183,10 @@ impl AstrologyChartProvider {
             manifest: self.loaded.manifest.clone(),
             tzdb_version: time.tzdb_version(),
             delta_t_model: crate::lines::geojson::DELTA_T_MODEL,
+            delta_t_sources: crate::lines::deltat::delta_t_sources(),
             sidereal_model: crate::lines::geojson::SIDEREAL_MODEL,
             node_model: crate::lines::geojson::NODE_CONVENTION,
-            time_scales: epoch.map(time_scales),
+            time_scales: epoch.map(time_scales).transpose()?,
         };
         let result = Arc::new(AstrologyChartResponse {
             request: request.clone(),
@@ -219,6 +227,10 @@ impl AstrologyChartProvider {
         struct Identity<'a> {
             algorithm: &'static str,
             version: &'static str,
+            delta_t_model: &'static str,
+            delta_t_sources: &'static [crate::lines::deltat::DeltaTDataFile],
+            sidereal_model: &'static str,
+            node_model: &'static str,
             manifest: &'a EphemerisManifest,
             tzdb: &'static str,
             original: BirthIdentity,
@@ -231,6 +243,10 @@ impl AstrologyChartProvider {
         let identity = Identity {
             algorithm: ALGORITHM,
             version: env!("CARGO_PKG_VERSION"),
+            delta_t_model: crate::lines::geojson::DELTA_T_MODEL,
+            delta_t_sources: crate::lines::deltat::delta_t_sources(),
+            sidereal_model: crate::lines::geojson::SIDEREAL_MODEL,
+            node_model: crate::lines::geojson::NODE_CONVENTION,
             manifest: &self.loaded.manifest,
             tzdb: time.tzdb_version(),
             original: BirthIdentity::new(&request.birth_time),
@@ -367,21 +383,39 @@ fn epoch_from_utc(utc: chrono::DateTime<chrono::Utc>) -> Result<Epoch, ChartErro
     .map_err(|_| ChartError::CalculationFailed)
 }
 
-fn time_scales(epoch: Epoch) -> ChartTimeScales {
+fn time_scales(epoch: Epoch) -> Result<ChartTimeScales, ChartError> {
     let julian_day_utc = epoch.to_jde_utc_days();
     let julian_day_tdb = 2_451_545.0 + crate::utc_to_tdb(epoch).0 / DAY_SECONDS;
-    let delta_t_seconds = crate::lines::deltat::delta_t_seconds(julian_day_utc);
-    ChartTimeScales {
+    let estimate = crate::lines::deltat::delta_t_estimate(julian_day_utc)
+        .ok_or(ChartError::CalculationFailed)?;
+    let julian_day_tt = epoch.to_jde_tt_days();
+    Ok(ChartTimeScales {
         julian_day_utc,
-        julian_day_tt: epoch.to_jde_tt_days(),
+        julian_day_tt,
         julian_day_tdb,
-        model_julian_day_ut1: julian_day_tdb - delta_t_seconds / DAY_SECONDS,
-        delta_t_seconds,
-    }
+        model_julian_day_ut1: julian_day_tt - estimate.seconds / DAY_SECONDS,
+        delta_t_seconds: estimate.seconds,
+        delta_t_kind: estimate.kind,
+        delta_t_reported_error_seconds: estimate.reported_error_seconds,
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn modeled_ut1_is_derived_from_tt_instead_of_tdb() {
+        let epoch = Epoch::maybe_from_gregorian_utc(2000, 4, 1, 0, 0, 0, 0)
+            .expect("valid synthetic time-scale reference");
+        let scales = time_scales(epoch).expect("valid synthetic time scales");
+        assert!(
+            (scales.model_julian_day_ut1
+                - (scales.julian_day_tt - scales.delta_t_seconds / DAY_SECONDS))
+                .abs()
+                < 1e-12,
+            "Earth rotation must use TT minus delta-T rather than substituting TDB"
+        );
+    }
+
     use super::*;
     use crate::lines::LINE_BODIES;
     use crate::spk::test_support::synthetic_type2;

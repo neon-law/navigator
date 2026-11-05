@@ -37,9 +37,7 @@ const SECONDS_PER_DAY: f64 = 86_400.0;
 pub fn gast_degrees(utc: Epoch) -> f64 {
     let TdbSeconds(tdb_seconds) = utc_to_tdb(utc);
 
-    // TDB differs from TT by the ≤1.7 ms periodic relativistic term —
-    // irrelevant at the precision of a Julian date here.
-    let tt_days = J2000_JD + tdb_seconds / SECONDS_PER_DAY;
+    let tt_days = utc.to_jde_tt_days();
     // ΔT itself is tabulated against UTC civil time, so it is evaluated at
     // the UTC instant; UT1 then follows from TT − ΔT.
     let ut1_days = tt_days - delta_t_seconds(utc.to_jde_utc_days()) / SECONDS_PER_DAY;

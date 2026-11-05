@@ -4248,6 +4248,7 @@ dependencies = [
 name = "ephemeris"
 version = "26.11.5"
 dependencies = [
+ "anyhow",
  "chrono",
  "chrono-tz",
  "hifitime",
