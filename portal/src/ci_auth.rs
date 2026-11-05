@@ -8,6 +8,11 @@
 //! carries an explicit capability: the seed mint can reach its one write
 //! endpoint, while the document mint can reach only the metadata reads
 //! `navigator project gate --check` uses.
+//!
+//! Forgejo runs have their own pair of doors. `/auth/ci/forgejo/seed-token`
+//! writes only for the deployment-trusted CD workflow on `refs/heads/main`;
+//! the gate on a pull request gets a dry-run seed session, and every other
+//! Forgejo run is refused.
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -17,7 +22,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use store::seed::SeedModel;
 
-use crate::forgejo_oidc::{repository_matches_issuer, ForgejoOidc};
+use crate::forgejo_oidc::{repository_matches_issuer, ForgejoOidc, ForgejoRun};
 use crate::github_oidc::{GitHubActionsClaims, GitHubOidc};
 use crate::session::{
     now_unix_secs, random_token_32, DocumentScope, SeedScope, SessionData, SessionScope,
@@ -56,6 +61,7 @@ pub fn routes(state: CiAuthState) -> Router {
             "/auth/ci/forgejo/document-token",
             post(mint_forgejo_document_token),
         )
+        .route("/auth/ci/forgejo/seed-token", post(mint_forgejo_seed_token))
         .with_state(state)
 }
 
@@ -102,7 +108,20 @@ async fn mint_forgejo_document_token(
     State(state): State<CiAuthState>,
     Json(input): Json<MintRequest>,
 ) -> Response {
-    match mint_forgejo_document_inner(&state, &input.token).await {
+    match mint_forgejo_inner(&state, &input.token, CiSessionKind::Document).await {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// `POST /auth/ci/forgejo/seed-token` — the Forgejo half of the seed door.
+/// Only the deployment-trusted CD workflow on `refs/heads/main` mints a
+/// writing session; the gate on a pull request mints a dry-run-only one.
+async fn mint_forgejo_seed_token(
+    State(state): State<CiAuthState>,
+    Json(input): Json<MintRequest>,
+) -> Response {
+    match mint_forgejo_inner(&state, &input.token, CiSessionKind::Seed).await {
         Ok(body) => (StatusCode::OK, Json(body)).into_response(),
         Err(error) => error.into_response(),
     }
@@ -202,25 +221,37 @@ async fn mint_inner(
     })
 }
 
-async fn mint_forgejo_document_inner(
+async fn mint_forgejo_inner(
     state: &CiAuthState,
     token: &str,
+    kind: CiSessionKind,
 ) -> Result<MintResponse, MintError> {
     let claims = state
         .forgejo_oidc
         .verify(token)
         .await
         .map_err(|error| MintError::Unauthorized(error.to_string()))?;
-    state
+    let run = state
         .forgejo_oidc
         .authorize_run(&claims)
         .map_err(|error| MintError::Forbidden(error.to_string()))?;
+    // Decided before the token is spent, so a refused run burns nothing.
+    let seed_dry_run_only = match (kind, run) {
+        (CiSessionKind::Seed, ForgejoRun::MainCd) => false,
+        (CiSessionKind::Seed, ForgejoRun::MainGate) => {
+            return Err(MintError::Forbidden(
+                "only the trusted Forgejo CD workflow on main may write seeds".into(),
+            ))
+        }
+        // A pull request's seed session is dry-run; a document session never writes.
+        (CiSessionKind::Seed, ForgejoRun::PullRequest) | (CiSessionKind::Document, _) => true,
+    };
     state
         .forgejo_oidc
         .spend_token(token, claims.exp)
         .map_err(|error| MintError::Unauthorized(error.to_string()))?;
     let project = resolve_forgejo_project(&state.surreal, &claims.iss, &claims.repository).await?;
-    let actor = lawyer_dri_actor(&state.surreal, &project, CiSessionKind::Document).await?;
+    let actor = lawyer_dri_actor(&state.surreal, &project, kind).await?;
     let exp = (now_unix_secs() + CI_SESSION_TTL_SECS).min(claims.exp);
     let session = SessionData {
         sub: actor
@@ -235,19 +266,31 @@ async fn mint_forgejo_document_inner(
         source: SessionSource::Ci,
         provider: None,
         viewing_as_dri: None,
-        scope: Some(SessionScope::Document(DocumentScope {
-            project_id: project.id,
-            project_code: project.code.clone(),
-        })),
+        scope: Some(match kind {
+            CiSessionKind::Seed => SessionScope::Seed(SeedScope {
+                endpoint: crate::api::SEED_ENDPOINT.to_string(),
+                models: SeedModel::ALL.to_vec(),
+                project_code: project.code.clone(),
+                dry_run_only: seed_dry_run_only,
+            }),
+            CiSessionKind::Document => SessionScope::Document(DocumentScope {
+                project_id: project.id,
+                project_code: project.code.clone(),
+            }),
+        }),
     };
     tracing::info!(
         target: "audit",
-        event = "ci.document_token.minted",
+        event = match kind {
+            CiSessionKind::Seed => "ci.seed_token.minted",
+            CiSessionKind::Document => "ci.document_token.minted",
+        },
         project_code = %project.code,
         person_id = %actor.id,
         repository = %claims.repository,
         forgejo_run_id = %claims.run_id,
-        "forgejo ci: minted a project-scoped document session",
+        dry_run_only = seed_dry_run_only,
+        "forgejo ci: minted a project-scoped session",
     );
     Ok(MintResponse {
         token: state.sessions.encode(&session),

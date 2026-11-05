@@ -1,0 +1,150 @@
+# The Forgejo runner controller (ENG-1236): one process in the application
+# namespace that starts a disposable, repository-scoped one-job runner in
+# `navigator-forgejo-runners` for every queued Actions job. See
+# docs/forgejo-deployment.md, "Runner controller".
+#
+# The controller's image is the in-cluster CLI image (`navigator` on
+# distroless, with CA certificates); its token reaches only the runner
+# namespace. `FORGEJO_TOKEN` is the environment's one Forgejo operator token,
+# synced from Secret Manager into `navigator-forgejo-runner-controller`; it
+# never enters a job pod, which holds only its own one-job runner credential.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: navigator-forgejo-runners
+  labels:
+    # Recorded after verifying the cluster enforces NetworkPolicy and denies
+    # metadata, Kubernetes API, database and object-store access from here.
+    navigator.neonlaw.org/runner-network-policy: enforced
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: navigator-forgejo-runner-controller
+  namespace: navigator
+automountServiceAccountToken: true
+---
+# Everything a disposable runner needs, in the runner namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: navigator-forgejo-runner-controller
+  namespace: navigator-forgejo-runners
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets", "serviceaccounts"]
+    verbs: ["create"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: navigator-forgejo-runner-controller
+  namespace: navigator-forgejo-runners
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: navigator-forgejo-runner-controller
+subjects:
+  - kind: ServiceAccount
+    name: navigator-forgejo-runner-controller
+    namespace: navigator
+---
+# Reading the runner namespace's own labels is the isolation precondition;
+# this names exactly that one namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: navigator-forgejo-runner-namespace-reader
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: ["navigator-forgejo-runners"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: navigator-forgejo-runner-namespace-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: navigator-forgejo-runner-namespace-reader
+subjects:
+  - kind: ServiceAccount
+    name: navigator-forgejo-runner-controller
+    namespace: navigator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-forgejo-runner-controller
+  namespace: navigator
+  labels:
+    app: navigator-forgejo-runner-controller
+spec:
+  # One owner of the in-flight set: two controllers would each count only
+  # their own idle runners and could start two runners for one job.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: navigator-forgejo-runner-controller
+  template:
+    metadata:
+      labels:
+        app: navigator-forgejo-runner-controller
+    spec:
+      serviceAccountName: navigator-forgejo-runner-controller
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: YOUR_IMAGE_REGISTRY/navigator-surreal-archive:YY.M.D
+          args:
+            - ops
+            - forgejo
+            - runner-controller
+            - --url=YOUR_FORGEJO_ORIGIN
+            - --runner-namespace=navigator-forgejo-runners
+            - --egress-host=YOUR_FORGEJO_HOST
+            - --egress-host=YOUR_NAVIGATOR_HOST
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: navigator-forgejo-runner-controller
+            - name: RUST_LOG
+              value: info
+            - name: FORGEJO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-forgejo-runner-controller
+                  key: FORGEJO_TOKEN
+          envFrom:
+            - configMapRef:
+                name: navigator-otel-env
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

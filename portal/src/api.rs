@@ -2129,7 +2129,7 @@ async fn run_finance_door(
     }
 }
 
-/// The two outcomes `project-gate.yml` reports for a push to `main`.
+/// The outcomes `project-gate.yml` or a Forgejo `cd.yml` reports for a push to `main`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum CiOutcome {
@@ -2168,13 +2168,14 @@ impl MainPushEvent {
         if !self.run_url.starts_with("https://") || self.run_url.len() > 2048 {
             return Err("run_url must be an https URL");
         }
-        let login_ok = (1..=39).contains(&self.author_login.len())
+        // A GitHub login, or a Forgejo one, which also allows `_` and `.`.
+        let login_ok = (1..=40).contains(&self.author_login.len())
             && self
                 .author_login
                 .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
         if !login_ok {
-            return Err("author_login must be a GitHub login");
+            return Err("author_login must be a GitHub or Forgejo login");
         }
         if self.run_attempt == 0 {
             return Err("run_attempt must be at least 1");

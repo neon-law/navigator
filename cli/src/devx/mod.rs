@@ -1015,6 +1015,39 @@ fn dispatch_with_dns_provider(
         crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::RunnerOnce(
             options,
         ))) => forgejo::runner::run(&options),
+        crate::Command::Ops(crate::OpsCmd::Forgejo(
+            crate::ForgejoPolicyCmd::RunnerController {
+                url,
+                runner_namespace,
+                context,
+                egress_host,
+                egress_ip,
+                dns_ip,
+                interval,
+                max_runners,
+                once,
+            },
+        )) => forgejo::controller::run(&forgejo::controller::Options {
+            url,
+            runner_namespace,
+            context,
+            egress_host,
+            egress_ip,
+            dns_ip,
+            interval: std::time::Duration::from_secs(interval.max(5)),
+            max_runners,
+            once,
+        }),
+        crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::Logs {
+            repository,
+            run,
+            url,
+            context,
+            namespace,
+        })) => forgejo::logs::run(&repository, run, &url, &context, &namespace),
+        crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::Release {
+            action: crate::ForgejoReleaseCmd::Mirror { url, version },
+        })) => forgejo::release::run(&url, &version),
         crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::Bundle {
             mirror,
             output,

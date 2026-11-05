@@ -106,10 +106,11 @@ async fn fixture() -> Fixture {
     .await
     .unwrap();
     state.canonical_host = portal::CanonicalHost::new(Some("staging.neonlaw.com".into()));
-    let verifier = ForgejoOidc::local_test_issuer(
+    let verifier = ForgejoOidc::local_test_issuer_with_cd(
         &issuer,
         "navigator-ci",
         ".forgejo/workflows/project-gate.yml",
+        ".forgejo/workflows/cd.yml",
     )
     .unwrap();
     Fixture {
@@ -167,12 +168,16 @@ fn claims(issuer: &str, repository: &str, iat: i64) -> ForgejoActionsClaims {
 }
 
 async fn mint(app: &Router, token: &str) -> (StatusCode, serde_json::Value) {
+    mint_at(app, "/auth/ci/forgejo/document-token", token).await
+}
+
+async fn mint_at(app: &Router, door: &str, token: &str) -> (StatusCode, serde_json::Value) {
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/auth/ci/forgejo/document-token")
+                .uri(door)
                 .header(header::HOST, "staging.neonlaw.com")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(serde_json::json!({"token":token}).to_string()))
@@ -429,4 +434,91 @@ async fn discovery_metadata_must_keep_the_trusted_issuer_and_same_origin_jwks() 
         let token = sign_rs256_claims(TEST_OIDC_KID, &claims);
         assert_eq!(mint(&app, &token).await.0, StatusCode::UNAUTHORIZED);
     }
+}
+
+/// The CD workflow on `refs/heads/main`, as Forgejo signs it.
+fn cd_claims(issuer: &str, repository: &str, iat: i64) -> ForgejoActionsClaims {
+    let mut cd = claims(issuer, repository, iat);
+    cd.workflow = "cd.yml".into();
+    cd.workflow_ref = format!("{repository}/.forgejo/workflows/cd.yml@refs/heads/main");
+    cd
+}
+
+fn seed_scope(minted: &serde_json::Value) -> portal::session::SeedScope {
+    let session = SessionStore::new(TEST_SESSION_KEY)
+        .decode(minted["token"].as_str().unwrap())
+        .unwrap();
+    match session.scope {
+        Some(portal::session::SessionScope::Seed(scope)) => scope,
+        other => panic!("expected a seed scope, got {other:?}"),
+    }
+}
+
+/// ENG-1237: only the trusted CD workflow on main writes seeds; the gate on
+/// a pull request gets a dry run; the gate on main gets nothing.
+#[tokio::test]
+async fn the_forgejo_seed_door_writes_only_for_cd_on_main() {
+    let fixture = fixture().await;
+    let now = now_unix_secs();
+
+    let cd = sign_rs256_claims(TEST_OIDC_KID, &cd_claims(&fixture.issuer, "firm/acme", now));
+    let (status, minted) = mint_at(&fixture.app, "/auth/ci/forgejo/seed-token", &cd).await;
+    assert_eq!(status, StatusCode::OK, "{minted}");
+    let scope = seed_scope(&minted);
+    assert_eq!(scope.project_code, "acme");
+    assert!(!scope.dry_run_only);
+
+    let mut pr = claims(&fixture.issuer, "firm/acme", now);
+    pr.event_name = "pull_request".into();
+    pr.sub = "repo:firm/acme:pull_request".into();
+    pr.git_ref = "refs/pull/17/head".into();
+    pr.base_ref = "main".into();
+    pr.workflow_ref = "firm/acme/.forgejo/workflows/project-gate.yml@refs/pull/17/head".into();
+    let pr = sign_rs256_claims(TEST_OIDC_KID, &pr);
+    let (status, minted) = mint_at(&fixture.app, "/auth/ci/forgejo/seed-token", &pr).await;
+    assert_eq!(status, StatusCode::OK, "{minted}");
+    assert!(seed_scope(&minted).dry_run_only);
+
+    let gate_on_main = sign_rs256_claims(TEST_OIDC_KID, &claims(&fixture.issuer, "firm/acme", now));
+    assert_eq!(
+        mint_at(&fixture.app, "/auth/ci/forgejo/seed-token", &gate_on_main)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    // The refusal spent nothing: the same token still reads documents.
+    assert_eq!(mint(&fixture.app, &gate_on_main).await.0, StatusCode::OK);
+
+    // CD's documents and notify jobs read through the document door.
+    let cd_documents = sign_rs256_claims(
+        TEST_OIDC_KID,
+        &cd_claims(&fixture.issuer, "firm/acme", now + 1),
+    );
+    assert_eq!(mint(&fixture.app, &cd_documents).await.0, StatusCode::OK);
+
+    // The CD workflow off main, or claiming a pull request, is refused.
+    let mut off_main = cd_claims(&fixture.issuer, "firm/acme", now + 2);
+    off_main.git_ref = "refs/heads/feature".into();
+    off_main.sub = "repo:firm/acme:ref:refs/heads/feature".into();
+    off_main.workflow_ref = "firm/acme/.forgejo/workflows/cd.yml@refs/heads/feature".into();
+    let off_main = sign_rs256_claims(TEST_OIDC_KID, &off_main);
+    assert_eq!(
+        mint_at(&fixture.app, "/auth/ci/forgejo/seed-token", &off_main)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let mut cd_as_pr = cd_claims(&fixture.issuer, "firm/acme", now + 3);
+    cd_as_pr.event_name = "pull_request".into();
+    cd_as_pr.sub = "repo:firm/acme:pull_request".into();
+    cd_as_pr.git_ref = "refs/pull/18/head".into();
+    cd_as_pr.base_ref = "main".into();
+    cd_as_pr.workflow_ref = "firm/acme/.forgejo/workflows/cd.yml@refs/pull/18/head".into();
+    let cd_as_pr = sign_rs256_claims(TEST_OIDC_KID, &cd_as_pr);
+    assert_eq!(
+        mint_at(&fixture.app, "/auth/ci/forgejo/seed-token", &cd_as_pr)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
 }

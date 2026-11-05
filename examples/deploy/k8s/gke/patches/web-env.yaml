@@ -64,6 +64,13 @@ spec:
                   name: navigator-forgejo-actions-oidc
                   key: workflow
                   optional: true
+            # Optional: the one workflow whose runs on main may write seeds.
+            - name: NAVIGATOR_FORGEJO_ACTIONS_OIDC_CD_WORKFLOW
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-forgejo-actions-oidc
+                  key: cd_workflow
+                  optional: true
             # The installation's Forgejo root URL, rendered by `ops ship` from
             # the deployment's public `NAVIGATOR_FORGEJO_ROOT_URL` coordinate.
             # Firm organization creation and Project repository provisioning

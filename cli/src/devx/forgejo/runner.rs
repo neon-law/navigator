@@ -13,7 +13,7 @@ use super::cluster::Kube;
 const DEADLINE_SECS: u64 = 1800;
 const RUNNER_IMAGE: &str = "data.forgejo.org/forgejo/runner@sha256:ca3d5eea46004789a175d1369eec6829d3ea9bfbe2011a06625b4bdaa55f7552";
 
-fn repository_scope(scope: &str) -> Result<()> {
+pub(in crate::devx) fn repository_scope(scope: &str) -> Result<()> {
     let components: Vec<_> = scope.split('/').collect();
     ensure!(
         components.len() == 2
@@ -47,6 +47,60 @@ fn public_ipv4(address: &str) -> Result<Ipv4Addr> {
     Ok(ip)
 }
 
+/// Every public IPv4 address `host` resolves to now. A name that resolves
+/// to any private, metadata or non-unicast address is refused outright rather
+/// than filtered, so a poisoned answer cannot quietly widen egress.
+fn resolve_public_ipv4(host: &str) -> Result<Vec<Ipv4Addr>> {
+    use std::net::ToSocketAddrs as _;
+    ensure!(
+        !host.is_empty()
+            && host
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"-.".contains(&c)),
+        "egress host must be a DNS name"
+    );
+    let mut addresses: Vec<Ipv4Addr> = Vec::new();
+    for address in (host, 443)
+        .to_socket_addrs()
+        .with_context(|| format!("resolve egress host {host}"))?
+    {
+        if let std::net::IpAddr::V4(ip) = address.ip() {
+            let ip = public_ipv4(&ip.to_string())?;
+            if !addresses.contains(&ip) {
+                addresses.push(ip);
+            }
+        }
+    }
+    ensure!(
+        !addresses.is_empty(),
+        "egress host {host} has no IPv4 address"
+    );
+    Ok(addresses)
+}
+
+/// The exact `/32` destinations: explicit addresses plus each named host's
+/// current public IPv4 addresses, without duplicates.
+pub(in crate::devx) fn egress_destinations(
+    ips: &[String],
+    hosts: &[String],
+) -> Result<Vec<Ipv4Addr>> {
+    let mut destinations: Vec<Ipv4Addr> = Vec::new();
+    let explicit = ips
+        .iter()
+        .map(|ip| public_ipv4(ip))
+        .collect::<Result<Vec<_>>>()?;
+    let resolved = hosts
+        .iter()
+        .map(|host| resolve_public_ipv4(host))
+        .collect::<Result<Vec<_>>>()?;
+    for ip in explicit.into_iter().chain(resolved.into_iter().flatten()) {
+        if !destinations.contains(&ip) {
+            destinations.push(ip);
+        }
+    }
+    Ok(destinations)
+}
+
 fn dns_ipv4(address: &str) -> Result<Ipv4Addr> {
     let ip: Ipv4Addr = address
         .parse()
@@ -64,10 +118,26 @@ fn dns_ipv4(address: &str) -> Result<Ipv4Addr> {
     Ok(ip)
 }
 
-fn job(name: &str, namespace: &str, secret: &str) -> Value {
+/// The Job annotations recovery reads: which repository-scoped registration
+/// this Job holds. A numeric ID and a repository name, never a credential.
+pub(in crate::devx) const REGISTRATION_ANNOTATION: &str =
+    "navigator.neonlaw.org/runner-registration";
+pub(in crate::devx) const REPOSITORY_ANNOTATION: &str = "navigator.neonlaw.org/runner-repository";
+/// The label every disposable runner Job carries, so recovery lists exactly
+/// these Jobs and nothing else in the namespace.
+pub(in crate::devx) const RUNNER_JOB_LABEL: &str = "navigator.neonlaw.org/forgejo-runner";
+
+fn job(name: &str, namespace: &str, secret: &str, repository: &str, registration: u64) -> Value {
     json!({
         "apiVersion": "batch/v1", "kind": "Job",
-        "metadata": {"name": name, "namespace": namespace},
+        "metadata": {
+            "name": name, "namespace": namespace,
+            "labels": {RUNNER_JOB_LABEL: "true"},
+            "annotations": {
+                REGISTRATION_ANNOTATION: registration.to_string(),
+                REPOSITORY_ANNOTATION: repository
+            }
+        },
         "spec": {
             "suspend": true, "backoffLimit": 0, "activeDeadlineSeconds": DEADLINE_SECS,
             "ttlSecondsAfterFinished": 300,
@@ -142,8 +212,8 @@ fn network_policy(name: &str, namespace: &str, ips: &[Ipv4Addr], dns: Ipv4Addr) 
 }
 
 #[derive(Deserialize)]
-struct Registration {
-    id: u64,
+pub(in crate::devx) struct Registration {
+    pub(in crate::devx) id: u64,
     uuid: uuid::Uuid,
     token: String,
 }
@@ -155,27 +225,32 @@ struct RegisteredRunner {
     owner_id: u64,
     repo_id: u64,
     ephemeral: bool,
+    #[serde(default)]
+    status: String,
 }
 
-struct RunnerApi {
+pub(in crate::devx) struct RunnerApi {
     client: reqwest::Client,
     endpoint: String,
     token: String,
 }
 
 impl RunnerApi {
-    fn new(origin: &str, repository: &str, token: String) -> Result<Self> {
+    pub(in crate::devx) fn new(origin: &str, repository: &str, token: String) -> Result<Self> {
         repository_scope(repository)?;
         let url = url::Url::parse(origin).context("parse Forgejo origin")?;
+        // Unit tests drive a loopback mock over HTTP; nothing else may.
+        let loopback_test =
+            cfg!(test) && url.scheme() == "http" && url.host_str() == Some("127.0.0.1");
         ensure!(
-            url.scheme() == "https" && url.host_str().is_some()
+            (url.scheme() == "https" || loopback_test) && url.host_str().is_some()
                 && url.username().is_empty() && url.password().is_none()
                 && url.query().is_none() && url.fragment().is_none() && url.path() == "/",
             "Forgejo runner registration requires an HTTPS origin without credentials, path, query or fragment"
         );
         Ok(Self {
             client: reqwest::Client::builder()
-                .https_only(true)
+                .https_only(!loopback_test)
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(30))
                 .build()?,
@@ -187,7 +262,7 @@ impl RunnerApi {
         })
     }
 
-    async fn register(&self, name: &str) -> Result<Registration> {
+    pub(in crate::devx) async fn register(&self, name: &str) -> Result<Registration> {
         let response = self
             .client
             .post(&self.endpoint)
@@ -240,7 +315,7 @@ impl RunnerApi {
         Ok(())
     }
 
-    async fn remove(&self, id: u64) -> Result<()> {
+    pub(in crate::devx) async fn remove(&self, id: u64) -> Result<()> {
         let response = self
             .client
             .delete(format!("{}/{id}", self.endpoint))
@@ -258,7 +333,28 @@ impl RunnerApi {
         Ok(())
     }
 
-    async fn require_removed(&self, id: u64) -> Result<()> {
+    /// Whether registration `id` has picked up its one job. `None` once the
+    /// registration is gone. Forgejo reports `active` while a runner works.
+    pub(in crate::devx) async fn busy(&self, id: u64) -> Result<Option<bool>> {
+        let response = self
+            .client
+            .get(format!("{}/{id}", self.endpoint))
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        ensure!(
+            response.status() == StatusCode::OK,
+            "runner status cannot be read ({})",
+            response.status()
+        );
+        let runner: RegisteredRunner = response.json().await.context("read runner status")?;
+        Ok(Some(runner.status == "active"))
+    }
+
+    pub(in crate::devx) async fn require_removed(&self, id: u64) -> Result<()> {
         let response = self
             .client
             .get(format!("{}/{id}", self.endpoint))
@@ -281,10 +377,102 @@ fn owned(mut object: Value, name: &str, uid: &str) -> Value {
     object
 }
 
-fn create(kube: &Kube, object: &Value) -> Result<()> {
-    kube.output_with_stdin(&["create", "-f", "-"], Some(&serde_json::to_vec(object)?))
-        .map_err(|_| anyhow::anyhow!("Kubernetes resource creation failed; inspect operator permissions and private cluster diagnostics"))?;
-    Ok(())
+/// The Kubernetes operations a disposable runner needs, scoped to the one
+/// runner namespace. `kubectl` on an operator host ([`Kube`]) and the
+/// in-cluster API from the runner controller ([`super::kubeapi::InCluster`])
+/// both implement it, so the isolation below is the same code either way.
+pub(in crate::devx) trait Cluster: Send + Sync {
+    fn namespace(&self) -> &str;
+    fn create(&self, object: &Value) -> Result<()>;
+    /// The Job's JSON, or `None` when it does not exist.
+    fn job(&self, name: &str) -> Result<Option<Value>>;
+    fn unsuspend(&self, name: &str) -> Result<()>;
+    /// Delete the Job and, by ownership, its pod, Secret, service account and policy.
+    fn delete_job(&self, name: &str) -> Result<()>;
+    fn runner_namespace(&self) -> Result<Value>;
+    fn network_policies(&self) -> Result<Value>;
+    /// Every Job labelled [`RUNNER_JOB_LABEL`].
+    fn runner_jobs(&self) -> Result<Vec<Value>>;
+    /// The stdout of the Job's pod: the runner's own lines and the job's steps.
+    fn job_log(&self, name: &str) -> Result<String>;
+}
+
+impl Cluster for Kube {
+    fn namespace(&self) -> &str {
+        Kube::namespace(self)
+    }
+
+    fn create(&self, object: &Value) -> Result<()> {
+        self.output_with_stdin(&["create", "-f", "-"], Some(&serde_json::to_vec(object)?))
+            .map_err(|_| anyhow::anyhow!("Kubernetes resource creation failed; inspect operator permissions and private cluster diagnostics"))?;
+        Ok(())
+    }
+
+    fn job(&self, name: &str) -> Result<Option<Value>> {
+        let found = self.output(&["get", "job", name, "--ignore-not-found", "-o", "json"])?;
+        if found.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(serde_json::from_str(&found)?))
+    }
+
+    fn unsuspend(&self, name: &str) -> Result<()> {
+        self.output(&[
+            "patch",
+            "job",
+            name,
+            "--type=merge",
+            "-p",
+            r#"{"spec":{"suspend":false}}"#,
+        ])?;
+        Ok(())
+    }
+
+    fn delete_job(&self, name: &str) -> Result<()> {
+        self.output(&["delete", "job", name, "--ignore-not-found", "--wait=true"])?;
+        Ok(())
+    }
+
+    fn runner_namespace(&self) -> Result<Value> {
+        Ok(serde_json::from_str(&self.output(&[
+            "get",
+            "namespace",
+            Kube::namespace(self),
+            "-o",
+            "json",
+        ])?)?)
+    }
+
+    fn network_policies(&self) -> Result<Value> {
+        Ok(serde_json::from_str(&self.output(&[
+            "get",
+            "networkpolicies",
+            "-o",
+            "json",
+        ])?)?)
+    }
+
+    fn runner_jobs(&self) -> Result<Vec<Value>> {
+        let listed: Value = serde_json::from_str(&self.output(&[
+            "get",
+            "jobs",
+            "-l",
+            &format!("{RUNNER_JOB_LABEL}=true"),
+            "-o",
+            "json",
+        ])?)?;
+        Ok(listed["items"].as_array().cloned().unwrap_or_default())
+    }
+
+    fn job_log(&self, name: &str) -> Result<String> {
+        self.output(&["logs", &format!("job/{name}"), "--tail=-1"])
+    }
+}
+
+/// Refuse to start `name` unless the runner namespace is declared isolated
+/// and holds no broad `NetworkPolicy`.
+pub(in crate::devx) fn require_isolated(kube: &dyn Cluster, name: &str) -> Result<()> {
+    namespace_is_isolated(&kube.runner_namespace()?, &kube.network_policies()?, name)
 }
 
 fn namespace_is_isolated(namespace: &Value, policies: &Value, name: &str) -> Result<()> {
@@ -316,66 +504,75 @@ fn namespace_is_isolated(namespace: &Value, policies: &Value, name: &str) -> Res
     Ok(())
 }
 
-fn cleanup(
-    kube: &Kube,
+/// Whether `name` is exactly one invocation's disposable Job name.
+pub(in crate::devx) fn is_runner_job_name(name: &str) -> bool {
+    name.strip_prefix("forgejo-job-")
+        .is_some_and(|suffix| suffix.len() == 32 && uuid::Uuid::parse_str(suffix).is_ok())
+}
+
+pub(in crate::devx) fn cleanup(
+    kube: &dyn Cluster,
     api: &RunnerApi,
     runtime: &tokio::runtime::Runtime,
     name: &str,
     id: u64,
 ) -> Result<()> {
     ensure!(
-        id > 0
-            && name
-                .strip_prefix("forgejo-job-")
-                .is_some_and(|suffix| suffix.len() == 32 && uuid::Uuid::parse_str(suffix).is_ok()),
+        id > 0 && is_runner_job_name(name),
         "cleanup requires the exact Job name and positive registration ID from one invocation"
     );
     let runner = runtime.block_on(api.remove(id));
-    let job = kube.output(&["delete", "job", name, "--ignore-not-found", "--wait=true"]);
+    let job = kube.delete_job(name);
     runner.context("remove runner registration; retry explicit recovery cleanup")?;
     job.context("remove disposable runner Job; retry explicit recovery cleanup")?;
     Ok(())
 }
 
-fn execute(
-    kube: &Kube,
+/// The one-job runner's configuration. `log.job_level` puts every step's
+/// output on the pod's stdout, which is how a job's log reaches Cloud Logging
+/// and, through the controller, Dash0 (ENG-1238).
+fn runner_config(origin: &str, registration: &Registration) -> Result<String> {
+    Ok(serde_yaml::to_string(&json!({
+        "log": {"level": "info", "job_level": "info"},
+        "runner": {"capacity": 1, "labels": ["self-hosted:host"], "timeout": "20m"},
+        "cache": {"enabled": false}, "host": {"workdir_parent": "/data/work"},
+        "server": {"connections": {"navigator": {"url": origin, "uuid": registration.uuid, "token": registration.token}}}
+    }))?)
+}
+
+/// Create the suspended Job, its owned identity, Secret and exact egress
+/// policy, then start it and wait for it to finish.
+pub(in crate::devx) fn execute(
+    kube: &dyn Cluster,
     name: &str,
+    repository: &str,
     origin: &str,
     ips: &[Ipv4Addr],
     dns: Ipv4Addr,
     registration: &Registration,
 ) -> Result<()> {
-    let namespace = kube.namespace();
-    create(kube, &job(name, namespace, name))?;
-    let observed: Value = serde_json::from_str(&kube.output(&["get", "job", name, "-o", "json"])?)?;
+    let namespace = kube.namespace().to_owned();
+    let namespace = namespace.as_str();
+    kube.create(&job(name, namespace, name, repository, registration.id))?;
+    let observed = kube.job(name)?.context("created Job cannot be read back")?;
     let uid = observed["metadata"]["uid"]
         .as_str()
         .filter(|uid| !uid.is_empty())
         .context("created Job has no UID")?;
-    let config = serde_yaml::to_string(&json!({
-        "runner": {"capacity": 1, "labels": ["self-hosted:host"], "timeout": "20m"},
-        "cache": {"enabled": false}, "host": {"workdir_parent": "/data/work"},
-        "server": {"connections": {"navigator": {"url": origin, "uuid": registration.uuid, "token": registration.token}}}
-    }))?;
+    let config = runner_config(origin, registration)?;
     for object in [
         json!({"apiVersion": "v1", "kind": "ServiceAccount", "metadata": {"name": name, "namespace": namespace}, "automountServiceAccountToken": false}),
         json!({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": name, "namespace": namespace}, "type": "Opaque", "stringData": {"config.yml": config}}),
         network_policy(name, namespace, ips, dns),
     ] {
-        create(kube, &owned(object, name, uid))?;
+        kube.create(&owned(object, name, uid))?;
     }
-    kube.output(&[
-        "patch",
-        "job",
-        name,
-        "--type=merge",
-        "-p",
-        r#"{"spec":{"suspend":false}}"#,
-    ])?;
+    kube.unsuspend(name)?;
     let started = Instant::now();
     loop {
-        let observed: Value =
-            serde_json::from_str(&kube.output(&["get", "job", name, "-o", "json"])?)?;
+        let observed = kube
+            .job(name)?
+            .context("runner Job disappeared while running")?;
         if observed["status"]["succeeded"].as_u64().unwrap_or(0) > 0 {
             return Ok(());
         }
@@ -391,22 +588,25 @@ fn execute(
     }
 }
 
-pub(in crate::devx) fn run(options: &crate::ForgejoRunnerArgs) -> Result<()> {
+/// A dedicated runner namespace, never Navigator's application namespace or
+/// a system one, on an explicit context.
+pub(in crate::devx) fn validate_namespace(context: &str, namespace: &str) -> Result<()> {
+    ensure!(!context.trim().is_empty(), "Kubernetes context is required");
     ensure!(
-        !options.context.trim().is_empty(),
-        "Kubernetes context is required"
-    );
-    ensure!(
-        !options.runner_namespace.trim().is_empty()
-            && options.runner_namespace != "navigator"
-            && !options.runner_namespace.starts_with("kube-"),
+        !namespace.trim().is_empty() && namespace != "navigator" && !namespace.starts_with("kube-"),
         "use a dedicated runner namespace, separate from application and system workloads"
     );
-    let ips: Vec<_> = options
-        .egress_ip
-        .iter()
-        .map(|ip| public_ipv4(ip))
-        .collect::<Result<_>>()?;
+    Ok(())
+}
+
+/// Parse the `NodeLocal` DNS address a runner may query.
+pub(in crate::devx) fn dns_address(address: &str) -> Result<Ipv4Addr> {
+    dns_ipv4(address)
+}
+
+pub(in crate::devx) fn run(options: &crate::ForgejoRunnerArgs) -> Result<()> {
+    validate_namespace(&options.context, &options.runner_namespace)?;
+    let ips = egress_destinations(&options.egress_ip, &options.egress_host)?;
     let dns = dns_ipv4(&options.dns_ip)?;
     let api = RunnerApi::new(
         &options.url,
@@ -427,22 +627,21 @@ pub(in crate::devx) fn run(options: &crate::ForgejoRunnerArgs) -> Result<()> {
         !ips.is_empty(),
         "explicit public egress destinations are required"
     );
-    let namespace: Value = serde_json::from_str(&kube.output(&[
-        "get",
-        "namespace",
-        &options.runner_namespace,
-        "-o",
-        "json",
-    ])?)?;
-    let policies: Value =
-        serde_json::from_str(&kube.output(&["get", "networkpolicies", "-o", "json"])?)?;
     let name = format!("forgejo-job-{}", uuid::Uuid::new_v4().simple());
-    namespace_is_isolated(&namespace, &policies, &name)?;
+    require_isolated(&kube, &name)?;
     let registration = runtime.block_on(api.register(&name))?;
     // The numeric registration ID is recovery metadata, never a credential.
     eprintln!("One-job runner {name}, registration {}", registration.id);
-    let result = execute(&kube, &name, &options.url, &ips, dns, &registration)
-        .and_then(|()| runtime.block_on(api.require_removed(registration.id)));
+    let result = execute(
+        &kube,
+        &name,
+        &options.repository,
+        &options.url,
+        &ips,
+        dns,
+        &registration,
+    )
+    .and_then(|()| runtime.block_on(api.require_removed(registration.id)));
     let cleanup = cleanup(&kube, &api, &runtime, &name, registration.id);
     if let Err(error) = &result {
         eprintln!("One-job runner did not complete: {error}");
@@ -700,7 +899,13 @@ mod tests {
 
     #[test]
     fn one_job_has_no_shared_filesystem_or_platform_identity() {
-        let job = job("runner-proof", "proof", "runner-proof");
+        let job = job("runner-proof", "proof", "runner-proof", "example/sample", 7);
+        assert_eq!(job["metadata"]["annotations"][REGISTRATION_ANNOTATION], "7");
+        assert_eq!(
+            job["metadata"]["annotations"][REPOSITORY_ANNOTATION],
+            "example/sample"
+        );
+        assert_eq!(job["metadata"]["labels"][RUNNER_JOB_LABEL], "true");
         assert_eq!(job["spec"]["backoffLimit"], 0);
         assert_eq!(job["spec"]["activeDeadlineSeconds"], 1800);
         let pod = &job["spec"]["template"]["spec"];
@@ -735,6 +940,18 @@ mod tests {
         assert!(public_ipv4("8.8.8.8").is_ok());
         assert!(public_ipv4("0.0.0.0/0").is_err());
         assert!(public_ipv4("::1").is_err());
+    }
+
+    /// ENG-1234: a named host replaces hand-collected GitHub addresses, and a
+    /// name that resolves to an internal address is refused, not filtered.
+    #[test]
+    fn egress_hosts_resolve_to_public_addresses_only() {
+        assert_eq!(
+            egress_destinations(&["8.8.8.8".into(), "8.8.8.8".into()], &[]).unwrap(),
+            vec![Ipv4Addr::new(8, 8, 8, 8)]
+        );
+        assert!(egress_destinations(&[], &["localhost".into()]).is_err());
+        assert!(egress_destinations(&[], &["https://forge.example".into()]).is_err());
     }
 
     #[test]

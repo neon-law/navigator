@@ -1144,6 +1144,122 @@ fn record_nightly_project_update_with_meter(meter: &Meter, failures: &[(&str, &s
         .add(1, &[KeyValue::new("outcome", outcome)]);
 }
 
+/// The instrumentation scope for the Forgejo runner controller (ENG-1238).
+const FORGEJO_METER: &str = "navigator.forgejo";
+
+/// Counter: one per controller tick, by `outcome` (`ok` | `error`). A flat
+/// line is the controller-stopped signal.
+pub const FORGEJO_CONTROLLER_TICK: &str = "navigator.forgejo.controller.tick";
+/// Gauge: seconds the oldest waiting run of a repository has waited; 0 when
+/// none waits. By `forgejo.repository`.
+pub const FORGEJO_RUN_OLDEST_WAITING: &str = "navigator.forgejo.run.oldest_waiting_seconds";
+/// Counter: finished runs, by `forgejo.repository`, `forgejo.workflow`,
+/// `forgejo.event` and `outcome` (Forgejo's run status).
+pub const FORGEJO_RUN_FINISHED: &str = "navigator.forgejo.run.finished";
+/// Histogram: seconds from a run's creation to its start — the queue time a
+/// missing runner shows up in. Exported to Prometheus as
+/// `forgejo_job_queue_seconds`-shaped buckets.
+pub const FORGEJO_RUN_QUEUE_SECONDS: &str = "navigator.forgejo.run.queue_seconds";
+/// Histogram: seconds from a run's start to its end.
+pub const FORGEJO_RUN_DURATION_SECONDS: &str = "navigator.forgejo.run.duration_seconds";
+/// Counter: runner Jobs and registrations recovery removed.
+pub const FORGEJO_RUNNER_ORPHAN_CLEANED: &str = "navigator.forgejo.runner.orphan_cleaned";
+/// Gauge: 1 while a repository's `main` head has had no CD run for 15
+/// minutes, else 0. By `forgejo.repository`.
+pub const FORGEJO_CD_MISSED: &str = "navigator.forgejo.cd.missed";
+
+/// Attribute keys the Forgejo metrics carry. The repository is
+/// `<firm>/<project code>`; nothing else names a matter.
+pub const FORGEJO_ATTRIBUTE_KEYS: &[&str] = &[
+    "outcome",
+    "forgejo.repository",
+    "forgejo.workflow",
+    "forgejo.event",
+];
+
+/// One finished Forgejo Actions run.
+pub struct ForgejoRunFinished<'a> {
+    pub repository: &'a str,
+    pub workflow: &'a str,
+    pub event: &'a str,
+    pub outcome: &'a str,
+    pub queue_seconds: Option<f64>,
+    pub duration_seconds: Option<f64>,
+}
+
+/// Start the tick and orphan series at zero so a restart is visible to
+/// `increase()`. Call once when the controller starts.
+pub fn register_forgejo_controller() {
+    let meter = opentelemetry::global::meter(FORGEJO_METER);
+    let ticks = meter.u64_counter(FORGEJO_CONTROLLER_TICK).build();
+    for outcome in ["ok", "error"] {
+        ticks.add(0, &[KeyValue::new("outcome", outcome)]);
+    }
+    meter
+        .u64_counter(FORGEJO_RUNNER_ORPHAN_CLEANED)
+        .build()
+        .add(0, &[]);
+}
+
+/// Record one controller tick.
+pub fn record_forgejo_tick(outcome: &str, orphans_cleaned: u64) {
+    let meter = opentelemetry::global::meter(FORGEJO_METER);
+    meter
+        .u64_counter(FORGEJO_CONTROLLER_TICK)
+        .build()
+        .add(1, &[KeyValue::new("outcome", outcome.to_owned())]);
+    meter
+        .u64_counter(FORGEJO_RUNNER_ORPHAN_CLEANED)
+        .build()
+        .add(orphans_cleaned, &[]);
+}
+
+/// Record a repository's oldest waiting run and whether its `main` head has
+/// gone without a CD run.
+pub fn record_forgejo_repository(repository: &str, oldest_waiting_seconds: f64, cd_missed: bool) {
+    let meter = opentelemetry::global::meter(FORGEJO_METER);
+    let attributes = [KeyValue::new("forgejo.repository", repository.to_owned())];
+    meter
+        .f64_gauge(FORGEJO_RUN_OLDEST_WAITING)
+        .build()
+        .record(oldest_waiting_seconds, &attributes);
+    meter
+        .u64_gauge(FORGEJO_CD_MISSED)
+        .build()
+        .record(u64::from(cd_missed), &attributes);
+}
+
+/// Record one finished run.
+pub fn record_forgejo_run_finished(run: &ForgejoRunFinished<'_>) {
+    let meter = opentelemetry::global::meter(FORGEJO_METER);
+    record_forgejo_run_finished_with_meter(&meter, run);
+}
+
+fn record_forgejo_run_finished_with_meter(meter: &Meter, run: &ForgejoRunFinished<'_>) {
+    let attributes = [
+        KeyValue::new("forgejo.repository", run.repository.to_owned()),
+        KeyValue::new("forgejo.workflow", run.workflow.to_owned()),
+        KeyValue::new("forgejo.event", run.event.to_owned()),
+        KeyValue::new("outcome", run.outcome.to_owned()),
+    ];
+    meter
+        .u64_counter(FORGEJO_RUN_FINISHED)
+        .build()
+        .add(1, &attributes);
+    if let Some(seconds) = run.queue_seconds {
+        meter
+            .f64_histogram(FORGEJO_RUN_QUEUE_SECONDS)
+            .build()
+            .record(seconds, &attributes[..3]);
+    }
+    if let Some(seconds) = run.duration_seconds {
+        meter
+            .f64_histogram(FORGEJO_RUN_DURATION_SECONDS)
+            .build()
+            .record(seconds, &attributes);
+    }
+}
+
 /// The instrumentation scope for browser sign-in metrics.
 const AUTH_METER: &str = "navigator.auth";
 
@@ -1480,6 +1596,58 @@ pub fn set_span_parent(span: &tracing::Span, traceparent: Option<&str>, tracesta
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_finished_forgejo_run_carries_only_the_bounded_keys() {
+        use opentelemetry::metrics::MeterProvider as _;
+        use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_periodic_exporter(exporter.clone())
+            .build();
+        let meter = provider.meter(super::FORGEJO_METER);
+        super::record_forgejo_run_finished_with_meter(
+            &meter,
+            &super::ForgejoRunFinished {
+                repository: "shook-law-pc/sample-estate",
+                workflow: "cd.yml",
+                event: "push",
+                outcome: "failure",
+                queue_seconds: Some(12.0),
+                duration_seconds: Some(90.0),
+            },
+        );
+        provider.force_flush().expect("metric flush");
+        let metrics = exporter
+            .get_finished_metrics()
+            .expect("metric export succeeds");
+        let mut names = Vec::new();
+        for metric in metrics
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        {
+            names.push(metric.name().to_owned());
+            let rendered = format!("{:?}", metric.data());
+            assert!(
+                rendered.contains("shook-law-pc/sample-estate"),
+                "{rendered}"
+            );
+            for refused in ["title", "branch", "message", "sha"] {
+                assert!(!rendered.contains(refused), "{refused} in {rendered}");
+            }
+        }
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                super::FORGEJO_RUN_DURATION_SECONDS,
+                super::FORGEJO_RUN_FINISHED,
+                super::FORGEJO_RUN_QUEUE_SECONDS
+            ]
+        );
+        provider.shutdown().expect("metric provider shuts down");
+    }
     #[derive(Clone, Default)]
     struct Buf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 

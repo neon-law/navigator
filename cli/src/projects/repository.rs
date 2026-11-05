@@ -419,7 +419,9 @@ pub(crate) fn validate_gate(
     validate_documents_gitignore(root, write_fixes, &mut errors, &mut warnings);
     let manifest_valid = validate_layout(root, &mut errors, &mut warnings);
     validate_codeowners(root, &mut errors);
-    validate_automerge_workflow(root, write_fixes, &mut errors);
+    if !is_forgejo_backed(root) || root.join(AUTOMERGE_WORKFLOW).exists() {
+        validate_automerge_workflow(root, write_fixes, &mut errors);
+    }
     validate_tracked_files(root, write_fixes, &mut errors, &mut warnings);
     validate_client_visibility(root, &mut warnings);
     validate_firm_role_prose(root, write_fixes, &mut warnings);
@@ -971,27 +973,31 @@ fn validate_github_path(path: &Path, relative: &Path, errors: &mut Vec<Finding>)
     }
 }
 
-/// Close `.forgejo/` to exactly [`FORGEJO_GATE_WORKFLOW`], held byte-exact
-/// to [`forgejo_gate_workflow`]: it is machine-owned, and it is the one
-/// workflow path the deployment's Forgejo document door trusts.
+/// Close `.forgejo/` to exactly [`FORGEJO_GATE_WORKFLOW`] and
+/// [`FORGEJO_CD_WORKFLOW`], each held byte-exact to this release's generated
+/// bytes: they are machine-owned, and they are the two workflow paths the
+/// deployment's Forgejo OIDC doors trust.
 fn validate_forgejo_path(path: &Path, relative: &Path, errors: &mut Vec<Finding>) {
     let relative = slash_separated_path(relative);
-    if relative != FORGEJO_GATE_WORKFLOW {
-        errors.push(Finding::at(
+    let workflows = project_scaffold::forgejo_workflow_files();
+    match workflows.iter().find(|(owned, _)| *owned == relative) {
+        None => errors.push(Finding::at(
             path,
             format!(
                 "`{relative}` is outside the closed `.forgejo` file set; only \
-                 `{FORGEJO_GATE_WORKFLOW}` belongs here"
+                 `{FORGEJO_GATE_WORKFLOW}` and `{FORGEJO_CD_WORKFLOW}` belong here"
             ),
-        ));
-    } else if fs::read_to_string(path).ok() != Some(forgejo_gate_workflow()) {
-        errors.push(Finding::at(
-            path,
-            format!(
-                "`{FORGEJO_GATE_WORKFLOW}` differs from this release's generated Forgejo gate; \
-                 run `navigator project repository sync-skills` to restore it"
-            ),
-        ));
+        )),
+        Some((owned, expected)) if fs::read_to_string(path).ok().as_ref() != Some(expected) => {
+            errors.push(Finding::at(
+                path,
+                format!(
+                    "`{owned}` differs from this release's generated Forgejo workflow; \
+                     run `navigator project repository sync-skills` to restore it"
+                ),
+            ));
+        }
+        Some(_) => {}
     }
 }
 
@@ -1039,6 +1045,14 @@ fn validate_automerge_workflow(root: &Path, write_fixes: bool, errors: &mut Vec<
     ));
 }
 
+/// A checkout that carries `.forgejo/` runs on Forgejo Actions, which ignores
+/// `.github/workflows/`. Its GitHub callers (`ci.yml`, `cd.yml`,
+/// `automerge.yml`) are inert there, so they are checked when present and no
+/// longer required.
+fn is_forgejo_backed(root: &Path) -> bool {
+    root.join(".forgejo").is_dir()
+}
+
 fn validate_layout(root: &Path, errors: &mut Vec<Finding>, warnings: &mut Vec<Finding>) -> bool {
     if !root.join("README.md").is_file() {
         errors.push(Finding::at(
@@ -1054,34 +1068,42 @@ fn validate_layout(root: &Path, errors: &mut Vec<Finding>, warnings: &mut Vec<Fi
         .ok()
         .and_then(|contents| super::manifest::parse(&contents).ok());
 
-    resolve_workflow(
-        &WorkflowSpec {
-            current: &root.join(WORKFLOW),
-            retired: &root.join(RETIRED_WORKFLOW),
-            canonical: WORKFLOW,
-            missing_message: "missing required CI gate",
-        },
-        manifest.as_ref(),
-        errors,
-        warnings,
-        |path, contents, manifest, errors| {
-            validate_workflow(path, contents, manifest, DEFAULT_WORKFLOW_HOME, errors);
-        },
-    );
-    resolve_workflow(
-        &WorkflowSpec {
-            current: &root.join(CD_WORKFLOW),
-            retired: &root.join(RETIRED_CD_WORKFLOW),
-            canonical: CD_WORKFLOW,
-            missing_message: "missing required CD workflow",
-        },
-        manifest.as_ref(),
-        errors,
-        warnings,
-        |path, contents, manifest, errors| {
-            validate_cd_workflow(path, contents, manifest, DEFAULT_WORKFLOW_HOME, errors);
-        },
-    );
+    let github_callers_required = !is_forgejo_backed(root);
+    let required_or_present = |current: &str, retired: &str| {
+        github_callers_required || root.join(current).exists() || root.join(retired).exists()
+    };
+    if required_or_present(WORKFLOW, RETIRED_WORKFLOW) {
+        resolve_workflow(
+            &WorkflowSpec {
+                current: &root.join(WORKFLOW),
+                retired: &root.join(RETIRED_WORKFLOW),
+                canonical: WORKFLOW,
+                missing_message: "missing required CI gate",
+            },
+            manifest.as_ref(),
+            errors,
+            warnings,
+            |path, contents, manifest, errors| {
+                validate_workflow(path, contents, manifest, DEFAULT_WORKFLOW_HOME, errors);
+            },
+        );
+    }
+    if required_or_present(CD_WORKFLOW, RETIRED_CD_WORKFLOW) {
+        resolve_workflow(
+            &WorkflowSpec {
+                current: &root.join(CD_WORKFLOW),
+                retired: &root.join(RETIRED_CD_WORKFLOW),
+                canonical: CD_WORKFLOW,
+                missing_message: "missing required CD workflow",
+            },
+            manifest.as_ref(),
+            errors,
+            warnings,
+            |path, contents, manifest, errors| {
+                validate_cd_workflow(path, contents, manifest, DEFAULT_WORKFLOW_HOME, errors);
+            },
+        );
+    }
 
     let Some(entries) = layout_entries(root, errors) else {
         return manifest_valid;
@@ -2905,7 +2927,8 @@ pub(crate) fn emit_scaffold(
 
 /// Emit the canonical shell for a newly opened Project using resources
 /// embedded in this CLI release. No checkout of Navigator is needed. A
-/// Forgejo-backed Project also gets [`FORGEJO_GATE_WORKFLOW`].
+/// Forgejo-backed Project also gets [`FORGEJO_GATE_WORKFLOW`] and
+/// [`FORGEJO_CD_WORKFLOW`].
 pub(crate) fn emit_scaffold_for(
     root: &Path,
     code: &str,
@@ -2956,16 +2979,21 @@ pub(crate) fn emit_scaffold_for(
             include_str!("../../../LICENSE-APACHE-2").to_string(),
         ),
     ];
-    let forgejo_gate = (forge == cloud::ForgeBackend::Forgejo).then(|| {
-        (
-            project_scaffold::FORGEJO_GATE_WORKFLOW.to_string(),
-            project_scaffold::forgejo_gate_workflow(),
-        )
-    });
+    let forgejo = forge == cloud::ForgeBackend::Forgejo;
+    let forgejo_workflows = if forgejo {
+        project_scaffold::forgejo_workflow_files()
+    } else {
+        Vec::new()
+    };
+    // Forgejo Actions ignores `.github/workflows/`; a Forgejo-backed Project
+    // carries only its own two workflows.
+    let files = files
+        .into_iter()
+        .filter(|(relative, _)| !(forgejo && relative.starts_with(".github/workflows/")));
     for (relative, contents) in project_scaffold::canonical_files(&source)
         .into_iter()
         .chain(files)
-        .chain(forgejo_gate)
+        .chain(forgejo_workflows)
     {
         let path = root.join(relative);
         if let Some(parent) = path.parent() {
@@ -3014,7 +3042,7 @@ pub(crate) fn emit_synced_skills(root: &Path) -> anyhow::Result<()> {
 /// write. The Navigator source root and arbitrary folders are refused.
 ///
 /// Restores `AGENTS.md`, Claude permissions, and each canonical skill to the copy embedded in this
-/// CLI release, plus [`FORGEJO_GATE_WORKFLOW`] for a Forgejo-backed Project
+/// CLI release, plus both Forgejo workflows for a Forgejo-backed Project
 /// (`NAVIGATOR_FORGE_BACKEND=forgejo`, or a checkout that already carries
 /// `.forgejo/`). Returns the repository-relative paths whose bytes changed.
 /// Custom skills and every other Project file stay untouched.
@@ -3070,12 +3098,9 @@ pub(crate) fn repair_skills_for(
         restore_canonical(&root, &relative, contents, &mut repaired)?;
     }
     if forge == cloud::ForgeBackend::Forgejo || root.join(".forgejo").exists() {
-        restore_canonical(
-            &root,
-            FORGEJO_GATE_WORKFLOW,
-            &forgejo_gate_workflow(),
-            &mut repaired,
-        )?;
+        for (relative, contents) in project_scaffold::forgejo_workflow_files() {
+            restore_canonical(&root, &relative, &contents, &mut repaired)?;
+        }
     }
     for name in RETIRED_SYNCED_SKILLS {
         remove_retired_skill(&root, name, &mut repaired)?;
@@ -3218,7 +3243,7 @@ pub(crate) use project_scaffold::FORGEJO_REQUIRED_CHECK;
 /// commit-status context it posts. The canonical bytes live in
 /// `project-scaffold` so this CLI's scaffold and the server-side repository
 /// seeding write the same workflow.
-pub(crate) use project_scaffold::{forgejo_gate_workflow, FORGEJO_GATE_WORKFLOW};
+pub(crate) use project_scaffold::{FORGEJO_CD_WORKFLOW, FORGEJO_GATE_WORKFLOW};
 
 /// The forge this process scaffolds for, from `NAVIGATOR_FORGE_BACKEND`
 /// (unset is GitHub).
@@ -6445,10 +6470,11 @@ jobs:
 #[cfg(test)]
 mod forgejo_gate_tests {
     use super::{
-        emit_scaffold_for, forgejo_gate_workflow, repair_skills_for, validate_gate, workflow_for,
-        DEFAULT_WORKFLOW_HOME, FORGEJO_GATE_WORKFLOW, FORGEJO_REQUIRED_CHECK, WORKFLOW,
+        emit_scaffold_for, repair_skills_for, validate_gate, workflow_for, DEFAULT_WORKFLOW_HOME,
+        FORGEJO_CD_WORKFLOW, FORGEJO_GATE_WORKFLOW, FORGEJO_REQUIRED_CHECK, WORKFLOW,
     };
     use cloud::ForgeBackend;
+    use project_scaffold::forgejo_gate_workflow;
     use std::fs;
 
     fn scaffold(forge: ForgeBackend) -> tempfile::TempDir {
@@ -6503,21 +6529,40 @@ mod forgejo_gate_tests {
     }
 
     #[test]
-    fn a_forgejo_scaffold_carries_the_gate_and_passes_its_own_validation() {
+    fn a_forgejo_scaffold_carries_both_workflows_and_passes_its_own_validation() {
         let root = scaffold(ForgeBackend::Forgejo);
         assert_eq!(
             fs::read_to_string(root.path().join(FORGEJO_GATE_WORKFLOW)).unwrap(),
             forgejo_gate_workflow()
         );
-        // GitHub's thin caller stays byte-for-byte what it was.
         assert_eq!(
-            fs::read_to_string(root.path().join(WORKFLOW)).unwrap(),
-            workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version())
+            fs::read_to_string(root.path().join(FORGEJO_CD_WORKFLOW)).unwrap(),
+            project_scaffold::forgejo_cd_workflow()
         );
+        // Forgejo ignores `.github/workflows/`, so none is written or required.
+        assert!(!root.path().join(".github/workflows").exists());
         assert_eq!(
             validate_gate(root.path(), Some("matter-one"), false).errors,
             0
         );
+    }
+
+    #[test]
+    fn a_forgejo_checkout_still_validates_github_callers_it_carries() {
+        let root = scaffold(ForgeBackend::Forgejo);
+        let ci = root.path().join(WORKFLOW);
+        fs::create_dir_all(ci.parent().unwrap()).unwrap();
+        fs::write(
+            &ci,
+            workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version()),
+        )
+        .unwrap();
+        assert_eq!(
+            validate_gate(root.path(), Some("matter-one"), false).errors,
+            0
+        );
+        fs::write(&ci, "name: ci\n").unwrap();
+        assert!(validate_gate(root.path(), Some("matter-one"), false).errors > 0);
     }
 
     #[test]
@@ -6530,6 +6575,13 @@ mod forgejo_gate_tests {
             1
         );
         fs::write(&gate, forgejo_gate_workflow()).unwrap();
+        let cd = root.path().join(FORGEJO_CD_WORKFLOW);
+        fs::write(&cd, "name: cd\non: [push]\n").unwrap();
+        assert_eq!(
+            validate_gate(root.path(), Some("matter-one"), false).errors,
+            1
+        );
+        fs::write(&cd, project_scaffold::forgejo_cd_workflow()).unwrap();
         fs::write(
             root.path().join(".forgejo/workflows/extra.yml"),
             "name: extra\n",
@@ -6571,7 +6623,10 @@ mod forgejo_gate_tests {
         assert!(!github.path().join(".forgejo").exists());
         assert_eq!(
             repair_skills_for(github.path(), ForgeBackend::Forgejo).unwrap(),
-            vec![FORGEJO_GATE_WORKFLOW.to_string()]
+            vec![
+                FORGEJO_GATE_WORKFLOW.to_string(),
+                FORGEJO_CD_WORKFLOW.to_string()
+            ]
         );
     }
 
@@ -6580,6 +6635,7 @@ mod forgejo_gate_tests {
         let root = scaffold(ForgeBackend::Forgejo);
         let tree = crate::projects::source_import::tree_from_checkout(root.path()).unwrap();
         assert!(tree.files.contains_key(FORGEJO_GATE_WORKFLOW));
+        assert!(tree.files.contains_key(FORGEJO_CD_WORKFLOW));
     }
 
     /// The blueprint's locked decision: the scaffold bytes are shared with

@@ -76,7 +76,8 @@ pub(crate) fn matching_stored_session(host: &str) -> Result<MatchingSession> {
 pub enum SeedCredential {
     /// Bearer from `navigator site login` (`~/.navigator.json`).
     Stored { host: Option<String> },
-    /// GitHub Actions OIDC exchanged at `POST /auth/ci/seed-token`.
+    /// Actions OIDC exchanged at `POST /auth/ci/seed-token` (GitHub) or
+    /// `POST /auth/ci/forgejo/seed-token` (Forgejo).
     Ci { host: String },
 }
 
@@ -544,6 +545,15 @@ impl CiForge {
         }
     }
 
+    /// The `/auth/ci/*` door that mints a seed session for this forge's OIDC
+    /// token. The deployment decides write versus dry-run from the run.
+    pub(crate) fn seed_mint_path(self) -> &'static str {
+        match self {
+            Self::GitHub => "/auth/ci/seed-token",
+            Self::Forgejo => "/auth/ci/forgejo/seed-token",
+        }
+    }
+
     fn name(self) -> &'static str {
         match self {
             Self::GitHub => "GitHub Actions",
@@ -578,19 +588,15 @@ async fn resolve_ci(host: &str) -> Result<(String, String)> {
     resolve_ci_on(host, CiForge::detect()).await
 }
 
-/// [`resolve_ci`] on a named forge. The seed capability is GitHub-only:
-/// Navigator has no Forgejo seed door and refuses one on purpose, so a
-/// Forgejo run is refused here before any token is requested.
+/// [`resolve_ci`] on a named forge. Each forge has its own seed door; the
+/// deployment, not this process, decides whether the run may write (a push
+/// or dispatch on `main`, and on Forgejo only the trusted `cd.yml`) or only
+/// dry-run (a pull request).
 async fn resolve_ci_on(host: &str, forge: CiForge) -> Result<(String, String)> {
-    if forge == CiForge::Forgejo {
-        return Err(anyhow!(
-            "seed import over CI OIDC is GitHub Actions only; a Forgejo Actions run may mint only a document session"
-        ));
-    }
     let base = credentials::base_url(host);
     let client = reqwest::Client::new();
-    let github_token = actions_oidc_token(&client, &base, forge).await?;
-    let minted = mint_ci_token(&client, &base, "/auth/ci/seed-token", &github_token).await?;
+    let oidc_token = actions_oidc_token(&client, &base, forge).await?;
+    let minted = mint_ci_token(&client, &base, forge.seed_mint_path(), &oidc_token).await?;
     eprintln!(
         "{}",
         palette::dim(format!(
@@ -6388,22 +6394,15 @@ mod tests {
         );
     }
 
-    /// The seed capability has no Forgejo door: a Forgejo run is refused
-    /// before it asks its runner for a token or calls any mint.
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_forgejo_run_never_mints_the_seed_capability() {
-        let navigator = MockServer::start().await;
-        Mock::given(wiremock::matchers::any())
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&navigator)
-            .await;
-        let error = super::resolve_ci_on(&navigator.uri(), super::CiForge::Forgejo)
-            .await
-            .expect_err("Forgejo cannot mint a seed session");
-        assert!(
-            error.to_string().contains("GitHub Actions only"),
-            "{error:#}"
+    #[test]
+    fn each_forge_has_its_own_seed_door() {
+        assert_eq!(
+            super::CiForge::GitHub.seed_mint_path(),
+            "/auth/ci/seed-token"
+        );
+        assert_eq!(
+            super::CiForge::Forgejo.seed_mint_path(),
+            "/auth/ci/forgejo/seed-token"
         );
     }
 
