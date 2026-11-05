@@ -1,0 +1,332 @@
+{
+  "swisseph_version": "2.10.03",
+  "jd_tt": 2451545.0,
+  "requested_flags": 260,
+  "rows": [
+    {
+      "swiss_body_id": 0,
+      "returned_flags": 260,
+      "before_flags": 4,
+      "after_flags": 4,
+      "equatorial_flags": 2308,
+      "longitude_deg": 280.368166558278,
+      "latitude_deg": 0.000232331812065,
+      "right_ascension_deg": 281.2775703742019,
+      "declination_deg": -23.03248395049781,
+      "distance_au": 0.983327650254817,
+      "reported_longitude_speed_deg_per_day": 1.019432021193524,
+      "reported_latitude_speed_deg_per_day": -8.8668722e-07,
+      "longitude_speed_deg_per_day": 1.019433288111031,
+      "latitude_speed_deg_per_day": -6.798355659e-06,
+      "reported_radial_velocity_au_per_day": -7.342674237e-06,
+      "range_derivative_au_per_day": -7.358026828e-06,
+      "body": "sun",
+      "source_id": 10
+    },
+    {
+      "swiss_body_id": 1,
+      "returned_flags": 260,
+      "before_flags": 4,
+      "after_flags": 4,
+      "equatorial_flags": 2308,
+      "longitude_deg": 223.31489459426504,
+      "latitude_deg": 5.170946954373778,
+      "right_ascension_deg": 222.4436462536504,
+      "declination_deg": -10.897841811976306,
+      "distance_au": 0.002689963512472,
+      "reported_longitude_speed_deg_per_day": 12.021291366357236,
+      "reported_latitude_speed_deg_per_day": -0.177889260194741,
+      "longitude_speed_deg_per_day": 12.021331074101909,
+      "latitude_speed_deg_per_day": -0.177897981417345,
+      "reported_radial_velocity_au_per_day": 1.8582639557e-05,
+      "range_derivative_au_per_day": 1.8586656474e-05,
+      "body": "moon",
+      "source_id": 301
+    },
+    {
+      "swiss_body_id": 2,
+      "returned_flags": 260,
+      "before_flags": 4,
+      "after_flags": 4,
+      "equatorial_flags": 2308,
+      "longitude_deg": 271.8881253092831,
+      "latitude_deg": -0.99475315329265,
+      "right_ascension_deg": 272.0733795459228,
+      "declination_deg": -24.41884246924988,
+      "distance_au": 1.415466070819542,
+      "reported_longitude_speed_deg_per_day": 1.556250190175952,
+      "reported_latitude_speed_deg_per_day": -0.097494165444874,
+      "longitude_speed_deg_per_day": 1.556251009133121,
+      "latitude_speed_deg_per_day": -0.097500011719625,
+      "reported_radial_velocity_au_per_day": 0.004620240803471,
+      "range_derivative_au_per_day": 0.004617665181748,
+      "body": "mercury",
+      "source_id": 199
+    },
+    {
+      "swiss_body_id": 3,
+      "returned_flags": 260,
+      "before_flags": 4,
+      "after_flags": 4,
+      "equatorial_flags": 2308,
+      "longitude_deg": 241.5649051341494,
+      "latitude_deg": 2.066368734359608,
+      "right_ascension_deg": 239.891861595839,
+      "declination_deg": -18.448722578938124,
+      "distance_au": 1.13757458901994,
+      "reported_longitude_speed_deg_per_day": 1.209038889240746,
+      "reported_latitude_speed_deg_per_day": -0.028072625290499,
+      "longitude_speed_deg_per_day": 1.20904094659636,
+      "latitude_speed_deg_per_day": -0.028077979647563,
+      "reported_radial_velocity_au_per_day": 0.006485895237309,
+      "range_derivative_au_per_day": 0.006484277992946,
+      "body": "venus",
+      "source_id": 299
+    },
+    {
+      "swiss_body_id": 4,
+      "returned_flags": 260,
+      "before_flags": 4,
+      "after_flags": 4,
+      "equatorial_flags": 2308,
+      "longitude_deg": 327.96274028126487,
+      "latitude_deg": -1.067792162176026,
+      "right_ascension_deg": 330.5162719109906,
+      "declination_deg": -13.182683376822295,
+      "distance_au": 1.849683427300457,
+      "reported_longitude_speed_deg_per_day": 0.775672756260739,
+      "reported_latitude_speed_deg_per_day": 0.012475475118339,
+      "longitude_speed_deg_per_day": 0.77567400137923,
+      "latitude_speed_deg_per_day": 0.012472292408141,
+      "reported_radial_velocity_au_per_day": 0.005424804715533,
+      "range_derivative_au_per_day": 0.005422603061938,
+      "body": "mars",
+      "source_id": 4
+    },
+    {
+      "swiss_body_id": 5,
+      "returned_flags": 260,
+      "before_flags": 4,
+      "after_flags": 4,
+      "equatorial_flags": 2308,
+      "longitude_deg": 25.253000197221603,
+      "latitude_deg": -1.262176659450557,
+      "right_ascension_deg": 23.86776995670336,
+      "declination_deg": 8.594242607121513,
+      "distance_au": 4.621169869860752,
+      "reported_longitude_speed_deg_per_day": 0.040758827849546,
+      "reported_latitude_speed_deg_per_day": 0.005173360542074,
+      "longitude_speed_deg_per_day": 0.04075917217051,
+      "latitude_speed_deg_per_day": 0.005175989233059,
+      "reported_radial_velocity_au_per_day": 0.015520775777716,
+      "range_derivative_au_per_day": 0.015522943184294,
+      "body": "jupiter",
+      "source_id": 5
+    },
+    {
+      "swiss_body_id": 6,
+      "returned_flags": 260,
+      "before_flags": 4,
+      "after_flags": 4,
+      "equatorial_flags": 2308,
+      "longitude_deg": 40.39565369073438,
+      "latitude_deg": -2.444826061784781,
+      "right_ascension_deg": 38.76539586677209,
+      "declination_deg": 12.614788553236446,
+      "distance_au": 8.652785348334243,
+      "reported_longitude_speed_deg_per_day": -0.019946120887267,
+      "reported_latitude_speed_deg_per_day": 0.004743143879898,
+      "longitude_speed_deg_per_day": -0.019945901749452,
+      "latitude_speed_deg_per_day": 0.004747108779668,
+      "reported_radial_velocity_au_per_day": 0.014379316035094,
+      "range_derivative_au_per_day": 0.01438707261741,
+      "body": "saturn",
+      "source_id": 6
+    },
+    {
+      "swiss_body_id": 7,
+      "returned_flags": 260,
+      "before_flags": 4,
+      "after_flags": 4,
+      "equatorial_flags": 2308,
+      "longitude_deg": 314.8091859736063,
+      "latitude_deg": -0.658333058959714,
+      "right_ascension_deg": 317.47482944209,
+      "declination_deg": -17.020327115800498,
+      "distance_au": 20.72716190696313,
+      "reported_longitude_speed_deg_per_day": 0.050343203634182,
+      "reported_latitude_speed_deg_per_day": 0.000250028388099,
+      "longitude_speed_deg_per_day": 0.050344804221822,
+      "latitude_speed_deg_per_day": 0.000245746601308,
+      "reported_radial_velocity_au_per_day": 0.009909874137174,
+      "range_derivative_au_per_day": 0.009879687150942,
+      "body": "uranus",
+      "source_id": 7
+    },
+    {
+      "swiss_body_id": 8,
+      "returned_flags": 260,
+      "before_flags": 4,
+      "after_flags": 4,
+      "equatorial_flags": 2308,
+      "longitude_deg": 303.19295494548777,
+      "latitude_deg": 0.23499135194723,
+      "right_ascension_deg": 305.432785667037,
+      "declination_deg": -19.213254418249168,
+      "distance_au": 31.024522194449546,
+      "reported_longitude_speed_deg_per_day": 0.03556995823298,
+      "reported_latitude_speed_deg_per_day": -0.000223654779881,
+      "longitude_speed_deg_per_day": 0.0355690073593,
+      "latitude_speed_deg_per_day": -0.000228706363328,
+      "reported_radial_velocity_au_per_day": 0.006755486803527,
+      "range_derivative_au_per_day": 0.006704926467478,
+      "body": "neptune",
+      "source_id": 8
+    },
+    {
+      "swiss_body_id": 9,
+      "returned_flags": 260,
+      "before_flags": 4,
+      "after_flags": 4,
+      "equatorial_flags": 2308,
+      "longitude_deg": 251.45468287697295,
+      "latitude_deg": 10.855201382103107,
+      "right_ascension_deg": 251.41908177466814,
+      "declination_deg": -11.394313108229609,
+      "distance_au": 31.064396070186795,
+      "reported_longitude_speed_deg_per_day": 0.035153068833337,
+      "reported_latitude_speed_deg_per_day": 0.001467328565367,
+      "longitude_speed_deg_per_day": 0.035153602693754,
+      "latitude_speed_deg_per_day": 0.001461707163628,
+      "reported_radial_velocity_au_per_day": -0.007914082495358,
+      "range_derivative_au_per_day": -0.007961581330846,
+      "body": "pluto",
+      "source_id": 9
+    }
+  ],
+  "source_repository": "https://github.com/aloistr/swisseph",
+  "source_revision": "175e1fcb3108bcd5c0d146c803f51dcf23508012",
+  "source_manifest": {
+    "version": "2.10.03",
+    "retrieved_at": "2026-11-05T02:42:19.465202+00:00",
+    "files": [
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/Makefile",
+        "sha256": "1f872c7fb49d45577452caea3bf09c62945e8ba67389f38556827d059e3be805",
+        "bytes": 2732
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/LICENSE",
+        "sha256": "b6345743292c516d07799dfad46f1a641e5270da2160cc4d6bd54594d6faa991",
+        "bytes": 2371
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swetest.c",
+        "sha256": "98e0059e65e91252955327c3c162ef541c06c7bd03dc7c54891bb73fd516a468",
+        "bytes": 144165
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swedate.c",
+        "sha256": "6790e989a003cb6422080d9aecf3c6567a25030f5b5647fd749e5b16422cfac7",
+        "bytes": 20063
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swehouse.c",
+        "sha256": "384c1d7b2a8bcef9f2cf16f7fbf02e7aa18f372bc11320874a5543b92aed95d9",
+        "bytes": 112151
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swejpl.c",
+        "sha256": "44014e260ae9ab2b1e8f413bb8a35fa270e369e3fb4907cd137ae103d2a8d0c2",
+        "bytes": 33480
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swemmoon.c",
+        "sha256": "1d5f5ef9a95cf9a2f395b6334a58c63851ce0512d65bf08e49d3caf0a9fecb00",
+        "bytes": 61388
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swemplan.c",
+        "sha256": "d13502ca7b92e3e32317b67ba7f012d92fabd1d358c3394c094d5515a3567caa",
+        "bytes": 27880
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/sweph.c",
+        "sha256": "80761ccfae7cd7207a33559d8898b9c5386cced609cfaebbbbf050f7a80ddc4f",
+        "bytes": 290642
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swephlib.c",
+        "sha256": "d41eb2f396163fedd574749de02a25e8547b4e1e4c66783d47ccc0c7e4885a05",
+        "bytes": 164395
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swecl.c",
+        "sha256": "ab46bdc303978523c69d814d236432541ff48cb410b756ef78cc1e8d2b2be303",
+        "bytes": 225794
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swehel.c",
+        "sha256": "7b4be28627afd22b059389abc4ef679b7259a0bcb9d0510e7ca3825901754b93",
+        "bytes": 123264
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swejpl.h",
+        "sha256": "f61ae6173b150f456540afba68500989c642506822e0397cf99c2cb7f50aac0d",
+        "bytes": 3995
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/sweodef.h",
+        "sha256": "a2ace0fc0ea81ffbf9eb0a7f9fc1c1446d98f07d3a170a2c54b8ef4908325462",
+        "bytes": 10838
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swephexp.h",
+        "sha256": "dd8e74e2853915a316041397f31730219b7910333be6bba3934fd77130335f22",
+        "bytes": 40932
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swedll.h",
+        "sha256": "cc33c8a26c28d7cba817012040f4ff68260b378d2149d66bf2c341cbb80549d1",
+        "bytes": 17785
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/sweph.h",
+        "sha256": "8e44b9c00d23a0b583581f17fc6798ea376649d2517abbb556ee1b1aff6a138a",
+        "bytes": 34361
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swephlib.h",
+        "sha256": "29a151bb0c6adcb73fa73eff805b498c26bdffbb81e82d55e1b50f79218ea82a",
+        "bytes": 7786
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swehouse.h",
+        "sha256": "7a91a007a4de0900ed6d234d74da421b2372d245b09a2ba8b74d6e2e054a200c",
+        "bytes": 3702
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swemptab.h",
+        "sha256": "dc7595b81bd49e86a6204ed1e0a041c410a9de5c068fd1d90d350a82d604fb85",
+        "bytes": 311984
+      },
+      {
+        "url": "https://raw.githubusercontent.com/aloistr/swisseph/v2.10.03/swenut2000a.h",
+        "sha256": "83b0a2f569174b56c8e26971b00f85f5ae52265b34c1c53436c7122e0f1faad7",
+        "bytes": 68486,
+        "retrieved_at": "2026-11-05T02:43:30.311258+00:00"
+      }
+    ]
+  },
+  "generator": "ephemeris/fixtures/generators/state_reference.c",
+  "generator_sha256": "957bb859ae74a50ed6a96e9044fe9a424ed857318f4b517cadd6822bff98a98c",
+  "conventions": "swe_calc TT, apparent geocentric true equator/ecliptic of date, explicit Moshier without ephemeris data files. Signed rates are centered 60-second differences of reported coordinates and range. Toolkit velocity fields are retained separately.",
+  "tolerances": {
+    "angles_arcsec": 1.0,
+    "angular_speed_arcsec_per_day": 1.0,
+    "range_relative": 1e-05,
+    "range_derivative_km_per_day": 5.0
+  },
+  "tolerance_note": "Independent Moshier cross-check; these comparison margins are not absolute astronomical uncertainties. Native SPK interpolation has separate tighter JPL geometric vectors. Planet-system barycenters are identified separately from planet centers.",
+  "instant_utc": "2000-01-01T11:58:55.816"
+}

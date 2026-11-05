@@ -18,7 +18,7 @@
 //! It is always compiled (not feature-gated) so both the in-crate
 //! integration tests and the downstream `features` crate can reach it
 //! without a self dev-dependency; every type it touches
-//! (`StubSignatureProvider`, `CapturingEmail`, the passthrough policy /
+//! (`FakeSignatureProvider`, `CapturingEmail`, the passthrough policy /
 //! google-oauth configs, the empty indices) already ships in the binary
 //! as a production fallback, so it adds no real surface.
 
@@ -154,13 +154,14 @@ pub async fn app_state(surreal: store::surreal::SurrealDb) -> AppState {
         policy: crate::policy::PolicyClient::passthrough(),
         workflow_runtime: Arc::new(workflows::InMemoryRuntime::new()),
         questionnaire_runtime: Arc::new(workflows::InMemoryRuntime::new()),
-        signature_provider: Arc::new(crate::signature::StubSignatureProvider::new()),
+        signature_provider: Arc::new(crate::signature::FakeSignatureProvider::new()),
         billing_provider: Arc::new(crate::billing::StubBillingProvider::new()),
         integration_providers: Arc::new(crate::integrations::UnconfiguredIntegrations::default()),
         runtime_kms: Arc::new(cloud::NoRuntimeKms),
         contract_reviewer: Arc::new(crate::contract_review::StubContractReviewer),
         esignature_webhook_secret: None,
         esignature_hmac_key: None,
+        fake_signature_dir: None,
         email: Arc::new(crate::email::CapturingEmail::new()),
         attachment_scanner: Arc::new(crate::attachment_scanner::FakeAttachmentScanner::clean()),
         inbound_email_secret: None,

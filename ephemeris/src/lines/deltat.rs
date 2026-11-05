@@ -1,92 +1,144 @@
-//! Classical ΔT = TT − UT1, the Earth-rotation time correction.
+//! Delta-T (TT minus UT1) from pinned primary observations and explicit forecasts.
 //!
-//! UT1 is the Earth-rotation angle's time scale; TT (and its barycentric
-//! sibling TDB) paces the ephemeris. Their difference ΔT must come from a
-//! model because Earth's spin rate is not predictable far ahead. The model
-//! here follows the Swiss Ephemeris 2.10.03 default (what astro.com serves)
-//! so that rendered lines agree with the reference charts, while every
-//! coefficient comes from a published, unlicensed-concern-free source:
-//!
-//! * **Before 1955** — the Espenak & Meeus (2006) piecewise polynomials,
-//!   published in NASA TP-2009-214174 (*Five Millennium Canon of Solar
-//!   Eclipses*), public-domain US-government work. Swiss Ephemeris uses the
-//!   Stephenson/Morrison/Hohenkerk 2016 spline in this era; the two models
-//!   disagree by at most ≈0.85 s in 1900–1950 (measured against
-//!   `swe_deltat`, this is ≈12.8″ ≈ 0.0036° of line longitude — inside the
-//!   0.01° validation bar, and recorded honestly in the test fixtures).
-//! * **1955 through 2028** — the Astronomical Almanac K8–9 / IERS yearly
-//!   table with Bessel's fourth-order interpolation, exactly the numbers and
-//!   algorithm Swiss Ephemeris uses (`deltat_aa` in `swephlib.c`), so this
-//!   era reproduces the reference to well under a millisecond.
-//! * **Beyond 2028** — the published future cubic fitted by
-//!   Stephenson/Morrison/Hohenkerk 2016 (UKHO lunar-velocity movement data,
-//!   <http://astro.ukho.gov.uk/nao/lvm/>), spliced to the table's last value
-//!   over a 100-year transition, as Swiss Ephemeris does.
-//!
-//! Values before 1600 carry minutes of observational uncertainty; the /world
-//! page warns for birth dates where ΔT uncertainty dominates line placement.
+//! Before 1955: Espenak/Meeus historical polynomials. From 1955: linear
+//! interpolation of USNO historic and monthly observations, followed by the
+//! published USNO forecast. Beyond its last sample, the terminal line segment
+//! is extended and marked Extrapolation with no reported error bound.
+//! Source bytes and their identities are verified and embedded at build time.
 
-/// The ΔT values for 1955 through 2028, in seconds, one per year.
-///
-/// Transcribed from the tabulated `dt[]` initializer in Swiss Ephemeris
-/// 2.10.03 `swephlib.c`, which credits The Astronomical Almanac pp. K8–K9
-/// (1997 and later editions) with recent values from IERS
-/// (`maia.usno.navy.mil/ser7/deltat.data`). The 2024–2028 entries are that
-/// source's extrapolation. The values are published yearly facts, identical
-/// in every ephemeris that cites the Almanac.
-const ALMANAC_1955_2028: [f64; 74] = [
-    31.07, 31.35, 31.68, 32.18, 32.68, 33.15, 33.59, 34.00, 34.47, 35.03, 35.73, 36.54, 37.43,
-    38.29, 39.20, 40.18, 41.17, 42.23, 43.37, 44.4841, 45.4761, 46.4567, 47.5214, 48.5344, 49.5862,
-    50.5387, 51.3808, 52.1668, 52.9565, 53.7882, 54.3427, 54.8713, 55.3222, 55.8197, 56.3000,
-    56.8553, 57.5653, 58.3092, 59.1218, 59.9845, 60.7854, 61.6287, 62.2951, 62.9659, 63.4673,
-    63.8285, 64.0908, 64.2998, 64.4734, 64.5736, 64.6876, 64.8452, 65.1464, 65.4574, 65.7768,
-    66.0699, 66.3246, 66.6030, 66.9069, 67.2810, 67.6439, 68.1024, 68.5927, 68.9676, 69.2202,
-    69.3612, 69.3593, 69.2945, 69.1833, 69.10, 69.00, 68.90, 68.80, 68.80,
-];
+use serde::Serialize;
 
-/// First year of the Almanac table.
-const TABLE_START: i32 = 1955;
-
-/// Last year of the Almanac table.
-const TABLE_END: i32 = 2028;
-
-/// ΔT at the civil instant given as a UTC Julian date.
-///
-/// The Julian date must lie on the UTC scale (as produced by
-/// `Epoch::to_jde_utc_days`). The returned value is seconds of TT − UT1; the
-/// caller converts to days by dividing by 86 400.
-///
-/// The model is evaluated at the UTC instant itself rather than iterating on
-/// UT1: dΔT/dt is at most ≈1 s/year, so the first-order UT1 correction
-/// changes ΔT by well under a millisecond — three orders below the line
-/// validation bar.
-#[must_use]
-pub fn delta_t_seconds(jd_utc: f64) -> f64 {
-    // Swiss Ephemeris anchors the Almanac-table year fraction on 2451544.5
-    // (2000 January 1.0, `deltat_aa`) with a Julian year; keep it for exact
-    // parity.
-    let y_table = 2000.0 + (jd_utc - 2_451_544.5) / 365.25;
-    // The polynomial pieces key on the Gregorian decimal year: the calendar
-    // year plus the elapsed fraction of that year, so January 1.0 of year N
-    // is exactly N.0.
-    let y_gregorian = decimal_year(jd_utc);
-
-    if y_table < f64::from(TABLE_START) {
-        espenak_meeus(y_gregorian)
-    } else if y_table <= f64::from(TABLE_END) {
-        bessel_almanac(y_table)
-    } else {
-        smh2016_future(y_table)
-    }
+/// The evidence supporting the Earth-rotation correction at an instant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeltaTKind {
+    /// Published historical polynomial, without a stated error for this instant.
+    HistoricalModel,
+    /// Interpolated or exact tabulated USNO observation.
+    Observation,
+    /// Published USNO prediction, including the observation-to-forecast transition.
+    Forecast,
+    /// Linear continuation beyond the published forecast, without an error bound.
+    Extrapolation,
 }
 
-/// The Gregorian decimal year of a UTC Julian date: the calendar year plus
-/// the elapsed fraction of that year, so January 1.0 of year N is exactly
-/// N.0 — the convention the Espenak–Meeus pieces use for `t = y − 1900`.
+/// A public scientific source snapshot, independent of the orbital kernels.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct DeltaTDataFile {
+    /// Upstream file name.
+    pub name: &'static str,
+    /// Canonical upstream URL.
+    pub source: &'static str,
+    /// Identified upstream snapshot.
+    pub upstream_version: &'static str,
+    /// Retrieval UTC.
+    pub retrieved_at: &'static str,
+    /// SHA-256 of the verified original bytes.
+    pub sha256: &'static str,
+    /// Verified original byte count.
+    pub bytes: u64,
+}
+
+/// A model reading, excluding any original civil date or personal coordinates.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct DeltaTEstimate {
+    /// TT minus UT1 in seconds.
+    pub seconds: f64,
+    /// Observation, published forecast, or explicit model extrapolation.
+    pub kind: DeltaTKind,
+    /// Quoted source error in seconds; not a guaranteed interpolation error bound.
+    /// None means no quoted error, never zero. Between samples, both must report
+    /// errors and the larger endpoint error is retained.
+    pub reported_error_seconds: Option<f64>,
+}
+
+struct Sample {
+    jd: f64,
+    seconds: f64,
+    uncertainty: Option<f64>,
+    kind: DeltaTKind,
+}
+#[allow(clippy::unreadable_literal)] // Generated source literals preserve their original precision.
+mod data {
+    use super::{DeltaTDataFile, DeltaTKind, Sample};
+    include!(concat!(env!("OUT_DIR"), "/delta_t_samples.rs"));
+}
+
+/// Verified primary data identities used by this numerical model.
+#[must_use]
+pub fn delta_t_sources() -> &'static [DeltaTDataFile] {
+    data::SOURCES
+}
+
+/// Evaluate Delta-T at a UTC Julian day, returning no estimate for nonfinite input
+/// or an unrepresentable result. UTC dates are proleptic Gregorian. The historic
+/// decimal years use the elapsed fraction of their actual Gregorian year.
+#[must_use]
+pub fn delta_t_estimate(jd_utc: f64) -> Option<DeltaTEstimate> {
+    if !jd_utc.is_finite() {
+        return None;
+    }
+    let samples = data::SAMPLES;
+    let first = samples.first()?;
+    let last = samples.last()?;
+    let estimate = if jd_utc < first.jd {
+        DeltaTEstimate {
+            seconds: espenak_meeus(decimal_year(jd_utc)),
+            kind: DeltaTKind::HistoricalModel,
+            reported_error_seconds: None,
+        }
+    } else if jd_utc > last.jd {
+        let before = samples.get(samples.len().checked_sub(2)?)?;
+        DeltaTEstimate {
+            seconds: interpolate(before, last, jd_utc),
+            kind: DeltaTKind::Extrapolation,
+            reported_error_seconds: None,
+        }
+    } else {
+        match samples.binary_search_by(|sample| sample.jd.total_cmp(&jd_utc)) {
+            Ok(index) => {
+                let sample = samples.get(index)?;
+                DeltaTEstimate {
+                    seconds: sample.seconds,
+                    kind: sample.kind,
+                    reported_error_seconds: sample.uncertainty,
+                }
+            }
+            Err(index) => {
+                let before = samples.get(index.checked_sub(1)?)?;
+                let after = samples.get(index)?;
+                DeltaTEstimate {
+                    seconds: interpolate(before, after, jd_utc),
+                    kind: after.kind,
+                    reported_error_seconds: before
+                        .uncertainty
+                        .zip(after.uncertainty)
+                        .map(|(a, b)| a.max(b)),
+                }
+            }
+        }
+    };
+    estimate.seconds.is_finite().then_some(estimate)
+}
+
+fn interpolate(before: &Sample, after: &Sample, jd: f64) -> f64 {
+    before.seconds + (jd - before.jd) * (after.seconds - before.seconds) / (after.jd - before.jd)
+}
+
+/// TT minus UT1 in seconds at a UTC Julian day. Nonfinite inputs/results yield NaN;
+/// callers needing explicit availability and source classification use
+/// [`delta_t_estimate`]. SPK interpolation itself uses TDB, not this correction.
+#[must_use]
+pub fn delta_t_seconds(jd_utc: f64) -> f64 {
+    delta_t_estimate(jd_utc).map_or(f64::NAN, |estimate| estimate.seconds)
+}
+
+/// Actual elapsed fraction of the containing proleptic Gregorian calendar year.
 fn decimal_year(jd_utc: f64) -> f64 {
     let year = calendar_year(jd_utc);
-    let jan1_0 = january_first_jd(year) - 0.5;
-    year + (jd_utc - jan1_0) / 365.2425
+    let jan1 = january_first_jd(year) - 0.5;
+    let next_jan1 = january_first_jd(year + 1.0) - 0.5;
+    year + (jd_utc - jan1) / (next_jan1 - jan1)
 }
 
 /// The integer calendar year (as an exact f64) containing the UTC Julian
@@ -168,113 +220,65 @@ fn espenak_meeus(y: f64) -> f64 {
     }
 }
 
-/// Astronomical Almanac K8–9 table values with Bessel interpolation.
-///
-/// A faithful port of the published fourth-order Bessel scheme (Almanac
-/// K8–9; identical in Swiss Ephemeris `deltat_aa`): the value at the start
-/// of the year, refined with first, Bessel-averaged second, third, and
-/// fourth differences of the yearly table. Boundary years where the
-/// difference stencil would leave the table fall back to lower order,
-/// exactly as the reference does.
-fn bessel_almanac(year: f64) -> f64 {
-    let table = &ALMANAC_1955_2028;
-    let table_len = table.len();
-    let start_year = year.floor();
-    // The dispatch guarantees 1955 ≤ year ≤ 2028, so the offset is a small
-    // non-negative integer; the assert makes the cast's precondition real.
-    let offset = start_year - f64::from(TABLE_START);
-    assert!(
-        (0.0..=f64::from(TABLE_END - TABLE_START)).contains(&offset),
-        "dispatch constrains the Almanac year to the table"
-    );
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let index = offset as usize;
-    let fraction = year - start_year;
-
-    // Zeroth-order estimate is the value at the start of the year.
-    let mut estimate = table[index];
-
-    // First order: linear interpolation into the year.
-    if index + 1 >= table_len {
-        return estimate;
-    }
-    estimate += fraction * (table[index + 1] - table[index]);
-
-    // Second and higher differences need one year on each side.
-    if index == 0 || index + 2 >= table_len {
-        return estimate;
-    }
-
-    // Five first differences spanning two years on each side of the window.
-    let mut first_diffs = [0.0_f64; 6];
-    for (offset, slot) in first_diffs.iter_mut().enumerate().take(5) {
-        // d[k] = table[k+1] − table[k], with k running index−2 … index+2.
-        let diff_index = (index + offset).checked_sub(2);
-        if let Some(k) = diff_index.filter(|k| k + 1 < table_len) {
-            *slot = table[k + 1] - table[k];
-        }
-    }
-
-    // Second differences.
-    for slot in 0..4 {
-        first_diffs[slot] = first_diffs[slot + 1] - first_diffs[slot];
-    }
-    let mut bessel_weight = 0.25 * fraction * (fraction - 1.0);
-    estimate += bessel_weight * (first_diffs[1] + first_diffs[2]);
-
-    // Third differences.
-    for slot in 0..3 {
-        first_diffs[slot] = first_diffs[slot + 1] - first_diffs[slot];
-    }
-    bessel_weight *= 2.0 / 3.0;
-    estimate += (fraction - 0.5) * bessel_weight * first_diffs[1];
-
-    // Fourth differences (the reference re-checks the left boundary here).
-    if index < 2 || index + 3 > table_len {
-        return estimate;
-    }
-    for slot in 0..2 {
-        first_diffs[slot] = first_diffs[slot + 1] - first_diffs[slot];
-    }
-    bessel_weight *= 0.125 * (fraction + 1.0) * (fraction - 2.0);
-    estimate += bessel_weight * (first_diffs[0] + first_diffs[1]);
-
-    estimate
-}
-
-/// Future extrapolation beyond the Almanac table (after 2028).
-///
-/// The cubic `64 + 521B/3000 + B²/1250 + 121B³/30000000` (B = y − 2000) is
-/// the published fit to the Stephenson/Morrison/Hohenkerk 2016 long-term
-/// data (UKHO), and the parabola `42.5 + 32.5·(0.01(y−2000))²` continues it
-/// after 2500. To avoid a discontinuity at the table's end, the value is
-/// blended linearly into the table's last entry over the century from 2128
-/// back to 2028 — the same splice Swiss Ephemeris applies.
-fn smh2016_future(y: f64) -> f64 {
-    let future_cubic =
-        |b: f64| b * b * b * 121.0 / 30_000_000.0 + b * b / 1250.0 + b * 521.0 / 3000.0 + 64.0;
-    let mut ans;
-    let at_table_end;
-    if y < 2500.0 {
-        ans = future_cubic(y - 2000.0);
-        at_table_end = future_cubic(f64::from(TABLE_END) - 2000.0);
-    } else {
-        let b = 0.01 * (y - 2000.0);
-        ans = b * b * 32.5 + 42.5;
-        // The parabola replaces the cubic only far in the future; the
-        // blend below then never applies (y ≥ 2500 > table end + 100).
-        at_table_end = f64::NAN;
-    }
-    if y <= f64::from(TABLE_END + 100) {
-        let last = ALMANAC_1955_2028[ALMANAC_1955_2028.len() - 1];
-        ans += (at_table_end - last) * (y - f64::from(TABLE_END + 100)) * 0.01;
-    }
-    ans
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn estimates_distinguish_quoted_errors_from_unbounded_extrapolation() {
+        let observed = delta_t_estimate(2_461_314.5).expect("pinned observation");
+        assert_eq!(observed.kind, DeltaTKind::Observation);
+        assert!(
+            observed.reported_error_seconds.is_none(),
+            "monthly data has no quoted error"
+        );
+        let forecast = delta_t_estimate(2_463_871.5).expect("pinned final prediction");
+        assert_eq!(forecast.kind, DeltaTKind::Forecast);
+        assert!(
+            forecast
+                .reported_error_seconds
+                .is_some_and(|error| (error - 1.0).abs() < 1e-12),
+            "the published prediction's quoted error must be preserved"
+        );
+        let outside = delta_t_estimate(2_463_872.5).expect("explicit linear continuation");
+        assert_eq!(outside.kind, DeltaTKind::Extrapolation);
+        assert!(
+            outside.reported_error_seconds.is_none(),
+            "extrapolation has no stated error bound"
+        );
+        assert!(
+            (outside.seconds - (71.25 + 0.05 / 91.0)).abs() < 1e-9,
+            "continuation must use the final published segment, without an invented future fit"
+        );
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                delta_t_estimate(invalid).is_none(),
+                "nonfinite epochs have no estimate"
+            );
+        }
+    }
+
+    #[test]
+    fn usno_observation_forecast_and_transition_are_reproduced() {
+        // Pinned USNO deltat.data: 2026-10-01 = 69.2065 s.
+        // Pinned deltat.preds: MJD 61406 = 69.14 s and MJD 63871 = 71.25 s.
+        // The midpoint between the observation and first future forecast is linear.
+        for (mjd, expected) in [(61_314.0, 69.2065), (61_360.0, 69.17325), (63_871.0, 71.25)] {
+            assert!(
+                (delta_t_seconds(mjd + 2_400_000.5) - expected).abs() < 1e-9,
+                "the selected primary-source observations and forecasts must be reproduced"
+            );
+        }
+    }
+
+    #[test]
+    fn decimal_year_stays_inside_a_leap_year_until_its_last_instant() {
+        let last_minute = january_first_jd(2001.0) - 0.5 - 1.0 / 1440.0;
+        assert!(
+            (2000.0..2001.0).contains(&decimal_year(last_minute)),
+            "calendar fractions must use the actual length of a leap year"
+        );
+    }
 
     /// 1955 January 1.5 UT, Julian day 2435109.0.
     const JD_1955: f64 = 2_435_109.0;
@@ -286,18 +290,17 @@ mod tests {
         january_first_jd(f64::from(year))
     }
 
-    /// January 1.0 of the year: the instant the Almanac table and the
-    /// Espenak–Meeus pieces anchor their yearly values to.
+    /// January 1.0 of the year, for the Gregorian historical-polynomial anchors.
     fn jd_jan1_0(year: i32) -> f64 {
         january_first_jd(f64::from(year)) - 0.5
     }
 
     /// Swiss Ephemeris 2.10.03 `swe_deltat` (default model), measured with
     /// the `gen_probe` C harness against its own binary files, 2026-10-30.
-    /// Post-1955 values must match at the sub-millisecond level because the
-    /// model is identical (same table, same interpolation).
+    /// Post-1955 observational anchors retain the existing comparison limit
+    /// against the independently implemented USNO interpolation.
     #[test]
-    fn post_1955_matches_swiss_ephemeris_default() {
+    fn observational_anchors_agree_with_swiss_reference() {
         let cases: [(i32, f64); 7] = [
             (1960, 33.1506),
             (1970, 40.1827),
@@ -307,20 +310,6 @@ mod tests {
             (2010, 66.0706),
             (2020, 69.3613),
         ];
-        for (year, expected) in cases {
-            let got = delta_t_seconds(jd_jan1_5(year));
-            assert!(
-                (got - expected).abs() < 0.005,
-                "year {year}: got {got}, Swiss Ephemeris {expected}"
-            );
-        }
-    }
-
-    /// The future branch reproduces Swiss Ephemeris beyond the table
-    /// (2030 and 2040 anchors from the same probe run).
-    #[test]
-    fn future_matches_swiss_ephemeris_default() {
-        let cases: [(i32, f64); 2] = [(2030, 69.2767), (2040, 71.8002)];
         for (year, expected) in cases {
             let got = delta_t_seconds(jd_jan1_5(year));
             assert!(
@@ -399,7 +388,7 @@ mod tests {
     fn decimal_year_tracks_year_fraction() {
         // June 1.0 of 2000: day 152 of the year (leap year).
         let mid = decimal_year(jd_jan1_0(2000) + 152.0);
-        assert!((mid - 2000.0 - 152.0 / 365.2425).abs() < 1e-9);
+        assert!((mid - 2000.0 - 152.0 / 366.0).abs() < 1e-9);
         // December 31 23:59 UTC remains inside 2026.
         let eve = decimal_year(jd_jan1_0(2026) + 364.999);
         assert!((2026.0..2027.0).contains(&eve), "Dec 31 eve: {eve}");
@@ -426,13 +415,5 @@ mod tests {
         let before = delta_t_seconds(JD_1955 - 1.0);
         let after = delta_t_seconds(JD_1955);
         assert!((after - before).abs() < 0.1, "{before} vs {after}");
-    }
-
-    /// Table interpolation reproduces the yearly values at January 1.5,
-    /// where the reference anchors its year fraction.
-    #[test]
-    fn table_reproduces_yearly_values() {
-        let got = delta_t_seconds(jd_jan1_5(1970));
-        assert!((got - 40.18).abs() < 0.01, "got {got}");
     }
 }

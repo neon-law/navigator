@@ -80,7 +80,12 @@ pub fn render_certificate(params: &CertificateParams) -> Result<Vec<u8>, PdfErro
 /// escape within such a literal, so escaping those two is sufficient;
 /// control characters (newlines/tabs from a pasted name) are collapsed to
 /// a single space so the literal stays on one line.
-fn escape_typst_string(input: &str) -> String {
+/// Escape caller-supplied free text as a Typst **string literal** —
+/// never markup — so a stray quote or backslash renders as the literal
+/// characters instead of executing as Typst code. Public because every
+/// caller-supplied field of every Typst render needs exactly this.
+#[must_use]
+pub fn escape_typst_string(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         match ch {
@@ -93,9 +98,30 @@ fn escape_typst_string(input: &str) -> String {
     out
 }
 
+/// Escape a string for safe interpolation into Typst **markup** — the
+/// sibling of [`escape_typst_string`] for text that lands inline in a
+/// markup template instead of inside a quoted literal. Escapes every
+/// markup-significant character so the text renders as its literal
+/// characters rather than as structure or code.
+#[must_use]
+pub fn escape_typst_markup(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 8);
+    for ch in input.chars() {
+        match ch {
+            '\\' | '*' | '_' | '`' | '$' | '#' | '@' | '<' | '>' | '[' | ']' | '~' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' | '\r' | '\t' => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{escape_typst_string, render_certificate, CertificateParams};
+    use super::{escape_typst_markup, escape_typst_string, render_certificate, CertificateParams};
 
     fn params() -> CertificateParams {
         CertificateParams {
@@ -125,6 +151,18 @@ mod tests {
         assert_eq!(escape_typst_string(r#"a"b\c"#), r#"a\"b\\c"#);
         // Control characters collapse to spaces so the literal is one line.
         assert_eq!(escape_typst_string("a\nb\tc"), "a b c");
+    }
+
+    #[test]
+    fn markup_escape_neutralizes_every_metacharacter() {
+        assert_eq!(escape_typst_markup("a_b@c"), "a\\_b\\@c");
+        assert_eq!(escape_typst_markup("*bold*"), "\\*bold\\*");
+        assert_eq!(
+            escape_typst_markup("#text(red)[x] <y> ~z~ `q` $m$ \\>"),
+            "\\#text(red)\\[x\\] \\<y\\> \\~z\\~ \\`q\\` \\$m\\$ \\\\\\>"
+        );
+        // Control characters collapse to spaces so rows stay on one line.
+        assert_eq!(escape_typst_markup("a\nb\tc"), "a b c");
     }
 
     #[test]

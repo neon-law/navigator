@@ -7,10 +7,28 @@ isolated DocuSign attachment. Local sandbox values use a gitignored `.env`; clou
 convention is in [`third-party-integrations.md`](third-party-integrations.md). This page is the DocuSign specifics.
 
 The signature seam lives under `portal/src/`: [`signature.rs`](../portal/src/signature.rs) (the `SignatureProvider`
-trait + the DocuSign and stub impls), JWT-grant auth in [`docusign_auth.rs`](../portal/src/docusign_auth.rs), the
-embedded signing routes in [`esign_view.rs`](../portal/src/esign_view.rs), and the completion [webhook
-source](../portal/src/esignature_webhook.rs). An unconfigured vendor falls back to the in-process stub, so a fresh
-checkout boots and self-tests without a DocuSign account.
+trait, the provider selection, and the DocuSign + fake impls), JWT-grant auth in
+[`docusign_auth.rs`](../portal/src/docusign_auth.rs), the embedded signing routes in
+[`esign_view.rs`](../portal/src/esign_view.rs), and the completion [webhook
+source](../portal/src/esignature_webhook.rs).
+
+## Selecting the provider is explicit and fails closed
+
+Which provider a boot runs is one environment value with no default and no fallback: `NAVIGATOR_SIGNATURE_PROVIDER`
+accepts exactly `fake` or `docusign` (`portal::signature::SignatureProviderKind::from_env`).
+
+- **Unset or misspelled** — the boot refuses to start, naming the two accepted values. A fresh checkout sets `fake`
+  (see `.env.example`); nothing ever runs "with the stub because DocuSign was unset" — a send-for-signature button that
+  quietly wrote fake envelopes is the demo-shaped failure this removes.
+- **`fake` in a production environment** — the boot refuses to start: the fake provider creates envelopes with no legal
+  weight. `NAVIGATOR_ENVIRONMENT` unset *is* the production profile, so the fake only ever boots where a developer named
+  dev explicitly.
+- **`docusign`** — the real provider, which requires `DOCUSIGN_BASE_URL` + `DOCUSIGN_ACCOUNT_ID` and a token source
+  (below). Declaring it incompletely is also a boot failure.
+
+`fake` is the local signature loop: envelopes persist to disk, anchors are validated against the prepared PDF's text,
+each recipient signs a real local page, and completion is delivered as a DocuSign-Connect-shaped HMAC-signed webhook —
+so a fresh checkout proves the whole loop and self-tests without a DocuSign account.
 
 ## One attachment per deployment
 
@@ -168,8 +186,8 @@ emailed link — regardless of `delivery`.
   ([`portal::esign_view`](../portal/src/esign_view.rs)) mint one via `SignatureProvider::create_recipient_view`, which
   POSTs `envelopes/{id}/views/recipient` and matches the recipient on the email, userName, and clientUserId triple. It
   **redirects the browser to it**. The ceremony runs on DocuSign's own site; Navigator does not frame it. The URL
-  expires in minutes, so it is minted fresh per request. The stub returns a deterministic URL in dev/KIND. The firm path
-  fits an in-office signing; the client path is the signer's own door.
+  expires in minutes, so it is minted fresh per request. The fake provider returns a deterministic URL in dev/KIND. The
+  firm path fits an in-office signing; the client path is the signer's own door.
 
   The signer may never come back — they close the tab, or finish on their phone — so **nothing depends on the return
   trip**. The completion webhook below is the authoritative path; the redirect's `return_url` only decides where a

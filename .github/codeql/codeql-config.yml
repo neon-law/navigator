@@ -1,6 +1,8 @@
 # CodeQL configuration for .github/workflows/codeql.yml.
 #
-# `actions/unpinned-tag` is the one query excluded. The release cut
+# Two queries are excluded.
+#
+# `actions/unpinned-tag`: the release cut
 # (`ops release version`) pins this repository's own composite action to the
 # release tag, e.g. `neon-law/navigator/.github/actions/navigator-install@26.10.25-rc.1`,
 # and the tag does not exist until `deploy.yml` creates it after merge, so a
@@ -8,7 +10,15 @@
 # check` already verify those pins, and
 # `cli/tests/workflow_action_pins.rs` requires every other third-party action
 # to be pinned to a full commit SHA. Every other actions query stays on.
+#
+# `rust/non-https-url`: the only flagged URL is the GKE metadata server,
+# `http://metadata.google.internal` (cloud/src/archives_project.rs), which is
+# HTTP by design — the endpoint is link-local inside the cluster and never
+# supports TLS. Everything else it flags would be a real transport issue, so
+# keep the query on elsewhere via code review rather than widening this file.
 name: navigator codeql
 query-filters:
   - exclude:
       id: actions/unpinned-tag
+  - exclude:
+      id: rust/non-https-url

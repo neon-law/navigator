@@ -455,6 +455,11 @@ pub struct AppState {
     /// dev/tests skips verification; required in production via
     /// `enforce_deployment_invariants`. Loaded from `DOCUSIGN_HMAC_KEY`.
     pub esignature_hmac_key: Option<String>,
+    /// The fake signature provider's on-disk envelope directory when the
+    /// fake is the running provider — the backing store the dev sign-page
+    /// route serves. `None` under DocuSign and in tests that construct
+    /// state directly; see [`esign_view::fake_signing_page`].
+    pub fake_signature_dir: Option<std::path::PathBuf>,
     /// Outbound email backend. `CapturingEmail` in dev/tests so
     /// outbound mail never escapes the host; `SendGridEmail` (wrapped
     /// in `RetryingEmail`) in production. Selected by
@@ -773,6 +778,14 @@ fn public_ingress_routes() -> Router<AppState> {
         .route(
             "/webhook/esignature/{secret}",
             axum::routing::post(esignature_webhook::webhook),
+        )
+        // The fake provider's sign pages, served by this portal in dev —
+        // the signer's redirect target is a URL on this server, backed by
+        // the pages the fake writes to disk. Under DocuSign the handler
+        // answers 404.
+        .route(
+            "/fake-signature/{envelope}/{email}",
+            axum::routing::get(esign_view::fake_signing_page),
         )
         .route("/docusign/consent-callback", get(docusign_consent_callback))
 }

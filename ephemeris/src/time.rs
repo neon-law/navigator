@@ -3,9 +3,9 @@
 //! The chain is UTC→TAI→TT→TDB, all through `hifitime`:
 //!
 //! 1. **UTC→TAI** — hifitime's built-in model (TAI−UTC is 37 seconds from
-//!    2017: 27 inserted leap seconds plus the initial 10 seconds). For dates before 1972 hifitime models the
-//!    pre-leap-second UTC drift, so 1900+ birth data converts on the same code
-//!    path as modern dates.
+//!    2017: 27 inserted leap seconds plus the initial 10 seconds). Before 1972,
+//!    this pinned model uses TAI−UTC = 0; fractional historical UTC adjustments
+//!    are absent. Historical civil-clock interpretation remains unvalidated.
 //! 2. **TAI→TT** — the fixed 32.184 s offset of Terrestrial Time.
 //! 3. **TT→TDB** — the periodic relativistic term (amplitude ≈ 1.6 ms) that
 //!    converts the geoid clock to the solar-system barycenter clock the
@@ -102,7 +102,7 @@ mod tests {
         );
     }
 
-    /// 1900 birth data converts on the pre-1972 hifitime path and stays finite
+    /// A proleptic UTC label converts on the pre-1972 hifitime path and stays finite
     /// and negative (well before J2000).
     #[test]
     fn pre_1972_date_converts() {

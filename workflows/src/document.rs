@@ -43,8 +43,9 @@ pub enum DocumentPayload {
     },
     /// Fetch the blank form at `blank_form_key`, fill its AcroForm
     /// `/Fields` from `fields` (name → value), **flatten** the result to
-    /// static page content, and persist it at `storage_key`. The workflow
-    /// spec reaches this fill only after `lawyer_review`
+    /// static page content, append the pages rendered from
+    /// `addendum_typst` when set, and persist it at `storage_key`. The
+    /// workflow spec reaches this fill only after `lawyer_review`
     /// ([`crate::lawyer_review_precedes_submission`]), so flattening here
     /// freezes exactly what an attorney approved — no downstream viewer
     /// can re-edit a value before it reaches a government office.
@@ -52,6 +53,13 @@ pub enum DocumentPayload {
         storage_key: String,
         blank_form_key: String,
         fields: std::collections::BTreeMap<String, String>,
+        /// Optional Typst source rendered after the filled form. A
+        /// form-bound template's body is what its signer is owed — the
+        /// engagement terms and the signature blocks the e-signature
+        /// fields anchor to — so a packet carrying signature fields
+        /// renders the body and the packet carries it. `None` keeps the
+        /// artifact exactly the filled form.
+        addendum_typst: Option<String>,
     },
 }
 
@@ -144,13 +152,26 @@ pub async fn dispatch_generate_pdf(
             storage_key,
             blank_form_key,
             fields,
+            addendum_typst,
         } => {
             let blank = storage.get(blank_form_key).await?.bytes;
             let filled = pdf::fill_acroform(&blank, fields)?;
             // Flatten to static content before persisting: this fill sits
             // past lawyer_review, so nothing downstream may re-edit the
             // approved values on their way to a government office.
-            (pdf::flatten(&filled)?, storage_key.as_str())
+            let flattened = pdf::flatten(&filled)?;
+            let bytes = match addendum_typst {
+                Some(source) => {
+                    // The rendered body — engagement terms, signature
+                    // blocks — follows the state's own form, so the
+                    // packet sent for signature carries what the client
+                    // actually signs.
+                    let addendum = pdf::render(source)?;
+                    pdf::append_document(&flattened, &addendum)?
+                }
+                None => flattened,
+            };
+            (bytes, storage_key.as_str())
         }
     };
     // Resolve the notation's project and its pinned template's declared
@@ -295,6 +316,7 @@ mod tests {
             storage_key: "notations/acro-test/nv_articles.pdf".into(),
             blank_form_key: "forms/nv_articles.pdf".into(),
             fields,
+            addendum_typst: None,
         };
         dispatch_generate_pdf(&storage, None, uuid::Uuid::from_u128(2), &payload)
             .await
@@ -331,6 +353,7 @@ mod tests {
             storage_key: "k".into(),
             blank_form_key: "b".into(),
             fields: BTreeMap::new(),
+            addendum_typst: None,
         })
         .unwrap();
         assert_eq!(acro["kind"], "acroform");

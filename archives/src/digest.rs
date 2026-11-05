@@ -37,11 +37,15 @@ pub struct SnapshotEntry {
 
 /// The data a completed workflow run hands to [`render_archives_slack`]:
 /// the run date, the export bucket the per-table links point into, and the
-/// snapshot outcomes (successes and failures).
+/// snapshot outcomes (successes and failures). `archive_project` carries
+/// the archive lane's GCP project (`NAVIGATOR_ARCHIVES_GCP_PROJECT_ENV`) —
+/// set when the bucket lives offsite, so the console links open in the
+/// archive project's context and the digest names where the data went.
 #[derive(Debug, Clone)]
 pub struct DiagnosticReport {
     pub run_date: NaiveDate,
     pub bucket: String,
+    pub archive_project: Option<String>,
     pub snapshots: Vec<SnapshotEntry>,
     pub failures: Vec<TableFailure>,
 }
@@ -65,9 +69,21 @@ pub fn render_archives_slack(report: &DiagnosticReport) -> String {
         report.run_date,
         report.snapshots.len()
     );
+    if let Some(project) = &report.archive_project {
+        let _ = writeln!(out, "• *archive project* — {project} (offsite bucket)");
+    }
     for entry in &report.snapshots {
+        // The `project` query parameter pins the console to the archive
+        // project: without it the browser opens the bucket in whichever
+        // project the viewer last visited, which for an offsite bucket is
+        // not the deployment's.
+        let project_query = report
+            .archive_project
+            .as_deref()
+            .map(|project| format!("?project={project}"))
+            .unwrap_or_default();
         let url = format!(
-            "{GCS_BROWSER_BASE}/{}/{APPLICATION_LANE}/{}",
+            "{GCS_BROWSER_BASE}/{}/{APPLICATION_LANE}/{}{project_query}",
             report.bucket, entry.table
         );
         let _ = writeln!(
@@ -93,6 +109,7 @@ mod tests {
         DiagnosticReport {
             run_date: NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
             bucket: "navigator-exports".into(),
+            archive_project: None,
             snapshots,
             failures,
         }
@@ -205,5 +222,25 @@ mod tests {
         let msg = render_archives_slack(&sample(vec![], vec![]));
         assert!(msg.contains("(0 tables)"));
         assert!(!msg.contains('•'));
+    }
+
+    #[test]
+    fn an_archive_project_is_annotated_and_pinned_in_the_console_links() {
+        // The offsite lane names its GCP project: the digest carries the
+        // annotation line, and every per-table link opens the console in
+        // the archive project's context.
+        let mut report = sample(vec![snap("persons", 10)], vec![]);
+        report.archive_project = Some("neon-law-archive".into());
+        let msg = render_archives_slack(&report);
+        assert!(
+            msg.contains("• *archive project* — neon-law-archive (offsite bucket)"),
+            "annotation line: {msg}"
+        );
+        assert!(
+            msg.contains(
+                "<https://console.cloud.google.com/storage/browser/navigator-exports/application/persons?project=neon-law-archive|view in GCP>"
+            ),
+            "console link pinned to the archive project: {msg}"
+        );
     }
 }

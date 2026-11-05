@@ -42,3 +42,7 @@ cli/testdata/synthetic-initial-case-assessment.pdf binary
 # Reproducible caller snapshots; ownership.json is the reviewed source contract.
 store/postgres/caller-inventory.json linguist-generated=true
 store/postgres/source-call-sites.jsonl linguist-generated=true
+
+# Verbatim scientific snapshots; build-time verification uses the original byte hashes.
+ephemeris/data/usno/*.data -text
+ephemeris/data/usno/*.preds -text

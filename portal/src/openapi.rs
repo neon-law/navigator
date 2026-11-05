@@ -2624,6 +2624,41 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/private-terms": {
+          "get": {
+            "summary": "Read the identifiers a pre-filing PII check refuses",
+            "description":
+              "The Project's code, its matter name, and every participant's name, mailbox, and \
+               phone. `navigator project feedback-check --project` scans a draft against them \
+               before it is filed in an outside tracker. Authorization: a firm-side participant \
+               on the Project; a client-side participant, a Clerk, or a caller with no \
+               participation → 404.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "The Project's private terms", "content": { "application/json": { "schema": {
+                "type": "object",
+                "required": ["code", "name", "participants"],
+                "properties": {
+                  "code": { "type": "string" },
+                  "name": { "type": "string" },
+                  "participants": { "type": "array", "items": {
+                    "type": "object",
+                    "required": ["name", "email"],
+                    "properties": {
+                      "name": { "type": "string" },
+                      "email": { "type": "string" },
+                      "phone": { "type": ["string", "null"] }
+                    }
+                  } }
+                }
+              } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such matter, or the caller is not a firm-side participant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/projects/{id}/participants": {
           "get": {
             "summary": "List a matter's participation ledger",

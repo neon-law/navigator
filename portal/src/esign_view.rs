@@ -59,6 +59,7 @@ use uuid::Uuid;
 use crate::admin::AdminState;
 use crate::session::SessionData;
 use crate::signature::RecipientView;
+use crate::AppState;
 
 /// `GET /app/notations/:id/sign` and `GET /app/lawyer/notations/:id/sign` —
 /// mint a single-use recipient-view URL for the notation's captive client
@@ -252,11 +253,44 @@ async fn return_url_for(
 /// answer if it ever is not, and a panic never is.
 fn redirect_to_provider(signing_url: &str) -> Option<Response> {
     let parsed = url::Url::parse(signing_url).ok()?;
-    if parsed.scheme() != "https" || !parsed.has_host() {
+    // Production providers are https. The one http exception is the
+    // loopback host the fake's sign pages are served from in dev — and
+    // the fake cannot boot in production, so this never widens what a
+    // real deployment forwards.
+    let loopback_http = parsed.scheme() == "http"
+        && parsed
+            .host_str()
+            .is_some_and(|h| matches!(h, "127.0.0.1" | "localhost" | "[::1]"));
+    if (parsed.scheme() != "https" || !parsed.has_host()) && !loopback_http {
         return None;
     }
     let location = HeaderValue::from_str(parsed.as_str()).ok()?;
     Some((StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response())
+}
+
+/// The fake provider's per-recipient sign page, served by this portal in
+/// dev: the URL the signer is redirected to is one on this server, backed
+/// by the page the fake wrote to disk. `404` when the fake is not the
+/// running provider or no page exists for this envelope and recipient —
+/// a missing page is an unknown envelope, not an error to bury.
+pub(crate) async fn fake_signing_page(
+    State(state): State<AppState>,
+    AxumPath((envelope_id, email)): AxumPath<(String, String)>,
+) -> Response {
+    let Some(dir) = state.fake_signature_dir else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    // The same slug discipline the file was written under — idempotent,
+    // so a URL carrying either the raw email or an already-slugged
+    // segment resolves, and no path segment can escape the directory.
+    let page = dir
+        .join("signing")
+        .join(&envelope_id)
+        .join(format!("{}.html", crate::signature::recipient_slug(&email)));
+    match tokio::fs::read_to_string(&page).await {
+        Ok(html) => ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 #[cfg(test)]
@@ -273,6 +307,25 @@ mod tests {
             response.headers().get(header::LOCATION).unwrap(),
             url,
             "the signer is sent to the provider's own page, unmodified"
+        );
+    }
+
+    #[test]
+    fn the_fakes_loopback_sign_page_redirects_too() {
+        // Dev only: the fake serves its ceremony from this server's own
+        // loopback. A production provider can never produce this URL —
+        // the fake refuses to boot there.
+        let url = "http://127.0.0.1:3001/fake-signature/fake-abc-1/libra-example-com";
+        let response = redirect_to_provider(url).expect("a loopback sign page is redirectable");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    }
+
+    #[test]
+    fn a_plain_http_url_to_a_remote_host_is_refused() {
+        let url = "http://evil.example.com/signing/abc123";
+        assert!(
+            redirect_to_provider(url).is_none(),
+            "http to anything but loopback must not become a redirect"
         );
     }
 

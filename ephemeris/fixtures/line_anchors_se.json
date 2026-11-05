@@ -3,7 +3,7 @@
   "swisseph_version": "2.10.03",
   "flags": "SEFLG_SWIEPH | SEFLG_EQUATORIAL (apparent geocentric, true equator and equinox of date); GAST from swe_sidtime (apparent sidereal time, UT1 input)",
   "epoch_note": "Julian Days in TT (swe_calc ephemeris time); TDB-TT <= 1.7 ms, < 0.001 arcsecond at lunar distance. UT1 for swe_sidtime = jd_tt - delta_t/86400.",
-  "delta_t_note": "delta_t values are the Navigator crate's Espenak-Meeus/Almanac/SMH2016 model outputs, shared with both chains to isolate geometric implementation; Delta-T itself is validated by the crate's deltat fixtures",
+  "delta_t_note": "Reference delta_t values are fixed inputs recorded per row; UT1 = jd_tt - delta_t/86400. Navigator's independent USNO/Espenak-Meeus model is compared at the unchanged line gate.",
   "anchor_note": "ASC anchors sweep 180 deg west of the sub-body meridian (MC), DSC 180 deg east; 23 interior anchor longitudes of 24 equal segments each; crossing latitude by bisection on sin(d)sin(b)+cos(d)cos(b)cos(H) = 0; rows with |dec| < 0.05 deg carry empty anchors (pole-degenerate horizon)",
   "rows": [
     { "label": "1950-01-01T00:00:00Z", "body": "sun", "ra": 280.884803213, "dec": -23.070738703, "mc": 180.796903749, "ic": 0.796903749, "delta_t": 29.070000000,

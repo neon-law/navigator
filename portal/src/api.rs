@@ -403,6 +403,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "GET",
+            "/app/api/projects/{id}/private-terms",
+            get(private_terms_door),
+        ),
+        (
+            "GET",
             "/app/api/projects/{id}/section-counts",
             get(project_section_counts_door),
         ),
@@ -1949,6 +1954,70 @@ async fn list_participants_door(
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
     Ok((StatusCode::OK, Json(rows)).into_response())
+}
+
+/// One participant's identifiers on [`PrivateTerms`].
+#[derive(Serialize)]
+struct PrivateTermsParticipant {
+    name: String,
+    email: String,
+    phone: Option<String>,
+}
+
+/// The identifiers a Pre-Filing PII Check refuses for one Project.
+#[derive(Serialize)]
+struct PrivateTerms {
+    code: String,
+    name: String,
+    participants: Vec<PrivateTermsParticipant>,
+}
+
+/// `GET /app/api/projects/{id}/private-terms` — the Project's code, its matter
+/// name, and every participant's name, mailbox, and phone, which
+/// `navigator project feedback-check --project` scans a draft against. Only a
+/// firm-side participant reads it: a client-side participant, a Clerk, and a
+/// caller with no participation all get the bare 404 an unknown id gets.
+async fn private_terms_door(
+    State(state): State<ApiState>,
+    authed: AuthedSession,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let viewer =
+        store::access::matter_viewer(&state.surreal, authed.0.person_id, authed.0.role, id)
+            .await
+            .map_err(ApiError::Db)?;
+    if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
+        return Err(ApiError::NotFound);
+    }
+    let project = store::projects::find_by_id(&state.surreal, id)
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?
+        .ok_or(ApiError::NotFound)?;
+    let people: Vec<Uuid> = store::projects::participations_for_project(&state.surreal, id)
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?
+        .iter()
+        .map(|row| row.person_id)
+        .collect();
+    let participants = store::persons::find_by_ids(&state.surreal, &people)
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?
+        .into_iter()
+        .map(|person| PrivateTermsParticipant {
+            name: person.name,
+            email: person.email,
+            phone: person.phone,
+        })
+        .collect();
+    Ok((
+        StatusCode::OK,
+        Json(PrivateTerms {
+            code: project.code,
+            name: project.name,
+            participants,
+        }),
+    )
+        .into_response())
 }
 
 /// `GET /app/api/projects/{id}/finance`: the Project's latest finance aggregate,
@@ -12514,6 +12583,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             ("GET", format!("/app/api/projects/{p}"), None),
             ("GET", format!("/app/api/projects/{p}/status"), None),
             ("GET", format!("/app/api/projects/{p}/participants"), None),
+            ("GET", format!("/app/api/projects/{p}/private-terms"), None),
             ("GET", format!("/app/api/projects/{p}/section-counts"), None),
             ("GET", format!("/app/api/projects/{p}/notations"), None),
             (
@@ -13172,6 +13242,62 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
 
     /// A participating lawyer reads the matter they work on: the project,
     /// its participants, its notations, and its documents.
+    /// The Pre-Filing PII Check's terms are firm-side only: the participating
+    /// lawyer reads the code, matter name, and each participant's name,
+    /// mailbox, and phone; the matter's own client gets the bare 404.
+    #[tokio::test]
+    async fn private_terms_answer_a_firm_side_participant_and_refuse_the_client() {
+        let f = door_fixture().await;
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: f.project,
+                person_id: f.lawyer.person_id.unwrap(),
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .expect("add the lawyer to the matter");
+        let client = store::persons::find_or_create(
+            &f.db,
+            &store::persons::NewPerson {
+                phone: Some("702-555-0142".to_string()),
+                ..store::persons::NewPerson::new("Harper Cruller", "harper@crullers.example")
+            },
+        )
+        .await
+        .expect("seed the client person");
+        store::projects::add_participation(&f.db, f.project, client.id, "client")
+            .await
+            .expect("attach the client to the matter");
+        let path = format!("/app/api/projects/{}/private-terms", f.project);
+
+        let (status, json) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let project = store::projects::find_by_id(&f.db, f.project)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(json["code"], project.code);
+        assert_eq!(json["name"], project.name);
+        let harper = json["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["email"] == "harper@crullers.example")
+            .expect("the client participant is listed");
+        assert_eq!(harper["name"], "Harper Cruller");
+        assert_eq!(harper["phone"], "702-555-0142");
+
+        let client_session = crate::SessionData {
+            person_id: Some(client.id),
+            ..crate::SessionData::fresh("harper", store::persons::Role::Client)
+        };
+        let (status, _) = call(&f.state, Some(&client_session), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
     #[tokio::test]
     async fn a_participating_lawyer_reads_their_matter() {
         let f = door_fixture().await;

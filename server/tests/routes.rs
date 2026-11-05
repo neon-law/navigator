@@ -732,6 +732,7 @@ fn erroring_policy() -> portal::policy::PolicyClient {
 async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
     AppState {
         brand_bundle: None,
+        fake_signature_dir: None,
         surreal: store::surreal::test_support::mem().await,
         workshops: WorkshopIndex::new(materials),
         auth: AuthConfig::new(true, None),
@@ -758,7 +759,7 @@ async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
         policy: portal::policy::PolicyClient::passthrough(),
         workflow_runtime: std::sync::Arc::new(workflows::InMemoryRuntime::new()),
         questionnaire_runtime: std::sync::Arc::new(workflows::InMemoryRuntime::new()),
-        signature_provider: std::sync::Arc::new(portal::signature::StubSignatureProvider::new()),
+        signature_provider: std::sync::Arc::new(portal::signature::FakeSignatureProvider::new()),
         billing_provider: std::sync::Arc::new(portal::billing::StubBillingProvider::new()),
         contract_reviewer: std::sync::Arc::new(portal::contract_review::StubContractReviewer),
         integration_providers: std::sync::Arc::new(

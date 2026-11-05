@@ -272,3 +272,11 @@ values = ["Meet Aster"]
 [[paths]]
 reason = "Explicitly staged minified release wasm-bindgen glue generated from repository source; source is scanned separately and contains no runtime birth data."
 values = ["server/public/dioxus/assets/webapp-dxh6edfaa1b9a452a86.js"]
+
+[[names]]
+reason = "Barycentric Dynamical Time is the named astronomical time scale in the Delta T glossary entry, not a person."
+values = ["Barycentric Dynamical Time"]
+
+[[values]]
+reason = "Decimal mantissa of the fixed J2000 Moshier Mars declination in ephemeris/fixtures/swisseph_state_reference.json, reproduced by its standalone probe; not a payment-card number."
+values = ["182683376822295"]

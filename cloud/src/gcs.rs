@@ -590,6 +590,26 @@ impl StorageService for GcsStorage {
             .is_some_and(|policy| policy.is_locked.unwrap_or(false)))
     }
 
+    /// The bucket's owning project number, from the same bucket-get the
+    /// retention probe uses. GCS reports the number only — never the
+    /// project id — to a storage-scoped credential, which is why
+    /// [`crate::archives_project`] compares numbers (or contrasts against
+    /// the deployment project's number) instead of ids.
+    async fn bucket_project_number(&self) -> Result<i64, StorageError> {
+        let bucket = self
+            .client
+            .get_bucket(&GetBucketRequest {
+                bucket: (*self.bucket).clone(),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| StorageError::Gcs {
+                key: "<archive-project>".into(),
+                message: format!("probe the bucket's owning project: {e}"),
+            })?;
+        Ok(bucket.project_number)
+    }
+
     async fn head(&self, key: &str) -> Result<Option<crate::ObjectHead>, StorageError> {
         match self
             .client

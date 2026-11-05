@@ -3688,10 +3688,10 @@ fn roll(
     // 3b. Render the Secret Manager catalog for THIS deployment: drop every
     //     entry it does not write. A deployment that declines DocuSign cannot
     //     retain a catalog entry for it — and must not be given a placeholder
-    //     credential to make
-    //     the reference resolve, since `portal::signature` reaches its stub
-    //     only through genuine absence. Same for an object scoped to another
-    //     deployment, which this one is forbidden to hold at all.
+    //     credential to make the reference resolve: selection is explicit
+    //     (`NAVIGATOR_SIGNATURE_PROVIDER`), so a deployment that named no
+    //     provider never boots the real one either. Same for an object scoped
+    //     to another deployment, which this one is forbidden to hold at all.
     omit_unwritten_objects(
         &target,
         &super::deployments::skipped_projected_objects(deployment)?,
@@ -11975,7 +11975,7 @@ spec:
     #[test]
     fn a_deployment_that_declines_docusign_renders_no_docusign_reference() {
         // A row that declares no `DOCUSIGN_BASE_URL` runs
-        // `StubSignatureProvider`, holds no DocuSign object, and its catalog must
+        // `FakeSignatureProvider`, holds no DocuSign object, and its catalog must
         // not ask for one. This is the ship half of the failure: without it the
         // resolve preflight aborts naming all nine, and the only way past would
         // be a placeholder credential — which boots the real provider instead

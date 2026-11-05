@@ -49,3 +49,7 @@ pub use chart_angles::ChartAngles;
 pub use chart_provider::{
     AstrologyChartProvider, AstrologyChartResponse, BodyPosition, ChartProvenance, ChartTimeScales,
 };
+
+pub use lines::deltat::{
+    delta_t_estimate, delta_t_sources, DeltaTDataFile, DeltaTEstimate, DeltaTKind,
+};
