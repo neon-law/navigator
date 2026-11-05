@@ -598,7 +598,7 @@ mod tests {
         .await
         .unwrap();
         for ein in [
-            serde_json::json!(123456789),
+            serde_json::json!(123_456_789),
             serde_json::json!("123456789"),
             serde_json::json!("12-345678x"),
             serde_json::Value::Null,
