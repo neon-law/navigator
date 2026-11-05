@@ -1,6 +1,6 @@
 use super::*;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
-use chrono::{Days, TimeDelta, TimeZone};
+use chrono::{Days, SubsecRound, TimeDelta, TimeZone};
 
 fn message(sent_at: DateTime<Utc>) -> NewSentEmail {
     NewSentEmail {
@@ -35,7 +35,8 @@ async fn export(pg: &PostgresDb, day: NaiveDate) -> DayExport {
         data_file: format!("gs://synthetic/sent_email/data/sent_at_day={day}/part.parquet"),
         snapshot_id: 1,
         metadata_version: 1,
-        exported_at: Utc::now(),
+        // PostgreSQL keeps microseconds; Linux clocks report nanoseconds.
+        exported_at: Utc::now().trunc_subsecs(6),
         purged_at: None,
     };
     record_export(pg, &export).await.unwrap();
