@@ -6,6 +6,7 @@ use chrono::TimeZone as _;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde::Deserialize;
 
+mod answers_file;
 mod assets;
 mod authorities;
 mod blog;
@@ -1106,6 +1107,14 @@ enum ProjectsCmd {
     Onboard {
         #[command(flatten)]
         host: HostOpt,
+        /// A saved answers file (as `site notation answers --save-answers`
+        /// writes) to prefill the onboarding notation from: every question
+        /// the template asks is answered from the file's `state: value` map,
+        /// so the onboarding's interpolated fields match the notation the
+        /// file was saved from. A question the file does not answer fails
+        /// the onboard — prefill is whole, never partial.
+        #[arg(long = "answers-from", alias = "answers-file")]
+        answers_from: Option<PathBuf>,
     },
     /// Open the offboarding letter, then close and archive a signed-off Project.
     Offboard {
@@ -4858,6 +4867,14 @@ enum NotationAction {
         /// you can see. Required — the matter must already exist.
         #[arg(long)]
         project: String,
+        /// A saved answers file (as `site notation answers --save-answers`
+        /// writes) to prefill the new notation from: every question the
+        /// template asks is answered from the file's `state: value` map, so
+        /// the notation's interpolated fields match the notation the file
+        /// was saved from. A question the file does not answer fails the
+        /// create — prefill is whole, never partial.
+        #[arg(long = "answers-from", alias = "answers-file")]
+        answers_from: Option<PathBuf>,
     },
     /// Print a notation's workflow state + signature request id
     /// (`GET …/review?format=json`).
@@ -4879,6 +4896,12 @@ enum NotationAction {
         /// Emit the raw JSON answers.
         #[arg(long)]
         json: bool,
+        /// Save the filed answers to this path as a `state: value` YAML map
+        /// for `--answers-from` / `--answers-file` prefill. Intended on a
+        /// completed notation — typically an onboarding whose answers a
+        /// follow-on notation should repeat.
+        #[arg(long)]
+        save_answers: Option<PathBuf>,
     },
     /// Render + park a notation's document for review (`POST
     /// …/approve-send`) — fills the bound packet (a formation's official
@@ -6070,8 +6093,13 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 host,
             } => projects::finance::show(host.host.as_deref(), project_code.as_deref(), json).await,
         },
-        ProjectsCmd::Onboard { host } => {
-            projects::lifecycle::onboard(host.host.as_deref(), Path::new(".")).await
+        ProjectsCmd::Onboard { host, answers_from } => {
+            projects::lifecycle::onboard(
+                host.host.as_deref(),
+                Path::new("."),
+                answers_from.as_deref(),
+            )
+            .await
         }
         ProjectsCmd::Offboard { effective_at, host } => {
             projects::lifecycle::offboard(host.host.as_deref(), Path::new("."), effective_at).await
@@ -6423,20 +6451,34 @@ async fn run_notation(action: NotationAction) -> ExitCode {
             host,
             client_email: _,
             project: _,
-        } => match template_code.as_str() {
-            "onboarding" | "onboarding__letter" => {
-                projects::lifecycle::onboard(host.host.as_deref(), Path::new(".")).await
-            }
-            "offboarding" | "offboarding__letter" => {
-                projects::lifecycle::offboard(host.host.as_deref(), Path::new("."), None).await
-            }
-            _ => {
+            answers_from,
+        } => {
+            if answers_from.is_some() && !template_code.starts_with("onboarding") {
                 eprintln!(
+                    "navigator site notation create: --answers-from prefills an onboarding; offboarding and other templates take no answers file"
+                );
+                return ExitCode::FAILURE;
+            }
+            match template_code.as_str() {
+                "onboarding" | "onboarding__letter" => {
+                    projects::lifecycle::onboard(
+                        host.host.as_deref(),
+                        Path::new("."),
+                        answers_from.as_deref(),
+                    )
+                    .await
+                }
+                "offboarding" | "offboarding__letter" => {
+                    projects::lifecycle::offboard(host.host.as_deref(), Path::new("."), None).await
+                }
+                _ => {
+                    eprintln!(
                         "navigator site notation create: use `navigator project onboard` or `navigator project offboard`"
                     );
-                ExitCode::FAILURE
+                    ExitCode::FAILURE
+                }
             }
-        },
+        }
         NotationAction::Status {
             notation_id,
             host,
@@ -6446,7 +6488,16 @@ async fn run_notation(action: NotationAction) -> ExitCode {
             notation_id,
             host,
             json,
-        } => remote::notation_answers(host.host.as_deref(), notation_id, json).await,
+            save_answers,
+        } => {
+            remote::notation_answers(
+                host.host.as_deref(),
+                notation_id,
+                json,
+                save_answers.as_deref(),
+            )
+            .await
+        }
         NotationAction::Approve { notation_id, host } => {
             remote::notation_approve(host.host.as_deref(), notation_id).await
         }

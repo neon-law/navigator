@@ -15,8 +15,8 @@ pub(crate) use project_scaffold::{OFFBOARDING, ONBOARDING};
 
 /// Open the onboarding notation, deriving the matter and client from
 /// `navigator.yaml` in `root`.
-pub async fn onboard(host: Option<&str>, root: &Path) -> ExitCode {
-    run(root, host, ONBOARDING).await
+pub async fn onboard(host: Option<&str>, root: &Path, answers_from: Option<&Path>) -> ExitCode {
+    run(root, host, ONBOARDING, answers_from).await
 }
 
 /// Open the offboarding notation, or close and archive a matter whose signed
@@ -29,8 +29,8 @@ pub async fn offboard(
     run_offboard(root, host, effective_at).await
 }
 
-async fn run(root: &Path, host: Option<&str>, kind: &str) -> ExitCode {
-    match run_open(root, host, kind).await {
+async fn run(root: &Path, host: Option<&str>, kind: &str, answers_from: Option<&Path>) -> ExitCode {
+    match run_open(root, host, kind, answers_from).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("navigator project {kind}: {error:#}");
@@ -39,7 +39,12 @@ async fn run(root: &Path, host: Option<&str>, kind: &str) -> ExitCode {
     }
 }
 
-async fn run_open(root: &Path, host: Option<&str>, kind: &str) -> Result<()> {
+async fn run_open(
+    root: &Path,
+    host: Option<&str>,
+    kind: &str,
+    answers_from: Option<&Path>,
+) -> Result<()> {
     let project = project_coordinates(root)?;
     let template = template_path(root, kind)?;
     let code = template
@@ -81,7 +86,18 @@ async fn run_open(root: &Path, host: Option<&str>, kind: &str) -> Result<()> {
         return Ok(());
     }
 
-    let created = remote::notation_create(host, code, &project.client_dri, &project.code).await;
+    let created = remote::notation_create(
+        host,
+        code,
+        &project.client_dri,
+        &project.code,
+        if kind == ONBOARDING {
+            answers_from
+        } else {
+            None
+        },
+    )
+    .await;
     if created != ExitCode::SUCCESS {
         return Err(anyhow!("could not open the {kind} notation"));
     }
@@ -123,7 +139,7 @@ async fn run_offboard(
                 );
                 return Ok(());
             }
-            if remote::notation_create(host, code, &project.client_dri, &project.code).await
+            if remote::notation_create(host, code, &project.client_dri, &project.code, None).await
                 != ExitCode::SUCCESS
             {
                 return Err(anyhow!("could not open the offboarding notation"));
@@ -604,7 +620,9 @@ mod tests {
             )
             .unwrap();
         }
-        let error = run_open(root.path(), None, ONBOARDING).await.unwrap_err();
+        let error = run_open(root.path(), None, ONBOARDING, None)
+            .await
+            .unwrap_err();
         assert!(
             error.to_string().contains("multiple onboarding Drafts"),
             "ambiguous Drafts must be refused before Git or HTTP: {error:#}"
@@ -704,7 +722,7 @@ mod tests {
     async fn onboarding_writes_a_stub_before_making_any_remote_request() {
         let root = tempfile::tempdir().unwrap();
         write_manifest(root.path());
-        run_open(root.path(), None, ONBOARDING).await.unwrap();
+        run_open(root.path(), None, ONBOARDING, None).await.unwrap();
         let stub =
             std::fs::read_to_string(template_path(root.path(), ONBOARDING).unwrap()).unwrap();
         assert!(stub.contains("Draft this letter"));
@@ -721,7 +739,7 @@ mod tests {
             "a".repeat(64)
         );
         std::fs::write(folder.join("retainer_signed.pdf.yaml"), pointer).unwrap();
-        run_open(root.path(), None, ONBOARDING).await.unwrap();
+        run_open(root.path(), None, ONBOARDING, None).await.unwrap();
     }
 
     #[tokio::test]
@@ -826,7 +844,7 @@ mod tests {
         std::fs::write(root.path().join(&relative), &stub).unwrap();
         // No git checkout and no host: reaching either would fail, so success
         // proves the stub stopped the command first.
-        run_open(root.path(), None, ONBOARDING).await.unwrap();
+        run_open(root.path(), None, ONBOARDING, None).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(root.path().join(relative)).unwrap(),
             stub
