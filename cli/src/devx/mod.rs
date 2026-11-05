@@ -2626,6 +2626,10 @@ fn render_env_for(cfg: &KindConfig, db_name: &str, web_port: u16, root: &Path) -
         ("PORT", web_port.to_string()),
         ("NAVIGATOR_ENVIRONMENT", "dev".into()),
         ("NAVIGATOR_CI_HARNESS", "1".into()),
+        // Signature provider selection has no default and refuses to boot
+        // unset (`portal::signature::SignatureProviderKind::from_env`). The
+        // local tier runs the fake loop; `fake` is refused in production.
+        ("NAVIGATOR_SIGNATURE_PROVIDER", "fake".into()),
         (
             "KUBECONFIG",
             shell_single_quote(&root.join(".devx").join("kubeconfig").display().to_string()),
@@ -4101,6 +4105,14 @@ admin_base_url = "https://production-env.example.invalid:9070"
         );
         assert!(env.contains("NAVIGATOR_SURREAL_USER=root"), "{env}");
         assert!(env.contains("NAVIGATOR_SURREAL_PASSWORD=root"), "{env}");
+    }
+
+    /// `web` refuses to boot without an explicit signature provider, so
+    /// the local tier names the fake loop or quickstart never comes up.
+    #[test]
+    fn render_env_selects_the_fake_signature_provider() {
+        let env = render_env(&default_cfg(), Path::new("/ws"));
+        assert!(env.contains("NAVIGATOR_SIGNATURE_PROVIDER=fake"), "{env}");
     }
 
     #[test]
