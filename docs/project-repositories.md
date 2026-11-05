@@ -499,6 +499,41 @@ During local development, `navigator dev up` and `navigator dev worktree-env up`
 source (`navigator.yaml`, `drafts/`, and the commit) before writing `.devx/env`. They run no `pnpm` and stage no
 `dist/`.
 
+### Upload limits
+
+Each document path has one limit per file and one per batch. Each limit is a single constant in
+[`store::documents`](../store/src/documents.rs) (`MAX_UPLOAD_FORM_FILES`, `MAX_UPLOAD_FORM_BYTES`,
+`MAX_DOCUMENT_UPLOAD_BYTES`, `MAX_MEDIA_DOCUMENT_UPLOAD_BYTES`, `MAX_STREAMING_UPLOAD_BYTES`) or
+[`store::drive_import`](../store/src/drive_import.rs) (`MAX_FILES`, `MAX_FILE_BYTES`, `MAX_TOTAL_BYTES`).
+`store::documents::upload_limits_markdown_table` renders the table below from those constants, and a test fails when
+this page and that function disagree.
+
+| Path | Per file | Per batch | Per matter |
+| --- | --- | --- | --- |
+| Upload form on the matter's Documents tab | 500 MiB | 50 files, 500 MiB in total | no limit |
+| `navigator site document upload` | 1 GiB | one file per run | no limit |
+| `navigator project sync` | 1 GiB | no limit; each staged file is its own upload | no limit |
+| `POST /app/api/projects/{id}/documents` | 25 MiB; 100 MiB for kind `transcript` | one file per request | no limit |
+| Upload session (`.../documents/upload-session`) | 1 GiB | one file per session | no limit |
+| Drive dropbox import | 25 MiB | 50 files, 500 MiB in total | no limit |
+
+No path limits a matter's total. Every path accepts any file type: `kind` classifies the document, and only passive
+types (PDF and raster images) are ever served inline.
+
+`navigator site document upload` and `navigator project sync` send a file within the buffered door's limit in one
+request and stream a larger one through an [Upload Session](glossary/upload-session.md), so a 54 MB scan syncs without
+complaint. Above 1 GiB both refuse the file before sending a byte and say it must be split.
+
+The upload form is lawyer-only; a client has no upload door in the app. A client sends files into the matter's [Client
+Submissions](glossary/client-submissions.md) folder, or to their lawyer some other way, and the lawyer files them. The
+Drive dropbox import refuses a whole pass that holds a file or a total over its limits, so a lawyer files an oversized
+client file with `navigator site document upload` instead.
+
+The form checks a batch in the browser before sending it. A batch over a limit is refused with a message that says
+nothing was uploaded, names both limits, and points a single file over the batch limit to `navigator site document
+upload`. The server answers the same message with `413 Payload Too Large` when an oversized submission reaches it. The
+web ingress's `proxy-body-size` sits above the batch limit, so the app, not the proxy, answers.
+
 ## Court notices
 
 A litigation Project lists the case numbers it appears in under `dockets:` in `navigator.yaml` (`Y020` refuses anything

@@ -107,28 +107,16 @@ const INLINE_CONTENT_TYPES: &[&str] = &[
     "image/webp",
 ];
 
-/// Most files one submission may carry.
-///
-/// The batch is held in memory until the whole multipart body has been
-/// read — `kind` and `description` post *after* the files, so a file
-/// can't be filed the moment it arrives. That buffer is what makes a
-/// ceiling necessary: without one, an authenticated lawyer session could
-/// post an unbounded number of parts and exhaust the process, taking
-/// other requests down with it. Fifty is far above a realistic
-/// discovery batch and far below anything that threatens the pod.
-const MAX_BATCH_FILES: usize = 50;
+/// Most files one submission may carry: [`store::documents::MAX_UPLOAD_FORM_FILES`].
+const MAX_BATCH_FILES: usize = store::documents::MAX_UPLOAD_FORM_FILES;
 
-/// Most bytes one submission may carry across every file in it.
-///
-/// The per-file ceiling is the same number: one 500 MB file and fifty
-/// 10 MB files cost the same memory, so the limit that matters is the
-/// total. Sized for scanned-PDF discovery batches, which is the heaviest
-/// legitimate traffic this route sees.
+/// Most bytes one submission may carry across every file in it:
+/// [`store::documents::MAX_UPLOAD_FORM_BYTES`].
 ///
 /// `pub(crate)` so `admin.rs` can raise Axum's own default ~2 MB body
 /// limit to match on this route — without that layer, Axum rejects a
 /// multi-megabyte PDF long before this constant's check ever runs.
-pub(crate) const MAX_BATCH_BYTES: usize = 500 * 1024 * 1024;
+pub(crate) const MAX_BATCH_BYTES: usize = store::documents::MAX_UPLOAD_FORM_BYTES;
 
 /// `POST /app/projects/{project_code}/documents/upload`.
 pub async fn upload(
@@ -181,7 +169,11 @@ pub async fn upload(
         Err(BatchError::Malformed) => return StatusCode::BAD_REQUEST.into_response(),
         Err(BatchError::TooLarge) => {
             tracing::warn!(%project_id, "project document upload exceeded the batch ceiling");
-            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                store::documents::upload_form_limit_message(),
+            )
+                .into_response();
         }
     };
     if batch.files.is_empty() {
@@ -600,6 +592,19 @@ enum BatchError {
     TooLarge,
 }
 
+impl BatchError {
+    /// A multipart read error: the route's body limit is the batch byte
+    /// ceiling reached before the handler's own count, so it is
+    /// [`BatchError::TooLarge`]; anything else is unreadable.
+    fn from_multipart(error: &axum::extract::multipart::MultipartError) -> Self {
+        if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            Self::TooLarge
+        } else {
+            Self::Malformed
+        }
+    }
+}
+
 /// The existing document `assets` row, when this project already holds one
 /// with the same filename and the same bytes.
 ///
@@ -685,7 +690,7 @@ async fn read_upload_batch(multipart: &mut Multipart) -> Result<UploadBatch, Bat
         let next = match multipart.next_field().await {
             Ok(Some(field)) => field,
             Ok(None) => break,
-            Err(_) => return Err(BatchError::Malformed),
+            Err(error) => return Err(BatchError::from_multipart(&error)),
         };
         let name = next.name().map(String::from);
         match name.as_deref() {
@@ -694,7 +699,7 @@ async fn read_upload_batch(multipart: &mut Multipart) -> Result<UploadBatch, Bat
                 let content_type = next.content_type().map(String::from);
                 let bytes = match next.bytes().await {
                     Ok(b) => b.to_vec(),
-                    Err(_) => return Err(BatchError::Malformed),
+                    Err(error) => return Err(BatchError::from_multipart(&error)),
                 };
                 // A picker with nothing selected still posts one part —
                 // no filename, zero bytes. That is "nothing selected".

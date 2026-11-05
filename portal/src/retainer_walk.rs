@@ -1969,7 +1969,18 @@ pub(crate) async fn render_and_park(
     // body reads the human *labels*.
     let document_payload = if let Some(form_code) = template_row.form_code.as_deref() {
         let form_ctx = render_form_context_from_answers(deps.surreal, notation_id).await?;
-        acroform_payload(deps, notation_id, form_code, &form_ctx).await?
+        // The body is not a discarded cover sheet: the packet the client
+        // signs has to carry the engagement terms and the signature
+        // blocks the e-signature fields anchor to — without it the send
+        // is a form nobody can sign. Expand signatures exactly as the
+        // Typst fork does, so the anchors rendered into the addendum are
+        // the same deterministic fields the send path manifests.
+        let ctx = render_context_from_answers(deps.surreal, notation_id).await?;
+        let (expanded_body, signature_fields) = crate::signature_render::expand_signatures(
+            &typst_body_from_template(&template_body, &ctx, template_row.kind.as_deref()),
+        );
+        let addendum_typst = (!signature_fields.is_empty()).then_some(expanded_body);
+        acroform_payload(deps, notation_id, form_code, &form_ctx, addendum_typst).await?
     } else {
         let ctx = render_context_from_answers(deps.surreal, notation_id).await?;
         // Convert the Markdown body to Typst, then expand signature
@@ -2014,6 +2025,7 @@ async fn acroform_payload(
     notation_id: Uuid,
     form_code: &str,
     ctx: &BTreeMap<String, String>,
+    addendum_typst: Option<String>,
 ) -> Result<String, WorkflowDriveError> {
     let form_err = |reason: String| WorkflowDriveError::Form {
         form_code: form_code.to_string(),
@@ -2057,6 +2069,7 @@ async fn acroform_payload(
         storage_key: document_pdf_storage_key(notation_id),
         blank_form_key,
         fields,
+        addendum_typst,
     })
     .map_err(WorkflowDriveError::Payload)
 }

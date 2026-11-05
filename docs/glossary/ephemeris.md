@@ -26,16 +26,15 @@ kernel bytes plus the conversion settings recorded here. Source coverage dates u
   mismatch. Storage resolves through the `EphemerisStore` trait; `FilesystemStore` rooted at `$NAVIGATOR_EPHEMERIS_DIR`
   serves development and tests, and production storage (for example an object store) remains an open decision the trait
   keeps reversible.
-- **Time standard** — civil UTC converts to TDB through hifitime: UTC→TAI applies hifitime's built-in leap-second table
-  (TAI−UTC is 37 s from 2017: 27 inserted leap seconds plus the initial 10 s; pre-1972 UTC drift is modeled), TAI→TT
-  adds the fixed 32.184 s offset, and TT→TDB adds the periodic relativistic term (amplitude ≈ 1.6 ms). Classical delta-T
-  (TT−UT1) is not consumed by the lookup; SPK segments are functions of TDB only, and delta-T belongs to Earth-rotation
-  quantities such as the ascendant and midheaven, computed by later layers.
+- **Time standard** — normalized civil birth labels before 1972 are UT1. Adding the pinned delta-T model gives physical
+  TT. From 1972, hifitime converts UTC→TAI→TT using pinned IERS leap seconds and TT = TAI + 32.184 s; TAI−UTC is 37 s
+  from 2017. Both paths convert TT→TDB with the periodic relativistic term, bounded by about 1.7 ms. SPK segments are
+  functions of physical TDB. The historical civil convention approximates UTC without reconstructing fractional
+  1961–1971 adjustments.
 - **Reference frame** — ICRF/J2000 (SPK frame id 1). Segments declared in any other frame are refused rather than
   rotated.
-- **Verification** — the crate's tests interpolate a checked-in table of JPL Horizons reference positions (every DE440
-  body plus Chiron, 1900–2050) within tolerances derived from the documented DE441–DE440 agreement: about one meter for
-  planets across DE440's coverage, about ten meters for the Moon a century from present.
+- **Verification** — JPL geometric comparison gates are 0.01 km for tested major-body states, 0.1 km for the Moon,
+  and 50 km for Chiron. They are software/model cross-check margins, not absolute astronomical uncertainties.
 
 The mean ascending lunar node uses the IERS Conventions (2003) longitude from ERFA 2.0.1, with IAU 2000B nutation and
 IAU 2006 true obliquity. The calculation provenance names these models. Swiss Ephemeris 2.10.03 supplies independent
@@ -51,9 +50,9 @@ includes the original civil input and precision, resolved instant, coordinates, 
 version, algorithm version, and the complete source manifest. Concurrent callers receive their own original input.
 
 A [Birth Time](birth-time.md) resolves through pinned IANA rules. The initial calculation window is 1900-01-01 inclusive
-to 2050-01-01 exclusive UTC. The whole uncertainty interval must fit that window. Unknown times retain only the date and
-zone and return no positions or angles. Approximate times return nominal positions with their stated uncertainty,
-without houses or angles. Civil leap-second input is rejected.
+to 2050-01-01 exclusive in the normalized universal civil calendar. The whole uncertainty interval must fit that window.
+Unknown times retain only the date and zone and return no positions or angles. Approximate times return nominal
+positions with their stated uncertainty, without houses or angles. Civil leap-second input is rejected.
 
 | Convention | Supported selection |
 | --- | --- |
@@ -79,10 +78,18 @@ longitude differences wrap across zero. The apparent solver applies light time, 
 nutation. It does not apply gravitational light deflection or atmospheric refraction. Position lookup evaluates native
 SPK polynomials rather than interpolating a daily table.
 
-Provenance distinguishes UTC, TT, TDB, and modeled UT1. The existing sidereal layer approximates TT by TDB within about
-1.7 ms when subtracting delta-T. Its delta-T convention is recorded separately from the orbital source. Future UTC and
-Earth rotation follow pinned models and do not promise future observed precision. Calculation errors omit birth input
-and derived position values; personal request and response types have no debug formatting.
+Provenance records the civil calendar and its UT1/UTC scale, physical TT/TDB, and explicit UT1. Historical inputs have
+no invented UTC reading. Modern Earth rotation uses TT minus [Delta T](delta-t.md), with pinned USNO observations and
+forecasts and explicit extrapolation beyond the published forecast. Historical dates before 1955 use the published
+Espenak-Meeus polynomials. The quoted source error is separate from a guaranteed model error; missing errors and
+extrapolation are not labeled zero uncertainty. Precession, nutation, and node series use TDB as a TT approximation
+within about 1.7 ms. Future UTC follows the pinned clock model. Calculation errors omit birth input and derived
+positions; personal request and response types have no debug formatting.
+
+The calculation provenance and cache identity include every numerical model and the original Earth-rotation source URLs,
+retrieval UTC, upstream snapshot identity, SHA-256, and byte count. These public source data are verified and normalized
+at compile time; requests perform no source-network calls. The source contract is in
+[`ephemeris/data/usno/README.md`](../../ephemeris/data/usno/README.md).
 
 Run the synthetic full-inventory benchmark with exact manifest files available locally:
 
@@ -93,3 +100,7 @@ NAVIGATOR_EPHEMERIS_DIR=/path/to/pinned-kernels cargo run -p ephemeris --release
 It reports verified loading, first calculation, and 100-run uncached/cache-hit medians. It prints durations only and is
 an observation tool rather than a timing assertion in CI. Swiss house fixtures validate the angle construction with
 explicit sidereal angle and obliquity inputs, independently of the chosen Earth-rotation prediction model.
+
+Resolved chart results carry a `ChartInstant`, pairing the physical epoch with explicit UT1. Use `gast_degrees_for`,
+`lines_for_instant`, and `LineProvenance::for_instant` for these results. Raw `Epoch` line APIs interpret their input
+through hifitime's proleptic UTC model and do not resolve historical birth clocks. The algorithm identity is chart-v3.

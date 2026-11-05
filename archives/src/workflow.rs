@@ -662,7 +662,10 @@ fn digest_message<F: Fn(&str) -> Option<String>>(
 /// Assemble the [`DiagnosticReport`] from the journaled summary and the
 /// archive bucket. Takes a `key -> value` lookup seam so the mapping is
 /// unit-testable without mutating process env. The bucket is the only env
-/// the digest needs — it is the root of every per-table GCS console link.
+/// the digest needs — it is the root of every per-table GCS console link —
+/// plus the optional archive project ([`cloud::archives_project::ARCHIVES_GCP_PROJECT_ENV`]),
+/// which annotates the digest and pins the console links when the lane
+/// writes offsite.
 ///
 /// Fails rather than rendering a placeholder. The snapshot phase cannot have
 /// produced a summary without resolving this same bucket, so by the time the
@@ -679,6 +682,8 @@ fn build_report<F: Fn(&str) -> Option<String>>(
     Ok(DiagnosticReport {
         run_date: summary.run_date,
         bucket,
+        archive_project: get(cloud::archives_project::ARCHIVES_GCP_PROJECT_ENV)
+            .filter(|s| !s.is_empty()),
         snapshots: summary.entries.clone(),
         failures: summary.failures.clone(),
     })
@@ -1325,6 +1330,47 @@ mod tests {
             msg.contains("• ⚠️ *documents* — snapshot failed"),
             "failed table surfaces as a warning: {msg}"
         );
+    }
+
+    #[test]
+    fn digest_message_annotates_the_offsite_archive_project_when_set() {
+        // With the archive project named, the digest carries the annotation
+        // line and every console link opens in the archive project's
+        // context — the cross-project shape the offsite lane ships.
+        let msg = digest_message(
+            &summary_with(vec![entry("persons", 312)], vec![]),
+            lookup(&[
+                ("NAVIGATOR_ARCHIVES_BUCKET", "proj-archives"),
+                (
+                    cloud::archives_project::ARCHIVES_GCP_PROJECT_ENV,
+                    "neon-law-archive",
+                ),
+            ]),
+        )
+        .expect("a named bucket resolves");
+        assert!(
+            msg.contains("• *archive project* — neon-law-archive (offsite bucket)"),
+            "annotation line: {msg}"
+        );
+        assert!(
+            msg.contains(
+                "<https://console.cloud.google.com/storage/browser/proj-archives/application/persons?project=neon-law-archive|view in GCP>"
+            ),
+            "console link pinned to the archive project: {msg}"
+        );
+    }
+
+    #[test]
+    fn digest_message_omits_the_project_annotation_when_absent() {
+        // The in-project lane sets no project env: no annotation line, and
+        // the links stay exactly as they rendered before the seam existed.
+        let msg = digest_message(
+            &summary_with(vec![entry("persons", 312)], vec![]),
+            lookup(&[("NAVIGATOR_ARCHIVES_BUCKET", "proj-archives")]),
+        )
+        .expect("a named bucket resolves");
+        assert!(!msg.contains("archive project"), "got {msg}");
+        assert!(!msg.contains("?project="), "got {msg}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

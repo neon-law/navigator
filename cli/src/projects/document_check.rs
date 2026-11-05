@@ -117,22 +117,195 @@ pub(crate) async fn run(dir: &Path, ci: bool, deep: bool) -> Result<Outcome> {
     let host = host
         .filter(|host| !host.trim().is_empty())
         .ok_or_else(|| anyhow!("navigator.yaml names no host"))?;
-    let client = if ci {
-        let (base, token) = crate::remote::resolve_ci_document(&host).await?;
-        DocumentClient::with_credential(base, token, &project).await?
-    } else {
-        DocumentClient::connect(Some(&host), &project).await?
-    };
-    check(dir, &client, !ci, deep).await
+    if !ci {
+        let client = DocumentClient::connect(Some(&host), &project).await?;
+        return check_with(dir, &client, None, true, deep).await;
+    }
+    let (base, token) = crate::remote::resolve_ci_document(&host).await?;
+    let client = DocumentClient::with_credential(base, token, &project).await?;
+    // The CI session lives at most ten minutes; renewal mints a fresh one
+    // from this run's OIDC token exactly the way the first mint did.
+    let remint: Remint = Box::new(move || {
+        let host = host.clone();
+        Box::pin(async move {
+            crate::remote::resolve_ci_document(&host)
+                .await
+                .map(|(_, token)| token)
+        })
+    });
+    check_with(dir, &client, Some(&remint), false, deep).await
 }
 
-/// Compare `dir` with the live records `client` can see.
+/// Mint a fresh bearer for the same deployment and Project.
+pub(crate) type Remint =
+    Box<dyn Fn() -> futures::future::BoxFuture<'static, Result<String>> + Send + Sync>;
+
+/// How many revision reads the check keeps in flight at once.
+const REVISION_CONCURRENCY: usize = 8;
+
+/// A revision read the deployment refused for want of a live session.
+#[derive(Debug)]
+struct SessionExpired(String);
+
+impl std::fmt::Display for SessionExpired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SessionExpired {}
+
+/// Whether a failed read says nothing about the document, only the session.
+fn is_session_failure(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<SessionExpired>().is_some() || crate::remote::is_session_refused(error)
+}
+
+/// The revision reads of one check run. A `401` renews the session once
+/// through `remint` and retries the read; when there is no `remint`, or the
+/// renewed session is refused too, the read fails as an expired session —
+/// a `401` never reads as a missing document.
+struct LiveSession<'a> {
+    initial: &'a DocumentClient,
+    remint: Option<&'a Remint>,
+    state: std::sync::Mutex<SessionState>,
+    renewing: tokio::sync::Mutex<()>,
+}
+
+#[derive(Default)]
+struct SessionState {
+    /// Bumped by each successful renewal, so reads refused under an older
+    /// session reuse the newer one instead of minting again.
+    generation: u64,
+    renewed: Option<std::sync::Arc<DocumentClient>>,
+    /// Set once a renewal fails or a renewed session is refused too.
+    exhausted: Option<String>,
+}
+
+impl<'a> LiveSession<'a> {
+    fn new(initial: &'a DocumentClient, remint: Option<&'a Remint>) -> Self {
+        Self {
+            initial,
+            remint,
+            state: std::sync::Mutex::new(SessionState::default()),
+            renewing: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, SessionState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    async fn list_revisions(&self, slug: &str) -> Result<RevisionsResponse> {
+        let (generation, renewed) = {
+            let state = self.state();
+            (state.generation, state.renewed.clone())
+        };
+        let client = renewed.as_deref().unwrap_or(self.initial);
+        let refused = match client.list_revisions(slug).await {
+            Err(error) if crate::remote::is_session_refused(&error) => error,
+            other => return other,
+        };
+        let fresh = match self.renew(generation).await {
+            Ok(fresh) => fresh,
+            Err(reason) => return Err(self.expired(&format!("{refused:#}; {reason}"))),
+        };
+        match fresh.list_revisions(slug).await {
+            Err(error) if crate::remote::is_session_refused(&error) => {
+                let reason = format!("the renewed session was refused too: {error:#}");
+                self.state().exhausted.get_or_insert(reason.clone());
+                Err(self.expired(&reason))
+            }
+            other => other,
+        }
+    }
+
+    /// The session to retry with: a renewal another read already made since
+    /// `seen`, or a fresh mint.
+    async fn renew(
+        &self,
+        seen: u64,
+    ) -> std::result::Result<std::sync::Arc<DocumentClient>, String> {
+        let Some(remint) = self.remint else {
+            return Err("run `navigator site login` and re-run the check".to_string());
+        };
+        let _renewing = self.renewing.lock().await;
+        {
+            let state = self.state();
+            if let Some(reason) = &state.exhausted {
+                return Err(reason.clone());
+            }
+            if state.generation != seen {
+                if let Some(renewed) = &state.renewed {
+                    return Ok(renewed.clone());
+                }
+            }
+        }
+        match remint().await {
+            Ok(token) => {
+                let fresh = std::sync::Arc::new(self.initial.with_token(token));
+                let mut state = self.state();
+                state.generation += 1;
+                state.renewed = Some(fresh.clone());
+                Ok(fresh)
+            }
+            Err(error) => {
+                let reason = format!("renewing it failed: {error:#}");
+                self.state().exhausted = Some(reason.clone());
+                Err(reason)
+            }
+        }
+    }
+
+    fn expired(&self, reason: &str) -> anyhow::Error {
+        let who = if self.remint.is_some() {
+            "CI session"
+        } else {
+            "Navigator session"
+        };
+        anyhow::Error::new(SessionExpired(format!(
+            "{who} expired or is unauthenticated: {reason}"
+        )))
+    }
+
+    /// Read each slug's revisions with bounded concurrency, answered in the
+    /// order of `slugs`.
+    async fn list_each<'s>(
+        &self,
+        slugs: impl IntoIterator<Item = &'s String>,
+    ) -> Vec<(&'s String, Result<RevisionsResponse>)> {
+        use futures::StreamExt as _;
+        futures::stream::iter(slugs)
+            .map(|slug| async move { (slug, self.list_revisions(slug).await) })
+            .buffered(REVISION_CONCURRENCY)
+            .collect()
+            .await
+    }
+}
+
+/// Compare `dir` with the live records `client` can see, never renewing the
+/// session.
+#[cfg(test)]
 pub(crate) async fn check(
     dir: &Path,
     client: &DocumentClient,
     write: bool,
     deep: bool,
 ) -> Result<Outcome> {
+    check_with(dir, client, None, write, deep).await
+}
+
+/// Compare `dir` with the live records `client` can see, renewing the session
+/// through `remint` when the deployment refuses it mid-run.
+pub(crate) async fn check_with(
+    dir: &Path,
+    client: &DocumentClient,
+    remint: Option<&Remint>,
+    write: bool,
+    deep: bool,
+) -> Result<Outcome> {
+    let session = LiveSession::new(client, remint);
     let mut fixes = Vec::new();
     if let Some(outcome) = reconcile_legacy_layout(dir, write, &mut fixes)? {
         return Ok(outcome);
@@ -168,7 +341,8 @@ pub(crate) async fn check(
 
     let removed = RemovedPointers::scan(dir);
     let mut claimed: BTreeSet<String> = BTreeSet::new();
-    let (resolved, colliding) = resolve_live_slugs(client, &live_slugs, &locals, &mut errors).await;
+    let (resolved, colliding, unread) =
+        resolve_live_slugs(&session, &live_slugs, &locals, &mut errors).await;
     claimed.extend(colliding.iter().cloned());
     for (slug, live, key) in resolved {
         if colliding.contains(&key) {
@@ -189,28 +363,29 @@ pub(crate) async fn check(
             &removed,
         )?;
     }
-    for (slug, local) in &locals {
-        if claimed.contains(slug) {
-            continue;
+    let unclaimed = locals.iter().filter(|(slug, local)| {
+        // A live slug whose revisions could not be read already carries
+        // that failure; it is not a missing document.
+        if claimed.contains(*slug) || unread.contains(*slug) {
+            return false;
         }
-        let Local::Pointer { pointer, .. } = local else {
-            continue;
-        };
         // LAW-82: an Authority-backed pointer never has a live Project row —
         // its bytes are archived under a global Authority, never filed on
         // this Project as a document — so there is no live chain to report
         // missing.
-        if pointer.authority_id.is_some() {
-            continue;
-        }
-        let message = match client.list_revisions(slug).await {
+        matches!(local, Local::Pointer { pointer, .. } if pointer.authority_id.is_none())
+    });
+    let unclaimed: BTreeMap<&String, &Local> = unclaimed.collect();
+    for (slug, read) in session.list_each(unclaimed.keys().copied()).await {
+        let message = match read {
             Ok(live) if live.revisions.iter().any(|revision| revision.operative) => {
                 "the live chain is missing from the integrity report".to_string()
             }
+            Err(error) if is_session_failure(&error) => format!("{error:#}"),
             _ => "no live document for this pointer; run `navigator project sync` to upload it or remove the pointer".to_string(),
         };
         errors.push(CheckFailure {
-            location: local.relative().to_string(),
+            location: unclaimed[slug].relative().to_string(),
             message,
         });
     }
@@ -378,24 +553,31 @@ fn index_pointers(dir: &Path, errors: &mut Vec<CheckFailure>) -> Result<BTreeMap
     Ok(locals)
 }
 
-/// Fetch every live slug's revisions once, then group them by pointer key.
+/// Fetch every live slug's revisions once, in parallel, then group them by
+/// pointer key. A slug whose revisions could not be read is reported in
+/// `errors` and named in the third returned set.
 ///
 /// A slug that turns out to share another slug's pointer key (LAW-81 — a
 /// bare legacy slug and its extension-carrying twin both resolving to the
 /// same `documents/<key>.yaml`) is reported directly in `errors` and named in
-/// the returned set instead of being handed to [`reconcile_slug`]:
+/// the second returned set instead of being handed to [`reconcile_slug`]:
 /// reconciling both in turn would rewrite the one pointer back and forth,
 /// which reads like an ordinary drifted pointer and invites another commit
 /// round.
 async fn resolve_live_slugs(
-    client: &DocumentClient,
+    session: &LiveSession<'_>,
     live_slugs: &BTreeSet<String>,
     locals: &BTreeMap<String, Local>,
     errors: &mut Vec<CheckFailure>,
-) -> (Vec<(String, RevisionsResponse, String)>, BTreeSet<String>) {
+) -> (
+    Vec<(String, RevisionsResponse, String)>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+) {
     let mut resolved: Vec<(String, RevisionsResponse, String)> = Vec::new();
-    for slug in live_slugs {
-        match client.list_revisions(slug).await {
+    let mut unread: BTreeSet<String> = BTreeSet::new();
+    for (slug, read) in session.list_each(live_slugs).await {
+        match read {
             Ok(live) => {
                 let key = pointer_key(slug, &live);
                 resolved.push((slug.clone(), live, key));
@@ -405,6 +587,7 @@ async fn resolve_live_slugs(
                     location: located(locals, slug),
                     message: format!("{error:#}"),
                 });
+                unread.insert(slug.clone());
             }
         }
     }
@@ -431,7 +614,7 @@ async fn resolve_live_slugs(
             ),
         });
     }
-    (resolved, colliding)
+    (resolved, colliding, unread)
 }
 
 // A legacy extensionless slug (LAW-62) is keyed in `locals` under the
@@ -1956,6 +2139,225 @@ mod tests {
 
         assert!(error.contains("404 Not Found: not found"), "{error}");
         assert!(error.contains("attempt 1 of 3"), "{error}");
+    }
+
+    /// A renewal that counts its mints and hands back `fresh-token`.
+    fn counting_remint() -> (Remint, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = calls.clone();
+        let remint: Remint = Box::new(move || {
+            let counter = counter.clone();
+            Box::pin(async move {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok("fresh-token".to_string())
+            })
+        });
+        (remint, calls)
+    }
+
+    fn revisions_route(project_id: Uuid) -> String {
+        format!("/app/api/projects/{project_id}/documents/revisions")
+    }
+
+    /// LAW-268: the CI session lapses mid-run. The refused read renews the
+    /// session once and is retried, and the run finishes clean.
+    #[tokio::test]
+    async fn a_session_refused_mid_run_is_renewed_once_and_the_read_retried() {
+        let (server, project_id, first_id) = server().await;
+        let second_id = Uuid::now_v7();
+        let dir = tempfile::tempdir().unwrap();
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({ "assets": [
+                asset(first_id, Some("a.pdf"), true, None),
+                asset(second_id, Some("b.pdf"), true, None),
+            ] }),
+        )
+        .await;
+        mount_revisions_named(&server, project_id, "a.pdf", first_id, SHA, "a.pdf").await;
+        Mock::given(method("GET"))
+            .and(path(revisions_route(project_id)))
+            .and(query_param("slug", "b.pdf"))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("session expired"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(revisions_route(project_id)))
+            .and(query_param("slug", "b.pdf"))
+            .and(header("authorization", "Bearer fresh-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "kind": "filing",
+                "revisions": [{
+                    "version": 1,
+                    "asset_id": second_id,
+                    "created_at": "2026-09-05T12:00:00Z",
+                    "sha256": SHA,
+                    "size_bytes": 18,
+                    "filename": "b.pdf",
+                    "visibility": "internal",
+                    "operative": true
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (remint, mints) = counting_remint();
+
+        let outcome = check_with(
+            dir.path(),
+            &client(&server, project_id),
+            Some(&remint),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            outcome
+                .fixes
+                .iter()
+                .map(|fix| fix.path.as_str())
+                .collect::<Vec<_>>(),
+            ["blobs/a.pdf.yaml", "blobs/b.pdf.yaml"]
+        );
+    }
+
+    /// A session the deployment keeps refusing after renewal is reported as
+    /// an expired session on every pointer — never as a missing document —
+    /// and is renewed only once.
+    #[tokio::test]
+    async fn a_persistent_refusal_is_an_expired_session_not_a_missing_document() {
+        let (server, project_id, asset_id) = server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let live = "blobs/pleadings/summons.pdf.yaml";
+        let orphan = "blobs/pleadings/answer.pdf.yaml";
+        write_tree(dir.path(), live, &pointer_yaml(asset_id, SHA));
+        write_tree(dir.path(), orphan, &pointer_yaml(Uuid::now_v7(), OTHER_SHA));
+        gitignore(dir.path());
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({ "assets": [asset(asset_id, Some("pleadings/summons.pdf"), true, None)] }),
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path(revisions_route(project_id)))
+            .respond_with(ResponseTemplate::new(401).set_body_string("session expired"))
+            .mount(&server)
+            .await;
+        let (remint, mints) = counting_remint();
+
+        let outcome = check_with(
+            dir.path(),
+            &client(&server, project_id),
+            Some(&remint),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            locations(&outcome.errors),
+            [live, orphan],
+            "{:?}",
+            outcome.errors
+        );
+        for error in &outcome.errors {
+            assert!(
+                error
+                    .message
+                    .starts_with("CI session expired or is unauthenticated"),
+                "{error:?}"
+            );
+            assert!(!error.message.contains("no live document"), "{error:?}");
+        }
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Without a way to renew (a local login), a refusal names the login,
+    /// never a missing document.
+    #[tokio::test]
+    async fn a_refusal_without_renewal_names_the_expired_login() {
+        let (server, project_id, asset_id) = server().await;
+        let dir = tempfile::tempdir().unwrap();
+        write_tree(
+            dir.path(),
+            "blobs/pleadings/answer.pdf.yaml",
+            &pointer_yaml(asset_id, SHA),
+        );
+        gitignore(dir.path());
+        mount_integrity(&server, project_id, serde_json::json!({ "assets": [] })).await;
+        Mock::given(method("GET"))
+            .and(path(revisions_route(project_id)))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let outcome = check(dir.path(), &client(&server, project_id), false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.errors.len(), 1, "{:?}", outcome.errors);
+        let message = &outcome.errors[0].message;
+        assert!(
+            message.starts_with("Navigator session expired or is unauthenticated"),
+            "{message}"
+        );
+        assert!(message.contains("navigator site login"), "{message}");
+    }
+
+    /// Revision reads run eight at a time, so a matter with hundreds of
+    /// pointers finishes well inside one session, and the findings still
+    /// come back in slug order.
+    #[tokio::test]
+    async fn revision_reads_run_concurrently_and_report_in_slug_order() {
+        const SLUGS: usize = 24;
+        const DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+        let (server, project_id, _) = server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let assets: Vec<serde_json::Value> = (0..SLUGS)
+            .map(|index| {
+                asset(
+                    Uuid::now_v7(),
+                    Some(&format!("doc-{index:02}.pdf")),
+                    true,
+                    None,
+                )
+            })
+            .collect();
+        mount_integrity(&server, project_id, serde_json::json!({ "assets": assets })).await;
+        Mock::given(method("GET"))
+            .and(path(revisions_route(project_id)))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_string("not found")
+                    .set_delay(DELAY),
+            )
+            .expect(u64::try_from(SLUGS).unwrap())
+            .mount(&server)
+            .await;
+
+        let started = std::time::Instant::now();
+        let outcome = check(dir.path(), &client(&server, project_id), false, false)
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+
+        let expected: Vec<String> = (0..SLUGS)
+            .map(|index| format!("blobs/doc-{index:02}.pdf.yaml"))
+            .collect();
+        assert_eq!(locations(&outcome.errors), expected);
+        assert!(
+            elapsed < DELAY * u32::try_from(SLUGS).unwrap() / 2,
+            "{SLUGS} reads took {elapsed:?}"
+        );
     }
 
     /// A tree laid out like `documents/`: one Matter Folder, a good invoice,

@@ -1035,9 +1035,12 @@ enum ProjectsCmd {
         #[arg(long = "term")]
         terms: Vec<String>,
         /// A Project whose code and participants are resolved into private
-        /// terms from the store; repeat for each matter in the draft.
+        /// terms through the site API with the `site login` session; repeat
+        /// for each matter in the draft.
         #[arg(long = "project")]
         projects: Vec<String>,
+        #[command(flatten)]
+        host: HostOpt,
     },
     /// Record e-filing transaction status and file court-stamped copies.
     Efiling {
@@ -1085,6 +1088,16 @@ enum ProjectsCmd {
         /// Project code. Defaults to project.name in navigator.yaml.
         project_code: Option<String>,
         /// Emit the complete live status as JSON.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Read the Project's onboarding status: pitch or official.
+    Lifecycle {
+        /// Project code. Defaults to project.name in navigator.yaml.
+        project_code: Option<String>,
+        /// Emit the onboarding status as JSON.
         #[arg(long)]
         json: bool,
         #[command(flatten)]
@@ -2687,7 +2700,8 @@ enum SiteCmd {
         /// repository root.
         #[arg(requires = "model_name")]
         seed_file: Option<PathBuf>,
-        /// Replace every field represented in each matching seed record.
+        /// Replace every field represented in each matching seed record,
+        /// including a Person record's `role`.
         #[arg(long)]
         overwrite: bool,
         /// Show the per-record reconciliation plan without writing anything.
@@ -5617,47 +5631,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             file,
             terms,
             projects,
-        } => {
-            let text = match file {
-                Some(path) => std::fs::read_to_string(path),
-                None => std::io::read_to_string(std::io::stdin()),
-            };
-            let Ok(text) = text else {
-                eprintln!("navigator: could not read the draft");
-                return ExitCode::from(2);
-            };
-            // The store opens only for a --project draft: a term-only check
-            // must work without any database configured.
-            let resolved = if projects.is_empty() {
-                Vec::new()
-            } else {
-                let db = match open_surreal().await {
-                    Ok(db) => db,
-                    Err(exit) => return exit,
-                };
-                match cli::pii_audit::private_terms(&db, &projects).await {
-                    Ok(terms) => terms,
-                    Err(e) => {
-                        eprintln!("navigator: {e:#}");
-                        return ExitCode::from(2);
-                    }
-                }
-            };
-            let terms = cli::pii_audit::merge_terms(&resolved, &terms);
-            let findings = cli::feedback_scan::scan(&text, &terms);
-            for f in &findings {
-                eprintln!(
-                    "line {}: {} found; write {} instead",
-                    f.line, f.kind, f.placeholder
-                );
-            }
-            if findings.is_empty() {
-                println!("feedback check: clean");
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::FAILURE
-            }
-        }
+            host,
+        } => projects::feedback_check::run(file, &terms, &projects, host.host.as_deref()).await,
         ProjectsCmd::Docket {
             action:
                 DocketCmd::Ingest {
@@ -6111,6 +6086,13 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             project_code,
             json,
         } => projects::status::run(host.host.as_deref(), project_code.as_deref(), json).await,
+        ProjectsCmd::Lifecycle {
+            host,
+            project_code,
+            json,
+        } => {
+            projects::lifecycle_read::run(host.host.as_deref(), project_code.as_deref(), json).await
+        }
         ProjectsCmd::Finance { action } => match action {
             FinanceCmd::Run { project_code, host } => {
                 projects::finance::run(host.host.as_deref(), project_code.as_deref()).await
@@ -8431,21 +8413,8 @@ fn run_render(
     else {
         return ExitCode::from(2);
     };
-    // Final documents only: unless this is a preview, the filled text
-    // carries nothing a person is still meant to complete. Missing facts
-    // route to the questionnaire state that answers them.
-    if !preview {
-        let unfinished = rules::final_document::scan(&body);
-        if !unfinished.is_empty() {
-            for finding in &unfinished {
-                eprintln!("navigator: rendered {finding}");
-            }
-            eprintln!(
-                "navigator: a final render carries no unfinished text; answer the questionnaire, \
-                 or pass `--preview` for a highlighted draft"
-            );
-            return ExitCode::from(1);
-        }
+    if !preview && !final_body_is_finished(&body) {
+        return ExitCode::from(1);
     }
 
     let Ok(letterhead) =
@@ -8488,6 +8457,31 @@ fn run_render(
         ))
     );
     ExitCode::SUCCESS
+}
+
+/// Final documents only: the filled text carries nothing a person is still
+/// meant to complete, and no draft counsel signature. Missing facts route to
+/// the questionnaire state that answers them. Prints each refusal.
+fn final_body_is_finished(body: &str) -> bool {
+    if word::paper::has_draft_counsel_signature(body) {
+        eprintln!(
+            "navigator: a counsel signature is signed from the Project's `matter.counsel.name`, \
+             which only a pleading reads; render this draft with `--preview`"
+        );
+        return false;
+    }
+    let unfinished = rules::final_document::scan(body);
+    if unfinished.is_empty() {
+        return true;
+    }
+    for finding in &unfinished {
+        eprintln!("navigator: rendered {finding}");
+    }
+    eprintln!(
+        "navigator: a final render carries no unfinished text; answer the questionnaire, \
+         or pass `--preview` for a highlighted draft"
+    );
+    false
 }
 
 /// Binds `firm.legal_name` to the Project's Firm legal name unless the
@@ -8625,6 +8619,13 @@ fn pleading_body(
     let certificate = projects::service::certificate_for(file, contents, preview)?
         .map(|certificate| format!("\n\n{certificate}"))
         .unwrap_or_default();
+    // A draft's counsel signature prints `/s/ DRAFT`; a final render signs
+    // it `/s/ <counsel>` from `matter.counsel.name`.
+    let body = if preview {
+        body
+    } else {
+        word::paper::sign_counsel_signatures(&body, &projects::matter::counsel_name(file)?)
+    };
     Ok(format!("{caption}{body}{certificate}"))
 }
 
@@ -8688,6 +8689,7 @@ fn render_notation_artifact(
                 source_revision: source_revision.as_deref(),
                 pleading,
                 provenance: Some(provenance),
+                preview,
             },
         )
         .map_err(|error| format!("render Word document: {error}"));

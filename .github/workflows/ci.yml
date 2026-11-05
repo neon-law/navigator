@@ -203,7 +203,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: set up the pinned .NET SDK
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: global.json
       - name: verify the locked restore in the release SDK image
@@ -469,14 +469,14 @@ jobs:
       # installer silently picked up a new cargo-llvm-cov. 0.8.7 is the version
       # the floor below was measured with; bump both together, deliberately.
       - name: install cargo-llvm-cov
-        uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
+        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: cargo-llvm-cov@0.8.7
       # Pinned to the same version `deploy.yml`'s browser gate pins, for the
       # same reason: the test runner must not change under the coverage floor
       # because an installer picked up a newer release.
       - name: install cargo-nextest
-        uses: taiki-e/install-action@1919c4a95903d2c33e4a221102edca87309fc14b # v2.89.0
+        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: nextest@0.9.140
       # Cache the compiled DEPENDENCIES, not just their sources.
@@ -1032,9 +1032,55 @@ jobs:
   # Auto-merge arming (`automerge.yml`) is deliberately not a dependency: it is
   # opt-in by label, it does not run on forks, and whether auto-merge got armed
   # is not a statement about whether the code is good.
+  # The programme's headline check: the local signature loop, end to end,
+  # with no DocuSign credentials. Render → send → sign → webhook → file,
+  # every failure path injectable. Green means the local story is true, and
+  # a red run is a regression in the seam, the anchors, or the webhook
+  # trust path — never an environment problem, because nothing here reaches
+  # past localhost.
+  signature-loop:
+    name: signature loop
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
+    # Same fleet as `rust` (see its sizing note); the loop compiles only the
+    # portal lib test binary, so 30 minutes is wide headroom.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      # lld + stripped symbols for the same reasons the `rust` job documents.
+      RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C strip=symbols"
+    steps:
+      - name: free disk space
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
+        with:
+          swap-storage: false
+      - name: install lld
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lld
+          ld.lld --version
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.98.0
+      - name: cache the Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          # Shared with the `rust` job on the same ref: both jobs compile the
+          # same third-party graph, so the entry one builds serves the other.
+          shared-key: workspace
+      - name: run the local signature loop
+        # The whole provider seam — selection, anchors, signing pages,
+        # HMAC webhooks, certificate, fault injection — is one module; the
+        # filter runs all of it and none of it needs credentials.
+        run: |
+          cargo test -p portal --lib signature::tests:: -- --nocapture
+
   ci:
     name: ci
-    needs: [changes, gate, rust, word-adapter]
+    needs: [changes, gate, rust, word-adapter, signature-loop]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -1045,12 +1091,14 @@ jobs:
           GATE_RESULT: ${{ needs.gate.result }}
           RUST_RESULT: ${{ needs.rust.result }}
           WORD_ADAPTER_RESULT: ${{ needs.word-adapter.result }}
+          SIGNATURE_LOOP_RESULT: ${{ needs.signature-loop.result }}
         run: |
           set -euo pipefail
           echo "classify the pull request: ${CHANGES_RESULT}"
           echo "gate content: ${GATE_RESULT}"
           echo "cargo test (workspace): ${RUST_RESULT}"
           echo "test managed Word adapter: ${WORD_ADAPTER_RESULT}"
+          echo "signature loop: ${SIGNATURE_LOOP_RESULT}"
           if [ "${CHANGES_RESULT}" != "success" ]; then
               echo "::error::the merge gate is red — classify the pull request reported ${CHANGES_RESULT}"
               exit 1
@@ -1065,5 +1113,9 @@ jobs:
           fi
           if [ "${WORD_ADAPTER_RESULT}" != "success" ] && [ "${WORD_ADAPTER_RESULT}" != "skipped" ]; then
               echo "::error::the merge gate is red — test managed Word adapter reported ${WORD_ADAPTER_RESULT}"
+              exit 1
+          fi
+          if [ "${SIGNATURE_LOOP_RESULT}" != "success" ] && [ "${SIGNATURE_LOOP_RESULT}" != "skipped" ]; then
+              echo "::error::the merge gate is red — signature loop reported ${SIGNATURE_LOOP_RESULT}"
               exit 1
           fi

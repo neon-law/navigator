@@ -32,6 +32,10 @@ pub struct RenderOptions<'a> {
     /// which template produced the package and its hash at export time.
     /// `None` leaves the package without the provenance part.
     pub provenance: Option<Provenance<'a>>,
+    /// A `--preview` draft: every unanswered `{{placeholder}}` and every
+    /// `«OPEN: …»` flag is highlighted yellow, as the PDF preview washes
+    /// them, so an open item cannot pass for prose.
+    pub preview: bool,
 }
 
 /// Court-paper geometry for a pleading's Word render, in Word's own units:
@@ -90,6 +94,11 @@ struct Paragraph {
     text: String,
     /// Byte ranges styled as Markdown emphasis; the import baseline stays plain text.
     italics: Vec<std::ops::Range<usize>>,
+    /// Byte ranges highlighted yellow: an open item in a draft.
+    highlights: Vec<std::ops::Range<usize>>,
+    /// The paragraph carries a counsel signature, so its bottom border is
+    /// the signature rule the `/s/` line sits on.
+    signature_rule: bool,
     /// The `<!-- keep -->` group this paragraph belongs to. Paragraphs
     /// sharing a group are kept on one page: each is told to stay with the
     /// next, so Word moves the whole group together when it fits and
@@ -122,7 +131,10 @@ pub fn render_notation(
         .map(|_| crate::paper::parse(markdown))
         .transpose()?;
     let body = paper.as_ref().map_or(markdown, |paper| paper.body.as_str());
-    let blocks = blocks(body);
+    let mut blocks = blocks(body);
+    if options.preview {
+        highlight_open_items(&mut blocks);
+    }
     let caption = pleading
         .zip(paper.as_ref().and_then(|paper| paper.caption.as_ref()))
         .map(|(frame, caption)| caption_xml(frame, caption))
@@ -476,6 +488,30 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                         .push(SIGNER_BOX_RUN);
                 }
             }
+            // A counsel signature: italic `/s/` and the name on a signature
+            // rule, `DRAFT` highlighted until a final render names counsel.
+            Event::Html(html) | Event::InlineHtml(html)
+                if crate::paper::counsel_signature(&html).is_some() =>
+            {
+                if let Some(signature) = crate::paper::counsel_signature(&html) {
+                    if let Some(paragraph) = cell.as_mut().or(current.as_mut()) {
+                        append_counsel_signature(paragraph, &signature);
+                    } else {
+                        // The marker on its own line is an HTML block, not a
+                        // paragraph: it is the signature paragraph itself.
+                        let mut paragraph = Paragraph {
+                            group,
+                            ..Paragraph::default()
+                        };
+                        append_counsel_signature(&mut paragraph, &signature);
+                        result.push(SourcePair {
+                            kind: SourceBlockKind::Paragraph,
+                            source: range,
+                            block: Block::Paragraph(paragraph),
+                        });
+                    }
+                }
+            }
             Event::Html(html) | Event::InlineHtml(html) => match crate::paper::keep_marker(&html) {
                 Some(crate::paper::Keep::Open) if quote_depth == 0 && lists.is_empty() => {
                     groups += 1;
@@ -575,7 +611,7 @@ fn document_xml(
                 Some(Block::Paragraph(next)) if next.group == paragraph.group
             );
         let keep_lines = paragraph.group.is_some();
-        if paragraph.style.is_some() || keep_lines {
+        if paragraph.style.is_some() || keep_lines || paragraph.signature_rule {
             body.push_str("<w:pPr>");
             if let Some(style) = paragraph.style {
                 let _ = write!(body, "<w:pStyle w:val=\"{style}\"/>");
@@ -585,6 +621,13 @@ fn document_xml(
             }
             if keep_lines {
                 body.push_str("<w:keepLines/>");
+            }
+            if paragraph.signature_rule {
+                let _ = write!(
+                    body,
+                    "{SIGNATURE_RULE_BORDER}<w:ind w:right=\"{}\"/>",
+                    text_width.saturating_sub(SIGNATURE_RULE_TWIPS)
+                );
             }
             body.push_str("</w:pPr>");
         }
@@ -622,34 +665,105 @@ fn append_text(paragraph: &mut Paragraph, text: &str, italic: bool) {
     }
 }
 
-fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
-    let mut out = String::new();
-    let mut from = 0;
-    for range in &paragraph.italics {
-        let start = range.start.min(paragraph.text.len());
-        let end = range.end.min(paragraph.text.len());
-        out.push_str(&runs_xml(&paragraph.text[from..start], bold, false));
-        out.push_str(&runs_xml(&paragraph.text[start..end], bold, true));
-        from = end;
+/// The signature rule: a single bottom border on the signature paragraph.
+const SIGNATURE_RULE_BORDER: &str =
+    r#"<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr>"#;
+/// How far the signature rule runs: three and a half inches.
+const SIGNATURE_RULE_TWIPS: u32 = 5040;
+
+/// Append a counsel signature's `/s/` line to `paragraph` and draw its rule.
+fn append_counsel_signature(paragraph: &mut Paragraph, signature: &crate::paper::CounselSignature) {
+    append_text(paragraph, "/s/ ", true);
+    let start = paragraph.text.len();
+    append_text(paragraph, signature.name(), true);
+    if *signature == crate::paper::CounselSignature::Draft {
+        paragraph.highlights.push(start..paragraph.text.len());
     }
-    out.push_str(&runs_xml(&paragraph.text[from..], bold, false));
+    paragraph.signature_rule = true;
+}
+
+/// Highlight every open item a preview carries: each unanswered
+/// `{{placeholder}}` and each `«OPEN: …»` flag.
+fn highlight_open_items(blocks: &mut [Block]) {
+    for block in blocks {
+        match block {
+            Block::Paragraph(paragraph) => mark_open_items(paragraph),
+            Block::Table(table) => table.rows.iter_mut().flatten().for_each(mark_open_items),
+        }
+    }
+}
+
+fn mark_open_items(paragraph: &mut Paragraph) {
+    let text = &paragraph.text;
+    let mut spans = Vec::new();
+    for (opening, closing) in [("{{", "}}"), ("\u{ab}OPEN:", "\u{bb}")] {
+        let mut from = 0;
+        while let Some(start) = text[from..].find(opening).map(|at| from + at) {
+            let Some(end) = text[start + opening.len()..]
+                .find(closing)
+                .map(|at| start + opening.len() + at + closing.len())
+            else {
+                break;
+            };
+            spans.push(start..end);
+            from = end;
+        }
+    }
+    paragraph.highlights.extend(spans);
+}
+
+/// A paragraph's runs, split wherever emphasis or a highlight starts or ends.
+fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
+    let length = paragraph.text.len();
+    let mut cuts = vec![0, length];
+    for range in paragraph.italics.iter().chain(&paragraph.highlights) {
+        cuts.push(range.start.min(length));
+        cuts.push(range.end.min(length));
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let covers = |ranges: &[std::ops::Range<usize>], at: usize| {
+        ranges.iter().any(|range| range.contains(&at))
+    };
+    let mut out = String::new();
+    for window in cuts.windows(2) {
+        let (start, end) = (window[0], window[1]);
+        let style = RunStyle {
+            bold,
+            italic: covers(&paragraph.italics, start),
+            highlight: covers(&paragraph.highlights, start),
+        };
+        out.push_str(&runs_xml(&paragraph.text[start..end], style));
+    }
     out
+}
+
+/// How one run is set.
+#[derive(Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
+struct RunStyle {
+    bold: bool,
+    italic: bool,
+    highlight: bool,
 }
 
 /// A paragraph's text as runs, a `<w:br/>` for each hard break and an
 /// underlined rule for each Signer Box.
-fn runs_xml(text: &str, bold: bool, italic: bool) -> String {
+fn runs_xml(text: &str, style: RunStyle) -> String {
     if text.is_empty() {
         return String::new();
     }
     let mut weight = String::new();
-    if bold || italic {
+    if style.bold || style.italic || style.highlight {
         weight.push_str("<w:rPr>");
-        if bold {
+        if style.bold {
             weight.push_str("<w:b/>");
         }
-        if italic {
+        if style.italic {
             weight.push_str("<w:i/>");
+        }
+        if style.highlight {
+            weight.push_str("<w:highlight w:val=\"yellow\"/>");
         }
         weight.push_str("</w:rPr>");
     }
@@ -1126,6 +1240,7 @@ mod tests {
                 provenance: None,
                 source_revision: None,
                 pleading: Some(frame),
+                preview: false,
             },
         )
         .unwrap()
@@ -1228,6 +1343,7 @@ mod tests {
                 provenance: None,
                 source_revision: None,
                 pleading: Some(frame),
+                preview: false,
             },
         )
         .unwrap()
@@ -1318,6 +1434,7 @@ mod tests {
                 provenance: None,
                 source_revision: None,
                 pleading: Some(RAILED),
+                preview: false,
             },
         )
         .unwrap();
@@ -1337,6 +1454,7 @@ mod tests {
                 provenance: None,
                 source_revision: None,
                 pleading: Some(RAILED),
+                preview: false,
             },
         )
         .unwrap();
@@ -1375,6 +1493,7 @@ mod tests {
                 provenance: None,
                 source_revision: None,
                 pleading: Some(RAILED),
+                preview: false,
             },
         )
         .unwrap_err();
@@ -1425,6 +1544,7 @@ mod tests {
                 provenance: None,
                 source_revision: Some("abc123"),
                 pleading: None,
+                preview: false,
             },
         )
         .unwrap()
@@ -1577,6 +1697,7 @@ mod tests {
                 provenance: None,
                 source_revision: None,
                 pleading: Some(RAILED),
+                preview: false,
             },
         )
         .unwrap();
@@ -1732,5 +1853,111 @@ mod tests {
             doc.contains("<w:r><w:t xml:space=\"preserve\"> plain.</w:t>"),
             "{doc}"
         );
+    }
+
+    /// A proposed order's draft: counsel's signature, counsel's open date,
+    /// and the judge's plain rules beneath.
+    const PROPOSED_ORDER: &str = "# [PROPOSED] ORDER\n\nDATED: {{custom_datetime__signed_on}}\n\n\
+        <!-- counsel-signature -->\n\nPat Sample, Attorney for Plaintiff\n\nIT IS SO ORDERED.\n\n\
+        DISTRICT COURT JUDGE: ______________________________\n\nDated: ______________________\n";
+
+    fn proposed_order(markdown: &str, preview: bool) -> String {
+        let bytes = render_notation(
+            markdown,
+            None,
+            &RenderOptions {
+                pleading: Some(RAILED),
+                preview,
+                ..RenderOptions::default()
+            },
+        )
+        .unwrap();
+        part(&bytes, "word/document.xml")
+    }
+
+    /// The `<w:p>` whose text contains `needle`.
+    fn paragraph_with<'a>(document: &'a str, needle: &str) -> &'a str {
+        let at = document.find(needle).expect(needle);
+        let start = document[..at].rfind("<w:p>").expect("paragraph start");
+        let end = at + document[at..].find("</w:p>").expect("paragraph end");
+        &document[start..end]
+    }
+
+    /// LAW-239: a draft's counsel signature is an italic `/s/ DRAFT` on a
+    /// bottom-border rule, `DRAFT` highlighted; its open date is highlighted;
+    /// the judge's lines stay plain.
+    #[test]
+    fn a_draft_counsel_signature_sits_on_its_rule_with_draft_highlighted() {
+        let document = proposed_order(PROPOSED_ORDER, true);
+        let signature = paragraph_with(&document, ">DRAFT<");
+        assert!(
+            signature.contains("<w:pBdr><w:bottom w:val=\"single\""),
+            "{signature}"
+        );
+        assert!(
+            signature.contains("<w:i/></w:rPr><w:t xml:space=\"preserve\">/s/ </w:t>"),
+            "{signature}"
+        );
+        assert!(
+            signature.contains(
+                "<w:i/><w:highlight w:val=\"yellow\"/></w:rPr><w:t xml:space=\"preserve\">DRAFT</w:t>"
+            ),
+            "{signature}"
+        );
+        assert!(!signature.contains("____"), "{signature}");
+        assert!(!signature.contains("Pat Sample"), "{signature}");
+
+        let date = paragraph_with(&document, "{{custom_datetime__signed_on}}");
+        assert!(
+            date.contains(
+                "<w:highlight w:val=\"yellow\"/></w:rPr><w:t xml:space=\"preserve\">{{custom_datetime__signed_on}}</w:t>"
+            ),
+            "{date}"
+        );
+        assert!(
+            date.contains("<w:r><w:t xml:space=\"preserve\">DATED: </w:t>"),
+            "{date}"
+        );
+
+        for line in ["DISTRICT COURT JUDGE: ____", "Dated: ____"] {
+            let judge = paragraph_with(&document, line);
+            assert!(!judge.contains("w:highlight"), "{judge}");
+            assert!(!judge.contains("w:pBdr"), "{judge}");
+            assert!(!judge.contains("<w:i/>"), "{judge}");
+        }
+        assert_eq!(document.matches("<w:pBdr>").count(), 1, "{document}");
+    }
+
+    /// A final render signs `/s/ <counsel>` on the same rule, nothing
+    /// highlighted.
+    #[test]
+    fn a_signed_counsel_signature_names_counsel_on_the_rule() {
+        let signed = PROPOSED_ORDER
+            .replace("{{custom_datetime__signed_on}}", "1 March 2027")
+            .replace(
+                crate::paper::COUNSEL_SIGNATURE,
+                &crate::paper::signed_counsel_signature("Pat Sample"),
+            );
+        let document = proposed_order(&signed, false);
+        let signature = paragraph_with(&document, ">/s/ Pat Sample</w:t>");
+        assert!(
+            signature.contains("<w:pBdr><w:bottom w:val=\"single\""),
+            "{signature}"
+        );
+        assert!(
+            signature.contains("<w:i/></w:rPr><w:t xml:space=\"preserve\">/s/ Pat Sample</w:t>"),
+            "{signature}"
+        );
+        assert!(!document.contains("DRAFT"), "{document}");
+        assert!(!document.contains("w:highlight"), "{document}");
+        assert!(!document.contains("counsel-signature"), "{document}");
+    }
+
+    /// Without `preview`, an unanswered placeholder is not highlighted.
+    #[test]
+    fn only_a_preview_highlights_open_items() {
+        let document = proposed_order(PROPOSED_ORDER, false);
+        let date = paragraph_with(&document, "{{custom_datetime__signed_on}}");
+        assert!(!date.contains("w:highlight"), "{date}");
     }
 }

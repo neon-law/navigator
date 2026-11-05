@@ -374,6 +374,44 @@ pub async fn for_notation(
         .collect())
 }
 
+/// Every provider-confirmed completed signature across a set of notations —
+/// the batched resolver behind the matter-level onboarding-status check
+/// (`store::projects::onboarding_official_sets`), which asks one question of
+/// many notations at once: has any of these envelopes executed. Only rows
+/// with `signed_at` set come back — a live, declined, voided, or expired
+/// envelope is not execution, the same distinction
+/// [`completed_for_notation`] draws for a single notation.
+///
+/// An empty `notation_ids` returns an empty vec without a query.
+///
+/// # Errors
+///
+/// [`SignatureError::Db`] if the lookup fails.
+pub async fn completed_for_notations(
+    db: &SurrealDb,
+    notation_ids: &[Uuid],
+) -> Result<Vec<Signature>, SignatureError> {
+    if notation_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let notations: Vec<surrealdb::types::RecordId> = notation_ids
+        .iter()
+        .map(|id| record_id(crate::notations::TABLE, *id))
+        .collect();
+    let mut response = db
+        .query(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE notation_id IN $notations AND signed_at != NONE"
+        ))
+        .bind(("notations", notations))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    let rows: Vec<SignatureRow> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(SignatureRow::into_signature)
+        .collect())
+}
+
 /// Stamp `signed_at` on the signature for `(provider, provider_id)` when
 /// the provider reports completion. A no-op (returns `false`) for an
 /// unknown envelope — the callback may arrive for one we never tracked, or

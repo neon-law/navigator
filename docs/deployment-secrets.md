@@ -470,14 +470,17 @@ no other may hold its credentials. Each deployment is measured against the requi
 
 A requirement may also be *triggered* by another key, which is how a deployment declines a whole integration. DocuSign
 is the worked example: `DOCUSIGN_BASE_URL` declares it, and only then are the account, auth, HMAC, and webhook keys
-required. A deployment that executes no documents supplies none of them and runs `StubSignatureProvider`.
+required. A deployment that executes no documents supplies none of them and selects `NAVIGATOR_SIGNATURE_PROVIDER=fake`
+— the explicit local signature loop, refused in production.
 
 Declining an integration is not the same as stubbing one, and the difference is load-bearing. A placeholder value does
-not reach the stub — `portal::signature::DocuSignSignatureProvider::from_env` returns `Some` for any non-empty value, so
-a fake credential boots the *real* provider and the deployment ships green and fails on its first signature request. The
-stub is reachable only through genuine absence. Where an integration has no such fork, a placeholder is still the only
-option: the production deployment's `SENDGRID_API_KEY` is a documented stub for exactly that reason, because
-`NAVIGATOR_EMAIL_BACKEND` admits no stub backend to select.
+not reach the fake — provider selection is explicit and fail-closed
+(`portal::signature::SignatureProviderKind::from_env` accepts only `fake` or `docusign`), so a fake credential with no
+selection fails boot rather than reaching the *real* provider. And a deployment that selects `docusign` while holding a
+fake credential ships green and fails on its first signature request — which is exactly what the trigger structure
+refuses to let through. Where an integration has no such fork, a placeholder is still the only option: the production
+deployment's `SENDGRID_API_KEY` is a documented stub for exactly that reason, because `NAVIGATOR_EMAIL_BACKEND` admits
+no stub backend to select.
 
 The gate reads key names and never decrypts, so it runs with no credential and no network call. That is the whole point
 of the drift bug being mechanical now: a key renamed in one place and nowhere else fails the build instead of surfacing

@@ -13,7 +13,12 @@ runtime shape, and the crate source for implementation details.
 The cloud and KIND CronJobs both fire at **05:55 and 17:55 UTC**. The trigger sends the scheduled UTC time as the
 workflow key and request payload; retries within that run attach to the same Restate invocation. Application Parquet
 uses `application/<table>/data/dt=<date>/run=<HHMM>/snapshot.parquet`, with `0555` and `1755` as separate generations.
-Re-extraction overwrites the same generation file, and Iceberg promotion selects only that generation's files.
+Re-extraction overwrites the same generation file, and Iceberg promotion selects only that generation's files. That
+overwrite is the **unlocked** lane's behavior. On a retention-locked offsite bucket every write is create-only
+(`put_immutable`) under attempt-unique keys — a re-extraction of the same slot claims a fresh attempt key instead of
+replacing the committed bytes — and `metadata/version-hint.text` is never written; readers resolve the latest version
+from the highest `v<N>.metadata.json`. See the offsite, immutability, and drill sections in [Iceberg
+archive](../docs/iceberg-archive.md).
 
 A missed scheduled run can be submitted with `ARCHIVES_SCHEDULED_FOR=<RFC3339 UTC time>` on the trigger. It must name
 05:55 or 17:55 exactly. The override preserves that run's key and date; it does not reconstruct historical source data.
@@ -22,6 +27,12 @@ The journaled `email` step posts mrkdwn through the existing Slack bot to the de
 messages channel for simulated matters). Missing bot credentials or a channel fail the step rather than silently
 capturing a successful digest. Slack transport failures retry that step; acknowledgment loss can produce a duplicate
 notice. The durable step names remain unchanged so existing invocations can replay.
+
+When the archive bucket lives in a GCP project other than the deployment's, `NAVIGATOR_ARCHIVES_GCP_PROJECT_ID` names it
+— the archive project's id or numeric project number. Lane resolution verifies the bucket's owning project through the
+storage credential and **refuses to write** when the match cannot be confirmed: every unverifiable shape fails the run
+before any object is written. The Slack digest then annotates the archive project and pins its console links with
+`?project=`. Leave it unset for an in-project bucket and on non-GCS backends.
 
 When `NAVIGATOR_POSTGRES_HOST` is set, the snapshot step requires reviewed coverage for Navigator and Forgejo. Both
 databases must export successfully before a paired completion manifest is written. Each retains its own MVCC watermark.

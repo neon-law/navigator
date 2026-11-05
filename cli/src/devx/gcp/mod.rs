@@ -1522,12 +1522,12 @@ mod tests {
         //    and each short name is named in the prose.
         assert_eq!(
             REQUIRED_SERVICES.len(),
-            23,
-            "the workshop says twenty-three APIs; keep prose and code in lockstep",
+            24,
+            "the workshop says twenty-four APIs; keep prose and code in lockstep",
         );
         assert!(
-            prose.contains("twenty-three"),
-            "DEPLOY.md must state the API count in words (twenty-three)",
+            prose.contains("twenty-four"),
+            "DEPLOY.md must state the API count in words (twenty-four)",
         );
         for svc in REQUIRED_SERVICES {
             let short = svc.strip_suffix(".googleapis.com").unwrap_or(svc);

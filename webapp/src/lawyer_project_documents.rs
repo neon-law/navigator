@@ -111,6 +111,40 @@ pub(crate) fn visibility_word(stored: &str) -> String {
     }
 }
 
+/// The upload form's limits and the copy that states them, computed
+/// server-side from `store::documents` so the wasm client never needs the
+/// `store` crate and the form can never state a limit the server does not
+/// enforce.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct UploadFormLimits {
+    /// Most files one submission may carry.
+    pub max_files: usize,
+    /// Most bytes one submission may carry across every file.
+    pub max_bytes: u64,
+    /// The help line under the file picker.
+    pub help: String,
+    /// The refusal shown when a selection is over a limit.
+    pub refusal: String,
+}
+
+/// The upload form's limits from the constants the upload handler enforces.
+#[cfg(feature = "server")]
+pub(crate) fn upload_form_limits() -> UploadFormLimits {
+    use store::documents::{
+        human_bytes, upload_form_limit_message, MAX_UPLOAD_FORM_BYTES, MAX_UPLOAD_FORM_FILES,
+    };
+    UploadFormLimits {
+        max_files: MAX_UPLOAD_FORM_FILES,
+        max_bytes: MAX_UPLOAD_FORM_BYTES as u64,
+        help: format!(
+            "Select one file or several — each is filed as its own document. One upload carries at \
+             most {MAX_UPLOAD_FORM_FILES} files and {} in total.",
+            human_bytes(MAX_UPLOAD_FORM_BYTES)
+        ),
+        refusal: upload_form_limit_message(),
+    }
+}
+
 /// The document-upload Kind select's options, as `(value, label)` — every
 /// `Kind` valid in the asset lane, in [`rules::kind::Kind::ALL`] order. Computed
 /// here rather than duplicated as literal strings, so a new asset-lane kind

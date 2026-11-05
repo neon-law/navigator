@@ -20,9 +20,8 @@ use crate::loader::EphemerisManifest;
 use hifitime::Epoch;
 
 /// The ΔT model behind UT1, verbatim provenance (see [`super::deltat`]).
-pub(crate) const DELTA_T_MODEL: &str = "Espenak & Meeus (2006) polynomials to 1955, \
-Astronomical Almanac table with fourth-order Bessel interpolation \
-1955-2028, Stephenson-Morrison-Hohenkerk (2016) future blend";
+pub(crate) const DELTA_T_MODEL: &str = "USNO pinned 2026-11-05 snapshot, linear observation/forecast interpolation; \
+terminal-segment extrapolation without a reported error bound; Espenak-Meeus historical polynomials before 1955";
 
 /// The sidereal model behind the MC/IC longitudes, verbatim provenance
 /// (see [`super::sidereal`]).
@@ -55,16 +54,24 @@ pub struct KernelProvenance {
 }
 
 /// The models and kernel bytes behind a line set.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct LineProvenance {
-    /// The civil instant the lines describe, ISO-8601 UTC to the second.
-    pub instant_utc: String,
+    /// UTC reading, absent when the original civil label is historical UT1.
+    pub instant_utc: Option<String>,
+    /// Explicit normalized civil label and scale for a resolved chart.
+    pub reference: Option<crate::BirthTimeReference>,
+    /// Physical TT/TDB and Earth-rotation readings for a resolved chart.
+    pub time_scales: Option<crate::ChartTimeScales>,
     /// The time-scale model string from the verifying manifest.
     pub time_scale_model: String,
     /// The reference-frame string from the verifying manifest.
     pub reference_frame: String,
     /// The ΔT model behind UT1 and the horizon geometry.
     pub delta_t_model: &'static str,
+    /// Actual observation/forecast/extrapolation classification and quoted error.
+    pub delta_t_reading: Option<super::deltat::DeltaTEstimate>,
+    /// Verified source data identities, independent of the orbital kernels.
+    pub delta_t_sources: &'static [super::deltat::DeltaTDataFile],
     /// The sidereal model behind the MC/IC longitudes.
     pub sidereal_model: &'static str,
     /// The lunar-node convention, when the node is rendered.
@@ -93,14 +100,36 @@ impl LineProvenance {
             })
             .collect();
         Self {
-            instant_utc: instant_iso_utc(utc),
+            instant_utc: Some(instant_iso_utc(utc)),
+            reference: None,
+            time_scales: None,
             time_scale_model: manifest.time_scale_model.clone(),
             reference_frame: manifest.reference_frame.clone(),
             delta_t_model: DELTA_T_MODEL,
+            delta_t_reading: super::deltat::delta_t_estimate(utc.to_jde_utc_days()),
+            delta_t_sources: super::deltat::delta_t_sources(),
             sidereal_model: SIDEREAL_MODEL,
             node_convention: NODE_CONVENTION,
             kernels,
         }
+    }
+
+    /// Provenance for [`super::lines_for_instant`], retaining the chart's actual clock scale.
+    #[must_use]
+    pub fn for_instant(manifest: &EphemerisManifest, instant: crate::ChartInstant) -> Self {
+        let scales = instant.time_scales();
+        let mut provenance = Self::new(manifest, instant.epoch());
+        provenance.instant_utc = scales
+            .julian_day_utc
+            .map(|_| instant_iso_utc(instant.epoch()));
+        provenance.reference = Some(scales.reference);
+        provenance.delta_t_reading = Some(super::deltat::DeltaTEstimate {
+            seconds: scales.delta_t_seconds,
+            kind: scales.delta_t_kind,
+            reported_error_seconds: scales.delta_t_reported_error_seconds,
+        });
+        provenance.time_scales = Some(scales);
+        provenance
     }
 }
 
@@ -230,7 +259,7 @@ mod tests {
     fn test_manifest() -> EphemerisManifest {
         EphemerisManifest {
             version: crate::MANIFEST_VERSION,
-            time_scale_model: "Espenak-Meeus/Almanac dT".to_owned(),
+            time_scale_model: "synthetic UTC/TT/TDB model".to_owned(),
             reference_frame: "ICRF/J2000, IAU 2006/2000B of-date".to_owned(),
             files: vec![crate::loader::EphemerisFile {
                 upstream_version: "synthetic fixture".to_owned(),
@@ -368,7 +397,7 @@ mod tests {
         assert_eq!(provenance_json["instant_utc"], "2026-10-30T12:00:00Z");
         assert_eq!(
             provenance_json["time_scale_model"],
-            "Espenak-Meeus/Almanac dT"
+            "synthetic UTC/TT/TDB model"
         );
         assert_eq!(
             provenance_json["reference_frame"],

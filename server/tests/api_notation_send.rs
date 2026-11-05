@@ -8,7 +8,7 @@
 //! gets a bare 404, admin bypasses), the readiness gate (send before the PDF
 //! is rendered → 409 document_not_ready), and a live 200 after an approval
 //! rendered the PDF (a `DispatchingRuntime` runs the generate-PDF worker; a
-//! `StubSignatureProvider` records the dispatched envelope).
+//! `FakeSignatureProvider` records the dispatched envelope).
 
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ struct Harness {
     workflow_runtime: Arc<dyn StateMachineRuntime>,
     /// The stub the router dispatches through, so a test can assert the
     /// provider was never called.
-    signature_provider: Arc<portal::signature::StubSignatureProvider>,
+    signature_provider: Arc<portal::signature::FakeSignatureProvider>,
 }
 
 async fn build_app() -> Harness {
@@ -66,7 +66,7 @@ async fn build_app() -> Harness {
         email.clone(),
         storage.clone(),
     ));
-    let signature_provider = Arc::new(portal::signature::StubSignatureProvider::new());
+    let signature_provider = Arc::new(portal::signature::FakeSignatureProvider::new());
     let state = AppState {
         sessions: SessionStore::new(KEY),
         storage: storage.clone(),

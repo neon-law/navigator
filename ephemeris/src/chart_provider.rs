@@ -2,11 +2,9 @@
 
 use crate::lines::LineBody;
 use crate::{
-    AstrologyChartRequest, BirthTime, ChartAngles, ChartError, EphemerisManifest, EphemerisStore,
-    LoadedEphemeris, ResolvedBirthTime, TdbSeconds,
+    AstrologyChartRequest, BirthTime, ChartAngles, ChartError, ChartInstant, ChartTimeScales,
+    EphemerisManifest, EphemerisStore, LoadedEphemeris, ResolvedBirthTime, TdbSeconds,
 };
-use chrono::{Datelike, Timelike};
-use hifitime::Epoch;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -17,7 +15,8 @@ use std::{
 
 const DAY_SECONDS: f64 = 86_400.0;
 const RATE_STEP_SECONDS: f64 = 30.0;
-const ALGORITHM: &str = "navigator-local-SPK/apparent-IAU2006-2000B/IERS2003-node/chart-v1";
+const ALGORITHM: &str =
+    "navigator-local-SPK/apparent-IAU2006-2000B/IERS2003-node/USNO-deltaT/civil-UT1-before-1972/chart-v3";
 
 /// One body's apparent geocentric state. Orbital points have no physical range.
 #[derive(Clone, Serialize)]
@@ -44,21 +43,6 @@ pub struct BodyPosition {
     pub distance_speed_km_per_day: Option<f64>,
 }
 
-/// Distinct time-scale readings for the evaluation instant.
-#[derive(Clone, Serialize)]
-pub struct ChartTimeScales {
-    /// Civil UTC Julian day.
-    pub julian_day_utc: f64,
-    /// Terrestrial Time Julian day.
-    pub julian_day_tt: f64,
-    /// Barycentric Dynamical Time Julian day used by SPK interpolation.
-    pub julian_day_tdb: f64,
-    /// Earth-rotation model's UT1 Julian day, with TDB used as TT to within 1.7 ms.
-    pub model_julian_day_ut1: f64,
-    /// Model TT minus UT1, seconds, evaluated at UTC.
-    pub delta_t_seconds: f64,
-}
-
 /// Source bytes and actual numerical conventions behind a private chart result.
 #[derive(Clone, Serialize)]
 pub struct ChartProvenance {
@@ -72,6 +56,8 @@ pub struct ChartProvenance {
     pub tzdb_version: &'static str,
     /// Delta-T model used for Earth rotation.
     pub delta_t_model: &'static str,
+    /// Verified Earth-rotation data snapshots, separate from the SPK sources.
+    pub delta_t_sources: &'static [crate::lines::deltat::DeltaTDataFile],
     /// Apparent sidereal model used for local angles.
     pub sidereal_model: &'static str,
     /// Mean-node model.
@@ -87,6 +73,8 @@ pub struct AstrologyChartResponse {
     pub request: AstrologyChartRequest,
     /// Resolved time and its original precision.
     pub time: ResolvedBirthTime,
+    /// Physical epoch and explicit Earth rotation; absent for an unknown clock.
+    pub instant: Option<ChartInstant>,
     /// Requested positions; absent for an unknown clock.
     pub positions: Option<Vec<BodyPosition>>,
     /// Exact-time angles and optional houses; absent for uncertain or degenerate geometry.
@@ -139,7 +127,8 @@ impl AstrologyChartProvider {
                 return Ok(Arc::clone(&entry.value));
             }
         }
-        let epoch = time.utc().map(epoch_from_utc).transpose()?;
+        let instant = time.instant()?;
+        let epoch = instant.map(ChartInstant::epoch);
         let positions = epoch
             .map(|epoch| {
                 let instant = crate::utc_to_tdb(epoch);
@@ -151,10 +140,11 @@ impl AstrologyChartProvider {
             })
             .transpose()?;
         let angles = if time.can_compute_angles() {
-            epoch
-                .map(|epoch| {
+            instant
+                .map(|instant| {
+                    let epoch = instant.epoch();
                     let sidereal =
-                        crate::lines::sidereal::gast_degrees(epoch) + request.longitude_deg;
+                        crate::lines::sidereal::gast_degrees_for(instant) + request.longitude_deg;
                     let obliquity =
                         crate::apparent::frame::true_obliquity(crate::utc_to_tdb(epoch))
                             .to_degrees();
@@ -176,13 +166,15 @@ impl AstrologyChartProvider {
             manifest: self.loaded.manifest.clone(),
             tzdb_version: time.tzdb_version(),
             delta_t_model: crate::lines::geojson::DELTA_T_MODEL,
+            delta_t_sources: crate::lines::deltat::delta_t_sources(),
             sidereal_model: crate::lines::geojson::SIDEREAL_MODEL,
             node_model: crate::lines::geojson::NODE_CONVENTION,
-            time_scales: epoch.map(time_scales),
+            time_scales: instant.map(ChartInstant::time_scales),
         };
         let result = Arc::new(AstrologyChartResponse {
             request: request.clone(),
             time,
+            instant,
             positions,
             angles,
             provenance,
@@ -219,10 +211,14 @@ impl AstrologyChartProvider {
         struct Identity<'a> {
             algorithm: &'static str,
             version: &'static str,
+            delta_t_model: &'static str,
+            delta_t_sources: &'static [crate::lines::deltat::DeltaTDataFile],
+            sidereal_model: &'static str,
+            node_model: &'static str,
             manifest: &'a EphemerisManifest,
             tzdb: &'static str,
             original: BirthIdentity,
-            utc: Option<String>,
+            reference: Option<crate::BirthTimeReference>,
             longitude_bits: u64,
             latitude_bits: u64,
             bodies: Vec<&'static str>,
@@ -231,10 +227,14 @@ impl AstrologyChartProvider {
         let identity = Identity {
             algorithm: ALGORITHM,
             version: env!("CARGO_PKG_VERSION"),
+            delta_t_model: crate::lines::geojson::DELTA_T_MODEL,
+            delta_t_sources: crate::lines::deltat::delta_t_sources(),
+            sidereal_model: crate::lines::geojson::SIDEREAL_MODEL,
+            node_model: crate::lines::geojson::NODE_CONVENTION,
             manifest: &self.loaded.manifest,
             tzdb: time.tzdb_version(),
             original: BirthIdentity::new(&request.birth_time),
-            utc: time.utc().map(|instant| instant.to_rfc3339()),
+            reference: time.reference(),
             longitude_bits: request.longitude_deg.to_bits(),
             latitude_bits: request.latitude_deg.to_bits(),
             bodies: request.bodies.iter().map(|body| body.name()).collect(),
@@ -353,33 +353,6 @@ impl BirthIdentity {
     }
 }
 
-fn epoch_from_utc(utc: chrono::DateTime<chrono::Utc>) -> Result<Epoch, ChartError> {
-    let component = |value| u8::try_from(value).map_err(|_| ChartError::CalculationFailed);
-    Epoch::maybe_from_gregorian_utc(
-        utc.year(),
-        component(utc.month())?,
-        component(utc.day())?,
-        component(utc.hour())?,
-        component(utc.minute())?,
-        component(utc.second())?,
-        utc.nanosecond(),
-    )
-    .map_err(|_| ChartError::CalculationFailed)
-}
-
-fn time_scales(epoch: Epoch) -> ChartTimeScales {
-    let julian_day_utc = epoch.to_jde_utc_days();
-    let julian_day_tdb = 2_451_545.0 + crate::utc_to_tdb(epoch).0 / DAY_SECONDS;
-    let delta_t_seconds = crate::lines::deltat::delta_t_seconds(julian_day_utc);
-    ChartTimeScales {
-        julian_day_utc,
-        julian_day_tt: epoch.to_jde_tt_days(),
-        julian_day_tdb,
-        model_julian_day_ut1: julian_day_tdb - delta_t_seconds / DAY_SECONDS,
-        delta_t_seconds,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +360,7 @@ mod tests {
     use crate::spk::test_support::synthetic_type2;
     use crate::{BirthTime, EphemerisFile, EphemerisManifest, EphemerisStore, LocalBirthTime};
     use chrono::NaiveDate;
+    use hifitime::Epoch;
     use sha2::{Digest, Sha256};
     use std::{
         collections::HashMap,
@@ -482,6 +456,32 @@ mod tests {
             0.0,
             0.0,
         )
+    }
+
+    #[test]
+    fn historical_civil_clocks_identify_their_ut1_calendar_reading() {
+        let provider = provider(1);
+        for year in [1900, 1950, 1955, 1965, 1971] {
+            let mut input = request();
+            input.birth_time = BirthTime::Exact(LocalBirthTime {
+                local: NaiveDate::from_ymd_opt(year, 1, 1)
+                    .and_then(|date| date.and_hms_opt(0, 0, 0))
+                    .expect("synthetic historical clock"),
+                zone: chrono_tz::UTC,
+                offset_seconds: None,
+            });
+            let chart = provider.calculate(&input).expect("historical chart");
+            let scales = chart.provenance.time_scales.as_ref().expect("known clock");
+            // The TT constructor supplies only a calendar day number here.
+            let calendar_jd =
+                Epoch::maybe_from_gregorian(year, 1, 1, 0, 0, 0, 0, hifitime::TimeScale::TT)
+                    .expect("synthetic calendar reading")
+                    .to_jde_tt_days();
+            assert!(
+                (scales.model_julian_day_ut1 - calendar_jd).abs() < 1e-9,
+                "historical civil labels must identify UT1 rather than proleptic UTC"
+            );
+        }
     }
 
     #[test]

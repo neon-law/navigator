@@ -35,15 +35,19 @@ const SECONDS_PER_DAY: f64 = 86_400.0;
 /// instant given as a UTC `Epoch`.
 #[must_use]
 pub fn gast_degrees(utc: Epoch) -> f64 {
-    let TdbSeconds(tdb_seconds) = utc_to_tdb(utc);
+    let ut1_days = utc.to_jde_tt_days() - delta_t_seconds(utc.to_jde_utc_days()) / SECONDS_PER_DAY;
+    gast_at(utc, ut1_days)
+}
 
-    // TDB differs from TT by the ≤1.7 ms periodic relativistic term —
-    // irrelevant at the precision of a Julian date here.
-    let tt_days = J2000_JD + tdb_seconds / SECONDS_PER_DAY;
-    // ΔT itself is tabulated against UTC civil time, so it is evaluated at
-    // the UTC instant; UT1 then follows from TT − ΔT.
-    let ut1_days = tt_days - delta_t_seconds(utc.to_jde_utc_days()) / SECONDS_PER_DAY;
+/// Apparent sidereal time from a physical epoch and its explicit UT1 reading.
+#[must_use]
+pub fn gast_degrees_for(instant: crate::ChartInstant) -> f64 {
+    gast_at(instant.epoch(), instant.ut1_julian_day())
+}
 
+fn gast_at(epoch: Epoch, ut1_days: f64) -> f64 {
+    let TdbSeconds(tdb_seconds) = utc_to_tdb(epoch);
+    let tt_days = epoch.to_jde_tt_days();
     let era_deg = earth_rotation_angle_degrees(ut1_days);
     let gmst_poly_deg = gmst06_polynomial_degrees((tt_days - J2000_JD) / DAYS_PER_CENTURY);
     let equation_of_equinoxes_deg = equation_of_equinoxes_degrees(TdbSeconds(tdb_seconds));

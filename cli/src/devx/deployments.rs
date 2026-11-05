@@ -704,8 +704,8 @@ enum Exemption {
     /// key is supplied, so a deployment supplying none of the integration has
     /// nothing to satisfy — and must not be handed a placeholder to get past
     /// this check. `example-project` declines `DocuSign` (no `DOCUSIGN_BASE_URL`)
-    /// and runs `StubSignatureProvider`, which `portal::signature` reaches only
-    /// through genuine absence.
+    /// and selects `NAVIGATOR_SIGNATURE_PROVIDER=fake` — the explicit local
+    /// signature loop, refused in production.
     Untriggered,
 }
 
@@ -3287,11 +3287,12 @@ sops:
     #[test]
     fn a_deployment_that_declines_docusign_skips_every_docusign_object() {
         // The failure this whole seam exists for: a row that supplies no
-        // `DOCUSIGN_BASE_URL`, so it declines the integration and runs
-        // `StubSignatureProvider`. Every DocuSign object the shared manifest
+        // `DOCUSIGN_BASE_URL`, so it declines the integration and selects
+        // `NAVIGATOR_SIGNATURE_PROVIDER=fake` — the explicit local
+        // signature loop. Every DocuSign object the shared manifest
         // references must read as a skip rather than a missing credential —
-        // otherwise the only way to ship is a placeholder, which boots the real
-        // provider instead of the stub.
+        // otherwise the only way to ship is a placeholder, which boots the
+        // real provider in an environment that named no selection.
         let root = fixture_tree();
         for deployment in provisioned_deployments(&root)
             .into_iter()

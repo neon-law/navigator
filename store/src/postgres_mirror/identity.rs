@@ -55,7 +55,8 @@ const ENTITY_COLUMNS: &[&str] = &[
     "inserted_at",
     "updated_at",
 ];
-/// `email_lower` is absent: PostgreSQL generates it from `email`.
+/// Surreal's derived `email_lower` is absent: PostgreSQL's `email` is
+/// `citext`, so its unique index already ignores letter case.
 const PERSON_COLUMNS: &[&str] = &[
     "id",
     "name",

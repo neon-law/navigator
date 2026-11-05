@@ -43,7 +43,7 @@ pub struct Journey {
     /// The concrete signature stub wired into the app's
     /// `signature_provider`, held so a journey can assert the envelope's
     /// recipient routing and the bytes that were sent.
-    pub signature: Arc<portal::signature::StubSignatureProvider>,
+    pub signature: Arc<portal::signature::FakeSignatureProvider>,
     /// The session store wired into the app, so a journey can mint a
     /// cookie session for a client Person and drive the client-facing
     /// portal surfaces (intake, review) as that human.
@@ -118,7 +118,7 @@ impl Journey {
         // seam stayed untouched and inspect the e-signature envelope.
         let billing = Arc::new(portal::billing::StubBillingProvider::new());
         state.billing_provider = billing.clone();
-        let signature = Arc::new(portal::signature::StubSignatureProvider::new());
+        let signature = Arc::new(portal::signature::FakeSignatureProvider::new());
         state.signature_provider = signature.clone();
         let public_dir = std::path::Path::new(portal::DEFAULT_PUBLIC_DIR);
         // Composed through the `neon` crate rather than restated here, so the

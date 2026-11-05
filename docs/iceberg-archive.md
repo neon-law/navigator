@@ -143,7 +143,7 @@ One dedicated bucket, `NAVIGATOR_ARCHIVES_BUCKET`, opened through `cloud::archiv
 ```text
 gs://<archive-bucket>/application/<table>/
   metadata/
-    version-hint.text
+    version-hint.text                   # unlocked lane only — never written on the locked lane
     v<N>.metadata.json
     snap-<snapshot-id>-<uuid>.avro      # manifest list
     <uuid>-m0.avro                       # manifest file(s)
@@ -159,6 +159,59 @@ metadata beside each table's data. The completion marker is `postgres/_paired/<g
 
 Bytes stay in `cloud::StorageService` (GCS in prod, `FsStorage` in dev) — the writer goes through the trait, never the
 GCS SDK directly, per [AGENTS.md](../AGENTS.md).
+
+### Offsite archive project
+
+When the archive bucket lives in a GCP project other than the deployment's, set `NAVIGATOR_ARCHIVES_GCP_PROJECT_ID` on
+the workflows-service pod to the archive project's id or numeric project number. Lane resolution
+(`cloud::archives_from_env`) then verifies the bucket's owning project through the storage credential and **refuses to
+write** when the match cannot be confirmed: a numeric value verifies by direct equality against the project number GCS
+reports for the bucket; an id verifies that the bucket is outside the deployment project (a storage-scoped credential
+cannot resolve ids to numbers). The Slack digest annotates the archive project and pins its console links with
+`?project=`. Leave the variable unset for an in-project bucket and on non-GCS backends (staging SeaweedFS keeps its
+existing variable set).
+
+**What the variable accepts.** Either the archive project's id (e.g. `example-archive-project`) or its numeric project
+number (e.g. `123456789012`). The two forms prove different things, because the workflows-service identity holds only
+`roles/storage.objectCreator` and `roles/storage.objectViewer` on the bucket — no Cloud Resource Manager access — so the
+only project identity GCS reports to it is the bucket's numeric project number:
+
+- **A number** verifies by direct equality against that probe. This is the stronger form.
+- **An id** cannot be resolved to a number under a storage-only credential, so the check verifies the property it
+  can: the bucket's project differs from the deployment project's number, read from the GKE metadata server (no IAM
+  required). The id is still carried into the Slack digest annotation.
+
+**Fail-closed refusal.** The verification runs at the single choke point every archives-lane caller resolves its handle
+through (`cloud::archives_from_env`), before any object write. Every unverifiable shape is an error, never a pass: a
+probe error, a numeric mismatch, an id-form value whose bucket lands in the deployment project, or an id-form value with
+an unreachable metadata server all refuse the lane, and the scheduled run records the failure. An unset or empty value
+leaves the seam off.
+
+**What the Slack digest annotates.** When the variable is set, the digest gains an `• *archive project* — <value>
+(offsite bucket)` line, and every per-table console link is pinned with `?project=<value>` so the GCS browser opens the
+bucket in the archive project's context rather than whichever project the viewer last visited.
+
+## Immutability on the retention-locked lane
+
+The offsite bucket carries a **locked** GCS Bucket Lock retention policy — 25 years (25 × 365.25 days, expressed in
+seconds as `OFFSITE_ARCHIVES_RETENTION_SECONDS`), set at bucket creation and locked once verified. A locked policy
+rejects both replacement and deletion of any object, so on that lane the writer's contract is **create-only**:
+
+- **Probe before write.** Every writer probes the bucket's policy (`retention_locked`) and branches on the answer. A
+  backend that cannot determine its bucket's policy fails the run — an unprobeable locked bucket must never receive a
+  destructive overwrite. The filesystem and S3 backends answer "no policy" (they have no bucket-policy surface).
+- **Attempt-unique keys.** On a locked lane every write goes through `put_immutable` (create only when no live
+  object holds the key). Nothing overwrites committed bytes: a scheduled application snapshot claims its `run=<HHMM>`
+  generation key only when that generation is not yet taken; a re-extraction of the same slot or an unscheduled run
+  lands under its own attempt-unique key (an ordinal for fingerprint companions, a uuid partition for re-extractions).
+  The unlocked lane (dev, KIND, unlocked in-project buckets) keeps the documented within-generation overwrite on fixed
+  keys.
+- **No `version-hint.text`.** The hint is mutable by definition — a locked policy rejects replacing it — so the
+  locked lane never writes it. Readers resolve the latest table version by taking the highest `v<N>.metadata.json` in
+  the `metadata/` listing, the same log-chaining order the writer walks (`archives/src/iceberg.rs`).
+- **Retention is the lock.** The `application/` lane carries no lifecycle rule; the locked policy is what prevents
+  deletion for 25 years. Deleting archive data is neither a permission the writer identity holds nor a call the code
+  makes.
 
 ## Catalog + BigQuery wiring — **operator decision required**
 
@@ -197,6 +250,40 @@ Inside the existing scheduled `Archives` Restate workflow on `workflows-service`
 live in workflows-service](durable-workflows.md)). The Iceberg metadata write is one additional journaled `ctx.run` step
 per table, after the Parquet write it already does. The diagnostic email gains an "Iceberg tables" line per table
 (snapshot id + metadata version).
+
+## Post-provisioning drill
+
+CI proves the writer, the attempt-key scheme, and the project seam against fakes; a locked bucket in a second GCP
+project has no test double. After provisioning the offsite lane and before relying on it, run this drill once — it is
+the manual proof CI cannot run. It uses synthetic names (`example-archive-project`, `example-archives-offsite`) because
+real identifiers never enter Git ([public contributor safety](public-contributor-safety.md)); substitute your
+deployment's real coordinates only at the CLI, never in a committed file.
+
+1. **Provision — create → verify policy → lock.** Run `navigator ops gcp setup` with
+   `--offsite-archives-project-id example-archive-project --offsite-archives-bucket example-archives-offsite`. The
+   provisioner creates the bucket with its retention policy already in place, verifies the policy against the live
+   bucket, and only then locks it — the lock is irreversible, so a wrong policy is converged by deleting the bucket
+   before it was ever locked, never by "fixing" a locked one. The workflows-service identity receives
+   `roles/storage.objectCreator` and `roles/storage.objectViewer` on the bucket and nothing else.
+2. **Configure.** Set `NAVIGATOR_ARCHIVES_BUCKET` to the offsite bucket and `NAVIGATOR_ARCHIVES_GCP_PROJECT_ID` to
+   the archive project's id or numeric project number on the workflows-service pod (see the example deployment's
+   [`config.toml`](../deployments/example-deployment/config.toml)).
+3. **Prove the fail-closed seam first.** Temporarily set `NAVIGATOR_ARCHIVES_GCP_PROJECT_ID` to a wrong project
+   number and trigger one run: lane resolution must refuse before any object is written, and the run must record the
+   failure. Restore the correct value.
+4. **Run one archive cycle.** Trigger the scheduled workflow by hand —
+   `kubectl --namespace navigator create job --from=cronjob/archives-trigger archives-drill-<date>` (see [scheduled
+   jobs](cronjobs.md)) — and watch the Slack digest: the `archive project` line, the pinned per-table links, and no
+   failure lines.
+5. **Read back through Iceberg.** In the GCS browser pinned to `example-archive-project`, confirm the table's
+   `metadata/` prefix holds `v1.metadata.json` (and no `version-hint.text`), with the data file under
+   `data/dt=<date>/run=<HHMM>/snapshot.parquet`. Read the table through the catalog choice recorded above (BigLake or an
+   external table) and confirm the row count matches the digest line.
+6. **Prove immutability.** Attempt to replace and then delete the snapshot Parquet; GCS must reject both under the
+   locked policy.
+7. **Record the drill.** Date, digest message, snapshot id, and the read-back row count go in the deployment's
+   operational log. The drill proves the offsite lane end to end; it does not replace the PostgreSQL rehydration drill
+   or the separate recovery contracts noted under [PostgreSQL coverage](#postgresql-coverage-generations).
 
 ## Council consensus (folded in)
 

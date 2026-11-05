@@ -37,17 +37,16 @@ use crate::components::{
     ChoiceGroupOption, CiteCheckCitation, CiteCheckPane, CiteCheckSide, CiteCheckStatus,
     CiteCheckView, ClientDriView, ClientDriViewBanner, CodeBlock, Column, ConfirmDelete, CopyRun,
     DataTable, Empty, ExternalLink, FactCard, FactGrid, Feed, FeedAccent, FeedPost, FeedSource,
-    Field, FooterAttorney, FooterBarLicense, FooterBrandLink, FooterMembership, FooterNavLink,
-    FooterOffice, FooterSocialLink, FormCard, GitHubStars, Hero, HeroAlign, HeroLevel, Honeypot,
-    Icon, IconName, LawyerPortalBreadcrumb, LegalBlueprintDisclaimer, NavigatorDestination,
-    NavigatorFooter, NavigatorFooterLink, NavigatorNavbar, NavigatorShell, NotationDocument,
-    NotationDocumentData, OpenTermLink, Pagination, Panel, PeopleListInputs, PersonChoice,
-    PersonPicker, PricingCard, PricingSection, Progress, PublicShell, QuestionStage, RowActions,
-    RunParagraph, SampleMattersBanner, Separator, SeparatorOrientation, SignatureSeal,
-    SignatureSealData, SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta, SortState, Stage,
-    StageWidth, StatusCell, StatusStrip, StepMeta, Stepper, StepperPanel, Tab, Tabs,
-    TestimonialCards, TestimonialSection, Toast, ToastTone, ToggleGroup, ToggleOption,
-    THEME_STYLESHEET_HREF,
+    Field, FooterAttorney, FooterBarLicense, FooterMembership, FooterNavLink, FooterOffice,
+    FooterSocialLink, FormCard, GitHubStars, Hero, HeroAlign, HeroLevel, Honeypot, Icon, IconName,
+    LawyerPortalBreadcrumb, LegalBlueprintDisclaimer, NavigatorDestination, NavigatorFooter,
+    NavigatorFooterLink, NavigatorNavbar, NavigatorShell, NotationDocument, NotationDocumentData,
+    OpenTermLink, Pagination, Panel, PeopleListInputs, PersonChoice, PersonPicker, PricingCard,
+    PricingSection, Progress, PublicShell, QuestionStage, RowActions, RunParagraph,
+    SampleMattersBanner, Separator, SeparatorOrientation, SignatureSeal, SignatureSealData,
+    SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta, SortState, Stage, StageWidth, StatusCell,
+    StatusStrip, StepMeta, Stepper, StepperPanel, Tab, Tabs, TestimonialCards, TestimonialSection,
+    Toast, ToastTone, ToggleGroup, ToggleOption, THEME_STYLESHEET_HREF,
 };
 // The vendor marks come from their own module rather than the theme root: they
 // are the one component whose colours are a third party's rather than the
@@ -957,7 +956,6 @@ fn FirmFooterShowcase(chrome: PublicChrome) -> Element {
                     compiled_identity_allowed: true,
                     legal_entity: chrome.legal_entity.clone(),
                     firm_home_href: String::new(),
-                    brands: Vec::new(),
                     copyright_year: chrome.copyright_year,
                 },
             }
@@ -975,21 +973,6 @@ fn demo_memberships(chrome: &PublicChrome) -> Vec<FooterMembership> {
             standing: membership.standing.clone(),
             href: membership.href.clone(),
             logo_href: membership.logo_href.clone(),
-        })
-        .collect()
-}
-
-/// The same family and current Brand that the page footer publishes.
-fn demo_family(chrome: &PublicChrome) -> Vec<FooterBrandLink> {
-    chrome
-        .brands
-        .iter()
-        .map(|brand| FooterBrandLink {
-            label: brand.label.clone(),
-            href: brand.href.clone(),
-            current: brand.current,
-            logo_href: brand.logo_href.clone(),
-            byline: brand.byline.clone(),
         })
         .collect()
 }
@@ -1568,9 +1551,8 @@ fn SiteFooterShowcase(chrome: PublicChrome) -> Element {
                 trademark: chrome.trademark.clone(),
                 trademark_registration: chrome.trademark_registration.clone(),
                 trademark_record_url: chrome.trademark_record_url.clone(),
-                // The request's family and affiliations let the gallery audit
-                // the same landmarks, headings, and links the page publishes.
-                brands: demo_family(&chrome),
+                // The request's affiliations let the gallery audit the same
+                // links the page publishes.
                 memberships: demo_memberships(&chrome),
                 social: demo_social(&chrome),
                 // The same release stamp as the outer page footer.

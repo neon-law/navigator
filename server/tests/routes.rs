@@ -734,6 +734,7 @@ fn erroring_policy() -> portal::policy::PolicyClient {
 async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
     AppState {
         brand_bundle: None,
+        fake_signature_dir: None,
         surreal: store::surreal::test_support::mem().await,
         workshops: WorkshopIndex::new(materials),
         auth: AuthConfig::new(true, None),
@@ -760,7 +761,7 @@ async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
         policy: portal::policy::PolicyClient::passthrough(),
         workflow_runtime: std::sync::Arc::new(workflows::InMemoryRuntime::new()),
         questionnaire_runtime: std::sync::Arc::new(workflows::InMemoryRuntime::new()),
-        signature_provider: std::sync::Arc::new(portal::signature::StubSignatureProvider::new()),
+        signature_provider: std::sync::Arc::new(portal::signature::FakeSignatureProvider::new()),
         billing_provider: std::sync::Arc::new(portal::billing::StubBillingProvider::new()),
         contract_reviewer: std::sync::Arc::new(portal::contract_review::StubContractReviewer),
         integration_providers: std::sync::Arc::new(
@@ -16894,6 +16895,15 @@ async fn project_documents_upload_rejects_a_batch_over_the_file_ceiling() {
 
     let resp = post_documents_batch(app, &project_code, &cookie, boundary, body).await;
     assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    // The refusal is plain language naming the limits and another way to
+    // send the files, never a bare status the browser shows as a failure.
+    let refusal = body_string(resp).await;
+    assert_eq!(refusal, store::documents::upload_form_limit_message());
+    assert!(refusal.contains(&format!(
+        "{} files",
+        store::documents::MAX_UPLOAD_FORM_FILES
+    )));
+    assert!(refusal.contains("navigator site document upload"));
     assert!(
         store::assets::list_all(&state.surreal)
             .await
@@ -17399,6 +17409,23 @@ async fn project_detail_page_renders_documents_and_upload_form() {
     // id would collide with the Estate transcript uploader's `id="file"`.
     assert!(body.contains("/public/js/upload-progress.js"));
     assert!(body.contains("id=\"document-upload-file\""));
+    // The form states its limits, and carries the refusal the script shows
+    // instead of sending a selection over them.
+    assert!(body.contains("id=\"document-upload-limit\""));
+    assert!(body.contains(&format!(
+        "data-max-files=\"{}\"",
+        store::documents::MAX_UPLOAD_FORM_FILES
+    )));
+    assert!(body.contains(&format!(
+        "data-max-bytes=\"{}\"",
+        store::documents::MAX_UPLOAD_FORM_BYTES
+    )));
+    assert!(body.contains(&store::documents::upload_form_limit_message()));
+    assert!(body.contains(&format!(
+        "at most {} files and {} in total",
+        store::documents::MAX_UPLOAD_FORM_FILES,
+        store::documents::human_bytes(store::documents::MAX_UPLOAD_FORM_BYTES)
+    )));
 }
 
 #[tokio::test]

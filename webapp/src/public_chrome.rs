@@ -11,8 +11,8 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    FooterAttorney, FooterBarLicense, FooterBrandLink, FooterMembership, FooterNavLink,
-    FooterOffice, FooterSocialLink, SiteFooterLegal,
+    FooterAttorney, FooterBarLicense, FooterMembership, FooterNavLink, FooterOffice,
+    FooterSocialLink, SiteFooterLegal,
 };
 
 /// One nav destination, resolved from the brand for the header.
@@ -55,21 +55,6 @@ pub struct ChromeBarLicense {
 pub struct ChromeAttorney {
     pub name: String,
     pub licenses: Vec<ChromeBarLicense>,
-}
-
-/// One brand the current firm wears, for the public footer's "Our Family" row.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
-pub struct ChromeBrand {
-    pub label: String,
-    pub href: String,
-    pub current: bool,
-    /// The brand's own mark, shown beside its family link.
-    #[serde(default)]
-    pub logo_href: String,
-    /// What this brand does, carried from the footer model so the family
-    /// block reads the same on a public page as it does inside `/app`.
-    #[serde(default)]
-    pub byline: String,
 }
 
 /// One social profile the public footer links under the wordmark.
@@ -190,10 +175,6 @@ pub struct PublicChrome {
     /// wasm client does not need to link the `views` crate.
     #[serde(default)]
     pub is_practice: bool,
-    /// Brands the current firm wears, in registry order — the footer's "Our
-    /// Family" row. Empty or a single entry renders no row.
-    #[serde(default)]
-    pub brands: Vec<ChromeBrand>,
     /// The associations the firm has a public affiliation with — the footer's
     /// standing lines.
     /// Empty renders none.
@@ -304,17 +285,6 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
                 .collect(),
             navigator_version: chrome.navigator_version.clone(),
             github_stars: chrome.github_stars,
-            brands: chrome
-                .brands
-                .iter()
-                .map(|brand| FooterBrandLink {
-                    label: brand.label.clone(),
-                    href: brand.href.clone(),
-                    current: brand.current,
-                    logo_href: brand.logo_href.clone(),
-                    byline: brand.byline.clone(),
-                })
-                .collect(),
             memberships: chrome
                 .memberships
                 .iter()
@@ -512,25 +482,6 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         companion_image: (views::brand::brand_key() == views::brand::BrandKey::Vesta)
             .then(|| views::assets::asset_url(views::assets::ASTER_BOARD_KEY)),
         is_practice: views::brand::BrandKey::LIVE.contains(&views::brand::brand_key()),
-        // The compiled family — every house brand the firm trades under, the
-        // request's own key marked current — so the "Our Family" row is on
-        // every page from first boot. The request overlay
-        // (`inject_public_utility`, reading `webapp::firm_footer`'s resolved
-        // model) replaces it with the live `firm_brand` rows once a Firm
-        // wears the key. Empty under a bundle that renamed the firm, which
-        // renders no row.
-        brands: crate::firm_footer::compiled_family_brands(views::brand::brand_key())
-            .into_iter()
-            .map(|brand| ChromeBrand {
-                label: brand.label,
-                href: brand.href,
-                current: brand.current,
-                logo_href: brand.logo_href,
-                byline: brand.byline,
-            })
-            .collect(),
-        // The firm's association affiliations. A firm fact like the offices
-        // above it: the same line on every host the firm serves.
         memberships: views::brand::firm_memberships()
             .iter()
             .map(|membership| ChromeMembership {
@@ -616,17 +567,6 @@ pub fn apply_resolved_firm_footer(
     chrome.legal_entity.clone_from(&model.legal_entity);
     chrome.firm_home_href.clone_from(&model.firm_home_href);
     chrome.copyright_year = model.copyright_year;
-    chrome.brands = model
-        .brands
-        .iter()
-        .map(|brand| ChromeBrand {
-            label: brand.label.clone(),
-            href: brand.href.clone(),
-            current: brand.current,
-            logo_href: brand.logo_href.clone(),
-            byline: brand.byline.clone(),
-        })
-        .collect();
 }
 
 /// Public social destinations scoped to the request Brand.
@@ -727,22 +667,6 @@ mod tests {
                     license_url: "https://example.com/bar/100001".to_string(),
                 }],
             }],
-            brands: vec![
-                ChromeBrand {
-                    label: "Neon Law".to_string(),
-                    href: "https://www.neonlaw.com".to_string(),
-                    current: true,
-                    logo_href: "/public/logo.svg".to_string(),
-                    byline: "flat-fee legal services for emerging tech".to_string(),
-                },
-                ChromeBrand {
-                    label: "DeleteYourData.com".to_string(),
-                    href: "https://www.deleteyourdata.com".to_string(),
-                    current: false,
-                    logo_href: "/public/brand/delete-your-data/logo.svg".to_string(),
-                    byline: "protect your personal information".to_string(),
-                },
-            ],
             memberships: vec![ChromeMembership {
                 label: "Justice Technology Association".to_string(),
                 standing: JTA_STANDING.to_string(),
@@ -1003,52 +927,19 @@ mod tests {
             "the contact band carries over: {tenant_out}"
         );
         assert!(
-            tenant_out.contains(r#"aria-label="Our family""#)
-                && tenant_out.contains(r#"href="https://www.deleteyourdata.com""#),
-            "the family row carries over: {tenant_out}"
-        );
-        assert!(
             tenant_out.contains(&JTA_STANDING.to_string())
                 && tenant_out.contains(r#"href="https://justicetechassociation.org/get-involved""#),
             "the membership line carries over: {tenant_out}"
         );
     }
 
-    /// The chrome the server resolves carries the firm's compiled family with
-    /// the request's own brand current, and the firm's affiliation — so the
-    /// rows render from first boot, before any Firm row exists to override
-    /// them.
+    /// The chrome the server resolves carries the firm's affiliation, so the
+    /// line renders from first boot, before any Firm row exists to override
+    /// it.
     #[cfg(feature = "server")]
     #[test]
-    fn the_resolved_chrome_carries_the_compiled_family_and_the_membership() {
+    fn the_resolved_chrome_carries_the_membership() {
         let chrome = firm_public_chrome(Vec::new());
-        let labels: Vec<&str> = chrome.brands.iter().map(|b| b.label.as_str()).collect();
-        assert_eq!(
-            labels,
-            [
-                "Neon Law",
-                "DeleteYourData.com",
-                "DeleteYourDebt.com",
-                "Vesta Estate Planning",
-                "Misericordia Injury Law",
-                "Abhaya Immigration",
-                "Lawyer Shook",
-                "Summons Defense",
-                "Daybridge Divorce Law",
-                "Death & Divorce",
-                "CyberInjuryLaw",
-                "Aegis Criminal Defense",
-                "Groundwork Real Estate Law",
-                "Guieb & Shook"
-            ]
-        );
-        assert!(chrome.brands[0].current, "the default brand is current");
-        assert!(
-            chrome.brands[1..]
-                .iter()
-                .all(|b| !b.current && b.href.starts_with("https://")),
-            "every other brand links its production home: {labels:?}"
-        );
         assert_eq!(chrome.memberships.len(), 1);
         assert_eq!(
             chrome.memberships[0].label,
@@ -1318,7 +1209,6 @@ mod tests {
             legal_entity: entity.into(),
             compiled_identity_allowed: allowed,
             firm_home_href: String::new(),
-            brands: Vec::new(),
             copyright_year: 2026,
         }
     }
@@ -1400,10 +1290,8 @@ mod tests {
             legal_entity: chrome.legal_entity.clone(),
             compiled_identity_allowed: true,
             firm_home_href: chrome.firm_home_href.clone(),
-            brands: Vec::new(),
             copyright_year: chrome.copyright_year,
         };
-        chrome.brands.clear();
         let before = serde_json::to_value(&chrome).unwrap();
         apply_resolved_firm_footer(&mut chrome, &model);
         assert_eq!(serde_json::to_value(&chrome).unwrap(), before);

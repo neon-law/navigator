@@ -113,6 +113,13 @@
       "table": "matter_page"
     },
     {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "email_lower",
+      "missing_table": null,
+      "table": "person"
+    },
+    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -4169,9 +4176,8 @@
       "person": {
         "columns": {
           "apple_subject": "TEXT",
-          "email": "TEXT",
+          "email": "CITEXT",
           "email_confirmed": "BOOLEAN",
-          "email_lower": "TEXT",
           "family_name": "TEXT",
           "given_name": "TEXT",
           "id": "UUID",

@@ -271,7 +271,12 @@ refuses the start. Keep the bootstrap Owner address in its secret configuration;
 - **Clerks** — supervised non-lawyer firm workers, role `clerk`, also using lowercase `*@neonlaw.com` emails in
   canonical seed data. They are not a member of the Lawyer tier.
 - **Clients** — any seeded non-firm person, role `client`. Email is the client's real address; no domain restriction.
-  `client@neonlaw.com` in the KIND fixture below is the sole local exception to that non-firm-address rule.
+- **`site import person`** reads an optional `role:` per record (`store::seed::check_seed_roles`). Omitted means
+  `client` on a create and leaves an existing Person's role alone. `lawyer` and `clerk` require the record's email to
+  sit on a Brand's approved domain, the host of a Brand website URL
+  ([`store::brand_domains`](../store/src/brand_domains.rs)); any other domain is refused. `owner` and `admin` are never
+  imported. A role that differs from an existing Person's is applied only with `--overwrite`, by a session that may
+  assign it; without `--overwrite` the record stays unchanged and carries a warning.
 - **The KIND-only Rauthy fixture** seeds one account per role, each with password `password`: `owner@neonlaw.com`,
   `admin@neonlaw.com`, `lawyer@neonlaw.com`, `clerk@neonlaw.com`, and `client@neonlaw.com` (per
   [`open-admin-server`](../.agents/skills/open-admin-server/SKILL.md)). Four of the five are seeded onto one demo
@@ -281,10 +286,12 @@ refuses the start. Keep the bootstrap Owner address in its secret configuration;
   behind the row, rendering only the participation ledger until the fixture Admin grants themself one.
   `lawyer@neonlaw.com` carries exactly one role, lawyer, not admin.
 
-Email identifies exactly one person regardless of casing. `person.email_lower`, a computed field, carries a unique index
-(`person_email_lower`), and every lookup keyed on email goes through `store::persons::find_by_email_ci`, so an identity
-provider presenting `Attorney@Example.com` resolves to the row stored as `attorney@example.com` and authorizes against
-the same role. Two rows differing only by case cannot exist.
+Email identifies exactly one person regardless of casing, and the stored address keeps the casing it was entered with.
+In SurrealDB, `person.email_lower`, a computed field, carries a unique index (`person_email_lower`); in PostgreSQL,
+`person.email` is `citext` with the unique index `person_email_key`. Every lookup keyed on email goes through
+`store::persons::find_by_email_ci`, so an identity provider presenting `Attorney@Example.com` resolves to the row stored
+as `attorney@example.com` and authorizes against the same role. Two rows differing only by case cannot exist. A Person
+seed import with `--overwrite` writes a change that is only in letter case.
 
 ## Participation
 

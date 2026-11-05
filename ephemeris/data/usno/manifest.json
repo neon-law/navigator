@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "rights_source": "https://maia.usno.navy.mil/products/deltaT",
+  "rights_statement": "Distribution Statement A. Approved for public release: distribution unlimited.",
+  "files": [
+    {
+      "source": "https://maia.usno.navy.mil/ser7/historic_deltat.data",
+      "sha256": "9f43514119060601a00624a5d9287a91b0b1f5e12bec5209bbabda90b392b70b",
+      "bytes": 30345,
+      "retrieved_at": "2026-11-05T03:28:35.185697+00:00",
+      "name": "historic_deltat.data",
+      "upstream_version": "Unversioned USNO product; pinned retrieval 2026-11-05"
+    },
+    {
+      "source": "https://maia.usno.navy.mil/ser7/deltat.data",
+      "sha256": "7396fcfdad33856b5242f288887678d75f3803494fa79394bc02f37eb99efc1e",
+      "bytes": 13545,
+      "retrieved_at": "2026-11-05T03:28:35.675590+00:00",
+      "name": "deltat.data",
+      "upstream_version": "Unversioned USNO product; pinned retrieval 2026-11-05"
+    },
+    {
+      "source": "https://maia.usno.navy.mil/ser7/deltat.preds",
+      "sha256": "5d864fddd30b2c64d2a86d3debbb25604eb5de44370c96bccf2abd5463f3db08",
+      "bytes": 1483,
+      "retrieved_at": "2026-11-05T03:28:36.136643+00:00",
+      "name": "deltat.preds",
+      "upstream_version": "Unversioned USNO product; pinned retrieval 2026-11-05"
+    }
+  ]
+}

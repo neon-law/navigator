@@ -190,7 +190,11 @@ async fn handle_callback(socket: &mut TcpStream, expected_state: &str) -> Result
             .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
             .take(64)
             .collect();
-        return Err(anyhow!("Google refused the authorization: {error}"));
+        return Err(anyhow!(
+            "Google refused the authorization: {error}. The OAuth client must be a Desktop app \
+behind the Firm's Internal consent screen, with the Gmail API enabled; see {}",
+            super::PROVISIONING_DOC
+        ));
     }
     let Some(code) = code else {
         respond(
@@ -372,7 +376,10 @@ fn secret_from_client_json(bytes: &[u8], client_id: &str) -> Result<String> {
     let parsed: ClientJson = serde_json::from_slice(bytes)
         .map_err(|_| anyhow!("the client secret file is not Google client JSON"))?;
     let installed = parsed.installed.ok_or_else(|| {
-        anyhow!("the client secret file has no `installed` client; download a Desktop-app client's JSON")
+        anyhow!(
+            "the client secret file has no `installed` client; download a Desktop-app client's JSON (see {})",
+            super::PROVISIONING_DOC
+        )
     })?;
     if installed
         .client_id
@@ -446,7 +453,10 @@ pub(super) fn gcp_source(
         return Ok(None);
     }
     let project = project.ok_or_else(|| {
-        anyhow!("GCP client secret needs a project; run navigator mail setup --project <project>")
+        anyhow!(
+            "GCP client secret needs a project; run navigator mail setup --project <project> (see {})",
+            super::PROVISIONING_DOC
+        )
     })?;
     let secret = secret.unwrap_or("navigator-mail-oauth-client-secret");
     for value in [project, secret] {
@@ -515,7 +525,7 @@ fn gcp_secret_result(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<Stri
         } else {
             "GCP client secret lookup failed; check gcloud authentication and Secret Manager access"
         };
-        return Err(anyhow!(message));
+        return Err(anyhow!("{message} (see {})", super::PROVISIONING_DOC));
     }
     let secret = std::str::from_utf8(stdout)
         .map_err(|_| anyhow!("GCP client secret is not UTF-8"))?
@@ -798,6 +808,7 @@ mod tests {
         send_to(addr, "/?state=nonce&error=access_denied%3Cscript%3E").await;
         let error = format!("{}", waiter.await.unwrap().unwrap_err());
         assert!(error.contains("access_denied"));
+        assert!(error.contains("docs/mail-cli.md#provision-gmail-for-navigator-mail"));
         assert!(!error.contains('<'));
     }
 
@@ -1157,6 +1168,10 @@ mod gcp_tests {
                 .unwrap_err()
                 .to_string();
             assert!(error.contains(expected), "{error}");
+            assert!(
+                error.contains("docs/mail-cli.md#provision-gmail-for-navigator-mail"),
+                "{error}"
+            );
             assert!(!error.contains("private-marker"));
             assert!(!error.contains("private-secret"));
         }

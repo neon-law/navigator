@@ -85,6 +85,10 @@ The remaining hosting work is deliberately adjacent, not a missing setup stage:
 | TLS and Gateway manifests | `navigator ops ship`; it renders and applies Gateway, certificate, and route manifests. |
 | Restate | The Restate operator and its manifests provision the broker; `ops ship` re-registers the worker. |
 | Secret values | `navigator ops secrets apply`; decrypts and writes Secret Manager plus the Kubernetes Secret. |
+| Gmail OAuth client | A console step; see [Gmail for mail](mail-cli.md#provision-gmail-for-navigator-mail). |
+
+`navigator ops gcp services --project-id <project>` is the read-only check on the API stage: it prints `ok` or `MISSING`
+for each API setup enables and exits nonzero on drift. Re-running setup enables a missing API.
 
 ### The image hub
 

@@ -17,17 +17,15 @@ async fn prepared_practice_pages_render_their_own_identity_and_contact_form() {
     );
     let db = state.surreal.clone();
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-    for (key, port, other_name, headline) in [
+    for (key, port, headline) in [
         (
             BrandKey::Aegis,
             21301,
-            "Groundwork Real Estate Law",
             "Facing criminal charges? Start with a conversation.",
         ),
         (
             BrandKey::Groundwork,
             21302,
-            "Aegis Criminal Defense",
             "Before you sign, know where you stand.",
         ),
     ] {
@@ -75,15 +73,6 @@ async fn prepared_practice_pages_render_their_own_identity_and_contact_form() {
             assert!(
                 html.contains(views::brand::SHOOK_CONSULTATION_URL),
                 "shared Notion booking link"
-            );
-            let document = scraper::Html::parse_document(&html);
-            let family =
-                scraper::Selector::parse("footer .site-footer__family").expect("family selector");
-            assert!(
-                document
-                    .select(&family)
-                    .any(|row| row.html().contains(other_name)),
-                "shared firm directory includes sibling brands"
             );
             assert!(
                 html.contains(&format!("brand-{}-tokens.css", key.as_str())),

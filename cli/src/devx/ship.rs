@@ -3688,10 +3688,10 @@ fn roll(
     // 3b. Render the Secret Manager catalog for THIS deployment: drop every
     //     entry it does not write. A deployment that declines DocuSign cannot
     //     retain a catalog entry for it — and must not be given a placeholder
-    //     credential to make
-    //     the reference resolve, since `portal::signature` reaches its stub
-    //     only through genuine absence. Same for an object scoped to another
-    //     deployment, which this one is forbidden to hold at all.
+    //     credential to make the reference resolve: selection is explicit
+    //     (`NAVIGATOR_SIGNATURE_PROVIDER`), so a deployment that named no
+    //     provider never boots the real one either. Same for an object scoped
+    //     to another deployment, which this one is forbidden to hold at all.
     omit_unwritten_objects(
         &target,
         &super::deployments::skipped_projected_objects(deployment)?,
@@ -8241,28 +8241,6 @@ mod tests {
         }
     }
 
-    /// The footer's family row reads the same gate.
-    ///
-    /// "Our Family" is a set of links; listing a brand whose host answers
-    /// `404` advertises a practice a reader cannot reach, and for the NYC
-    /// summons practice that is worse than a dead link.
-    #[test]
-    fn the_family_row_lists_only_admitted_brands() {
-        let listed = webapp::firm_footer::compiled_family_brands(views::brand::BrandKey::default());
-        for key in views::brand::BrandKey::GUIEB_SHOOK_FAMILY {
-            let href = key.public_home_href();
-            let present = listed.iter().any(|brand| brand.href == href);
-            assert_eq!(
-                present,
-                key.is_live(),
-                "{} is {}live and {}listed in the family row",
-                key.as_str(),
-                if key.is_live() { "" } else { "not " },
-                if present { "" } else { "not " },
-            );
-        }
-    }
-
     #[test]
     fn a_staging_render_carries_the_staging_sibling_not_the_production_one() {
         // Mirrors `render_substitutes_every_placeholder_to_zero_remaining`'s
@@ -11975,7 +11953,7 @@ spec:
     #[test]
     fn a_deployment_that_declines_docusign_renders_no_docusign_reference() {
         // A row that declares no `DOCUSIGN_BASE_URL` runs
-        // `StubSignatureProvider`, holds no DocuSign object, and its catalog must
+        // `FakeSignatureProvider`, holds no DocuSign object, and its catalog must
         // not ask for one. This is the ship half of the failure: without it the
         // resolve preflight aborts naming all nine, and the only way past would
         // be a placeholder credential — which boots the real provider instead

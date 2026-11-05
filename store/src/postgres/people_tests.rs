@@ -833,3 +833,63 @@ async fn directory_views_join_firm_names_and_scope_to_visible_people() {
         .unwrap()
         .is_empty());
 }
+
+#[tokio::test]
+async fn email_is_citext_matching_any_case_and_keeping_the_entered_casing() {
+    let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+        return;
+    };
+    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let surreal = crate::test_support::mem_surreal().await;
+    let entered = format!("Cased.Person-{}@Example.test", Uuid::now_v7());
+    let person = super::create(&pg, &surreal, &NewPerson::new("Cased Person", &entered))
+        .await
+        .unwrap();
+    assert_eq!(person.email, entered);
+
+    // A lookup in any case finds the row and returns the casing entered.
+    let found = super::by_email(&pg, &entered.to_lowercase())
+        .await
+        .unwrap()
+        .expect("a differently-cased lookup finds the Person");
+    assert_eq!(
+        (found.id, found.email.as_str()),
+        (person.id, entered.as_str())
+    );
+    let filtered = super::directory_entries(&pg, "", &entered.to_uppercase(), &[], None)
+        .await
+        .unwrap();
+    assert_eq!(filtered.len(), 1);
+
+    // A case variant is the same mailbox: the unique index refuses it.
+    assert!(matches!(
+        super::create(
+            &pg,
+            &surreal,
+            &NewPerson::new("Variant", entered.to_uppercase())
+        )
+        .await,
+        Err(PersonError::EmailTaken)
+    ));
+
+    // A change only in letter case is written, and the mailbox stays put.
+    let recased = entered.to_lowercase();
+    let edited = super::edit(
+        &pg,
+        &surreal,
+        person.id,
+        &PersonEdit {
+            email: Some(recased.clone()),
+            ..PersonEdit::default()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(edited.email, recased);
+    assert_eq!(
+        super::mailbox_holder(&pg, &entered).await.unwrap(),
+        Some(person.id)
+    );
+    pg.0.close().await;
+}

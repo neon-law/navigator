@@ -3,17 +3,18 @@
 //! The chain is UTC→TAI→TT→TDB, all through `hifitime`:
 //!
 //! 1. **UTC→TAI** — hifitime's built-in model (TAI−UTC is 37 seconds from
-//!    2017: 27 inserted leap seconds plus the initial 10 seconds). For dates before 1972 hifitime models the
-//!    pre-leap-second UTC drift, so 1900+ birth data converts on the same code
-//!    path as modern dates.
+//!    2017: 27 inserted leap seconds plus the initial 10 seconds). Before 1972,
+//!    this pinned model uses TAI−UTC = 0; fractional historical UTC adjustments
+//!    are absent. Resolved historical birth clocks use the separate UT1-based
+//!    [`crate::ChartInstant`] path.
 //! 2. **TAI→TT** — the fixed 32.184 s offset of Terrestrial Time.
 //! 3. **TT→TDB** — the periodic relativistic term (amplitude ≈ 1.6 ms) that
 //!    converts the geoid clock to the solar-system barycenter clock the
 //!    ephemeris integrator reports.
 //!
 //! The classical ΔT = TT−UT1 is **not** consumed here: SPK segments are
-//! functions of TDB only. ΔT belongs to Earth-rotation quantities (the
-//! ascendant and midheaven), which later layers compute.
+//! functions of TDB only. The historical chart-clock path separately uses ΔT
+//! to resolve its UT1 input into a physical TT epoch.
 
 use hifitime::Epoch;
 
@@ -102,7 +103,7 @@ mod tests {
         );
     }
 
-    /// 1900 birth data converts on the pre-1972 hifitime path and stays finite
+    /// A proleptic UTC label converts on the pre-1972 hifitime path and stays finite
     /// and negative (well before J2000).
     #[test]
     fn pre_1972_date_converts() {

@@ -163,6 +163,9 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
             index_continuation = !line.ends_with(';');
             continue;
         }
+        if current.is_none() && line.starts_with("DROP VIEW ") && line.ends_with(';') {
+            continue;
+        }
         if line.is_empty() || line.starts_with("--") || line == ")" || line == ");" {
             if line == ");" {
                 if let Some(table) = current.take() {
@@ -294,6 +297,34 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
                 if !valid_identifier || !tables.contains_key(name) {
                     return Err(Error::UnsupportedSql(line.to_string()));
                 }
+                continue;
+            }
+            if let [name, "DROP", "COLUMN", column] = words.as_slice() {
+                let table = tables
+                    .get_mut(*name)
+                    .filter(|table| table.columns.contains_key(*column))
+                    .ok_or_else(|| Error::UnsupportedSql(line.to_string()))?;
+                table.columns.remove(*column);
+                let dropped: Vec<String> = table
+                    .foreign_keys
+                    .iter()
+                    .filter(|(source, _)| source == column)
+                    .map(|(_, target)| target.clone())
+                    .collect();
+                table.foreign_keys.retain(|(source, _)| source != column);
+                for target in dropped {
+                    if !table.foreign_keys.iter().any(|(_, other)| *other == target) {
+                        table.references.remove(&target);
+                    }
+                }
+                continue;
+            }
+            if let [name, "ALTER", "COLUMN", column, "TYPE", sql_type] = words.as_slice() {
+                let current = tables
+                    .get_mut(*name)
+                    .and_then(|table| table.columns.get_mut(*column))
+                    .ok_or_else(|| Error::UnsupportedSql(line.to_string()))?;
+                *current = (*sql_type).to_string();
                 continue;
             }
             let (name, column, sql_type) = match words.as_slice() {
@@ -1391,9 +1422,19 @@ mod tests {
                 include_str!("../postgres/migrations/20261104120000_sent_email_append_only.sql"),
             ),
             (
+                "20261105000000_person_email_citext.sql",
+                include_str!("../postgres/migrations/20261105000000_person_email_citext.sql"),
+            ),
+            (
                 "20261105120000_inbox_conversation_person_id.sql",
                 include_str!(
                     "../postgres/migrations/20261105120000_inbox_conversation_person_id.sql"
+                ),
+            ),
+            (
+                "20261105130000_index_message_provider_message_id.sql",
+                include_str!(
+                    "../postgres/migrations/20261105130000_index_message_provider_message_id.sql"
                 ),
             ),
         ])
@@ -1915,7 +1956,20 @@ mod tests {
         assert!(parse_schema("ALTER TABLE brand DROP COLUMN name;").is_err());
         assert!(parse_schema("ALTER TABLE absent ADD COLUMN name TEXT;").is_err());
 
+        let altered = parse_schema(&format!(
+            "{sql}\nALTER TABLE brand DROP COLUMN firm_id;\n\
+             ALTER TABLE brand ALTER COLUMN website_url TYPE CITEXT;\n\
+             DROP VIEW brand_directory;"
+        ))
+        .expect("DROP COLUMN, ALTER COLUMN TYPE and DROP VIEW parse");
+        assert_eq!(altered["brand"].columns["website_url"], "CITEXT");
+        assert!(!altered["brand"].columns.contains_key("firm_id"));
+        assert!(altered["brand"].foreign_keys.is_empty());
+        assert!(!altered["brand"].references.contains("firm"));
+        assert!(parse_schema(&format!("{sql}\nALTER TABLE brand DROP COLUMN absent;")).is_err());
+
         let postgres = parse_schema(canonical_schema()).expect("canonical SQL parses");
+        assert_eq!(postgres["person"].columns["email"], "CITEXT");
         assert!(postgres["brand"].columns.contains_key("website_url"));
         let parity = compare_to_surreal(
             &postgres,

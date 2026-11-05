@@ -201,6 +201,22 @@ fn caption_for_export(file: &Path, contents: &str, final_export: bool) -> Result
     }
 }
 
+/// The name a final render signs counsel's `/s/` line with:
+/// `matter.counsel.name` from the Project's manifest.
+///
+/// # Errors
+///
+/// The message [`read`] gives for a missing or malformed `matter:`.
+pub fn counsel_name(file: &Path) -> Result<String, String> {
+    let path = find_manifest(file).ok_or_else(|| {
+        format!(
+            "no {} found above this pleading; add one with a `{KEY}:` block",
+            manifest::FILE
+        )
+    })?;
+    Ok(read(&path)?.counsel.name.trim().to_string())
+}
+
 /// A final export requires the court's assignments, even when a draft
 /// explicitly declares them pending.
 ///
