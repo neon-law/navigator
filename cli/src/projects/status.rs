@@ -63,6 +63,10 @@ fn print_status(value: &serde_json::Value) {
     }
     let onboarding = &value["onboarding"];
     println!("onboarding filed: {}", onboarding["filed"]);
+    println!(
+        "onboarding status: {}",
+        onboarding["status"].as_str().unwrap_or("unknown")
+    );
     if let Some(documents) = onboarding["documents"].as_array() {
         for doc in documents {
             println!(

@@ -196,6 +196,13 @@ pub struct ProjectDetailView {
     pub code: String,
     pub name: String,
     pub status: String,
+    /// This matter's onboarding reading, `pitch` until its onboarding
+    /// notation's envelope completes a signature loop Navigator sent, then
+    /// `official`. A wasm-safe string — the store's `OnboardingStatus` enum
+    /// does not cross to the client build; `store::projects::OnboardingStatus::
+    /// label()` computes it server-side.
+    #[serde(default)]
+    pub onboarding_status: String,
     /// Every invoice mirrored for this matter, newest first — a matter may
     /// carry more than one over time (ENG-588). Empty until Xero raises one.
     pub invoices: Vec<InvoiceView>,
@@ -583,12 +590,18 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
     };
     let page_tabs =
         crate::sections::page::stored_page_tabs(&surreal, id, &project.code, viewer).await;
+    // The matter's execution reading, from the signature records — `official`
+    // only once the onboarding envelope completed a loop Navigator sent.
+    let onboarding_status = store::projects::onboarding_status(&surreal, id)
+        .await
+        .map_err(server_error)?;
     Ok(ProjectDetailView {
         page_tabs,
         id: project.id.to_string(),
         code: project.code,
         name: project.name,
         status: project.status,
+        onboarding_status: onboarding_status.label().to_string(),
         invoices,
         trust,
         notations: notation_rows,
@@ -1068,6 +1081,19 @@ pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
                 current: view.selected_tab.href(&view.code),
             }
             p { span { class: "status-chip", "{view.status}" } }
+            if !view.onboarding_status.is_empty() {
+                p {
+                    span {
+                        class: "status-chip",
+                        title: if view.onboarding_status == "official" {
+                            "Onboarding is official: the matter's onboarding document completed a signature loop driven by Navigator — every recipient signed."
+                        } else {
+                            "This matter is still a pitch: its onboarding document has not completed a signature loop driven by Navigator."
+                        },
+                        "Onboarding: {view.onboarding_status}"
+                    }
+                }
+            }
 
             crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
 
@@ -1358,6 +1384,36 @@ mod render_tests {
         assert!(html.contains("Due soon"), "{html}");
         assert!(html.contains("Past (1)"), "{html}");
         assert!(html.contains("Earlier notice"), "{html}");
+    }
+
+    /// The client matter page renders the onboarding reading as a chip: the
+    /// loader's status text verbatim, pitch before the loop completes and
+    /// official after, with each state's hover title carrying the caveat.
+    #[test]
+    fn the_onboarding_reading_renders_as_a_chip_in_both_states() {
+        let base = ProjectDetailView {
+            code: "acme".into(),
+            name: "Sample Matter".into(),
+            ..ProjectDetailView::default()
+        };
+        // No status set (an older payload path) renders no chip at all.
+        let unset = render_page(base.clone());
+        assert!(!unset.contains("Onboarding:"), "{unset}");
+
+        let pitch = render_page(ProjectDetailView {
+            onboarding_status: "pitch".into(),
+            ..base.clone()
+        });
+        assert!(pitch.contains("Onboarding: pitch"), "{pitch}");
+        assert!(pitch.contains("still a pitch"), "{pitch}");
+        assert!(!pitch.contains("Onboarding: official"), "{pitch}");
+
+        let official = render_page(ProjectDetailView {
+            onboarding_status: "official".into(),
+            ..base
+        });
+        assert!(official.contains("Onboarding: official"), "{official}");
+        assert!(official.contains("Onboarding is official"), "{official}");
     }
 
     fn saved_testimonial_view() -> ProjectDetailView {

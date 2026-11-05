@@ -1796,7 +1796,9 @@ async fn get_project_door(
 }
 
 /// Live lifecycle evidence for a firm-side participant. Filing establishes
-/// onboarding presence; this read makes no assertion about execution.
+/// onboarding presence; `onboarding.status` carries the execution reading —
+/// `official` only once the onboarding envelope completed a loop Navigator
+/// sent.
 async fn project_status_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
@@ -1834,6 +1836,9 @@ async fn project_status_door(
     } else {
         Vec::new()
     };
+    let onboarding_status = store::projects::onboarding_status(&state.surreal, id)
+        .await
+        .map_err(ApiError::Db)?;
     Ok(Json(serde_json::json!({
         "code": project.code,
         "status": if project.status == "archived" { "archived" } else { lifecycle.label() },
@@ -1844,8 +1849,9 @@ async fn project_status_door(
         "source_state": store::project_surfaces::source_state(&project),
         "onboarding": {
             "filed": opening.contains(&id),
+            "status": onboarding_status.label(),
             "documents": documents,
-            "execution_verified": false
+            "execution_verified": onboarding_status == store::projects::OnboardingStatus::Official
         },
         "missing": missing
     }))
