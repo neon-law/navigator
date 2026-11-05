@@ -1052,11 +1052,7 @@ fn ops_gcp_help_lists_the_hub_alongside_the_environment_provisioner() {
 
     assert_eq!(
         command_names(&output),
-        vec![
-            // The two provisioners, widest blast radius first: an environment,
-            // then the shared registry.
-            "hub", "iap", "setup", "help",
-        ]
+        vec!["hub", "iap", "services", "setup", "help",]
     );
 }
 

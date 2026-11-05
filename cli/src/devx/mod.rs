@@ -798,8 +798,10 @@ pub enum GcpCmd {
     /// resources, and it refuses a project ID recorded as an environment.
     #[command(subcommand)]
     Hub(GcpHubCmd),
-    /// Report drift between the APIs `ops gcp setup` enables and the APIs
-    /// the project actually has enabled, `gmail.googleapis.com` among them.
+    /// Report required APIs that are disabled on the project.
+    ///
+    /// Compares the APIs `ops gcp setup` enables with the APIs the project
+    /// actually has enabled, `gmail.googleapis.com` among them.
     /// Read-only: it lists the project's enabled services and enables
     /// nothing. Exits nonzero when any required API is disabled.
     Services {
