@@ -199,10 +199,7 @@ impl CreateProjectNotationError {
                 tracing::warn!(%code, count = violations.len(), "project_notation_new: template refused");
                 (
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    format!(
-                        "template `{code}` has {} blocking rule violation(s); fix it in the repo and retry",
-                        violations.len()
-                    ),
+                    invalid_template_message(&code, &violations),
                 )
                     .into_response()
             }
@@ -245,6 +242,10 @@ impl CreateProjectNotationError {
             )
                 .into_response(),
             Self::Session(e) => {
+                if let Some(message) = e.lawyer_fault() {
+                    tracing::warn!(error = %e, "project_notation_new: lawyer-fixable create failure");
+                    return (StatusCode::UNPROCESSABLE_ENTITY, message).into_response();
+                }
                 tracing::error!(error = %e, "project_notation_new: create failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response()
             }
@@ -254,6 +255,22 @@ impl CreateProjectNotationError {
             }
         }
     }
+}
+
+/// First line of a refused Draft: the rule code and message, plus how many
+/// other violations the CLI's one-line report would otherwise hide.
+pub(crate) fn invalid_template_message(code: &str, violations: &[rules::Violation]) -> String {
+    let detail = violations.first().map_or_else(
+        || "the template failed validation".to_string(),
+        |violation| format!("{}: {}", violation.code, violation.message),
+    );
+    let more = violations.len().saturating_sub(1);
+    let suffix = if more > 0 {
+        format!(" (+{more} more)")
+    } else {
+        String::new()
+    };
+    format!("template `{code}` is invalid: {detail}{suffix}")
 }
 
 pub async fn project_notation_new_post(
@@ -420,5 +437,58 @@ mod tests {
             text.contains("nevada"),
             "the cause must name the offending condition: {text}"
         );
+    }
+
+    /// LAW-273: a refused Draft names the rule on the first line, which is all
+    /// `notation create` prints. A count alone does not say what to fix.
+    #[tokio::test]
+    async fn an_invalid_template_names_the_blocking_rule() {
+        let response = CreateProjectNotationError::Session(NotationSessionError::TemplateSource(
+            TemplateSourceError::Invalid {
+                code: "offboarding__letter".to_string(),
+                violations: vec![rules::Violation {
+                    code: "N123",
+                    path: std::path::PathBuf::from("offboarding__letter.md"),
+                    line: 1,
+                    range: 0..0,
+                    message: "`kind: offboarding` must carry a Harvard outline".to_string(),
+                }],
+            },
+        ))
+        .into_lawyer_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let text = body_text(response).await;
+        assert!(
+            text.contains("N123") && text.contains("Harvard outline"),
+            "the cause must name the rule: {text}"
+        );
+        assert!(!text.contains("internal"), "{text}");
+    }
+
+    /// LAW-273: a template the engine cannot walk is a 422 that names the
+    /// template, not `500 internal`.
+    #[tokio::test]
+    async fn a_template_without_a_questionnaire_names_itself() {
+        let response = CreateProjectNotationError::Session(
+            NotationSessionError::TemplateHasNoQuestionnaire("offboarding__letter".to_string()),
+        )
+        .into_lawyer_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let text = body_text(response).await;
+        assert!(
+            text.contains("offboarding__letter") && text.contains("questionnaire"),
+            "the cause must name the template: {text}"
+        );
+    }
+
+    /// A failed project read or question write is the store, not the Draft.
+    #[tokio::test]
+    async fn a_store_failure_stays_internal() {
+        let response = CreateProjectNotationError::Session(NotationSessionError::TemplateSource(
+            TemplateSourceError::Store("database: down".into()),
+        ))
+        .into_lawyer_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body_text(response).await, "internal");
     }
 }

@@ -228,6 +228,38 @@ impl From<String> for NotationSessionError {
     }
 }
 
+impl NotationSessionError {
+    /// A fault the lawyer can fix in the template or the matter.
+    ///
+    /// The notation-create door turns this into a 422 whose body is the
+    /// message. A store failure — a project read, a question write, or a
+    /// template-row write — stays [`None`], because those include database
+    /// failures and the Draft may be valid. The durable runtime and a missing
+    /// person row stay internal the same way.
+    #[must_use]
+    pub fn lawyer_fault(&self) -> Option<String> {
+        match self {
+            Self::TemplateHasNoQuestionnaire(code) => Some(format!(
+                "template `{code}` has no questionnaire frontmatter"
+            )),
+            Self::QuestionNotSeeded(code) => Some(format!(
+                "question `{code}` is not seeded; the template names a question the store does not have"
+            )),
+            Self::RouteDeadEnd { state } => Some(format!(
+                "questionnaire answer at `{state}` routes nowhere — no choice edge matches and no `_` fallback exists"
+            )),
+            Self::UndeclaredChoice { state, declared } => Some(format!(
+                "`{state}` accepts only these options: {}",
+                declared.join(", ")
+            )),
+            Self::SnapshotEncode(message) | Self::SnapshotDecode(message) => {
+                Some(format!("questionnaire snapshot: {message}"))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Create a fresh Notation for `template_code`, start the
 /// questionnaire runtime, and return the first question.
 ///
@@ -1588,6 +1620,17 @@ mod tests {
     }
 
     #[test]
+    fn a_store_or_template_write_failure_is_not_a_lawyer_fault() {
+        let store = NotationSessionError::TemplateSource(
+            store::template_source::TemplateSourceError::Store("database: down".into()),
+        );
+        assert!(store.lawyer_fault().is_none());
+        let template =
+            NotationSessionError::Template(store::templates::TemplateError::MissingSourceCommit);
+        assert!(template.lawyer_fault().is_none());
+    }
+
+    #[test]
     fn a_what_is_prompt_interpolates_the_question_label() {
         assert_eq!(
             localize_prompt_for_state("What is the {{for_label}}?", "custom_usd__annual_salary"),
@@ -1989,6 +2032,111 @@ mod tests {
         assert!(
             matches!(outcome.next, NextStep::NeedsAnswer { .. }),
             "opening the notation must leave the questionnaire ready to answer"
+        );
+    }
+
+    /// LAW-273: a pitch whose only Draft is an offboarding letter with an empty
+    /// questionnaire and a `draft_created → lawyer_review → generate_pdf → END`
+    /// workflow must open that notation. A refusal has to name the template,
+    /// not collapse into an untyped failure.
+    #[tokio::test]
+    async fn a_pitch_offboarding_letter_with_an_empty_questionnaire_opens() {
+        use super::create_notation_from_repo;
+        const TEMPLATE: &str = "\
+---
+kind: offboarding
+title: Closing Letter
+respondent_type: person_and_entity
+confidential: true
+questionnaire:
+  BEGIN:
+    _: END
+  END: {}
+workflow:
+  BEGIN:
+    draft_created: lawyer_review
+  lawyer_review:
+    approved: generate_pdf
+    rejected: END
+  generate_pdf:
+    pdf_persisted: END
+  END: {}
+---
+
+Dear Client:
+
+This Closing Letter confirms that the Firm has completed its work for the Client on this matter, and that the Firm's
+representation of the Client is now concluded.
+
+## I. Representation concluded
+
+The Firm's representation of the Client on this matter is now concluded. The Firm will take no further action on this
+matter. Should a new need arise, the Client is welcome to open a new matter with the Firm at any time.
+
+## II. Work completed
+
+The Client's project files stay available to download from the portal for three days after this letter is signed.
+
+## III. Fees at closing
+
+Please find the attached PDF of the project fee schedule. If a balance is owed, a check goes to the address on file.
+
+## IV. Your file
+
+The Firm will make reasonable commercial efforts to store the Client's data for ten years after this letter is signed.
+
+## V. Closing
+
+It has been our privilege to do this work alongside you. A future engagement requires a new retainer for a new matter.
+";
+
+        let surreal = db().await;
+        let storage: Arc<dyn StorageService> = Arc::new(
+            cloud::FsStorage::new(std::env::temp_dir().join("navigator-pitch-offboard-test"))
+                .await
+                .unwrap(),
+        );
+        let person_id = seed_person(&surreal, "client@example.com").await;
+        let project_id = seed_project(&surreal).await;
+        let project = store::projects::find_by_id(&surreal, project_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(project.status, "open");
+        assert!(!store::notations::exists_for_project(&surreal, project_id)
+            .await
+            .unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let repo = repos::RepoStore::new(dir.path());
+        repo.ensure_code(&project.code).unwrap();
+        repo.commit_as_code(
+            &project.code,
+            repos::Author {
+                name: "Lawyer",
+                email: "lawyer@example.com",
+            },
+            "add the pitch closing letter",
+            &[("drafts/offboarding__letter.md", TEMPLATE.as_bytes())],
+        )
+        .unwrap();
+
+        let outcome = create_notation_from_repo(
+            &surreal,
+            &InMemoryRuntime::new(),
+            &storage,
+            &repo,
+            "offboarding__letter",
+            person_id,
+            project_id,
+            Some(project.entity_id),
+        )
+        .await;
+
+        let outcome = outcome.expect("a pitch offboarding letter opens");
+        assert!(
+            matches!(outcome.next, NextStep::QuestionnaireComplete),
+            "an empty questionnaire is already complete: {:?}",
+            outcome.next
         );
     }
 

@@ -1346,8 +1346,8 @@ enum ProjectsCmd {
         project_code: String,
         /// Why the matter closed. Pitch reasons require an offboarding document;
         /// active-matter reasons require an onboarding document.
-        #[arg(long)]
-        reason: store::projects::ClosureReason,
+        #[arg(long, value_enum)]
+        reason: ClosureReasonArg,
         /// RFC 3339 time when the matter actually closed.
         #[arg(long)]
         effective_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -4966,6 +4966,35 @@ enum NotationAction {
 /// address space until touched.
 const CLI_STACK_BYTES: usize = 64 * 1024 * 1024;
 
+/// CLI spelling of [`store::projects::ClosureReason`]. The store type stays
+/// free of clap; `--help` lists these `snake_case` values because the field is
+/// a [`clap::ValueEnum`].
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum ClosureReasonArg {
+    PitchDeclined,
+    PitchLapsed,
+    PitchWithdrawn,
+    PitchSuperseded,
+    EngagementCompleted,
+    ClientTerminated,
+    FirmWithdrew,
+}
+
+impl ClosureReasonArg {
+    const fn into_reason(self) -> store::projects::ClosureReason {
+        match self {
+            Self::PitchDeclined => store::projects::ClosureReason::PitchDeclined,
+            Self::PitchLapsed => store::projects::ClosureReason::PitchLapsed,
+            Self::PitchWithdrawn => store::projects::ClosureReason::PitchWithdrawn,
+            Self::PitchSuperseded => store::projects::ClosureReason::PitchSuperseded,
+            Self::EngagementCompleted => store::projects::ClosureReason::EngagementCompleted,
+            Self::ClientTerminated => store::projects::ClosureReason::ClientTerminated,
+            Self::FirmWithdrew => store::projects::ClosureReason::FirmWithdrew,
+        }
+    }
+}
+
 fn main() -> ExitCode {
     std::thread::Builder::new()
         .name("navigator".into())
@@ -6236,9 +6265,13 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             dir,
             host,
         } => {
-            let closed =
-                remote::matter_close(host.host.as_deref(), &project_code, reason, effective_at)
-                    .await;
+            let closed = remote::matter_close(
+                host.host.as_deref(),
+                &project_code,
+                reason.into_reason(),
+                effective_at,
+            )
+            .await;
             if closed != ExitCode::SUCCESS {
                 return closed;
             }

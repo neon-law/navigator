@@ -1224,3 +1224,22 @@ fn dev_up_from_a_fresh_clone_needs_only_public_tools() {
         );
     }
 }
+
+#[test]
+fn project_close_help_lists_every_closure_reason() {
+    let output = unwrapped(&help(&["project", "close", "--help"]));
+    for reason in [
+        "pitch_declined",
+        "pitch_lapsed",
+        "pitch_withdrawn",
+        "pitch_superseded",
+        "engagement_completed",
+        "client_terminated",
+        "firm_withdrew",
+    ] {
+        assert!(
+            output.contains(reason),
+            "project close --help must list {reason}, got:\n{output}"
+        );
+    }
+}
