@@ -67,6 +67,8 @@ pub const FORGEJO_REQUIRED_CHECK: &str = "gate / gate (pull_request)";
 /// the notation template, with the template kept the source of truth.
 /// `analyze-memo` (LAW-237) reviews a finished memo or letter and reports
 /// findings before any correction is applied.
+/// `court-filing-drafts` (LAW-239) marks every draft of a court filing
+/// counsel will sign and clears the marks to finalize it.
 pub const SYNCED_SKILLS: &[(&str, &str)] = &[
     (
         "council",
@@ -143,6 +145,10 @@ pub const SYNCED_SKILLS: &[(&str, &str)] = &[
     (
         "word-editing",
         include_str!("../../.agents/skills/word-editing/SKILL.md"),
+    ),
+    (
+        "court-filing-drafts",
+        include_str!("../../.agents/skills/court-filing-drafts/SKILL.md"),
     ),
 ];
 

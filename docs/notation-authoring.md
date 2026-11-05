@@ -498,6 +498,12 @@ lets it flow across pages, whole and unclipped, when it is taller than a page. W
 stay with the next. A marker inside a list or block quote is ignored, and an unclosed group closes at the end of the
 body.
 
+**A [Counsel Signature](glossary/counsel-signature.md)** is `<!-- counsel-signature -->` in its own paragraph. A
+`--preview` draws it as italic `/s/ DRAFT` on a signature rule, the paragraph's bottom border, with `DRAFT` highlighted
+yellow, and the Word preview highlights each unanswered placeholder and open drafting marker as the PDF does. A final
+render signs it italic `/s/ <name>` from `matter.counsel.name`. A judge's lines on a proposed order are plain text with
+a rule, which no render marks. The `court-filing-drafts` skill carries the drafting practice.
+
 Headings in a pleading are the calibration's one type size, set apart by weight, with the same space around them as
 between paragraphs, so the body under them stays on the rail. The 28-line frame is 672pt of 24pt lines starting one inch
 down, which leaves a 48pt bottom margin: the page number, rule, and 10pt title sit in it, below the last numbered line.

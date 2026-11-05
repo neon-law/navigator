@@ -312,6 +312,8 @@ const FORBIDDEN_DOCUMENT_EXTENSIONS: &[&str] = &["doc", "docx", "odt", "pdf"];
 /// the notation template, with the template kept the source of truth.
 /// `analyze-memo` (LAW-237) reviews a finished memo or letter and reports
 /// findings before any correction is applied.
+/// `court-filing-drafts` (LAW-239) marks every draft of a court filing
+/// counsel will sign and clears the marks to finalize it.
 /// The canonical bytes live in `project-scaffold` so this CLI's scaffold and
 /// the server-side repository seeding write the same copies.
 pub(crate) use project_scaffold::SYNCED_SKILLS;
@@ -4016,6 +4018,17 @@ jobs:
                 "synced skill `{name}` documents a command that does not resolve: {found:?}"
             );
         }
+    }
+
+    /// LAW-239: every Project repository carries `court-filing-drafts`, and
+    /// the marker it tells an author to write is the one the renders read.
+    #[test]
+    fn court_filing_drafts_is_synced_and_names_the_rendered_marker() {
+        let (_, skill) = SYNCED_SKILLS
+            .iter()
+            .find(|(name, _)| *name == "court-filing-drafts")
+            .expect("court-filing-drafts is a synced skill");
+        assert!(skill.contains(word::paper::COUNSEL_SIGNATURE));
     }
 
     #[test]
