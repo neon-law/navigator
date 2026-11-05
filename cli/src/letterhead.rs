@@ -1,10 +1,10 @@
 //! The letterhead a Project's letter goes out under, resolved from the
 //! Project's Brand (LAW-265).
 //!
-//! `navigator.yaml` names the Brand two ways. `project.brand` is the Brand
-//! key itself and wins when declared; otherwise `project.host` is looked up
-//! in the compiled registry ([`views::brand::registered_brand_key`], or the
-//! Brand's apex). The resolved Brand frames the letter: its display name as
+//! `project.host` in `navigator.yaml` selects the Brand from the compiled
+//! registry ([`views::brand::registered_brand_key`], or the Brand's apex).
+//! An optional `project.brand` must agree with that host-selected Brand.
+//! The resolved Brand frames the letter: its display name as
 //! the wordmark, its Firm's legal name beneath it, its production host on
 //! the web line, `contact@` that host's registrable domain, and its phone.
 //!
@@ -23,8 +23,15 @@ pub enum LetterheadError {
     UnknownBrand(String),
     /// `project.host` maps to no compiled Brand.
     UnknownHost(String),
-    /// `navigator.yaml` names neither a Brand nor a host.
+    /// `navigator.yaml` has no host to select the Brand.
     Undeclared,
+    /// `project.brand` contradicts the host-selected Brand.
+    BrandMismatch {
+        /// The manifest's explicit Brand assertion.
+        declared: BrandKey,
+        /// The Brand selected by the manifest's host.
+        resolved: BrandKey,
+    },
     /// The compiled Brand's host cannot name a mailbox domain.
     InvalidBrandHost(BrandKey),
 }
@@ -40,12 +47,18 @@ impl fmt::Display for LetterheadError {
             Self::UnknownHost(host) => write!(
                 f,
                 "navigator.yaml's `project.host: {host}` maps to no Brand, so the letter has no \
-                 letterhead; correct the host or declare `project.brand`"
+                 letterhead; correct the host before rendering a letter"
             ),
             Self::Undeclared => write!(
                 f,
-                "navigator.yaml declares neither `project.brand` nor `project.host`, so the \
-                 letter has no letterhead"
+                "navigator.yaml requires `project.host` to select the letterhead Brand"
+            ),
+            Self::BrandMismatch { declared, resolved } => write!(
+                f,
+                "navigator.yaml's `project.brand: {}` disagrees with the host-selected Brand \
+                 `{}`; correct the declaration or host before rendering a letter",
+                declared.as_str(),
+                resolved.as_str()
             ),
             Self::InvalidBrandHost(key) => write!(
                 f,
@@ -58,7 +71,7 @@ impl fmt::Display for LetterheadError {
 
 impl std::error::Error for LetterheadError {}
 
-/// The Brand a Project's `navigator.yaml` names: `brand` wins, else `host`.
+/// The Brand selected by a Project's host, checked against its Brand assertion.
 ///
 /// # Errors
 /// [`LetterheadError`] naming the key or host that resolves to no Brand.
@@ -66,13 +79,21 @@ pub fn resolve_brand(brand: Option<&str>, host: Option<&str>) -> Result<BrandKey
     fn declared(value: Option<&str>) -> Option<&str> {
         value.map(str::trim).filter(|v| !v.is_empty())
     }
-    if let Some(key) = declared(brand) {
-        return BrandKey::parse(key).ok_or_else(|| LetterheadError::UnknownBrand(key.to_string()));
-    }
+    let asserted = declared(brand)
+        .map(|key| {
+            BrandKey::parse(key).ok_or_else(|| LetterheadError::UnknownBrand(key.to_string()))
+        })
+        .transpose()?;
     let host = declared(host).ok_or(LetterheadError::Undeclared)?;
-    registered_brand_key(host)
+    let resolved = registered_brand_key(host)
         .or_else(|| brand_key_for_apex(host))
-        .ok_or_else(|| LetterheadError::UnknownHost(host.to_string()))
+        .ok_or_else(|| LetterheadError::UnknownHost(host.to_string()))?;
+    if let Some(declared) = asserted {
+        if declared != resolved {
+            return Err(LetterheadError::BrandMismatch { declared, resolved });
+        }
+    }
+    Ok(resolved)
 }
 
 /// The letterhead `key` wears: its display name, its Firm's legal name,
@@ -99,7 +120,7 @@ pub fn for_brand(key: BrandKey) -> Result<pdf::Letterhead, LetterheadError> {
 /// The letterhead for a Project declaring `brand` and `host`.
 ///
 /// # Errors
-/// [`LetterheadError`] when neither resolves to a Brand.
+/// [`LetterheadError`] when the host has no Brand or the declaration contradicts it.
 pub fn for_project(
     brand: Option<&str>,
     host: Option<&str>,
@@ -113,12 +134,32 @@ mod tests {
     use views::brand::BrandKey;
 
     #[test]
-    fn a_declared_brand_wins_over_the_host() {
+    fn a_declared_brand_cannot_override_the_host() {
         let other = BrandKey::ALL[1];
-        assert_eq!(
-            resolve_brand(Some(other.as_str()), Some(BrandKey::Neon.hosts()[0])),
-            Ok(other)
+        assert!(
+            resolve_brand(Some(other.as_str()), Some(BrandKey::Neon.hosts()[0])).is_err(),
+            "a declaration must agree with the host-selected Brand"
         );
+    }
+
+    #[test]
+    fn a_declared_brand_requires_a_known_host() {
+        let brand = Some(BrandKey::Neon.as_str());
+        assert_eq!(resolve_brand(brand, None), Err(LetterheadError::Undeclared));
+        assert_eq!(
+            resolve_brand(brand, Some("unknown.example.test")),
+            Err(LetterheadError::UnknownHost("unknown.example.test".into()))
+        );
+    }
+
+    #[test]
+    fn a_matching_declaration_asserts_the_hosts_brand() {
+        for key in BrandKey::ALL.iter().copied() {
+            assert_eq!(
+                resolve_brand(Some(key.as_str()), Some(key.hosts()[0])),
+                Ok(key)
+            );
+        }
     }
 
     #[test]
