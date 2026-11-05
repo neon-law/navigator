@@ -2418,8 +2418,11 @@ enum NotationCmd {
         /// under `templates/` and then `templates/notations/`. Underscores
         /// and hyphens are interchangeable in a name.
         file: PathBuf,
-        /// Render locally instead of pushing a draft. A **lint**, not a
-        /// preview: nothing is pushed and nothing is stored, and the
+        /// Lint locally instead of pushing a draft. A **lint**, not a
+        /// preview: it prints every blocking rule violation the gate and a
+        /// draft push would report and exits non-zero on any. A clean
+        /// template then renders locally until Ctrl-C; nothing is pushed
+        /// and nothing is stored, and the
         /// questionnaire steps only with a Dioxus client bundle
         /// (`navigator dev build-webapp`) — without one the page still
         /// renders every question, it just does not advance. Works

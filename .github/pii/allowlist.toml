@@ -34,6 +34,14 @@ values = [
 ]
 
 [[paths]]
+reason = "Generated Swiss house-validation angles for a fixed synthetic ARMC/latitude grid; decimal mantissas trigger card-number recognition. The fixture records source hashes and reproduction inputs and contains no personal birth records."
+values = ["ephemeris/fixtures/swisseph_house_reference.json"]
+
+[[names]]
+reason = "Birth Time is the glossary's calculation-input concept, not a person's name."
+values = ["Birth Time"]
+
+[[paths]]
 reason = "Copyright attributions the licences require."
 values = [
   "third-party-notices.txt",

@@ -4248,6 +4248,8 @@ dependencies = [
 name = "ephemeris"
 version = "26.11.5"
 dependencies = [
+ "chrono",
+ "chrono-tz",
  "hifitime",
  "serde",
  "serde_json",

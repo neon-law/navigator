@@ -921,6 +921,43 @@ pub fn lint_source_classified(file: &SourceFile) -> Vec<Violation> {
     lint_source_classified_with_codes(file, &canonical_question_codes())
 }
 
+/// Rules that read the checkout around a file, not just its bytes. `M057`
+/// resolves each relative link against the files beside it on disk; a
+/// server holding only a pushed template has no checkout to resolve
+/// against, so it would flag every relative link. `navigator project gate`
+/// and `navigator notation preview --offline` run it from the checkout.
+pub const CHECKOUT_ONLY_RULE_CODES: &[&str] = &["M057"];
+
+/// Every Error-severity violation in one template, under the rule set
+/// `navigator project gate` selects for it: the classified set with the
+/// canonical question-code registry. The local half of the single
+/// blocking verdict — `navigator notation preview --offline` reports it.
+#[must_use]
+pub fn blocking_violations(file: &SourceFile) -> Vec<Violation> {
+    lint_source_classified(file)
+        .into_iter()
+        .filter(|violation| crate::severity_for_code(violation.code) == crate::Severity::Error)
+        .collect()
+}
+
+/// The blocking verdict on a template held as bytes with no checkout around
+/// it — what the server refuses at draft push and notation create. A
+/// blueprint is a template by where it sits, so it always gets the notation
+/// set the gate selects for a template (the canonical question registry
+/// included), less [`CHECKOUT_ONLY_RULE_CODES`]. A file that declares no
+/// `kind:` meets the same refusal in the gate through `S104`'s template-lane
+/// check. A template the gate passes is never refused here for a rule the
+/// gate did not run.
+#[must_use]
+pub fn blocking_violations_without_checkout(file: &SourceFile) -> Vec<Violation> {
+    navigator_default_rules()
+        .iter()
+        .filter(|rule| !CHECKOUT_ONLY_RULE_CODES.contains(&rule.code()))
+        .flat_map(|rule| rule.lint(file))
+        .filter(|violation| crate::severity_for_code(violation.code) == crate::Severity::Error)
+        .collect()
+}
+
 fn lint_source_classified_with_codes(file: &SourceFile, valid_codes: &[String]) -> Vec<Violation> {
     let rule_set = navigator_classified_rules_with_codes(file, valid_codes);
     rule_set.iter().flat_map(|r| r.lint(file)).collect()
