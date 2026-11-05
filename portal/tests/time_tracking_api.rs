@@ -13,15 +13,15 @@
 //! under the `timer` source; and the non-participating 404 posture holds on
 //! every door.
 
-use axum::Router;
 use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::{header, Request, StatusCode};
+use axum::Router;
 use chrono::NaiveDate;
 use portal::api::ApiState;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sqlx::{
-    PgPool,
     postgres::{PgConnectOptions, PgSslMode},
+    PgPool,
 };
 use store::persons::{NewPerson, Role};
 use store::test_support::mem_surreal;

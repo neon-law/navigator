@@ -5,11 +5,11 @@
 //! so the outcome slugs the `navigator integrations` surface renders are the
 //! same strings the real provider adapters would report.
 
-use axum::Router;
 use axum::body::Body;
-use axum::http::{Request, header};
+use axum::http::{header, Request};
+use axum::Router;
 use portal::api::ApiState;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use store::firms::{FirmMembership, NewPersonFirmRole};
 use store::persons::{NewPerson, Role};
 use store::surreal::SurrealDb;
