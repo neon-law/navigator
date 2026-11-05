@@ -24,11 +24,15 @@ This document is the canonical narrative for the system. The Rust modules link b
 ### Per-host sign-in on one registered callback
 
 Every identity provider knows one callback, the origin of `OAUTH_REDIRECT_URI`. Each brand host still keeps its own
-session and its own `/app`, so a person signed in on `iep.neonlaw.com` has a session there and nowhere else. No provider
-needs one redirect URI per host.
+sign-in page, session, and `/app`, so a person signed in on `iep.neonlaw.com` has a session there and nowhere else. No
+provider needs one redirect URI per host.
 
-1. `/auth/login` or `/auth/login/{provider}` on a live brand host sets a host-only `navigator_handoff_nonce` cookie and
-   answers 303 to the same path and query on the callback origin, adding `return_host` and `handoff_nonce`.
+`/auth/login` on a live brand host renders that brand's own sign-in page, so a Vesta client never sees a Neon Law page.
+With one provider and no password door, it answers 303 to its own `/auth/login/oidc` instead. Password sign-in completes
+on the brand host. Only the provider leg crosses to the callback origin, and only in redirects:
+
+1. `/auth/login/{provider}` on a live brand host sets a host-only `navigator_handoff_nonce` cookie and answers 303 to
+   the same path and query on the callback origin, adding `return_host` and `handoff_nonce`.
 2. The callback origin keeps both in a signed `navigator_return_host` cookie, only when `return_host` is a live brand
    host on its default port or a loopback brand listener in development. Any other host is ignored.
 3. After the provider verifies the person, the callback origin redirects to `https://<return_host>/auth/handoff` with a

@@ -29,8 +29,9 @@
 //! whether or not `CANONICAL_HOST` is configured, because the gate is about
 //! what this build may publish rather than about which host it prefers.
 //!
-//! When browser OAuth is configured, a brand host keeps its own `/app` and
-//! session: its `/auth/login` detours through the callback origin and is
+//! When browser OAuth is configured, a brand host keeps its own `/app`,
+//! session, and branded `/auth/login` page; only its provider redirect
+//! (`/auth/login/{provider}`) detours through the callback origin and is
 //! handed back (see [`crate::host_handoff`]). Any other host's `/app` and
 //! sign-in entry points redirect to the callback origin before any
 //! authentication cookie is issued. That configured origin is also admitted so
@@ -192,20 +193,20 @@ fn sign_in_detour(cfg: &CanonicalHost, host: &str, uri: &axum::http::Uri) -> Opt
         return None;
     }
     let path = uri.path();
-    let login_entry = path == "/auth/login" || path.starts_with("/auth/login/");
+    let provider_entry = path.starts_with("/auth/login/");
+    let login_entry = path == "/auth/login" || provider_entry;
     let app_entry = path == "/app" || path.starts_with("/app/");
     let path_and_query = uri
         .path_and_query()
         .map_or("/", axum::http::uri::PathAndQuery::as_str);
-    // A brand host keeps its own `/app` and its own session. Its sign-in
-    // detours through the callback origin, the one redirect URI every
-    // provider knows, and is handed back afterwards.
-    if login_entry && cfg.is_handoff_host(host) {
-        return Some(crate::host_handoff::brand_host_login_redirect(
-            origin,
-            host,
-            path_and_query,
-        ));
+    // A brand host keeps its own `/app`, its own session, and its own sign-in
+    // page: a client of Vesta signs in on Vesta's host under Vesta's name.
+    // Only the provider redirect detours through the callback origin, the one
+    // redirect URI every provider knows, and is handed back afterwards.
+    if cfg.is_handoff_host(host) {
+        return provider_entry.then(|| {
+            crate::host_handoff::brand_host_login_redirect(origin, host, path_and_query)
+        });
     }
     // Any other host signs in on the callback origin itself.
     if login_entry || (app_entry && !cfg.is_handoff_host(host)) {

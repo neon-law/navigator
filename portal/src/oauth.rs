@@ -1262,6 +1262,7 @@ fn portal_project_code(return_to: &str) -> Option<&str> {
 async fn login(
     State(s): State<AuthState>,
     cookies: Cookies,
+    headers: axum::http::HeaderMap,
     Query(q): Query<LoginQuery>,
 ) -> Response {
     let return_to = safe_return_to(&q.return_to);
@@ -1319,6 +1320,22 @@ async fn login(
             None,
             StatusCode::OK,
         );
+    }
+    // A brand host never starts a provider itself: the provider returns only
+    // to the callback origin, which would arrive without this host's
+    // pre-auth cookie. Its provider path detours there and is handed back.
+    let brand_host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|host| s.canonical_host.is_handoff_host(host));
+    if brand_host {
+        return provider_buttons(&s, return_to)
+            .into_iter()
+            .next()
+            .map_or_else(
+                || (StatusCode::NOT_FOUND, "sign-in provider not configured").into_response(),
+                |provider| Redirect::to(&provider.href).into_response(),
+            );
     }
     start_provider(&s, &cookies, ProviderId::Primary, return_to)
 }

@@ -133,9 +133,9 @@ navigator ops host setup --host iep.neonlaw.com --deployment <name> --apply
 2. **Certificate:** a real TLS handshake and the brand's own page. Every registered host is already on the Firm
    `ManagedCertificate` and Ingress `ops ship` renders, so a failure here means the release has not shipped or issuance
    is still pending, about 15 minutes after DNS resolves.
-3. **Sign-in:** `/auth/login` on the host must detour to the deployment's callback origin and name the host as
-   `return_host`. Sign-in is handed back to the host for its own session ([per-host sign-in](oidc.md)), so no identity
-   provider needs a new redirect URI.
+3. **Sign-in:** `/auth/login/oidc` on the host must detour to the deployment's callback origin and name the host as
+   `return_host`. `/auth/login` itself renders the brand's own sign-in page. Sign-in is handed back to the host for its
+   own session ([per-host sign-in](oidc.md)), so no identity provider needs a new redirect URI.
 
 It exits nonzero until all three are ready and is safe to rerun.
 
