@@ -7,7 +7,6 @@
 /// their PDFs are small; a response this large is a wrong link, not a
 /// document, and buffering it anyway would only make the mistake expensive.
 // Adapters pass response sizes through `fetch_into`'s guard.
-#[cfg_attr(not(test), allow(dead_code))]
 const MAX_RESPONSE_BYTES: usize = 256 * 1024 * 1024;
 
 /// One HTTP GET an adapter needs: the URL, optional request headers (the
@@ -15,14 +14,12 @@ const MAX_RESPONSE_BYTES: usize = 256 * 1024 * 1024;
 /// resuming a partial download, the byte offset the server should answer
 /// from.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // adapters build these; the base registers none yet
 pub(crate) struct FetchRequest {
     pub url: String,
     /// `Range: bytes=<start>-`. `None` on a first fetch.
     pub range_start: Option<u64>,
     /// Request headers, applied verbatim. A `BTreeMap` so a request's
     /// serialization — and any test record of it — is deterministic.
-    #[cfg_attr(not(test), allow(dead_code))] // the adapter sets the Provider header
     pub headers: std::collections::BTreeMap<String, String>,
 }
 
@@ -32,7 +29,6 @@ pub(crate) struct FetchRequest {
 /// the adapter — which knows the portal — decides that a `5xx` is transient
 /// while a `404` means the flow moved.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // adapters receive these from `fetch`
 pub(crate) struct FetchResponse {
     pub status: u16,
     pub body: Vec<u8>,
@@ -45,21 +41,18 @@ pub(crate) enum FetchError {
     #[error("the HTTP fetch failed")]
     Request(#[from] reqwest::Error),
     #[error("the response body from {url} exceeded {limit} bytes")]
-    #[cfg_attr(not(test), allow(dead_code))] // `fetch_into` raises this past the size bound
     TooLarge { url: String, limit: usize },
 }
 
 /// The fetch seam adapters parse through.
 #[async_trait::async_trait]
 pub(crate) trait HttpFetcher: Send + Sync {
-    #[cfg_attr(not(test), allow(dead_code))] // adapters fetch through this seam
     async fn fetch(&self, request: &FetchRequest) -> Result<FetchResponse, FetchError>;
 }
 
 /// The reqwest-backed fetcher production adapters use: a single client with
 /// a bounded request timeout, honoring `Range` when the caller asks.
 pub(crate) struct HttpFetcherOverReqwest {
-    #[cfg_attr(not(test), allow(dead_code))] // read by the fetch implementation
     client: reqwest::Client,
 }
 

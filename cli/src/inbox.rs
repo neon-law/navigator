@@ -149,8 +149,6 @@ fn process_body(message: Uuid, apply: bool) -> serde_json::Value {
 #[derive(Debug, Deserialize)]
 struct ProcessView {
     id: Uuid,
-    #[allow(dead_code)]
-    conversation_id: Uuid,
     channel: String,
     provider_message_id: Option<String>,
     external_address: String,
@@ -163,10 +161,6 @@ struct ProcessView {
     #[serde(default)]
     recorded_nef_outcome: Option<String>,
     project_id: Option<Uuid>,
-    #[allow(dead_code)]
-    occurred_at: String,
-    #[allow(dead_code)]
-    inserted_at: String,
 }
 
 /// An apply's response: the recorded verdict plus the notice outcome.
@@ -175,8 +169,6 @@ struct ProcessApplyView {
     result: ProcessView,
     route: String,
     route_label: String,
-    #[allow(dead_code)]
-    reason: String,
     recorded_at: String,
     already_recorded: bool,
     slack_notice: String,
