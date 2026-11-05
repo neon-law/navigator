@@ -992,3 +992,107 @@ mod clauses_page {
         }
     }
 }
+
+const VESTA_HOST: &str = "www.vestaestateplanning.com";
+
+async fn get_on_host(app: &Router, host: &str, path: &str) -> axum::http::Response<Body> {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("host", host)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+fn location(response: &axum::http::Response<Body>) -> String {
+    response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A brand host's sign-in page is its own: Vesta's client chooses a provider
+/// on Vesta's host, under Vesta's name, and the callback origin never
+/// appears as a page.
+#[tokio::test]
+async fn a_brand_host_renders_its_own_sign_in_page() {
+    let mut state = contract_state().await;
+    state.oauth_microsoft = Some(portal::OAuthConfig::new(
+        "navigator-microsoft",
+        "secret",
+        "http://localhost:3001/auth/callback",
+        "https://login.microsoftonline.example/authorize",
+        "https://login.microsoftonline.example/token",
+    ));
+    let app = portal::router(state);
+
+    let response = get_on_host(&app, VESTA_HOST, "/auth/login").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("Vesta Estate Planning"), "{html}");
+    assert!(html.contains("href=\"/auth/login/microsoft?"), "{html}");
+    assert!(!html.contains("localhost:3001"), "{html}");
+}
+
+/// With one provider and no chooser, a brand host still never starts the
+/// provider itself: it routes through its own provider path, which alone
+/// detours to the callback origin carrying the host to hand back to.
+#[tokio::test]
+async fn a_brand_host_detours_only_its_provider_leg() {
+    let app = portal::router(contract_state().await);
+
+    let login = get_on_host(&app, VESTA_HOST, "/auth/login?return_to=/app/projects").await;
+    assert_eq!(login.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&login), "/auth/login/oidc?return_to=/app/projects");
+
+    let provider = get_on_host(&app, VESTA_HOST, "/auth/login/oidc?return_to=/app/projects").await;
+    assert_eq!(provider.status(), StatusCode::SEE_OTHER);
+    let target = url::Url::parse(&location(&provider)).unwrap();
+    assert_eq!(
+        target.origin().ascii_serialization(),
+        "http://localhost:3001"
+    );
+    assert_eq!(target.path(), "/auth/login/oidc");
+    let query: std::collections::HashMap<_, _> = target.query_pairs().into_owned().collect();
+    assert_eq!(
+        query.get("return_host").map(String::as_str),
+        Some(VESTA_HOST)
+    );
+    assert_eq!(
+        query.get("return_to").map(String::as_str),
+        Some("/app/projects")
+    );
+    assert!(query
+        .get("handoff_nonce")
+        .is_some_and(|nonce| nonce.len() >= 16));
+    assert!(provider
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .any(|cookie| cookie
+            .to_str()
+            .unwrap()
+            .starts_with("navigator_handoff_nonce=")));
+}
+
+/// The callback origin itself keeps the immediate provider redirect.
+#[tokio::test]
+async fn the_callback_origin_still_redirects_straight_to_the_provider() {
+    let app = portal::router(contract_state().await);
+    let login = get_on_host(&app, "localhost:3001", "/auth/login").await;
+    assert!(login.status().is_redirection());
+    assert!(
+        location(&login).starts_with("https://rauthy.example/auth/v1/oidc/authorize"),
+        "{}",
+        location(&login)
+    );
+}
