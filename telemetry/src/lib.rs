@@ -930,8 +930,8 @@ pub const FUNNEL_STEP_ATTRIBUTE_KEYS: &[&str] = &["step"];
 pub mod funnel_step {
     /// An anonymous lead was persisted.
     pub const LEAD_CAPTURED: &str = "funnel.lead_captured";
-    /// A client started a service from the start door.
-    pub const STARTED: &str = "funnel.started";
+    /// A client accepted an engagement offer from the start door.
+    pub const OFFER_ACCEPTED: &str = "funnel.offer_accepted";
     /// A notation's questionnaire reached its terminal state.
     pub const INTAKE_COMPLETE: &str = "funnel.intake_complete";
     /// A notation entered the lawyer review gate.
@@ -970,8 +970,11 @@ pub enum FunnelEvent<'a> {
         source_path: &'a str,
         sms_consent: bool,
     },
-    /// A client opened a service start door successfully.
-    Started {
+    /// A client accepted an engagement offer through the service start
+    /// door: the offer's matter and notation exist and its terms are on
+    /// record as proposed answers. Identifiers only — the terms themselves
+    /// are client content, never telemetry.
+    OfferAccepted {
         person_id: &'a str,
         project_id: &'a str,
         notation_id: &'a str,
@@ -1000,7 +1003,7 @@ impl FunnelEvent<'_> {
     fn step(&self) -> &'static str {
         match self {
             Self::LeadCaptured { .. } => funnel_step::LEAD_CAPTURED,
-            Self::Started { .. } => funnel_step::STARTED,
+            Self::OfferAccepted { .. } => funnel_step::OFFER_ACCEPTED,
             Self::IntakeComplete { .. } => funnel_step::INTAKE_COMPLETE,
             Self::ReviewEntered { .. } => funnel_step::REVIEW_ENTERED,
             Self::Sent { .. } => funnel_step::SENT,
@@ -1030,7 +1033,7 @@ pub fn record_funnel_event(event: FunnelEvent<'_>) {
             source_path,
             sms_consent,
         ),
-        FunnelEvent::Started {
+        FunnelEvent::OfferAccepted {
             person_id,
             project_id,
             notation_id,
@@ -1742,7 +1745,7 @@ mod tests {
                 source_path: "/services",
                 sms_consent: false,
             });
-            super::record_funnel_event(FunnelEvent::Started {
+            super::record_funnel_event(FunnelEvent::OfferAccepted {
                 person_id: "00000000-0000-0000-0000-000000000002",
                 project_id: "00000000-0000-0000-0000-000000000003",
                 notation_id: "00000000-0000-0000-0000-000000000004",
@@ -1781,7 +1784,7 @@ mod tests {
             }
         }
         assert!(rendered.contains("funnel.lead_captured"));
-        assert!(rendered.contains("funnel.started"));
+        assert!(rendered.contains("funnel.offer_accepted"));
         assert!(rendered.contains("funnel.intake_complete"));
         assert!(rendered.contains("funnel.review_entered"));
         assert!(rendered.contains("funnel.sent"));

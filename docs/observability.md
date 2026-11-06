@@ -95,7 +95,7 @@ event name in the bounded `step` field. The five steps and their fields are:
 | Event | Fields |
 | --- | --- |
 | `funnel.lead_captured` | `lead_id`, `brand`, `source_path`, `sms_consent` |
-| `funnel.started` | `person_id`, `project_id`, `notation_id`, `service_id`, `brand` |
+| `funnel.offer_accepted` | `person_id`, `project_id`, `notation_id`, `service_id`, `brand` |
 | `funnel.intake_complete` | `notation_id`, `project_id` |
 | `funnel.review_entered` | `notation_id`, `project_id` |
 | `funnel.sent` | `notation_id`, `project_id`, `channel` (`email` or `signature`) |
