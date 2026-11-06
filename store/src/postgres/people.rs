@@ -295,13 +295,17 @@ async fn sync_current_surreal(
             .bind(("id", record_id("person", id)))
             .await
             .and_then(surrealdb::IndexedResults::check)
-            .map_err(|_| PersonError::PostgresProjection("SurrealDB delete failed".into()))?;
+            .map_err(|error| {
+                PersonError::PostgresProjection(format!("SurrealDB delete failed: {error}"))
+            })?;
         db.query("DELETE person_mailbox WHERE person_id=$id")
             .bind(("id", record_id("person", id)))
             .await
             .and_then(surrealdb::IndexedResults::check)
-            .map_err(|_| {
-                PersonError::PostgresProjection("SurrealDB mailbox cleanup failed".into())
+            .map_err(|error| {
+                PersonError::PostgresProjection(format!(
+                    "SurrealDB mailbox cleanup failed: {error}"
+                ))
             })?;
     }
     tx.commit().await.map_err(database)
@@ -599,12 +603,16 @@ async fn sync_surreal(db: &SurrealDb, person: &Person, admitted: bool) -> Result
     query
         .await
         .and_then(surrealdb::IndexedResults::check)
-        .map_err(|_| PersonError::PostgresProjection("SurrealDB write failed".into()))?;
+        .map_err(|error| {
+            PersonError::PostgresProjection(format!("SurrealDB write failed: {error}"))
+        })?;
     let email_lower = person.email.trim().to_lowercase();
     db.query("DELETE person_mailbox WHERE person_id = $id; UPSERT type::record('person_mailbox', $email_lower) SET person_id = $id")
         .bind(("id", record_id("person", person.id))).bind(("email_lower", email_lower))
         .await.and_then(surrealdb::IndexedResults::check)
-        .map_err(|_| PersonError::PostgresProjection("SurrealDB mailbox sync failed".into()))?;
+        .map_err(|error| {
+            PersonError::PostgresProjection(format!("SurrealDB mailbox sync failed: {error}"))
+        })?;
     Ok(())
 }
 
