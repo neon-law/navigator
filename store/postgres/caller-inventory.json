@@ -570,7 +570,7 @@
       4067,
       4070,
       4074,
-      5232
+      5240
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -1227,6 +1227,7 @@
       "portal/src/deadlines_api.rs",
       "portal/src/dioxus_app.rs",
       "portal/src/esign_view.rs",
+      "portal/src/esignature_webhook.rs",
       "portal/src/expunge.rs",
       "portal/src/expunge/purge.rs",
       "portal/src/host_handoff.rs",
@@ -1877,11 +1878,11 @@
       4547,
       4555,
       4583,
-      4878,
-      5066,
-      5093,
-      5186,
-      5188
+      4886,
+      5074,
+      5101,
+      5194,
+      5196
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -2421,9 +2422,9 @@
     ],
     "query_call_ids": [
       1137,
-      5046,
       5054,
-      5056
+      5062,
+      5064
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -4274,18 +4275,18 @@
       4663,
       4667,
       4669,
-      4862,
-      4863,
-      4864,
-      4869,
+      4870,
       4871,
       4872,
-      4907,
-      4943,
-      4953,
-      5014,
-      5039,
-      5126
+      4877,
+      4879,
+      4880,
+      4915,
+      4951,
+      4961,
+      5022,
+      5047,
+      5134
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -4495,10 +4496,10 @@
       3977,
       4251,
       4257,
-      4906,
-      4954,
-      5013,
-      5038
+      4914,
+      4962,
+      5021,
+      5046
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -4513,6 +4514,77 @@
       "remaining": [
         "Equivalent application queries, directory/participation isolation, and unauthorized mutations are not established by this mirror lifecycle."
       ]
+    }
+  },
+  {
+    "source_table": "esignature_webhook_journal",
+    "migration_disposition": "migrate",
+    "source_fields": {
+      "attempts": "int",
+      "consumed_at": "option<datetime>",
+      "id": "record",
+      "inserted_at": "datetime",
+      "last_error": "option<string>",
+      "payload": "string",
+      "provider": "string",
+      "provider_id": "string",
+      "status": "string",
+      "updated_at": "datetime"
+    },
+    "target_table_present": true,
+    "ownership": {
+      "scope": "project",
+      "through": "envelope_id -> signature -> notation_id -> owning parent scope",
+      "migration_slice": "workflow-storage",
+      "parity_scenario": "verified receipts journal before consumption; redelivery deduplication; replay advances or retries; unknown envelope stays unjournaled"
+    },
+    "destination": "PostgreSQL esignature_webhook_journal",
+    "source_indexes": [
+      "DEFINE INDEX OVERWRITE esignature_webhook_journal_event ON esignature_webhook_journal FIELDS provider, provider_id, status UNIQUE",
+      "DEFINE INDEX OVERWRITE esignature_webhook_journal_pending ON esignature_webhook_journal FIELDS consumed_at, inserted_at"
+    ],
+    "source_field_rules": [
+      "DEFINE FIELD OVERWRITE provider ON esignature_webhook_journal TYPE string",
+      "DEFINE FIELD OVERWRITE provider_id ON esignature_webhook_journal TYPE string",
+      "DEFINE FIELD OVERWRITE status ON esignature_webhook_journal TYPE string",
+      "DEFINE FIELD OVERWRITE payload ON esignature_webhook_journal TYPE string",
+      "DEFINE FIELD OVERWRITE consumed_at ON esignature_webhook_journal TYPE option<datetime>",
+      "DEFINE FIELD OVERWRITE attempts ON esignature_webhook_journal TYPE int DEFAULT 0",
+      "DEFINE FIELD OVERWRITE last_error ON esignature_webhook_journal TYPE option<string>",
+      "DEFINE FIELD OVERWRITE inserted_at ON esignature_webhook_journal TYPE datetime DEFAULT time::now()",
+      "DEFINE FIELD OVERWRITE updated_at ON esignature_webhook_journal TYPE datetime DEFAULT time::now()"
+    ],
+    "source_table_declaration": "DEFINE TABLE IF NOT EXISTS esignature_webhook_journal SCHEMAFULL PERMISSIONS NONE",
+    "candidate_rust_callers": [
+      "archives/src/postgres.rs",
+      "store/src/signature_webhook_journal.rs"
+    ],
+    "query_call_ids": [
+      4724,
+      4727,
+      4729
+    ],
+    "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
+    "runtime_parity": {
+      "scenario": "verified receipts journal before consumption; redelivery deduplication; replay advances or retries; unknown envelope stays unjournaled",
+      "runtime_tests": [
+        {
+          "file": "server/tests/esignature_loop.rs",
+          "function": "journaled_receipt_recovers_after_a_mid_delivery_death",
+          "proves": "a receipt journaled before consumption is replayed after a mid-delivery death, so the event is recovered, not lost"
+        },
+        {
+          "file": "server/tests/esignature_loop.rs",
+          "function": "a_redelivered_completion_is_answered_from_the_journal",
+          "proves": "a redelivered terminal event is answered from the journal instead of consuming twice"
+        },
+        {
+          "file": "server/tests/esignature_loop.rs",
+          "function": "a_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving",
+          "proves": "a failed consumption keeps its receipt pending and the replay sweep continues through the backlog"
+        }
+      ],
+      "remaining": []
     }
   },
   {
@@ -5632,22 +5704,22 @@
       4552,
       4597,
       4609,
-      4743,
-      4745,
-      4752,
-      4769,
-      4820,
-      4824,
-      4826,
+      4751,
+      4753,
+      4760,
+      4777,
       4828,
-      4833,
+      4832,
+      4834,
       4836,
       4841,
-      4879,
-      4925,
-      4951,
-      5094,
-      5187
+      4844,
+      4849,
+      4887,
+      4933,
+      4959,
+      5102,
+      5195
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -5707,7 +5779,7 @@
       3226,
       3805,
       3808,
-      4944
+      4952
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -6289,7 +6361,7 @@
       3547,
       3557,
       4598,
-      5206
+      5214
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -7048,10 +7120,10 @@
       4252,
       4253,
       4255,
-      4905,
-      4955,
-      5012,
-      5037
+      4913,
+      4963,
+      5020,
+      5045
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -8376,12 +8448,12 @@
       4601,
       4602,
       4604,
-      5154,
-      5156,
-      5158,
-      5160,
       5162,
-      5207
+      5164,
+      5166,
+      5168,
+      5170,
+      5215
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -8839,11 +8911,11 @@
       4520,
       4526,
       4562,
-      4726,
-      4728,
-      4730,
-      4732,
-      5107
+      4734,
+      4736,
+      4738,
+      4740,
+      5115
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -10266,41 +10338,41 @@
       4658,
       4659,
       4660,
-      4753,
-      4762,
+      4761,
       4770,
-      4807,
-      4810,
-      4821,
+      4778,
+      4815,
+      4818,
       4829,
-      4842,
-      4847,
-      4849,
-      4852,
-      4853,
-      4854,
+      4837,
+      4850,
       4855,
-      4856,
       4857,
-      4859,
       4860,
       4861,
+      4862,
+      4863,
+      4864,
       4865,
-      4866,
       4867,
-      4881,
-      4882,
-      4883,
-      4904,
-      4946,
-      4959,
-      4962,
+      4868,
+      4869,
+      4873,
+      4874,
+      4875,
+      4889,
+      4890,
+      4891,
+      4912,
+      4954,
+      4967,
       4970,
-      4976,
-      5011,
-      5036,
-      5047,
-      5125
+      4978,
+      4984,
+      5019,
+      5044,
+      5055,
+      5133
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -10627,7 +10699,7 @@
       3509,
       3521,
       3525,
-      4850
+      4858
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -10818,14 +10890,14 @@
       4644,
       4648,
       4652,
-      4886,
-      4910,
-      4947,
-      4981,
-      5017,
-      5034,
+      4894,
+      4918,
+      4955,
+      4989,
+      5025,
       5042,
-      5044
+      5050,
+      5052
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -11298,21 +11370,21 @@
       4590,
       4591,
       4592,
-      4778,
       4786,
-      4792,
       4794,
-      5152,
-      5166,
-      5178,
-      5180,
-      5182,
-      5184,
+      4800,
+      4802,
+      5160,
+      5174,
+      5186,
+      5188,
       5190,
       5192,
-      5202,
-      5204,
-      5241
+      5198,
+      5200,
+      5210,
+      5212,
+      5249
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -11776,6 +11848,7 @@
       "webapp/src/admin_unassigned_project_detail.rs",
       "webapp/src/app_chrome.rs",
       "webapp/src/astrocartography.rs",
+      "webapp/src/astrocartography/mercator.rs",
       "webapp/src/brand_website.rs",
       "webapp/src/clause_editor.rs",
       "webapp/src/clerk.rs",
@@ -12092,31 +12165,31 @@
       4642,
       4646,
       4651,
-      4813,
-      4816,
-      4818,
-      4822,
+      4821,
+      4824,
+      4826,
       4830,
-      4834,
-      4843,
-      4888,
-      4908,
-      4919,
-      4920,
-      4922,
+      4838,
+      4842,
+      4851,
+      4896,
+      4916,
       4927,
-      4929,
-      4941,
-      4948,
-      4960,
-      4963,
+      4928,
+      4930,
+      4935,
+      4937,
+      4949,
+      4956,
+      4968,
       4971,
-      4977,
+      4979,
       4985,
-      5015,
-      5040,
-      5068,
-      5070
+      4993,
+      5023,
+      5048,
+      5076,
+      5078
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12675,7 +12748,7 @@
       4064,
       4493,
       4499,
-      5109
+      5117
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -13296,6 +13369,7 @@
       "store/src/review_documents.rs",
       "store/src/seed.rs",
       "store/src/seed/sample_records.rs",
+      "store/src/signature_webhook_journal.rs",
       "store/src/signatures.rs",
       "store/src/surreal/config.rs",
       "telemetry/src/lib.rs",
@@ -13356,15 +13430,15 @@
       873,
       882,
       883,
-      4723,
-      4726,
-      4728,
-      4730,
-      4732,
-      4735,
-      4737,
-      4739,
-      4741
+      4731,
+      4734,
+      4736,
+      4738,
+      4740,
+      4743,
+      4745,
+      4747,
+      4749
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -13458,7 +13532,7 @@
       3991,
       3993,
       4117,
-      5189
+      5197
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -13527,7 +13601,7 @@
       3837,
       3844,
       3848,
-      4746
+      4754
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -13662,13 +13736,13 @@
       "store/src/social_oauth_attempts.rs"
     ],
     "query_call_ids": [
-      4768,
-      4771,
-      4773,
-      4774,
-      4775,
       4776,
-      4777
+      4779,
+      4781,
+      4782,
+      4783,
+      4784,
+      4785
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -13802,8 +13876,8 @@
     ],
     "query_call_ids": [
       3774,
-      4814,
-      4819
+      4822,
+      4827
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -13876,16 +13950,16 @@
       4561,
       4611,
       4613,
-      4820,
-      4824,
-      4826,
       4828,
-      4831,
-      4833,
+      4832,
+      4834,
       4836,
-      4837,
       4839,
-      4841
+      4841,
+      4844,
+      4845,
+      4847,
+      4849
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -13950,8 +14024,8 @@
       3303,
       3307,
       3323,
-      4844,
-      4846
+      4852,
+      4854
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -14279,12 +14353,12 @@
       4084,
       4562,
       4617,
-      4916,
-      4925,
-      4931,
-      4934,
-      4936,
-      5105
+      4924,
+      4933,
+      4939,
+      4942,
+      4944,
+      5113
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -14368,11 +14442,11 @@
     ],
     "query_call_ids": [
       3776,
-      4961,
-      4964,
-      4966,
-      4968,
-      4972
+      4969,
+      4972,
+      4974,
+      4976,
+      4980
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -14499,6 +14573,7 @@
       "store/src/postgres_backfill.rs",
       "store/src/postgres_mirror/records.rs",
       "store/src/project_folders.rs",
+      "store/src/signature_webhook_journal.rs",
       "store/src/social_publications.rs",
       "store/src/verifications.rs",
       "telemetry/src/lib.rs",
@@ -14516,9 +14591,9 @@
     ],
     "query_call_ids": [
       1142,
-      5048,
-      5050,
-      5052
+      5056,
+      5058,
+      5060
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -14646,8 +14721,8 @@
       "webapp/src/project_billing.rs"
     ],
     "query_call_ids": [
-      5069,
-      5071
+      5077,
+      5079
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
