@@ -1367,9 +1367,8 @@ fn a_project_host_frames_the_letter_with_that_brands_letterhead() {
 }
 
 #[test]
-fn a_declared_project_brand_wins_over_the_host() {
+fn a_declared_project_brand_cannot_override_the_host() {
     let key = other_brand();
-    let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
     let neon_host = views::brand::BrandKey::Neon.hosts()[1];
     let work = TempDir::new().unwrap();
     let src = letter_in_project(
@@ -1379,13 +1378,33 @@ fn a_declared_project_brand_wins_over_the_host() {
             key.as_str()
         ),
     );
-
-    let header = word_letterhead(&work, &src);
-
-    assert!(
-        header.contains(&branding.firm.site_name.to_uppercase()),
-        "project.brand picks the letterhead: {header}"
-    );
+    for (extension, word) in [("pdf", false), ("docx", true)] {
+        let out = work.path().join(format!("demand.{extension}"));
+        let args = [
+            "--preview".as_ref(),
+            src.as_os_str(),
+            "--out".as_ref(),
+            out.as_os_str(),
+        ];
+        let result = if word {
+            render_word(&args)
+        } else {
+            render_pdf(&args)
+        };
+        assert!(
+            !result.status.success(),
+            "contradictory Brands must refuse {extension}"
+        );
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.contains("project.brand"),
+            "names the declaration: {stderr}"
+        );
+        assert!(
+            !out.exists(),
+            "no {extension} is written on another Brand's letterhead"
+        );
+    }
 }
 
 #[test]
