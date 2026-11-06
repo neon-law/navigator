@@ -97,9 +97,19 @@ Run the synthetic full-inventory benchmark with exact manifest files available l
 NAVIGATOR_EPHEMERIS_DIR=/path/to/pinned-kernels cargo run -p ephemeris --release --example chart_benchmark
 ```
 
-It reports verified loading, first calculation, and 100-run uncached/cache-hit medians. It prints durations only and is
-an observation tool rather than a timing assertion in CI. Swiss house fixtures validate the angle construction with
-explicit sidereal angle and obliquity inputs, independently of the chosen Earth-rotation prediction model.
+It reports verified loading, first private calculation, and 100 observations per operation: request-local
+`calculate_uncached`, bounded-cache miss, independently prewarmed cache hit, canonical geometry construction, ordered
+numerical-row materialization, and GeoJSON encoding. Cache clearing and hit prewarming occur outside timed calls;
+returned-value destruction also occurs outside each timed operation. Geometry and encoding use the same fixed synthetic
+full-inventory chart. Output contains durations and counts, without birth inputs, positions, epochs or provenance.
+
+Summaries use nearest-rank p50 and p95: sort observations and select the one-based rank `ceil(p * count / 100)`. For an
+even count, nearest-rank p50 selects the lower middle observation rather than an averaged median. These are local
+measurements, without a CI latency threshold or an inference about source accuracy. The benchmark measures native
+SPK-backed calculations; it supplies no sampled-table interpolation or replacement astronomy engine.
+
+Swiss house fixtures validate the angle construction with explicit sidereal angle and obliquity inputs, independently of
+the chosen Earth-rotation prediction model.
 
 Resolved chart results carry a `ChartInstant`, pairing the physical epoch with explicit UT1. Use `gast_degrees_for`,
 `lines_for_instant`, and `LineProvenance::for_instant` for these results. Raw `Epoch` line APIs interpret their input

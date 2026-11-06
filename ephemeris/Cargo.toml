@@ -27,3 +27,7 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
+
+[[example]]
+name = "chart_benchmark"
+test = true
