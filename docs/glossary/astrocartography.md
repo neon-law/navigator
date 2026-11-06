@@ -48,3 +48,23 @@ This is request-local calculated data, including a precise epoch, without the or
 basemap adapter receives only geographic segments and public body labels; precise private provenance stays on the
 application side. Numerical rows follow the same body, angle, segment, and vertex order as GeoJSON, with zero-based
 indices and no stored-chart identity.
+
+## Mercator display adapter
+
+The pure `webapp::astrocartography::mercator` adapter accepts canonical lines without the private epoch or calculation
+provenance. It clips each straight geographic longitude/latitude edge to the square Mercator band at `atan(sinh(pi))`,
+approximately 85.05112878 degrees north and south, inserting boundary intersections. It preserves source segment order,
+paired antimeridian edges and separate exit/reentry subpaths; zero-length tangencies are omitted. Canonical physical
+geometry remains unchanged, including its poles and continuous geographic condition bound.
+
+The [Google world-coordinate convention](https://developers.google.com/maps/documentation/javascript/coordinates) uses
+an eastward x and southward y from the northwest corner. The adapter normalizes the base world to 0–1 on each axis;
+multiplication by 256 gives zoom-zero world pixels. Paired longitude edges remain x=0 and x=1 before an explicit integer
+world offset. At most eight distinct world copies may be requested, a display resource limit rather than an astronomical
+convention. Output carries body, source ID, angle and source indices, with no copied birth input or private provenance.
+It has no debug formatting or serialization and activates no map provider, route, or rendered surface.
+
+Geographic intersections follow coordinate-linear edges, not geodesics. A projected straight chord does not inherit the
+canonical geographic horizon-condition certificate. This adapter defines clipping and coordinate conversion, without a
+new astronomical accuracy, screen-space approximation or viewport-cropping guarantee. Projection roundoff at the square
+boundary is checked within sixteen machine epsilons before its final 0–1 normalization.
