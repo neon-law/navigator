@@ -208,6 +208,8 @@ pub enum Section {
     FiduciaryRoster,
     /// The estate's assets: how each passes and whether it is funded.
     AssetSchedule,
+    /// A request-local private chart for personal reflection, explicitly opted into by the Project.
+    AstrologyChart,
     /// Who holds which shares, with each holding's fully diluted share.
     CapTable,
     /// Conditions precedent and deliverables, from the matter's Notations.
@@ -290,6 +292,7 @@ impl Section {
         Section::AdministrationSteps,
         Section::FiduciaryRoster,
         Section::AssetSchedule,
+        Section::AstrologyChart,
         Section::CapTable,
         Section::ClosingChecklist,
         Section::SignatureTracker,
@@ -353,6 +356,7 @@ impl Section {
             Section::AdministrationSteps => "administration_steps",
             Section::FiduciaryRoster => "fiduciary_roster",
             Section::AssetSchedule => "asset_schedule",
+            Section::AstrologyChart => "astrology_chart",
             Section::CapTable => "cap_table",
             Section::ClosingChecklist => "closing_checklist",
             Section::SignatureTracker => "signature_tracker",
@@ -432,6 +436,7 @@ impl Section {
             Section::InstrumentSet => {
                 "One card per estate instrument with its formalities and status"
             }
+            Section::AstrologyChart => "A private request-local astrology chart for optional personal reflection",
             Section::SigningCeremony => "The signing ceremony's date, place, and steps",
             Section::DistributionPlan => "The residuary shares the trust names",
             Section::AdministrationSteps => "Workflow states rendered as stages",
@@ -664,6 +669,7 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
                 S::AdministrationSteps,
                 S::FiduciaryRoster,
                 S::AssetSchedule,
+                S::AstrologyChart,
                 S::KeyDatesStrip,
                 S::DownloadList,
             ],

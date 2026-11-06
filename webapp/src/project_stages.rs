@@ -22,6 +22,7 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{Badge, BadgeTone, Choice, Empty, Field, FormCard, Heading};
+#[cfg(feature = "server")]
 use crate::people::ViewerRole;
 
 /// One entry in the Firm's ordered stage vocabulary.

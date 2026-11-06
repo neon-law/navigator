@@ -17,6 +17,7 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{Badge, BadgeTone, Choice, Empty, Field, FormCard, Heading};
+#[cfg(feature = "server")]
 use crate::people::ViewerRole;
 
 /// One task row for the Tasks tab.

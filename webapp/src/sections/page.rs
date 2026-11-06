@@ -15,6 +15,7 @@
 //! reader, in declared order, then the reader's built-in [`MatterTab`]s. One
 //! strip serves the show page, its built-in sections, and every declared page.
 
+#[cfg(feature = "server")]
 use std::collections::BTreeMap;
 
 use dioxus::prelude::*;
@@ -32,7 +33,7 @@ pub struct PageTab {
 
 /// Everything one rendered page needs, display-ready. An empty `title`
 /// means not found.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct MatterPageView {
     pub code: String,
     pub matter_name: String,
@@ -44,6 +45,20 @@ pub struct MatterPageView {
     pub role: ViewerRole,
     pub logo: Option<crate::components::AppLogo>,
     pub tokens_href: String,
+    pub viewing_as_dri: Option<crate::components::ClientDriView>,
+}
+
+impl std::fmt::Debug for MatterPageView {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MatterPageView")
+            .field("found", &!self.title.is_empty())
+            .field("lens", &self.lens)
+            .field("section_count", &self.sections.len())
+            .field("role", &self.role)
+            .field("viewing_as_dri", &self.viewing_as_dri.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl MatterPageView {
@@ -59,6 +74,7 @@ impl MatterPageView {
             role,
             logo: None,
             tokens_href: String::new(),
+            viewing_as_dri: None,
         }
     }
 }
@@ -381,7 +397,7 @@ pub async fn get_matter_page() -> Result<MatterPageView, ServerFnError> {
         .ok()
         .and_then(|axum::extract::RawQuery(query)| query)
         .unwrap_or_default();
-    let cx = load_context(
+    let mut cx = load_context(
         &surreal,
         &project,
         lens,
@@ -395,7 +411,10 @@ pub async fn get_matter_page() -> Result<MatterPageView, ServerFnError> {
         },
     )
     .await?;
+    let (chart, viewing_as_dri) = private_chart_context(project.id, lens).await;
+    cx.private_chart = chart;
     Ok(MatterPageView {
+        viewing_as_dri,
         tabs: matter_tabs(&project.code, &entries, viewer),
         code: project.code,
         matter_name: project.name,
@@ -410,6 +429,37 @@ pub async fn get_matter_page() -> Result<MatterPageView, ServerFnError> {
         logo: crate::app_chrome::app_logo_from_context().await,
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
     })
+}
+
+#[cfg(feature = "server")]
+async fn private_chart_context(
+    project_id: uuid::Uuid,
+    lens: PageLens,
+) -> (
+    crate::private_chart::ChartSectionView,
+    Option<crate::components::ClientDriView>,
+) {
+    let csrf = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::Extension<crate::csrf::CsrfToken>,
+        _,
+    >()
+    .await
+    .ok()
+    .map(|axum::Extension(token)| token.0);
+    let dri_context = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::Extension<crate::components::ViewingAsDri>,
+        _,
+    >()
+    .await
+    .ok()
+    .map(|axum::Extension(view)| view.0);
+    let chart = crate::private_chart::section_view(
+        project_id,
+        lens,
+        csrf.as_deref(),
+        dri_context.as_ref().map(Option::is_some),
+    );
+    (chart, dri_context.flatten())
 }
 
 /// The `side` value of a page's query string, e.g. `side=ours`.
@@ -832,9 +882,10 @@ pub fn CaseNav(tabs: Vec<PageTab>, current: String) -> Element {
 /// The page body, prop-driven so SSR tests render it without a server future.
 #[component]
 pub fn MatterPageBody(view: MatterPageView) -> Element {
+    let mut hydrated = use_signal(|| false);
     if view.title.is_empty() {
         return rsx! {
-            main { id: "matter-page", class: "nav-theme",
+            main { id: "matter-page", class: "nav-theme", "data-matter-page-root": "true", "data-hydrated": "{hydrated}", onmounted: move |_| hydrated.set(true),
                 h1 { "Not found" }
                 p { "No page is available at this address." }
             }
@@ -854,11 +905,15 @@ pub fn MatterPageBody(view: MatterPageView) -> Element {
         }
         main {
             id: "matter-page",
+            "data-matter-page-root": "true",
+            "data-hydrated": "{hydrated}",
+            onmounted: move |_| hydrated.set(true),
             class: "nav-theme portal-detail",
             "data-lens": view.lens.as_str(),
             nav { class: "portal-detail__back",
                 a { class: "nav-link", href: "{back}", "← {view.matter_name}" }
             }
+            crate::components::ClientDriViewBanner { view: view.viewing_as_dri.clone() }
             h1 { "{view.title}" }
             CaseNav { tabs: view.tabs.clone(), current }
             for section in view.sections.iter() {
@@ -919,6 +974,7 @@ mod tests {
             role: ViewerRole::Client,
             logo: None,
             tokens_href: String::new(),
+            viewing_as_dri: None,
         }
     }
 

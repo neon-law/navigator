@@ -140,7 +140,10 @@ word = { workspace = true, optional = true }
 # server build already has an OS source and must not gain a browser one.
 # `wasm-bindgen` and `js-sys` are already in the client bundle via `dioxus/web`.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-web-sys = { workspace = true, features = ["Storage", "Location"] }
+web-sys = { workspace = true, features = ["Storage", "Location", "Element", "Event", "EventTarget", "AbortController", "AbortSignal", "HtmlElement", "HtmlInputElement", "HtmlSelectElement", "NodeList", "PageTransitionEvent", "RequestCache", "RequestCredentials", "RequestMode", "RequestRedirect", "ReferrerPolicy"] }
+# Reuse the already-locked browser Fetch wrapper and bindings; no new version or framework.
+gloo-net = { version = "=0.6.0", default-features = false, features = ["http", "json"] }
+wasm-bindgen = "=0.2.126"
 uuid = { workspace = true, features = ["js"] }
 
 [dev-dependencies]

@@ -1841,6 +1841,8 @@ pub fn matter_page_router(
         .route(
             MATTER_PAGE_PATH,
             get(render_handler)
+                .layer(from_fn(inject_csrf_token))
+                .layer(from_fn(inject_dri_view))
                 .layer(from_fn(inject_viewer_role))
                 .layer(from_fn(inject_app_brand_mark))
                 .layer(from_fn(inject_person_id))
@@ -1860,6 +1862,14 @@ pub fn matter_page_router(
             crate::policy::require_policy,
         ))
         .route_layer(from_fn_with_state(auth, crate::auth::require_auth))
+}
+
+pub(crate) async fn private_matter_page_response(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response
 }
 
 /// The client self-serve intake path (#956 Phase 4) — the magic-link surface

@@ -49,6 +49,7 @@
 
 use dioxus::prelude::*;
 
+#[cfg(feature = "server")]
 use crate::people::ViewerRole;
 use crate::sections::page::MatterTab;
 

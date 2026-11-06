@@ -780,6 +780,7 @@ async fn page(
         role: role_for(lens),
         logo: None,
         tokens_href: String::new(),
+        viewing_as_dri: None,
     };
     let body = matter_page::render_matter_page_body(view);
     respond(
@@ -1459,6 +1460,7 @@ mod tests {
                 role: webapp::people::ViewerRole::Lawyer,
                 logo: None,
                 tokens_href: String::new(),
+                viewing_as_dri: None,
             },
         );
         assert!(html.contains("Case timeline"), "{html}");
