@@ -20,14 +20,16 @@ row. Reading the private half is every firm tier ([Clerk](role.md) included); *c
 tiers, through the matter edit form — the panel renders no inputs of its own, so there is one write path. Slack and
 Notion each render as their own card there, private field beside a "Share a separate resource with the client" toggle
 that reveals the shared field: the toggle is a real submitted checkbox the handler reads directly, so unchecking it and
-saving is what clears the shared column, whatever text is left in the field it hid.
+saving is what clears the shared column, whatever text is left in the field it hid. A Drive card beside them takes the
+matter's existing folder as its `drive.google.com` link or its id, with no share toggle because the folder is firm-only.
 
 Five are stored URLs on the `project` row (`internal_slack_channel_url`, `external_slack_channel_url`,
 `private_notion_page_url`, `shared_notion_page_url`, `booking_url`), each validated by
 [`store::projects::is_valid_resource_url`](../../store/src/projects.rs) because each is rendered as an `href`. The Drive
-row is derived from `drive_folder_id`, the calendar row from `calendar_id`, and the portal row is configured by the
-matter existing rather than by a column. The calendar id and the booking link are set with `navigator project set`, not
-the edit form.
+row links `drive_folder_id` once `navigator project setup` has adopted and verified that folder as the matter's root
+[Drive Ingest Folder](drive-ingest-folder.md), and only for the Lawyer matter lens. The calendar row is derived from
+`calendar_id`, and the portal row is configured by the matter existing rather than by a column. The calendar id and the
+booking link are set with `navigator project set`, not the edit form.
 
 Navigator stores addresses, not permissions. Who may open a Notion page or a Drive folder is governed by that service's
 own sharing, which Navigator neither reads nor enforces — so a page named "private" here is only private if it was

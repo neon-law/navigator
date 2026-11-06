@@ -26,6 +26,14 @@
 //! shared, and there is no separate confirmation dialog — saving with the
 //! toggle off *is* the confirmation.
 //!
+//! # The Drive card
+//!
+//! Beside them, a Drive card records the matter's existing folder in the
+//! Firm's Projects shared drive, pasted as its `drive.google.com` link or its
+//! id — the same field `navigator project set --drive-folder` writes, and the
+//! folder `navigator project setup` then adopts instead of creating one. It has
+//! no share toggle: the folder is firm-only.
+//!
 //! # Authorization
 //!
 //! Lawyer tier, and hidden rather than refused (the handler's `404`). The
@@ -79,6 +87,11 @@ pub struct ProjectEditView {
     /// The client-shared Notion page, on the same terms.
     #[serde(default)]
     pub shared_notion_page_url: String,
+    /// The matter's Drive folder id, blank when none is recorded. The form
+    /// posts it back as entered, a folder link or an id; a blank submission
+    /// clears it.
+    #[serde(default)]
+    pub drive_folder_id: String,
     /// The Project's source repository as a whole URL, on any forge. Blank when
     /// the matter records none, which is a legitimate state.
     pub repository_url: String,
@@ -210,6 +223,7 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         external_slack_channel_url: project.external_slack_channel_url.unwrap_or_default(),
         private_notion_page_url: project.private_notion_page_url.unwrap_or_default(),
         shared_notion_page_url: project.shared_notion_page_url.unwrap_or_default(),
+        drive_folder_id: project.drive_folder_id.unwrap_or_default(),
         repository_url: project.repository_url.unwrap_or_default(),
         csrf_token,
         error,
@@ -295,6 +309,40 @@ pub(crate) const PRIVATE_NOTION_HELP: &str =
 pub(crate) const SHARED_NOTION_HELP: &str =
     "Optional — the Notion page shared with the client, if this project has one. \
      Visible to the client, so share it to them in Notion too.";
+
+/// The help line under the Drive folder field.
+///
+/// Names what the field accepts and what happens next, because the folder is
+/// adopted, not made: setup creates a folder only when none is recorded here.
+pub(crate) const DRIVE_FOLDER_HELP: &str =
+    "Optional — an existing folder in the firm\u{2019}s Projects shared drive, pasted as its \
+     Google Drive link or its id. Firm-only: a client never sees it. Navigator confirms the \
+     folder with Google Drive when it saves, and project setup adopts it instead of creating \
+     a new one.";
+
+/// The Drive card: the matter's one firm-only folder, so unlike
+/// [`resource_card`] it has no client-sharing toggle.
+fn drive_card(drive_folder_id: &str) -> Element {
+    let field = Field::text(
+        "Private Google Drive folder",
+        "drive_folder_id",
+        drive_folder_id.to_string(),
+    )
+    .placeholder("https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOp")
+    .help(DRIVE_FOLDER_HELP);
+    rsx! {
+        fieldset { class: "nav-fieldset project-edit__resource-card",
+            legend { class: "nav-fieldset__legend",
+                ResourceMarkGlyph {
+                    mark: ResourceMark::GoogleDrive,
+                    class: "project-edit__resource-card-mark".to_string(),
+                }
+                "Google Drive"
+            }
+            {field.render()}
+        }
+    }
+}
 
 /// The help line under the source repository field.
 ///
@@ -442,6 +490,7 @@ fn edit_body(view: &ProjectEditView) -> Element {
             extra_fields: Some(rsx! {
                 {slack_card}
                 {notion_card}
+                {drive_card(&view.drive_folder_id)}
                 {repository_field.render()}
             }),
         }
@@ -509,6 +558,7 @@ mod tests {
             external_slack_channel_url: String::new(),
             private_notion_page_url: "https://www.notion.so/neonlaw/Private-abc123".to_string(),
             shared_notion_page_url: String::new(),
+            drive_folder_id: "1SyntheticFolderId".to_string(),
             // Deliberately on a self-hosted forge whose path resembles neither
             // the matter name nor a Project code: the field renders a stored
             // value and composes nothing.
@@ -599,26 +649,52 @@ mod tests {
         );
     }
 
-    /// The `Product decision` behind ENG-477: Slack and Notion are each their
-    /// own bounded fieldset (a `<legend>` is the accessible group name a
-    /// screen reader announces on entry), not four fields loose in one form.
+    /// The `Product decision` behind ENG-477: Slack, Notion, and Drive are
+    /// each their own bounded fieldset (a `<legend>` is the accessible group
+    /// name a screen reader announces on entry), not fields loose in one form.
     #[test]
-    fn slack_and_notion_render_as_separate_bounded_fieldsets() {
+    fn slack_notion_and_drive_render_as_separate_bounded_fieldsets() {
         let html = render(&view());
         assert_eq!(
             html.matches(r#"class="nav-fieldset project-edit__resource-card""#)
                 .count(),
-            2,
+            3,
             "one fieldset per resource: {html}"
         );
         assert!(html.contains("data-resource-mark=\"slack\""), "{html}");
         assert!(html.contains("data-resource-mark=\"notion\""), "{html}");
+        assert!(
+            html.contains("data-resource-mark=\"google-drive\""),
+            "{html}"
+        );
         // Every card carries the client-sharing toggle by its accessible name.
         assert_eq!(
             html.matches("Share a separate resource with the client")
                 .count(),
             2,
             "{html}"
+        );
+    }
+
+    /// The Drive card offers the matter's existing folder, prefilled from the
+    /// stored id, and has no client-sharing toggle: the folder is firm-only.
+    #[test]
+    fn the_drive_card_offers_the_stored_folder_and_no_share_toggle() {
+        let html = render(&view());
+        assert!(html.contains(r#"name="drive_folder_id""#), "{html}");
+        assert!(html.contains("Private Google Drive folder"), "{html}");
+        assert!(
+            html.contains(r#"value="1SyntheticFolderId""#),
+            "the stored folder is prefilled: {html}"
+        );
+        let drive_card = html
+            .split(r#"data-resource-mark="google-drive""#)
+            .nth(1)
+            .and_then(|rest| rest.split("</fieldset>").next())
+            .unwrap_or_else(|| panic!("the Drive card renders: {html}"));
+        assert!(
+            !drive_card.contains("Share a separate resource with the client"),
+            "{drive_card}"
         );
     }
 

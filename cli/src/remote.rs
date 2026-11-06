@@ -3992,12 +3992,14 @@ pub(crate) async fn resolve_firm(
 }
 
 /// `PATCH /app/api/projects/{id}` with `fields`, for the coordinates
-/// `navigator project set` records on the live row.
+/// `navigator project set` records on the live row. Returns the value of
+/// [`store::project_surfaces::DRIVE_FOLDER_CHECK_HEADER`] when the server
+/// checked a Drive folder named by the patch.
 pub async fn patch_project_fields(
     host: &str,
     project_code: &str,
     fields: &serde_json::Map<String, serde_json::Value>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     let (base, token) = resolve(Some(host))?;
     let project_id =
         crate::projects::surfaces::resolve_project_id(&base, &token, project_code).await?;
@@ -4009,6 +4011,11 @@ pub async fn patch_project_fields(
         .await
         .context("PATCH /app/api/projects/{id}")?;
     let status = response.status();
+    let drive_folder_check = response
+        .headers()
+        .get(store::project_surfaces::DRIVE_FOLDER_CHECK_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
         return Err(anyhow::anyhow!(
@@ -4016,7 +4023,7 @@ pub async fn patch_project_fields(
             body.lines().next().unwrap_or_default().trim()
         ));
     }
-    Ok(())
+    Ok(drive_folder_check)
 }
 
 /// `navigator site notation create <template-code> --project <code> --client-email …`

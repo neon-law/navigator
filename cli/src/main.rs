@@ -1158,12 +1158,14 @@ enum ProjectsCmd {
         /// both. `navigator project setup` creates the calendar.
         #[arg(long = "calendar", value_name = "ID")]
         calendar: Option<String>,
-        /// The Project's Drive ingest folder id, in the Firm's Projects
-        /// shared drive. Written to `project.drive_folder_id` and the live
-        /// Project; an empty value clears both. `navigator project setup`
-        /// creates the folder, or adopts one named for the code that
-        /// already exists.
-        #[arg(long = "drive-folder", value_name = "ID")]
+        /// An existing Drive folder for the Project, in the Firm's Projects
+        /// shared drive: its drive.google.com link or its id. Written to
+        /// `project.drive_folder_id` and the live Project; an empty value
+        /// clears both. The deployment confirms the folder with Drive when it
+        /// has a Drive credential, and says when it could only check the
+        /// id's shape. `navigator project setup` then adopts this folder
+        /// instead of creating one.
+        #[arg(long = "drive-folder", value_name = "URL_OR_ID")]
         drive_folder: Option<String>,
         /// Preview every change without writing navigator.yaml or the live
         /// Project row.
