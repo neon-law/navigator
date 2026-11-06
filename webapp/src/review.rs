@@ -19,6 +19,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "server")]
 use crate::csrf::CsrfToken;
 
 /// The rendered review page — every field wasm-safe.

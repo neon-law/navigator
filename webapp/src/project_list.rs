@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::components::{Column, DataTable, SortState};
 use crate::people::ViewerRole;
+#[cfg(feature = "server")]
 use crate::portal_project_list::PersonId;
 
 /// Which lifecycle lens the projects list renders: the open matters (the

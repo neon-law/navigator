@@ -32,6 +32,7 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{FactCard, FactGrid, Field, FormCard, Heading, Toast, ToastTone};
+#[cfg(feature = "server")]
 use crate::csrf::CsrfToken;
 use crate::lawyer_project_communications::{communications_tab, notes_tab, CommunicationRow};
 use crate::lawyer_project_documents::{documents_table, LawyerDocRow};

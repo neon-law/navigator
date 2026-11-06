@@ -5565,6 +5565,7 @@ a.nav-steps__step:focus-visible {
 .astrology-chart__table { width: 100%; border-collapse: collapse; text-align: left; font-size: .9rem; }
 .astrology-chart__table caption { text-align: left; color: var(--nav-color-text-muted); margin-block: 1rem; }
 .astrology-chart__table th, .astrology-chart__table td { border-bottom: 1px solid var(--nav-color-border); padding: .6rem .35rem; overflow-wrap: anywhere; }
+.astrology-chart__table td:nth-child(3) { overflow-wrap: normal; }
 .astro-eyebrow { color: var(--nav-color-primary); font-size: .85rem; letter-spacing: .08em; }
 .astro-demo-notice { border-left: 3px solid var(--nav-color-primary); padding: .8rem 1rem; background: var(--nav-color-surface-subtle); }
 .astro-map-layers { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; border: 1px solid var(--nav-color-border); padding: 1rem; margin-block: 1.5rem; }
@@ -5912,3 +5913,9 @@ a.nav-steps__step:focus-visible {
 .world-page__aster svg.aster-artwork { width: 100%; height: auto; }
 .world-page__aster-note { max-width: 70ch; margin: -.25rem auto 2rem; padding-inline: 1rem; font-size: .95rem; font-style: italic; }
 @media (max-width: 719px) { .world-page__aster { display: none; } }
+
+/* Private page data stays hidden across a frozen back/forward-cache lifecycle. */
+.private-chart[hidden] { display: none !important; }
+.private-chart__fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: var(--nav-space-4, 1rem); }
+.private-chart__fields > legend, .private-chart__fields > p, .private-chart__bodies, .private-chart__fields > .chart-toggle { grid-column: 1 / -1; }
+.private-chart__bodies { display: flex; flex-wrap: wrap; gap: var(--nav-space-3, .75rem); }

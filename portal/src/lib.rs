@@ -2057,9 +2057,6 @@ pub fn bootstrap_with_forgejo_oidc(
         // The matter conversation page renders through Dioxus at
         // `/app/projects/{project_code}/conversation`; the tier picks the lens.
         dioxus_conversation,
-        // One declared Matter Page renders through Dioxus at
-        // `/app/projects/{project_code}/{page_slug}`; participation picks the lens.
-        dioxus_matter_page,
         // The comment-only client document-review page (#641 Phase 3) renders
         // through Dioxus at `/app/projects/{project_code}/review/{doc_id}`.
         dioxus_review,
@@ -2113,6 +2110,12 @@ pub fn bootstrap_with_forgejo_oidc(
             &boundary_auth,
         ));
     }
+    // Wrap the complete session boundary: private page refusals must not be cached.
+    router = router.merge(
+        session_boundary(dioxus_matter_page, &boundary_sessions, &boundary_auth).route_layer(
+            axum::middleware::map_response(dioxus_app::private_matter_page_response),
+        ),
+    );
     router = router.merge(session_boundary(
         dioxus_app_brands_edit_post,
         &boundary_sessions,

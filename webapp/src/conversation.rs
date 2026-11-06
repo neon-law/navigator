@@ -16,7 +16,9 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "server")]
 use crate::csrf::CsrfToken;
+#[cfg(feature = "server")]
 use crate::people::ViewerRole;
 
 /// One message in the thread, in a wasm-safe shape.

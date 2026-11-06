@@ -122,6 +122,7 @@ pub mod person_show;
 pub mod playbooks;
 pub mod portal_project_detail;
 pub mod portal_project_list;
+pub mod private_chart;
 pub mod profile;
 pub mod project_billing;
 pub mod project_calendar;

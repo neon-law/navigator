@@ -19,8 +19,10 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "server")]
 use crate::csrf::CsrfToken;
 use crate::people::ViewerRole;
+#[cfg(feature = "server")]
 use crate::portal_project_list::PersonId;
 
 /// One supervised matter, in a wasm-safe shape (plain strings — no
