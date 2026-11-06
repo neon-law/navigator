@@ -3093,7 +3093,7 @@ fn canonical_document(base: &str) -> Value {
           "post": {
             "summary": "Report a push to a Project repository's main",
             "description":
-              "A Project repository's CI reports one push to `main`. Authorization: the document-scoped CI session `project-gate.yml` mints for exactly this Project; any other session, including a CI session for another Project, returns 403. The event is handed to the per-Project `project-slack` workflow object, which resolves the Project's private channel from its own row and posts one notice per `(short_sha, run_attempt)`; a repeat of the same pair posts nothing new. The body carries mechanism fields only — no commit subject is accepted.",
+              "A Project repository's CI reports one push to `main`. Authorization: the document-scoped CI session that `project-gate.yml` (GitHub) or `.forgejo/workflows/cd.yml` (Forgejo) mints for exactly this Project; any other session, including a CI session for another Project, returns 403. The event is handed to the per-Project `project-slack` workflow object, which resolves the Project's private channel from its own row and posts one notice per `(short_sha, run_attempt)`; a repeat of the same pair posts nothing new. The body carries mechanism fields only — no commit subject is accepted.",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
             ],
@@ -3103,8 +3103,8 @@ fn canonical_document(base: &str) -> Value {
               "additionalProperties": false,
               "properties": {
                 "short_sha": { "type": "string", "description": "7 to 40 lowercase hex characters" },
-                "run_url": { "type": "string", "format": "uri", "description": "The GitHub Actions run, https" },
-                "author_login": { "type": "string", "description": "The pusher's GitHub login" },
+                "run_url": { "type": "string", "format": "uri", "description": "The GitHub or Forgejo Actions run, https" },
+                "author_login": { "type": "string", "description": "The pusher's GitHub or Forgejo login" },
                 "gate": { "type": "string", "enum": ["pass", "fail"] },
                 "publish": { "type": "string", "enum": ["pass", "fail", "skipped"], "description": "Absent when the gate reports before the publish half has run" },
                 "run_attempt": { "type": "integer", "minimum": 1 }

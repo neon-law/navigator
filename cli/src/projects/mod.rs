@@ -32,6 +32,7 @@ pub mod ics;
 pub mod lifecycle;
 pub mod lifecycle_read;
 pub mod local_bytes;
+pub mod main_push;
 pub mod manifest;
 pub mod matter;
 pub mod pages_init;

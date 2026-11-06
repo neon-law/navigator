@@ -171,6 +171,13 @@ spec:
                   name: navigator-forgejo-actions-oidc
                   key: workflow
                   optional: true
+            # Optional: the one workflow whose runs on main may write seeds.
+            - name: NAVIGATOR_FORGEJO_ACTIONS_OIDC_CD_WORKFLOW
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-forgejo-actions-oidc
+                  key: cd_workflow
+                  optional: true
             - name: SESSION_SECRET
               valueFrom:
                 secretKeyRef:

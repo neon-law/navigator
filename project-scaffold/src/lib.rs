@@ -35,17 +35,32 @@ pub const OFFBOARDING: &str = "offboarding";
 /// bytes never are.
 pub const ROOT_GITIGNORE: &str = "# Document bytes staged for or pulled down by `navigator project sync`.\n# Each document's pointer is committed under blobs/; its bytes never are.\n/documents/\n\n# Legal files and handoff notes never enter a Project repository.\n*.pdf\n*.docx\n*.local\n\n# Call notes and memos for `navigator project communication create --body-file`.\n# The Communication's body lives in Navigator's store, never in Git.\nnotes/\n\n# Email bodies, drafts, and saved copies of sent mail. Matter facts, never Git.\nmail/\n\n# Per-machine agent and operating-system state.\n.claude/settings.local.json\n.claude/worktrees/\n.agents/settings.local.json\n.agents/worktrees/\n.DS_Store\n";
 
-/// The release-download base the generated Forgejo gate installs the pinned
-/// `navigator` release from. It lives here — not beside its `lsp_download`
-/// consumer — because the gate workflow embeds it, and the gate's bytes must
-/// be identical whether the CLI wrote them to disk or the server committed
-/// them.
+/// Where every published `navigator` release lives: the GitHub Release the
+/// CLI's LSP download and `navigator ops forgejo release mirror` read from.
+/// Forgejo workflows never reach it; they install from
+/// [`FORGEJO_RELEASE_OWNER`]'s package registry on their own server.
 pub const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/neon-law/navigator/releases/download";
+
+/// The public Forgejo organization whose generic package `navigator` holds
+/// each mirrored release (`<version>/navigator-<version>-linux.tar.gz` and its
+/// `.sha256`). A runner's egress allowlist is then the Forgejo origin and the
+/// Navigator host, with no GitHub address to track (ENG-1234).
+pub const FORGEJO_RELEASE_OWNER: &str = "navigator";
+
+/// The generic package name every mirrored release is published under.
+pub const FORGEJO_RELEASE_PACKAGE: &str = "navigator";
+
+/// The CD workflow a Forgejo-backed Project repository carries: on a push to
+/// `main` it runs the live document check, reconciles `seeds/`, and posts
+/// the main-push notice. The deployment's
+/// `NAVIGATOR_FORGEJO_ACTIONS_OIDC_CD_WORKFLOW` names this exact path, and
+/// only this workflow on `refs/heads/main` can mint the seed-write session.
+pub const FORGEJO_CD_WORKFLOW: &str = ".forgejo/workflows/cd.yml";
 
 /// The gate workflow a Forgejo-backed Project repository carries. Forgejo
 /// Actions reads `.forgejo/workflows/` and ignores `.github/workflows/` when
-/// it exists, so `ci.yml` and `cd.yml` stay for GitHub and this file is the
-/// whole Forgejo gate. The deployment's `NAVIGATOR_FORGEJO_ACTIONS_OIDC_WORKFLOW`
+/// it exists, so this file and [`FORGEJO_CD_WORKFLOW`] are the whole Forgejo
+/// pipeline. The deployment's `NAVIGATOR_FORGEJO_ACTIONS_OIDC_WORKFLOW`
 /// names this exact path: the Forgejo document-token door trusts no other.
 pub const FORGEJO_GATE_WORKFLOW: &str = ".forgejo/workflows/gate.yml";
 
@@ -217,11 +232,83 @@ pub fn synced_skill_files() -> Vec<(String, String)> {
         .collect()
 }
 
+/// The shared check-out step of every generated Forgejo job: fetch exactly
+/// `forgejo.sha` from the job's own server with the job's own token.
+fn forgejo_checkout_step(name: &str) -> String {
+    format!(
+        r#"      - name: {name}
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: http.extraHeader
+          GIT_CONFIG_VALUE_0: "Authorization: token ${{{{ forgejo.token }}}}"
+          SERVER_URL: ${{{{ forgejo.server_url }}}}
+          REPOSITORY: ${{{{ forgejo.repository }}}}
+          REF: ${{{{ forgejo.ref }}}}
+        run: |
+          set -eu
+          git init --quiet .
+          git fetch --quiet --depth 1 "${{SERVER_URL%/}}/${{REPOSITORY}}.git" "${{REF}}"
+          git checkout --quiet --force --detach FETCH_HEAD
+          git clean --quiet -ffdx
+"#
+    )
+}
+
+/// The shared install step: read the exact release `navigator.yaml` pins and
+/// install it from [`FORGEJO_RELEASE_OWNER`]'s generic package on the job's
+/// own Forgejo server, verifying its SHA-256. A release the registry does not
+/// hold yet fails with the one command that mirrors it.
+fn forgejo_install_step() -> String {
+    format!(
+        r#"      - name: install the pinned navigator release
+        env:
+          SERVER_URL: ${{{{ forgejo.server_url }}}}
+        run: |
+          set -eu
+          version="$(sed -n 's/^version:[[:space:]]*//p' navigator.yaml | head -n 1 | tr -d "\"' \r")"
+          if ! printf '%s\n' "${{version}}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "::error::navigator.yaml version must be an exact release tag, not '${{version}}'."
+            exit 1
+          fi
+          if [ "$(uname -s)" != Linux ]; then
+            echo "::error::unsupported runner OS $(uname -s); Forgejo runners are Linux"
+            exit 1
+          fi
+          asset="navigator-${{version}}-linux.tar.gz"
+          release="${{SERVER_URL%/}}/api/packages/{FORGEJO_RELEASE_OWNER}/generic/{FORGEJO_RELEASE_PACKAGE}/${{version}}"
+          bin="$(mktemp -d)"
+          cd "${{bin}}"
+          for file in "${{asset}}" "${{asset}}.sha256"; do
+            if command -v curl >/dev/null 2>&1; then
+              fetched=curl; curl -fsSL -o "${{file}}" "${{release}}/${{file}}" || fetched=
+            else
+              fetched=wget; wget -q -O "${{file}}" "${{release}}/${{file}}" || fetched=
+            fi
+            if [ -z "${{fetched}}" ]; then
+              echo "::error::release ${{version}} is not mirrored on this Forgejo; run navigator ops forgejo release mirror --version ${{version}}"
+              exit 1
+            fi
+          done
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum -c "${{asset}}.sha256"
+          else
+            shasum -a 256 -c "${{asset}}.sha256"
+          fi
+          tar -xzf "${{asset}}" navigator
+          chmod 0755 navigator
+          echo "${{bin}}" >> "${{GITHUB_PATH}}"
+"#
+    )
+}
+
 /// The Forgejo gate: on every pull request, check out its head, install the
-/// `navigator` release `navigator.yaml` pins, and run
-/// `navigator project gate --ci`. `enable-openid-connect` makes the runner
-/// export `ACTIONS_ID_TOKEN_REQUEST_*`; the CLI requests a token audienced to
-/// the manifest's host and exchanges it at `/auth/ci/forgejo/document-token`.
+/// `navigator` release `navigator.yaml` pins, run
+/// `navigator project gate --ci`, and dry-run `seeds/` against the live
+/// Project. `enable-openid-connect` makes the runner export
+/// `ACTIONS_ID_TOKEN_REQUEST_*`; the CLI requests a token audienced to the
+/// manifest's host and exchanges it at `/auth/ci/forgejo/document-token`
+/// (the gate) or `/auth/ci/forgejo/seed-token` (the seed dry-run, which the
+/// deployment holds to dry-run for a pull request).
 ///
 /// Every step is plain shell, so the workflow needs no action repository the
 /// Forgejo installation would have to mirror. The binary installs outside the
@@ -241,61 +328,80 @@ jobs:
     runs-on: self-hosted
     enable-openid-connect: true
     steps:
-      - name: check out the pull request
-        env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: http.extraHeader
-          GIT_CONFIG_VALUE_0: "Authorization: token ${{{{ forgejo.token }}}}"
-          SERVER_URL: ${{{{ forgejo.server_url }}}}
-          REPOSITORY: ${{{{ forgejo.repository }}}}
-          REF: ${{{{ forgejo.ref }}}}
+{checkout}{install}      - name: navigator site import --dry-run
         run: |
           set -eu
-          git init --quiet .
-          git fetch --quiet --depth 1 "${{SERVER_URL%/}}/${{REPOSITORY}}.git" "${{REF}}"
-          git checkout --quiet --force --detach FETCH_HEAD
-          git clean --quiet -ffdx
-      - name: install the pinned navigator release
-        run: |
-          set -eu
-          version="$(sed -n 's/^version:[[:space:]]*//p' navigator.yaml | head -n 1 | tr -d "\"' \r")"
-          if ! printf '%s\n' "${{version}}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
-            echo "::error::navigator.yaml version must be an exact release tag, not '${{version}}'."
-            exit 1
+          if [ ! -d seeds ]; then
+            echo "no seeds — nothing to validate"
+            exit 0
           fi
-          case "$(uname -s)" in
-            Linux) platform=linux ;;
-            Darwin) platform=macos ;;
-            *) echo "::error::unsupported runner OS $(uname -s)"; exit 1 ;;
-          esac
-          asset="navigator-${{version}}-${{platform}}.tar.gz"
-          release="{RELEASE_DOWNLOAD_BASE}/${{version}}"
-          bin="$(mktemp -d)"
-          cd "${{bin}}"
-          for file in "${{asset}}" "${{asset}}.sha256"; do
-            if command -v curl >/dev/null 2>&1; then
-              curl -fsSL -o "${{file}}" "${{release}}/${{file}}"
-            else
-              wget -q -O "${{file}}" "${{release}}/${{file}}"
-            fi
-          done
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum -c "${{asset}}.sha256"
-          else
-            shasum -a 256 -c "${{asset}}.sha256"
-          fi
-          tar -xzf "${{asset}}" navigator
-          chmod 0755 navigator
-          echo "${{bin}}" >> "${{GITHUB_PATH}}"
+          host="$(sed -n 's/^[[:space:]]*host:[[:space:]]*//p' navigator.yaml | head -n 1 | tr -d "\"' \r")"
+          navigator site import --dry-run --ci --host "${{host}}"
       - name: navigator project gate
         run: navigator project gate --ci
-"#
+"#,
+        checkout = forgejo_checkout_step("check out the pull request"),
+        install = forgejo_install_step(),
+    )
+}
+
+/// The Forgejo CD workflow: on a push to `main` (or a dispatch on `main`),
+/// the same main-only work GitHub's `project-gate.yml` runs — the live
+/// document check, live `seeds/` reconciliation (never `--overwrite`), and
+/// the Project's private main-push notice. The notice runs whatever the other
+/// two did and reports their combined outcome; it never fails the run.
+#[must_use]
+pub fn forgejo_cd_workflow() -> String {
+    format!(
+        r#"# Generated by `navigator project scaffold`; `navigator project repository
+# sync-skills` restores it. The deployment trusts only this path to write seeds.
+name: cd
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  documents:
+    runs-on: self-hosted
+    enable-openid-connect: true
+    steps:
+{checkout}{install}      - name: navigator project gate --check
+        run: navigator project gate --check --ci
+  seeds:
+    runs-on: self-hosted
+    enable-openid-connect: true
+    steps:
+{checkout}{install}      - name: navigator site import
+        run: |
+          set -eu
+          if [ ! -d seeds ]; then
+            echo "no seeds — nothing to reconcile"
+            exit 0
+          fi
+          host="$(sed -n 's/^[[:space:]]*host:[[:space:]]*//p' navigator.yaml | head -n 1 | tr -d "\"' \r")"
+          navigator site import --ci --host "${{host}}"
+  notify:
+    needs: [documents, seeds]
+    if: always()
+    runs-on: self-hosted
+    enable-openid-connect: true
+    continue-on-error: true
+    steps:
+{checkout}{install}      - name: notify the Project channel of this push
+        env:
+          GATE: ${{{{ (needs.documents.result == 'success' && needs.seeds.result == 'success') && 'pass' || 'fail' }}}}
+        run: navigator project notify-main-push --ci --gate "${{GATE}}"
+"#,
+        checkout = forgejo_checkout_step("check out main"),
+        install = forgejo_install_step(),
     )
 }
 
 /// Everything the server commits as a Forgejo-backed Project repository's
 /// first commit: [`canonical_files`], the synced Agent Skills, and the
-/// byte-exact [`FORGEJO_GATE_WORKFLOW`]. The CLI's scaffold emits these same
+/// byte-exact [`FORGEJO_GATE_WORKFLOW`] and [`FORGEJO_CD_WORKFLOW`]. The CLI's scaffold emits these same
 /// bytes plus GitHub-specific files (`AGENTS.md`, `.claude/settings.json`,
 /// the thin `ci.yml`/`cd.yml` callers, `CODEOWNERS`, the licenses); a test
 /// in the CLI crate asserts the seed set is byte-identical to that output.
@@ -304,8 +410,18 @@ pub fn forgejo_seed_files(source: &ScaffoldSource) -> Vec<(String, String)> {
     canonical_files(source)
         .into_iter()
         .chain(synced_skill_files())
-        .chain([(FORGEJO_GATE_WORKFLOW.to_string(), forgejo_gate_workflow())])
+        .chain(forgejo_workflow_files())
         .collect()
+}
+
+/// The two machine-owned Forgejo workflows, path paired with exact bytes.
+/// `.forgejo/` holds these and nothing else.
+#[must_use]
+pub fn forgejo_workflow_files() -> Vec<(String, String)> {
+    vec![
+        (FORGEJO_GATE_WORKFLOW.to_string(), forgejo_gate_workflow()),
+        (FORGEJO_CD_WORKFLOW.to_string(), forgejo_cd_workflow()),
+    ]
 }
 
 /// The stable digest binding a canonical file set to the commit that first
@@ -494,20 +610,14 @@ mod tests {
     }
 
     #[test]
-    fn the_seed_set_is_canonical_plus_skills_plus_the_gate() {
+    fn the_seed_set_is_canonical_plus_skills_plus_both_workflows() {
         let source = source();
         let seeded = forgejo_seed_files(&source);
         let mut expected = canonical_files(&source);
         expected.extend(synced_skill_files());
         expected.push((FORGEJO_GATE_WORKFLOW.to_string(), forgejo_gate_workflow()));
+        expected.push((FORGEJO_CD_WORKFLOW.to_string(), forgejo_cd_workflow()));
         assert_eq!(seeded, expected);
-        assert_eq!(
-            seeded
-                .iter()
-                .filter(|(path, _)| path == FORGEJO_GATE_WORKFLOW)
-                .count(),
-            1
-        );
     }
 
     #[test]
@@ -526,7 +636,6 @@ mod tests {
         let parsed: serde_yaml::Value = serde_yaml::from_str(&workflow).unwrap();
         assert_eq!(parsed["name"].as_str(), Some("gate"));
         assert!(workflow.contains(FORGEJO_REQUIRED_CHECK));
-        assert!(workflow.contains(RELEASE_DOWNLOAD_BASE));
         // Rendered, not templated: no Rust format braces survive.
         assert!(!workflow.contains("{{{"), "{workflow}");
         let steps = parsed["jobs"]["gate"]["steps"].as_sequence().unwrap();
@@ -535,6 +644,47 @@ mod tests {
             steps.last().unwrap()["run"].as_str(),
             Some("navigator project gate --ci")
         );
+    }
+
+    /// ENG-1234: a Forgejo job installs from its own server's package
+    /// registry, so its egress never needs a GitHub address.
+    #[test]
+    fn forgejo_workflows_install_from_the_forgejo_package_registry_only() {
+        for (path, workflow) in forgejo_workflow_files() {
+            assert!(!workflow.contains("github.com"), "{path}");
+            assert!(
+                workflow.contains(
+                    "${SERVER_URL%/}/api/packages/navigator/generic/navigator/${version}"
+                ),
+                "{path}"
+            );
+            assert!(!workflow.contains("{{{"), "{path}");
+        }
+    }
+
+    #[test]
+    fn the_cd_workflow_runs_on_main_and_reports_every_job_to_the_notice() {
+        let workflow = forgejo_cd_workflow();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&workflow).unwrap();
+        assert_eq!(parsed["name"].as_str(), Some("cd"));
+        assert_eq!(parsed["on"]["push"]["branches"][0].as_str(), Some("main"));
+        assert!(parsed["on"]["pull_request"].is_null());
+        let jobs = &parsed["jobs"];
+        let run_of = |job: &str| {
+            jobs[job]["steps"].as_sequence().unwrap().last().unwrap()["run"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(run_of("documents"), "navigator project gate --check --ci");
+        assert!(run_of("seeds").contains("navigator site import --ci --host"));
+        assert!(!run_of("seeds").contains("--overwrite"));
+        assert!(run_of("notify").starts_with("navigator project notify-main-push --ci"));
+        assert_eq!(jobs["notify"]["if"].as_str(), Some("always()"));
+        assert_eq!(jobs["notify"]["continue-on-error"].as_bool(), Some(true));
+        for job in ["documents", "seeds", "notify"] {
+            assert_eq!(jobs[job]["enable-openid-connect"].as_bool(), Some(true));
+        }
     }
 
     #[test]

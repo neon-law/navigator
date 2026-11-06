@@ -154,6 +154,33 @@ Two counters are recorded once per run, in a journaled step so a replay does not
 failure in the last day, which is critical at five or more for one tag, and no finished run in 26 hours. Dash0 is
 staging-only today, so production relies on the Slack headline until a production row declares `DASH0_ENDPOINT`.
 
+## Forgejo Actions
+
+The runner controller (`navigator ops forgejo runner-controller`, see [Forgejo deployment](forgejo-deployment.md)) is
+Forgejo's telemetry source. It exports through the collector, so it reaches Dash0 and Google Cloud like every other
+service.
+
+- **Metrics.** `navigator.forgejo.controller.tick` counts each tick by `outcome`. `navigator.forgejo.run.finished`
+  counts finished runs, and `navigator.forgejo.run.queue_seconds` and `navigator.forgejo.run.duration_seconds` time
+  them, by `forgejo.repository`, `forgejo.workflow`, `forgejo.event` and `outcome`. The gauges
+  `navigator.forgejo.run.oldest_waiting_seconds` and `navigator.forgejo.cd.missed` are set per repository.
+  `navigator.forgejo.runner.orphan_cleaned` counts recovered leftovers.
+- **Logs.** `forgejo.job.queued`, `forgejo.job.started`, `forgejo.job.finished` and `forgejo.runner.orphan_cleaned`
+  records add `forgejo.run_number`.
+- **Job logs.** After each job, the controller re-emits the runner pod's stdout, one record per line, under target
+  `forgejo.job.log`. The runner's `log.job_level` puts every step's output there. The same stdout reaches Cloud Logging
+  directly from the pod.
+
+The repository is `<firm>/<project code>`, opaque by construction. No PR title, branch name or commit message is
+emitted. Job output passes the same source-side content screen as every record, so a line that looks like client content
+is dropped from telemetry. `navigator ops forgejo logs <owner>/<repository> --run <n>` still prints the whole log from
+Forgejo.
+
+The collector also scrapes Forgejo's `/metrics` (`prometheus/forgejo`) with the bearer token in
+`navigator-forgejo-metrics`. These are installation-wide gauges only: per-repository and per-label series are off in
+`app.ini`. [`dash0-forgejo-check-rules.yaml`](../examples/deploy/k8s/observability/dash0-forgejo-check-rules.yaml)
+alerts on these signals.
+
 ## Where it lands: direct OpenObserve
 
 Traces, metrics, and logs speak OTLP/gRPC directly to the OpenObserve organization and stream named in their

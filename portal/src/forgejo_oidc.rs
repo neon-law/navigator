@@ -60,12 +60,24 @@ pub struct ForgejoOidc {
     spent_token_digests: Arc<Mutex<HashMap<String, i64>>>,
 }
 
+/// Which trusted workflow a verified run is, which fixes what it may mint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgejoRun {
+    /// The gate on a pull request's head ref: read-only, seed dry-run only.
+    PullRequest,
+    /// The gate workflow on `refs/heads/main`: read-only.
+    MainGate,
+    /// The CD workflow on `refs/heads/main`: the one run that may write seeds.
+    MainCd,
+}
+
 enum ForgejoOidcInner {
     Reject,
     Jwks {
         issuer: String,
         audience: String,
         workflow_path: String,
+        cd_workflow_path: Option<String>,
         client: reqwest::Client,
         cache: Arc<AsyncMutex<Option<(Instant, JwksDocument)>>>,
         last_kid_refetch: Arc<AsyncMutex<Option<Instant>>>,
@@ -100,6 +112,10 @@ impl ForgejoOidc {
             "NAVIGATOR_FORGEJO_ACTIONS_OIDC_AUDIENCE",
             "NAVIGATOR_FORGEJO_ACTIONS_OIDC_WORKFLOW",
         ];
+        // Optional: without it no Forgejo run can mint the seed-write session.
+        let cd_workflow_path = std::env::var("NAVIGATOR_FORGEJO_ACTIONS_OIDC_CD_WORKFLOW")
+            .ok()
+            .filter(|path| !path.trim().is_empty());
         let config = names.map(std::env::var);
         if config.iter().all(Result::is_err) {
             return Self::rejecting();
@@ -108,7 +124,7 @@ impl ForgejoOidc {
             tracing::error!("partial Forgejo Actions OIDC trust configuration; rejecting tokens");
             return Self::rejecting();
         };
-        Self::configured(issuer, audience, workflow_path).unwrap_or_else(|error| {
+        Self::build(issuer, audience, workflow_path, cd_workflow_path, false).unwrap_or_else(|error| {
             tracing::error!(%error, "invalid Forgejo Actions OIDC trust configuration; rejecting tokens");
             Self::rejecting()
         })
@@ -121,7 +137,30 @@ impl ForgejoOidc {
         audience: impl Into<String>,
         workflow_path: impl Into<String>,
     ) -> Result<Self, ForgejoOidcError> {
-        Self::build(issuer.into(), audience.into(), workflow_path.into(), false)
+        Self::build(
+            issuer.into(),
+            audience.into(),
+            workflow_path.into(),
+            None,
+            false,
+        )
+    }
+
+    /// [`Self::configured`] plus the trusted CD workflow, the one path whose
+    /// runs on `refs/heads/main` may mint the seed-write session.
+    pub fn configured_with_cd(
+        issuer: impl Into<String>,
+        audience: impl Into<String>,
+        workflow_path: impl Into<String>,
+        cd_workflow_path: impl Into<String>,
+    ) -> Result<Self, ForgejoOidcError> {
+        Self::build(
+            issuer.into(),
+            audience.into(),
+            workflow_path.into(),
+            Some(cd_workflow_path.into()),
+            false,
+        )
     }
 
     /// Test constructor for a local discovery/JWKS server. It accepts HTTP
@@ -132,22 +171,52 @@ impl ForgejoOidc {
         audience: impl Into<String>,
         workflow_path: impl Into<String>,
     ) -> Result<Self, ForgejoOidcError> {
-        Self::build(issuer.into(), audience.into(), workflow_path.into(), true)
+        Self::build(
+            issuer.into(),
+            audience.into(),
+            workflow_path.into(),
+            None,
+            true,
+        )
+    }
+
+    /// [`Self::local_test_issuer`] with a trusted CD workflow.
+    #[doc(hidden)]
+    pub fn local_test_issuer_with_cd(
+        issuer: impl Into<String>,
+        audience: impl Into<String>,
+        workflow_path: impl Into<String>,
+        cd_workflow_path: impl Into<String>,
+    ) -> Result<Self, ForgejoOidcError> {
+        Self::build(
+            issuer.into(),
+            audience.into(),
+            workflow_path.into(),
+            Some(cd_workflow_path.into()),
+            true,
+        )
     }
 
     fn build(
         issuer: String,
         audience: String,
         workflow_path: String,
+        cd_workflow_path: Option<String>,
         allow_local_http: bool,
     ) -> Result<Self, ForgejoOidcError> {
+        let trusted_path = |path: &str| {
+            path.starts_with(".forgejo/workflows/")
+                && !path.contains("..")
+                && !path.contains('@')
+                && !path.ends_with('/')
+        };
         let issuer_url =
             Url::parse(&issuer).map_err(|error| ForgejoOidcError::Invalid(error.to_string()))?;
         if audience.trim().is_empty()
-            || !workflow_path.starts_with(".forgejo/workflows/")
-            || workflow_path.contains("..")
-            || workflow_path.contains('@')
-            || workflow_path.ends_with('/')
+            || !trusted_path(&workflow_path)
+            || cd_workflow_path
+                .as_deref()
+                .is_some_and(|cd| !trusted_path(cd) || cd == workflow_path)
             || !issuer_url.username().is_empty()
             || issuer_url.password().is_some()
             || issuer_url.query().is_some()
@@ -170,6 +239,7 @@ impl ForgejoOidc {
                 issuer,
                 audience,
                 workflow_path,
+                cd_workflow_path,
                 client,
                 cache: Arc::new(AsyncMutex::new(None)),
                 last_kid_refetch: Arc::new(AsyncMutex::new(None)),
@@ -236,13 +306,31 @@ impl ForgejoOidc {
         }
     }
 
-    /// Enforce the deployment-owned workflow and event/ref contract.
-    pub fn authorize_run(&self, claims: &ForgejoActionsClaims) -> Result<(), ForgejoOidcError> {
-        let ForgejoOidcInner::Jwks { workflow_path, .. } = &*self.inner else {
+    /// Enforce the deployment-owned workflow and event/ref contract, and say
+    /// which trusted workflow this run is. A pull request runs only the gate;
+    /// a push or dispatch on `main` runs the gate or, when configured, CD.
+    pub fn authorize_run(
+        &self,
+        claims: &ForgejoActionsClaims,
+    ) -> Result<ForgejoRun, ForgejoOidcError> {
+        let ForgejoOidcInner::Jwks {
+            workflow_path: gate_path,
+            cd_workflow_path,
+            ..
+        } = &*self.inner
+        else {
             return Err(ForgejoOidcError::Rejected);
         };
         let Some(repository) = forgejo_repository(&claims.repository) else {
             return Err(invalid_claims());
+        };
+        let file_of = |path: &str| path.rsplit('/').next().unwrap_or_default().to_owned();
+        let (workflow_path, run) = match (claims.event_name.as_str(), cd_workflow_path) {
+            ("push" | "workflow_dispatch", Some(cd)) if claims.workflow == file_of(cd) => {
+                (cd, ForgejoRun::MainCd)
+            }
+            ("push" | "workflow_dispatch", _) => (gate_path, ForgejoRun::MainGate),
+            _ => (gate_path, ForgejoRun::PullRequest),
         };
         let expected_workflow = format!("{repository}/{workflow_path}@{}", claims.git_ref);
         let workflow_file = workflow_path.rsplit('/').next().unwrap_or_default();
@@ -300,7 +388,7 @@ impl ForgejoOidc {
         {
             return Err(invalid_claims());
         }
-        Ok(())
+        Ok(run)
     }
 
     /// Spend the exact verified JWT until its signed expiry. Forgejo v15 has

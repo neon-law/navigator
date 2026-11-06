@@ -62,6 +62,10 @@ Rules:
   repository arm App-owned squash auto-merge without a label. Then check `gh pr view --json autoMergeRequest,state`; an
   already-green PR may merge immediately. Report the PR URL and whether it merged or auto-merge is armed. Use `--draft`
   when the user asks to hold the PR. Required checks and resolved review threads still govern merging.
+- **Fix CI before reporting.** The PR is not done while any check is red, `CodeQL` included (it counts only new alerts
+  in changed code). Fix each failure with [[fix-checks]] and push until every check is green. `CodeQL`
+  `rust/cleartext-logging` flags any print of a value parsed from the CLI command enum: drop the interpolation; never
+  dismiss the alert.
 - **Wait for the review comments, then answer them.** Greptile and human reviewers post after CI starts, and an
   unresolved thread blocks auto-merge like a red check. Address every comment with [[review-pr]] (fix it, or reply with
   the reason not to) and resolve its thread. The PR is not done, or reported done, until every thread is answered.

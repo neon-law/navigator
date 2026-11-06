@@ -82,4 +82,5 @@ Before opening the PR, rebase with `git rebase -S origin/main` again and run `na
 --quiet -- validate` when `navigator` is not on `PATH`). Do not re-run the workspace tests, the `features` harness, or
 coverage; CI runs them. Keep the issue identifier out of public prose except the bare identifier permitted by
 `docs/agent-workflows.md`. Then follow [`create-pr`](../create-pr/SKILL.md): push and open a pull request against
-`main`, ready for review, not as a draft. Do not stop at a green worktree. Apply `create-pr`'s auto-merge rule.
+`main`, ready for review, not as a draft. Do not stop at a green worktree. Apply `create-pr`'s auto-merge rule, then fix
+CI until every check is green.

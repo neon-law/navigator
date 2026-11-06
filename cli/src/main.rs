@@ -1475,6 +1475,20 @@ enum ProjectsCmd {
         #[arg(long)]
         ci: bool,
     },
+    /// Report this push to `main` to the Project's private Slack channel.
+    ///
+    /// Run by a Project repository's CD workflow after its document and seed
+    /// jobs. Exchanges the run's OIDC token for the document-scoped session
+    /// bound to this repository's live Project, then posts the short SHA, the
+    /// run URL, the pusher's login and the outcome. No commit subject is sent.
+    NotifyMainPush {
+        /// The combined outcome of this push's document and seed jobs.
+        #[arg(long, value_enum)]
+        gate: projects::main_push::Outcome,
+        /// Required: this runs only from CI, with the run's OIDC token.
+        #[arg(long, required = true)]
+        ci: bool,
+    },
     /// Render this checkout's declared pages on localhost, under a draft
     /// banner, reloading on each save. Reads section data from the host
     /// with the stored login, read only; never pushes anything to it.
@@ -3777,6 +3791,68 @@ enum ForgejoPolicyCmd {
         after_help = "Run only from a trusted operator host. FORGEJO_TOKEN must never enter a pull-request-controlled job."
     )]
     RunnerOnce(ForgejoRunnerArgs),
+    /// Start a disposable runner for every queued Actions job, forever. Runs in-cluster.
+    #[command(
+        after_help = "FORGEJO_TOKEN holds the environment's operator token; it never enters a job pod. \
+Each runner is the same isolated, repository-scoped one-job Job `runner-once` starts. \
+See docs/forgejo-deployment.md."
+    )]
+    RunnerController {
+        /// Public HTTPS Forgejo origin.
+        #[arg(long)]
+        url: String,
+        /// Existing dedicated runner namespace.
+        #[arg(long)]
+        runner_namespace: String,
+        /// Operate through kubectl on this context instead of the pod's own service account.
+        #[arg(long)]
+        context: Option<String>,
+        /// Hosts a job may reach on TCP 443, resolved to public IPv4 at each launch: the Forgejo
+        /// origin and the Navigator host.
+        #[arg(long)]
+        egress_host: Vec<String>,
+        /// Extra exact public IPv4 destinations on TCP 443.
+        #[arg(long)]
+        egress_ip: Vec<String>,
+        /// `NodeLocal` DNS IPv4 permitted on TCP/UDP 53 beside `kube-dns`.
+        #[arg(long, default_value = "169.254.20.10")]
+        dns_ip: String,
+        /// Seconds between ticks.
+        #[arg(long, default_value_t = 20)]
+        interval: u64,
+        /// Most runners alive at once.
+        #[arg(long, default_value_t = 4)]
+        max_runners: usize,
+        /// Run one tick, wait for its runners, and exit.
+        #[arg(long)]
+        once: bool,
+    },
+    /// Print every job log of one Actions run, read from the Forgejo volume.
+    #[command(
+        after_help = "Needs FORGEJO_TOKEN on the trusted operator host and kubectl exec on the Forgejo pod. \
+A queued job has no log yet; a running job's log appears when it finishes."
+    )]
+    Logs {
+        /// Explicit owner/repository.
+        repository: String,
+        /// The run number Forgejo shows (`/actions/runs/<n>`).
+        #[arg(long)]
+        run: u64,
+        /// HTTPS Forgejo origin.
+        #[arg(long)]
+        url: String,
+        /// Explicit Kubernetes context of the Forgejo installation.
+        #[arg(long)]
+        context: String,
+        /// Namespace of the `navigator-forgejo` `StatefulSet`.
+        #[arg(long, default_value = "navigator")]
+        namespace: String,
+    },
+    /// Mirror published navigator releases into this Forgejo's package registry.
+    Release {
+        #[command(subcommand)]
+        action: ForgejoReleaseCmd,
+    },
     /// Back up a local mirror and prove every ref restores. Excludes LFS and forge metadata.
     Bundle {
         /// Local bare mirror made with `git clone --mirror`.
@@ -3842,6 +3918,24 @@ enum ForgejoPolicyCmd {
 }
 
 #[derive(Subcommand)]
+enum ForgejoReleaseCmd {
+    /// Download one release's Linux archive and digest from GitHub, verify the SHA-256, and
+    /// publish both as the public `navigator` organization's generic package. Idempotent.
+    #[command(
+        after_help = "Needs FORGEJO_TOKEN for a site administrator on the trusted operator host. \
+Forgejo workflows install from <url>/api/packages/navigator/generic/navigator/<version>/."
+    )]
+    Mirror {
+        /// HTTPS Forgejo origin, or HTTP loopback for KIND.
+        #[arg(long)]
+        url: String,
+        /// Exact release tag, as `navigator.yaml` pins it.
+        #[arg(long)]
+        version: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum ForgejoSshKeysCmd {
     /// Reconcile every Person holding a key (or one Person) through the
     /// key-sync service identity. Drift is reported, never removed; exits
@@ -3872,13 +3966,17 @@ struct ForgejoRunnerArgs {
     /// Existing dedicated runner namespace, separate from Navigator's application namespace.
     #[arg(long)]
     runner_namespace: String,
-    /// Exact public IPv4 destinations permitted on TCP 443, including release-download redirects.
+    /// Exact public IPv4 destinations permitted on TCP 443.
     #[arg(
         long,
-        required_unless_present = "cleanup_registration",
+        required_unless_present_any = ["cleanup_registration", "egress_host"],
         conflicts_with = "cleanup_registration"
     )]
     egress_ip: Vec<String>,
+    /// Hosts whose public IPv4 addresses are resolved now and permitted on TCP 443: the Forgejo
+    /// origin and the Navigator host. Releases install from Forgejo's own package registry.
+    #[arg(long, conflicts_with = "cleanup_registration")]
+    egress_host: Vec<String>,
     /// `NodeLocal` DNS IPv4 permitted on TCP/UDP 53 beside `kube-dns`; defaults to GKE's `NodeLocal` DNS cache.
     #[arg(long, default_value = "169.254.20.10")]
     dns_ip: String,
@@ -6283,6 +6381,15 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
         ProjectsCmd::Gate {
             ci, check, deep, ..
         } => projects::pinned_gate::dispatch(GateMode::Content { ci, check, deep }).await,
+        ProjectsCmd::NotifyMainPush { gate, ci: _ } => {
+            match projects::main_push::notify(std::path::Path::new("."), gate).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("navigator: main-push notice not sent: {error:#}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         ProjectsCmd::Preview { port } => projects::preview::run(port).await,
         ProjectsCmd::Surfaces { action } => match action {
             SurfacesCmd::Reconcile {
