@@ -146,6 +146,90 @@ async fn reconciliation_preserves_deep_receipts_and_shared_ancestors() {
 }
 
 #[tokio::test]
+async fn missing_receipt_ancestor_refuses_repair_without_changing_target_rows() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = mem_surreal().await;
+    let project =
+        crate::test_support::seed_project_surreal(&surreal, "Synthetic orphan receipt").await;
+    let entity = crate::projects::find_by_id(&surreal, project)
+        .await
+        .unwrap()
+        .unwrap()
+        .entity_id;
+    mirror_identity(&pg, &[entity], &[]).await;
+    let mut ids = Vec::new();
+    for body in ["Synthetic ancestor", "Synthetic receipt"] {
+        ids.push(
+            communications::log_note(
+                &surreal,
+                &communications::NewNote {
+                    project_id: project,
+                    author_person_id: None,
+                    subject: None,
+                    body: body.into(),
+                },
+            )
+            .await
+            .unwrap()
+            .id,
+        );
+    }
+    surreal
+        .query("UPDATE $id SET acknowledges=$ancestor")
+        .bind(("id", crate::surreal::record_id("communication", ids[1])))
+        .bind((
+            "ancestor",
+            crate::surreal::record_id("communication", ids[0]),
+        ))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    assert!(reconcile(&surreal, &pg).await.unwrap().is_clean());
+    surreal
+        .query("DELETE $ancestor; UPDATE $id SET body='Synthetic changed source'")
+        .bind(("id", crate::surreal::record_id("communication", ids[1])))
+        .bind((
+            "ancestor",
+            crate::surreal::record_id("communication", ids[0]),
+        ))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+
+    assert!(matches!(
+        reconcile(&surreal, &pg).await,
+        Err(MirrorError::Source)
+    ));
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication")
+        .fetch_one(&pg.0)
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 2,
+        "the stale ancestor must not be deleted during refusal"
+    );
+    let receipt: (String, Option<Uuid>) =
+        sqlx::query_as("SELECT body, acknowledges FROM communication WHERE id=$1")
+            .bind(ids[1])
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+    assert_eq!(receipt, ("Synthetic receipt".into(), Some(ids[0])));
+    let source = communications::find(&surreal, project, ids[1])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(source.body, "Synthetic changed source");
+    assert_eq!(source.acknowledges, Some(ids[0]));
+    pg.0.close().await;
+}
+
+#[tokio::test]
 async fn communications_and_email_threads_replay_reconcile_and_delete() {
     let Some((options, database)) = fresh_schema().await else {
         return;
