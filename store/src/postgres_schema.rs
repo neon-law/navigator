@@ -1447,6 +1447,22 @@ mod tests {
                     "../postgres/migrations/20261105150000_create_esignature_webhook_journal.sql"
                 ),
             ),
+            (
+                "20261106000000_create_contingency_term.sql",
+                include_str!("../postgres/migrations/20261106000000_create_contingency_term.sql"),
+            ),
+            (
+                "20261106010000_create_outcome_estimate.sql",
+                include_str!("../postgres/migrations/20261106010000_create_outcome_estimate.sql"),
+            ),
+            (
+                "20261106020000_create_matter_outcome.sql",
+                include_str!("../postgres/migrations/20261106020000_create_matter_outcome.sql"),
+            ),
+            (
+                "20261106030000_add_stage_default_odds.sql",
+                include_str!("../postgres/migrations/20261106030000_add_stage_default_odds.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

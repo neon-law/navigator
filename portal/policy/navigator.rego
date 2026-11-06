@@ -486,6 +486,22 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Contingent-fee work product: a matter's dated Contingency Terms, its
+# Outcome Estimates, and its Matter Outcome. GET reads the history; POST
+# records a new row. Lawyer tier, the same gate the
+# `LawyerSession` extractor applies; the handler resolves
+# `store::access::matter_viewer` and answers 404 for a caller with no
+# firm-side participation row, Owner and Admin included.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] in {"contingency-terms", "outcome-estimates", "matter-outcome"}
+    count(input.path) == 5
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
 # Fee structures: the firm's attorney rates, firm defaults and matter
 # overrides together — the same attorney-tier fee catalog the rate doors
 # resolve against. Lawyer tier.

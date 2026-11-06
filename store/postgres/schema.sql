@@ -3967,3 +3967,161 @@ CREATE UNIQUE INDEX IF NOT EXISTS esignature_webhook_journal_event
 CREATE INDEX IF NOT EXISTS esignature_webhook_journal_pending
     ON "esignature_webhook_journal" ("consumed_at", "inserted_at");
 
+-- Migration: 20261106000000_create_contingency_term.sql
+-- A matter's Contingency Term: its percentage-of-recovery fee. Rows are dated
+-- by effective_on and only ever added to; resolution takes the latest row
+-- effective on or before the date asked (docs/glossary/contingency-term.md).
+-- Percentages are basis points and amounts integer cents, never floats.
+-- fee_agreement_notation_id names the signed fee-agreement Notation the
+-- engagement letter requires; Notations are mirrored from SurrealDB, so the
+-- store checks it and it carries no foreign key, like notation.template_id.
+CREATE TABLE contingency_term (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL REFERENCES project(id),
+    effective_on DATE NOT NULL,
+    costs_deducted TEXT NOT NULL CHECK (costs_deducted IN ('before_fee', 'after_fee')),
+    rate_cents_per_hour INTEGER CHECK (rate_cents_per_hour IS NULL OR rate_cents_per_hour >= 0),
+    fee_agreement_notation_id UUID NOT NULL,
+    author_person_id UUID NOT NULL REFERENCES person(id),
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX contingency_term_project_effective ON contingency_term (project_id, effective_on, inserted_at);
+
+-- One tier per Case Stage: the fee a resolution at or after that stage pays.
+-- `ordinal` is the authored order, which follows the Firm's stage order.
+CREATE TABLE contingency_term_tier (
+    contingency_term_id UUID NOT NULL REFERENCES contingency_term(id),
+    ordinal SMALLINT NOT NULL CHECK (ordinal >= 0),
+    stage_definition_id UUID NOT NULL REFERENCES stage_definition(id),
+    fee_bps INTEGER NOT NULL CHECK (fee_bps BETWEEN 0 AND 10000),
+    PRIMARY KEY (contingency_term_id, ordinal),
+    UNIQUE (contingency_term_id, stage_definition_id)
+);
+
+-- A tier's stage must come from the matter Firm's own vocabulary.
+CREATE FUNCTION enforce_contingency_term_tier_stage() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM contingency_term t
+        JOIN project p ON p.id = t.project_id
+        JOIN stage_definition d ON d.firm_id = p.firm_id
+        WHERE t.id = NEW.contingency_term_id AND d.id = NEW.stage_definition_id
+    ) THEN
+        RAISE EXCEPTION 'A Contingency Term tier must name a stage from the matter Firm''s own vocabulary';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER contingency_term_tier_stage
+    BEFORE INSERT ON contingency_term_tier
+    FOR EACH ROW EXECUTE FUNCTION enforce_contingency_term_tier_stage();
+
+-- Both tables are history: a change is a new effective_on, never an edit or
+-- a removal.
+CREATE FUNCTION reject_contingency_term_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Contingency Terms are dated history; record a new effective_on instead';
+END;
+$$;
+CREATE TRIGGER contingency_term_immutable
+    BEFORE UPDATE OR DELETE ON contingency_term
+    FOR EACH ROW EXECUTE FUNCTION reject_contingency_term_mutation();
+CREATE TRIGGER contingency_term_tier_immutable
+    BEFORE UPDATE OR DELETE ON contingency_term_tier
+    FOR EACH ROW EXECUTE FUNCTION reject_contingency_term_mutation();
+
+-- Migration: 20261106010000_create_outcome_estimate.sql
+-- A lawyer's Outcome Estimate for a matter: exactly three outcomes, each with
+-- a probability in basis points and a gross recovery in integer cents. Rows
+-- are only ever added to, like stage_event; the newest row is the current
+-- estimate (docs/glossary/outcome-estimate.md). Firm work product: only a
+-- firm-side participant reads or writes it.
+CREATE TABLE outcome_estimate (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL REFERENCES project(id),
+    author_person_id UUID NOT NULL REFERENCES person(id),
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    expected_resolution_on DATE NOT NULL,
+    note TEXT CHECK (note IS NULL OR length(btrim(note)) BETWEEN 1 AND 2000),
+    win_at_trial_probability_bps INTEGER NOT NULL CHECK (win_at_trial_probability_bps BETWEEN 0 AND 10000),
+    win_at_trial_gross_recovery_cents BIGINT NOT NULL CHECK (win_at_trial_gross_recovery_cents >= 0),
+    settle_probability_bps INTEGER NOT NULL CHECK (settle_probability_bps BETWEEN 0 AND 10000),
+    settle_gross_recovery_cents BIGINT NOT NULL CHECK (settle_gross_recovery_cents >= 0),
+    lose_probability_bps INTEGER NOT NULL CHECK (lose_probability_bps BETWEEN 0 AND 10000),
+    lose_gross_recovery_cents BIGINT NOT NULL DEFAULT 0 CHECK (lose_gross_recovery_cents = 0),
+    CHECK (win_at_trial_probability_bps + settle_probability_bps + lose_probability_bps = 10000)
+);
+CREATE INDEX outcome_estimate_project_recorded ON outcome_estimate (project_id, recorded_at, id);
+
+CREATE FUNCTION reject_outcome_estimate_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Outcome Estimates are history; record a new estimate instead';
+END;
+$$;
+CREATE TRIGGER outcome_estimate_immutable
+    BEFORE UPDATE OR DELETE ON outcome_estimate
+    FOR EACH ROW EXECUTE FUNCTION reject_outcome_estimate_mutation();
+
+-- Migration: 20261106020000_create_matter_outcome.sql
+-- A Matter Outcome: what actually happened when a matter resolved, and the
+-- fee and costs the firm received (docs/glossary/matter-outcome.md). A matter
+-- has one: the first row is the only one with no supersedes_id, and a
+-- correction is a new row superseding the current one, never an edit. The
+-- chain is the audit trail; its newest link is the outcome. Calibration
+-- compares these actual figures against the matter's Outcome Estimates.
+-- iolta_allocation_id names the IOLTA Allocation the recovery passed
+-- through; allocations are mirrored from SurrealDB under text keys, so it
+-- carries no foreign key.
+CREATE TABLE matter_outcome (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL REFERENCES project(id),
+    result TEXT NOT NULL CHECK (result IN ('won', 'settled', 'lost', 'dismissed')),
+    resolved_on DATE NOT NULL,
+    gross_recovery_cents BIGINT NOT NULL CHECK (gross_recovery_cents >= 0),
+    fee_received_cents BIGINT NOT NULL CHECK (fee_received_cents >= 0),
+    costs_recovered_cents BIGINT NOT NULL CHECK (costs_recovered_cents >= 0),
+    iolta_allocation_id TEXT CHECK (iolta_allocation_id IS NULL OR length(btrim(iolta_allocation_id)) BETWEEN 1 AND 200),
+    author_person_id UUID NOT NULL REFERENCES person(id),
+    supersedes_id UUID UNIQUE REFERENCES matter_outcome(id),
+    correction_reason TEXT CHECK (correction_reason IS NULL OR length(btrim(correction_reason)) BETWEEN 1 AND 500),
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    CHECK ((supersedes_id IS NULL) = (correction_reason IS NULL))
+);
+-- One original per matter; UNIQUE (supersedes_id) keeps each correction
+-- chain linear, so a matter holds exactly one current outcome.
+CREATE UNIQUE INDEX matter_outcome_one_per_matter ON matter_outcome (project_id) WHERE supersedes_id IS NULL;
+
+-- A correction must supersede a row of the same matter.
+CREATE FUNCTION enforce_matter_outcome_chain() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.supersedes_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM matter_outcome WHERE id = NEW.supersedes_id AND project_id = NEW.project_id
+    ) THEN
+        RAISE EXCEPTION 'A Matter Outcome correction must supersede an outcome of the same matter';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER matter_outcome_chain
+    BEFORE INSERT ON matter_outcome
+    FOR EACH ROW EXECUTE FUNCTION enforce_matter_outcome_chain();
+
+CREATE FUNCTION reject_matter_outcome_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'A Matter Outcome is never edited; record a superseding correction instead';
+END;
+$$;
+CREATE TRIGGER matter_outcome_immutable
+    BEFORE UPDATE OR DELETE ON matter_outcome
+    FOR EACH ROW EXECUTE FUNCTION reject_matter_outcome_mutation();
+
+-- Migration: 20261106030000_add_stage_default_odds.sql
+-- A Firm's default win/settle/lose odds per Case Stage, in basis points. The
+-- current stage's defaults stand in when a matter with a Contingency Term has
+-- no Outcome Estimate, always labeled a default so nobody reads a Firm
+-- default as a lawyer's judgment. Defaults carry odds
+-- only, never a recovery (docs/glossary/case-stage.md).
+ALTER TABLE stage_definition ADD COLUMN default_win_at_trial_bps INTEGER CHECK (default_win_at_trial_bps BETWEEN 0 AND 10000);
+ALTER TABLE stage_definition ADD COLUMN default_settle_bps INTEGER CHECK (default_settle_bps BETWEEN 0 AND 10000);
+ALTER TABLE stage_definition ADD COLUMN default_lose_bps INTEGER CHECK (default_lose_bps BETWEEN 0 AND 10000);
+ALTER TABLE stage_definition ADD CONSTRAINT stage_definition_default_odds CHECK ((default_win_at_trial_bps IS NULL AND default_settle_bps IS NULL AND default_lose_bps IS NULL) OR (default_win_at_trial_bps IS NOT NULL AND default_settle_bps IS NOT NULL AND default_lose_bps IS NOT NULL AND default_win_at_trial_bps + default_settle_bps + default_lose_bps = 10000));

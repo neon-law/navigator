@@ -498,9 +498,11 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // 665 + 2 = 667.
     // + 3 for mapped Fi history: Lawyer admission, denied tiers, and exact shape.
     // The inventory includes private chart admission and scoped-CI denial.
+    // + 3 for contingent-fee work product: lawyer reads/writes, lower-tier
+    //   and anonymous denials, and exact method/path boundaries.
     assert_eq!(
         test_names.len(),
-        672,
+        675,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

@@ -267,6 +267,22 @@ erDiagram
         string subject
         datetime updated_at
     }
+    contingency_term {
+        uuid author_person_id
+        string costs_deducted
+        datetime effective_on
+        uuid fee_agreement_notation_id
+        uuid id
+        datetime inserted_at
+        uuid project_id
+        int rate_cents_per_hour
+    }
+    contingency_term_tier {
+        uuid contingency_term_id
+        int fee_bps
+        int ordinal
+        uuid stage_definition_id
+    }
     contract_review {
         uuid asset_id
         json findings
@@ -941,6 +957,20 @@ erDiagram
         string inserted_at
         string project_id
     }
+    matter_outcome {
+        uuid author_person_id
+        string correction_reason
+        int costs_recovered_cents
+        int fee_received_cents
+        int gross_recovery_cents
+        uuid id
+        string iolta_allocation_id
+        uuid project_id
+        datetime recorded_at
+        datetime resolved_on
+        string result
+        uuid supersedes_id
+    }
     matter_page {
         string clerk_sections
         string client_sections
@@ -1171,6 +1201,20 @@ erDiagram
         string request_fingerprint
         json result
         boolean started
+    }
+    outcome_estimate {
+        uuid author_person_id
+        datetime expected_resolution_on
+        uuid id
+        int lose_gross_recovery_cents
+        int lose_probability_bps
+        string note
+        uuid project_id
+        datetime recorded_at
+        int settle_gross_recovery_cents
+        int settle_probability_bps
+        int win_at_trial_gross_recovery_cents
+        int win_at_trial_probability_bps
     }
     person {
         string apple_subject
@@ -1687,6 +1731,9 @@ erDiagram
     }
     stage_definition {
         string case_type
+        int default_lose_bps
+        int default_settle_bps
+        int default_win_at_trial_bps
         uuid firm_id
         uuid id
         datetime inserted_at
@@ -1854,6 +1901,10 @@ erDiagram
     communication }o--|| communication : references
     person }o--|| communication : references
     project }o--|| communication : references
+    person }o--|| contingency_term : references
+    project }o--|| contingency_term : references
+    contingency_term }o--|| contingency_term_tier : references
+    stage_definition }o--|| contingency_term_tier : references
     jurisdiction }o--|| credential : references
     person }o--|| credential : references
     document_chain_archive }o--|| document_chain_archive_item : references
@@ -1916,6 +1967,9 @@ erDiagram
     firm }o--|| matter_caption : references
     project }o--|| matter_caption : references
     project }o--|| matter_flat_fee : references
+    matter_outcome }o--|| matter_outcome : references
+    person }o--|| matter_outcome : references
+    project }o--|| matter_outcome : references
     firm }o--|| matter_page : references
     project }o--|| matter_page : references
     asset }o--|| message : references
@@ -1941,6 +1995,8 @@ erDiagram
     template }o--|| notation_package_template : references
     communication }o--|| notation_source : references
     notation }o--|| notation_source : references
+    person }o--|| outcome_estimate : references
+    project }o--|| outcome_estimate : references
     person }o--|| person_delegate : references
     person }o--|| person_external_identity : references
     firm }o--|| person_firm_role : references
