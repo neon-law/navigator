@@ -13136,6 +13136,7 @@
     ],
     "source_table_declaration": "DEFINE TABLE IF NOT EXISTS schema_version SCHEMAFULL PERMISSIONS NONE",
     "candidate_rust_callers": [
+      "cli/src/ephemeris_tables.rs",
       "cli/src/postgres_backfill.rs",
       "cli/src/postgres_mirror.rs",
       "cli/src/surreal_archive.rs",
@@ -14589,6 +14590,7 @@
       "cli/src/devx/ship.rs",
       "cli/src/devx/signed_commits.rs",
       "cli/src/document_read.rs",
+      "cli/src/ephemeris_tables.rs",
       "cli/src/forms_sync.rs",
       "cli/src/main.rs",
       "cli/src/projects/docket/renumber.rs",
