@@ -106,9 +106,17 @@ async fn seed_lawyer_review_notation(h: &Harness, project_id: uuid::Uuid) -> uui
         .await
         .unwrap()
         .expect("seed_canonical inserts onboarding__letter");
+    let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
+        &h.surreal,
+        Some(&h.storage),
+        &tmpl,
+    )
+    .await
+    .unwrap();
     let notation_id = store::notations::create(
         &h.surreal,
-        &store::notations::NewNotation::new(tmpl.id, client.id, project_id, "BEGIN"),
+        &store::notations::NewNotation::new(tmpl.id, client.id, project_id, "BEGIN")
+            .with_questionnaire_snapshot(snapshot),
     )
     .await
     .unwrap()
@@ -291,6 +299,25 @@ async fn an_unfinished_document_is_refused_and_never_reaches_the_provider() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = seed_lawyer_review_notation(&h, project.id).await;
+    let notation = store::notations::find_by_id(&h.surreal, notation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let choice = store::questions::find_by_code(&h.surreal, "custom_single_choice")
+        .await
+        .unwrap()
+        .unwrap();
+    store::answers::record(
+        &h.surreal,
+        &store::answers::NewAnswer::new(
+            choice.id,
+            notation.person_id,
+            store::answers::primitive("nevada"),
+        )
+        .in_notation(notation_id, "custom_single_choice__governing_law"),
+    )
+    .await
+    .unwrap();
     let clauses = store::notation_clauses::for_notation(&h.surreal, notation_id)
         .await
         .unwrap();
@@ -302,7 +329,7 @@ async fn an_unfinished_document_is_refused_and_never_reaches_the_provider() {
     let draft = store::notation_clauses::append(
         &h.surreal,
         notation_id,
-        "**Fees.** This matter is billed at [INSERT RATE] per hour.",
+        "{{#if custom_single_choice__governing_law=nevada}}**Fees.** This matter is billed at [INSERT RATE] per hour.{{/if}}",
         None,
     )
     .await

@@ -87,9 +87,17 @@ async fn build_app_and_notation() -> (
         .await
         .unwrap();
 
+    let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
+        &surreal,
+        Some(&storage),
+        &tmpl,
+    )
+    .await
+    .unwrap();
     let notation_id = store::notations::create(
         &surreal,
-        &store::notations::NewNotation::new(tmpl.id, libra.id, proj.id, "BEGIN"),
+        &store::notations::NewNotation::new(tmpl.id, libra.id, proj.id, "BEGIN")
+            .with_questionnaire_snapshot(snapshot),
     )
     .await
     .unwrap()

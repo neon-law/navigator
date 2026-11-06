@@ -84,9 +84,17 @@ async fn seed_lawyer_review_notation(h: &Harness, project_id: uuid::Uuid) -> uui
         .await
         .unwrap()
         .expect("seed_canonical inserts onboarding__letter");
+    let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
+        &h.surreal,
+        Some(&h.storage),
+        &tmpl,
+    )
+    .await
+    .unwrap();
     let notation_id = store::notations::create(
         &h.surreal,
-        &store::notations::NewNotation::new(tmpl.id, client.id, project_id, "BEGIN"),
+        &store::notations::NewNotation::new(tmpl.id, client.id, project_id, "BEGIN")
+            .with_questionnaire_snapshot(snapshot),
     )
     .await
     .unwrap()

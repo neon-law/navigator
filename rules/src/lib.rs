@@ -104,6 +104,7 @@ pub mod project_skill;
 pub mod project_skill_catalog;
 pub mod questionnaire;
 pub mod questionnaire_hover;
+mod route_safety;
 pub mod s102;
 pub mod s103;
 pub mod s104;
@@ -374,7 +375,7 @@ pub fn description_for_code(code: &str) -> &'static str {
         "N112" => "Workflow step is allowed but its automation is not built yet",
         "N113" => "Questionnaire state type must be a registered question type",
         "N114" => "`__for_` child state must follow a role-matched person/entity parent",
-        "N115" => "Template data path or iterator must resolve against a typed questionnaire state",
+        "N115" => "Template data path or iterator must resolve against a typed state on every rendering route",
         "N116" => "Notation workflow must gate every outbound submission behind lawyer review",
         "N117" => "every `custom_text__*` state the respondent answers must be an allowlisted free-text primitive",
         "N118" => "Every questionnaire answer routes, and every route reaches END",
@@ -383,7 +384,7 @@ pub fn description_for_code(code: &str) -> &'static str {
              `create_pull_request.md` and ask the change-surface, Engineering Council, and \
              narrative questions"
         }
-        "N120" => "Template body placeholder must name a declared questionnaire state",
+        "N120" => "Template body placeholder must name a questionnaire state on every rendering route",
         "N121" => "A `sent_for_signature` state must be preceded by a `generate_pdf` state",
         "N122" => "Every declared questionnaire state must be read by the template body",
         "N123" => {

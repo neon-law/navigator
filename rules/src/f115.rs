@@ -1,5 +1,5 @@
 //! `N115` — template body data paths and iterators must resolve against
-//! the questionnaire's typed states.
+//! the questionnaire's typed states on every rendering route.
 //!
 //! Three body grammars are grounded here:
 //!
@@ -201,17 +201,7 @@ impl Rule for F115PathResolution {
             check_declared_signer_backing(file, &file.contents, &BTreeMap::new(), &mut violations);
             return violations;
         };
-        // state name → its `<type>` token.
-        let state_type: BTreeMap<&str, &str> = questionnaire
-            .keys()
-            .filter(|s| s.as_str() != "BEGIN" && s.as_str() != "END")
-            .map(|s| {
-                (
-                    s.as_str(),
-                    s.split_once("__").map_or(s.as_str(), |(t, _)| t),
-                )
-            })
-            .collect();
+        let state_type = state_types(&questionnaire);
 
         // Only the body carries render placeholders; scan past frontmatter.
         let compiled =
@@ -293,8 +283,24 @@ impl Rule for F115PathResolution {
             violations.push(violation(file, "`{{#if}}` is not closed by `{{/if}}`"));
         }
         check_declared_signer_backing(file, &file.contents, &state_type, &mut violations);
+        violations.extend(crate::route_safety::findings(file, Self::CODE));
         violations
     }
+}
+
+fn state_types(questionnaire: &BTreeMap<String, BTreeMap<String, String>>) -> BTreeMap<&str, &str> {
+    questionnaire
+        .keys()
+        .filter(|state| state.as_str() != "BEGIN" && state.as_str() != "END")
+        .map(|state| {
+            (
+                state.as_str(),
+                state
+                    .split_once("__")
+                    .map_or(state.as_str(), |(kind, _)| kind),
+            )
+        })
+        .collect()
 }
 
 fn handle_for(
