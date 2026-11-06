@@ -52,6 +52,7 @@ Feature: E-signature completion webhook closes the retainer loop
     And the retainer workflow is still at "sent_for_signature__pending"
 
   Scenario: A receipt the worker never consumed is recovered by the boot-time sweep
+    Given an independent app has an unconsumed verified receipt
     When the worker journals a validly-signed completion callback and dies before consuming it
     Then the journal holds one pending receipt
     And the retainer workflow is still at "sent_for_signature__pending"
@@ -61,3 +62,4 @@ Feature: E-signature completion webhook closes the retainer loop
     And the notation row state is "END"
     And the signature row state is "completed"
     And the journal has no pending receipts
+    And the independent app still has its pending receipt

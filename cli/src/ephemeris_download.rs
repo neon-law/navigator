@@ -15,8 +15,11 @@ const MANIFEST_NAME: &str = "source-manifest.json";
 
 #[derive(Subcommand)]
 pub(crate) enum EphemerisCmd {
-    /// Generate verified local Parquet and CSV reference files from a raw DE440 bundle.
+    /// Generate local Parquet and CSV tables from verified DE440 sources.
     Tables {
+        /// Add fixed-location Iceberg v2 using URI-safe ASCII output paths.
+        #[arg(long)]
+        iceberg: bool,
         /// Logged-in deployment; its server authorizes Owner/Admin before local reads.
         #[arg(long)]
         host: Option<String>,
@@ -55,6 +58,7 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
         }
         EphemerisCmd::Tables {
             host,
+            iceberg,
             source_dir,
             from,
             to_exclusive,
@@ -63,7 +67,15 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
             async {
                 let (base, token) = crate::remote::resolve(host.as_deref())?;
                 let manifest = catalogue(&base, &token).await?;
-                crate::ephemeris_tables::publish(&source_dir, &manifest, from, to_exclusive, &dir)
+                crate::ephemeris_tables::publish(
+                    &source_dir,
+                    &manifest,
+                    from,
+                    to_exclusive,
+                    &dir,
+                    iceberg,
+                )
+                .await
             }
             .await
         }

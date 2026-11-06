@@ -66,6 +66,7 @@ dioxus-fullstack-core = "0.7.9"
 arrow = { version = "60", default-features = false }
 # Iceberg's independent reader uses Arrow 58; archive writes use Arrow 60.
 arrow_array58 = { package = "arrow-array", version = "58.4" }
+iceberg = "0.10"
 arrow_cast58 = { package = "arrow-cast", version = "58.4" }
 arrow_schema58 = { package = "arrow-schema", version = "58.4" }
 assert_cmd = "2"

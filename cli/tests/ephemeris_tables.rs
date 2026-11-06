@@ -288,6 +288,16 @@ async fn real_command_publishes_typed_exact_immutable_reference_files() {
         )
         .unwrap();
         assert_roundtrip(&destination, &table);
+        assert_iceberg_mode(
+            &server,
+            &credentials,
+            &source,
+            &destination,
+            from,
+            to,
+            &table,
+        )
+        .await;
         assert_immutable_rerun(&server, &credentials, &source, &destination, from, to).await;
     }
     verify_refusals(&server, &credentials, &source, parent.path()).await;
@@ -577,4 +587,343 @@ fn assert_content_identity(manifest: &serde_json::Value) {
         reordered["snapshot_id"], manifest["snapshot_id"],
         "content identity must ignore JSON object order and generation time"
     );
+}
+
+#[tokio::test]
+async fn cached_owner_cannot_generate_iceberg_without_server_authorization() {
+    for status in [403, 401] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/ephemeris/sources"))
+            .respond_with(ResponseTemplate::new(status))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let parent = tempfile::tempdir().unwrap();
+        let credentials = parent.path().join("credentials.json");
+        std::fs::write(
+            &credentials,
+            serde_json::to_vec(&serde_json::json!({"hosts": {server.uri(): {
+                "token": "synthetic-denied-token", "role": "owner", "expires_at": i64::MAX
+            }}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_navigator"))
+            .args([
+                "ephemeris",
+                "tables",
+                "--iceberg",
+                "--host",
+                &server.uri(),
+                "--source-dir",
+            ])
+            .arg(parent.path().join("missing-source"))
+            .args([
+                "--from",
+                "1900-01-01",
+                "--to-exclusive",
+                "1900-01-02",
+                "--dir",
+            ])
+            .arg(parent.path().join("unsupported output"))
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+            .output()
+            .await
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&format!("HTTP {status}")),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
+    }
+}
+
+async fn invoke_iceberg(
+    server: &MockServer,
+    credentials: &std::path::Path,
+    source: &std::path::Path,
+    dir: &std::path::Path,
+    from: &str,
+    to: &str,
+) -> std::process::Output {
+    tokio::process::Command::new(env!("CARGO_BIN_EXE_navigator"))
+        .args([
+            "ephemeris",
+            "tables",
+            "--iceberg",
+            "--host",
+            &server.uri(),
+            "--source-dir",
+        ])
+        .arg(source)
+        .args(["--from", from, "--to-exclusive", to, "--dir"])
+        .arg(dir)
+        .env("NAVIGATOR_CREDENTIALS_FILE", credentials)
+        .output()
+        .await
+        .unwrap()
+}
+
+async fn assert_iceberg_mode(
+    server: &MockServer,
+    credentials: &std::path::Path,
+    source: &std::path::Path,
+    plain: &std::path::Path,
+    from: &str,
+    to: &str,
+    expected: &ephemeris::EphemerisReferenceTable,
+) {
+    let dir = plain.with_file_name(format!("{from}-iceberg"));
+    let output = invoke_iceberg(server, credentials, source, &dir, from, to).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_roundtrip(&dir, expected);
+    assert_fresh_iceberg(&dir, expected).await;
+    assert_eq!(std::fs::read_dir(plain).unwrap().count(), 4);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 6);
+    for name in ["reference.parquet", "reference.csv", "source-manifest.json"] {
+        assert_eq!(
+            std::fs::read(plain.join(name)).unwrap(),
+            std::fs::read(dir.join(name)).unwrap()
+        );
+    }
+    let original: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(plain.join("derived-manifest.json")).unwrap())
+            .unwrap();
+    let created: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("derived-manifest.json")).unwrap()).unwrap();
+    assert_eq!(original["content"], created["content"]);
+    assert_eq!(original["snapshot_id"], created["snapshot_id"]);
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("iceberg-manifest.json")).unwrap()).unwrap();
+    assert_eq!(
+        receipt["content"]["reference_snapshot_id"],
+        created["snapshot_id"]
+    );
+    let mut names = vec![
+        "reference.parquet".to_owned(),
+        "reference.csv".into(),
+        "source-manifest.json".into(),
+        "derived-manifest.json".into(),
+        "iceberg-manifest.json".into(),
+    ];
+    names.extend(
+        receipt["content"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap().to_owned()),
+    );
+    let before = names
+        .iter()
+        .map(|n| {
+            (
+                n.clone(),
+                std::fs::read(dir.join(n)).unwrap(),
+                std::fs::metadata(dir.join(n)).unwrap().modified().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(invoke_iceberg(server, credentials, source, &dir, from, to)
+        .await
+        .status
+        .success());
+    for (name, bytes, mtime) in &before {
+        assert_eq!(std::fs::read(dir.join(name)).unwrap(), *bytes);
+        assert_eq!(
+            std::fs::metadata(dir.join(name))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            *mtime
+        );
+    }
+    // Formats cannot silently upgrade or replace one another.
+    assert!(!invoke(server, credentials, source, &dir, from, to)
+        .await
+        .status
+        .success());
+    assert!(
+        !invoke_iceberg(server, credentials, source, plain, from, to)
+            .await
+            .status
+            .success()
+    );
+    let moved = dir.with_extension("moved");
+    std::fs::rename(&dir, &moved).unwrap();
+    assert!(
+        !invoke_iceberg(server, credentials, source, &moved, from, to)
+            .await
+            .status
+            .success()
+    );
+    for (name, bytes, _) in before {
+        assert_eq!(std::fs::read(moved.join(name)).unwrap(), bytes);
+    }
+}
+
+async fn assert_fresh_iceberg(
+    dir: &std::path::Path,
+    expected: &ephemeris::EphemerisReferenceTable,
+) {
+    use futures::TryStreamExt;
+    let layout: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("iceberg-manifest.json")).unwrap()).unwrap();
+    let table = iceberg::table::StaticTable::from_metadata_file(
+        layout["content"]["metadata_location"].as_str().unwrap(),
+        iceberg::TableIdent::from_strs(["reference", "independent_reader"]).unwrap(),
+        iceberg::io::FileIO::new_with_fs(),
+    )
+    .await
+    .unwrap();
+    let tasks = table.scan().build().unwrap().plan_files().await.unwrap();
+    let batches: Vec<_> = table
+        .reader_builder()
+        .build()
+        .read(tasks)
+        .unwrap()
+        .stream()
+        .try_collect()
+        .await
+        .unwrap();
+    let parquet = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+        std::fs::File::open(dir.join("reference.parquet")).unwrap(),
+    )
+    .unwrap();
+    let schema = parquet.schema();
+    assert_eq!(
+        table.metadata().current_schema().as_struct().fields().len(),
+        20
+    );
+    for (i, field) in table
+        .metadata()
+        .current_schema()
+        .as_struct()
+        .fields()
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(field.id, i32::try_from(i + 1).unwrap());
+        assert_eq!(field.name, *schema.field(i).name());
+        assert!(!field.required);
+    }
+    let mut offset = 0;
+    for batch in batches {
+        assert_eq!(batch.num_columns(), 20);
+        for row in 0..batch.num_rows() {
+            assert_native_row(&batch, row, &expected.rows[offset], schema);
+            offset += 1;
+        }
+    }
+    assert_eq!(offset, expected.rows.len());
+}
+
+fn assert_native_row(
+    batch: &arrow_array58::RecordBatch,
+    row: usize,
+    expected: &ephemeris::EphemerisReferenceRow,
+    schema: &arrow::datatypes::Schema,
+) {
+    use arrow_array58::Array;
+    let values = serde_json::to_value(expected).unwrap();
+    for (column, field) in schema.fields().iter().enumerate() {
+        assert_eq!(batch.schema().field(column).name(), field.name());
+        assert_eq!(
+            batch.schema().field(column).data_type().to_string(),
+            field.data_type().to_string()
+        );
+        let actual = batch.column(column);
+        let value = &values[field.name()];
+        assert_eq!(actual.is_null(row), value.is_null());
+        if value.is_null() {
+            continue;
+        }
+        match field.data_type() {
+            arrow::datatypes::DataType::Int64 => assert_eq!(
+                actual
+                    .as_any()
+                    .downcast_ref::<arrow_array58::Int64Array>()
+                    .unwrap()
+                    .value(row),
+                value.as_i64().unwrap()
+            ),
+            arrow::datatypes::DataType::Int32 => assert_eq!(
+                i64::from(
+                    actual
+                        .as_any()
+                        .downcast_ref::<arrow_array58::Int32Array>()
+                        .unwrap()
+                        .value(row)
+                ),
+                value.as_i64().unwrap()
+            ),
+            arrow::datatypes::DataType::Float64 => assert_eq!(
+                actual
+                    .as_any()
+                    .downcast_ref::<arrow_array58::Float64Array>()
+                    .unwrap()
+                    .value(row)
+                    .to_bits(),
+                value.as_f64().unwrap().to_bits()
+            ),
+            arrow::datatypes::DataType::Utf8 => {
+                let text = if field.name() == "reference_calendar" {
+                    expected.reference_calendar.to_string()
+                } else {
+                    value.as_str().unwrap().to_owned()
+                };
+                assert_eq!(
+                    actual
+                        .as_any()
+                        .downcast_ref::<arrow_array58::StringArray>()
+                        .unwrap()
+                        .value(row),
+                    text
+                );
+            }
+            _ => panic!("unsupported reference type"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn authorized_iceberg_path_gate_refuses_escaping_before_source_reads() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/app/api/ephemeris/sources"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(source_manifest()))
+        .mount(&server)
+        .await;
+    let parent = tempfile::tempdir().unwrap();
+    let credentials = parent.path().join("credentials.json");
+    std::fs::write(
+        &credentials,
+        serde_json::to_vec(&serde_json::json!({"hosts":{server.uri():{
+            "token":"synthetic-admin-token","role":"client","expires_at":i64::MAX
+        }}}))
+        .unwrap(),
+    )
+    .unwrap();
+    for name in ["space output", "literal%20", "hash#name", "unicode-é"] {
+        let destination = parent.path().join(name);
+        let output = invoke_iceberg(
+            &server,
+            &credentials,
+            &parent.path().join("missing-source"),
+            &destination,
+            "1900-01-01",
+            "1900-01-02",
+        )
+        .await;
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("URI-safe ASCII"));
+        assert!(!destination.exists());
+    }
+    assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
 }

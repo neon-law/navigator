@@ -14,6 +14,8 @@ path = "src/main.rs"
 anyhow.workspace = true
 archives.workspace = true
 arrow.workspace = true
+arrow_array58.workspace = true
+iceberg.workspace = true
 csv.workspace = true
 parquet.workspace = true
 # `notation preview` serves the real `/notations/{slug}` router on a local

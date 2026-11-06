@@ -23,6 +23,7 @@ mod document_read;
 mod document_reconcile;
 mod document_sync;
 mod ephemeris_download;
+mod ephemeris_iceberg;
 mod ephemeris_tables;
 mod firm_forgejo;
 mod firms_doctor;
