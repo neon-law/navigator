@@ -31,7 +31,9 @@ fn refresh_records_open_pull_requests() {
 fn lanes_refuse_open_pull_request_overlap() {
     let body = skill();
     assert!(
-        body.contains("Drop any issue an open pull request already links"),
+        body.contains(
+            "Exclude issues an open pull request already links from new implementation prompts"
+        ),
         "lanes must refuse issues an open pull request already links, got:\n{body}"
     );
     assert!(
