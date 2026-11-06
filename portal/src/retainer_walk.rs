@@ -1967,28 +1967,27 @@ pub(crate) async fn render_and_park(
     // one, the body renders through Typst as before. The AcroForm fill
     // reads the raw choice *keys* (a form radio selects by key); the Typst
     // body reads the human *labels*.
+    let (keys, labels) =
+        build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
     let document_payload = if let Some(form_code) = template_row.form_code.as_deref() {
-        let form_ctx = render_form_context_from_answers(deps.surreal, notation_id).await?;
         // The body is not a discarded cover sheet: the packet the client
         // signs has to carry the engagement terms and the signature
         // blocks the e-signature fields anchor to — without it the send
         // is a form nobody can sign. Expand signatures exactly as the
         // Typst fork does, so the anchors rendered into the addendum are
         // the same deterministic fields the send path manifests.
-        let ctx = render_context_from_answers(deps.surreal, notation_id).await?;
         let (expanded_body, signature_fields) = crate::signature_render::expand_signatures(
-            &typst_body_from_template(&template_body, &ctx, template_row.kind.as_deref()),
+            &typst_body_from_template(&template_body, &keys, &labels, template_row.kind.as_deref()),
         );
         let addendum_typst = (!signature_fields.is_empty()).then_some(expanded_body);
-        acroform_payload(deps, notation_id, form_code, &form_ctx, addendum_typst).await?
+        acroform_payload(deps, notation_id, form_code, &keys, addendum_typst).await?
     } else {
-        let ctx = render_context_from_answers(deps.surreal, notation_id).await?;
         // Convert the Markdown body to Typst, then expand signature
         // placeholders into anchored Typst blocks. Only the Typst source
         // matters here; the placed fields are rebuilt at send time from the
         // same deterministic expansion over the same conversion.
         let (typst_source, _signature_fields) = crate::signature_render::expand_signatures(
-            &typst_body_from_template(&template_body, &ctx, template_row.kind.as_deref()),
+            &typst_body_from_template(&template_body, &keys, &labels, template_row.kind.as_deref()),
         );
         serde_json::to_string(&workflows::DocumentPayload::Typst {
             storage_key: document_pdf_storage_key(notation_id),
@@ -2173,8 +2172,9 @@ pub(crate) async fn dispatch_signature(
     // carries nothing a person is still meant to complete. Signing anchors
     // (`{{client.signature}}`) are the provider's and pass.
     let template_body = store::notation_clauses::splice(&raw_template_body, &clauses);
-    let ctx = render_context_from_answers(deps.surreal, notation_id).await?;
-    let unfinished = rules::final_document::scan(&substitute_template_body(&template_body, &ctx));
+    let (keys, ctx) = build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
+    let unfinished =
+        rules::final_document::scan(&substitute_template_body(&template_body, &keys, &ctx));
     if !unfinished.is_empty() {
         return Err(WorkflowDriveError::Unfinished(
             unfinished.iter().map(ToString::to_string).collect(),
@@ -2191,7 +2191,7 @@ pub(crate) async fn dispatch_signature(
     // `person__client.name`) and otherwise from the notation's bound
     // Person row — never hardcoded in the provider.
     let (_typst_source, signature_fields) = crate::signature_render::expand_signatures(
-        &typst_body_from_template(&template_body, &ctx, template_row.kind.as_deref()),
+        &typst_body_from_template(&template_body, &keys, &ctx, template_row.kind.as_deref()),
     );
 
     // Read the PDF the worker persisted back from storage so the bytes
@@ -2452,12 +2452,34 @@ pub(crate) async fn resolve_intake_review(
         .into_response());
     }
 
-    let rendered_html = render_assembled_document(&render_deps(state), notation_id)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, %notation_id, "review: render failed");
+    let rendered_html = match render_assembled_document(&render_deps(state), notation_id).await {
+        Ok(html) => html,
+        Err(WorkflowDriveError::Context(ContextError::Questionnaire(error))) => {
+            let (status, message) = if matches!(
+                error.as_ref(),
+                notation_session::NotationSessionError::QuestionnaireAuthorityMissing
+            ) {
+                (StatusCode::BAD_REQUEST, error.to_string())
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not resolve the document questionnaire".to_string(),
+                )
+            };
+            return Err((status, message).into_response());
+        }
+        Err(WorkflowDriveError::TemplateBody(_)) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not read the pinned document body",
+            )
+                .into_response());
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, %notation_id, "review: render failed");
             String::new()
-        });
+        }
+    };
     // Offer the questionnaire's questions as flaggable in the "Request changes"
     // panel while the notation awaits review.
     let reask_questions = questionnaire_questions(state, notation_id)
@@ -2466,11 +2488,16 @@ pub(crate) async fn resolve_intake_review(
         .map(|(code, label)| webapp::intake_review::ReaskQuestion { code, label })
         .collect();
 
-    let governing_law_defaulted =
-        match render_context_from_answers(&state.surreal, notation_id).await {
-            Ok(ctx) => ctx.get(GOVERNING_LAW_DEFAULTED_MARKER).map(String::as_str) == Some("true"),
-            Err(_) => false,
-        };
+    let governing_law_defaulted = match render_context_from_answers(
+        &state.surreal,
+        Some(&state.storage),
+        notation_id,
+    )
+    .await
+    {
+        Ok(ctx) => ctx.get(GOVERNING_LAW_DEFAULTED_MARKER).map(String::as_str) == Some("true"),
+        Err(_) => false,
+    };
 
     Ok(webapp::intake_review::IntakeReviewData {
         notation_id: notation_id.to_string(),
@@ -2500,7 +2527,7 @@ pub(crate) fn back_to_review(notation_id: Uuid) -> Response {
 /// failure yields an empty list, so the review page still renders (just
 /// without the request-changes panel).
 async fn questionnaire_questions(state: &AdminState, notation_id: Uuid) -> Vec<(String, String)> {
-    let codes = notation_session::questionnaire_chain_for_notation(
+    let codes = notation_session::questionnaire_chain_for_reask(
         &state.surreal,
         Some(&state.storage),
         notation_id,
@@ -2541,6 +2568,10 @@ pub enum RequestChangesError {
     NotInReview,
     /// No answer was flagged for re-collection.
     NothingFlagged,
+    /// A selected answer is outside the completed questionnaire route.
+    OffRouteQuestion,
+    /// A legacy seed body discarded its questionnaire metadata.
+    QuestionnaireAuthorityMissing,
     /// A store write or the workflow signal failed.
     Db(String),
 }
@@ -2553,6 +2584,14 @@ impl std::fmt::Display for RequestChangesError {
             Self::NothingFlagged => {
                 write!(f, "select at least one answer to send back for changes")
             }
+            Self::OffRouteQuestion => {
+                write!(f, "flag only answers on the completed questionnaire route")
+            }
+            Self::QuestionnaireAuthorityMissing => write!(
+                f,
+                "{}",
+                notation_session::NotationSessionError::QuestionnaireAuthorityMissing
+            ),
             Self::Db(e) => write!(f, "database: {e}"),
         }
     }
@@ -2570,6 +2609,7 @@ impl std::error::Error for RequestChangesError {}
 pub async fn request_notation_changes(
     surreal: &store::surreal::SurrealDb,
     runtime: &dyn StateMachineRuntime,
+    storage: Option<&Arc<dyn cloud::StorageService>>,
     notation_id: Uuid,
     actor: Option<Uuid>,
     flagged: &[String],
@@ -2584,6 +2624,17 @@ pub async fn request_notation_changes(
     }
     if flagged.is_empty() {
         return Err(RequestChangesError::NothingFlagged);
+    }
+    let route = notation_session::questionnaire_chain_for_reask(surreal, storage, notation_id)
+        .await
+        .map_err(|error| match error {
+            notation_session::NotationSessionError::QuestionnaireAuthorityMissing => {
+                RequestChangesError::QuestionnaireAuthorityMissing
+            }
+            error => RequestChangesError::Db(error.to_string()),
+        })?;
+    if flagged.iter().any(|code| !route.contains(code)) {
+        return Err(RequestChangesError::OffRouteQuestion);
     }
     let record_actor = actor.unwrap_or(notation_row.person_id);
     store::reask::record_change_request(surreal, notation_id, record_actor, flagged, note)
@@ -2617,6 +2668,7 @@ pub async fn request_changes_post(
     match request_notation_changes(
         &state.surreal,
         state.workflow_runtime.as_ref(),
+        Some(&state.storage),
         notation_id,
         acting,
         &flagged,
@@ -2638,6 +2690,16 @@ pub async fn request_changes_post(
         Err(RequestChangesError::NothingFlagged) => (
             StatusCode::BAD_REQUEST,
             "select at least one answer to send back for changes",
+        )
+            .into_response(),
+        Err(RequestChangesError::QuestionnaireAuthorityMissing) => (
+            StatusCode::BAD_REQUEST,
+            notation_session::NotationSessionError::QuestionnaireAuthorityMissing.to_string(),
+        )
+            .into_response(),
+        Err(RequestChangesError::OffRouteQuestion) => (
+            StatusCode::BAD_REQUEST,
+            "flag only answers on the completed questionnaire route",
         )
             .into_response(),
         Err(e) => {
@@ -2678,6 +2740,26 @@ pub(crate) async fn resolve_reask(
         .as_ref()
         .map(|r| r.flagged_questions.clone())
         .unwrap_or_default();
+    let route = notation_session::questionnaire_chain_for_reask(
+        &state.surreal,
+        Some(&state.storage),
+        notation_id,
+    )
+    .await
+    .map_err(|error| match error {
+        notation_session::NotationSessionError::QuestionnaireAuthorityMissing => {
+            (StatusCode::BAD_REQUEST, error.to_string()).into_response()
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "could not resolve the completed questionnaire route",
+        )
+            .into_response(),
+    })?;
+    if flagged_codes.iter().any(|code| !route.contains(code)) {
+        return Err((StatusCode::BAD_REQUEST,
+            "the flagged answers are outside the completed questionnaire route; begin a fresh intake").into_response());
+    }
     // Resolve a human label per flagged code from the questionnaire set.
     let labels: std::collections::HashMap<String, String> =
         questionnaire_questions(state, notation_id)
@@ -2719,6 +2801,12 @@ pub enum ResubmitReaskError {
     /// question is not seeded). The resubmit is refused whole and the matter
     /// stays parked, rather than landing a partial correction.
     AnswerWriteFailed(String),
+    /// A flagged question is not on the completed route.
+    OffRouteQuestion,
+    /// A legacy seed body discarded its questionnaire metadata.
+    QuestionnaireAuthorityMissing,
+    /// Correcting a branch would require a different question chain.
+    QuestionnaireRouteChanged,
     /// A store read or the workflow signal failed.
     Db(String),
 }
@@ -2735,6 +2823,19 @@ impl std::fmt::Display for ResubmitReaskError {
             Self::AnswerWriteFailed(e) => {
                 write!(f, "a re-collected answer could not be saved: {e}")
             }
+            Self::OffRouteQuestion => write!(
+                f,
+                "re-collect only questions on the completed questionnaire route"
+            ),
+            Self::QuestionnaireRouteChanged => write!(
+                f,
+                "this correction changes the questionnaire route; begin a fresh intake"
+            ),
+            Self::QuestionnaireAuthorityMissing => write!(
+                f,
+                "{}",
+                notation_session::NotationSessionError::QuestionnaireAuthorityMissing
+            ),
             Self::Db(e) => write!(f, "database: {e}"),
         }
     }
@@ -2752,6 +2853,7 @@ impl std::error::Error for ResubmitReaskError {}
 pub async fn resubmit_reask(
     surreal: &store::surreal::SurrealDb,
     runtime: &dyn StateMachineRuntime,
+    storage: Option<&Arc<dyn cloud::StorageService>>,
     notation_id: Uuid,
     actor: Option<Uuid>,
     answers: &std::collections::BTreeMap<String, String>,
@@ -2777,14 +2879,40 @@ pub async fn resubmit_reask(
             None => return Err(ResubmitReaskError::MissingAnswer(code.clone())),
         }
     }
+    let corrections = to_write
+        .iter()
+        .map(|(code, value)| ((*code).to_owned(), (*value).to_owned()))
+        .collect();
+    notation_session::validate_reask_answers(surreal, storage, notation_id, &corrections)
+        .await
+        .map_err(|error| match error {
+            notation_session::NotationSessionError::QuestionnaireAuthorityMissing => {
+                ResubmitReaskError::QuestionnaireAuthorityMissing
+            }
+            notation_session::NotationSessionError::QuestionNotOnRoute => {
+                ResubmitReaskError::OffRouteQuestion
+            }
+            notation_session::NotationSessionError::QuestionnaireRouteChanged => {
+                ResubmitReaskError::QuestionnaireRouteChanged
+            }
+            error => ResubmitReaskError::AnswerWriteFailed(error.to_string()),
+        })?;
     let author = notation_session::AnswerAuthor::lawyer(actor);
     // Each re-collected answer is written independently (Surreal has no
     // cross-write transaction here); a mid-write failure leaves already-written
     // answers in place rather than rolling the set back.
     for (code, value) in &to_write {
-        notation_session::record_reask_answer(surreal, notation_id, code, value, None, author)
-            .await
-            .map_err(|e| ResubmitReaskError::AnswerWriteFailed(e.to_string()))?;
+        notation_session::record_reask_answer(
+            surreal,
+            storage,
+            notation_id,
+            code,
+            value,
+            None,
+            author,
+        )
+        .await
+        .map_err(|e| ResubmitReaskError::AnswerWriteFailed(e.to_string()))?;
     }
     let next = signal_workflow(runtime, notation_id, "intake_resubmitted", None, actor)
         .await
@@ -2812,6 +2940,7 @@ pub async fn reask_post(
     match resubmit_reask(
         &state.surreal,
         state.workflow_runtime.as_ref(),
+        Some(&state.storage),
         notation_id,
         acting,
         &answers,
@@ -2839,6 +2968,11 @@ pub async fn reask_post(
             "could not save a re-collected answer",
         )
             .into_response(),
+        Err(
+            error @ (ResubmitReaskError::QuestionnaireAuthorityMissing
+            | ResubmitReaskError::OffRouteQuestion
+            | ResubmitReaskError::QuestionnaireRouteChanged),
+        ) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
         Err(e) => {
             tracing::error!(error = %e, %notation_id, "reask: resubmit failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response()
@@ -2867,8 +3001,8 @@ async fn render_assembled_document(
     // Conditions read stored choice keys (`=NV`); placeholders print labels
     // (`Nevada`). The public preview already splits those maps. Using labels
     // for both dropped every `{{#if state=KEY}}` branch on review and PDF.
-    let keys = render_form_context_from_answers(deps.surreal, notation_id).await?;
-    let labels = render_context_from_answers(deps.surreal, notation_id).await?;
+    let (keys, labels) =
+        build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
     Ok(views::notation::render_filled_in_with_display(
         &template_body,
         &keys,
@@ -2956,7 +3090,7 @@ async fn drive_closing_workflow(
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
     let template_body = store::templates::body(deps.surreal, deps.storage, &template_row).await?;
-    let ctx = render_context_from_answers(deps.surreal, notation_id).await?;
+    let (keys, ctx) = build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
 
     // Lawyer review short-circuits to `approved` in the dev loop (a real
     // lawyer-review handler swaps in for prod). The `approved` signal
@@ -2965,7 +3099,12 @@ async fn drive_closing_workflow(
     // `generate_pdf__closing_letter`.
     let document_payload = serde_json::to_string(&workflows::DocumentPayload::Typst {
         storage_key: closing_letter_storage_key(notation_id),
-        typst_source: typst_body_from_template(&template_body, &ctx, template_row.kind.as_deref()),
+        typst_source: typst_body_from_template(
+            &template_body,
+            &keys,
+            &ctx,
+            template_row.kind.as_deref(),
+        ),
     })
     .map_err(WorkflowDriveError::Payload)?;
     let s = signal_workflow(
@@ -2994,8 +3133,12 @@ async fn drive_closing_workflow(
 /// compiler. Signature placeholders stay in place for
 /// `signature_render::expand_signatures`, so final PDFs process data first
 /// and signature anchors second.
-fn substitute_template_body(body: &str, ctx: &BTreeMap<String, String>) -> String {
-    views::notation::fill(body, ctx)
+fn substitute_template_body(
+    body: &str,
+    keys: &BTreeMap<String, String>,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    views::notation::fill_with_display(body, keys, labels)
 }
 
 /// Assemble a notation template body into compilable Typst: substitute the
@@ -3023,7 +3166,8 @@ fn substitute_template_body(body: &str, ctx: &BTreeMap<String, String>) -> Strin
 /// expand them into anchored blocks afterward.
 fn typst_body_from_template(
     body: &str,
-    ctx: &BTreeMap<String, String>,
+    keys: &BTreeMap<String, String>,
+    labels: &BTreeMap<String, String>,
     kind: Option<&str>,
 ) -> String {
     let body = rules::frontmatter::split(body).map_or(body, |(_, body)| body);
@@ -3034,7 +3178,7 @@ fn typst_body_from_template(
     format!(
         "{}{}",
         format.preamble(&pdf::Letterhead::default()),
-        pdf::to_typst(&substitute_template_body(body, ctx))
+        pdf::to_typst(&substitute_template_body(body, keys, labels))
     )
 }
 
@@ -3102,15 +3246,14 @@ pub fn resolve_client_recipient(
 /// [`resolve_client_recipient`] for a caller that holds only a notation id:
 /// read the answers, the bound Person, and the delivery mode, then resolve.
 ///
-/// This is the view path's entry point, and it deliberately performs the
-/// same three reads the send path performs at
-/// [`send_for_signature`]'s call site, so the two cannot drift by reading
-/// different inputs either.
+/// The view and send paths use the same scoped body answers and bound
+/// Person when resolving the captive recipient.
 pub async fn client_recipient_for_notation(
     surreal: &store::surreal::SurrealDb,
+    storage: &Arc<dyn cloud::StorageService>,
     notation_row: &store::notations::Notation,
 ) -> Result<ClientRecipient, ContextError> {
-    let ctx = render_context_from_answers(surreal, notation_row.id).await?;
+    let ctx = render_context_from_answers(surreal, Some(storage), notation_row.id).await?;
     let client = store::persons::find_by_id(surreal, notation_row.person_id).await?;
     let captive = notation_row.delivery != store::notations::DELIVERY_EMAILED;
     Ok(resolve_client_recipient(
@@ -3210,39 +3353,16 @@ fn build_signature_manifest(
     })
 }
 
-/// Build the `{{state}} → answer` context map for `notation_id`.
-///
-/// Notation-scoped, not person-scoped: only the answers this Notation
-/// collected, so a person's other matters never bleed in (the old
-/// person-only filter is what let two matters' answers collide). Each
-/// answer is keyed on its full `<type>__<role>` state
-/// (`entity__company`, `entity__subsidiary`) so two records of one type
-/// stay distinct, and the bare canonical code is also exposed → its latest
-/// answer for a direct `{{code}}` placeholder. Template-agnostic: it
-/// surfaces whatever states the bound questionnaire collected, so a body
-/// interpolates only its own placeholders and any extra keys are inert.
-/// The placeholder context for rendering a **document or preview** — a
-/// single/multiple-choice answer surfaces its human *label*, so a typst
-/// body (the retainer, the closing letter) and the lawyer HTML preview read
-/// "Married", not the stored key "married".
+/// Display labels for recipient resolution and review indicators. Body
+/// rendering takes condition keys and labels from one answer projection.
 async fn render_context_from_answers(
     surreal: &store::surreal::SurrealDb,
+    storage: Option<&Arc<dyn cloud::StorageService>>,
     notation_id: Uuid,
 ) -> Result<BTreeMap<String, String>, ContextError> {
-    build_answer_context(surreal, notation_id, ChoiceRendering::Labels).await
-}
-
-/// The placeholder context for an **AcroForm fill** — choice answers keep
-/// their raw *key*. A re-authored government form selects a radio group's
-/// member by the choice key (its checkbox on-state), so the fill must see
-/// `five_year`, not the label; only the human-facing render substitutes the
-/// label. Everything else (merge fields, the `person__client.email` seeded
-/// from the Person row) is identical.
-async fn render_form_context_from_answers(
-    surreal: &store::surreal::SurrealDb,
-    notation_id: Uuid,
-) -> Result<BTreeMap<String, String>, ContextError> {
-    build_answer_context(surreal, notation_id, ChoiceRendering::Keys).await
+    build_answer_context(surreal, storage, notation_id)
+        .await
+        .map(|(_, labels)| labels)
 }
 
 /// Whether a choice answer renders as its human label (documents, preview)
@@ -3253,98 +3373,78 @@ enum ChoiceRendering {
     Keys,
 }
 
-/// A context build that failed in one engine or the other: the bound
-/// template, the answers, their questions, and the bound
-/// client are all SurrealDB.
+/// A body-context read that failed before a document could be assembled.
 #[derive(Debug, thiserror::Error)]
 pub enum ContextError {
     #[error("database: {0}")]
     Db(String),
     #[error(transparent)]
-    Notation(#[from] store::notations::NotationError),
-    #[error(transparent)]
-    Template(#[from] store::templates::TemplateError),
-    #[error(transparent)]
     Person(#[from] store::persons::PersonError),
-    #[error(transparent)]
-    Answer(#[from] store::answers::AnswerError),
-    #[error(transparent)]
-    Question(#[from] store::questions::QuestionError),
+    #[error("questionnaire: {0}")]
+    Questionnaire(#[source] Box<notation_session::NotationSessionError>),
 }
 
-impl From<String> for ContextError {
-    fn from(message: String) -> Self {
-        Self::Db(message)
-    }
-}
-
+/// Condition keys and display labels derived from one scoped answer read.
 async fn build_answer_context(
     surreal: &store::surreal::SurrealDb,
+    storage: Option<&Arc<dyn cloud::StorageService>>,
     notation_id: Uuid,
-    choice_rendering: ChoiceRendering,
-) -> Result<BTreeMap<String, String>, ContextError> {
-    let answers = store::answers::for_notation(surreal, notation_id).await?;
-
-    // The notation's bound template + Person. For a document/preview render
-    // the template's bundled spec supplies the choice metadata
-    // (`value → label`) so a single-choice answer renders its label; the
-    // Person row carries the client identity the questionnaire never
-    // captures (it asks `person__client` for the name, never the email).
-    let notation_row = store::notations::find_by_id(surreal, notation_id).await?;
-    let choices = match (choice_rendering, notation_row.as_ref()) {
-        (ChoiceRendering::Labels, Some(n)) => store::templates::find_by_id(surreal, n.template_id)
-            .await?
-            .and_then(|t| workflows::catalog_spec_yaml(&t.code))
-            .and_then(|yaml| workflows::choices_from_yaml(yaml).ok())
-            .unwrap_or_default(),
-        // Key rendering (AcroForm fill) and the no-notation case both leave
-        // choices unmapped, so answers keep their raw stored value.
-        _ => BTreeMap::new(),
+) -> Result<(BTreeMap<String, String>, BTreeMap<String, String>), ContextError> {
+    let projection = notation_session::render_answer_projection(surreal, storage, notation_id)
+        .await
+        .map_err(|error| ContextError::Questionnaire(Box::new(error)))?;
+    let notation = &projection.notation;
+    let mut keys = context_from_answers(
+        &projection.answers,
+        &projection.codes,
+        &BTreeMap::new(),
+        |state| projection.declares_state(state),
+    );
+    let mut labels = context_from_answers(
+        &projection.answers,
+        &projection.codes,
+        projection.choices(),
+        |state| projection.declares_state(state),
+    );
+    let person = if projection.includes_state("person__client") {
+        store::persons::find_by_id(surreal, notation.person_id).await?
+    } else {
+        None
     };
-
-    // Resolve the question codes for the answered questions in one query.
-    let question_ids: Vec<Uuid> = answers.iter().map(|a| a.question_id).collect();
-    let code_by_id: BTreeMap<Uuid, String> = store::questions::find_by_ids(surreal, &question_ids)
-        .await?
-        .into_iter()
-        .map(|q| (q.id, q.code))
-        .collect();
-    let mut ctx = context_from_answers(&answers, &code_by_id, &choices);
-
-    // Seed the bound client's identity from the Person row where the
-    // questionnaire didn't capture it — the retainer/naturalization intake
-    // asks `person__client` for the name only, so `{{person__client.email}}`
-    // (and the N-400's email field) fills from `persons.email`. Answers win:
-    // only fill a gap, never overwrite a captured value.
-    if let Some(person) = match notation_row.as_ref() {
-        Some(n) => store::persons::find_by_id(surreal, n.person_id).await?,
-        None => None,
-    } {
-        ctx.entry("person__client.email".to_string())
-            .or_insert(person.email);
-        ctx.entry("person__client.name".to_string())
-            .or_insert(person.name);
-    }
-    // Seed the onboarding jurisdiction the notation's Project carries, so a
-    // Clause input bound to `project.onboarding_jurisdiction` (`rules::clauses`)
-    // fills from the live row instead of a questionnaire answer. Answers and
-    // the Person row win: this only fills a gap.
-    if let Some(n) = notation_row.as_ref() {
-        if let Some(project) = store::projects::find_by_id(surreal, n.project_id)
-            .await
-            .map_err(|error| ContextError::Db(error.to_string()))?
+    let project = store::projects::find_by_id(surreal, notation.project_id)
+        .await
+        .map_err(|error| ContextError::Db(error.to_string()))?;
+    let firm = project
+        .as_ref()
+        .and_then(|project| firm_legal_name_for_brand(&project.brand));
+    for (ctx, rendering) in [
+        (&mut keys, ChoiceRendering::Keys),
+        (&mut labels, ChoiceRendering::Labels),
+    ] {
+        if let Some(person) = &person {
+            ctx.entry("person__client.email".to_string())
+                .or_insert_with(|| person.email.clone());
+            ctx.entry("person__client.name".to_string())
+                .or_insert_with(|| person.name.clone());
+        }
+        if let Some(jurisdiction) = project
+            .as_ref()
+            .and_then(|project| project.onboarding_jurisdiction.as_ref())
         {
-            if let Some(jurisdiction) = project.onboarding_jurisdiction {
-                ctx.entry("project.onboarding_jurisdiction".to_string())
-                    .or_insert(jurisdiction);
-            }
-            if let Some(name) = firm_legal_name_for_brand(&project.brand) {
-                ctx.entry("firm.legal_name".to_string()).or_insert(name);
-            }
+            ctx.entry("project.onboarding_jurisdiction".to_string())
+                .or_insert_with(|| jurisdiction.clone());
+        }
+        if let Some(name) = &firm {
+            ctx.entry("firm.legal_name".to_string())
+                .or_insert_with(|| name.clone());
+        }
+        if !projection.declares_state(GOVERNING_LAW_CONTEXT_KEY)
+            || projection.includes_state(GOVERNING_LAW_CONTEXT_KEY)
+        {
+            default_governing_law(ctx, rendering);
         }
     }
-    default_governing_law(&mut ctx, choice_rendering);
-    Ok(ctx)
+    Ok((keys, labels))
 }
 
 /// Fill-context key for the governing-law answer. A stored choice (including
@@ -3403,6 +3503,7 @@ fn context_from_answers(
     answers: &[store::answers::Answer],
     code_by_id: &BTreeMap<Uuid, String>,
     choices: &BTreeMap<String, BTreeMap<String, String>>,
+    declares_state: impl Fn(&str) -> bool,
 ) -> BTreeMap<String, String> {
     let mut ctx = BTreeMap::new();
     for a in answers {
@@ -3410,7 +3511,7 @@ fn context_from_answers(
         let raw = store::answers::display_value(&a.value);
         // A single/multiple-choice answer stores the choice *key*; render
         // its human *label* wherever a `{{state}}` / `{{code}}` placeholder
-        // shows it (and wherever the AcroForm fill reads it). Keyed on the
+        // shows it; AcroForm callers omit labels and retain raw keys. Keyed on the
         // answer's full state, so the right question's options resolve;
         // falls back to the raw value for a free-text answer.
         let display = a
@@ -3419,8 +3520,13 @@ fn context_from_answers(
             .or(code.map(String::as_str))
             .and_then(|state| workflows::choice_label(choices, state, &raw))
             .unwrap_or_else(|| raw.clone());
-        // Bare canonical code → latest answer (for a `{{code}}` placeholder).
-        if let Some(code) = code {
+        // A compatibility alias must not impersonate a separately declared question.
+        if let Some(code) = code.filter(|code| {
+            !declares_state(code)
+                || a.state_name
+                    .as_deref()
+                    .is_none_or(|state| state == code.as_str())
+        }) {
             ctx.insert(code.clone(), display.clone());
         }
         // Full `<type>__<role>` state → this answer (for `{{type__role}}`),
@@ -4045,7 +4151,7 @@ mod tests {
         let code_by_id = BTreeMap::from([(entity_q, "entity".to_string())]);
         let answers = [answer_row(entity_q, "entity__company", "Libra LLC")];
 
-        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new());
+        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new(), |_| false);
 
         assert_eq!(
             ctx.get("entity__company").map(String::as_str),
@@ -4076,7 +4182,7 @@ mod tests {
             )]),
         )]);
 
-        let ctx = context_from_answers(&answers, &code_by_id, &choices);
+        let ctx = context_from_answers(&answers, &code_by_id, &choices, |_| false);
 
         assert_eq!(
             ctx.get("custom_single_choice__eligibility_basis")
@@ -4091,6 +4197,7 @@ mod tests {
             &text_answers,
             &BTreeMap::from([(text_q, "custom_text".to_string())]),
             &choices,
+            |_| false,
         );
         assert_eq!(
             text_ctx
@@ -4113,7 +4220,7 @@ mod tests {
             "five_year",
         )];
 
-        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new());
+        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new(), |_| false);
 
         assert_eq!(
             ctx.get("custom_single_choice__eligibility_basis")
@@ -4207,7 +4314,7 @@ mod tests {
             }),
         )];
 
-        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new());
+        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new(), |_| false);
 
         assert_eq!(
             ctx.get("person__client.name").map(String::as_str),
@@ -4233,7 +4340,7 @@ Sign: {{client.signature}}";
             ),
         ]);
 
-        let data_filled = substitute_template_body(body, &ctx);
+        let data_filled = substitute_template_body(body, &ctx, &ctx);
         assert!(data_filled.contains("Client: Libra Prime"));
         assert!(data_filled.contains("- Aries from Las Vegas"));
         assert!(data_filled.contains("- Virgo from Reno"));
@@ -4251,10 +4358,27 @@ Sign: {{client.signature}}";
     }
 
     #[test]
+    fn typst_conditions_use_numeric_keys_and_print_labels_without_unasked_branch_data() {
+        let keys = BTreeMap::from([
+            ("custom_single_choice__path".into(), "1".into()),
+            ("custom_text__asked".into(), "Known".into()),
+        ]);
+        let labels = BTreeMap::from([
+            ("custom_single_choice__path".into(), "First option".into()),
+            ("custom_text__asked".into(), "Known".into()),
+        ]);
+        let body = "{{#if custom_single_choice__path=1}}SELECTED {{custom_single_choice__path}} {{custom_text__asked}}{{else}}{{custom_text__unasked}}{{/if}}";
+        let source = typst_body_from_template(body, &keys, &labels, None);
+        assert!(source.contains("SELECTED First option Known"));
+        assert!(!source.contains("custom_text__unasked"));
+        assert!(!source.contains("{{#if"));
+    }
+
+    #[test]
     fn stored_template_pdf_excludes_source_metadata() {
         let source = "---\nkind: onboarding\nquestionnaire:\n  BEGIN: {}\n---\n\nThe law of {{law}} governs.";
         let ctx = BTreeMap::from([("law".to_string(), "Nevada".to_string())]);
-        let typst = typst_body_from_template(source, &ctx, None);
+        let typst = typst_body_from_template(source, &ctx, &ctx, None);
         assert!(typst.contains("The law of Nevada governs."));
         assert!(!typst.contains("questionnaire"));
         assert!(!typst.contains("onboarding"));
@@ -4269,7 +4393,7 @@ Sign: {{client.signature}}";
         // preview — rather than always rendering plain, or a `kind: letter`
         // notation reaches object storage with no letterhead.
         let ctx = BTreeMap::new();
-        let source = typst_body_from_template("Body.", &ctx, Some("letter"));
+        let source = typst_body_from_template("Body.", &ctx, &ctx, Some("letter"));
         assert!(
             source.contains("logo-neon-law.png"),
             "a `kind: letter` template must render on the firm's letterhead: {source}"
@@ -4282,7 +4406,7 @@ Sign: {{client.signature}}";
     fn typst_body_from_template_renders_plain_for_an_unset_or_unknown_kind() {
         let ctx = BTreeMap::new();
         for kind in [None, Some("bogus")] {
-            let source = typst_body_from_template("Body.", &ctx, kind);
+            let source = typst_body_from_template("Body.", &ctx, &ctx, kind);
             assert!(
                 !source.contains("logo-neon-law.png"),
                 "{kind:?} must not pick up letterhead: {source}"
@@ -4295,7 +4419,7 @@ Sign: {{client.signature}}";
         // `will` defaults to plain (Kind::default_output) — an instrument
         // between other parties never carries firm letterhead.
         let ctx = BTreeMap::new();
-        let source = typst_body_from_template("Body.", &ctx, Some("will"));
+        let source = typst_body_from_template("Body.", &ctx, &ctx, Some("will"));
         assert!(!source.contains("logo-neon-law.png"), "{source}");
     }
 
@@ -4657,7 +4781,7 @@ Sign: {{client.signature}}";
             answer_row(entity_q, "entity__subsidiary", "Libra Sub LLC"),
         ];
 
-        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new());
+        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new(), |_| false);
 
         assert_eq!(
             ctx.get("entity__company").map(String::as_str),
@@ -4690,7 +4814,7 @@ Sign: {{client.signature}}";
             ),
         ];
 
-        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new());
+        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new(), |_| false);
 
         assert_eq!(
             ctx.get("custom_text__mission_statement")
@@ -4714,7 +4838,7 @@ Sign: {{client.signature}}";
             answer_row(custom_q, "custom_text__mission_statement", "Final answer"),
         ];
 
-        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new());
+        let ctx = context_from_answers(&answers, &code_by_id, &BTreeMap::new(), |_| false);
 
         assert_eq!(
             ctx.get("custom_text__mission_statement")
@@ -4750,12 +4874,12 @@ Sign: {{client.signature}}";
         let runtime = workflows::InMemoryRuntime::new();
         let (notation_id, poisoned) = walk_onboarding_letter(&surreal, &runtime, OFF_LIST).await;
 
-        let ctx = render_context_from_answers(&surreal, notation_id)
+        let ctx = render_context_from_answers(&surreal, None, notation_id)
             .await
             .expect("render context");
         let composed = rules::clauses::compile(workflows::RETAINER_INTAKE_TEMPLATE)
             .expect("bundled template composes before persistence");
-        let rendered = substitute_template_body(&composed, &ctx);
+        let rendered = substitute_template_body(&composed, &ctx, &ctx);
 
         // The render-side proof first: this is the clause a client signs, so
         // a failure here shows the sentence the arbitrary string reached.

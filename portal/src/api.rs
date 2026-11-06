@@ -4302,7 +4302,7 @@ struct RequestNotationChangesRequest {
 /// request-changes control. Both converge on
 /// `retainer_walk::request_notation_changes`. Lawyer-tier only and matter-scoped
 /// (out-of-scope → 404, admin bypasses). `204` on success; not at review is
-/// `409`, an empty flagged set is `400`.
+/// `409`; an empty or off-route flagged set is `400`.
 async fn request_notation_changes_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
@@ -4319,6 +4319,7 @@ async fn request_notation_changes_door(
     match crate::retainer_walk::request_notation_changes(
         &state.surreal,
         state.workflow_runtime.as_ref(),
+        Some(&state.storage),
         id,
         Some(acting),
         &input.flagged,
@@ -4336,6 +4337,16 @@ async fn request_notation_changes_door(
             })),
         )
             .into_response()),
+        Err(crate::retainer_walk::RequestChangesError::QuestionnaireAuthorityMissing) => {
+            Ok(bad_request(
+                "questionnaire_authority_missing",
+                "The completed questionnaire definition is unavailable; begin a fresh intake.",
+            ))
+        }
+        Err(crate::retainer_walk::RequestChangesError::OffRouteQuestion) => Ok(bad_request(
+            "question_not_on_route",
+            "Flag only answers on the completed questionnaire route.",
+        )),
         Err(crate::retainer_walk::RequestChangesError::NothingFlagged) => Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -4377,6 +4388,7 @@ async fn resubmit_reask_door(
     match crate::retainer_walk::resubmit_reask(
         &state.surreal,
         state.workflow_runtime.as_ref(),
+        Some(&state.storage),
         id,
         Some(acting),
         &input.answers,
@@ -4393,6 +4405,18 @@ async fn resubmit_reask_door(
             })),
         )
             .into_response()),
+        Err(crate::retainer_walk::ResubmitReaskError::QuestionnaireAuthorityMissing) => Ok(bad_request(
+            "questionnaire_authority_missing",
+            "The completed questionnaire definition is unavailable; begin a fresh intake.",
+        )),
+        Err(crate::retainer_walk::ResubmitReaskError::OffRouteQuestion) => Ok(bad_request(
+            "question_not_on_route",
+            "Re-collect only questions on the completed questionnaire route.",
+        )),
+        Err(crate::retainer_walk::ResubmitReaskError::QuestionnaireRouteChanged) => Ok(bad_request(
+            "questionnaire_route_changed",
+            "This correction changes the questionnaire route; begin a fresh intake.",
+        )),
         Err(crate::retainer_walk::ResubmitReaskError::MissingAnswer(code)) => Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({

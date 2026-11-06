@@ -132,6 +132,13 @@ async fn build() -> Fixture {
     .await
     .unwrap();
 
+    let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
+        &surreal,
+        Some(&storage),
+        &tmpl,
+    )
+    .await
+    .unwrap();
     let notation_id = store::notations::create(
         &surreal,
         &store::notations::NewNotation::new(
@@ -139,7 +146,8 @@ async fn build() -> Fixture {
             signer,
             project.id,
             "sent_for_signature__pending",
-        ),
+        )
+        .with_questionnaire_snapshot(snapshot),
     )
     .await
     .unwrap()
@@ -152,11 +160,10 @@ async fn build() -> Fixture {
     // The envelope the route redirects to must be one the provider holds:
     // send the rendered anchor PDF through the fake first, then record the
     // provider-issued id against the notation.
-    let request_id = provider
+    let portal::signature::SignatureRequestId(envelope_id) = provider
         .send_for_signature(notation_id, &anchor_pdf(), &signing_manifest())
         .await
         .unwrap();
-    let envelope_id = request_id.0;
     let state = AppState {
         storage,
         sessions: SessionStore::new(KEY),
@@ -494,6 +501,12 @@ async fn an_emailed_envelope_has_no_embedded_session_to_open() {
     // replay and the honest answer is a conflict rather than a minted URL the
     // provider would refuse.
     let f = build().await;
+    let snapshot = store::notations::find_by_id(&f.surreal, f.notation_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .questionnaire_snapshot
+        .unwrap();
     let emailed = store::notations::create(
         &f.surreal,
         &store::notations::NewNotation {
@@ -504,6 +517,7 @@ async fn an_emailed_envelope_has_no_embedded_session_to_open() {
                 f.project_id,
                 "sent_for_signature__pending",
             )
+            .with_questionnaire_snapshot(snapshot)
         },
     )
     .await

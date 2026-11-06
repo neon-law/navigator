@@ -15,7 +15,7 @@
 //! in-memory runtime records the transition in its own `Vec`.
 //! Callers do not write `notation_events` themselves.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use cloud::StorageService;
@@ -153,6 +153,14 @@ pub enum NotationSessionError {
     EngagementMustBeFirst { code: String, kind: String },
     #[error("template `{0}` has no questionnaire frontmatter")]
     TemplateHasNoQuestionnaire(String),
+    #[error(
+        "template body storage is required to resolve a notation without a frozen questionnaire"
+    )]
+    QuestionnaireStorageRequired,
+    #[error("the completed questionnaire definition is unavailable; begin a fresh intake")]
+    QuestionnaireAuthorityMissing,
+    #[error("reading pinned template body: {0}")]
+    TemplateBody(#[from] store::templates::TemplateBodyError),
     #[error("reading template from the project repo: {0}")]
     TemplateSource(#[from] store::template_source::TemplateSourceError),
     #[error("template: {0}")]
@@ -167,6 +175,10 @@ pub enum NotationSessionError {
     QuestionNotClientFacing(String),
     #[error("question `{0}` was not flagged for re-collection by the lawyer review")]
     QuestionNotFlagged(String),
+    #[error("re-collect only questions on the completed questionnaire route")]
+    QuestionNotOnRoute,
+    #[error("this correction changes the questionnaire route; begin a fresh intake")]
+    QuestionnaireRouteChanged,
     #[error("question code mismatch: questionnaire is currently asking `{expected}`, got `{got}`")]
     QuestionMismatch { expected: String, got: String },
     /// An answer named an option its question never declared.
@@ -542,15 +554,9 @@ pub async fn questionnaire_snapshot_for_template(
     questionnaire_snapshot_from_definition(&definition)
 }
 
-/// The questions the notation actually walks, in walk order, sourced
-/// from its frozen questionnaire snapshot — the scoped blob's
-/// questionnaire when the pinned template carried one — and resolved
-/// through the answers already recorded, so a branched questionnaire's
-/// rendered order tracks the branch taken rather than the full
-/// fan-out (which for a linear questionnaire is the same chain). The
-/// admin walker's progress indicator reads this so the total tracks
-/// the questionnaire the client is answering, not the compile-time
-/// bundled spec.
+/// The active walker's projected question order from its frozen questionnaire
+/// and latest answers, including extracted defaults. Review and Re-ask use
+/// [`questionnaire_chain_for_reask`] for the confirmed completed route.
 pub async fn questionnaire_chain_for_notation(
     surreal: &store::surreal::SurrealDb,
     storage: Option<&Arc<dyn StorageService>>,
@@ -566,6 +572,212 @@ pub async fn questionnaire_chain_for_notation(
         .collect())
 }
 
+enum RenderQuestionnaire {
+    Absent {
+        choices: BTreeMap<String, BTreeMap<String, String>>,
+    },
+    Present {
+        definition: QuestionnaireDefinition,
+        route: BTreeSet<String>,
+    },
+}
+
+/// One answer projection for a document render. The route and eligible rows
+/// come from the same answer read; this does not change the stored evidence.
+pub struct RenderAnswerProjection {
+    pub notation: store::notations::Notation,
+    pub answers: Vec<store::answers::Answer>,
+    pub codes: BTreeMap<Uuid, String>,
+    questionnaire: RenderQuestionnaire,
+}
+
+impl RenderAnswerProjection {
+    /// Whether a typed binding belongs to this route. A verified static
+    /// document without a questionnaire retains its bound-record bindings.
+    #[must_use]
+    pub fn includes_state(&self, state: &str) -> bool {
+        match &self.questionnaire {
+            RenderQuestionnaire::Absent { .. } => true,
+            RenderQuestionnaire::Present { route, .. } => route.contains(state),
+        }
+    }
+
+    #[must_use]
+    pub fn declares_state(&self, state: &str) -> bool {
+        matches!(&self.questionnaire, RenderQuestionnaire::Present { definition, .. }
+            if definition.spec.inner().states.keys().any(|key| key.as_str() == state))
+    }
+
+    #[must_use]
+    pub fn choices(&self) -> &BTreeMap<String, BTreeMap<String, String>> {
+        match &self.questionnaire {
+            RenderQuestionnaire::Absent { choices } => choices,
+            RenderQuestionnaire::Present { definition, .. } => &definition.choices,
+        }
+    }
+}
+
+/// Project body answers onto the verified frozen or pinned questionnaire route. Active intake
+/// keeps proposed defaults; after the workflow leaves BEGIN, only confirmed
+/// answers select the route and fill the body. No-questionnaire documents
+/// retain their bindings only after their pinned body proves that absence.
+///
+/// # Errors
+/// Malformed snapshots, unavailable or invalid pinned bodies, and store reads fail closed.
+pub async fn render_answer_projection(
+    surreal: &store::surreal::SurrealDb,
+    storage: Option<&Arc<dyn StorageService>>,
+    notation_id: Uuid,
+) -> Result<RenderAnswerProjection, NotationSessionError> {
+    answer_projection(surreal, storage, notation_id, false).await
+}
+
+async fn answer_projection(
+    surreal: &store::surreal::SurrealDb,
+    storage: Option<&Arc<dyn StorageService>>,
+    notation_id: Uuid,
+    for_reask: bool,
+) -> Result<RenderAnswerProjection, NotationSessionError> {
+    let (notation, definition) = verified_questionnaire(surreal, storage, notation_id).await?;
+    let mut answers = store::answers::for_notation(surreal, notation_id).await?;
+    let ids: Vec<Uuid> = answers.iter().map(|answer| answer.question_id).collect();
+    let codes: BTreeMap<Uuid, String> = store::questions::find_by_ids(surreal, &ids)
+        .await?
+        .into_iter()
+        .map(|question| (question.id, question.code))
+        .collect();
+    let questionnaire = match definition {
+        None => {
+            // Static documents retain their established label formatting;
+            // a catalog label never supplies questionnaire route authority.
+            let choices = store::templates::find_by_id(surreal, notation.template_id)
+                .await?
+                .and_then(|template| catalog_spec_yaml(&template.code))
+                .and_then(|yaml| choices_from_yaml(yaml).ok())
+                .unwrap_or_default();
+            RenderQuestionnaire::Absent { choices }
+        }
+        Some(definition) => {
+            if for_reask || notation.state != StateName::BEGIN {
+                answers.retain(|answer| answer.source != store::answers::SOURCE_EXTRACTED);
+            }
+            let values = values_for_answers(&answers, &codes);
+            let route: BTreeSet<String> = definition
+                .spec
+                .question_order(&values)
+                .into_iter()
+                .map(|state| state.0)
+                .collect();
+            answers.retain(|answer| {
+                answer
+                    .state_name
+                    .as_ref()
+                    .or_else(|| codes.get(&answer.question_id))
+                    .is_some_and(|state| route.contains(state))
+            });
+            RenderQuestionnaire::Present { definition, route }
+        }
+    };
+    Ok(RenderAnswerProjection {
+        notation,
+        answers,
+        codes,
+        questionnaire,
+    })
+}
+
+async fn verified_questionnaire(
+    surreal: &store::surreal::SurrealDb,
+    storage: Option<&Arc<dyn StorageService>>,
+    notation_id: Uuid,
+) -> Result<(store::notations::Notation, Option<QuestionnaireDefinition>), NotationSessionError> {
+    let notation = store::notations::find_by_id(surreal, notation_id)
+        .await?
+        .ok_or(NotationSessionError::NotationNotFound(notation_id))?;
+    let definition = if let Some(snapshot) = &notation.questionnaire_snapshot {
+        Some(
+            serde_json::from_value::<QuestionnaireDefinition>(snapshot.clone())
+                .map_err(|error| NotationSessionError::SnapshotDecode(error.to_string()))?,
+        )
+    } else {
+        let storage = storage.ok_or(NotationSessionError::QuestionnaireStorageRequired)?;
+        let template = store::templates::find_by_id(surreal, notation.template_id)
+            .await?
+            .ok_or(NotationSessionError::NotationNotFound(notation_id))?;
+        let body = store::templates::body_pinned_to(
+            surreal,
+            storage,
+            &template,
+            notation.template_body_sha256.as_deref(),
+        )
+        .await?;
+        let definition = definition_from_verified_body(&body)?;
+        // The seed strips frontmatter before storing bodies. Matching one of
+        // those bodies proves metadata was discarded, not that intake was absent.
+        // The catalog only classifies the missing authority; it never restores it.
+        if definition.is_none()
+            && store::seed::seeded_clause_sources(&template.code, &body).is_some()
+            && catalog_spec_yaml(&template.code)
+                .is_some_and(|yaml| definition_from_yaml(yaml).is_ok())
+        {
+            return Err(NotationSessionError::QuestionnaireAuthorityMissing);
+        }
+        definition
+    };
+    if let Some(definition) = &definition {
+        definition.spec.validate()?;
+        definition.spec.validate_routes(&definition.choices)?;
+    }
+    Ok((notation, definition))
+}
+
+fn definition_from_verified_body(
+    body: &str,
+) -> Result<Option<QuestionnaireDefinition>, NotationSessionError> {
+    let Some(yaml) = rules::frontmatter::extract(body) else {
+        return if body.trim_start().starts_with("---") {
+            Err(WorkflowSpecError::Yaml("malformed template frontmatter".into()).into())
+        } else {
+            Ok(None)
+        };
+    };
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(yaml).map_err(|error| WorkflowSpecError::Yaml(error.to_string()))?;
+    if !value.is_mapping() {
+        return Err(
+            WorkflowSpecError::Yaml("template frontmatter must be a mapping".into()).into(),
+        );
+    }
+    if value.get("questionnaire").is_none() {
+        return Ok(None);
+    }
+    definition_from_yaml(yaml).map(Some)
+}
+
+/// The completed question chain for Lawyer Review and Re-ask. Extracted
+/// proposals remain available to the active walker, but cannot replace a
+/// confirmed branch selection when deciding which answers may be corrected.
+///
+/// # Errors
+/// Returns notation, verified questionnaire, or answer-read errors.
+pub async fn questionnaire_chain_for_reask(
+    surreal: &store::surreal::SurrealDb,
+    storage: Option<&Arc<dyn StorageService>>,
+    notation_id: Uuid,
+) -> Result<Vec<String>, NotationSessionError> {
+    let projection = answer_projection(surreal, storage, notation_id, true).await?;
+    let values = values_for_answers(&projection.answers, &projection.codes);
+    Ok(match &projection.questionnaire {
+        RenderQuestionnaire::Absent { .. } => Vec::new(),
+        RenderQuestionnaire::Present { definition, .. } => definition
+            .spec
+            .question_order(&values)
+            .into_iter()
+            .map(|state| state.0)
+            .collect(),
+    })
+}
+
 /// The answers recorded for one notation, folded latest-wins into
 /// `state name → recorded value` — the route resolver's input. Rows
 /// arrive oldest-first, so the last row per state is the latest.
@@ -573,16 +785,24 @@ async fn recorded_answers(
     surreal: &store::surreal::SurrealDb,
     notation_id: Uuid,
 ) -> Result<BTreeMap<String, String>, NotationSessionError> {
-    let mut taken = BTreeMap::new();
-    for answer in store::answers::for_notation(surreal, notation_id).await? {
-        if let Some(state_name) = &answer.state_name {
-            taken.insert(
-                state_name.clone(),
-                store::answers::display_value(&answer.value),
-            );
-        }
-    }
-    Ok(taken)
+    let answers = store::answers::for_notation(surreal, notation_id).await?;
+    Ok(values_for_answers(&answers, &BTreeMap::new()))
+}
+
+fn values_for_answers<'a>(
+    answers: impl IntoIterator<Item = &'a store::answers::Answer>,
+    codes: &BTreeMap<Uuid, String>,
+) -> BTreeMap<String, String> {
+    answers
+        .into_iter()
+        .filter_map(|answer| {
+            answer
+                .state_name
+                .as_ref()
+                .or_else(|| codes.get(&answer.question_id))
+                .map(|state| (state.clone(), store::answers::display_value(&answer.value)))
+        })
+        .collect()
 }
 
 fn questionnaire_snapshot_from_definition(
@@ -1115,6 +1335,59 @@ pub async fn record_client_answer_with_reference(
     Ok(())
 }
 
+/// Check a whole correction set before writing any re-collected answer.
+/// The caller still checks the workflow state and flagged set. A correction
+/// may change a choice while preserving its question chain; changing which
+/// questions were asked requires a fresh intake, not reuse of off-route answers.
+///
+/// # Errors
+/// Returns notation/snapshot/read errors, an undeclared choice, an off-route
+/// question, or a correction that changes the completed question chain.
+pub async fn validate_reask_answers(
+    surreal: &store::surreal::SurrealDb,
+    storage: Option<&Arc<dyn StorageService>>,
+    notation_id: Uuid,
+    answers: &BTreeMap<String, String>,
+) -> Result<(), NotationSessionError> {
+    let projection = answer_projection(surreal, storage, notation_id, true).await?;
+    check_reask_projection(&projection, answers)
+}
+
+fn check_reask_projection(
+    projection: &RenderAnswerProjection,
+    answers: &BTreeMap<String, String>,
+) -> Result<(), NotationSessionError> {
+    match &projection.questionnaire {
+        RenderQuestionnaire::Absent { .. } if answers.is_empty() => Ok(()),
+        RenderQuestionnaire::Absent { .. } => Err(NotationSessionError::QuestionNotOnRoute),
+        RenderQuestionnaire::Present { definition, .. } => check_reask_route(
+            definition,
+            &values_for_answers(&projection.answers, &projection.codes),
+            answers,
+        ),
+    }
+}
+
+fn check_reask_route(
+    definition: &QuestionnaireDefinition,
+    taken: &BTreeMap<String, String>,
+    answers: &BTreeMap<String, String>,
+) -> Result<(), NotationSessionError> {
+    let route = definition.spec.question_order(taken);
+    for (code, value) in answers {
+        if !route.iter().any(|state| state.as_str() == code.as_str()) {
+            return Err(NotationSessionError::QuestionNotOnRoute);
+        }
+        ensure_declared_choice(&definition.choices, code, value)?;
+    }
+    let mut corrected = taken.clone();
+    corrected.extend(answers.clone());
+    if definition.spec.question_order(&corrected) != route {
+        return Err(NotationSessionError::QuestionnaireRouteChanged);
+    }
+    Ok(())
+}
+
 /// Re-collect one flagged answer on a notation parked at `reask__client`
 /// after a `lawyer_review` change request. Writes a fresh, latest-wins answer
 /// row attributed to `author` — the client self-serve, or lawyer on their
@@ -1125,35 +1398,35 @@ pub async fn record_client_answer_with_reference(
 /// END) stays put and every other answer is left as-is. The write is gated to
 /// the flagged set ([`store::reask::flagged_questions`]) — a question the
 /// review did not flag is rejected, so a hand-crafted POST can't rewrite an
-/// un-flagged answer. Audience gating (client-facing only) is the caller's,
+/// un-flagged answer. The correction also preserves the completed question
+/// chain; a different route requires a fresh intake. Audience gating (client-facing only) is the caller's,
 /// applied on the client self-serve surface; lawyer-on-behalf may re-collect
 /// any flagged question.
 ///
-/// Generic over the connection so a caller can re-collect several flagged
-/// answers inside one transaction (all-or-nothing) before resubmitting for
-/// review. The re-rendered document (on the next approve) assembles from the
-/// current answers, so the corrected value is what the attorney re-reviews
-/// and, ultimately, what gets signed.
+/// Subsequent document assembly uses the corrected answers in the review context.
 pub async fn record_reask_answer(
     surreal: &store::surreal::SurrealDb,
+    storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
     question_code: &str,
     value: &str,
     reference_id: Option<Uuid>,
     author: AnswerAuthor<'_>,
 ) -> Result<(), NotationSessionError> {
-    // The frozen questionnaire snapshot every notation carries supplies the
-    // declared choice set, so the correction is closed against the same
-    // options the original answer was — a re-collected value is what the
-    // attorney re-reviews and what ultimately gets signed.
-    let (notation_row, definition) = load_notation_and_spec(surreal, None, notation_id).await?;
+    // The verified frozen or pinned questionnaire supplies the declared
+    // choices and completed route before any correction is appended.
+    let projection = answer_projection(surreal, storage, notation_id, true).await?;
+    let notation_row = &projection.notation;
     let flagged = store::reask::flagged_questions(surreal, notation_id).await?;
     if !flagged.iter().any(|c| c == question_code) {
         return Err(NotationSessionError::QuestionNotFlagged(
             question_code.into(),
         ));
     }
-    ensure_declared_choice(&definition.choices, question_code, value)?;
+    check_reask_projection(
+        &projection,
+        &BTreeMap::from([(question_code.to_owned(), value.to_owned())]),
+    )?;
     let canonical_code = question_code_for_state(question_code);
     let question_row = store::questions::find_by_code(surreal, canonical_code)
         .await?
@@ -1909,6 +2182,7 @@ mod tests {
         // Lawyer re-collect the flagged answer on the client's behalf.
         record_reask_answer(
             &surreal,
+            None,
             notation_id,
             "person__client",
             "Libra Jones",
@@ -1932,6 +2206,7 @@ mod tests {
         // An un-flagged question is refused, even for lawyer.
         let err = record_reask_answer(
             &surreal,
+            None,
             notation_id,
             "project__engagement",
             "New Co",
@@ -4355,6 +4630,7 @@ It has been our privilege to do this work alongside you. A future engagement req
 
         let err = record_reask_answer(
             &surreal,
+            None,
             notation_id,
             "custom_single_choice__governing_law",
             OFF_LIST_GOVERNING_LAW,
@@ -4375,6 +4651,7 @@ It has been our privilege to do this work alongside you. A future engagement req
         // A declared correction still lands.
         record_reask_answer(
             &surreal,
+            None,
             notation_id,
             "custom_single_choice__governing_law",
             "california",

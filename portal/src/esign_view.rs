@@ -57,6 +57,7 @@ use axum::Extension;
 use uuid::Uuid;
 
 use crate::admin::AdminState;
+use crate::retainer_walk::client_recipient_for_notation;
 use crate::session::SessionData;
 use crate::signature::RecipientView;
 use crate::AppState;
@@ -139,9 +140,7 @@ pub async fn sign_get(
     // triple, so it must match the envelope exactly. Resolved through the
     // *same* function the send path used, so the two cannot drift.
     let recipient =
-        match crate::retainer_walk::client_recipient_for_notation(&state.surreal, &notation_row)
-            .await
-        {
+        match client_recipient_for_notation(&state.surreal, &state.storage, &notation_row).await {
             Ok(recipient) => recipient,
             Err(e) => {
                 tracing::error!(error = %e, %notation_id, "esign_view: recipient resolve failed");

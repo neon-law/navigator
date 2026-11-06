@@ -226,6 +226,13 @@ fn map_notation_err(err: NotationSessionError) -> ToolError {
         NotationSessionError::QuestionNotClientFacing(c) => {
             ToolError::InvalidArguments(format!("question `{c}` is not a client-facing question"))
         }
+        error @ (NotationSessionError::QuestionNotOnRoute
+        | NotationSessionError::QuestionnaireRouteChanged
+        | NotationSessionError::QuestionnaireAuthorityMissing) => {
+            ToolError::InvalidArguments(error.to_string())
+        }
+        error @ (NotationSessionError::QuestionnaireStorageRequired
+        | NotationSessionError::TemplateBody(_)) => ToolError::Internal(error.to_string()),
         NotationSessionError::QuestionNotFlagged(c) => ToolError::InvalidArguments(format!(
             "question `{c}` was not flagged for re-collection by the lawyer review"
         )),

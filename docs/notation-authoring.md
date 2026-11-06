@@ -74,14 +74,14 @@ Frontmatter fields:
 - `confidential` — an explicit `true`/`false` decision, never defaulted (N105).
 - `origin_url` — forms only; the HTTPS government page where the blank form can be obtained.
 - `form` — forms only; the bundled form code, matching the filename stem.
-- `questionnaire:` — the intake state machine: `BEGIN → typed_state → … → END`. Each step's `_:` is the "answered"
-  transition — and the **only** condition a questionnaire may use: the block must be one linear `_` chain from `BEGIN`
-  to `END` covering every declared state. `QuestionnaireSpec` rejects anything else at parse time, and `N118` flags it
-  at authoring time. State names are `<type>__<role>`; the prefix before `__` must be a registered Question Type.
-  Authors may write that map, or a linear list. A list item is a state name or a map with `state:`, an inline `prompt:`,
-  and, for a schedule, `columns:`. A `heading:` with `questions:` is a Questionnaire Group: a heading for the reader,
-  not a state. Both forms compile to the same chain. An inline prompt is stored on the role and overrides a `prompts:`
-  entry for that role.
+- `questionnaire:` — the intake state machine: `BEGIN → typed_state → … → END`. Each step follows the answer's named
+  choice route or its `_:` fallback. The graph must be reachable and acyclic, cover every declared choice, and reach
+  `END` on every route; `N118` checks this at authoring time. See [Questionnaire
+  Route](glossary/questionnaire-route.md). State names are `<type>__<role>`; the prefix before `__` must be a registered
+  Question Type. Authors may write that map, or a linear list. A list item is a state name or a map with `state:`, an
+  inline `prompt:`, and, for a schedule, `columns:`. A `heading:` with `questions:` is a Questionnaire Group: a heading
+  for the reader, not a state. Both forms compile to the same graph. An inline prompt is stored on the role and
+  overrides a `prompts:` entry for that role.
 - `workflow:` — the post-intake state machine: render, lawyer review, signature, filing. Transitions fire on named
   signals (`approved`, `pdf_persisted`, `signature_received`).
 
@@ -189,10 +189,12 @@ questionnaire shows for the state.
 
 **Body placeholders.** Prose uses `{{code}}` for a bare answer, `{{type__role.field}}` for a field off a typed answer,
 and `{{#for x in <aggregate>}} … {{x.field}} … {{/for}}` to walk a plural answer. `N115` resolves every path and
-iterator against the questionnaire's declared states, and `N120` resolves the bare `{{type__role}}` token the same way;
-signature blocks (`{{client.signature}}`) stay `N107`'s specialty, matched against the template's `signers:` list (or
-`[client, firm]` when that key is absent). A token nothing declares is never substituted, so it reaches the rendered
-page verbatim — which is why both rules ground the body against the questionnaire beside it.
+iterator against the questionnaire's declared states, and `N120` resolves the bare `{{type__role}}` token the same way.
+Both require the answer on every route where the surrounding condition renders it; see [Questionnaire
+Route](glossary/questionnaire-route.md). Conditional reads must exclude routes that skip their question; signature
+blocks (`{{client.signature}}`) stay `N107`'s specialty, matched against the template's `signers:` list (or `[client,
+firm]` when that key is absent). A token nothing declares is never substituted, so it reaches the rendered page verbatim
+— which is why both rules ground the body against the questionnaire beside it.
 
 ## How to create one — the five-step recipe
 
