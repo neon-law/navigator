@@ -17,6 +17,9 @@ Every House Brand also has a [Brand](brand.md) row with the same [Brand Key](bra
 `store::seed`, so a Firm can wear it and a Project can name it. The reverse does not hold: a Brand a Firm's Admin DRI
 creates at runtime has no House Brand, so it routes no host and publishes no marketing page.
 
+Project presentation follows [Brand's engagement identity contract](brand.md#engagement-identity). A registered host
+establishes routing, not admission, Firm membership or Project participation.
+
 `portal::canonical_host::resolve_brand_and_enforce_host` resolves the key early in the middleware stack from the
 incoming `Host:` header and stashes it as a request extension; `scope_branding` reads that extension and scopes the
 resolved `Branding` for the rest of the request, the same [`views::brand::scope`](../../views/src/brand.rs) task-local

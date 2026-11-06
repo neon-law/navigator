@@ -8,6 +8,10 @@ holds `firm_id`, a [Brand Key](brand-key.md), and timestamps, unique on the pair
 whole deployment, so one key is worn by at most one Firm and a Brand Key implies its Firm. Project ownership reads this
 table: `store::firms::firm_id_for_brand_key` resolves the Firm for a key, and a Project's `firm_id` must be that Firm.
 
+This ownership check is separate from a host selecting an engagement's presentation. A matching House Brand cannot make
+an invalid Firm/Brand pair valid or grant matter access. See [Brand's engagement identity
+contract](brand.md#engagement-identity) for the host assertion and legal-Firm identification.
+
 Distinct from `brand.firm_id`, which records which Firm *owns* the Brand row and so whose Admin DRI may edit it. The two
 normally agree, and the attach paths keep them so: a Firm wears a Brand it creates at `/app/admin/brands/new` at once,
 and a Brand row its Firm does not yet wear shows an "Attach to Firm" button on its edit page, which calls
