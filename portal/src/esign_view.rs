@@ -588,6 +588,13 @@ mod tests {
     async fn seed_matter(
         surreal: &store::surreal::SurrealDb,
     ) -> (store::persons::Person, Uuid, Uuid) {
+        seed_matter_with_delivery(surreal, store::notations::DELIVERY_EMBEDDED).await
+    }
+
+    async fn seed_matter_with_delivery(
+        surreal: &store::surreal::SurrealDb,
+        delivery: &str,
+    ) -> (store::persons::Person, Uuid, Uuid) {
         let client = store::test_support::ensure_person(
             surreal,
             &store::persons::NewPerson::new("Libra", "libra@example.com"),
@@ -607,7 +614,7 @@ mod tests {
         let notation = store::notations::create(
             surreal,
             &store::notations::NewNotation::new(template.id, client.id, project_id, "BEGIN")
-                .with_delivery(store::notations::DELIVERY_EMBEDDED),
+                .with_delivery(delivery),
         )
         .await
         .expect("seed the notation");
@@ -1036,6 +1043,69 @@ mod tests {
         )
         .await;
         assert_eq!(served.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn an_emailed_envelope_has_no_session_to_open() {
+        let (state, _root) = fake_app_state().await;
+        // An *emailed* notation: the recipient resolver derives no
+        // `clientUserId` for it — DocuSign mailed the signer their own
+        // link, so there is no embedded session to mint.
+        let (client, project_id, notation_id) =
+            seed_matter_with_delivery(&state.surreal, store::notations::DELIVERY_EMAILED).await;
+        store::projects::add_participation(&state.surreal, project_id, client.id, "client")
+            .await
+            .expect("bind the client to the matter");
+        // The envelope's recipient carries no `clientUserId`, matching
+        // the emailed notation above.
+        let manifest = SignatureManifest {
+            recipients: vec![SignatureRecipient {
+                role: "client".into(),
+                email: client.email.clone(),
+                name: client.name.clone(),
+                routing_order: 1,
+                client_user_id: None,
+            }],
+            fields: Vec::new(),
+        };
+        let request_id = state
+            .signature_provider
+            .send_for_signature(notation_id, b"%PDF-1.7 fake retainer", &manifest)
+            .await
+            .expect("the fake accepts an emailed manifest");
+        store::signatures::record_request(
+            &state.surreal,
+            notation_id,
+            store::signatures::SignatureProvider::DocuSign,
+            &request_id.0,
+        )
+        .await
+        .expect("record the envelope request");
+        let admin = admin_state(state);
+        let response = sign_get(
+            State(admin),
+            Extension(session_for(client.id, store::persons::Role::Client)),
+            HeaderMap::new(),
+            AxumPath(notation_id),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn a_lawyer_opening_the_sign_page_gets_the_firms_return_url() {
+        let (admin, _client, _project_id, notation_id, _root) = seed_signing_matter().await;
+        // A lawyer-tier session passes the participation gate on the firm
+        // lens and skips the identity gate: the ceremony is the client's,
+        // but the firm's step page is where the provider returns them.
+        let response = sign_get(
+            State(admin),
+            Extension(session_for(Uuid::now_v7(), store::persons::Role::Admin)),
+            HeaderMap::new(),
+            AxumPath(notation_id),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
     }
 
     /// A provider whose view URL points at a non-loopback http host — the
