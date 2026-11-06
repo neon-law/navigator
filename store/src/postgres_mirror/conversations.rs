@@ -1,6 +1,6 @@
 //! PostgreSQL projections for privileged Communications and email threads.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -348,32 +348,53 @@ async fn mirror_communication(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
-    let rows: Vec<CommRow> = s.query("SELECT id, project_id, channel, direction, author_person_id, counterparty, subject, body, source_ref, counterparty_role, acknowledges, asset_id, occurred_at, call, agreements, inserted_at, updated_at FROM communication WHERE id=$id")
-        .bind(("id", crate::surreal::record_id("communication", id))).await
-        .and_then(surrealdb::IndexedResults::check).map_err(|_| MirrorError::Source)?
-        .take(0).map_err(|_| MirrorError::Source)?;
-    let Some(row) = rows.into_iter().next() else {
-        return Ok(changed(
-            sqlx::query("DELETE FROM communication WHERE id=$1")
-                .bind(id)
-                .execute(&pg.0)
-                .await?
-                .rows_affected(),
-            Mirrored::Deleted,
-        ));
-    };
-    let image = source_image(row)?;
-    ensure_parent(s, pg, MirrorKey::Project(image.project_id)).await?;
-    if let Some(id) = image.author_person_id {
-        ensure_parent(s, pg, MirrorKey::Person(id)).await?;
+    let mut images = Vec::new();
+    let mut visited = BTreeSet::new();
+    let mut current = id;
+    loop {
+        if !visited.insert(current) {
+            return Err(MirrorError::Source);
+        }
+        let rows: Vec<CommRow> = s.query("SELECT id, project_id, channel, direction, author_person_id, counterparty, subject, body, source_ref, counterparty_role, acknowledges, asset_id, occurred_at, call, agreements, inserted_at, updated_at FROM communication WHERE id=$id")
+            .bind(("id", crate::surreal::record_id("communication", current))).await
+            .and_then(surrealdb::IndexedResults::check).map_err(|_| MirrorError::Source)?
+            .take(0).map_err(|_| MirrorError::Source)?;
+        let Some(row) = rows.into_iter().next() else {
+            if !images.is_empty() {
+                return Err(MirrorError::Source);
+            }
+            return Ok(changed(
+                sqlx::query("DELETE FROM communication WHERE id=$1")
+                    .bind(id)
+                    .execute(&pg.0)
+                    .await?
+                    .rows_affected(),
+                Mirrored::Deleted,
+            ));
+        };
+        let image = source_image(row)?;
+        let ancestor = image.acknowledges;
+        images.push(image);
+        let Some(ancestor) = ancestor else {
+            break;
+        };
+        current = ancestor;
     }
-    if let Some(id) = image.asset_id {
-        ensure_parent(s, pg, MirrorKey::Asset(id)).await?;
+
+    // Validate the full ancestry before writing; each receipt needs its
+    // acknowledged row first, and shared ancestors remain valid per call.
+    let mut result = Mirrored::Unchanged;
+    for image in images.into_iter().rev() {
+        ensure_parent(s, pg, MirrorKey::Project(image.project_id)).await?;
+        if let Some(id) = image.author_person_id {
+            ensure_parent(s, pg, MirrorKey::Person(id)).await?;
+        }
+        if let Some(id) = image.asset_id {
+            ensure_parent(s, pg, MirrorKey::Asset(id)).await?;
+        }
+        result = upsert_communication(pg, &image).await?;
     }
-    if let Some(id) = image.acknowledges {
-        Box::pin(mirror_communication(s, pg, id)).await?;
-    }
-    upsert_communication(pg, &image).await
+    Ok(result)
 }
 
 pub async fn mirror(
