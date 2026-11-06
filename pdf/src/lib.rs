@@ -78,8 +78,8 @@ pub use certificate::{
     escape_typst_markup, escape_typst_string, render_certificate, CertificateParams,
 };
 pub use format::{
-    render_document, render_document_with_options, Closing, LetterBlocks, Letterhead, OutputFormat,
-    PREVIEW_LABEL, PRIVILEGED_LABEL,
+    render_document, render_document_with_options, Closing, LetterBlocks, Letterhead,
+    LetterheadMark, OutputFormat, PREVIEW_LABEL, PRIVILEGED_LABEL,
 };
 pub use markdown::to_typst;
 pub use merge::append_document;
@@ -124,6 +124,11 @@ pub fn firm_logo_png() -> &'static [u8] {
 /// The virtual path the embedded [`FIRM_LOGO`] is resolvable at inside
 /// Typst markup — kept in one place so [`format`] and [`render`] agree.
 pub(crate) const LOGO_PATH: &str = "logo-neon-law.png";
+
+/// The virtual path a Brand's own uploaded mark rides into the engine at
+/// — registered only when the letterhead's mark carries bytes, so a
+/// letterhead that does not draw one never pays for it.
+pub(crate) const BRAND_LOGO_PATH: &str = "logo-brand-mark.png";
 
 /// The firm's typeface stack, most-preferred first. Typst walks it per
 /// glyph, so a document renders in GORP Serif wherever the licensed faces
@@ -280,6 +285,17 @@ pub fn render(source: &str) -> Result<Vec<u8>, PdfError> {
 /// or [`PdfError::Export`] if the PDF stage fails after a successful
 /// compile.
 pub fn render_with_options(source: &str, options: &RenderOptions) -> Result<Vec<u8>, PdfError> {
+    render_with_options_and_assets(source, options, &[])
+}
+
+/// [`render_with_options`], with additional virtual files the source's
+/// `#image(..)` calls resolve — a letterhead's Brand mark rides in here
+/// under [`BRAND_LOGO_PATH`].
+fn render_with_options_and_assets(
+    source: &str,
+    options: &RenderOptions,
+    assets: &[(&str, &[u8])],
+) -> Result<Vec<u8>, PdfError> {
     use typst_as_lib::TypstEngine;
     use typst_layout::PagedDocument;
 
@@ -300,7 +316,9 @@ pub fn render_with_options(source: &str, options: &RenderOptions) -> Result<Vec<
             TINOS_BOLD,
             TINOS_BOLD_ITALIC,
         ])
-        .with_static_file_resolver([(LOGO_PATH, FIRM_LOGO)])
+        .with_static_file_resolver(
+            std::iter::once((LOGO_PATH, FIRM_LOGO)).chain(assets.iter().copied()),
+        )
         .search_fonts_with(font_search_options())
         .build();
 

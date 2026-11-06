@@ -18,6 +18,16 @@
 //! The set of formats a template may *declare* in its `output:`
 //! frontmatter field is validated by the `rules` crate's `N109` rule;
 //! keep [`OutputFormat::FRONTMATTER_VALUES`] in step with it.
+//!
+//! The postal address prints only when the Brand's admin set one: the
+//! compiled default publishes none, because the Firm's postal address is
+//! a private-mailbox suite nothing is delivered to and no client visits.
+//! A Brand that sets an address on its letterhead row publishes it
+//! deliberately, beneath the contact line; the registered address stays
+//! in the website footer, where a registered address belongs. The
+//! letterhead's font family, likewise, applies only when the Brand's
+//! admin set one, and a family the host cannot resolve falls through to
+//! the faces behind it.
 
 use crate::{PdfError, LOGO_PATH};
 
@@ -36,11 +46,8 @@ use crate::{PdfError, LOGO_PATH};
 /// to reach the firm — voice line, mailbox, website — so a reader finds
 /// them all in a single place instead of scanning a block.
 ///
-/// The letterhead **publishes no street address**. The firm's postal
-/// address is a private-mailbox suite that nothing is delivered to and no
-/// client visits, so printing it on a letter points the reader at a door
-/// that does not answer. The registered address stays in the website
-/// footer, where a registered address belongs.
+/// The **postal address** prints only when the Brand's admin set one (see
+/// [`Letterhead::postal_address`]).
 ///
 /// An empty field drops cleanly rather than printing a gap, so a
 /// deployment that publishes no phone still renders a correct letterhead.
@@ -64,11 +71,33 @@ pub struct Letterhead {
     /// letter names the legal person behind the Brand. Empty, or the same
     /// as [`Letterhead::name`], prints nothing.
     pub entity: String,
-    /// Whether the compiled mark ([`crate::firm_logo_png`]) heads the page.
-    /// It is the default Brand's mark, so another Brand's letter sets this
-    /// `false` and opens on its wordmark rather than on a mark it does not
-    /// wear.
-    pub logo: bool,
+    /// The mark heading the page: the wordmark alone, the compiled Neon
+    /// mark, or the Brand's own uploaded mark — see [`LetterheadMark`].
+    pub mark: LetterheadMark,
+    /// The Firm's postal address, one rendered line per stored row,
+    /// beneath the contact line. The compiled default publishes none — the
+    /// Firm's address is a private-mailbox suite nothing is delivered to
+    /// and no client visits — but a Brand whose admin set one publishes it
+    /// deliberately, and an empty field drops cleanly.
+    pub postal_address: String,
+    /// The letterhead's font family, leading the type stack for the
+    /// letterhead block when the Brand's admin set one. Empty keeps the
+    /// renderer's own stack. A family whose faces are absent from the host
+    /// falls through to the faces behind it, exactly as GORP Serif itself
+    /// renders.
+    pub font_family: String,
+}
+
+/// The mark heading a letterhead's page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LetterheadMark {
+    /// The wordmark alone opens the page: no mark above it.
+    Wordmark,
+    /// The compiled Neon mark ([`crate::firm_logo_png`]) — the default
+    /// Brand's own mark, and a Brand with no runtime letterhead row's.
+    Compiled,
+    /// The Brand's own uploaded mark, these bytes.
+    Png(Vec<u8>),
 }
 
 impl Default for Letterhead {
@@ -82,7 +111,9 @@ impl Default for Letterhead {
             // this brand-agnostic crate does not read; a Project's letter
             // names it through `cli::letterhead`.
             entity: String::new(),
-            logo: true,
+            mark: LetterheadMark::Compiled,
+            postal_address: String::new(),
+            font_family: String::new(),
         }
     }
 }
@@ -123,8 +154,10 @@ impl Letterhead {
     /// the web line is its `host`, and the mailbox is always `contact@`
     /// the host's registrable domain. The phone is the Brand's, falling
     /// back to the Firm's; an empty field prints nothing. It names no
-    /// entity and draws no mark: the caller sets [`Letterhead::entity`] and
-    /// [`Letterhead::logo`] for the Brand it resolved.
+    /// entity, publishes no postal address, sets no letterhead font, and
+    /// opens on its wordmark: the caller sets [`Letterhead::entity`],
+    /// [`Letterhead::mark`], and the runtime lines for the Brand it
+    /// resolved.
     ///
     /// # Errors
     /// [`InvalidHost`] when `host` is empty or invalid.
@@ -146,7 +179,9 @@ impl Letterhead {
             email: format!("contact@{domain}"),
             web: host.trim().to_string(),
             entity: String::new(),
-            logo: false,
+            mark: LetterheadMark::Wordmark,
+            postal_address: String::new(),
+            font_family: String::new(),
         })
     }
 }
@@ -622,34 +657,94 @@ fn letter_continuation_prefix(blocks: &LetterBlocks) -> String {
     }
 }
 
-/// The letterhead itself — mark, wordmark, rule, contact line — shared by
-/// every format that carries one, so the firm's identity is drawn in
-/// exactly one place and a new format only chooses how much air sits
-/// beneath it via `below`.
+/// The letterhead itself — mark, wordmark, rule, contact line, postal
+/// address — shared by every format that carries one, so the firm's
+/// identity is drawn in exactly one place and a new format only chooses
+/// how much air sits beneath it via `below`.
 fn letterhead_block(letterhead: &Letterhead, below: &str) -> String {
-    let logo = if letterhead.logo {
-        format!("  #align(center)[#image(\"{LOGO_PATH}\", width: 0.34in)]\n  #v(0.45em)\n")
-    } else {
+    let mark = match &letterhead.mark {
+        LetterheadMark::Wordmark => String::new(),
+        LetterheadMark::Compiled => {
+            format!("  #align(center)[#image(\"{LOGO_PATH}\", width: 0.34in)]\n  #v(0.45em)\n")
+        }
+        LetterheadMark::Png(_) => {
+            // The Brand's own bytes ride into the engine under
+            // [`crate::BRAND_LOGO_PATH`] — see
+            // `crate::render_with_options`.
+            format!(
+                "  #align(center)[#image(\"{}\", width: 0.34in)]\n  #v(0.45em)\n",
+                crate::BRAND_LOGO_PATH
+            )
+        }
+    };
+    // The letterhead font leads the stack when the Brand set one; a
+    // family the host cannot resolve falls through to the faces behind
+    // it, the same contract GORP Serif itself renders under.
+    let font = if letterhead.font_family.trim().is_empty() {
         String::new()
+    } else {
+        format!(
+            "  #set text(font: (\"{}\", {}))\n",
+            escape_font_name(&letterhead.font_family),
+            crate::BRAND_FONT_STACK
+                .iter()
+                .map(|family| format!("\"{family}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     };
     format!(
         concat!(
             "#block(below: {below})[\n",
-            "{logo}",
+            "{font}",
+            "{mark}",
             "  #align(center)[#text(size: 9.5pt, tracking: 0.22em)[#upper[{name}]]]\n",
             "{entity_line}",
             "  #v(0.6em)\n",
             "  #line(length: 100%, stroke: 0.5pt + luma(35%))\n",
             "  #v(0.4em)\n",
             "{reach_line}",
+            "{postal_address}",
             "]\n\n",
         ),
         below = below,
-        logo = logo,
+        font = font,
+        mark = mark,
         name = esc(&letterhead.name),
         entity_line = entity_line(letterhead),
         reach_line = contact_line(&[&letterhead.phone, &letterhead.email, &letterhead.web]),
+        postal_address = postal_address_lines(letterhead),
     )
+}
+
+/// The Brand's postal address: one centred grey line per stored row
+/// beneath the contact line, or nothing when the letterhead publishes
+/// none. A stored row's blank lines drop out, so the address the admin
+/// typed is the address the reader sees.
+fn postal_address_lines(letterhead: &Letterhead) -> String {
+    let lines: Vec<String> = letterhead
+        .postal_address
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(esc)
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    // Typst's `\` continues the paragraph on the next rendered line.
+    format!(
+        "  #align(center)[#text(size: 7.5pt, tracking: 0.07em, \
+         fill: luma(40%))[{}]]\n",
+        lines.join("\\ ")
+    )
+}
+
+/// A font family's name as a Typst string literal. A family name has no
+/// way to carry Typst sigils, so the only characters that can break the
+/// literal are quotes and backslashes.
+fn escape_font_name(family: &str) -> String {
+    family.trim().replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// The Firm's legal name, small and grey beneath the wordmark, or nothing
@@ -659,8 +754,8 @@ fn entity_line(letterhead: &Letterhead) -> String {
     if entity.is_empty() || entity.eq_ignore_ascii_case(letterhead.name.trim()) {
         return String::new();
     }
-    // A shade apart from the contact line's `luma(40%)`, which stays the
-    // one place that fill appears.
+    // A shade apart from the contact and postal lines' `luma(40%)`, which
+    // stays one place on the page for one kind of line.
     format!(
         "  #v(0.3em)\n  #align(center)[#text(size: 7pt, tracking: 0.07em, \
          fill: luma(30%))[{}]]\n",
@@ -773,7 +868,14 @@ pub fn render_document_with_options(
         format.document_source(&markdown),
         format.postamble(),
     );
-    crate::render_with_options(&source, options)
+    // A letterhead carrying its Brand's own mark registers those bytes
+    // with the engine under [`crate::BRAND_LOGO_PATH`], which the block
+    // above references; every other mark resolves nothing extra.
+    let assets: &[(&str, &[u8])] = match &letterhead.mark {
+        LetterheadMark::Png(bytes) => &[(crate::BRAND_LOGO_PATH, bytes.as_slice())],
+        LetterheadMark::Compiled | LetterheadMark::Wordmark => &[],
+    };
+    crate::render_with_options_and_assets(&source, options, assets)
 }
 
 /// The words every page of a privileged render carries.
@@ -1817,7 +1919,7 @@ mod tests {
         fn a_brand_without_the_compiled_mark_draws_no_image() {
             let lh = Letterhead::from_brand("Example Brand", "examplefirm.test", "", "")
                 .expect("valid host");
-            assert!(!lh.logo);
+            assert_eq!(lh.mark, super::super::LetterheadMark::Wordmark);
             let preamble = OutputFormat::Letter(LetterBlocks::default()).preamble(&lh);
             assert!(!preamble.contains("#image("), "{preamble}");
             let default =

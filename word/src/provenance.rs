@@ -292,6 +292,8 @@ mod tests {
             phone: "702",
             email: "hello@neonlaw.com",
             web: "neonlaw.com",
+            postal_address: "",
+            font_family: "",
             logo_png: &[],
         };
         let bytes = render_notation(

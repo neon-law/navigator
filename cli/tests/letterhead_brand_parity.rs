@@ -2,16 +2,20 @@
 //! identity its Brand publishes.
 //!
 //! `notation pdf` / `notation word` resolve the Project's Brand from
-//! `navigator.yaml` (`cli::letterhead`) and frame the letter with it. The
-//! letterhead is built from the compiled Brand registry, source rather than a
-//! mounted bundle, because a rendered letter is a binding artifact whose
-//! re-render must print what was sent.
+//! `navigator.yaml` (`cli::letterhead`) and frame the letter with it. Which
+//! frame that Brand wears has two sources (LAW-266): the Brand's runtime
+//! letterhead row — the same rows `/app/admin/brands` edits — when the
+//! deployment's stores answer, and the compiled Brand registry when they
+//! cannot, a fallback the render announces. The runtime rows' rendering is
+//! exercised against real stores in `render.rs`; these tests pin the other
+//! half of the contract: the compiled fallback agrees with the registry it
+//! is compiled from, for every registered host, and a Brand with no
+//! runtime row still wears a correct frame.
 //!
-//! Building from source is not a licence to drift from it. When a Brand's
-//! voice line or name changes, a website that takes the new value while the
-//! letterhead keeps the old one sends letters inviting clients to dial a dead
-//! line. These tests turn that drift into a red build, for every registered
-//! host, not just the default Brand.
+//! Agreement is not a licence to drift. When a Brand's voice line or name
+//! changes, a website that takes the new value while the letterhead keeps
+//! the old one sends letters inviting clients to dial a dead line. These
+//! tests turn that drift into a red build.
 //!
 //! `pdf::Letterhead::default()` is what a template outside any Project renders
 //! on, so it is pinned to the default Brand's resolved letterhead.
@@ -50,7 +54,18 @@ fn every_registered_host_wears_its_brands_letterhead() {
             let labels: Vec<&str> = key.canonical_host().split('.').collect();
             let domain = labels[labels.len() - 2..].join(".");
             assert_eq!(letterhead.email, format!("contact@{domain}"), "{host}");
-            assert_eq!(letterhead.logo, key == BrandKey::Neon, "{host}");
+            let expected_mark = if key == BrandKey::Neon {
+                pdf::LetterheadMark::Compiled
+            } else {
+                pdf::LetterheadMark::Wordmark
+            };
+            assert_eq!(letterhead.mark, expected_mark, "{host}");
+            // The compiled registry publishes no postal address and names
+            // no letterhead font: a Brand's own address and font live in
+            // its runtime row (LAW-266). If a compiled Brand ever grows
+            // one, this is the test to change — deliberately.
+            assert!(letterhead.postal_address.is_empty(), "{host}");
+            assert!(letterhead.font_family.is_empty(), "{host}");
         }
     }
 }
