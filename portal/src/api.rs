@@ -2013,11 +2013,12 @@ struct PrivateTerms {
     code: String,
     name: String,
     participants: Vec<PrivateTermsParticipant>,
+    identifiers: Vec<String>,
 }
 
 /// `GET /app/api/projects/{id}/private-terms` — the Project's code, its matter
-/// name, and every participant's name, mailbox, and phone, which
-/// `navigator project feedback-check --project` scans a draft against. Only a
+/// name, participant identities, and scoped client and reference identifiers.
+/// `navigator project feedback-check` scans the draft locally against them. Only a
 /// firm-side participant reads it: a client-side participant, a Clerk, and a
 /// caller with no participation all get the bare 404 an unknown id gets.
 async fn private_terms_door(
@@ -2036,31 +2037,102 @@ async fn private_terms_door(
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
-    let people: Vec<Uuid> = store::projects::participations_for_project(&state.surreal, id)
-        .await
-        .map_err(|e| ApiError::Db(e.to_string()))?
-        .iter()
-        .map(|row| row.person_id)
-        .collect();
-    let participants = store::persons::find_by_ids(&state.surreal, &people)
+    let terms = private_terms_for_project(&state.surreal, project).await?;
+    Ok((StatusCode::OK, Json(terms)).into_response())
+}
+
+/// Resolve only parties attached to this authorized Project. A dangling
+/// attachment refuses the response instead of claiming a complete check.
+async fn private_terms_for_project(
+    db: &store::surreal::SurrealDb,
+    project: store::projects::Project,
+) -> Result<PrivateTerms, ApiError> {
+    let member_ids = store::projects::participations_for_project(db, project.id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .into_iter()
-        .map(|person| PrivateTermsParticipant {
-            name: person.name,
-            email: person.email,
-            phone: person.phone,
-        })
-        .collect();
-    Ok((
-        StatusCode::OK,
-        Json(PrivateTerms {
-            code: project.code,
-            name: project.name,
-            participants,
-        }),
-    )
-        .into_response())
+        .map(|row| row.person_id)
+        .collect::<std::collections::HashSet<_>>();
+    let mut person_ids = member_ids.iter().copied().collect::<Vec<_>>();
+    let mut entity_ids = vec![project.entity_id];
+    for reference in store::project_references::for_project(db, project.id)
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?
+    {
+        match reference.party.kind {
+            store::relationships::Endpoint::Person => person_ids.push(reference.party.id),
+            store::relationships::Endpoint::Entity => entity_ids.push(reference.party.id),
+        }
+    }
+    person_ids.sort_unstable();
+    person_ids.dedup();
+    entity_ids.sort_unstable();
+    entity_ids.dedup();
+    let people = store::persons::find_by_ids(db, &person_ids)
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?;
+    let entities = store::entities::find_by_ids(db, &entity_ids)
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?;
+    if people.len() != person_ids.len() || entities.len() != entity_ids.len() {
+        return Err(ApiError::Db(
+            "private identifier coverage is incomplete".into(),
+        ));
+    }
+    let mut identifiers = vec![project.id.to_string()];
+    let mut participants = Vec::new();
+    for person in people {
+        identifiers.push(person.id.to_string());
+        identifiers.extend(person.given_name);
+        identifiers.extend(person.middle_name);
+        identifiers.extend(person.family_name);
+        identifiers.extend(person.xero_contact_id);
+        if member_ids.contains(&person.id) {
+            participants.push(PrivateTermsParticipant {
+                name: person.name,
+                email: person.email,
+                phone: person.phone,
+            });
+        } else {
+            identifiers.extend([person.name, person.email]);
+            identifiers.extend(person.phone);
+        }
+    }
+    for entity in entities {
+        if let Some(metadata) = entity.metadata.as_ref() {
+            let object = metadata
+                .as_object()
+                .ok_or_else(|| ApiError::Db("private identifier coverage is incomplete".into()))?;
+            if let Some(value) = object.get("ein") {
+                let ein = value
+                    .as_str()
+                    .filter(|value| {
+                        value.len() == 10
+                            && value.bytes().enumerate().all(|(index, byte)| {
+                                if index == 2 {
+                                    byte == b'-'
+                                } else {
+                                    byte.is_ascii_digit()
+                                }
+                            })
+                    })
+                    .ok_or_else(|| {
+                        ApiError::Db("private identifier coverage is incomplete".into())
+                    })?;
+                identifiers.push(ein.to_owned());
+            }
+        }
+        identifiers.extend([entity.id.to_string(), entity.name]);
+        identifiers.extend(entity.phone);
+        identifiers.extend(entity.url);
+        identifiers.extend(entity.xero_id);
+    }
+    Ok(PrivateTerms {
+        code: project.code,
+        name: project.name,
+        participants,
+        identifiers,
+    })
 }
 
 /// `GET /app/api/projects/{id}/finance`: the Project's latest finance aggregate,
@@ -13498,6 +13570,296 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
         };
         let (status, _) = call(&f.state, Some(&client_session), "GET", &path, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn private_terms_include_the_client_and_only_referenced_parties() {
+        let f = door_fixture().await;
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: f.project,
+                person_id: f.lawyer.person_id.unwrap(),
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .unwrap();
+        let entity = store::test_support::seed_entity(&f.db).await;
+        store::project_references::reference(
+            &f.db,
+            f.project,
+            store::project_references::Party::entity(entity),
+            store::project_references::REASON_COUNTERPARTY_ENTITY,
+        )
+        .await
+        .unwrap();
+        let contact = store::persons::create(
+            &f.db,
+            &store::persons::NewPerson::new("Referenced Contact", "referenced@example.com"),
+        )
+        .await
+        .unwrap();
+        store::project_references::reference(
+            &f.db,
+            f.project,
+            store::project_references::Party::person(contact.id),
+            store::project_references::REASON_SIGNATORY,
+        )
+        .await
+        .unwrap();
+        let unrelated = store::test_support::seed_entity(&f.db).await;
+        let project = store::projects::find_by_id(&f.db, f.project)
+            .await
+            .unwrap()
+            .unwrap();
+        let client = store::entities::find_by_id(&f.db, project.entity_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let counterparty = store::entities::find_by_id(&f.db, entity)
+            .await
+            .unwrap()
+            .unwrap();
+        let unrelated = store::entities::find_by_id(&f.db, unrelated)
+            .await
+            .unwrap()
+            .unwrap();
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/projects/{}/private-terms", f.project),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let terms = json["identifiers"]
+            .as_array()
+            .expect("complete party identifiers");
+        for value in [client.name, counterparty.name, contact.name, contact.email] {
+            assert!(
+                terms.contains(&serde_json::json!(value)),
+                "missing attached identifier"
+            );
+        }
+        assert!(!terms.contains(&serde_json::json!(unrelated.name)));
+        assert!(!terms.contains(&serde_json::json!(unrelated.id.to_string())));
+        let outside_person = store::persons::create(
+            &f.db,
+            &store::persons::NewPerson::with_role(
+                "Unrelated Lawyer",
+                "unrelated-lawyer@example.com",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        let outsider = crate::SessionData {
+            person_id: Some(outside_person.id),
+            ..crate::SessionData::fresh("outsider", store::persons::Role::Lawyer)
+        };
+        let (status, _) = call(
+            &f.state,
+            Some(&outsider),
+            "GET",
+            &format!("/app/api/projects/{}/private-terms", f.project),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn private_terms_include_structured_identifiers_without_exporting_metadata() {
+        let f = door_fixture().await;
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: f.project,
+                person_id: f.lawyer.person_id.unwrap(),
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .unwrap();
+        let project = store::projects::find_by_id(&f.db, f.project)
+            .await
+            .unwrap()
+            .unwrap();
+        f.db.query("UPDATE $entity SET metadata = $metadata")
+            .bind((
+                "entity",
+                store::surreal::record_id("entity", project.entity_id),
+            ))
+            .bind((
+                "metadata",
+                serde_json::json!({
+                    "ein": "12-3456789", "private_note": "synthetic non-identifier context"
+                }),
+            ))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let contact = store::persons::create(
+            &f.db,
+            &store::persons::NewPerson {
+                given_name: Some("Privategiven".into()),
+                middle_name: Some("Privatemiddle".into()),
+                family_name: Some("Privatefamily".into()),
+                ..store::persons::NewPerson::new("Referenced Contact", "referenced@example.com")
+            },
+        )
+        .await
+        .unwrap();
+        store::project_references::reference(
+            &f.db,
+            f.project,
+            store::project_references::Party::person(contact.id),
+            store::project_references::REASON_SIGNATORY,
+        )
+        .await
+        .unwrap();
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/projects/{}/private-terms", f.project),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let terms = json["identifiers"].as_array().unwrap();
+        let missing = [
+            "12-3456789",
+            "Privategiven",
+            "Privatemiddle",
+            "Privatefamily",
+        ]
+        .iter()
+        .filter(|value| !terms.contains(&serde_json::json!(value)))
+        .count();
+        assert_eq!(missing, 0, "stored structured identifiers must be included");
+        assert!(!terms.contains(&serde_json::json!("synthetic non-identifier context")));
+        f.db.query("UPDATE $entity SET metadata.ein = 123")
+            .bind((
+                "entity",
+                store::surreal::record_id("entity", project.entity_id),
+            ))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let (status, _) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/projects/{}/private-terms", f.project),
+            None,
+        )
+        .await;
+        assert!(
+            !status.is_success(),
+            "a malformed stored identifier cannot be omitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn private_terms_refuse_a_dangling_person_or_entity_reference() {
+        for (table, reason) in [
+            ("person", store::project_references::REASON_SIGNATORY),
+            (
+                "entity",
+                store::project_references::REASON_COUNTERPARTY_ENTITY,
+            ),
+        ] {
+            let f = door_fixture().await;
+            store::participation::add_participant(
+                &f.db,
+                &store::participation::AddParticipantCommand {
+                    project_id: f.project,
+                    person_id: f.lawyer.person_id.unwrap(),
+                    dri: store::participation::DriRequest::Unchanged,
+                    actor: store::participation::DriActor::System,
+                },
+            )
+            .await
+            .unwrap();
+            let missing = Uuid::now_v7();
+            // The compatibility relation permits a dangling target. Refuse
+            // the incomplete identifier set rather than dropping that party.
+            f.db.query("RELATE $project->project_reference->$party SET reason = $reason")
+                .bind(("project", store::surreal::record_id("project", f.project)))
+                .bind(("party", store::surreal::record_id(table, missing)))
+                .bind(("reason", reason.to_string()))
+                .await
+                .unwrap()
+                .check()
+                .unwrap();
+            assert!(store::project_references::for_project(&f.db, f.project)
+                .await
+                .unwrap()
+                .iter()
+                .any(|row| row.party.id == missing));
+            let (status, json) = call(
+                &f.state,
+                Some(&f.lawyer),
+                "GET",
+                &format!("/app/api/projects/{}/private-terms", f.project),
+                None,
+            )
+            .await;
+            assert!(
+                !status.is_success(),
+                "a dangling {table} must refuse coverage"
+            );
+            assert!(json.get("identifiers").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn private_terms_refuse_a_missing_attached_entity() {
+        let f = door_fixture().await;
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: f.project,
+                person_id: f.lawyer.person_id.unwrap(),
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .unwrap();
+        let project = store::projects::find_by_id(&f.db, f.project)
+            .await
+            .unwrap()
+            .unwrap();
+        f.db.query("DELETE $entity")
+            .bind((
+                "entity",
+                store::surreal::record_id("entity", project.entity_id),
+            ))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/projects/{}/private-terms", f.project),
+            None,
+        )
+        .await;
+        assert!(
+            !status.is_success(),
+            "an incomplete set must not scan clean"
+        );
+        assert!(json.get("identifiers").is_none());
     }
 
     #[tokio::test]
