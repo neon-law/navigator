@@ -6226,7 +6226,8 @@ struct EmlUploadRequest {
     /// OAuth grant is involved in filing.
     raw_base64: String,
     /// The firm mailbox the filing lawyer files from. When it matches the
-    /// message's `From`, the message files as outbound; without it, inbound.
+    /// message's `From`, the message files as outbound. Defaults to the
+    /// signed-in lawyer's own address.
     mailbox: Option<String>,
     /// Required asset-lane kind when the message carries attachments — a
     /// decision, never a default, matching `POST .../documents`.
@@ -6251,7 +6252,7 @@ struct EmlUploadAttachment {
 struct EmlUploadResponse {
     /// The external id the message deduped on (`eml:<Message-ID or digest>`).
     source_ref: String,
-    /// `inbound` or `outbound`, decided by the optional mailbox match.
+    /// `inbound` or `outbound`, decided by the mailbox match.
     direction: String,
     /// `true` when a message with this `(channel, source_ref)` was already
     /// filed on this matter — nothing was written a second time.
@@ -6309,7 +6310,11 @@ async fn eml_upload_door(
             "raw_base64 must be the raw .eml message, base64-encoded.",
         ));
     };
-    let parsed = match crate::eml_filing::parse_eml(&raw, input.mailbox.as_deref()) {
+    let mailbox = match input.mailbox {
+        Some(mailbox) => Some(mailbox),
+        None => filing_lawyer_mailbox(&state.surreal, &lawyer).await?,
+    };
+    let parsed = match crate::eml_filing::parse_eml(&raw, mailbox.as_deref()) {
         Ok(parsed) => parsed,
         Err(error) => {
             return Ok(bad_request(
@@ -6362,6 +6367,20 @@ async fn eml_upload_door(
             .into_response());
     }
     file_parsed_eml(&state, id, &lawyer, parsed, kind, visibility, attachments).await
+}
+
+/// The signed-in lawyer's own address, the mailbox a request without one
+/// files from: the Person's email, else the session's sign-in email.
+async fn filing_lawyer_mailbox(
+    db: &store::surreal::SurrealDb,
+    lawyer: &LawyerSession,
+) -> Result<Option<String>, ApiError> {
+    if let Some(person_id) = lawyer.0.person_id {
+        if let Some(person) = store::persons::find_by_id(db, person_id).await? {
+            return Ok(Some(person.email));
+        }
+    }
+    Ok(lawyer.0.email.clone())
 }
 
 /// The filing half of the .eml door: ingest the parsed message as a
@@ -10912,6 +10931,75 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "kind_required");
+    }
+
+    /// A message the filing lawyer sent to someone outside the Project — not
+    /// a client, opposing counsel, or court — with a PDF attached.
+    const EML_OUTBOUND_TO_OUTSIDER: &str = "Message-ID: <sent-1@neonlaw.com>\r\n\
+From: Aries Attorney <aries@neonlaw.com>\r\n\
+To: Records Desk <records@example.test>\r\n\
+Subject: Requested records\r\n\
+Date: Mon, 02 Nov 2026 09:15:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\
+\r\n\
+--BOUND\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+The records you asked for are attached.\r\n\
+--BOUND\r\n\
+Content-Type: application/pdf\r\n\
+Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
+\r\n\
+%PDF-1.4\r\n\
+--BOUND--\r\n";
+
+    #[tokio::test]
+    async fn eml_door_files_the_lawyers_own_message_to_a_non_participant_as_outbound() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-out").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        // No mailbox in the request: the signed-in lawyer's own address
+        // decides direction, so a saved copy of their sent mail files as
+        // outbound with no Gmail grant.
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            Json(eml_request(
+                EML_OUTBOUND_TO_OUTSIDER.as_bytes(),
+                None,
+                Some("letter".to_string()),
+                false,
+            )),
+        )
+        .await
+        .expect("the lawyer's sent message files");
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["direction"], "outbound");
+        assert_eq!(json["filed"].as_array().map(Vec::len), Some(1));
+        let filed = store::communications::for_project(&db, project_id)
+            .await
+            .unwrap();
+        assert_eq!(filed.len(), 1);
+        assert_eq!(
+            filed[0].channel,
+            store::communications::channel::EMAIL_OUTBOUND
+        );
+        assert_eq!(
+            store::assets::for_project(&db, project_id)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the PDF files as an Asset"
+        );
     }
 
     #[tokio::test]

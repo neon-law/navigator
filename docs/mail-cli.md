@@ -182,13 +182,15 @@ makes for a whole thread, but for a single message the lawyer points at:
   message id is accepted as well.
 - **Local .eml.** A path to a saved .eml files from its own bytes: headers, Date, and body come from the message, and
   the Message-ID header (or a content digest when the message has none) scopes the source reference so re-filing the
-  same .eml dedupes.
+  same .eml dedupes. A message from the signed-in lawyer's own address files as outbound, whoever it went to; any other
+  files as inbound. Each attachment files as a document of kind `letter` (`--kind` overrides).
 - **PDF or any other file.** Any other local path rides the existing `navigator document upload` lane as a document,
   defaulting to kind `letter` (`--kind` overrides; the asset-lane kinds are accepted), visibility `internal`.
 
-Like `file`, `parse` takes `--project` and `--host` (each defaulting to `navigator.yaml`), warns when the message's
-participants do not match the Project's client contact, and refuses a message that carries attachments before it writes
-anything.
+Like `file`, `parse` takes `--project` and `--host` (each defaulting to `navigator.yaml`). For a Gmail message it warns
+when the message's participants do not match the Project's client contact, and refuses a message that carries
+attachments before it writes anything; save it with `mail save` and parse the .eml instead. When Navigator refuses a
+filing, the error names the status and the server's `error` code and `message`.
 
 ## Save a message's .eml copy
 
