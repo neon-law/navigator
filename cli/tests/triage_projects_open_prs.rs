@@ -1,4 +1,4 @@
-//! Implementation lanes must stay off work owned by open pull requests.
+//! Portfolio triage must stay off pull requests that are still open.
 //!
 //! The skill text is the instruction agents follow. These assertions hold the
 //! three rules that keep a lane from repeating work an open pull request
@@ -31,12 +31,8 @@ fn refresh_records_open_pull_requests() {
 fn lanes_refuse_open_pull_request_overlap() {
     let body = skill();
     assert!(
-        body.contains("Exclude issues an open pull request already links from new implementation prompts"),
-        "implementation prompts must exclude issues an open pull request already links, got:\n{body}"
-    );
-    assert!(
-        body.contains("while retaining them in the portfolio audit"),
-        "issues owned by open pull requests must remain in the audit, got:\n{body}"
+        body.contains("Drop any issue an open pull request already links"),
+        "lanes must refuse issues an open pull request already links, got:\n{body}"
     );
     assert!(
         body.contains("touch a path an open pull request or active worktree already changes"),
