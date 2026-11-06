@@ -8,6 +8,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use crate::atomic_directory::publish_no_clobber as publish_mirror_no_clobber;
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -270,24 +271,6 @@ fn verify_bundle_bytes(
         "restored refs do not match receipt"
     );
     Ok(restored)
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn publish_mirror_no_clobber(source: &Path, destination: &Path) -> Result<()> {
-    rustix::fs::renameat_with(
-        rustix::fs::CWD,
-        source,
-        rustix::fs::CWD,
-        destination,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .context("publish verified restore without replacing an existing path")?;
-    Ok(())
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn publish_mirror_no_clobber(_source: &Path, _destination: &Path) -> Result<()> {
-    anyhow::bail!("no-clobber directory publication is unsupported on this platform")
 }
 
 fn create(mirror: &Path, output: &Path) -> Result<()> {

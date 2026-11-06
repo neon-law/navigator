@@ -153,6 +153,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
     use axum::routing::{delete, get, patch, post, put};
     vec![
         ("GET", "/app/api/people", get(list_people)),
+        ("GET", "/app/api/ephemeris/sources", get(crate::ephemeris_reference::sources)),
         (
             "POST",
             "/app/api/projects/{id}/astrology-chart",

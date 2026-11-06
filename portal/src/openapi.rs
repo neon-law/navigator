@@ -104,6 +104,7 @@ pub fn document_with_base(base: &str) -> Value {
     add_inbox_import_operation(&mut document);
     add_fi_import_operation(&mut document);
     add_private_chart_operation(&mut document);
+    add_ephemeris_source_operation(&mut document);
     add_inbox_attachment_operation(&mut document);
     document["paths"]["/app/api/projects/{id}/section-counts"] = serde_json::json!({
       "get": {
@@ -121,6 +122,19 @@ pub fn document_with_base(base: &str) -> Value {
       }
     });
     document
+}
+
+fn add_ephemeris_source_operation(document: &mut Value) {
+    document["paths"]["/app/api/ephemeris/sources"] = json!({"get": {
+        "operationId":"getEphemerisSources", "tags":["Ephemeris"],
+        "summary":"Discover the pinned raw DE440 source for local acquisition",
+        "description":"Requires an authenticated Owner or Admin session. Scoped CI sessions are refused. Returns the version 2 source manifest with only the unmodified NAIF-distributed DE440 kernel; it contains no personal chart inputs or results. The manifest does not authorize generated-kernel mirroring or derived-table publication.",
+        "responses":{
+            "200":{"description":"Pinned DE440 source manifest", "content":{"application/json":{"schema":{"type":"object"}}}},
+            "401":{"description":"Unauthenticated"}, "403":{"description":"Role or session scope denied"},
+            "503":{"description":"Eligible source declaration unavailable"}
+        }
+    }});
 }
 
 fn add_private_chart_operation(document: &mut Value) {

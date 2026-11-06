@@ -41,6 +41,32 @@ IAU 2006 true obliquity. The calculation provenance names these models. Swiss Ep
 validation fixtures; the mean-node grid retains a one-arcsecond comparison limit. ERFA-derived routines retain the
 upstream notice in the repository `NOTICE`.
 
+## Local raw-source acquisition
+
+After `navigator site login --host <deployment>`, run:
+
+```bash
+navigator ephemeris download --host <deployment> --dir ./jpl-reference
+```
+
+The deployment authorizes the signed session as Owner or Admin through `GET /app/api/ephemeris/sources` before any
+source transfer or local bundle check. Cached credential roles do not grant access, and scoped CI sessions cannot use
+this door. The bounded version-2 catalogue contains only the checked-in DE440 pin. The CLI rejects different versions,
+source URLs, hashes, sizes, additional fields, or files rather than adopting new pins.
+
+The CLI obtains `de440.bsp` directly from its pinned NAIF URL using a separate client without Navigator credentials;
+neither client follows redirects. [NAIF's kernel rules](https://naif.jpl.nasa.gov/naif/rules.html) permit downloading
+and using kernels on its server and redistributing unmodified NAIF kernels. The [official planetary kernel
+directory](https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/) distributes DE440. Generated Horizons
+kernels are outside this acquisition catalogue.
+
+`--dir` names an immutable completed bundle containing the ordinary raw `de440.bsp` file and `source-manifest.json`. The
+CLI verifies the exact byte count and SHA-256 in a sibling staging directory before atomic publication without
+replacement. A repeated command accepts only the same fully verified bundle. Existing empty directories, different or
+corrupt contents, links, and concurrent destination creation are refused without replacing user data. Failed transfers
+remove only their own staging directory. This command acquires raw reference sources; it creates no personal chart
+export or derived numerical table.
+
 ## Private calculation boundary
 
 `AstrologyChartProvider` loads a version-2 manifest and calculates locally. It makes no network calls and creates no

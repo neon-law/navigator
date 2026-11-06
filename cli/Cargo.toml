@@ -24,6 +24,7 @@ cloud.workspace = true
 forms.workspace = true
 comfy-table.workspace = true
 dotenvy.workspace = true
+ephemeris.workspace = true
 # `scraper session` drives the pinned Chrome for Testing through
 # fantoccini, the same WebDriver client the e2e features harness uses.
 fantoccini.workspace = true
