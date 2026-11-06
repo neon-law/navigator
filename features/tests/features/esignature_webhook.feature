@@ -45,3 +45,19 @@ Feature: E-signature completion webhook closes the retainer loop
     Then the response status is 401
     And the retainer workflow is still at "sent_for_signature__pending"
     And the notation row state is "sent_for_signature__pending"
+
+  Scenario: A viewed event is acknowledged and the retainer stays pending
+    When the provider posts a validly-signed viewed callback for envelope "fake"
+    Then the response status is 200
+    And the retainer workflow is still at "sent_for_signature__pending"
+
+  Scenario: A receipt the worker never consumed is recovered by the boot-time sweep
+    When the worker journals a validly-signed completion callback and dies before consuming it
+    Then the journal holds one pending receipt
+    And the retainer workflow is still at "sent_for_signature__pending"
+    When the boot-time replay sweep drains the journal
+    Then the sweep drains without error
+    And the retainer workflow has advanced to "END"
+    And the notation row state is "END"
+    And the signature row state is "completed"
+    And the journal has no pending receipts

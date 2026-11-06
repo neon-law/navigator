@@ -443,7 +443,9 @@ pub(crate) async fn fake_sender_page(
 
 #[cfg(test)]
 mod tests {
-    use super::{fake_sender_page, fake_signing_page, redirect_to_provider, sender_view_get, sign_get};
+    use super::{
+        fake_sender_page, fake_signing_page, redirect_to_provider, sender_view_get, sign_get,
+    };
     use crate::admin::AdminState;
     use crate::session::SessionData;
     use crate::signature::{
@@ -570,8 +572,8 @@ mod tests {
     /// portal pointed at the fake's own on-disk root.
     async fn fake_app_state() -> (crate::AppState, std::path::PathBuf) {
         let mut state = app_state(test_support::mem().await).await;
-        let root = std::env::temp_dir()
-            .join(format!("navigator-esign-view-{}", Uuid::now_v7().simple()));
+        let root =
+            std::env::temp_dir().join(format!("navigator-esign-view-{}", Uuid::now_v7().simple()));
         state.signature_provider = Arc::new(
             crate::signature::FakeSignatureProvider::new_in(root.clone())
                 .with_signing_base_url("http://127.0.0.1:8080".into()),
@@ -651,8 +653,13 @@ mod tests {
     /// admin state, the seeded ids, and the fake's on-disk root — the root
     /// the minted view URLs are backed by.
     #[allow(clippy::type_complexity)]
-    async fn seed_signing_matter(
-    ) -> (AdminState, store::persons::Person, Uuid, Uuid, std::path::PathBuf) {
+    async fn seed_signing_matter() -> (
+        AdminState,
+        store::persons::Person,
+        Uuid,
+        Uuid,
+        std::path::PathBuf,
+    ) {
         let (state, root) = fake_app_state().await;
         let (client, project_id, notation_id) = seed_matter(&state.surreal).await;
         store::projects::add_participation(&state.surreal, project_id, client.id, "client")
@@ -773,8 +780,7 @@ mod tests {
             .await
             .expect("the fake mints a sender view");
 
-        let response =
-            fake_sender_page(State(state), AxumPath(request_id.0.clone())).await;
+        let response = fake_sender_page(State(state), AxumPath(request_id.0.clone())).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -789,8 +795,7 @@ mod tests {
     #[tokio::test]
     async fn a_sender_page_for_an_unknown_envelope_is_not_found() {
         let (state, _root) = fake_app_state().await;
-        let response =
-            fake_sender_page(State(state), AxumPath("fake-never-sent-1".into())).await;
+        let response = fake_sender_page(State(state), AxumPath("fake-never-sent-1".into())).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
@@ -916,8 +921,7 @@ mod tests {
         // wired in — a state pointed at this root answers 200 for it.
         let mut served_state = app_state(test_support::mem().await).await;
         served_state.fake_signature_dir = Some(root.clone());
-        let served =
-            fake_sender_page(State(served_state), AxumPath(envelope_id.clone())).await;
+        let served = fake_sender_page(State(served_state), AxumPath(envelope_id.clone())).await;
         assert_eq!(served.status(), StatusCode::OK);
     }
 
@@ -977,7 +981,10 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_ne!(other.id, client.id, "the second client is a different person");
+        assert_ne!(
+            other.id, client.id,
+            "the second client is a different person"
+        );
     }
 
     #[tokio::test]
@@ -1005,15 +1012,18 @@ mod tests {
             .split('/')
             .collect();
         assert_eq!(segments.len(), 2, "the redirect targets one sign page");
-        assert_ne!(segments[1], "sender", "the client gets a sign page, not the sender page");
+        assert_ne!(
+            segments[1], "sender",
+            "the client gets a sign page, not the sender page"
+        );
         let envelope_id = segments[0].to_string();
 
         // The minted URL is backed by the page the fake wrote at mint time,
         // served by the portal's fake-signing-page route.
-        let page = root
-            .join("signing")
-            .join(&envelope_id)
-            .join(format!("{}.html", crate::signature::recipient_slug(&client.email)));
+        let page = root.join("signing").join(&envelope_id).join(format!(
+            "{}.html",
+            crate::signature::recipient_slug(&client.email)
+        ));
         let html = tokio::fs::read_to_string(&page)
             .await
             .expect("the minted sign URL is backed by a page on disk");
@@ -1033,8 +1043,8 @@ mod tests {
     /// than send a browser to a URL they do not trust.
     async fn evil_base_app_state() -> (crate::AppState, std::path::PathBuf) {
         let mut state = app_state(test_support::mem().await).await;
-        let root = std::env::temp_dir()
-            .join(format!("navigator-esign-view-{}", Uuid::now_v7().simple()));
+        let root =
+            std::env::temp_dir().join(format!("navigator-esign-view-{}", Uuid::now_v7().simple()));
         state.signature_provider = Arc::new(
             crate::signature::FakeSignatureProvider::new_in(root.clone())
                 .with_signing_base_url("http://evil.example".into()),

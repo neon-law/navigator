@@ -353,9 +353,6 @@ mod tests {
             .expect("mark the receipt consumed");
 
         let pending = pending_receipts(&db, 10).await.expect("read the journal");
-        assert!(
-            pending.is_empty(),
-            "a consumed receipt stops being pending"
-        );
+        assert!(pending.is_empty(), "a consumed receipt stops being pending");
     }
 }

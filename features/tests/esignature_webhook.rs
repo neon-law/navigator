@@ -20,6 +20,7 @@ use portal::signature::{
     FakeSignatureProvider, SignatureManifest, SignatureProvider, SignatureRecipient,
 };
 use portal::webhook_auth::sign_hmac_sha256_b64;
+use portal::AppState;
 use portal::{policy::PolicyClient, SessionStore};
 use store::seed;
 use tower::ServiceExt;
@@ -73,6 +74,12 @@ struct WebhookWorld {
     /// consumption path reads, held so the parked envelope can be sent
     /// and signed through the real provider seam.
     provider: Option<Arc<FakeSignatureProvider>>,
+    /// The router's own state, held (`AppState` is clone-cheap) so the
+    /// journal-recovery sweep runs through the exact seams a running
+    /// server would use — same store, same provider, same runtime.
+    state: Option<AppState>,
+    /// The boot-time sweep's captured outcome, for the step that asserts it.
+    sweep_result: Option<Result<(), String>>,
     last_status: Option<StatusCode>,
     last_body: String,
 }
@@ -128,10 +135,14 @@ async fn build_app(world: &mut WebhookWorld) {
     // envelopes sent below are visible to the handler under test.
     let provider = Arc::new(FakeSignatureProvider::new());
     state.signature_provider = provider.clone();
-    let router = features::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    let router = features::neon_router(
+        state.clone(),
+        std::path::Path::new(portal::DEFAULT_PUBLIC_DIR),
+    );
     world.app = Some(router);
     world.runtime = Some(runtime);
     world.provider = Some(provider);
+    world.state = Some(state);
 }
 
 #[given(regex = r#"^a retainer parked at sent_for_signature__pending with envelope id "([^"]+)"$"#)]
@@ -347,6 +358,78 @@ async fn assert_signature_state(world: &mut WebhookWorld, state: String) {
     .unwrap()
     .expect("signature row");
     assert_eq!(signature.state.as_str(), state);
+}
+
+#[when(regex = r#"^the provider posts a validly-signed viewed callback for envelope "([^"]+)"$"#)]
+async fn post_viewed(world: &mut WebhookWorld, feature_envelope_id: String) {
+    // A non-terminal event: the handler acks it so the provider stops
+    // retrying, but nothing advances and nothing is journaled — a viewed
+    // event cannot be replayed into any workflow state.
+    let envelope_id = world.envelope_id().to_string();
+    assert!(envelope_id.starts_with(&feature_envelope_id));
+    let body = terminal_body(&envelope_id, "envelope-viewed", "delivered");
+    let signature = sign_hmac_sha256_b64(HMAC_KEY.as_bytes(), &body);
+    post_callback(world, body, &signature).await;
+}
+
+#[when("the worker journals a validly-signed completion callback and dies before consuming it")]
+async fn journal_and_die(world: &mut WebhookWorld) {
+    // The handler journals the verified receipt BEFORE consuming it — the
+    // journal is the delivery record. A worker killed in that window leaves
+    // exactly this state: a verified receipt in the journal, nothing
+    // consumed anywhere. Simulated at the same store seam the handler
+    // writes, with the same arguments it passes.
+    let state = world.state.as_ref().expect("app not built").clone();
+    let envelope_id = world.envelope_id().to_string();
+    let body = completion_body(&envelope_id);
+    store::signature_webhook_journal::journal_verified_receipt(
+        &state.surreal,
+        store::signatures::SignatureProvider::DocuSign,
+        &envelope_id,
+        "completed",
+        &String::from_utf8_lossy(&body),
+    )
+    .await
+    .expect("journal the verified receipt");
+}
+
+#[then("the journal holds one pending receipt")]
+async fn assert_one_pending(world: &mut WebhookWorld) {
+    let state = world.state.as_ref().expect("app not built").clone();
+    let pending = store::signature_webhook_journal::pending_receipts(&state.surreal, 100)
+        .await
+        .expect("read the journal");
+    assert_eq!(pending.len(), 1, "exactly one receipt awaits consumption");
+}
+
+#[when("the boot-time replay sweep drains the journal")]
+async fn sweep_journal(world: &mut WebhookWorld) {
+    let state = world.state.as_ref().expect("app not built").clone();
+    let result = portal::esignature_webhook::replay_pending_receipts(&state, 100)
+        .await
+        .map_err(|error| error.to_string());
+    world.sweep_result = Some(result);
+}
+
+#[then("the sweep drains without error")]
+async fn assert_sweep_ok(world: &mut WebhookWorld) {
+    let result = world.sweep_result.take().expect("the sweep has not run");
+    assert!(
+        result.is_ok(),
+        "the boot-time sweep drains the journal without error: {result:?}"
+    );
+}
+
+#[then("the journal has no pending receipts")]
+async fn assert_journal_empty(world: &mut WebhookWorld) {
+    let state = world.state.as_ref().expect("app not built").clone();
+    let pending = store::signature_webhook_journal::pending_receipts(&state.surreal, 100)
+        .await
+        .expect("read the journal");
+    assert!(
+        pending.is_empty(),
+        "every receipt is consumed after the sweep drains"
+    );
 }
 
 #[tokio::main]
