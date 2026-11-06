@@ -36,6 +36,19 @@ pub struct LiveFields<'a> {
     pub jurisdiction: Option<&'a str>,
 }
 
+impl<'a> LiveFields<'a> {
+    /// The same fields with `--drive-folder` replaced by its resolved id.
+    fn with_drive_folder<'b>(self, drive_folder_id: Option<&'b str>) -> LiveFields<'b>
+    where
+        'a: 'b,
+    {
+        LiveFields {
+            drive_folder_id,
+            ..self
+        }
+    }
+}
+
 /// Everything one `navigator project set` invocation was asked to do, as
 /// a single argument bundle — the LAW-213 flags pushed the bare parameter
 /// list past `clippy::too_many_arguments`.
@@ -85,6 +98,8 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
     if firm.is_some() != brand.is_some() {
         return Err(anyhow!("--firm and --brand must be supplied together"));
     }
+    let drive_folder = drive_folder_id(live_fields.drive_folder_id)?;
+    let live_fields = live_fields.with_drive_folder(drive_folder.as_deref());
     let live_patch = live_patch(live_fields)?;
     let path = Path::new(manifest::FILE);
     let contents = std::fs::read_to_string(path).context("read navigator.yaml")?;
@@ -158,7 +173,7 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
         return Ok(dry_run_plan(changed, &live_patch, firm.is_some()));
     }
     if !live_patch.is_empty() {
-        remote::patch_project_fields(host, project, &live_patch).await?;
+        patch_live_row(host, project, &live_patch, drive_folder.as_deref()).await?;
         changed.extend(live_patch.keys().map(|key| format!("live Project {key}")));
     }
     if let (Some(firm), Some(brand)) = (firm, brand) {
@@ -294,6 +309,50 @@ fn dry_run_plan(
     plan
 }
 
+/// The id `--drive-folder` names: a `drive.google.com` folder link or a bare
+/// id, normalised to the id before anything is written. An empty value stays
+/// empty, which clears the folder.
+fn drive_folder_id(raw: Option<&str>) -> Result<Option<String>> {
+    let Some(raw) = raw.map(str::trim) else {
+        return Ok(None);
+    };
+    if raw.is_empty() {
+        return Ok(Some(String::new()));
+    }
+    store::projects::drive_folder_id_from_input(raw)
+        .map(Some)
+        .ok_or_else(|| anyhow!(store::projects::DRIVE_FOLDER_INPUT_INVALID))
+}
+
+/// Send the live-row patch, then report how the deployment checked a Drive
+/// folder the patch names.
+async fn patch_live_row(
+    host: &str,
+    project: &str,
+    live_patch: &serde_json::Map<String, serde_json::Value>,
+    drive_folder: Option<&str>,
+) -> Result<()> {
+    let drive_folder_check = remote::patch_project_fields(host, project, live_patch).await?;
+    if let Some(folder) = drive_folder.filter(|id| !id.is_empty()) {
+        println!(
+            "drive folder {folder}: {}",
+            drive_folder_check_note(drive_folder_check.as_deref())
+        );
+    }
+    Ok(())
+}
+
+/// What the deployment's answer in
+/// [`store::project_surfaces::DRIVE_FOLDER_CHECK_HEADER`] means for the
+/// folder just recorded.
+fn drive_folder_check_note(check: Option<&str>) -> &'static str {
+    if check == Some(store::project_surfaces::DriveFolderCheck::Verified.as_str()) {
+        "confirmed with Drive as a live folder in the Firm's Projects shared drive"
+    } else {
+        "only the id's shape was checked; the deployment has no Drive credential, so Drive validation was skipped"
+    }
+}
+
 /// The live-row fields `--calendar`, `--booking-url`, `--jurisdiction`, and
 /// `--drive-folder`
 /// name, checked before any file or network write so a malformed value
@@ -390,7 +449,10 @@ fn remove_project_key(contents: &str, key: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{live_patch, remove_project_key, replace_project_key, LiveFields};
+    use super::{
+        drive_folder_check_note, drive_folder_id, live_patch, remove_project_key,
+        replace_project_key, LiveFields,
+    };
 
     #[test]
     fn removes_only_the_nested_key() {
@@ -456,6 +518,46 @@ mod tests {
                 })
                 .is_err(),
                 "{bad_drive_folder} must be refused"
+            );
+        }
+    }
+
+    /// `--drive-folder` takes the folder's link as Drive shares it, or the
+    /// bare id, and the live patch and the manifest both receive the id.
+    #[test]
+    fn drive_folder_accepts_a_folder_link_or_an_id_and_yields_the_id() {
+        for input in [
+            "1SyntheticFolderId",
+            "https://drive.google.com/drive/folders/1SyntheticFolderId?usp=sharing",
+            "https://drive.google.com/drive/u/1/folders/1SyntheticFolderId",
+            "https://drive.google.com/open?id=1SyntheticFolderId",
+        ] {
+            assert_eq!(
+                drive_folder_id(Some(input)).unwrap().as_deref(),
+                Some("1SyntheticFolderId"),
+                "{input}"
+            );
+        }
+        assert_eq!(drive_folder_id(Some("  ")).unwrap().as_deref(), Some(""));
+        assert_eq!(drive_folder_id(None).unwrap(), None);
+        let refused = drive_folder_id(Some("https://example.com/drive/folders/1Synthetic"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("drive.google.com folder link"),
+            "{refused}"
+        );
+    }
+
+    /// The report names whether Drive confirmed the folder, and says plainly
+    /// when only the id's shape was checked.
+    #[test]
+    fn the_drive_folder_note_says_whether_drive_confirmed_the_folder() {
+        assert!(drive_folder_check_note(Some("verified")).contains("confirmed with Drive"));
+        for check in [Some("skipped"), None] {
+            assert!(
+                drive_folder_check_note(check).contains("validation was skipped"),
+                "{check:?}"
             );
         }
     }

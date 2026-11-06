@@ -3094,18 +3094,36 @@ async fn require_project_firm_administration(
 /// `closed_at`, are rejected during request deserialization; move a matter's
 /// lifecycle through `POST /app/api/projects/{id}/lifecycle` instead. The
 /// rules live in `store::projects::update_project`, which the
-/// `/app/projects/{project_code}` edit form calls too.
+/// `/app/projects/{project_code}` edit form calls too. A patch naming a Drive
+/// folder is first checked with the deployment's Drive provider, and the
+/// response's `navigator-drive-folder-check` header says whether the folder
+/// was `verified` or the check `skipped` for want of a provider.
 async fn update_project(
     State(state): State<ApiState>,
     LawyerSession(session): LawyerSession,
     Path(id): Path<Uuid>,
     JsonOrForm(input): JsonOrForm<store::projects::UpdateProjectCommand>,
-) -> Result<Json<store::projects::Project>, ApiError> {
+) -> Result<Response, ApiError> {
     if let Some(firm_id) = input.firm_id {
         require_project_firm_administration(&state.surreal, &session, firm_id).await?;
     }
+    let drive_folder_check = match input.drive_folder_id.as_deref().map(str::trim) {
+        Some(folder) if store::projects::is_valid_drive_folder_id(folder) => Some(
+            store::project_surfaces::check_drive_folder_from_env(folder)
+                .await
+                .map_err(surface_error)?,
+        ),
+        _ => None,
+    };
     let updated = store::projects::update_project(&state.surreal, id, &input).await?;
-    Ok(Json(updated))
+    let mut response = Json(updated).into_response();
+    if let Some(check) = drive_folder_check {
+        response.headers_mut().insert(
+            store::project_surfaces::DRIVE_FOLDER_CHECK_HEADER,
+            axum::http::HeaderValue::from_static(check.as_str()),
+        );
+    }
+    Ok(response)
 }
 
 /// Request body for `POST /app/api/projects/{id}/lifecycle`. `status` and
@@ -12594,6 +12612,58 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             integration_providers: app.integration_providers.clone(),
             billing_provider: app.billing_provider.clone(),
         }
+    }
+
+    /// `navigator project set --drive-folder` records the folder through this
+    /// patch. A deployment with no Drive provider records the id and says the
+    /// check was skipped; a malformed id is refused before any Drive call.
+    #[tokio::test]
+    async fn a_drive_folder_patch_records_the_id_and_names_its_check() {
+        let db = store::test_support::mem_surreal().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "drive-adopt").await;
+        let state = router_api_state(db.clone()).await;
+        let session = crate::SessionData::fresh("l", store::persons::Role::Lawyer);
+        let patch = |value: &str| {
+            serde_json::from_value::<store::projects::UpdateProjectCommand>(
+                serde_json::json!({ "drive_folder_id": value }),
+            )
+            .expect("a drive folder patch")
+        };
+
+        let response = super::update_project(
+            State(state.clone()),
+            LawyerSession(session.clone()),
+            Path(project_id),
+            JsonOrForm(patch("1SyntheticFolderId")),
+        )
+        .await
+        .expect("the patch applies");
+        assert_eq!(
+            response
+                .headers()
+                .get(store::project_surfaces::DRIVE_FOLDER_CHECK_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("skipped"),
+            "no Drive provider is configured in tests"
+        );
+        let stored = store::projects::find_by_id(&db, project_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.drive_folder_id.as_deref(),
+            Some("1SyntheticFolderId")
+        );
+
+        let refused = super::update_project(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            JsonOrForm(patch("https://drive.google.com/drive/folders/1Other")),
+        )
+        .await
+        .expect_err("the API takes the id; the CLI and the form resolve links");
+        assert_eq!(refused.into_response().status(), StatusCode::BAD_REQUEST);
     }
 
     /// Drive one request through the real `/app/api` router with `session`

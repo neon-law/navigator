@@ -15,9 +15,12 @@ folder as a live store of client assets.
 `navigator project setup` creates the folder when none is recorded, or adopts an unrecorded one named for the code that
 a person made by hand before the matter was opened, recording the id before sharing anything and sharing it as a writer
 with every project participant who has an email. A reconcile reports the difference — `created` for a folder it made,
-`adopted` for one it only found and recorded, `present` for one already recorded. `navigator project set --drive-folder
-<id>` records an id by hand (`--dry-run` previews the write), and a setup or set that names a folder another matter
-already records is refused: the folder link, not its display name, is what scopes an import.
+`adopted` for one it only found and recorded, `present` for one already recorded, which it adopts as it stands and says
+so. `navigator project set --drive-folder <link-or-id>` and the matter edit form's Drive card record an existing folder
+by hand, from its `drive.google.com` link or its id (`--dry-run` previews the write). The deployment confirms the folder
+is live in the Projects shared drive with its Drive credential before recording it; without one, only the id's shape is
+checked and the CLI says Drive validation was skipped. A setup or set that names a folder another matter already records
+is refused: the folder link, not its display name, is what scopes an import.
 
 - Provider: [`cloud::drive`](../../cloud/src/drive.rs) · provisioning:
   [`store::project_surfaces`](../../store/src/project_surfaces.rs) · import:

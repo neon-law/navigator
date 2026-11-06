@@ -65,6 +65,81 @@ where
     keys.iter().any(|key| get(key).is_some())
 }
 
+/// The reconcile detail for a Drive folder the Project already records.
+pub const DRIVE_FOLDER_ALREADY_SET: &str =
+    "adopted the folder already set on the Project; no folder created";
+
+/// The response header `PATCH /app/api/projects/{id}` sets when the patch
+/// names a Drive folder: [`DriveFolderCheck::as_str`] of the check it ran.
+pub const DRIVE_FOLDER_CHECK_HEADER: &str = "navigator-drive-folder-check";
+
+/// How far a Drive folder id named by a lawyer was confirmed before it was
+/// recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriveFolderCheck {
+    /// The deployment's Drive provider found it as a live folder in the
+    /// Firm's Projects shared drive.
+    Verified,
+    /// The deployment has no Drive provider, so only the id's shape was
+    /// checked.
+    Skipped,
+}
+
+impl DriveFolderCheck {
+    /// The value carried by [`DRIVE_FOLDER_CHECK_HEADER`].
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+/// Confirm a Drive folder id before it is recorded on a Project: with a
+/// provider, it must be a live folder in the Firm's Projects shared drive
+/// ([`DriveService::is_ingest_folder`], the same test an import makes); with
+/// none, the check is [`DriveFolderCheck::Skipped`].
+///
+/// # Errors
+/// [`SurfaceError::Command`] carrying
+/// [`projects::DRIVE_FOLDER_NOT_IN_PROJECTS_DRIVE`] when the provider does not
+/// find the folder, and [`SurfaceError::Drive`] when it cannot be asked.
+pub async fn check_drive_folder<D>(
+    drive: Option<&D>,
+    folder_id: &str,
+) -> Result<DriveFolderCheck, SurfaceError>
+where
+    D: DriveService + ?Sized,
+{
+    let Some(drive) = drive else {
+        return Ok(DriveFolderCheck::Skipped);
+    };
+    if drive.is_ingest_folder(folder_id).await? {
+        Ok(DriveFolderCheck::Verified)
+    } else {
+        Err(SurfaceError::Command(ProjectCommandError::Invalid(
+            projects::DRIVE_FOLDER_NOT_IN_PROJECTS_DRIVE,
+        )))
+    }
+}
+
+/// [`check_drive_folder`] against the provider the process environment
+/// configures, on the same terms as [`reconcile_from_env`]: no Drive key at
+/// all skips the check, and a partial configuration is an error.
+///
+/// # Errors
+/// As [`check_drive_folder`], plus a provider initialization failure.
+pub async fn check_drive_folder_from_env(
+    folder_id: &str,
+) -> Result<DriveFolderCheck, SurfaceError> {
+    if !provider_configured(&DRIVE_CONFIGURATION_KEYS, |key| std::env::var(key).ok()) {
+        return Ok(DriveFolderCheck::Skipped);
+    }
+    let drive = cloud::GoogleDrive::from_env().await?;
+    check_drive_folder(Some(&drive), folder_id).await
+}
+
 /// What a reconcile pass did about one provisioned surface (Drive folder or
 /// source repository) — distinct from merely reporting the resulting value,
 /// because a caller reading only the value cannot tell "this call did the
@@ -183,7 +258,9 @@ pub struct ProjectSurfaces {
     pub documents_prefix: String,
     pub drive_folder_id: Option<String>,
     pub drive_status: SurfaceStatus,
-    /// Present when Drive was skipped because the provider is disabled.
+    /// Why Drive was skipped (the provider is disabled), or, for
+    /// [`SurfaceStatus::Present`], that the folder already set on the
+    /// Project was adopted rather than a new one created.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drive_detail: Option<String>,
     pub repository_url: Option<String>,
@@ -343,7 +420,14 @@ where
 
     let (drive_folder_id, drive_status, drive_detail) =
         if let Some(existing) = project.drive_folder_id.as_deref() {
-            (Some(existing.to_string()), SurfaceStatus::Present, None)
+            // A folder recorded by hand (`navigator project set
+            // --drive-folder` or the matter edit form) is adopted as it
+            // stands; setup never creates a second one beside it.
+            (
+                Some(existing.to_string()),
+                SurfaceStatus::Present,
+                Some(DRIVE_FOLDER_ALREADY_SET.to_string()),
+            )
         } else if let Some(drive) = drive {
             // LAW-213: a folder named for the code that predates the matter
             // is adopted, not shadowed by a second folder. Only a genuinely
@@ -1156,6 +1240,11 @@ mod tests {
             SurfaceStatus::Present,
             "the second pass found the folder already recorded rather than creating it again"
         );
+        assert_eq!(
+            second.drive_detail.as_deref(),
+            Some(super::DRIVE_FOLDER_ALREADY_SET),
+            "the report says the recorded folder was adopted, not created"
+        );
         assert_eq!(second.repository_status, SurfaceStatus::Present);
         assert_eq!(forge.repository_count(), 1);
         let folders = drive.list_folders().await.expect("list");
@@ -1200,6 +1289,73 @@ mod tests {
         assert_eq!(
             reloaded.drive_folder_id.as_deref(),
             Some(already.id.as_str())
+        );
+    }
+
+    /// A folder set by hand before setup runs is adopted as it stands: setup
+    /// creates nothing, records nothing new, and says so.
+    #[tokio::test]
+    async fn a_folder_set_by_hand_is_adopted_and_nothing_is_created() {
+        let surreal = mem_surreal().await;
+        let project = open_acme(&surreal).await;
+        let drive = FakeDrive::default();
+        let existing = drive
+            .create_folder("working-folder")
+            .await
+            .expect("a folder made before the Project");
+        projects::set_drive_folder_id(&surreal, project.id, Some(&existing.id))
+            .await
+            .expect("set by hand")
+            .expect("exists");
+
+        let surfaces = reconcile(&surreal, project.id, Some(&drive), None::<&FakeForge>)
+            .await
+            .expect("adopt");
+        assert_eq!(
+            surfaces.drive_folder_id.as_deref(),
+            Some(existing.id.as_str())
+        );
+        assert_eq!(surfaces.drive_status, SurfaceStatus::Present);
+        assert_eq!(
+            surfaces.drive_detail.as_deref(),
+            Some(super::DRIVE_FOLDER_ALREADY_SET)
+        );
+        assert_eq!(
+            drive.list_folders().await.expect("list").len(),
+            1,
+            "no folder named for the code is created beside the one set"
+        );
+    }
+
+    /// The check a hand-set folder passes before it is recorded: a live
+    /// folder in the Projects shared drive is verified, an unknown id is
+    /// refused with the reason, and no provider skips the check.
+    #[tokio::test]
+    async fn a_named_drive_folder_is_checked_against_the_provider() {
+        let drive = FakeDrive::default();
+        let folder = drive.create_folder("acme").await.expect("folder");
+        assert_eq!(
+            super::check_drive_folder(Some(&drive), &folder.id)
+                .await
+                .expect("verified"),
+            super::DriveFolderCheck::Verified
+        );
+        let refused = super::check_drive_folder(Some(&drive), "1UnknownSyntheticFolder")
+            .await
+            .expect_err("an unknown folder is refused");
+        assert!(
+            matches!(
+                refused,
+                SurfaceError::Command(projects::ProjectCommandError::Invalid(message))
+                    if message == crate::projects::DRIVE_FOLDER_NOT_IN_PROJECTS_DRIVE
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(
+            super::check_drive_folder(None::<&FakeDrive>, "1UnknownSyntheticFolder")
+                .await
+                .expect("skipped"),
+            super::DriveFolderCheck::Skipped
         );
     }
 
