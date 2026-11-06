@@ -433,7 +433,7 @@ pub(crate) fn validate_gate(
             validate_templates(
                 root,
                 directory,
-                engagement_executed(root),
+                executed_onboarding(root).as_deref(),
                 write_fixes,
                 &mut errors,
                 &mut warnings,
@@ -1940,7 +1940,7 @@ pub(crate) const RELEASE_TAG_SHAPE: &str =
 fn validate_templates(
     root: &Path,
     blueprint_directory: rules::project_blueprints::BlueprintDirectory,
-    engagement_executed: bool,
+    executed_onboarding: Option<&Path>,
     write_fixes: bool,
     errors: &mut Vec<Finding>,
     warnings: &mut Vec<Finding>,
@@ -1990,7 +1990,7 @@ fn validate_templates(
         return 0;
     }
 
-    let rules = templates_rule_set(engagement_executed);
+    let rules = templates_rule_set(executed_onboarding.is_some());
     let mut declared_codes = BTreeMap::new();
     for path in &paths {
         lint_project_template(
@@ -2001,15 +2001,41 @@ fn validate_templates(
             errors,
             warnings,
         );
+        if let Some(evidence) = executed_onboarding {
+            if let Some(finding) = retirable_onboarding(path, evidence) {
+                warnings.push(finding);
+            }
+        }
     }
     paths.len()
 }
 
+/// The N132 warning for an onboarding template the executed onboarding has
+/// made retirable: one that lacks `engagement_arbitration` and would fail
+/// N132 on an unexecuted onboarding. Adding the Clause now would only make the
+/// template disagree with what the client signed, so the gate points at the
+/// signed copy instead. An unreadable template is left to
+/// `lint_project_template`, which already reports it.
+fn retirable_onboarding(path: &Path, evidence: &Path) -> Option<Finding> {
+    let contents = fs::read_to_string(path).ok()?;
+    rules::clauses::onboarding_lacks_engagement_arbitration(&contents).then(|| {
+        Finding::at(
+            path,
+            format!(
+                "N132: the onboarding is executed (`{}` is its signed copy), so this template is \
+                 not required to carry `{}`; the signed copy is the record, so retire this \
+                 template and drop any page `draft:` line that names it",
+                evidence.display(),
+                rules::clauses::ENGAGEMENT_ARBITRATION
+            ),
+        )
+    })
+}
+
 /// The rule set `validate_templates` lints Project templates with. When the
-/// Project's engagement is executed (LAW-226), N132 runs in its executed
-/// variant, which waives the onboarding engagement-arbitration requirement
-/// the same way `navigator_default_rules_with_codes` swaps in the
-/// registry-backed N104.
+/// Project's onboarding is executed, N132 runs in its executed variant, which
+/// waives the onboarding engagement-arbitration requirement the same way
+/// `navigator_default_rules_with_codes` swaps in the registry-backed N104.
 fn templates_rule_set(engagement_executed: bool) -> Vec<Box<dyn rules::Rule>> {
     let mut rules = rules::navigator_default_rules_with_codes(&rules::canonical_question_codes());
     if engagement_executed {
@@ -2022,25 +2048,38 @@ fn templates_rule_set(engagement_executed: bool) -> Vec<Box<dyn rules::Rule>> {
     rules
 }
 
-/// Whether the Project's engagement has been executed, read from the
-/// committed document pointers (LAW-226): any pointer carrying a
-/// `docusign_envelope_id` is a signed copy, and the gate has no other
-/// committed signal for "this engagement went out and came back signed".
+/// The committed signed copy of the Project's onboarding, as a path relative
+/// to `root`, or `None` while the onboarding is unexecuted.
 ///
-/// A pointer that fails to parse counts as no evidence — the unwaived
+/// The evidence is a `kind: onboarding` pointer under `blobs/` carrying a
+/// `docusign_envelope_id`: the `<name>_signed.pdf` record the completed
+/// envelope files. A signed document of any other kind says nothing about the
+/// onboarding. The template pass is offline in every run, `--ci` and local
+/// alike, so it reads only this committed record; whether the envelope belongs
+/// to the Firm's account and completed is the live `OnboardingStatus`
+/// reading, which `project status` and `project lifecycle` report.
+///
+/// A pointer that fails to parse counts as no evidence: the unwaived
 /// requirement stands, and the parse fault surfaces through the pointer
 /// checks that already judge `blobs/`.
-fn engagement_executed(root: &Path) -> bool {
-    let blobs = root.join(POINTER_DIRECTORY);
-    let Ok(entries) = walkdir(&blobs) else {
-        return false;
-    };
+fn executed_onboarding(root: &Path) -> Option<PathBuf> {
+    let mut entries = walkdir(&root.join(POINTER_DIRECTORY)).ok()?;
+    entries.sort();
     entries
         .into_iter()
         .filter(|path| crate::document_sync::is_pointer_path(path))
-        .filter_map(|path| crate::document_sync::read_pointer(&path).ok())
-        .flatten()
-        .any(|pointer| pointer.docusign_envelope_id.is_some())
+        .find(|path| {
+            crate::document_sync::read_pointer(path)
+                .ok()
+                .flatten()
+                .is_some_and(|pointer| {
+                    pointer.kind == "onboarding" && pointer.docusign_envelope_id.is_some()
+                })
+        })
+        .map(|path| {
+            path.strip_prefix(root)
+                .map_or_else(|_| path.clone(), Path::to_path_buf)
+        })
 }
 
 /// Every file under `root`, recursively; a missing root is the empty list.
@@ -5925,10 +5964,10 @@ jobs:
 
     /// A signed copy under `blobs/`, built through the store's own writer so
     /// the fixture cannot drift from the pointer schema.
-    fn signed_pointer_yaml() -> String {
+    fn signed_pointer_yaml(kind: &str) -> String {
         store::document_pointers::DocumentPointer {
             checkout_path: None,
-            kind: "onboarding".into(),
+            kind: kind.into(),
             visibility: "internal".into(),
             folder: None,
             current_version: store::document_pointers::PointerVersion {
@@ -5953,60 +5992,93 @@ jobs:
         .unwrap()
     }
 
-    fn template_gate_errors(root: &Path, executed: bool) -> Vec<String> {
+    /// Run the template pass over `root` the way the gate does, reading its
+    /// execution evidence from `blobs/`; returns `(errors, warnings)`.
+    fn template_gate_findings(root: &Path) -> (Vec<String>, Vec<String>) {
         let mut errors: Vec<Finding> = Vec::new();
         let mut warnings: Vec<Finding> = Vec::new();
         validate_templates(
             root,
             rules::project_blueprints::BlueprintDirectory::Templates,
-            executed,
+            super::executed_onboarding(root).as_deref(),
             false,
             &mut errors,
             &mut warnings,
         );
-        errors.into_iter().map(|error| error.message).collect()
+        let messages = |findings: Vec<Finding>| {
+            findings
+                .into_iter()
+                .map(|finding| finding.message)
+                .collect()
+        };
+        (messages(errors), messages(warnings))
     }
 
-    /// LAW-226: the gate reads execution evidence from the committed pointers.
-    /// With a signed copy under `blobs/`, an onboarding template missing
-    /// `engagement_arbitration` passes; without one it still fails.
+    /// A Project checkout with one onboarding template that lacks
+    /// `engagement_arbitration`, and the given pointers under `blobs/`.
+    fn onboarding_checkout(pointers: &[(&str, String)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("templates")).unwrap();
+        std::fs::write(
+            dir.path().join("templates/onboarding__letter.md"),
+            "---\nkind: onboarding\nquestionnaire: [entity__company]\n---\nLetter.\n",
+        )
+        .unwrap();
+        for (relative, yaml) in pointers {
+            let path = dir.path().join("blobs").join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, yaml).unwrap();
+        }
+        dir
+    }
+
+    /// An unexecuted onboarding fails N132 for a template without
+    /// `engagement_arbitration`, and an envelope id on a document of another
+    /// kind is not the onboarding's execution.
     #[test]
-    fn an_executed_engagement_skips_n132_and_the_unexecuted_still_fails() {
-        let template = "---\nkind: onboarding\nquestionnaire: [entity__company]\n---\nLetter.\n";
+    fn an_unexecuted_onboarding_still_fails_n132() {
+        for pointers in [
+            Vec::new(),
+            vec![("letters/notice_signed.yaml", signed_pointer_yaml("letter"))],
+        ] {
+            let checkout = onboarding_checkout(&pointers);
+            assert_eq!(super::executed_onboarding(checkout.path()), None);
+            let (errors, warnings) = template_gate_findings(checkout.path());
+            assert!(
+                errors.iter().any(|finding| finding.starts_with("N132: ")
+                    && finding.contains("engagement_arbitration@")),
+                "{errors:?}"
+            );
+            assert!(
+                !warnings.iter().any(|finding| finding.starts_with("N132: ")),
+                "{warnings:?}"
+            );
+        }
+    }
 
-        let unsigned = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(unsigned.path().join("templates")).unwrap();
-        std::fs::write(
-            unsigned.path().join("templates/onboarding__letter.md"),
-            template,
-        )
-        .unwrap();
-        assert!(!super::engagement_executed(unsigned.path()));
-        let findings = template_gate_errors(unsigned.path(), false);
+    /// Once a signed `kind: onboarding` copy is committed, the template has
+    /// done its job: N132 no longer fails it, and the gate warns that the
+    /// template can be retired in favour of the signed copy.
+    #[test]
+    fn an_executed_onboarding_retires_its_template_instead_of_failing_n132() {
+        let checkout = onboarding_checkout(&[(
+            "onboarding/retainer_signed.yaml",
+            signed_pointer_yaml("onboarding"),
+        )]);
+        let evidence = super::executed_onboarding(checkout.path()).expect("executed");
+        assert_eq!(evidence, Path::new("blobs/onboarding/retainer_signed.yaml"));
+        let (errors, warnings) = template_gate_findings(checkout.path());
         assert!(
-            findings.iter().any(|finding| finding.starts_with("N132: ")
-                && finding.contains("engagement_arbitration@")),
-            "{findings:?}"
+            !errors.iter().any(|finding| finding.starts_with("N132: ")),
+            "{errors:?}"
         );
-
-        let signed = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(signed.path().join("templates")).unwrap();
-        std::fs::write(
-            signed.path().join("templates/onboarding__letter.md"),
-            template,
-        )
-        .unwrap();
-        std::fs::create_dir_all(signed.path().join("blobs/onboarding")).unwrap();
-        std::fs::write(
-            signed.path().join("blobs/onboarding/retainer_signed.yaml"),
-            signed_pointer_yaml(),
-        )
-        .unwrap();
-        assert!(super::engagement_executed(signed.path()));
-        let findings = template_gate_errors(signed.path(), true);
+        let warning = warnings
+            .iter()
+            .find(|finding| finding.starts_with("N132: "))
+            .expect("a retirement warning");
         assert!(
-            !findings.iter().any(|finding| finding.starts_with("N132: ")),
-            "{findings:?}"
+            warning.contains("blobs/onboarding/retainer_signed.yaml") && warning.contains("retire"),
+            "{warning}"
         );
     }
 
