@@ -1756,7 +1756,44 @@ pub const CALENDAR_ID_INVALID: &str =
 
 /// Human-readable reason [`is_valid_drive_folder_id`] refuses a value.
 pub const DRIVE_FOLDER_ID_INVALID: &str =
-    "A Drive folder id is the opaque id of the folder in the Firm's Projects shared drive, not a link.";
+    "A Drive folder is its drive.google.com folder link or its id, a folder in the Firm's Projects shared drive.";
+
+/// Human-readable reason a well-formed Drive folder id is refused because the
+/// deployment's Drive provider does not find it as a live folder in the
+/// Firm's Projects shared drive.
+pub const DRIVE_FOLDER_NOT_IN_PROJECTS_DRIVE: &str =
+    "That Drive folder is not a live folder in the Firm's Projects shared drive; move it there or share the shared drive with Navigator first.";
+
+/// The Drive folder id a lawyer typed or pasted: a bare id, or a
+/// `drive.google.com` folder link in any of the shapes Drive hands out —
+/// `/drive/folders/<id>`, `/drive/u/<n>/folders/<id>`, `/open?id=<id>`, and
+/// `/folderview?id=<id>`, with or without a query string. A shared-drive
+/// folder has the same link shapes as any other folder, so it needs no case
+/// of its own. `None` for anything else, including a link to another host.
+///
+/// The result always satisfies [`is_valid_drive_folder_id`], so the CLI and
+/// the matter edit form store the same id whichever form was entered.
+#[must_use]
+pub fn drive_folder_id_from_input(value: &str) -> Option<String> {
+    let value = value.trim();
+    if is_valid_drive_folder_id(value) {
+        return Some(value.to_string());
+    }
+    let url = url::Url::parse(value).ok()?;
+    if !matches!(url.scheme(), "https" | "http") || url.host_str() != Some("drive.google.com") {
+        return None;
+    }
+    let segments: Vec<&str> = url.path_segments()?.filter(|s| !s.is_empty()).collect();
+    let id = match segments.as_slice() {
+        ["drive", "folders", id] | ["drive", "u", _, "folders", id] => (*id).to_string(),
+        ["open" | "folderview"] => url
+            .query_pairs()
+            .find(|(key, _)| key == "id")
+            .map(|(_, id)| id.into_owned())?,
+        _ => return None,
+    };
+    is_valid_drive_folder_id(&id).then_some(id)
+}
 
 /// Human-readable reason [`drive_folder_recorded_elsewhere`] refuses a patch.
 pub const DRIVE_FOLDER_RECORDED_ELSEWHERE: &str = "That Drive folder is already the ingest folder of another matter; a folder scopes its import to the one matter that records it.";
@@ -5093,6 +5130,54 @@ mod surreal_read_tests {
                 .unwrap(),
             vec![created]
         );
+    }
+}
+
+#[cfg(test)]
+mod drive_folder_input_tests {
+    use super::drive_folder_id_from_input;
+
+    /// Every link shape Drive hands out for a folder — a My Drive folder and a
+    /// shared-drive folder look the same — and a bare id resolve to the id.
+    #[test]
+    fn every_drive_folder_link_shape_and_a_bare_id_resolve_to_the_id() {
+        for input in [
+            "1SyntheticFolderId_-0",
+            "  1SyntheticFolderId_-0  ",
+            "https://drive.google.com/drive/folders/1SyntheticFolderId_-0",
+            "https://drive.google.com/drive/folders/1SyntheticFolderId_-0?usp=sharing",
+            "https://drive.google.com/drive/folders/1SyntheticFolderId_-0/",
+            "https://drive.google.com/drive/u/0/folders/1SyntheticFolderId_-0",
+            "https://drive.google.com/drive/u/2/folders/1SyntheticFolderId_-0?usp=drive_link",
+            "https://drive.google.com/open?id=1SyntheticFolderId_-0",
+            "https://drive.google.com/folderview?id=1SyntheticFolderId_-0&usp=sharing",
+        ] {
+            assert_eq!(
+                drive_folder_id_from_input(input).as_deref(),
+                Some("1SyntheticFolderId_-0"),
+                "{input}"
+            );
+        }
+    }
+
+    /// Anything that is not a Drive folder link or an id is refused rather
+    /// than half-parsed: another host, a file link, a missing id, an id that
+    /// could change an API path.
+    #[test]
+    fn anything_else_is_refused() {
+        for input in [
+            "",
+            "not an id",
+            "https://drive.example.com/drive/folders/1SyntheticFolderId",
+            "https://drive.google.com/file/d/1SyntheticFileId/view",
+            "https://drive.google.com/drive/folders/",
+            "https://drive.google.com/drive/my-drive",
+            "https://drive.google.com/open?usp=sharing",
+            "https://drive.google.com/drive/folders/1Synthetic%2F..%2Fid",
+            "javascript:alert(1)",
+        ] {
+            assert_eq!(drive_folder_id_from_input(input), None, "{input}");
+        }
     }
 }
 

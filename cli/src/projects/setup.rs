@@ -67,7 +67,12 @@ fn surface_outcome(
     match status {
         store::project_surfaces::SurfaceStatus::Created => resource("created"),
         store::project_surfaces::SurfaceStatus::Adopted => resource("adopted"),
-        store::project_surfaces::SurfaceStatus::Present => resource("present"),
+        // The detail says how a recorded resource was found: for Drive, that
+        // the folder already set on the Project was adopted, not created.
+        store::project_surfaces::SurfaceStatus::Present => match detail {
+            Some(detail) => resource_with_detail("present", detail),
+            None => resource("present"),
+        },
         store::project_surfaces::SurfaceStatus::Skipped => resource_with_detail(
             "skipped",
             detail.unwrap_or_else(|| "provider is not configured".to_string()),
@@ -379,6 +384,28 @@ mod tests {
         assert_eq!(outcomes[1].1.outcome, "present");
         assert!(!succeeded(&outcomes[0].1));
         assert!(succeeded(&outcomes[1].1));
+    }
+
+    /// A folder set with `--drive-folder` before setup is reported as adopted
+    /// in place, never as created, and setup counts it as converged.
+    #[test]
+    fn a_folder_already_set_is_reported_as_adopted_not_created() {
+        let outcomes = surface_results(Ok(ProjectSurfaces {
+            code: "acme".to_string(),
+            documents_prefix: "projects/acme/documents".to_string(),
+            drive_folder_id: Some("1SyntheticFolderId".to_string()),
+            drive_status: SurfaceStatus::Present,
+            drive_detail: Some(store::project_surfaces::DRIVE_FOLDER_ALREADY_SET.to_string()),
+            repository_url: None,
+            repository_status: SurfaceStatus::Skipped,
+            repository_detail: Some("repository provider is not configured".to_string()),
+        }));
+        assert_eq!(outcomes[0].1.outcome, "present");
+        assert_eq!(
+            outcomes[0].1.detail.as_deref(),
+            Some(store::project_surfaces::DRIVE_FOLDER_ALREADY_SET)
+        );
+        assert!(succeeded(&outcomes[0].1));
     }
 
     #[test]

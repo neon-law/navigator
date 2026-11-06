@@ -92,7 +92,104 @@ fn project_set_exposes_the_live_fill_flags() {
         .stdout(predicates::str::contains("--private-slack-channel"))
         .stdout(predicates::str::contains("--private-notion-page"))
         .stdout(predicates::str::contains("--calendar"))
-        .stdout(predicates::str::contains("--booking-url"));
+        .stdout(predicates::str::contains("--booking-url"))
+        .stdout(predicates::str::contains("--drive-folder <URL_OR_ID>"));
+}
+
+/// `--drive-folder` takes the folder's Drive link, sends the bare id through
+/// the same live-row patch as `--calendar`, writes it to the manifest, and
+/// reports the deployment's Drive check.
+#[tokio::test(flavor = "multi_thread")]
+async fn project_set_links_an_existing_drive_folder_by_its_link() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let credentials_dir = TempDir::new().unwrap();
+    let credentials_path = credentials(&credentials_dir, &host);
+    let project_id = Uuid::now_v7();
+    let checkout = TempDir::new().unwrap();
+    fs::write(
+        checkout.path().join("navigator.yaml"),
+        concat!(
+            "version: \"26.9.26\"\nproject:\n  host: staging.neonlaw.com\n  name: acme\n",
+            "  lawyer_dri: lawyer@example.com\n  client_dri: client@example.com\n",
+            "  private_slack_channel: not provisioned\n  private_notion_page: not provisioned\n",
+        ),
+    )
+    .unwrap();
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": project_id, "code": "acme" }
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("/app/api/projects/{project_id}")))
+        .and(header("authorization", "Bearer test-token"))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "drive_folder_id": "1SyntheticSharedDriveFolder"
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("navigator-drive-folder-check", "verified")
+                .set_body_json(serde_json::json!({})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = command()
+        .current_dir(checkout.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+        .args([
+            "project",
+            "set",
+            "--drive-folder",
+            "https://drive.google.com/drive/u/0/folders/1SyntheticSharedDriveFolder?usp=sharing",
+            "--host",
+            &host,
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("drive folder 1SyntheticSharedDriveFolder: confirmed with Drive"),
+        "{stdout}"
+    );
+    let manifest = fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap();
+    assert!(
+        manifest.contains("  drive_folder_id: 1SyntheticSharedDriveFolder\n"),
+        "{manifest}"
+    );
+}
+
+/// A value that is neither a Drive folder link nor an id is refused before
+/// anything is written.
+#[test]
+fn project_set_refuses_a_link_that_is_not_a_drive_folder() {
+    let checkout = TempDir::new().unwrap();
+    let original = "version: \"26.9.26\"\nproject:\n  host: staging.neonlaw.com\n  name: acme\n";
+    fs::write(checkout.path().join("navigator.yaml"), original).unwrap();
+    command()
+        .current_dir(checkout.path())
+        .args([
+            "project",
+            "set",
+            "--drive-folder",
+            "https://drive.google.com/file/d/1SyntheticFileId/view",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("drive.google.com folder link"));
+    assert_eq!(
+        fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap(),
+        original
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

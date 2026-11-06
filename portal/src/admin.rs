@@ -3635,6 +3635,12 @@ struct ProjectInput {
     /// `shared_notion_page_url` on the same terms.
     #[serde(default)]
     share_shared_notion_page: Option<String>,
+    /// The edit form's Drive card: an existing folder in the Firm's Projects
+    /// shared drive, as its `drive.google.com` link or its id. `None` when the
+    /// form posts no such field (the open-matter form), which leaves the
+    /// column alone; a blank value clears it.
+    #[serde(default)]
+    drive_folder_id: Option<String>,
     /// Set (to `"1"`) when the opening attorney ticks the required conflict
     /// attestation checkbox. The shared `open_matter` command refuses the open
     /// without it (`AttestationRequired`) — every open is attested, never
@@ -4360,6 +4366,43 @@ async fn matter_dri_write(
     }
 }
 
+/// The Drive folder the edit form's Drive card names, resolved to the id the
+/// `project` row stores. A folder link or an id is accepted, as with `navigator
+/// project set --drive-folder`; a changed folder is confirmed with the
+/// deployment's Drive provider before it is recorded, and an unchanged one is
+/// not asked about again. `Ok(None)` leaves the column alone.
+async fn edited_drive_folder(
+    project: &store::projects::Project,
+    posted: Option<&str>,
+) -> Result<Option<String>, Response> {
+    let Some(posted) = posted.map(str::trim) else {
+        return Ok(None);
+    };
+    if posted.is_empty() {
+        return Ok(Some(String::new()));
+    }
+    let Some(folder_id) = store::projects::drive_folder_id_from_input(posted) else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            store::projects::DRIVE_FOLDER_ID_INVALID,
+        )
+            .into_response());
+    };
+    if project.drive_folder_id.as_deref() == Some(folder_id.as_str()) {
+        return Ok(Some(folder_id));
+    }
+    match store::project_surfaces::check_drive_folder_from_env(&folder_id).await {
+        Ok(_) => Ok(Some(folder_id)),
+        Err(store::project_surfaces::SurfaceError::Command(
+            store::projects::ProjectCommandError::Invalid(message),
+        )) => Err((StatusCode::BAD_REQUEST, message).into_response()),
+        Err(error) => {
+            tracing::error!(%error, project_id = %project.id, "projects_update: Drive folder check failed");
+            Err((StatusCode::BAD_GATEWAY, webapp::error_pages::server_error()).into_response())
+        }
+    }
+}
+
 async fn projects_update_lawyer_only(
     State(surreal): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
@@ -4377,8 +4420,8 @@ async fn projects_update_lawyer_only(
     // by dedicated lifecycle commands (navigator#770), not this general edit.
     // So `status` is neither posted by the form nor forwarded here. The form
     // always sends `description`, the two Slack fields, the two Notion fields,
-    // and the repository URL, so pass each as `Some` to keep the
-    // blank-clears behavior.
+    // the Drive folder, and the repository URL, so pass each as `Some` to keep
+    // the blank-clears behavior.
     let Some(project) = store::projects::find_by_code(&surreal, &code)
         .await
         .ok()
@@ -4394,6 +4437,11 @@ async fn projects_update_lawyer_only(
     // client's access, and a stale value sitting in a hidden field can never be
     // resubmitted as if sharing were still on. This never touches the private
     // half of either card.
+    let drive_folder_id =
+        match edited_drive_folder(&project, input.drive_folder_id.as_deref()).await {
+            Ok(drive_folder_id) => drive_folder_id,
+            Err(response) => return response,
+        };
     let share_external_slack = input.share_external_slack_channel.as_deref() == Some("1");
     let share_shared_notion = input.share_shared_notion_page.as_deref() == Some("1");
     let command = store::projects::UpdateProjectCommand {
@@ -4424,9 +4472,7 @@ async fn projects_update_lawyer_only(
         calendar_id: None,
         booking_url: None,
         onboarding_jurisdiction: None,
-        // Set with `navigator project set --drive-folder`; the form does not
-        // carry it, so it leaves the column alone.
-        drive_folder_id: None,
+        drive_folder_id,
     };
     match store::projects::update_project(&surreal, project_id, &command).await {
         Ok(_) => Redirect::to("/app/projects").into_response(),
@@ -4699,6 +4745,7 @@ mod tests {
             shared_notion_page_url: String::new(),
             share_external_slack_channel: None,
             share_shared_notion_page: None,
+            drive_folder_id: None,
             attestation: None,
         }
     }
@@ -7001,6 +7048,69 @@ mod tests {
                 .unwrap()
                 .role,
             Role::Client
+        );
+    }
+
+    /// The edit form's Drive card takes an existing folder's link or id and
+    /// records the id; a form that posts no Drive field leaves it alone, and a
+    /// link that is not a Drive folder is refused.
+    #[tokio::test]
+    async fn the_drive_card_records_an_existing_folder_by_its_link() {
+        let db = store::test_support::mem_surreal().await;
+        let (lawyer, _, project) = open_coverage_matter(&db, "coverage-drive").await;
+        let lawyer_session = session_for(&lawyer);
+        let mut edit = blank_project_input("coverage-drive");
+        edit.name = "Coverage Matter Renamed".into();
+        let saved = super::projects_update_lawyer_only(
+            S(db.clone()),
+            Some(Ext(lawyer_session.clone())),
+            P(project.code.clone()),
+            axum::Form(edit),
+        )
+        .await;
+        assert_eq!(location(&saved), "/app/projects");
+        let stored = store::projects::find_by_code(&db, &project.code)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.drive_folder_id, None,
+            "a form that posts no Drive field leaves the folder alone"
+        );
+
+        // The Drive card takes the folder's link and records its id.
+        let mut drive_edit = blank_project_input("coverage-drive");
+        drive_edit.name = "Coverage Matter Renamed".into();
+        drive_edit.drive_folder_id =
+            Some("https://drive.google.com/drive/folders/1SyntheticFolderId?usp=sharing".into());
+        let saved = super::projects_update_lawyer_only(
+            S(db.clone()),
+            Some(Ext(lawyer_session.clone())),
+            P(project.code.clone()),
+            axum::Form(drive_edit),
+        )
+        .await;
+        assert_eq!(location(&saved), "/app/projects");
+        let stored = store::projects::find_by_code(&db, &project.code)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.drive_folder_id.as_deref(),
+            Some("1SyntheticFolderId")
+        );
+        let mut bad_drive = blank_project_input("coverage-drive");
+        bad_drive.drive_folder_id = Some("https://drive.google.com/file/d/1SyntheticFileId".into());
+        assert_eq!(
+            super::projects_update_lawyer_only(
+                S(db.clone()),
+                Some(Ext(lawyer_session.clone())),
+                P(project.code.clone()),
+                axum::Form(bad_drive),
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
         );
     }
 
