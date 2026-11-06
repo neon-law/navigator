@@ -102,7 +102,10 @@ jobs:
           kubectl -n navigator rollout status statefulset/postgres-spike --timeout=180s
           actual=$(kubectl -n navigator get pod postgres-spike-0 -o jsonpath='{.spec.containers[0].image}')
           [[ "$actual" == "$POSTGRES_IMAGE" ]]
+          # run.sh already matched this image's versions to its label; empty
+          # declarations keep the shipped-version consistency checks here.
           kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
+            -v server_version_num= -v age= -v vector= \
             < "images/postgres/tests/extensions.sql" 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/kind-extensions.log"
           cargo test -p store postgres_schema::tests --lib
           cargo run -p store --example postgres_schema -- source-erd
