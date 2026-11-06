@@ -16,6 +16,8 @@
 //! the kernel-gated test in `webapp/tests/specimen_fixture.rs` re-casts the
 //! same instant through the engine and compares.
 
+pub mod mercator;
+
 use crate::ephemeris_labels::{body_display_name, body_symbol, line_body_named};
 use std::sync::LazyLock;
 
