@@ -385,13 +385,21 @@ pub fn current_source(code: &str) -> Result<String, String> {
         .ok_or_else(|| format!("unknown Clause `{code}`"))
 }
 
+/// Whether `markdown` is an onboarding template that lacks the current
+/// `engagement_arbitration` Clause — what N132 fails on an unexecuted
+/// onboarding. The Project gate asks it of an executed one to say which
+/// template the signed copy has made retirable.
+#[must_use]
+pub fn onboarding_lacks_engagement_arbitration(markdown: &str) -> bool {
+    missing_engagement_arbitration(markdown, false).is_some()
+}
+
 /// Why an onboarding template fails the engagement-arbitration requirement,
 /// or `None` when it includes the current Clause (or is not an onboarding).
 /// A compiled snapshot pins the Clause under `clause_sources:` and has already
-/// expanded its references. `engagement_executed` is LAW-226's waiver: the
-/// executed engagement was generated from this template as it stood when it
-/// was sent, so once execution evidence exists the template stops being
-/// required to carry today's clause.
+/// expanded its references. `engagement_executed` waives the requirement: the
+/// executed onboarding was generated from this template as it stood when it
+/// was sent, and the signed copy, not the template, is now the record.
 fn missing_engagement_arbitration(markdown: &str, engagement_executed: bool) -> Option<String> {
     let (yaml, body) = crate::frontmatter::split(markdown)?;
     let doc: Value = serde_yaml::from_str(yaml).ok()?;
@@ -427,8 +435,8 @@ fn missing_engagement_arbitration(markdown: &str, engagement_executed: bool) -> 
 /// Validate Clause composition and the expanded body's existing notation rules.
 #[derive(Debug, Default)]
 pub struct ClauseReferences {
-    /// LAW-226: execution evidence — a committed signed-copy pointer carrying
-    /// a `docusign_envelope_id` — waives the onboarding
+    /// Execution evidence — a committed signed `kind: onboarding` pointer
+    /// carrying a `docusign_envelope_id` — waives the onboarding
     /// engagement-arbitration requirement. `Default` is the unwaived rule,
     /// what every non-gate caller gets.
     engagement_executed: bool,

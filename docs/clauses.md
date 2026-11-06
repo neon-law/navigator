@@ -69,9 +69,14 @@ Every `kind: onboarding` template must declare the highest active version of `en
 and place it in the body with `{{> name}}`; `N132` (and so `navigator project gate`) fails the template otherwise. The
 onboarding scaffold stub starts with the clause, its `clauses:` block, and the two jurisdiction states. An offboarding
 letter ends an engagement already governed by the signed onboarding letter, so the requirement does not apply to it.
-Neither does it apply once the engagement itself is executed (LAW-226): when a committed document pointer carries a
-`docusign_envelope_id`, the gate skips the requirement, because the signed copy was generated from the template as it
-stood when it was sent and forcing today's clause into it would change nothing the client sees.
+Neither does it apply once the onboarding is executed. The evidence is a committed `kind: onboarding` pointer under
+`blobs/` that carries a `docusign_envelope_id`, the `<name>_signed.pdf` copy a completed envelope files. A signed
+document of another kind is not evidence. With that copy in place, `N132` does not fail an onboarding template that
+lacks the clause. Instead the gate warns that the template can be retired: the signed copy is the record, the template's
+history stays in Git, and adding today's clause would only make the template disagree with what the client signed.
+Retire it by deleting the template and any page `draft:` line that names it. The template check runs offline in both
+`--ci` and local runs, so it reads only this committed pointer. The live `OnboardingStatus` that `navigator project
+status` and `navigator project lifecycle` report is what confirms the envelope is the Firm's and completed.
 
 The body references `{{> arbitration}}`. Governing law, arbitration seat, court forum, and administrator are distinct
 decisions. The Clause accepts a jurisdiction state or an existing single-choice state for its law and seat. A
