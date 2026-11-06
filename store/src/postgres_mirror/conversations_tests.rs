@@ -18,6 +18,134 @@ fn communication_and_email_mirror_keys_disclose_only_opaque_ids() {
 }
 
 #[tokio::test]
+async fn reconciliation_refuses_cyclic_receipts_without_writing_them() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = mem_surreal().await;
+    let project =
+        crate::test_support::seed_project_surreal(&surreal, "Synthetic receipt cycle").await;
+    let entity = crate::projects::find_by_id(&surreal, project)
+        .await
+        .unwrap()
+        .unwrap()
+        .entity_id;
+    mirror_identity(&pg, &[entity], &[]).await;
+
+    for size in [1, 2] {
+        let mut ids = Vec::new();
+        for _ in 0..size {
+            let row = communications::log_note(
+                &surreal,
+                &communications::NewNote {
+                    project_id: project,
+                    author_person_id: None,
+                    subject: None,
+                    body: "Synthetic receipt".into(),
+                },
+            )
+            .await
+            .unwrap();
+            ids.push(row.id);
+        }
+        for (index, id) in ids.iter().enumerate() {
+            surreal
+                .query("UPDATE $id SET acknowledges=$receipt")
+                .bind(("id", crate::surreal::record_id("communication", *id)))
+                .bind((
+                    "receipt",
+                    crate::surreal::record_id("communication", ids[(index + 1) % size]),
+                ))
+                .await
+                .unwrap()
+                .check()
+                .unwrap();
+        }
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(2), reconcile(&surreal, &pg))
+                .await
+                .expect("a receipt cycle must be refused without indefinite recursion");
+        assert!(matches!(result, Err(MirrorError::Source)));
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication")
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "cyclic receipt rows must not be written");
+        surreal
+            .query("DELETE communication")
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+    }
+    pg.0.close().await;
+}
+
+#[tokio::test]
+async fn reconciliation_preserves_deep_receipts_and_shared_ancestors() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = mem_surreal().await;
+    let project =
+        crate::test_support::seed_project_surreal(&surreal, "Synthetic receipt chain").await;
+    let entity = crate::projects::find_by_id(&surreal, project)
+        .await
+        .unwrap()
+        .unwrap()
+        .entity_id;
+    mirror_identity(&pg, &[entity], &[]).await;
+    let mut ids = Vec::new();
+    for index in 0..34 {
+        let row = communications::log_note(
+            &surreal,
+            &communications::NewNote {
+                project_id: project,
+                author_person_id: None,
+                subject: None,
+                body: format!("Synthetic receipt {index}"),
+            },
+        )
+        .await
+        .unwrap();
+        let ancestor = if index >= 32 { ids.first() } else { ids.last() };
+        if let Some(ancestor) = ancestor {
+            surreal
+                .query("UPDATE $id SET acknowledges=$receipt")
+                .bind(("id", crate::surreal::record_id("communication", row.id)))
+                .bind((
+                    "receipt",
+                    crate::surreal::record_id("communication", *ancestor),
+                ))
+                .await
+                .unwrap()
+                .check()
+                .unwrap();
+        }
+        ids.push(row.id);
+    }
+    assert!(reconcile(&surreal, &pg).await.unwrap().is_clean());
+    assert!(reconcile(&surreal, &pg).await.unwrap().is_clean());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication")
+        .fetch_one(&pg.0)
+        .await
+        .unwrap();
+    assert_eq!(count, 34);
+    for id in &ids[32..] {
+        let ancestor: Uuid =
+            sqlx::query_scalar("SELECT acknowledges FROM communication WHERE id=$1")
+                .bind(id)
+                .fetch_one(&pg.0)
+                .await
+                .unwrap();
+        assert_eq!(ancestor, ids[0]);
+    }
+    pg.0.close().await;
+}
+
+#[tokio::test]
 async fn communications_and_email_threads_replay_reconcile_and_delete() {
     let Some((options, database)) = fresh_schema().await else {
         return;
