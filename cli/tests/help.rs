@@ -133,7 +133,7 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
 fn ephemeris_help_keeps_download_nested_and_requires_an_explicit_bundle_directory() {
     assert_eq!(
         command_names(&help(&["ephemeris", "--help"])),
-        vec!["download", "help"]
+        vec!["download", "tables", "help"]
     );
     let isolated = tempfile::tempdir().unwrap();
     let missing_credentials = isolated.path().join("missing-session.json");
@@ -154,6 +154,38 @@ fn ephemeris_help_keeps_download_nested_and_requires_an_explicit_bundle_director
         .assert()
         .failure()
         .stderr(str::contains("--dir <DIR>"));
+}
+
+#[test]
+fn ephemeris_table_help_is_nested_and_never_needs_credentials() {
+    let isolated = tempfile::tempdir().unwrap();
+    let missing = isolated.path().join("missing-session.json");
+    let output = Command::cargo_bin("navigator")
+        .unwrap()
+        .env("NAVIGATOR_CREDENTIALS_FILE", &missing)
+        .args(["ephemeris", "tables", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    for option in [
+        "--source-dir <SOURCE_DIR>",
+        "--from <FROM>",
+        "--to-exclusive <TO_EXCLUSIVE>",
+        "--dir <DIR>",
+    ] {
+        assert!(
+            help.contains(option),
+            "missing required table argument {option}"
+        );
+    }
+    Command::cargo_bin("navigator")
+        .unwrap()
+        .env("NAVIGATOR_CREDENTIALS_FILE", &missing)
+        .args(["ephemeris", "tables"])
+        .assert()
+        .failure()
+        .stderr(str::contains("--source-dir <SOURCE_DIR>"));
 }
 
 #[test]

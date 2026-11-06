@@ -12,6 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+archives.workspace = true
+arrow.workspace = true
+csv.workspace = true
+parquet.workspace = true
 # `notation preview` serves the real `/notations/{slug}` router on a local
 # bind, so the binary owns an axum server of its own.
 axum.workspace = true

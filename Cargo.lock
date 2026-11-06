@@ -2127,6 +2127,8 @@ name = "cli"
 version = "26.11.6"
 dependencies = [
  "anyhow",
+ "archives",
+ "arrow",
  "assert_cmd",
  "async-trait",
  "axum",
@@ -2136,6 +2138,7 @@ dependencies = [
  "clap",
  "cloud",
  "comfy-table",
+ "csv",
  "dotenvy",
  "ephemeris",
  "fantoccini",
@@ -2153,6 +2156,7 @@ dependencies = [
  "neon",
  "owo-colors",
  "p256 0.14.0",
+ "parquet 60.1.0",
  "pdf",
  "pdf-extract",
  "portal",

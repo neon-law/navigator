@@ -84,3 +84,51 @@ rates and source IDs remain null, as do unavailable quoted delta-T errors. The r
 covariance or guaranteed absolute astronomical error bound through this reader. Numerical validation margins are
 software/model cross-checks and do not supply that missing uncertainty. Extrapolated delta-T readings have no quoted
 error bound when the underlying model supplies none.
+
+## Authenticated local files
+
+The administrative CLI calculates a bounded table from an immutable raw DE440 bundle acquired by `navigator ephemeris
+download`:
+
+```bash
+navigator ephemeris tables --host <deployment> --source-dir <raw-bundle> \
+  --from 1900-01-01 --to-exclusive 1900-01-03 --dir <new-table-bundle>
+```
+
+The protected source catalog authorizes the current Owner/Admin session before any local source or output read,
+calculation or reuse. Cached role labels grant no access. This command performs no JPL transfer. It opens the verified
+ordinary kernel file without following a link, retains that descriptor, and verifies its bounded bytes again in the
+exact evaluator. The raw bundle must contain only `de440.bsp` and its matching `source-manifest.json`.
+
+The completed directory contains four ordinary files:
+
+| File | Contents |
+| --- | --- |
+| `reference.parquet` | Snappy-compressed rows with explicit Arrow physical types and stable field IDs 1 through 20. |
+| `reference.csv` | The same ordered columns/rows; empty fields represent documented nulls. |
+| `source-manifest.json` | The distinct compiled raw-source declaration and checksum pin. |
+| `derived-manifest.json` | Coverage, row count, schema, model/settings, source and artifact byte/hash identities. |
+
+TT/TDB coordinates remain signed 64-bit integers. All floating-point columns retain 64-bit values, including columns
+whose entire batch is null. Calendar, scale, model-kind and body labels are strings; source IDs are nullable 32-bit
+integers. CSV uses round-trip decimal representations for floating-point values and exact integer decimal strings.
+Consumers must use the manifest's column types rather than infer historical all-null columns or coerce epochs through
+floating-point numbers.
+
+The content snapshot ID is the SHA-256 of the compact `serde_json` content object, with object keys recursively sorted
+lexicographically and array order retained. It includes coverage, schema, model/settings, source identity and all
+artifact byte/hash identities. Generation time is recorded separately and does not change that identity. The raw
+manifest version, row schema version and file-format identity remain separate. A changed source, algorithm, schema or
+encoded file produces a different content identity.
+
+Each artifact is limited to 4 MiB and the derived manifest to 64 KiB. The command stages sibling files, verifies bytes,
+opens fresh Parquet and CSV readers to compare schema, field IDs, rows, nulls and values, then atomically publishes the
+completed directory without replacing an existing path. A failed publication removes only its own staging directory. A
+matching rerun reauthorizes, checks coverage/schema/source/version, recalculates the bounded expected table and verifies
+exact settings and file bytes; existing files and generation time remain unchanged. Incomplete, unrelated, corrupt,
+differently configured or linked output is refused and preserved. Concurrent publication cannot replace a completed
+directory.
+
+These are local Parquet and CSV files. No Iceberg metadata, DuckDB database, latest-release pointer, public hosting,
+cloud resources or snapshot-expiry service is created. The command accepts universal reference dates and a pinned raw
+bundle only; it has no personal-chart import or export selector.
