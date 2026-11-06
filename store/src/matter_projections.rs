@@ -161,6 +161,37 @@ pub struct ContingentProjection {
     pub estimate_recorded_at: Option<DateTime<Utc>>,
     /// The matter changed stage after the current estimate was recorded.
     pub stale: bool,
+    /// When the matter is expected to resolve (the current estimate's
+    /// expected resolution date), or resolved (the Matter Outcome's date).
+    pub resolves_on: Option<NaiveDate>,
+}
+
+impl ContingentProjection {
+    /// The outcomes that can happen.
+    fn possible(&self) -> impl Iterator<Item = &OutcomeProjection> + Clone {
+        self.outcomes.iter().filter(|o| o.probability_bps > 0)
+    }
+
+    /// Σ p·(fee(o) + costs recovered(o)): the cash the matter is expected
+    /// to bring in. `None` without recoveries.
+    #[must_use]
+    pub fn expected_cash_cents(&self) -> Option<i64> {
+        let advanced = self.costs_advanced_cents;
+        self.expected_fee_cents
+            .zip(self.expected_costs_lost_cents)
+            .map(|(fee, lost)| fee + advanced - lost)
+    }
+
+    /// The lowest and highest cash among outcomes that can happen; `None`
+    /// without recoveries.
+    #[must_use]
+    pub fn cash_range_cents(&self) -> Option<(i64, i64)> {
+        self.expected_cash_cents()?;
+        let cash = self
+            .possible()
+            .map(|o| o.fee_cents.unwrap_or_default() + o.costs_recovered_cents.unwrap_or_default());
+        cash.clone().min().zip(cash.max())
+    }
 }
 
 /// An hourly or flat-fee matter's projection: money already certain.
@@ -405,6 +436,7 @@ pub fn project_contingent(inputs: &ContingentInputs) -> ContingentProjection {
         time_cost_cents: inputs.time_cost_cents,
         estimate_recorded_at: None,
         stale: false,
+        resolves_on: None,
         outcomes,
     }
 }
@@ -487,6 +519,14 @@ pub async fn for_project(
         costs_advanced_cents: costs_advanced_cents(&costs),
         time_cost_cents: time_cost_cents(&entries),
     });
+    projection.resolves_on = outcome
+        .as_ref()
+        .map(|outcome| outcome.resolved_on)
+        .or_else(|| {
+            estimate
+                .as_ref()
+                .map(|estimate| estimate.expected_resolution_on)
+        });
     if let (Some(estimate), None) = (&estimate, &outcome) {
         projection.estimate_recorded_at = Some(estimate.recorded_at);
         let last_move = crate::case_stages::history(pg, project_id)
@@ -547,6 +587,9 @@ mod tests {
         assert_eq!(nets, [Some(16_000_000), Some(4_995_000), Some(-1_200_000)]);
         assert_eq!(projection.net_range_cents, Some((-1_200_000, 16_000_000)));
         assert_eq!(projection.costs_at_risk_cents, COSTS);
+        // Cash: 60% × (49,950 + 12,000) + 15% × (160,000 + 12,000).
+        assert_eq!(projection.expected_cash_cents(), Some(6_297_000));
+        assert_eq!(projection.cash_range_cents(), Some((0, 17_200_000)));
         let fees: Vec<_> = projection.outcomes.iter().map(|o| o.fee_bps).collect();
         assert_eq!(fees, [4_000, 3_330, 0]);
     }
@@ -616,6 +659,8 @@ mod tests {
         assert_eq!(projection.expected_net_cents, None);
         assert_eq!(projection.net_range_cents, None);
         assert_eq!(projection.costs_at_risk_cents, COSTS);
+        assert_eq!(projection.expected_cash_cents(), None);
+        assert_eq!(projection.cash_range_cents(), None);
     }
 
     #[test]
@@ -773,6 +818,7 @@ mod tests {
             assert_eq!(estimated.estimate_recorded_at, Some(estimate.recorded_at));
             assert!(!estimated.stale);
             assert_eq!(estimated.expected_fee_cents, Some(5_397_000));
+            assert_eq!(estimated.resolves_on, NaiveDate::from_ymd_opt(2027, 6, 30));
 
             // The matter moves on after the estimate: it is now stale, and
             // settling pays the trial tier.
@@ -802,6 +848,7 @@ mod tests {
             assert_eq!(actual.source, Some(OddsSource::Actual));
             assert_eq!(actual.expected_net_cents, Some(16_000_000));
             assert!(!actual.stale, "an actual figure is never stale");
+            assert_eq!(actual.resolves_on, NaiveDate::from_ymd_opt(2027, 5, 1));
         }
     }
 }

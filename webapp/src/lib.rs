@@ -137,6 +137,7 @@ pub mod project_resources;
 pub mod project_stages;
 pub mod project_tasks;
 pub mod project_timeline;
+pub mod projected_cash;
 pub mod public_chrome;
 pub mod purchases;
 pub mod reask;

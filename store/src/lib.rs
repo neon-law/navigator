@@ -206,6 +206,7 @@ pub mod project_section_counts;
 pub mod project_service;
 pub mod project_source_imports;
 pub mod project_surfaces;
+pub mod projected_cash;
 pub mod projects;
 pub mod purchases;
 pub mod question_registry;

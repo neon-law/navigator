@@ -166,6 +166,18 @@ pub mod derive {
         }
     }
 
+    /// Where the odds came from, as every surface labels it; empty with no
+    /// odds yet.
+    #[must_use]
+    pub fn source_label(source: Option<OddsSource>) -> &'static str {
+        match source {
+            Some(OddsSource::Lawyer) => "Lawyer estimate",
+            Some(OddsSource::StageDefault) => "Stage default",
+            Some(OddsSource::Actual) => "Actual outcome",
+            None => "",
+        }
+    }
+
     /// The section's view of `projection`.
     #[must_use]
     pub fn view(projection: &MatterProjection) -> OutcomeProjectionView {
@@ -175,13 +187,7 @@ pub mod derive {
         OutcomeProjectionView {
             contingent: true,
             unavailable: false,
-            source: match projection.source {
-                Some(OddsSource::Lawyer) => "Lawyer estimate",
-                Some(OddsSource::StageDefault) => "Stage default",
-                Some(OddsSource::Actual) => "Actual outcome",
-                None => "",
-            }
-            .to_string(),
+            source: source_label(projection.source).to_string(),
             estimated_on: projection
                 .estimate_recorded_at
                 .map(|at| at.format("%Y-%m-%d").to_string()),
