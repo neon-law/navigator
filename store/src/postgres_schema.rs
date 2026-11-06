@@ -1441,6 +1441,12 @@ mod tests {
                 "20261105140000_entity_metadata.sql",
                 include_str!("../postgres/migrations/20261105140000_entity_metadata.sql"),
             ),
+            (
+                "20261105150000_create_esignature_webhook_journal.sql",
+                include_str!(
+                    "../postgres/migrations/20261105150000_create_esignature_webhook_journal.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

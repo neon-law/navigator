@@ -1,7 +1,10 @@
 FROM postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4 AS build
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential postgresql-server-dev-16 curl ca-certificates flex bison && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-RUN curl -fLsS https://archive.apache.org/dist/age/PG16/1.6.0/apache-age-1.6.0-src.tar.gz -o age.tar.gz \
+# downloads.apache.org is the primary dist server (CDN-backed); the
+# archive.apache.org mirror has been unreachable from CI runners, and the
+# sha512 below still pins the content either way.
+RUN curl -fLsS https://downloads.apache.org/age/PG16/1.6.0/apache-age-1.6.0-src.tar.gz -o age.tar.gz \
  && echo '1e0a434d53d669e5d067721e1eba8c3c3c2ae072709d5f90783beeba6f5e88f592fa5d8808d621b720c22edfe8c698baa9b0adb9c7b4e3e2a83e7a753bd795c8  age.tar.gz' | sha512sum -c - \
  && mkdir age && tar xzf age.tar.gz -C age --strip-components=1 \
  && make -C age PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config -j2 \

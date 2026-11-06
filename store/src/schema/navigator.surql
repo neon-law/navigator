@@ -2196,6 +2196,37 @@ UPDATE signature SET state = 'requested' WHERE state = NONE;
 DEFINE INDEX OVERWRITE signature_provider_request ON signature FIELDS provider, provider_id UNIQUE;
 DEFINE INDEX OVERWRITE signature_notation ON signature FIELDS notation_id;
 
+-- `esignature_webhook_journal`: the durable archive of verified
+-- e-signature webhook receipts (ENG-787 phases 2-4). The webhook handler
+-- journals a verified, parseable receipt BEFORE consuming it, so a crash
+-- mid-consumption leaves the receipt replayable — journal first, consume
+-- second, and delivery is recoverable instead of best-effort. Only
+-- verified payloads reach this table: HMAC verification refuses an
+-- unverified delivery before any write, and a refusal is not an event.
+DEFINE TABLE IF NOT EXISTS esignature_webhook_journal SCHEMAFULL PERMISSIONS NONE;
+-- The provider's stored string (`docusign`) and its opaque envelope id —
+-- the same correlation pair `signature` answers the webhook by.
+DEFINE FIELD OVERWRITE provider ON esignature_webhook_journal TYPE string;
+DEFINE FIELD OVERWRITE provider_id ON esignature_webhook_journal TYPE string;
+-- The envelope status exactly as the payload carried it. The journal is
+-- an archive, not a filter; the closed set stays with `signature.state`.
+DEFINE FIELD OVERWRITE status ON esignature_webhook_journal TYPE string;
+-- The verified payload as its exact JSON text, so replay re-runs the
+-- bytes rather than an interpretation of them.
+DEFINE FIELD OVERWRITE payload ON esignature_webhook_journal TYPE string;
+-- NULL until consumption (workflow advance + signature stamp + document
+-- archival) succeeds; the boot-time replay sweep drains NULLs
+-- oldest-first.
+DEFINE FIELD OVERWRITE consumed_at ON esignature_webhook_journal TYPE option<datetime>;
+DEFINE FIELD OVERWRITE attempts ON esignature_webhook_journal TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE last_error ON esignature_webhook_journal TYPE option<string>;
+DEFINE FIELD OVERWRITE inserted_at ON esignature_webhook_journal TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON esignature_webhook_journal TYPE datetime DEFAULT time::now();
+-- The provider's redelivery of the same event lands on the same row; the
+-- replay sweep drains oldest-first.
+DEFINE INDEX OVERWRITE esignature_webhook_journal_event ON esignature_webhook_journal FIELDS provider, provider_id, status UNIQUE;
+DEFINE INDEX OVERWRITE esignature_webhook_journal_pending ON esignature_webhook_journal FIELDS consumed_at, inserted_at;
+
 -- `notarizations`: the notary counterpart to `signature`, correlated back
 -- from the provider by the same `(provider, provider_id)` pair.
 DEFINE TABLE IF NOT EXISTS notarization SCHEMAFULL PERMISSIONS NONE;

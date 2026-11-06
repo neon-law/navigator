@@ -804,6 +804,29 @@ where
     served
 }
 
+/// The boot-time journal replay's per-boot budget (ENG-787): how many
+/// pending e-signature receipts one boot drains. A restart with a larger
+/// backlog converges over subsequent boots instead of holding the boot
+/// host.
+const REPLAY_BUDGET: i64 = 100;
+
+/// Journal replay (ENG-787): a verified e-signature receipt that
+/// outlived its delivery — the worker died mid-consumption, the 5xx
+/// outlived the provider's retry budget — is recovered at boot, from
+/// the journal, through the same consumption function first delivery
+/// ran. Non-fatal by design: a sweep that cannot run must not block
+/// serving, and the backlog converges over subsequent boots.
+fn spawn_journal_replay(state: &crate::AppState) {
+    let replay_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(error) =
+            crate::esignature_webhook::replay_pending_receipts(&replay_state, REPLAY_BUDGET).await
+        {
+            tracing::error!(%error, "esignature webhook journal replay failed");
+        }
+    });
+}
+
 async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     // Load `.env` / `.devx/env` before any env read; in cluster the
     // environment is injected and both calls are no-ops.
@@ -838,6 +861,9 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     {
         tracing::error!(%error, "bootstrap Owner reconciliation failed");
     }
+
+    // Journal replay (ENG-787): see `spawn_journal_replay`.
+    spawn_journal_replay(&rt.state);
 
     // Every local port a registered brand's own env var claims (see
     // `views::brand::BrandKey::local_port_env_var`), read before `rt.state`

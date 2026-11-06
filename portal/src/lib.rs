@@ -788,6 +788,14 @@ fn public_ingress_routes() -> Router<AppState> {
             "/fake-signature/{envelope}/{email}",
             axum::routing::get(esign_view::fake_signing_page),
         )
+        // The fake provider's sender page — the sender-console stand-in
+        // the sender-view redirect points at, regenerated from the
+        // durable envelope at every mint. Under DocuSign the handler
+        // answers 404.
+        .route(
+            "/fake-signature/{envelope}/sender",
+            axum::routing::get(esign_view::fake_sender_page),
+        )
         .route("/docusign/consent-callback", get(docusign_consent_callback))
 }
 

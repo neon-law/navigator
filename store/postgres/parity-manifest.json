@@ -486,7 +486,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 112,
+    "table_count": 113,
     "tables": {
       "address": {
         "city": "string",
@@ -919,6 +919,18 @@
         "id": "record",
         "inserted_at": "datetime",
         "name": "string",
+        "updated_at": "datetime"
+      },
+      "esignature_webhook_journal": {
+        "attempts": "int",
+        "consumed_at": "option<datetime>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "last_error": "option<string>",
+        "payload": "string",
+        "provider": "string",
+        "provider_id": "string",
+        "status": "string",
         "updated_at": "datetime"
       },
       "estate_asset": {
@@ -1874,7 +1886,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 153,
+    "table_count": 154,
     "tables": {
       "address": {
         "columns": {
@@ -2820,6 +2832,23 @@
         },
         "foreign_keys": [],
         "name": "entity_type",
+        "references": []
+      },
+      "esignature_webhook_journal": {
+        "columns": {
+          "attempts": "BIGINT",
+          "consumed_at": "TIMESTAMPTZ",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "last_error": "TEXT",
+          "payload": "TEXT",
+          "provider": "TEXT",
+          "provider_id": "TEXT",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "esignature_webhook_journal",
         "references": []
       },
       "estate_asset": {

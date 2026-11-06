@@ -285,6 +285,19 @@ pub trait SignatureProvider: Send + Sync {
         view: &RecipientView,
     ) -> Result<String, SignatureError>;
 
+    /// Request the **sender-view URL** for an already-created envelope: the
+    /// page where the *sender* watches the envelope — its status, every
+    /// recipient's signing state, and (for the fake provider) what the
+    /// webhook delivery did. The sender-side observability seam: without
+    /// it the sender learns an envelope's state only from the completion
+    /// webhook, or not at all. Unlike the recipient view this is not tied
+    /// to a captive recipient — any sent envelope has a sender view.
+    async fn create_sender_view(
+        &self,
+        request_id: &SignatureRequestId,
+        return_url: &str,
+    ) -> Result<String, SignatureError>;
+
     /// Fetch the executed document set for a completed request — the
     /// signed PDF and the Certificate of Completion. Called on the
     /// completion webhook so the ESIGN record is archived to storage.
@@ -625,6 +638,19 @@ pub(crate) fn recipient_slug(email: &str) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect()
+}
+
+/// Escape a dynamic value into the fake provider's HTML pages. The sign
+/// and sender pages interpolate names, emails, and return URLs that came
+/// from records and request parameters, so every value goes through this
+/// before it touches markup.
+pub(crate) fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 impl FakeSignatureProvider {
@@ -983,7 +1009,10 @@ code{{background:#f4f4f6;padding:.1rem .3rem}}</style></head><body>\
 local loop (<code>navigator dev</code> tooling or the running workflow), \
 which records your signature with the fake signature provider.</p>\
 </body></html>\n",
-            signer.name, signer.name, signer.email, envelope.id,
+            html_escape(&signer.name),
+            html_escape(&signer.name),
+            html_escape(&signer.email),
+            html_escape(&envelope.id),
         );
         std::fs::write(&path, page)
             .map_err(|e| SignatureError::Provider(format!("writing {}: {e}", path.display())))?;
@@ -998,6 +1027,75 @@ which records your signature with the fake signature provider.</p>\
                 SignatureError::Provider(format!("writing {}: {e}", document.display()))
             })?;
         }
+        Ok(path)
+    }
+
+    /// The local sender page for an envelope, as `create_sender_view`
+    /// hands it out: the envelope's status, every recipient with their
+    /// signing state, and the webhook delivery outcome. Regenerated at
+    /// every mint — the page is a view over the durable envelope, never
+    /// a state of its own.
+    fn write_sender_page(
+        &self,
+        envelope: &FakeEnvelope,
+        return_url: &str,
+    ) -> Result<PathBuf, SignatureError> {
+        let path = self
+            .root
+            .join("signing")
+            .join(&envelope.id)
+            .join("sender.html");
+        std::fs::create_dir_all(path.parent().expect("sender page has a parent")).map_err(|e| {
+            SignatureError::Provider(format!(
+                "creating {}: {e}",
+                path.parent().expect("sender page has a parent").display()
+            ))
+        })?;
+        let mut recipient_rows = String::new();
+        for recipient in &envelope.recipients {
+            let signed_at = envelope
+                .signed
+                .iter()
+                .find(|s| s.email == recipient.email)
+                .map_or_else(|| "not yet".to_string(), |s| s.at.clone());
+            // Infallible: writing to a String never errors.
+            let _ = write!(
+                recipient_rows,
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&recipient.name),
+                html_escape(&recipient.email),
+                recipient.role,
+                html_escape(&signed_at),
+            );
+        }
+        let webhook = envelope.webhook_status.as_deref().map_or_else(
+            || "no delivery configured — the loop reads completion directly".to_string(),
+            str::to_string,
+        );
+        let page = format!(
+            "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
+<title>Sent envelope {0} — {1}</title>\
+<style>body{{font-family:system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#1a1a2e}}\
+table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ddd;padding:.4rem;text-align:left}}\
+code{{background:#f4f4f6;padding:.1rem .3rem}}</style></head><body>\
+<h1>Sent envelope</h1>\
+<p>Envelope <code>{0}</code> is <strong>{1}</strong> (sent {2}).</p>\
+<p><a href=\"document.pdf\">document.pdf</a> is the prepared document; \
+<a href=\"{3}\">return to Navigator</a>.</p>\
+<h2>Recipients</h2>\
+<table><tr><th>Name</th><th>Email</th><th>Role</th><th>Signed</th></tr>{4}</table>\
+<h2>Webhook delivery</h2>\
+<p>{5}</p>\
+</body></html>\n",
+            html_escape(&envelope.id),
+            html_escape(&envelope.status.to_string()),
+            html_escape(&envelope.created_at),
+            html_escape(return_url),
+            recipient_rows,
+            html_escape(&webhook),
+        );
+        std::fs::write(&path, page)
+            .map_err(|e| SignatureError::Provider(format!("writing {}: {e}", path.display())))?;
         Ok(path)
     }
 
@@ -1152,6 +1250,27 @@ impl SignatureProvider for FakeSignatureProvider {
         }
     }
 
+    async fn create_sender_view(
+        &self,
+        request_id: &SignatureRequestId,
+        return_url: &str,
+    ) -> Result<String, SignatureError> {
+        let envelope = self.envelope(request_id)?.ok_or_else(|| {
+            SignatureError::Provider(format!("no such envelope {}", request_id.0))
+        })?;
+        // (Re)generated at every mint so the page always shows the
+        // envelope's *current* state — status, who has signed, what the
+        // webhook delivery did — never a stale snapshot.
+        let page = self.write_sender_page(&envelope, return_url)?;
+        match &self.signing_base_url {
+            // Same dual-mode rule as the recipient view: a URL on the dev
+            // server when it serves the fake's pages, the on-disk page
+            // path under direct construction.
+            Some(base) => Ok(format!("{base}/{}/sender", request_id.0)),
+            None => Ok(format!("file://{}", page.display())),
+        }
+    }
+
     async fn fetch_completed_documents(
         &self,
         request_id: &SignatureRequestId,
@@ -1250,6 +1369,32 @@ pub struct DocuSignSignatureProvider {
 }
 
 impl DocuSignSignatureProvider {
+    /// The eSignature API request URL. DocuSign endpoints are HTTPS; a
+    /// plain-HTTP base is refused unless its host is loopback, which is
+    /// how tests point the provider at a local mock server — the same
+    /// https-unless-loopback rule the CLI applies to authenticated
+    /// deployment transfers. Account and envelope ids never travel in
+    /// cleartext to a non-loopback host.
+    fn request_url(&self, path: &str) -> Result<reqwest::Url, SignatureError> {
+        let url = reqwest::Url::parse(&format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        ))
+        .map_err(|_| {
+            SignatureError::Provider(format!("docusign base URL is not a valid URL: {path}"))
+        })?;
+        let loopback = url
+            .host_str()
+            .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"));
+        if url.scheme() != "https" && !loopback {
+            return Err(SignatureError::Provider(
+                "docusign base URL must be HTTPS".to_string(),
+            ));
+        }
+        Ok(url)
+    }
+
     /// Build a provider that authenticates with a static OAuth bearer
     /// (`DOCUSIGN_ACCESS_TOKEN`). The simple local/demo path; the token
     /// expires in ~8h and is not refreshed.
@@ -1427,16 +1572,13 @@ impl DocuSignSignatureProvider {
         envelope_id: &str,
         which: &str,
     ) -> Result<Vec<u8>, SignatureError> {
-        let url = format!(
-            "{}/v2.1/accounts/{}/envelopes/{}/documents/{}",
-            self.base_url.trim_end_matches('/'),
-            self.account_id,
-            envelope_id,
-            which
-        );
+        let url = self.request_url(&format!(
+            "v2.1/accounts/{}/envelopes/{}/documents/{which}",
+            self.account_id, envelope_id
+        ))?;
         let resp = self
             .http
-            .get(&url)
+            .get(url)
             .bearer_auth(self.bearer_token().await?)
             .send()
             .await
@@ -1477,14 +1619,10 @@ impl SignatureProvider for DocuSignSignatureProvider {
         pdf: &[u8],
         manifest: &SignatureManifest,
     ) -> Result<SignatureRequestId, SignatureError> {
-        let url = format!(
-            "{}/v2.1/accounts/{}/envelopes",
-            self.base_url.trim_end_matches('/'),
-            self.account_id
-        );
+        let url = self.request_url(&format!("v2.1/accounts/{}/envelopes", self.account_id))?;
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             // Idempotency at the provider boundary: the same notation
             // never creates two envelopes, even under a concurrent
             // double-send. DocuSign honors this key for 24h.
@@ -1516,12 +1654,10 @@ impl SignatureProvider for DocuSignSignatureProvider {
         request_id: &SignatureRequestId,
         view: &RecipientView,
     ) -> Result<String, SignatureError> {
-        let url = format!(
-            "{}/v2.1/accounts/{}/envelopes/{}/views/recipient",
-            self.base_url.trim_end_matches('/'),
-            self.account_id,
-            request_id.0
-        );
+        let url = self.request_url(&format!(
+            "v2.1/accounts/{}/envelopes/{}/views/recipient",
+            self.account_id, request_id.0
+        ))?;
         // `authenticationMethod` is the audit label DocuSign records for
         // how the signer was authenticated upstream; "none" means the app
         // (Neon Law Navigator, behind its own OIDC login) vouched for them. The
@@ -1536,7 +1672,7 @@ impl SignatureProvider for DocuSignSignatureProvider {
         });
         let resp = self
             .http
-            .post(&url)
+            .post(url)
             .bearer_auth(self.bearer_token().await?)
             .json(&body)
             .send()
@@ -1547,6 +1683,40 @@ impl SignatureProvider for DocuSignSignatureProvider {
             let body = resp.text().await.unwrap_or_default();
             return Err(SignatureError::Provider(format!(
                 "docusign recipient view responded {status}: {body}"
+            )));
+        }
+        let view: RecipientViewResponse = resp
+            .json()
+            .await
+            .map_err(|e| SignatureError::Provider(e.to_string()))?;
+        Ok(view.url)
+    }
+
+    async fn create_sender_view(
+        &self,
+        request_id: &SignatureRequestId,
+        return_url: &str,
+    ) -> Result<String, SignatureError> {
+        let url = self.request_url(&format!(
+            "v2.1/accounts/{}/envelopes/{}/views/sender",
+            self.account_id, request_id.0
+        ))?;
+        // The sender view carries no recipient identity — only where the
+        // console sends the browser when the sender closes it.
+        let body = serde_json::json!({ "returnUrl": return_url });
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(self.bearer_token().await?)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| SignatureError::Provider(e.to_string()))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(SignatureError::Provider(format!(
+                "docusign sender view responded {status}: {body}"
             )));
         }
         let view: RecipientViewResponse = resp
@@ -1884,6 +2054,22 @@ mod tests {
             "signer@example.com",
             "Signer",
         )
+    }
+
+    #[tokio::test]
+    async fn plain_http_base_is_refused_outside_loopback() {
+        // The provider transmits account and envelope ids in the request
+        // URL; a plain-HTTP base must fail the call rather than send them
+        // in cleartext. Loopback bases keep the wiremock tests working.
+        let ds = docusign("http://demo.docusign.net/restapi".into());
+        let err = ds
+            .create_sender_view(
+                &SignatureRequestId("env-1".into()),
+                "https://app.example/return",
+            )
+            .await
+            .expect_err("plain-http base must be refused");
+        assert!(err.to_string().contains("must be HTTPS"));
     }
 
     #[test]

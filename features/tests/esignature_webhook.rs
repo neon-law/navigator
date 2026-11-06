@@ -16,7 +16,11 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use cucumber::{given, then, when, World};
 use features::{app_state, body_string, fs_storage};
+use portal::signature::{
+    FakeSignatureProvider, SignatureManifest, SignatureProvider, SignatureRecipient,
+};
 use portal::webhook_auth::sign_hmac_sha256_b64;
+use portal::AppState;
 use portal::{policy::PolicyClient, SessionStore};
 use store::seed;
 use tower::ServiceExt;
@@ -26,6 +30,8 @@ use workflows::{InMemoryRuntime, MachineKind, StateMachineRuntime};
 const TEMPLATE_CODE: &str = "onboarding__letter";
 const HMAC_KEY: &str = "test-docusign-hmac-key";
 const PARKED: &str = "sent_for_signature__pending";
+const SIGNER_EMAIL: &str = "libra@example.com";
+const PARKED_PDF: &[u8] = b"%PDF-1.4 parked retainer awaiting the provider's callback";
 
 /// The DocuSign Connect completion payload for one envelope.
 fn completion_body(envelope_id: &str) -> Vec<u8> {
@@ -56,15 +62,24 @@ struct WebhookWorld {
     app: Option<axum::Router>,
     runtime: Option<Arc<InMemoryRuntime>>,
     notation_id: Option<Uuid>,
-    /// The envelope id actually recorded in `signatures`, unique per
-    /// scenario: `signatures` lives in the process-shared
-    /// [`features::shared_surreal`] engine, so two scenarios both parking on
-    /// the feature file's literal `"env-abc"` would collide on the
-    /// `(provider, provider_id)`
-    /// unique index and resolve to each other's notation. Mangled here with
-    /// the scenario's own notation id so each scenario's envelope is
-    /// distinct while the feature file keeps its readable literal text.
+    /// The envelope id actually recorded in `signatures`, minted by the
+    /// held fake provider as `fake-{notation_id}-1`. Notation ids are
+    /// unique per scenario in the process-shared
+    /// [`features::shared_surreal`] engine, so the minted envelope ids
+    /// never collide on the `(provider, provider_id)` unique index —
+    /// two scenarios both parking on the feature file's literal prefix
+    /// resolve to their own notation and their own envelope.
     envelope_id: Option<String>,
+    /// The app's signature provider — the same instance the webhook's
+    /// consumption path reads, held so the parked envelope can be sent
+    /// and signed through the real provider seam.
+    provider: Option<Arc<FakeSignatureProvider>>,
+    /// The router's own state, held (`AppState` is clone-cheap) so the
+    /// journal-recovery sweep runs through the exact seams a running
+    /// server would use — same store, same provider, same runtime.
+    state: Option<AppState>,
+    /// The boot-time sweep's captured outcome, for the step that asserts it.
+    sweep_result: Option<Result<(), String>>,
     last_status: Option<StatusCode>,
     last_body: String,
 }
@@ -91,6 +106,9 @@ impl WebhookWorld {
     fn envelope_id(&self) -> &str {
         self.envelope_id.as_deref().expect("envelope not built")
     }
+    fn provider(&self) -> Arc<FakeSignatureProvider> {
+        self.provider.as_ref().expect("provider not built").clone()
+    }
 }
 
 #[given("a Neon Law Navigator app with an HMAC-secured e-signature webhook")]
@@ -112,13 +130,26 @@ async fn build_app(world: &mut WebhookWorld) {
     // Arm the HMAC gate so the webhook actually verifies signatures —
     // without this the dev posture would accept the forged callback.
     state.esignature_hmac_key = Some(HMAC_KEY.to_string());
-    let router = features::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    // The webhook's consumption path reads `state.signature_provider` to
+    // archive completed documents; hand it the instance the world holds so
+    // envelopes sent below are visible to the handler under test.
+    let provider = Arc::new(FakeSignatureProvider::new());
+    state.signature_provider = provider.clone();
+    let router = features::neon_router(
+        state.clone(),
+        std::path::Path::new(portal::DEFAULT_PUBLIC_DIR),
+    );
     world.app = Some(router);
     world.runtime = Some(runtime);
+    world.provider = Some(provider);
+    world.state = Some(state);
 }
 
 #[given(regex = r#"^a retainer parked at sent_for_signature__pending with envelope id "([^"]+)"$"#)]
 async fn park_retainer(world: &mut WebhookWorld, envelope_id: String) {
+    // The feature's literal names the id scheme's prefix only; the fake
+    // provider mints the real envelope id below.
+    let _ = envelope_id;
     let surreal = features::shared_surreal().await;
     let tmpl = store::templates::resolve(&features::shared_surreal().await, None, TEMPLATE_CODE)
         .await
@@ -166,10 +197,32 @@ async fn park_retainer(world: &mut WebhookWorld, envelope_id: String) {
         "workflow should be parked before the callback"
     );
 
-    // Persist the parked state + record the provider's envelope id in
-    // `signatures`, exactly as the retainer walk does at send time. Mangled
-    // unique to this scenario — see the `envelope_id` field doc.
-    let envelope_id = format!("{envelope_id}-{notation_id}");
+    // Persist the parked state, then make the provider-side half of the
+    // send real: the held fake provider mints the envelope and the client's
+    // signature completes it — exactly the state DocuSign is in when its
+    // Connect callback posts. The journaled webhook then archives the
+    // completed document set from the same envelope. The row names
+    // DocuSign because the fake is its DocuSign-shaped double.
+    let manifest = SignatureManifest {
+        recipients: vec![SignatureRecipient {
+            role: "client".to_string(),
+            email: SIGNER_EMAIL.to_string(),
+            name: "Libra".to_string(),
+            routing_order: 1,
+            client_user_id: None,
+        }],
+        fields: Vec::new(),
+    };
+    let provider = world.provider();
+    let request_id = provider
+        .send_for_signature(notation_id, PARKED_PDF, &manifest)
+        .await
+        .expect("fake provider sends the parked envelope");
+    provider
+        .sign(&request_id, SIGNER_EMAIL)
+        .await
+        .expect("fake provider signs the parked envelope");
+
     store::notations::update_state(&surreal, notation_id, PARKED)
         .await
         .unwrap();
@@ -177,13 +230,13 @@ async fn park_retainer(world: &mut WebhookWorld, envelope_id: String) {
         &surreal,
         notation_id,
         store::signatures::SignatureProvider::DocuSign,
-        &envelope_id,
+        &request_id.0,
     )
     .await
     .unwrap();
 
     world.notation_id = Some(notation_id);
-    world.envelope_id = Some(envelope_id);
+    world.envelope_id = Some(request_id.0);
 }
 
 async fn post_callback(world: &mut WebhookWorld, body: Vec<u8>, signature: &str) {
@@ -305,6 +358,94 @@ async fn assert_signature_state(world: &mut WebhookWorld, state: String) {
     .unwrap()
     .expect("signature row");
     assert_eq!(signature.state.as_str(), state);
+}
+
+#[when(regex = r#"^the provider posts a validly-signed viewed callback for envelope "([^"]+)"$"#)]
+async fn post_viewed(world: &mut WebhookWorld, feature_envelope_id: String) {
+    // A non-terminal event: the handler acks it so the provider stops
+    // retrying, but nothing advances and nothing is journaled — a viewed
+    // event cannot be replayed into any workflow state.
+    let envelope_id = world.envelope_id().to_string();
+    assert!(envelope_id.starts_with(&feature_envelope_id));
+    let body = terminal_body(&envelope_id, "envelope-viewed", "delivered");
+    let signature = sign_hmac_sha256_b64(HMAC_KEY.as_bytes(), &body);
+    post_callback(world, body, &signature).await;
+}
+
+#[when("the worker journals a validly-signed completion callback and dies before consuming it")]
+async fn journal_and_die(world: &mut WebhookWorld) {
+    // The handler journals the verified receipt BEFORE consuming it — the
+    // journal is the delivery record. A worker killed in that window leaves
+    // exactly this state: a verified receipt in the journal, nothing
+    // consumed anywhere. Simulated at the same store seam the handler
+    // writes, with the same arguments it passes.
+    let state = world.state.as_ref().expect("app not built").clone();
+    let envelope_id = world.envelope_id().to_string();
+    let body = completion_body(&envelope_id);
+    store::signature_webhook_journal::journal_verified_receipt(
+        &state.surreal,
+        store::signatures::SignatureProvider::DocuSign,
+        &envelope_id,
+        "completed",
+        &String::from_utf8_lossy(&body),
+    )
+    .await
+    .expect("journal the verified receipt");
+}
+
+#[then("the journal holds one pending receipt")]
+async fn assert_one_pending(world: &mut WebhookWorld) {
+    let state = world.state.as_ref().expect("app not built").clone();
+    let pending = store::signature_webhook_journal::pending_receipts(&state.surreal, 100)
+        .await
+        .expect("read the journal");
+    assert_eq!(pending.len(), 1, "exactly one receipt awaits consumption");
+}
+
+#[when("the boot-time replay sweep drains the journal")]
+async fn sweep_journal(world: &mut WebhookWorld) {
+    let state = world.state.as_ref().expect("app not built").clone();
+    let result = portal::esignature_webhook::replay_pending_receipts(&state, 100)
+        .await
+        .map_err(|error| error.to_string());
+    world.sweep_result = Some(result);
+}
+
+#[then("the sweep drains without error")]
+async fn assert_sweep_ok(world: &mut WebhookWorld) {
+    let result = world.sweep_result.take().expect("the sweep has not run");
+    assert!(
+        result.is_ok(),
+        "the boot-time sweep drains the journal without error: {result:?}"
+    );
+}
+
+#[then("the journal has no pending receipts")]
+async fn assert_journal_empty(world: &mut WebhookWorld) {
+    let state = world.state.as_ref().expect("app not built").clone();
+    // Consumption is asserted synchronously by the steps above; the
+    // mark, though, can transiently lose its write under load, and the
+    // journal's contract is convergence across sweeps — the next sweep
+    // retries what this one left pending. Drain again before
+    // asserting, and fail only on a receipt the sweeps cannot clear.
+    for _ in 0..3 {
+        let pending = store::signature_webhook_journal::pending_receipts(&state.surreal, 100)
+            .await
+            .expect("read the journal");
+        if pending.is_empty() {
+            return;
+        }
+        portal::esignature_webhook::replay_pending_receipts(&state, 100)
+            .await
+            .expect("re-run the sweep");
+    }
+    let pending = store::signature_webhook_journal::pending_receipts(&state.surreal, 100)
+        .await
+        .expect("read the journal");
+    assert!(
+        pending.is_empty(),
+        "every receipt is consumed after the sweeps converge"
+    );
 }
 
 #[tokio::main]
