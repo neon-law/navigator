@@ -1,7 +1,9 @@
 //! Canonical geographic geometry derived from one validated chart response.
 //!
 //! These request-local values contain calculation provenance, not the original
-//! birth input. Continuous polyline interpolation has no certified error bound.
+//! birth input. Coordinate-linear horizon edges carry a continuous angular bound.
+
+mod interpolation;
 
 use serde::Serialize;
 
@@ -48,8 +50,11 @@ pub struct GeometryConvention {
     pub orientation: &'static str,
     pub vertex_altitude_tolerance_deg: f64,
     pub meridian_hour_angle_tolerance_deg: f64,
-    /// No bound is certified for straight interpolation between emitted vertices.
+    /// Maximum horizon angular-condition residual along straight WGS84 lon/lat edges.
+    /// This is neither geographic displacement nor a projected/geodesic path bound.
     pub polyline_interpolation_error_bound_deg: Option<f64>,
+    pub polyline_interpolation_metric: &'static str,
+    pub polyline_interpolation_sine_roundoff_allowance: f64,
 }
 
 /// One numerical-table row from a canonical segment, in body/angle/segment/vertex order.
@@ -134,7 +139,7 @@ impl AstrocartographyGeometry {
                 asc,
                 dsc,
             ] {
-                lines.push(GeographicLine::from_line(&line, state.source_id)?);
+                lines.push(GeographicLine::from_line(&line, state.source_id, dec, mc)?);
             }
         }
         Ok(Some(Self {
@@ -142,7 +147,7 @@ impl AstrocartographyGeometry {
                 calculation: response.provenance.clone(),
                 settings: response.request.settings.clone(),
                 convention: GeometryConvention {
-                    solver: "navigator-diurnal-true-horizon-v1",
+                    solver: "navigator-diurnal-true-horizon-v2",
                     coordinates: "WGS84 geodetic longitude, latitude in degrees",
                     celestial_frame: "apparent geocentric true equator/equinox of date (IAU 2006/2000B)",
                     longitude: "east-positive [-180, 180], with paired antimeridian edges",
@@ -152,7 +157,9 @@ impl AstrocartographyGeometry {
                     orientation: "instantaneous diurnal rotation at fixed RA/declination; tangent endpoints bound rising/setting arcs",
                     vertex_altitude_tolerance_deg: VERTEX_TOLERANCE_DEG,
                     meridian_hour_angle_tolerance_deg: VERTEX_TOLERANCE_DEG,
-                    polyline_interpolation_error_bound_deg: None,
+                    polyline_interpolation_error_bound_deg: Some(interpolation::BUDGET_DEG),
+                    polyline_interpolation_metric: "maximum true-horizon angular-condition residual along straight WGS84 longitude/latitude edges; not geographic displacement, projected or geodesic paths",
+                    polyline_interpolation_sine_roundoff_allowance: interpolation::SINE_ROUNDOFF,
                 },
             },
             lines,
@@ -221,7 +228,12 @@ impl AstrocartographyGeometry {
 }
 
 impl GeographicLine {
-    fn from_line(line: &AngularLine, source_id: Option<i32>) -> Result<Self, ChartError> {
+    fn from_line(
+        line: &AngularLine,
+        source_id: Option<i32>,
+        declination: f64,
+        meridian: f64,
+    ) -> Result<Self, ChartError> {
         let segments = line
             .segments()
             .into_iter()
@@ -241,6 +253,11 @@ impl GeographicLine {
                     .collect::<Result<Vec<_>, _>>()
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let segments = if matches!(line.angle, Angle::Asc | Angle::Dsc) {
+            interpolation::refine(segments, declination, meridian, line.angle)?
+        } else {
+            segments
+        };
         Ok(Self {
             body: line.body.name(),
             source_id,
@@ -366,6 +383,54 @@ mod tests {
             angles: None,
             provenance,
         }
+    }
+
+    #[test]
+    fn near_equatorial_polyline_interiors_obey_the_angular_budget() {
+        let mut response = response();
+        response.positions.as_mut().unwrap()[0].declination_deg = 0.01;
+        let geometry = geometry(&response);
+        let instant = response.instant.unwrap();
+        let gast = sidereal::gast_degrees_for(instant);
+        let state = &response.positions.as_ref().unwrap()[0];
+        let mut maximum = 0.0_f64;
+        for line in geometry
+            .lines()
+            .iter()
+            .filter(|line| line.body() == state.body && matches!(line.angle(), "asc" | "dsc"))
+        {
+            for pair in line
+                .segments()
+                .iter()
+                .flat_map(|segment| segment.windows(2))
+            {
+                for fraction in [0.125, 0.25, 0.5, 0.75, 0.875] {
+                    let longitude = pair[0][0] + fraction * (pair[1][0] - pair[0][0]);
+                    let latitude = pair[0][1] + fraction * (pair[1][1] - pair[0][1]);
+                    maximum = maximum.max(
+                        altitude_deg(
+                            longitude,
+                            latitude,
+                            state.right_ascension_deg,
+                            state.declination_deg,
+                            gast,
+                        )
+                        .abs(),
+                    );
+                }
+            }
+        }
+        assert!(
+            maximum <= 0.001,
+            "interior altitude residual {maximum} exceeds 0.001 degrees"
+        );
+        assert_eq!(
+            geometry
+                .provenance()
+                .convention
+                .polyline_interpolation_error_bound_deg,
+            Some(0.001)
+        );
     }
 
     #[test]
@@ -597,9 +662,13 @@ mod tests {
             "ICRF/J2000"
         );
         assert_eq!(value["settings"]["frame"], "true_of_date");
-        assert!(
-            value["convention"]["polyline_interpolation_error_bound_deg"].is_null(),
-            "vertex residual must not be mislabeled as a continuous-polyline bound"
+        assert_eq!(
+            value["convention"]["polyline_interpolation_error_bound_deg"],
+            0.001
+        );
+        assert_eq!(
+            value["convention"]["solver"],
+            "navigator-diurnal-true-horizon-v2"
         );
     }
 
