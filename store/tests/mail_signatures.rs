@@ -42,11 +42,12 @@ async fn postgres() -> Option<PostgresDb> {
     Some(pg)
 }
 
-/// A real Person row, so the gate's subject resolution answers it.
-async fn person(name: &str) -> (store::surreal::SurrealDb, Uuid) {
-    let surreal = mem_surreal().await;
-    let created = persons::create(
-        &surreal,
+/// A real Person row, so the gate's subject resolution answers it. Callers
+/// pass one shared in-process store: each `mem_surreal()` is its own
+/// isolated engine, so a Person exists only in the store that created them.
+async fn person(surreal: &store::surreal::SurrealDb, name: &str) -> Uuid {
+    persons::create(
+        surreal,
         &NewPerson {
             name: name.to_string(),
             email: format!("{name}@example.com"),
@@ -54,8 +55,8 @@ async fn person(name: &str) -> (store::surreal::SurrealDb, Uuid) {
         },
     )
     .await
-    .unwrap();
-    (surreal, created.id)
+    .unwrap()
+    .id
 }
 
 fn block() -> MailSignatureFields {
@@ -71,8 +72,9 @@ async fn a_saved_signature_round_trips_and_a_resave_replaces_it() {
     let Some(pg) = postgres().await else {
         return;
     };
-    let (surreal, attorney) = person("attorney").await;
-    let (other_surreal, colleague) = person("colleague").await;
+    let surreal = mem_surreal().await;
+    let attorney = person(&surreal, "attorney").await;
+    let colleague = person(&surreal, "colleague").await;
     assert_eq!(mail_signatures::find(&pg, attorney).await.unwrap(), None);
     assert_eq!(
         mail_signatures::for_person(&surreal, &pg, attorney)
@@ -107,10 +109,9 @@ async fn a_saved_signature_round_trips_and_a_resave_replaces_it() {
     let revised = MailSignatureFields {
         body: "Example Attorney, Of Counsel".to_string(),
     };
-    let resaved =
-        mail_signatures::save_for_actor(&other_surreal, &pg, attorney, attorney, &revised)
-            .await
-            .unwrap();
+    let resaved = mail_signatures::save_for_actor(&surreal, &pg, attorney, attorney, &revised)
+        .await
+        .unwrap();
     assert_eq!(resaved.body, revised.body);
     assert_eq!(
         mail_signatures::find(&pg, attorney).await.unwrap(),
@@ -125,8 +126,9 @@ async fn save_for_actor_refuses_anyone_but_the_attorney_without_writing() {
     let Some(pg) = postgres().await else {
         return;
     };
-    let (surreal, attorney) = person("attorney").await;
-    let (_, impostor) = person("impostor").await;
+    let surreal = mem_surreal().await;
+    let attorney = person(&surreal, "attorney").await;
+    let impostor = person(&surreal, "impostor").await;
 
     for (actor, subject) in [(impostor, attorney), (attorney, Uuid::now_v7())] {
         let error = mail_signatures::save_for_actor(&surreal, &pg, actor, subject, &block())
@@ -166,7 +168,8 @@ async fn an_unknown_person_reads_as_no_signature() {
     let Some(pg) = postgres().await else {
         return;
     };
-    let (surreal, attorney) = person("attorney").await;
+    let surreal = mem_surreal().await;
+    let attorney = person(&surreal, "attorney").await;
     mail_signatures::put(&pg, attorney, &block()).await.unwrap();
     let stranger = Uuid::now_v7();
     assert_eq!(
