@@ -1467,6 +1467,10 @@ mod tests {
                 "20261106120000_backfill_deadline_category.sql",
                 include_str!("../postgres/migrations/20261106120000_backfill_deadline_category.sql"),
             ),
+            (
+                "20261106130000_create_mail_signature.sql",
+                include_str!("../postgres/migrations/20261106130000_create_mail_signature.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

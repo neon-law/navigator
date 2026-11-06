@@ -303,6 +303,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "mail_signature",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "matter_billing_batch",
       "missing_column": null,
       "missing_table": null,
@@ -1914,7 +1921,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 158,
+    "table_count": 159,
     "tables": {
       "address": {
         "columns": {
@@ -3700,6 +3707,17 @@
         "references": [
           "mailroom"
         ]
+      },
+      "mail_signature": {
+        "columns": {
+          "body": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "mail_signature",
+        "references": []
       },
       "mailroom": {
         "columns": {

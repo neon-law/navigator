@@ -910,6 +910,12 @@ erDiagram
         string summary
         datetime updated_at
     }
+    mail_signature {
+        string body
+        datetime inserted_at
+        uuid person_id
+        datetime updated_at
+    }
     mailroom {
         uuid address_id
         uuid id

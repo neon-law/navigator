@@ -421,6 +421,13 @@
     "scope": "mailroom",
     "through": "mailroom_id -> Mailroom; Project attribution remains optional source data"
   },
+  "mail_signature": {
+    "migration_slice": "mail-signatures",
+    "parity_scenario": "one row per Person; self-edit only, so another actor and an unknown subject both get the same non-disclosing NotFound; a resave replaces the body and stamps a new revision",
+    "scope": "identity",
+    "target_only": true,
+    "through": "person_id; the writer authorizes the actor as the subject Person before it writes"
+  },
   "mailroom": {
     "migration_slice": "communications-storage",
     "parity_scenario": "same-Address round trip; unique name preserved",
