@@ -119,6 +119,7 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
     required!("NAVIGATOR_SURREAL_ARCHIVES_BUCKET"),
     required!("NAVIGATOR_CLAMD_ADDR"),
     required!(integration "NAVIGATOR_EMAIL_BACKEND"),
+    required!(integration "NAVIGATOR_SIGNATURE_PROVIDER"),
     required!(integration "SENDGRID_API_KEY"),
     required!(integration "SENDGRID_FROM_EMAIL"),
     required!(integration "SENDGRID_INBOUND_SECRET"),

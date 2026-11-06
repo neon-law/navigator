@@ -89,6 +89,11 @@ spec:
               value: NAVIGATOR_PUBLIC_HOST
             - name: NAVIGATOR_EMAIL_BACKEND
               value: sendgrid
+            # The signature provider has no default and `fake` refuses the
+            # production profile every GKE deployment runs, so DocuSign is the
+            # one selection that boots here. Its credentials ride the Secret.
+            - name: NAVIGATOR_SIGNATURE_PROVIDER
+              value: docusign
             - name: RESTATE_IDENTITY_KEY
               # Public key used to verify Restate Cloud request signatures.
               # `ops ship` renders it from the deployment config.

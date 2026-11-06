@@ -199,38 +199,45 @@ pub fn enforce_deployment_invariants<F: Fn(&str) -> Option<String>>(
         }
         let docusign_base = get("DOCUSIGN_BASE_URL").unwrap_or_default();
         let oauth_base = get("DOCUSIGN_OAUTH_BASE").unwrap_or_default();
-        match environment {
-            DeploymentEnvironment::Dev => {
-                if !docusign_base.is_empty()
-                    && !docusign_base.starts_with("https://demo.docusign.net/")
-                {
-                    violations.push(
-                        "DOCUSIGN_BASE_URL must use https://demo.docusign.net/ in the dev profile"
+        // Staging runs the production profile over simulated matters. Its
+        // envelopes must be the demo environment's non-binding ones, so the
+        // DocuSign hosts follow the matters, not the profile.
+        let docusign_demo = environment == DeploymentEnvironment::Dev
+            || store::config::sample_matters_from(environment, &get) == Ok(true);
+        if docusign_demo {
+            if !docusign_base.is_empty() && !docusign_base.starts_with("https://demo.docusign.net/")
+            {
+                violations.push(
+                        "DOCUSIGN_BASE_URL must use https://demo.docusign.net/ in the dev profile and over simulated matters"
                             .into(),
                     );
-                }
-                if !oauth_base.is_empty() && oauth_base != "https://account-d.docusign.com" {
-                    violations.push(
-                        "DOCUSIGN_OAUTH_BASE must use https://account-d.docusign.com in the dev profile"
-                            .into(),
-                    );
-                }
             }
-            DeploymentEnvironment::Production => {
-                if !docusign_base.is_empty() && docusign_base.contains("demo.docusign.net") {
-                    violations.push("DOCUSIGN_BASE_URL must not use the DocuSign demo environment in production".into());
-                }
-                if oauth_base.contains("account-d.docusign.com") {
-                    violations.push("DOCUSIGN_OAUTH_BASE must not use the DocuSign demo environment in production".into());
-                }
-                if get("DOCUSIGN_INTEGRATION_KEY").is_some_and(|value| !value.is_empty())
-                    && oauth_base.is_empty()
-                {
-                    violations.push(
-                        "DOCUSIGN_OAUTH_BASE must be set explicitly for production JWT credentials"
+            if !oauth_base.is_empty() && oauth_base != "https://account-d.docusign.com" {
+                violations.push(
+                        "DOCUSIGN_OAUTH_BASE must use https://account-d.docusign.com in the dev profile and over simulated matters"
                             .into(),
                     );
-                }
+            }
+        } else {
+            if !docusign_base.is_empty() && docusign_base.contains("demo.docusign.net") {
+                violations.push(
+                    "DOCUSIGN_BASE_URL must not use the DocuSign demo environment in production"
+                        .into(),
+                );
+            }
+            if oauth_base.contains("account-d.docusign.com") {
+                violations.push(
+                    "DOCUSIGN_OAUTH_BASE must not use the DocuSign demo environment in production"
+                        .into(),
+                );
+            }
+            if get("DOCUSIGN_INTEGRATION_KEY").is_some_and(|value| !value.is_empty())
+                && oauth_base.is_empty()
+            {
+                violations.push(
+                    "DOCUSIGN_OAUTH_BASE must be set explicitly for production JWT credentials"
+                        .into(),
+                );
             }
         }
     }
@@ -304,6 +311,7 @@ mod tests {
             ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
+            ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
             ("SENDGRID_FROM_EMAIL", "staging@example.com"),
             ("SENDGRID_API_KEY", "SG.test"),
             ("SENDGRID_INBOUND_SECRET", "secret"),
@@ -378,6 +386,7 @@ mod tests {
             ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
+            ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
             ("SENDGRID_FROM_EMAIL", "staging@example.com"),
             ("SENDGRID_API_KEY", "SG.test"),
             ("SENDGRID_INBOUND_SECRET", "secret"),
@@ -521,6 +530,7 @@ mod tests {
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
+            ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
             ("SENDGRID_FROM_EMAIL", "staging@example.com"),
             ("SENDGRID_API_KEY", "SG.test"),
             ("SENDGRID_INBOUND_SECRET", "secret"),
@@ -581,6 +591,7 @@ mod tests {
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
+            ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
             ("SENDGRID_FROM_EMAIL", "staging@example.com"),
             ("SENDGRID_API_KEY", "SG.test"),
             ("SENDGRID_INBOUND_SECRET", "secret"),
@@ -652,6 +663,7 @@ mod tests {
             ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
+            ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
             ("SENDGRID_FROM_EMAIL", "staging@example.com"),
             ("SENDGRID_API_KEY", "SG.test"),
             ("SENDGRID_INBOUND_SECRET", "secret"),
@@ -703,6 +715,7 @@ mod tests {
             ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
+            ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
             ("SENDGRID_API_KEY", "SG.dev"),
             ("SENDGRID_FROM_EMAIL", "dev@example.com"),
             ("SENDGRID_INBOUND_SECRET", "secret"),
@@ -870,6 +883,44 @@ mod tests {
         pairs.push(("DOCUSIGN_BASE_URL", "https://na4.docusign.net/restapi"));
         pairs.push(("DOCUSIGN_OAUTH_BASE", "https://account.docusign.com"));
         let err = dev_invariants(lookup(&pairs)).unwrap_err();
+        assert!(err
+            .violations
+            .iter()
+            .any(|v| v.starts_with("DOCUSIGN_BASE_URL")));
+        assert!(err
+            .violations
+            .iter()
+            .any(|v| v.starts_with("DOCUSIGN_OAUTH_BASE")));
+    }
+
+    /// Staging's shape: the production profile over simulated matters.
+    fn staging_with_docusign(
+        base: &'static str,
+        oauth: &'static str,
+    ) -> Vec<(&'static str, &'static str)> {
+        let mut pairs = full_with_jwks();
+        pairs.retain(|(key, _)| !matches!(*key, "DOCUSIGN_BASE_URL" | "DOCUSIGN_OAUTH_BASE"));
+        pairs.extend([
+            (store::config::NAVIGATOR_SIMULATED_MATTERS, "true"),
+            ("DOCUSIGN_BASE_URL", base),
+            ("DOCUSIGN_OAUTH_BASE", oauth),
+        ]);
+        pairs
+    }
+
+    #[test]
+    fn simulated_matters_boot_on_docusign_demo_and_refuse_live_docusign() {
+        let demo = staging_with_docusign(
+            "https://demo.docusign.net/restapi",
+            "https://account-d.docusign.com",
+        );
+        assert!(production_invariants(lookup(&demo)).is_ok());
+
+        let live = staging_with_docusign(
+            "https://na4.docusign.net/restapi",
+            "https://account.docusign.com",
+        );
+        let err = production_invariants(lookup(&live)).unwrap_err();
         assert!(err
             .violations
             .iter()
