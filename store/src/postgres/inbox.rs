@@ -228,13 +228,17 @@ pub(crate) async fn inbound_counterparty_on(
 /// The shared resolve-or-create behind ingest and the backfill, in the
 /// PostgreSQL People mirror: primary first, then any `person_mailbox`
 /// alias claim — the same exact, case-insensitive resolution
-/// `persons::find_by_any_email` serves on the Surreal lane. The
-/// [`crate::inbox::counterparty_decision`] guard applies here too: a
-/// lawyer- or clerk-tier sender never links. A sender no Person claims
-/// becomes a new client-tier Person in the same engine — `find_or_create`
-/// re-checks under the unique `email_lower` backstop, so a concurrent
-/// create collapses — and the Surreal projection stays fresh for
-/// alias-aware reads.
+/// `persons::find_by_any_email` serves on the Surreal lane. When the
+/// People authority is off, that Surreal directory is the people
+/// authority: a sender it claims is resolved there and mirrored into
+/// PostgreSQL rather than re-created (a second Person for the same
+/// mailbox would violate the Surreal `person_email_lower` unique index
+/// on projection). The [`crate::inbox::counterparty_decision`] guard
+/// applies here too: a lawyer- or clerk-tier sender never links. A
+/// sender no lane claims becomes a new client-tier Person in the same
+/// engine — `find_or_create` re-checks under the unique `email_lower`
+/// backstop, so a concurrent create collapses — and the Surreal
+/// projection stays fresh for alias-aware reads.
 pub(crate) async fn resolve_or_create_sender_on(
     pg: &PostgresDb,
     db: &SurrealDb,
@@ -257,6 +261,43 @@ pub(crate) async fn resolve_or_create_sender_on(
         // A known lawyer- or clerk-tier sender is outgoing mail: decision
         // None, and certainly no second Person for the same address.
         return Ok(crate::inbox::counterparty_decision(&person));
+    }
+    // Boxed: the fallback's combined future is large, and this resolver's
+    // future is embedded in every ingest caller's future — without the box
+    // each inbox test's future crosses the large-futures lint.
+    let fallback = async {
+        if let Some(existing) = crate::persons::find_by_any_email(db, address)
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?
+        {
+            // The Surreal directory claims this mailbox and PostgreSQL
+            // does not — the People authority is off, so Surreal is the
+            // source of truth. Project the Person into PostgreSQL through
+            // the standard mirror and resolve exactly as a
+            // PostgreSQL-native Person.
+            crate::postgres_mirror::mirror(
+                db,
+                pg,
+                &crate::postgres_mirror::MirrorKey::Person(existing.id),
+            )
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?;
+            let row = crate::postgres::people::by_email(pg, address)
+                .await?
+                .ok_or_else(|| {
+                    InboxError::Db(format!(
+                        "Surreal Person {} did not project to PostgreSQL for {address}",
+                        existing.id
+                    ))
+                })?;
+            return Ok(Some(crate::inbox::counterparty_decision(&row)));
+        }
+        Ok(None)
+    };
+    match Box::pin(fallback).await {
+        Ok(Some(decision)) => return Ok(decision),
+        Err(error) => return Err(error),
+        Ok(None) => {}
     }
     let created = crate::postgres::people::find_or_create(
         pg,
