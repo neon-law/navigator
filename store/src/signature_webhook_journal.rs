@@ -325,4 +325,37 @@ mod tests {
 
         assert!(!is_event_conflict(&error));
     }
+
+    #[tokio::test]
+    async fn a_consumed_receipt_stops_being_pending() {
+        let db = crate::surreal::test_support::mem().await;
+        let receipt = journal_verified_receipt(
+            &db,
+            SignatureProvider::DocuSign,
+            "fake-envelope-1",
+            "completed",
+            "{\"event\":\"envelope-completed\"}",
+        )
+        .await
+        .expect("journal the receipt");
+
+        let pending = pending_receipts(&db, 10).await.expect("read the journal");
+        assert_eq!(pending.len(), 1, "a fresh receipt is pending");
+        assert_eq!(
+            pending[0].id, receipt.id,
+            "the pending row hands back the journal's id"
+        );
+
+        // Mark through the row the sweep fetched — the same id
+        // `pending_receipts` returns — as `replay_one` does.
+        mark_consumed(&db, pending[0].id)
+            .await
+            .expect("mark the receipt consumed");
+
+        let pending = pending_receipts(&db, 10).await.expect("read the journal");
+        assert!(
+            pending.is_empty(),
+            "a consumed receipt stops being pending"
+        );
+    }
 }
