@@ -140,6 +140,7 @@ pub(super) const INLINE_ENV_WEB_KEYS: &[&str] = &[
     "NAVIGATOR_STORAGE_BACKEND",           // inline env
     "NAVIGATOR_APPLICATIONS_BUCKET",       // inline env → the applications bucket coordinate
     "NAVIGATOR_EMAIL_BACKEND",             // inline env
+    "NAVIGATOR_SIGNATURE_PROVIDER",        // inline env → docusign
     "GOOGLE_OAUTH_CLIENT_IDS",             // inline env allowlist
     "RESTATE_IDENTITY_KEY",                // public Restate Cloud request key
     "NAVIGATOR_SOCIAL_OAUTH_REDIRECT_URI", // inline env → the social OAuth callback
