@@ -267,16 +267,32 @@ async fn private_social_assignment_waits_for_human_privilege_review() {
         .goto(&format!("{}/app/inbox?brand=neon", base_url()))
         .await
         .unwrap();
-    wait_for_text(&browser, "Showing Brand neon", Duration::from_secs(15)).await;
+    // The folder rail marks the filter in effect with `aria-current`.
+    let brand_active =
+        "nav[aria-label='Filter inbox by Brand'] a[aria-current='true'][href*='brand=neon']";
+    wait_for_rail_filter(&browser, brand_active).await;
     scroll_and_js_click(
         &browser,
         "nav[aria-label='Filter inbox by channel'] a[href*='channel=x']",
     )
     .await;
-    wait_for_text(&browser, "Showing x", Duration::from_secs(15)).await;
-    wait_for_text(&browser, "Showing Brand neon", Duration::from_secs(15)).await;
+    wait_for_rail_filter(
+        &browser,
+        "nav[aria-label='Filter inbox by channel'] a[aria-current='true'][href*='channel=x']",
+    )
+    .await;
+    wait_for_rail_filter(&browser, brand_active).await;
     capture(&browser, "03-brand-filter").await;
     browser.close().await.unwrap();
+}
+
+async fn wait_for_rail_filter(browser: &fantoccini::Client, selector: &str) {
+    browser
+        .wait()
+        .at_most(Duration::from_secs(15))
+        .for_element(fantoccini::Locator::Css(selector))
+        .await
+        .unwrap_or_else(|error| panic!("the rail never marked {selector} active: {error}"));
 }
 
 async fn capture(browser: &fantoccini::Client, state: &str) {
