@@ -155,8 +155,9 @@ The last four leave the firm. Keep client identities and matter facts out of tho
 For a client email:
 
 * Run `navigator mail draft --body-file` to create an unsent draft of the substantive message body. Do not paste a
-  signature from another message: the CLI adds the configured `NAVIGATOR_GMAIL_SIGNATURE`, including its confidentiality
-  notice, exactly once. Missing configuration is an error; do not invent signature text.
+  signature from another message: the CLI adds the attorney's stored signature — the deployment's row for the sending
+  Gmail account when reachable, else the `NAVIGATOR_GMAIL_SIGNATURE` fallback it announces — including its
+  confidentiality notice, exactly once. Missing configuration in both sources is an error; do not invent signature text.
 * If the CLI reports an embedded signature, stop for attorney review. Preserve quoted history rather than stripping it
   to force the draft through.
 * The attorney reviews the complete draft in Gmail, confirms one signature and sends it personally. Do not insert

@@ -139,8 +139,12 @@ search convenience, not an authorization boundary. Filing compares the message p
 when they do not match. The authenticated Navigator API still enforces Project participation. The message idempotency
 key combines the normalized Gmail profile address and Gmail message id; reusing it in a different Project is rejected.
 
-For drafting, provide the substantive message body. Set `NAVIGATOR_GMAIL_SIGNATURE` privately to the approved attorney
-signature, including its confidentiality notice. Missing or blank configuration is refused before Gmail is contacted.
+For drafting, provide the substantive message body. The draft wears the attorney's stored signature: when the
+deployment's stores are reachable, the row for the sending Gmail account's Person signs the draft and stderr prints
+`signature: source=runtime person=<person id> revision=<row updated_at>`; the attorney edits that row on their own
+portal account page. When the stores are unreachable, the command falls back to `NAVIGATOR_GMAIL_SIGNATURE` — the
+fallback is announced on stderr, never silent, and the provenance line reads `source=env`. Missing or blank
+configuration in both sources is refused before Gmail is contacted.
 The CLI appends one copy, replacing repeated matching trailing copies without changing other prose or quoted context.
 Signature insertion preserves the draft's recipients, reply headers and attachment bytes.
 
