@@ -144,9 +144,9 @@ deployment's stores are reachable, the row for the sending Gmail account's Perso
 `signature: source=runtime person=<person id> revision=<row updated_at>`; the attorney edits that row on their own
 portal account page. When the stores are unreachable, the command falls back to `NAVIGATOR_GMAIL_SIGNATURE` — the
 fallback is announced on stderr, never silent, and the provenance line reads `source=env`. Missing or blank
-configuration in both sources is refused before Gmail is contacted.
-The CLI appends one copy, replacing repeated matching trailing copies without changing other prose or quoted context.
-Signature insertion preserves the draft's recipients, reply headers and attachment bytes.
+configuration in both sources is refused before Gmail is contacted. The CLI appends one copy, replacing repeated
+matching trailing copies without changing other prose or quoted context. Signature insertion preserves the draft's
+recipients, reply headers and attachment bytes.
 
 A matching signature on its own lines before quoted history or other text requires review. The CLI refuses before
 contacting Gmail, leaving any existing draft untouched. Clearly quoted lines prefixed with `>` and inline prose stay
