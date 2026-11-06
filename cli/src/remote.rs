@@ -20,6 +20,7 @@
 //! | `notation preview` | `POST /app/projects/{project_code}/notations/draft` |
 //! | `navigator site import` | `POST /app/api/seed` (optional `POST /auth/ci/seed-token`) |
 
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -618,9 +619,11 @@ pub(crate) async fn resolve_ci_document(host: &str) -> Result<(String, String)> 
 /// [`resolve_ci_document`] on a named forge.
 pub(crate) async fn resolve_ci_document_on(host: &str, forge: CiForge) -> Result<(String, String)> {
     let base = credentials::base_url(host);
+    let mint_path = forge.document_mint_path();
+    preflight_dns(&base, mint_path)?;
     let client = reqwest::Client::new();
     let oidc_token = actions_oidc_token(&client, &base, forge).await?;
-    let minted = mint_ci_token(&client, &base, forge.document_mint_path(), &oidc_token).await?;
+    let minted = mint_ci_token(&client, &base, mint_path, &oidc_token).await?;
     eprintln!(
         "{}",
         palette::dim(format!(
@@ -694,14 +697,26 @@ async fn mint_ci_token(
         .json(&serde_json::json!({ "token": github_token }))
         .send()
         .await
-        .map_err(|error| unreachable_host_error(base, mint_path, error))?;
+        .map_err(|error| {
+            // A DNS miss never got a server response, so — like the non-2xx
+            // path below — the refusal is surfaced as a CI annotation.
+            let dns = is_dns_failure(&error);
+            let mapped = unreachable_host_error(base, &format!("POST {mint_path}"), error);
+            if dns {
+                eprintln!(
+                    "{}",
+                    mint_refusal_annotation(mint_path, &mapped.to_string())
+                );
+            }
+            mapped
+        })?;
     let minted_status = minted.status();
     let minted_body = minted.text().await.unwrap_or_default();
     if !minted_status.is_success() {
         let message = mint_refusal_message(&minted_body);
         eprintln!(
             "{}",
-            mint_refusal_annotation(mint_path, minted_status, &message)
+            mint_refusal_annotation(mint_path, &format!("{minted_status}: {message}"))
         );
         return Err(anyhow::Error::new(MintRefusal).context(format!(
             "CI token mint at {mint_path} failed: {minted_status}: {message}"
@@ -710,32 +725,84 @@ async fn mint_ci_token(
     serde_json::from_str(&minted_body).with_context(|| format!("parse {mint_path} response"))
 }
 
-/// The error a mint reports when its request never reached Navigator. A host
-/// with no DNS record (a Brand host not yet published, say) is named as such,
-/// so the run says which `project.host` to fix rather than surfacing a raw
-/// resolver error; any other transport failure still names the host.
-fn unreachable_host_error(base: &str, mint_path: &str, error: reqwest::Error) -> anyhow::Error {
-    let host = base
-        .split_once("://")
-        .map_or(base, |(_, rest)| rest)
-        .trim_end_matches('/');
+/// Resolve the serving host before any request leaves the runner, so a host
+/// with no DNS record fails at the earliest step — before the OIDC audience
+/// request — with the host-naming remedies and the CI annotation instead of a
+/// raw resolver error mid-mint. A lookup failure that is not a name miss is
+/// left for the real request to report.
+fn preflight_dns(base: &str, mint_path: &str) -> Result<()> {
+    let Some((host, port)) = dns_target(base) else {
+        return Ok(());
+    };
+    match (host.as_str(), port).to_socket_addrs() {
+        Err(error) if error_chain_names_dns(&error) => {
+            let request = format!("POST {mint_path}");
+            let message = unreachable_host_message(base, &request);
+            eprintln!("{}", mint_refusal_annotation(mint_path, &message));
+            Err(anyhow!(message))
+        }
+        // Resolved, or a lookup failure that is not a name miss: the real
+        // request reports the latter in its own words.
+        _ => Ok(()),
+    }
+}
+
+/// The name and port a pre-flight lookup asks for, from a base URL.
+fn dns_target(base: &str) -> Option<(String, u16)> {
+    let url = reqwest::Url::parse(base).ok()?;
+    let host = url.host_str()?.to_string();
+    Some((host, url.port_or_known_default().unwrap_or(443)))
+}
+
+/// The error a request reports when it never reached Navigator — the mint
+/// POST and the gate's projects fetch share it. A host with no DNS record (a
+/// Brand host not yet published, say) is named as such, so the run says which
+/// `project.host` to fix rather than surfacing a raw resolver error; any
+/// other transport failure still names the host.
+pub(crate) fn unreachable_host_error(
+    base: &str,
+    request: &str,
+    error: reqwest::Error,
+) -> anyhow::Error {
     let message = if is_dns_failure(&error) {
-        format!(
-            "project.host `{host}` does not resolve: no DNS record answers for it, so \
-             POST {mint_path} never reached Navigator. Publish the host's DNS record, or set \
-             project.host to a host this deployment serves."
-        )
+        unreachable_host_message(base, request)
     } else {
-        format!("POST {mint_path} could not reach project.host `{host}`")
+        format!("{request} could not reach project.host `{}`", host_of(base))
     };
     anyhow::Error::new(error).context(message)
+}
+
+/// The host-naming message every DNS-refused request shares: the host, the
+/// fact nothing was reached, and both remedies — publish the record, or point
+/// `project.host` at a host this deployment serves.
+fn unreachable_host_message(base: &str, request: &str) -> String {
+    format!(
+        "project.host `{}` does not resolve: no DNS record answers for it, so \
+         {request} never reached Navigator. Publish the host's DNS record, or set \
+         project.host to a host this deployment serves.",
+        host_of(base)
+    )
+}
+
+/// The host part of a base URL, for naming it in refusals.
+fn host_of(base: &str) -> &str {
+    base.split_once("://")
+        .map_or(base, |(_, rest)| rest)
+        .trim_end_matches('/')
 }
 
 /// Whether a transport error is a name-resolution failure, judged by its
 /// source chain: reqwest reports a resolver failure as a connect error whose
 /// cause reads `dns error`, with the platform resolver's own words beneath.
 fn is_dns_failure(error: &reqwest::Error) -> bool {
-    let mut source: Option<&dyn std::error::Error> = Some(error);
+    error_chain_names_dns(error)
+}
+
+/// Whether an error's source chain reads as a name-resolution failure — the
+/// needles cover both the wording under a reqwest connect error and the words
+/// an `std::io::Error` from a direct lookup carries.
+fn error_chain_names_dns(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(current) = source {
         let text = current.to_string().to_ascii_lowercase();
         if [
@@ -755,12 +822,13 @@ fn is_dns_failure(error: &reqwest::Error) -> bool {
     false
 }
 
-/// The GitHub `::error::` workflow-command annotation `mint_ci_token` prints
-/// for a refused mint, naming the door (`mint_path`) and the server's own
-/// message — so a repository's Actions log shows *why* the run was refused
+/// The GitHub `::error::` workflow-command annotation `mint_ci_token` and the
+/// DNS pre-flight print for a refused mint, naming the door (`mint_path`) and
+/// the reason — a server status with its message, or a host that does not
+/// resolve — so a repository's Actions log shows *why* the run was refused
 /// rather than a generic HTTP status.
-fn mint_refusal_annotation(mint_path: &str, status: reqwest::StatusCode, message: &str) -> String {
-    format!("::error::CI token mint at {mint_path} was refused: {status}: {message}")
+fn mint_refusal_annotation(mint_path: &str, reason: &str) -> String {
+    format!("::error::CI token mint at {mint_path} was refused: {reason}")
 }
 
 /// A CI token mint refused by one of the `/auth/ci/*` doors
@@ -5026,7 +5094,7 @@ mod tests {
     };
     use super::{
         exit_code_for, fetch_step, first_line, integrity_failure, mint_refusal_annotation,
-        server_error,
+        preflight_dns, server_error,
     };
     use super::{fetch_project_list_with, trimmed_body, UploadSessionExpired};
     use crate::credentials::{self, Credentials, HostCredential};
@@ -5543,16 +5611,89 @@ mod tests {
         assert_eq!(exit_code_for(&error), ExitCode::from(2));
     }
 
+    /// LAW-266: the pre-flight resolves the serving host before any request
+    /// leaves the runner — the OIDC audience request included — so an
+    /// unresolvable `project.host` is refused at the earliest step with the
+    /// host-naming remedies. No `ACTIONS_ID_TOKEN_REQUEST_URL` is staged: if
+    /// the pre-flight failed to fire, this call would die on the missing
+    /// grant environment instead of naming the host.
+    #[tokio::test]
+    async fn ci_document_resolution_refuses_an_unresolvable_host_before_the_oidc_request() {
+        let error = super::resolve_ci_document_on("brand.invalid", super::CiForge::GitHub)
+            .await
+            .expect_err("an .invalid host cannot resolve");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("project.host `brand.invalid` does not resolve"),
+            "{message}"
+        );
+        assert!(
+            message.contains("POST /auth/ci/document-token"),
+            "{message}"
+        );
+        assert!(
+            message.contains("Publish the host's DNS record"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("ACTIONS_ID_TOKEN_REQUEST_URL"),
+            "{message}"
+        );
+    }
+
+    /// A loopback host resolves everywhere, so a local mock deployment never
+    /// trips the pre-flight.
+    #[test]
+    fn the_dns_preflight_passes_a_loopback_host_without_a_refusal() {
+        preflight_dns("http://127.0.0.1:9", "/auth/ci/document-token")
+            .expect("loopback always resolves");
+    }
+
+    /// The classifier reads the resolver's own words, and only those: a plain
+    /// connection refusal is a reachable host with a closed port, which the
+    /// real request reports in its own words.
+    #[test]
+    fn the_dns_classifier_reads_the_resolver_words_only() {
+        let miss = std::io::Error::other(
+            "failed to lookup address information: Name or service not known",
+        );
+        assert!(super::error_chain_names_dns(&miss));
+
+        let refused = std::io::Error::other("Connection refused (os error 111)");
+        assert!(!super::error_chain_names_dns(&refused));
+    }
+
     #[test]
     fn mint_refusal_annotation_names_the_door_and_the_servers_message() {
         assert_eq!(
             mint_refusal_annotation(
                 "/auth/ci/document-token",
-                reqwest::StatusCode::FORBIDDEN,
-                "the live project has no lawyer-tier lawyer DRI to attribute CI document verification to",
+                "403 Forbidden: the live project has no lawyer-tier lawyer DRI to attribute CI document verification to",
             ),
             "::error::CI token mint at /auth/ci/document-token was refused: 403 Forbidden: \
              the live project has no lawyer-tier lawyer DRI to attribute CI document verification to"
+        );
+    }
+
+    /// A DNS miss never got a server message, so the annotation carries the
+    /// host-naming refusal instead of a status.
+    #[test]
+    fn mint_refusal_annotation_carries_the_dns_refusal_for_an_unresolvable_host() {
+        let annotation = mint_refusal_annotation(
+            "/auth/ci/forgejo/document-token",
+            &super::unreachable_host_message(
+                "https://brand.invalid",
+                "POST /auth/ci/forgejo/document-token",
+            ),
+        );
+        assert!(annotation.starts_with("::error::"), "{annotation}");
+        assert!(
+            annotation.contains("project.host `brand.invalid` does not resolve"),
+            "{annotation}"
+        );
+        assert!(
+            annotation.contains("/auth/ci/forgejo/document-token"),
+            "{annotation}"
         );
     }
 

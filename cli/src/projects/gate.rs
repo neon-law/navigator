@@ -529,7 +529,7 @@ async fn check_live_with_token(dir: &Path, base: &str, token: &str) -> Result<()
         .bearer_auth(token)
         .send()
         .await
-        .context("GET /app/api/projects")?;
+        .map_err(|error| remote::unreachable_host_error(base, "GET /app/api/projects", error))?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -1056,6 +1056,31 @@ mod tests {
         let message = format!("{:#}", error.expect_err("no token to request"));
         assert!(message.contains("Forgejo Actions"), "{message}");
         assert!(message.contains("enable-openid-connect: true"), "{message}");
+    }
+
+    /// LAW-266: a transport failure on the projects fetch is classified with
+    /// the same host-naming message a DNS-missed mint gets, instead of the
+    /// bare context line. `.invalid` never resolves (RFC 2606); the mock
+    /// deployment is bypassed, so no token environment is staged.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_dns_miss_on_the_projects_fetch_names_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            "host: brand.invalid\nproject: acme\n",
+        )
+        .unwrap();
+
+        let error = super::check_live_with_token(dir.path(), "https://brand.invalid", "token")
+            .await
+            .expect_err("an .invalid host cannot be fetched");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("project.host `brand.invalid` does not resolve"),
+            "{message}"
+        );
+        assert!(message.contains("GET /app/api/projects"), "{message}");
     }
 
     #[tokio::test(flavor = "current_thread")]
