@@ -8,6 +8,9 @@ use chrono::{DateTime, Utc};
 
 use crate::{projects::manifest, remote};
 
+#[path = "lifecycle_letter.rs"]
+mod letter;
+
 /// The lifecycle kinds live in `project-scaffold` beside the Draft stubs
 /// they name, so the CLI's lifecycle commands and the shared scaffold
 /// cannot disagree on what an unedited stub is.
@@ -195,6 +198,22 @@ fn project_coordinates(root: &Path) -> Result<ProjectCoordinates> {
 }
 
 fn template_relative(root: &Path, kind: &str) -> Result<String> {
+    if kind == ONBOARDING {
+        if let Some(relative) = letter::declared(root)? {
+            let path = letter::checked_path(root, &relative)?;
+            let contents =
+                std::fs::read_to_string(path).context("read the declared engagement Draft")?;
+            if is_legacy_letter(&contents) {
+                return Err(anyhow!("the declared engagement Draft needs `navigator project migrate-letter` before onboarding"));
+            }
+            let declared_kind = rules::frontmatter::extract(&contents)
+                .and_then(|frontmatter| rules::frontmatter::field(frontmatter, "kind"));
+            if declared_kind.as_deref() != Some(ONBOARDING) {
+                return Err(anyhow!("the declared engagement Draft must have kind: onboarding; only onboarding-derived agreements can be migrated"));
+            }
+            return Ok(relative);
+        }
+    }
     let directory = super::repository::draft_directory(root);
     let folder = root.join(directory);
     let mut authored = Vec::new();
@@ -225,6 +244,9 @@ fn template_relative(root: &Path, kind: &str) -> Result<String> {
     }
     authored.sort();
     match authored.as_slice() {
+        [] if kind == ONBOARDING && !migration_candidates(root, directory)?.is_empty() => Err(anyhow!(
+            "an engagement agreement needs `navigator project migrate-letter` before onboarding"
+        )),
         [] => Ok(format!("{directory}/{}.md", template_code(kind))),
         [relative] => Ok(relative.clone()),
         _ => Err(anyhow!(
@@ -281,37 +303,36 @@ const LINEAGE_FIELD: &str = "derived_from";
 ///
 /// A legacy letter is a non-stub `drafts/` document declaring
 /// `kind: {LEGACY_ONBOARDING_KIND}` and a [`LINEAGE_FIELD`] pointing at the
-/// shared template it descended from. Exactly one such letter is expected:
+/// onboarding shared template it descended from. Exactly one such letter is expected:
 /// the verb rewrites its `kind:` to `onboarding`, moves the file to
 /// `{draft_directory}/onboarding__letter.md`, and leaves the `derived_from`
 /// lineage and the rest of the document untouched. An unedited stub already
 /// sitting at the canonical path is replaced; an authored canonical draft
 /// refuses the migration so a lawyer's writing is never overwritten.
 ///
-/// The migration rewrites frontmatter only; `Kind::opens_a_matter` and the
-/// rule engine are untouched, and `derived_from` stays documentation-only.
+/// The migration retypes the Draft and rewrites its page references together;
+/// `Kind::opens_a_matter` and the rule engine are untouched, and
+/// `derived_from` stays documentation-only.
 pub(crate) fn migrate_letter(root: &Path) -> Result<()> {
     let directory = super::repository::draft_directory(root);
-    let drafts = root.join(directory);
-    let mut legacy = Vec::new();
-    for entry in std::fs::read_dir(&drafts)
-        .with_context(|| format!("read the {directory}/ directory of {}", root.display()))?
-    {
-        let path = entry?.path();
-        if path.extension().is_none_or(|extension| extension != "md") || !path.is_file() {
-            continue;
-        }
+    let legacy = if let Some(relative) = letter::declared(root)? {
+        let path = letter::checked_path(root, &relative)?;
         let contents =
-            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        if !is_unedited_stub(&contents) && is_legacy_letter(&contents) {
-            legacy.push(path);
+            std::fs::read_to_string(&path).context("read the declared engagement Draft")?;
+        if !is_legacy_letter(&contents) {
+            return Err(anyhow!(
+                "the declared engagement Draft is not an onboarding-derived agreement"
+            ));
         }
-    }
+        vec![path]
+    } else {
+        migration_candidates(root, directory)?
+    };
     match legacy.as_slice() {
         [path] => migrate_letter_file(root, directory, path),
         [] => Err(anyhow!(
             "no legacy letter to migrate: a legacy letter declares `kind: \
-             {LEGACY_ONBOARDING_KIND}` and a `{LINEAGE_FIELD}` lineage in `{directory}/`; \
+             {LEGACY_ONBOARDING_KIND}` and a `{LINEAGE_FIELD}: onboarding__*` lineage in `{directory}/`; \
              nothing there declares both"
         )),
         [first, rest @ ..] => Err(anyhow!(
@@ -326,15 +347,41 @@ pub(crate) fn migrate_letter(root: &Path) -> Result<()> {
     }
 }
 
+fn migration_candidates(root: &Path, directory: &str) -> Result<Vec<PathBuf>> {
+    let drafts = root.join(directory);
+    if !drafts.exists() {
+        return Ok(Vec::new());
+    }
+    let mut legacy = Vec::new();
+    for entry in std::fs::read_dir(&drafts).context("read the Project Draft directory")? {
+        let path = entry?.path();
+        if path.extension().is_none_or(|extension| extension != "md") {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(root)?
+            .to_str()
+            .ok_or_else(|| anyhow!("Draft path is not UTF-8"))?;
+        letter::checked_path(root, relative)?;
+        let contents = std::fs::read_to_string(&path).context("read the engagement Draft")?;
+        if !is_unedited_stub(&contents) && is_legacy_letter(&contents) {
+            legacy.push(path);
+        }
+    }
+    legacy.sort();
+    Ok(legacy)
+}
+
 /// Whether the document is a legacy letter: an agreement-kind draft that
-/// records a `derived_from` lineage with the shared template it came from.
+/// records an `onboarding__*` shared-template lineage.
 fn is_legacy_letter(contents: &str) -> bool {
     let frontmatter = rules::frontmatter::extract(contents);
     frontmatter
         .and_then(|frontmatter| rules::frontmatter::field(frontmatter, "kind"))
         .is_some_and(|kind| kind == LEGACY_ONBOARDING_KIND)
         && frontmatter.is_some_and(|frontmatter| {
-            rules::frontmatter::field(frontmatter, LINEAGE_FIELD).is_some()
+            rules::frontmatter::field(frontmatter, LINEAGE_FIELD)
+                .is_some_and(|lineage| lineage.starts_with("onboarding__"))
         })
 }
 
@@ -352,6 +399,14 @@ fn migrate_letter_file(root: &Path, directory: &str, source: &Path) -> Result<()
     let target = root
         .join(directory)
         .join(format!("{}.md", template_code(ONBOARDING)));
+    if target
+        .symlink_metadata()
+        .is_ok_and(|metadata| !metadata.is_file())
+    {
+        return Err(anyhow!(
+            "the canonical letter destination must be a regular file"
+        ));
+    }
     if source != target && target.is_file() {
         let existing = std::fs::read_to_string(&target)
             .with_context(|| format!("read {}", target.display()))?;
@@ -364,10 +419,7 @@ fn migrate_letter_file(root: &Path, directory: &str, source: &Path) -> Result<()
             ));
         }
     }
-    std::fs::write(&target, &retyped).with_context(|| format!("write {}", target.display()))?;
-    if source != target {
-        std::fs::remove_file(source).with_context(|| format!("remove {}", source.display()))?;
-    }
+    letter::migrate(root, source, &target, &contents, &retyped)?;
     println!("migrated {} -> {}", source.display(), target.display());
     println!("next: review `git status`, commit the move, then run `navigator project onboard`");
     Ok(())
@@ -386,7 +438,7 @@ fn retyped_kind(contents: &str, new_kind: &str) -> Option<String> {
     let mut lines: Vec<String> = frontmatter.lines().map(ToString::to_string).collect();
     let mut retyped = false;
     for line in &mut lines {
-        if !retyped && line.trim_start().starts_with("kind:") {
+        if !retyped && line.starts_with("kind:") {
             *line = format!("kind: {new_kind}");
             retyped = true;
         }
@@ -905,6 +957,233 @@ The Firm will represent the client.
         assert!(migrated.contains("The Firm will represent the client."));
     }
 
+    fn declared_letter_manifest(path: &str) -> String {
+        format!(
+            "project:\n  host: navigator.example.test\n  name: sample-litigation\n  client_dri: client@example.test\npages:\n  - slug: engagement\n    kind: engagement_billing_records\n    title: Engagement\n    draft: '{path}'\n"
+        )
+    }
+
+    #[test]
+    fn onboarding_selects_the_declared_engagement_draft_before_other_authored_letters() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("templates")).unwrap();
+        for name in ["chosen.md", "other.md"] {
+            std::fs::write(
+                root.path().join("templates").join(name),
+                "---\nkind: onboarding\n---\nAuthored.\n",
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            root.path().join("navigator.yaml"),
+            declared_letter_manifest("templates/chosen.md"),
+        )
+        .unwrap();
+        assert_eq!(
+            template_relative(root.path(), ONBOARDING).unwrap(),
+            "templates/chosen.md"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_declared_agreement_requires_migration_without_scaffolding_another_letter() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("templates")).unwrap();
+        std::fs::write(root.path().join("templates/engagement.md"), legacy_letter()).unwrap();
+        std::fs::write(
+            root.path().join("navigator.yaml"),
+            declared_letter_manifest("templates/engagement.md"),
+        )
+        .unwrap();
+        let error = run_open(root.path(), None, ONBOARDING, None)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("project migrate-letter"),
+            "{error:#}"
+        );
+        assert!(!root.path().join("templates/onboarding__letter.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("templates/engagement.md")).unwrap(),
+            legacy_letter()
+        );
+    }
+
+    #[test]
+    fn migration_rewrites_every_page_reference_and_preserves_other_manifest_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("templates")).unwrap();
+        std::fs::write(root.path().join("templates/engagement.md"), legacy_letter()).unwrap();
+        let original = format!("{}  - {{slug: evidence, kind: document_workbench, title: Evidence, draft: \"templates/engagement.md\"}}\nallowed_hosts:\n  example.test: approved\n", declared_letter_manifest("templates/engagement.md"));
+        std::fs::write(root.path().join("navigator.yaml"), &original).unwrap();
+        super::migrate_letter(root.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("navigator.yaml")).unwrap(),
+            original.replace("templates/engagement.md", "templates/onboarding__letter.md")
+        );
+        assert_eq!(
+            template_relative(root.path(), ONBOARDING).unwrap(),
+            "templates/onboarding__letter.md"
+        );
+        assert!(!root.path().join("templates/engagement.md").exists());
+        let migrated =
+            std::fs::read_to_string(root.path().join("templates/onboarding__letter.md")).unwrap();
+        assert_eq!(
+            rules::frontmatter::split(&migrated).unwrap().1,
+            rules::frontmatter::split(&legacy_letter()).unwrap().1
+        );
+        assert!(migrated.contains("derived_from: onboarding__letter"));
+    }
+
+    #[test]
+    fn a_malformed_manifest_refuses_migration_before_any_letter_changes() {
+        for manifest in [
+            "pages: [\n",
+            "42\n",
+            "pages: wrong\n",
+            "pages: [42]\n",
+            "pages: [{draft: 42}]\n",
+            "pages: [{slug: engagement, kind: unknown, title: Engagement, draft: drafts/engagement.md}]\n",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("drafts")).unwrap();
+            std::fs::write(root.path().join("drafts/engagement.md"), legacy_letter()).unwrap();
+            std::fs::write(root.path().join("navigator.yaml"), manifest).unwrap();
+            assert!(super::migrate_letter(root.path()).is_err());
+            assert!(!root.path().join("drafts/onboarding__letter.md").exists());
+            assert_eq!(
+                std::fs::read_to_string(root.path().join("drafts/engagement.md")).unwrap(),
+                legacy_letter()
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.path().join("navigator.yaml")).unwrap(),
+                manifest
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_agreement_lineage_never_becomes_an_engagement() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("drafts")).unwrap();
+        let original = legacy_letter().replace(
+            "derived_from: onboarding__letter",
+            "derived_from: unrelated__agreement",
+        );
+        std::fs::write(root.path().join("drafts/agreement.md"), &original).unwrap();
+        let error = super::migrate_letter(root.path()).unwrap_err();
+        assert!(error.to_string().contains("onboarding__"), "{error:#}");
+        assert!(!root.path().join("drafts/onboarding__letter.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("drafts/agreement.md")).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn unsafe_or_missing_declared_drafts_refuse_before_writing_anything() {
+        for draft in ["../outside.md", "/outside.md", "templates/missing.md"] {
+            let root = tempfile::tempdir().unwrap();
+            let original = declared_letter_manifest(draft);
+            std::fs::write(root.path().join("navigator.yaml"), &original).unwrap();
+            assert!(
+                template_relative(root.path(), ONBOARDING).is_err(),
+                "{draft}"
+            );
+            assert!(super::migrate_letter(root.path()).is_err(), "{draft}");
+            assert!(!root.path().join("drafts").exists());
+            assert_eq!(
+                std::fs::read_to_string(root.path().join("navigator.yaml")).unwrap(),
+                original
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_symlink_cannot_read_or_migrate_an_outside_letter() {
+        for directory_link in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let original = legacy_letter();
+            std::fs::write(outside.path().join("letter.md"), &original).unwrap();
+            if directory_link {
+                std::os::unix::fs::symlink(outside.path(), root.path().join("templates")).unwrap();
+            } else {
+                std::fs::create_dir(root.path().join("templates")).unwrap();
+                std::os::unix::fs::symlink(
+                    outside.path().join("letter.md"),
+                    root.path().join("templates/letter.md"),
+                )
+                .unwrap();
+            }
+            std::fs::write(
+                root.path().join("navigator.yaml"),
+                declared_letter_manifest("templates/letter.md"),
+            )
+            .unwrap();
+            assert!(template_relative(root.path(), ONBOARDING).is_err());
+            assert!(super::migrate_letter(root.path()).is_err());
+            assert_eq!(
+                std::fs::read_to_string(outside.path().join("letter.md")).unwrap(),
+                original
+            );
+            assert!(!root.path().join("templates/onboarding__letter.md").exists());
+        }
+    }
+
+    #[test]
+    fn conflicting_declared_engagement_letters_require_a_choice_before_changes() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("drafts")).unwrap();
+        for name in ["one.md", "two.md"] {
+            std::fs::write(root.path().join("drafts").join(name), legacy_letter()).unwrap();
+        }
+        let original = format!("{}  - slug: alternative\n    kind: engagement_billing_records\n    title: Alternative\n    draft: drafts/two.md\n", declared_letter_manifest("drafts/one.md"));
+        std::fs::write(root.path().join("navigator.yaml"), &original).unwrap();
+        assert!(template_relative(root.path(), ONBOARDING)
+            .unwrap_err()
+            .to_string()
+            .contains("multiple engagement Drafts"));
+        assert!(super::migrate_letter(root.path()).is_err());
+        assert!(!root.path().join("drafts/onboarding__letter.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("navigator.yaml")).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn migration_refuses_a_symlink_at_the_canonical_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("drafts")).unwrap();
+        std::fs::write(root.path().join("drafts/old.md"), legacy_letter()).unwrap();
+        std::fs::write(outside.path().join("letter.md"), "Outside letter.").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("letter.md"),
+            root.path().join("drafts/onboarding__letter.md"),
+        )
+        .unwrap();
+        assert!(super::migrate_letter(root.path()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("letter.md")).unwrap(),
+            "Outside letter."
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("drafts/old.md")).unwrap(),
+            legacy_letter()
+        );
+    }
+
+    #[test]
+    fn retyping_a_letter_preserves_nested_kind_fields() {
+        let original = "---\nmetadata:\n  kind: letter\nkind: agreement\nderived_from: onboarding__letter\n---\nBody.\n";
+        assert_eq!(
+            super::retyped_kind(original, ONBOARDING).unwrap(),
+            original.replace("\nkind: agreement", "\nkind: onboarding")
+        );
+    }
+
     #[test]
     fn a_migrated_letter_passes_the_gate_rules_and_questionnaire_paths() {
         let root = tempfile::tempdir().unwrap();
@@ -940,7 +1219,11 @@ The Firm will represent the client.
             legacy_letter(),
         )
         .unwrap();
-        write_template_stub(&template_path(root.path(), ONBOARDING).unwrap(), ONBOARDING).unwrap();
+        write_template_stub(
+            &root.path().join("drafts/onboarding__letter.md"),
+            ONBOARDING,
+        )
+        .unwrap();
         super::migrate_letter(root.path()).unwrap();
         assert!(!root.path().join("drafts/engagement__letter.md").exists());
         let migrated =
@@ -1089,10 +1372,12 @@ The Firm will represent the client.
         );
 
         std::fs::create_dir(root.path().join("drafts")).unwrap();
-        assert_eq!(
-            template_relative(root.path(), ONBOARDING).unwrap(),
-            "drafts/onboarding__letter.md",
-            "an ambiguous checkout falls back to the canonical spelling; the gate refuses it"
+        assert!(
+            template_relative(root.path(), ONBOARDING)
+                .unwrap_err()
+                .to_string()
+                .contains("both drafts/ and templates/"),
+            "ambiguous Draft directories must refuse before scaffolding"
         );
     }
 
