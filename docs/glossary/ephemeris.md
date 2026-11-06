@@ -150,3 +150,7 @@ through hifitime's proleptic UTC model and do not resolve historical birth clock
 `navigator ephemeris tables` authorizes through the protected source catalog and creates bounded local Parquet/CSV
 [Ephemeris Reference Table](ephemeris-reference-table.md#authenticated-local-files) bundles from the verified raw DE440
 bundle. Derived manifests identify exact content separately from source manifests and generation time.
+
+The optional `--iceberg` mode adds a [local Iceberg v2
+layout](ephemeris-reference-table.md#fixed-location-iceberg-layout) over those files. Its layout artifact identity
+remains separate from the stable reference-content snapshot ID.

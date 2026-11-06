@@ -168,6 +168,13 @@ fn ephemeris_table_help_is_nested_and_never_needs_credentials() {
         .unwrap();
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("--iceberg"));
+    assert!(help.contains("fixed-location"));
+    assert!(help
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .contains("URI-safe ASCII"));
     for option in [
         "--source-dir <SOURCE_DIR>",
         "--from <FROM>",

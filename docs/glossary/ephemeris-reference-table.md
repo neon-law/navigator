@@ -100,7 +100,7 @@ calculation or reuse. Cached role labels grant no access. This command performs 
 ordinary kernel file without following a link, retains that descriptor, and verifies its bounded bytes again in the
 exact evaluator. The raw bundle must contain only `de440.bsp` and its matching `source-manifest.json`.
 
-The completed directory contains four ordinary files:
+Without `--iceberg`, the completed directory contains four ordinary files:
 
 | File | Contents |
 | --- | --- |
@@ -129,6 +129,56 @@ exact settings and file bytes; existing files and generation time remain unchang
 differently configured or linked output is refused and preserved. Concurrent publication cannot replace a completed
 directory.
 
-These are local Parquet and CSV files. No Iceberg metadata, DuckDB database, latest-release pointer, public hosting,
-cloud resources or snapshot-expiry service is created. The command accepts universal reference dates and a pinned raw
-bundle only; it has no personal-chart import or export selector.
+No DuckDB database, latest-release pointer, public hosting, cloud resources or snapshot-expiry service is created. The
+command accepts universal reference dates and a pinned raw bundle only; it has no personal-chart import or export
+selector.
+
+## Fixed-location Iceberg layout
+
+`navigator ephemeris tables --iceberg` adds one immutable local Iceberg v2 table over the same reference Parquet file.
+It accepts the same raw DE440 bundle and bounded dates. Authorization through the protected catalog precedes output path
+canonicalization and every local source/output read, calculation or reuse.
+
+The full canonical output path must be URI-safe ASCII, with no spaces, percent signs, non-ASCII characters or other
+characters requiring URI escaping. Unsupported paths are refused before source calculation or staging. The native
+filesystem reader strips the `file:` prefix without decoding escaped path characters. The command keeps valid fully
+qualified file URIs and refuses unsupported locations rather than substituting an invalid URI or renaming user files.
+
+Iceberg v2 metadata embeds the final absolute file location. The completed table must remain at that location; moving it
+does not create a relocatable table. A rerun at a different location is refused and preserves the files. No relative v2
+metadata paths, cloud filesystem adapter or implicit relocation are provided.
+
+The opt-in directory retains the four reference files and adds `iceberg-manifest.json` plus a `metadata` directory:
+
+| Metadata file | Contents |
+| --- | --- |
+| `v1.metadata.json` | One native Iceberg v2 schema, unpartitioned spec, unsorted order and immutable snapshot. |
+| `<uuid>-m0.avro` | The native data manifest, naming only the final `reference.parquet` URI. |
+| `snap-<native-id>-<uuid>.avro` | The native manifest list for that snapshot. |
+| `version-hint.text` | The initial metadata version, `1`. |
+
+The native schema retains field IDs 1 through 20 and the same physical value types. Its fields are optional; the Parquet
+file's nonnullable fields remain stricter. Missing or mismatched columns fail validation; documented unavailable
+quantities retain their exact null masks. Integer epoch coordinates remain native long values.
+
+The existing v1 `derived-manifest.json` content and reference snapshot ID are unchanged by the mode. The three
+Parquet/CSV/source files are byte-identical for the same calculation/settings. Independently created directories each
+record their own `generated_at`; a rerun preserves all four reference files byte for byte.
+
+`iceberg-manifest.json` separately binds `reference_snapshot_id`, final table/metadata locations, native table UUID,
+snapshot ID, timestamp and each metadata file's size/hash. Its `artifact_id` hashes that actual layout. It can depend on
+random UUID filenames, native generation time and final location; it is not a generation-time-independent reference
+identity. Native snapshot IDs need uniqueness only within the one immutable table and are not global reference IDs.
+
+Each native metadata file and the layout receipt is limited to 64 KiB. The command reads a closed, exact file inventory
+without following links and verifies its checksums. Before publication, genuine native Iceberg readers plan and scan
+staged bytes loaded into an explicit memory filesystem under their final URIs. Planned paths must name exactly the
+verified reference Parquet file. All 20 ordered columns, schema/field IDs, integer values, floating-point bits, nulls
+and row counts must match the computed table. No ambient filesystem or network backend can supply another file. Extra
+schema/history/spec/sort/ref/statistics metadata is refused; this command supports only its own new-table shape.
+
+Only after staged reference readers, native Iceberg scans and both receipts pass does the existing atomic NOREPLACE
+publication expose the completed directory. Fresh filesystem readers verify the real final table in the interoperability
+tests. Reruns reauthorize and recalculate the bounded expected reference data, verify the existing native layout and
+preserve its bytes and timestamps; they do not regenerate random metadata for equality. Plain and Iceberg modes refuse
+each other's existing directory shapes. There is no append, expiry, deletion or multi-snapshot maintenance command.

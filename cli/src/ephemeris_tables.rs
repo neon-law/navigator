@@ -17,8 +17,8 @@ use sha2::{Digest, Sha256};
 
 use crate::ephemeris_download::{hex_digest, open_regular, verify_bundle};
 
-const MAX_FILE_BYTES: usize = 4_194_304;
-const MAX_MANIFEST_BYTES: usize = 65_536;
+pub(super) const MAX_FILE_BYTES: usize = 4_194_304;
+pub(super) const MAX_MANIFEST_BYTES: usize = 65_536;
 const MANIFEST: &str = "derived-manifest.json";
 const PARQUET: &str = "reference.parquet";
 const CSV: &str = "reference.csv";
@@ -295,7 +295,7 @@ fn csv_bytes(batch: &RecordBatch) -> Result<Vec<u8>> {
     Ok(writer.into_inner()?)
 }
 
-fn read_bounded(path: &Path, cap: usize) -> Result<Vec<u8>> {
+pub(super) fn read_bounded(path: &Path, cap: usize) -> Result<Vec<u8>> {
     let file = open_regular(path)?;
     ensure!(
         file.metadata()?.len() <= cap as u64,
@@ -307,7 +307,7 @@ fn read_bounded(path: &Path, cap: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn digest(bytes: &[u8]) -> String {
+pub(super) fn digest(bytes: &[u8]) -> String {
     hex_digest(&Sha256::digest(bytes))
 }
 
@@ -316,6 +316,7 @@ fn existing_manifest(
     from: NaiveDate,
     to: NaiveDate,
     source: &[u8],
+    iceberg: bool,
 ) -> Result<Option<DerivedManifest>> {
     match std::fs::symlink_metadata(dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -326,13 +327,19 @@ fn existing_manifest(
         ),
     }
     let mut names = std::fs::read_dir(dir)?
-        .take(5)
+        .take(if iceberg { 7 } else { 5 })
         .map(|e| e.map(|e| e.file_name()))
         .collect::<std::io::Result<Vec<_>>>()?;
     names.sort();
     let mut expected: Vec<_> = [MANIFEST, SOURCE, PARQUET, CSV]
         .map(std::ffi::OsString::from)
         .into();
+    if iceberg {
+        expected.extend([
+            std::ffi::OsString::from("metadata"),
+            std::ffi::OsString::from(crate::ephemeris_iceberg::RECEIPT),
+        ]);
+    }
     expected.sort();
     ensure!(
         names == expected,
@@ -356,12 +363,13 @@ fn existing_manifest(
 }
 
 /// Called only after the canonical protected catalogue has authorized the operator.
-pub(crate) fn publish(
+pub(crate) async fn publish(
     source_dir: &Path,
     manifest: &EphemerisManifest,
     from: NaiveDate,
     to: NaiveDate,
     dir: &Path,
+    iceberg: bool,
 ) -> Result<()> {
     ensure!(
         from.year() >= 1900
@@ -370,8 +378,13 @@ pub(crate) fn publish(
                 .contains(&to.signed_duration_since(from).num_days()),
         "invalid bounded reference interval"
     );
+    let location = if iceberg {
+        Some(crate::ephemeris_iceberg::location(dir)?)
+    } else {
+        None
+    };
     let source = serde_json::to_vec_pretty(manifest)?;
-    let saved = existing_manifest(dir, from, to, &source)?;
+    let saved = existing_manifest(dir, from, to, &source, iceberg)?;
     verify_bundle(source_dir, manifest)?;
     let pin = manifest
         .files
@@ -428,16 +441,21 @@ pub(crate) fn publish(
                 "existing bundle data differs from its checksum"
             );
         }
+        if let Some(location) = &location {
+            crate::ephemeris_iceberg::verify(dir, location, &content_digest(&content)?, &batch)
+                .await?;
+        }
         return Ok(());
     }
-    publish_new(dir, &files, content, &batch)
+    publish_new(dir, &files, content, &batch, location.as_deref()).await
 }
 
-fn publish_new(
+async fn publish_new(
     dir: &Path,
     files: &[(&str, Vec<u8>)],
     content: Content,
     batch: &RecordBatch,
+    location: Option<&str>,
 ) -> Result<()> {
     let from = content.from;
     let to = content.to_exclusive;
@@ -450,6 +468,12 @@ fn publish_new(
         .unwrap_or(Path::new("."))
         .canonicalize()?;
     let destination = parent.join(name);
+    if let Some(expected_location) = location {
+        ensure!(
+            crate::ephemeris_iceberg::location(&destination)? == expected_location,
+            "Iceberg output location changed before staging"
+        );
+    }
     let stage = tempfile::Builder::new()
         .prefix(".navigator-reference-")
         .tempdir_in(&parent)?;
@@ -467,7 +491,17 @@ fn publish_new(
         "derived manifest exceeds byte bound"
     );
     write_new(&stage.path().join(MANIFEST), &receipt_bytes)?;
-    let verified = existing_manifest(stage.path(), from, to, &files[0].1)?
+    if let Some(location) = location {
+        crate::ephemeris_iceberg::author(
+            stage.path(),
+            location,
+            &receipt.snapshot_id,
+            receipt.generated_at.timestamp_millis(),
+            batch,
+        )
+        .await?;
+    }
+    let verified = existing_manifest(stage.path(), from, to, &files[0].1, location.is_some())?
         .context("staged receipt missing")?;
     ensure!(
         verified.content == receipt.content && verified.snapshot_id == receipt.snapshot_id,
@@ -480,6 +514,10 @@ fn publish_new(
         );
     }
     validate_readers(stage.path(), batch)?;
+    if let Some(location) = location {
+        crate::ephemeris_iceberg::verify(stage.path(), location, &receipt.snapshot_id, batch)
+            .await?;
+    }
     std::fs::File::open(stage.path())?.sync_all()?;
     crate::atomic_directory::publish_no_clobber(stage.path(), &destination)?;
     let _published = stage.keep();
@@ -487,7 +525,7 @@ fn publish_new(
     Ok(())
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -660,22 +698,370 @@ mod artifact_tests {
         ]
     }
 
-    #[test]
-    fn ordinary_artifacts_preserve_integer_bits_null_types_identity_and_existing_data() {
+    #[tokio::test]
+    async fn changed_parent_symlink_is_refused_before_staging_or_promotion() {
+        use std::os::unix::fs::symlink;
+        let parent = tempfile::tempdir().unwrap();
+        let a = parent.path().join("first");
+        let b = parent.path().join("second");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::create_dir(&b).unwrap();
+        let alias = parent.path().join("alias");
+        symlink(&a, &alias).unwrap();
+        let destination = alias.join("completed");
+        let location = crate::ephemeris_iceberg::location(&destination).unwrap();
+        std::fs::remove_file(&alias).unwrap();
+        symlink(&b, &alias).unwrap();
+        let batch = batch(&rows()).unwrap();
+        let files = files(&batch);
+        let error = publish_new(
+            &destination,
+            &files,
+            content(&batch, &files),
+            &batch,
+            Some(&location),
+        )
+        .await;
+        assert!(
+            error.is_err(),
+            "retargeted parent published a table under a different final URI"
+        );
+        assert!(!a.join("completed").exists());
+        assert!(!b.join("completed").exists());
+        assert_eq!(std::fs::read_dir(&a).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(&b).unwrap().count(), 0);
+    }
+
+    fn rewrite_native_metadata(dir: &Path, metadata: &serde_json::Value) {
+        let bytes = serde_json::to_vec_pretty(metadata).unwrap();
+        std::fs::write(dir.join("metadata/v1.metadata.json"), &bytes).unwrap();
+        let path = dir.join(crate::ephemeris_iceberg::RECEIPT);
+        let mut receipt: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let file = receipt["content"]["files"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|f| f["name"] == "metadata/v1.metadata.json")
+            .unwrap();
+        file["bytes"] = bytes.len().into();
+        file["sha256"] = digest(&bytes).into();
+        let mut content = receipt["content"].clone();
+        content.sort_all_objects();
+        receipt["artifact_id"] = digest(&serde_json::to_vec(&content).unwrap()).into();
+        std::fs::write(path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unused_metadata_history_is_refused_with_consistent_checksums() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("immutable");
+        let location = crate::ephemeris_iceberg::location(&dir).unwrap();
+        let batch = batch(&rows()).unwrap();
+        let files = files(&batch);
+        let content = content(&batch, &files);
+        let reference_id = content_digest(&content).unwrap();
+        publish_new(&dir, &files, content, &batch, Some(&location))
+            .await
+            .unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("metadata/v1.metadata.json")).unwrap())
+                .unwrap();
+        let mut extra_schema = metadata["schemas"][0].clone();
+        extra_schema["schema-id"] = 1.into();
+        let mut extra_spec = metadata["partition-specs"][0].clone();
+        extra_spec["spec-id"] = 1.into();
+        let mut refs = metadata["refs"].clone();
+        refs["additional"] = refs["main"].clone();
+        let mutations = [
+            (
+                "metadata-log",
+                serde_json::json!([{"timestamp-ms": metadata["last-updated-ms"].as_i64().unwrap()-1,
+                "metadata-file":"file:///outside-reference/previous.metadata.json"}]),
+            ),
+            (
+                "schemas",
+                serde_json::json!([metadata["schemas"][0], extra_schema]),
+            ),
+            (
+                "partition-specs",
+                serde_json::json!([metadata["partition-specs"][0], extra_spec]),
+            ),
+            (
+                "sort-orders",
+                serde_json::json!([metadata["sort-orders"][0], {"order-id":1,"fields":[{
+                "source-id":1,"transform":"identity","direction":"asc","null-order":"nulls-first"}]}]),
+            ),
+            ("refs", refs),
+        ];
+        for (key, value) in mutations {
+            let mut changed = metadata.clone();
+            changed[key] = value;
+            // Prove these are self-consistent native documents, not malformed JSON/checksum failures.
+            serde_json::from_value::<iceberg::spec::TableMetadata>(changed.clone()).unwrap();
+            rewrite_native_metadata(&dir, &changed);
+            let result =
+                crate::ephemeris_iceberg::verify(&dir, &location, &reference_id, &batch).await;
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("immutable metadata envelope"),
+                "{key}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn native_layouts_keep_reference_identity_and_read_all_columns_from_final_filesystem() {
+        use futures::TryStreamExt;
+        let parent = tempfile::tempdir().unwrap();
+        let batch = batch(&rows()).unwrap();
+        let files = files(&batch);
+        let reference_id = content_digest(&content(&batch, &files)).unwrap();
+        let mut artifact_ids = Vec::new();
+        for name in ["first-layout", "second-layout"] {
+            let dir = parent.path().join(name);
+            let location = crate::ephemeris_iceberg::location(&dir).unwrap();
+            publish_new(
+                &dir,
+                &files,
+                content(&batch, &files),
+                &batch,
+                Some(&location),
+            )
+            .await
+            .unwrap();
+            let receipt: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(dir.join(crate::ephemeris_iceberg::RECEIPT)).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(receipt["content"]["reference_snapshot_id"], reference_id);
+            artifact_ids.push(receipt["artifact_id"].clone());
+            let table = iceberg::table::StaticTable::from_metadata_file(
+                receipt["content"]["metadata_location"].as_str().unwrap(),
+                iceberg::TableIdent::from_strs(["reference", "independent_fixture_reader"])
+                    .unwrap(),
+                iceberg::io::FileIO::new_with_fs(),
+            )
+            .await
+            .unwrap();
+            let tasks = table.scan().build().unwrap().plan_files().await.unwrap();
+            let actual: Vec<_> = table
+                .reader_builder()
+                .build()
+                .read(tasks)
+                .unwrap()
+                .stream()
+                .try_collect()
+                .await
+                .unwrap();
+            crate::ephemeris_iceberg::compare(&actual, &batch).unwrap();
+            let before = std::fs::read(dir.join(crate::ephemeris_iceberg::RECEIPT)).unwrap();
+            assert!(publish_new(
+                &dir,
+                &files,
+                content(&batch, &files),
+                &batch,
+                Some(&location)
+            )
+            .await
+            .is_err());
+            assert_eq!(
+                std::fs::read(dir.join(crate::ephemeris_iceberg::RECEIPT)).unwrap(),
+                before
+            );
+            assert_eq!(
+                std::fs::read_dir(parent.path()).unwrap().count(),
+                artifact_ids.len()
+            );
+        }
+        assert_ne!(
+            artifact_ids[0], artifact_ids[1],
+            "layout identity includes the final location"
+        );
+    }
+
+    fn rewrite_layout_receipt(dir: &Path, receipt: &mut serde_json::Value) {
+        let mut content = receipt["content"].clone();
+        content.sort_all_objects();
+        receipt["artifact_id"] = digest(&serde_json::to_vec(&content).unwrap()).into();
+        std::fs::write(
+            dir.join(crate::ephemeris_iceberg::RECEIPT),
+            serde_json::to_vec_pretty(receipt).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_graph_refuses_links_corruption_extra_files_and_traversal_without_replacing_data(
+    ) {
+        use std::os::unix::fs::symlink;
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("immutable");
+        let location = crate::ephemeris_iceberg::location(&dir).unwrap();
+        let batch = batch(&rows()).unwrap();
+        let files = files(&batch);
+        let reference_id = content_digest(&content(&batch, &files)).unwrap();
+        publish_new(
+            &dir,
+            &files,
+            content(&batch, &files),
+            &batch,
+            Some(&location),
+        )
+        .await
+        .unwrap();
+        let path = dir.join("metadata/v1.metadata.json");
+        let original = std::fs::read(&path).unwrap();
+        let outside = parent.path().join("ordinary-outside-file");
+        std::fs::write(&outside, &original).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        symlink(&outside, &path).unwrap();
+        assert!(
+            crate::ephemeris_iceberg::verify(&dir, &location, &reference_id, &batch)
+                .await
+                .is_err()
+        );
+        assert!(std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"corrupt metadata").unwrap();
+        assert!(
+            crate::ephemeris_iceberg::verify(&dir, &location, &reference_id, &batch)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("checksum")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"corrupt metadata");
+        std::fs::write(&path, &original).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len((MAX_MANIFEST_BYTES + 1) as u64)
+            .unwrap();
+        assert!(
+            crate::ephemeris_iceberg::verify(&dir, &location, &reference_id, &batch)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("byte bound")
+        );
+        std::fs::write(&path, &original).unwrap();
+        std::fs::write(dir.join("metadata/unrelated"), b"preserve").unwrap();
+        assert!(
+            crate::ephemeris_iceberg::verify(&dir, &location, &reference_id, &batch)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(dir.join("metadata/unrelated")).unwrap(),
+            b"preserve"
+        );
+        std::fs::remove_file(dir.join("metadata/unrelated")).unwrap();
+        let mut receipt: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.join(crate::ephemeris_iceberg::RECEIPT)).unwrap(),
+        )
+        .unwrap();
+        receipt["content"]["files"][0]["name"] = "metadata/../ordinary-outside-file".into();
+        rewrite_layout_receipt(&dir, &mut receipt);
+        assert!(
+            crate::ephemeris_iceberg::verify(&dir, &location, &reference_id, &batch)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("metadata inventory")
+        );
+        assert_eq!(std::fs::read(outside).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn native_scan_plan_cannot_leave_the_loaded_reference_graph() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("immutable");
+        let location = crate::ephemeris_iceberg::location(&dir).unwrap();
+        let batch = batch(&rows()).unwrap();
+        let files = files(&batch);
+        let reference_id = content_digest(&content(&batch, &files)).unwrap();
+        publish_new(
+            &dir,
+            &files,
+            content(&batch, &files),
+            &batch,
+            Some(&location),
+        )
+        .await
+        .unwrap();
+        let mut receipt: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.join(crate::ephemeris_iceberg::RECEIPT)).unwrap(),
+        )
+        .unwrap();
+        let outside = parent.path().join("outside.parquet");
+        std::fs::write(&outside, b"must remain unread").unwrap();
+        let authored = archives::iceberg::author_snapshot(&archives::iceberg::SnapshotInput {
+            table: "ephemeris_reference_table",
+            arrow_schema: &batch.schema(),
+            table_location: &location,
+            data_files: &[archives::iceberg::DataFileSpec {
+                path: url::Url::from_file_path(&outside).unwrap().into(),
+                record_count: batch.num_rows() as u64,
+                file_size_in_bytes: files[1].1.len() as u64,
+            }],
+            snapshot_id: receipt["content"]["native_snapshot_id"].as_i64().unwrap(),
+            sequence_number: 1,
+            timestamp_ms: receipt["content"]["native_timestamp_ms"].as_i64().unwrap(),
+            version: 1,
+            prior: None,
+            expire_before_ms: None,
+        })
+        .await
+        .unwrap();
+        for entry in std::fs::read_dir(dir.join("metadata")).unwrap() {
+            std::fs::remove_file(entry.unwrap().path()).unwrap();
+        }
+        let metadata: iceberg::spec::TableMetadata = serde_json::from_slice(
+            &authored
+                .files
+                .iter()
+                .find(|(n, _)| n == "metadata/v1.metadata.json")
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        receipt["content"]["native_table_uuid"] = metadata.uuid().to_string().into();
+        receipt["content"]["files"] = serde_json::json!(authored.files.iter().map(|(name,bytes)| serde_json::json!({"name":name,"bytes":bytes.len(),"sha256":digest(bytes)})).collect::<Vec<_>>());
+        for (name, bytes) in authored.files {
+            std::fs::write(dir.join(name), bytes).unwrap();
+        }
+        rewrite_layout_receipt(&dir, &mut receipt);
+        let result = crate::ephemeris_iceberg::verify(&dir, &location, &reference_id, &batch).await;
+        assert!(result.unwrap_err().to_string().contains("scan plan leaves"));
+        assert_eq!(std::fs::read(outside).unwrap(), b"must remain unread");
+    }
+
+    #[tokio::test]
+    async fn ordinary_artifacts_preserve_integer_bits_null_types_identity_and_existing_data() {
         let rows = rows();
         let batch = batch(&rows).unwrap();
         let files = files(&batch);
         let parent = tempfile::tempdir().unwrap();
-        let dir = parent.path().join("completed");
+        let dir = parent.path().join("completed with spaces");
         let original_content = content(&batch, &files);
         let id = content_digest(&original_content).unwrap();
-        publish_new(&dir, &files, original_content, &batch).unwrap();
+        publish_new(&dir, &files, original_content, &batch, None)
+            .await
+            .unwrap();
         validate_readers(&dir, &batch).unwrap();
         let receipt = existing_manifest(
             &dir,
             content(&batch, &files).from,
             content(&batch, &files).to_exclusive,
             &files[0].1,
+            false,
         )
         .unwrap()
         .unwrap();
@@ -693,7 +1079,11 @@ mod artifact_tests {
             .unwrap()
             .modified()
             .unwrap();
-        assert!(publish_new(&dir, &files, content(&batch, &files), &batch).is_err());
+        assert!(
+            publish_new(&dir, &files, content(&batch, &files), &batch, None)
+                .await
+                .is_err()
+        );
         assert_eq!(
             read_bounded(&dir.join(PARQUET), MAX_FILE_BYTES).unwrap(),
             bytes
@@ -708,8 +1098,8 @@ mod artifact_tests {
         assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
     }
 
-    #[test]
-    fn malformed_staged_values_fail_before_promotion_and_remove_only_own_stage() {
+    #[tokio::test]
+    async fn malformed_staged_values_fail_before_promotion_and_remove_only_own_stage() {
         let batch = batch(&rows()).unwrap();
         let parent = tempfile::tempdir().unwrap();
         let unrelated = parent.path().join("unrelated");
@@ -718,11 +1108,18 @@ mod artifact_tests {
             let mut files = files(&batch);
             files[bad_index].1 = b"malformed reference artifact".to_vec();
             let dir = parent.path().join("refused");
-            // Matching hashes are insufficient: a fresh reader must reject invalid physical data.
-            assert!(publish_new(&dir, &files, content(&batch, &files), &batch).is_err());
-            assert!(!dir.exists());
-            assert_eq!(std::fs::read(&unrelated).unwrap(), b"preserve");
-            assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
+            let location = crate::ephemeris_iceberg::location(&dir).unwrap();
+            for mode in [None, Some(location.as_str())] {
+                // Matching hashes are insufficient: a fresh reader must reject invalid physical data.
+                assert!(
+                    publish_new(&dir, &files, content(&batch, &files), &batch, mode)
+                        .await
+                        .is_err()
+                );
+                assert!(!dir.exists());
+                assert_eq!(std::fs::read(&unrelated).unwrap(), b"preserve");
+                assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
+            }
         }
     }
 }
