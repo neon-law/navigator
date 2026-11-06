@@ -113,6 +113,34 @@ async fn assert_note(pg: &PostgresDb, id: Uuid, expected: &str) {
     assert_eq!(note.as_deref(), Some(expected));
 }
 
+async fn insert_row_without_funding_state(surreal: &SurrealDb, pg: &PostgresDb, project: Uuid) {
+    let id = Uuid::new_v4();
+    surreal
+        .query(
+            "DEFINE FIELD OVERWRITE funding_state ON estate_asset TYPE option<string>; \
+             CREATE $id SET project_id = $project, category = 'account', \
+             description = 'Synthetic incomplete row', passes_by = 'trust', \
+             inserted_at = $now, updated_at = $now",
+        )
+        .bind(("id", record_id(TABLE, id)))
+        .bind(("project", record_id("project", project)))
+        .bind(("now", Utc::now().to_rfc3339()))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO estate_asset \
+         (id, project_id, category, description, passes_by, funding_state, inserted_at, updated_at) \
+         VALUES ($1, $2, 'account', 'Synthetic incomplete row', 'trust', 'funded', now(), now())",
+    )
+    .bind(id)
+    .bind(project)
+    .execute(&pg.0)
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn estate_asset_write_hook_probe() {
     if std::env::var("NAVIGATOR_ESTATE_ASSET_MIRROR_PROBE").as_deref() != Ok("1") {
@@ -190,6 +218,7 @@ async fn estate_asset_write_hook_probe() {
         let asset = insert(&surreal, first, &fields(description)).await.unwrap();
         assert_image(&pg, &asset).await;
     }
+    insert_row_without_funding_state(&surreal, &pg, first).await;
     delete_for_project(&surreal, first).await.unwrap();
     assert!(list(&surreal, first).await.unwrap().is_empty());
     assert_eq!(stored_ids(&pg).await, vec![other.id]);

@@ -65,6 +65,12 @@ struct EstateAssetRow {
     updated_at: String,
 }
 
+// Deletion mirroring needs identity, not the current schedule's complete shape.
+#[derive(SurrealValue)]
+struct DeletedEstateAssetRow {
+    id: surrealdb::types::RecordId,
+}
+
 impl EstateAssetRow {
     fn into_asset(self) -> Option<EstateAsset> {
         Some(EstateAsset {
@@ -311,16 +317,13 @@ pub async fn delete_for_project(
         .bind(("project_id", record_id("project", project_id)))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
-    let deleted: Vec<EstateAssetRow> = response.take(0)?;
+    let deleted: Vec<DeletedEstateAssetRow> = response.take(0)?;
     crate::postgres_mirror::after_writes(
         surreal,
         deleted
             .into_iter()
-            .filter_map(EstateAssetRow::into_asset)
-            .map(|asset| crate::postgres_mirror::MirrorKey::Record {
-                table: TABLE,
-                id: asset.id,
-            }),
+            .filter_map(|row| record_uuid(&row.id))
+            .map(|id| crate::postgres_mirror::MirrorKey::Record { table: TABLE, id }),
     )
     .await;
     Ok(())

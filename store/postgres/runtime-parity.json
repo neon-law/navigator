@@ -402,7 +402,7 @@
       {
         "file": "store/src/estate_assets/mirror_tests.rs",
         "function": "estate_asset_write_hook_probe",
-        "proves": "Actual Estate Asset writes mirror complete rows and timestamps; updates, replay, single and Project-wide deletions converge while refused cross-Project writes leave the target untouched."
+        "proves": "Actual Estate Asset writes mirror complete rows and timestamps; updates, replay, single and Project-wide deletions converge, including deletion of rows missing a current schedule field, while refused cross-Project writes leave the target untouched."
       }
     ],
     "remaining": [
