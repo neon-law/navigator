@@ -14,7 +14,7 @@ the retained StatefulSet in [docs/postgres-kubernetes.md](postgres-kubernetes.md
 ## 0. What you are provisioning
 
 One Apache AGE graph, `navigator_graph`, in the existing PostgreSQL 16.15 cluster. The engine pair (PostgreSQL 16.15 +
-AGE 1.6.0) ships inside the digest-pinned `neon-law-postgres` image — there is nothing to install at the filesystem
+AGE 1.6.0) ships inside the digest-pinned `navigator/postgres` image — there is nothing to install at the filesystem
 level. A deployment moves onto the graph in four steps: extension and roles, migrations, backfill, then the web rollout
 that reads and writes the graph. Each step verifies before the next begins.
 

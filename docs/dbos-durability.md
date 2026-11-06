@@ -10,7 +10,7 @@ individually while `workflows-service` keeps serving the Restate endpoint for ev
 | --- | --- |
 | Crate | `dbos` 0.5.0 (MIT), the official native Rust SDK |
 | Database driver | SQLx 0.9 with ring rustls, the same build as the workspace |
-| PostgreSQL | the pinned `neon-law-postgres` image ([PostgreSQL compatibility](postgres-compatibility.md)) |
+| PostgreSQL | the pinned `navigator/postgres` image ([PostgreSQL compatibility](postgres-compatibility.md)) |
 | Missing from 0.5.0 | a scheduler and a transactional step |
 
 ## Where DBOS state lives

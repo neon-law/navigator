@@ -70,14 +70,14 @@ jobs:
         run: |
           kubectl kustomize k8s/overlays/postgres-spike > /tmp/postgres-spike.yaml
           image=$(awk '/^[[:space:]]*image:/ {print $2}' /tmp/postgres-spike.yaml)
-          [[ "$image" =~ ^ghcr\.io/[a-z0-9-]+/neon-law-postgres@sha256:[a-f0-9]{64}$ ]]
+          [[ "$image" =~ ^ghcr\.io/[a-z0-9-]+/[a-z0-9/-]+@sha256:[a-f0-9]{64}$ ]]
           echo "POSTGRES_IMAGE=$image" >> "$GITHUB_ENV"
           echo "$image" >> "$GITHUB_STEP_SUMMARY"
       - name: Build and test the included recipe
         run: |
-          docker build -f images/postgres/Containerfile -t neon-law-postgres:local images/postgres
+          docker build -f images/postgres/Containerfile -t navigator-postgres:local images/postgres
           cd images/postgres
-          bash tests/run.sh neon-law-postgres:local 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/navigator-recipe-smoke.log"
+          bash tests/run.sh navigator-postgres:local 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/navigator-recipe-smoke.log"
       - name: Anonymous pull and pinned SDK recovery smoke
         working-directory: images/postgres
         run: |

@@ -61,9 +61,9 @@ in either organization, is the `production` branch protections, the CODEOWNERS a
 requests only, squash only, auto-merge, automatic head-branch deletion, and squash commits titled and described from the
 pull request.
 
-GitHub `neon-law` is Navigator's public organization: Navigator, its Homebrew tap, the Zed LSP extension,
-`neon-law-postgres`, and the three sample matters live there. `neon-law-source-code`, where Navigator used to live, now
-holds only the published `navigator-ux`, so it keeps the public default too.
+GitHub `neon-law` is Navigator's public organization: Navigator, its Homebrew tap, the Zed LSP extension, the
+`navigator/postgres` image, and the three sample matters live there. `neon-law-source-code`, where Navigator used to
+live, now holds only the published `navigator-ux`, so it keeps the public default too.
 
 The private client-matter repositories still in `neon-law` are moving to Forgejo. Until they are gone, an interim guard
 keyed on **live** visibility keeps them private in posture: a repository GitHub reports as private is reconciled with
