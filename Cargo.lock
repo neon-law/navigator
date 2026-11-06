@@ -2137,6 +2137,7 @@ dependencies = [
  "cloud",
  "comfy-table",
  "dotenvy",
+ "ephemeris",
  "fantoccini",
  "flate2",
  "forms",

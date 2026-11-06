@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 mod answers_file;
 mod assets;
+mod atomic_directory;
 mod authorities;
 mod blog;
 mod clauses;
@@ -21,6 +22,7 @@ mod document_ocr;
 mod document_read;
 mod document_reconcile;
 mod document_sync;
+mod ephemeris_download;
 mod firm_forgejo;
 mod firms_doctor;
 mod forms_sync;
@@ -835,6 +837,11 @@ mod help_tests {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
+    /// Acquire authorized reusable raw ephemeris sources locally.
+    Ephemeris {
+        #[command(subcommand)]
+        action: ephemeris_download::EphemerisCmd,
+    },
     /// Scan tracked repository text for personal data with a local Presidio analyzer.
     Pii {
         /// Repository root containing .github/pii/allowlist.toml.
@@ -5183,6 +5190,7 @@ fn run() -> ExitCode {
             errors_only,
             ci: _,
         } => run_validate(&dir, fix, errors_only),
+        Command::Ephemeris { action } => runtime().block_on(ephemeris_download::run(action)),
         Command::Person { action } => runtime().block_on(run_person(action)),
         Command::Journal { firm, host, action } => {
             runtime().block_on(journal::run(firm, host, action))
