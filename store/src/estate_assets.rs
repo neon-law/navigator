@@ -17,6 +17,9 @@ use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 const TABLE: &str = "estate_asset";
 const LINE_INDEX: &str = "estate_asset_line";
 
+#[cfg(test)]
+mod mirror_tests;
+
 /// How an asset passes at death. The `ASSERT` on `estate_asset.passes_by` is
 /// the engine's copy of this list.
 pub const PASSES_BY: [&str; 5] = ["trust", "beneficiary_designation", "will", "joint", "other"];
@@ -143,6 +146,7 @@ async fn persist(
         }
         Err(error) => return Err(error.into()),
     };
+    crate::postgres_mirror::records::after_write(surreal, TABLE, id).await;
     let row: Option<EstateAssetRow> = response.take(0)?;
     row.and_then(EstateAssetRow::into_asset)
         .ok_or(EstateAssetError::WriteReturnedNothing)
@@ -286,6 +290,7 @@ pub async fn delete(
         .bind(("id", record_id(TABLE, id)))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
+    crate::postgres_mirror::records::after_write(surreal, TABLE, id).await;
     Ok(())
 }
 
@@ -299,11 +304,25 @@ pub async fn delete_for_project(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<(), EstateAssetError> {
-    surreal
-        .query(format!("DELETE {TABLE} WHERE project_id = $project_id"))
+    let mut response = surreal
+        .query(format!(
+            "DELETE {TABLE} WHERE project_id = $project_id RETURN BEFORE"
+        ))
         .bind(("project_id", record_id("project", project_id)))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
+    let deleted: Vec<EstateAssetRow> = response.take(0)?;
+    crate::postgres_mirror::after_writes(
+        surreal,
+        deleted
+            .into_iter()
+            .filter_map(EstateAssetRow::into_asset)
+            .map(|asset| crate::postgres_mirror::MirrorKey::Record {
+                table: TABLE,
+                id: asset.id,
+            }),
+    )
+    .await;
     Ok(())
 }
 
