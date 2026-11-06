@@ -49,8 +49,32 @@ pub struct StageDefinition {
     pub label: String,
     pub position: i32,
     pub case_type: Option<String>,
+    /// The Firm's default odds for a matter in this stage, used when a
+    /// contingent matter has no Outcome Estimate.
+    pub default_odds: Option<StageDefaultOdds>,
     pub inserted_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
+}
+
+/// A Firm's default win/settle/lose odds for a stage, in basis points
+/// summing to 10000. Odds only: a default never carries a recovery, so a
+/// matter with no estimate shows odds but no expected fee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StageDefaultOdds {
+    pub win_at_trial_bps: i32,
+    pub settle_bps: i32,
+    pub lose_bps: i32,
+}
+
+impl StageDefaultOdds {
+    fn validate(self) -> Result<(), CaseStageError> {
+        let all = [self.win_at_trial_bps, self.settle_bps, self.lose_bps];
+        if all.iter().any(|bps| !(0..=10_000).contains(bps)) || all.iter().sum::<i32>() != 10_000 {
+            return Err(CaseStageError::Invalid("default odds must sum to 10000"));
+        }
+        Ok(())
+    }
 }
 
 /// One audited transition of a matter to a stage. The first event on a matter
@@ -81,6 +105,18 @@ fn from_definition_row(row: &sqlx::postgres::PgRow) -> Result<StageDefinition, C
         label: row.try_get("label")?,
         position: row.try_get("position")?,
         case_type: row.try_get("case_type")?,
+        default_odds: match (
+            row.try_get::<Option<i32>, _>("default_win_at_trial_bps")?,
+            row.try_get::<Option<i32>, _>("default_settle_bps")?,
+            row.try_get::<Option<i32>, _>("default_lose_bps")?,
+        ) {
+            (Some(win_at_trial_bps), Some(settle_bps), Some(lose_bps)) => Some(StageDefaultOdds {
+                win_at_trial_bps,
+                settle_bps,
+                lose_bps,
+            }),
+            _ => None,
+        },
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -141,7 +177,8 @@ pub async fn list_definitions(
     firm_id: Uuid,
 ) -> Result<Vec<StageDefinition>, CaseStageError> {
     sqlx::query(
-        "SELECT id,firm_id,label,position,case_type,inserted_at,updated_at \
+        "SELECT id,firm_id,label,position,case_type,default_win_at_trial_bps,default_settle_bps,\
+         default_lose_bps,inserted_at,updated_at \
          FROM stage_definition WHERE firm_id=$1 ORDER BY position, label",
     )
     .bind(firm_id)
@@ -154,7 +191,8 @@ pub async fn list_definitions(
 
 pub async fn definition(pg: &PostgresDb, id: Uuid) -> Result<StageDefinition, CaseStageError> {
     sqlx::query(
-        "SELECT id,firm_id,label,position,case_type,inserted_at,updated_at \
+        "SELECT id,firm_id,label,position,case_type,default_win_at_trial_bps,default_settle_bps,\
+         default_lose_bps,inserted_at,updated_at \
          FROM stage_definition WHERE id=$1",
     )
     .bind(id)
@@ -164,6 +202,39 @@ pub async fn definition(pg: &PostgresDb, id: Uuid) -> Result<StageDefinition, Ca
     .map(from_definition_row)
     .transpose()?
     .ok_or(CaseStageError::NotFound)
+}
+
+/// Set (or, with `None`, clear) a stage's default odds. Firm data: the
+/// Firm's own judgment of how matters at this stage tend to end, always
+/// labeled a default wherever it stands in for a lawyer's estimate.
+///
+/// # Errors
+///
+/// [`CaseStageError::Invalid`] when the odds do not sum to 10000,
+/// [`CaseStageError::NotFound`] for an unknown stage, or a database failure.
+pub async fn set_default_odds(
+    pg: &PostgresDb,
+    stage_id: Uuid,
+    odds: Option<StageDefaultOdds>,
+) -> Result<StageDefinition, CaseStageError> {
+    if let Some(odds) = odds {
+        odds.validate()?;
+    }
+    let updated = sqlx::query(
+        "UPDATE stage_definition SET default_win_at_trial_bps=$2, default_settle_bps=$3, \
+         default_lose_bps=$4, updated_at=$5 WHERE id=$1",
+    )
+    .bind(stage_id)
+    .bind(odds.map(|o| o.win_at_trial_bps))
+    .bind(odds.map(|o| o.settle_bps))
+    .bind(odds.map(|o| o.lose_bps))
+    .bind(Utc::now())
+    .execute(&pg.0)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(CaseStageError::NotFound);
+    }
+    definition(pg, stage_id).await
 }
 
 /// Move a matter to a stage from the Firm's own vocabulary, appending the
@@ -362,6 +433,18 @@ mod tests {
             validate(&value),
             Err(CaseStageError::Invalid("case_type"))
         ));
+    }
+
+    #[test]
+    fn default_odds_sum_to_the_whole() {
+        let odds = |win, settle, lose| super::StageDefaultOdds {
+            win_at_trial_bps: win,
+            settle_bps: settle,
+            lose_bps: lose,
+        };
+        assert!(odds(1_000, 6_000, 3_000).validate().is_ok());
+        assert!(odds(1_000, 6_000, 2_000).validate().is_err());
+        assert!(odds(-1, 7_001, 3_000).validate().is_err());
     }
 
     #[test]
@@ -649,6 +732,58 @@ mod tests {
                 broken_chain.is_err(),
                 "a chain-breaking write must be refused"
             );
+        }
+
+        #[tokio::test]
+        async fn a_firm_sets_and_clears_a_stages_default_odds() {
+            let Some((options, database)) = fresh_schema().await else {
+                return;
+            };
+            let pg = connect(&options, &database).await;
+            let firm_id = firm(&pg).await;
+            let vocabulary = vocabulary(&pg, firm_id).await;
+            let odds = super::super::StageDefaultOdds {
+                win_at_trial_bps: 1_000,
+                settle_bps: 5_500,
+                lose_bps: 3_500,
+            };
+            assert_eq!(
+                super::super::definition(&pg, vocabulary.discovery)
+                    .await
+                    .unwrap()
+                    .default_odds,
+                None
+            );
+            let set = super::super::set_default_odds(&pg, vocabulary.discovery, Some(odds))
+                .await
+                .unwrap();
+            assert_eq!(set.default_odds, Some(odds));
+            assert!(matches!(
+                super::super::set_default_odds(
+                    &pg,
+                    vocabulary.discovery,
+                    Some(super::super::StageDefaultOdds {
+                        lose_bps: 1,
+                        ..odds
+                    })
+                )
+                .await,
+                Err(CaseStageError::Invalid(_))
+            ));
+            let partial =
+                sqlx::query("UPDATE stage_definition SET default_lose_bps=NULL WHERE id=$1")
+                    .bind(vocabulary.discovery)
+                    .execute(pg.pool())
+                    .await;
+            assert!(partial.is_err(), "the database refuses a partial set");
+            let cleared = super::super::set_default_odds(&pg, vocabulary.discovery, None)
+                .await
+                .unwrap();
+            assert_eq!(cleared.default_odds, None);
+            assert!(matches!(
+                super::super::set_default_odds(&pg, Uuid::new_v4(), None).await,
+                Err(CaseStageError::NotFound)
+            ));
         }
 
         #[tokio::test]

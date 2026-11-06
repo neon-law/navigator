@@ -5227,6 +5227,9 @@
       "stage_definition": {
         "columns": {
           "case_type": "TEXT",
+          "default_lose_bps": "INTEGER",
+          "default_settle_bps": "INTEGER",
+          "default_win_at_trial_bps": "INTEGER",
           "firm_id": "UUID",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",

@@ -13,7 +13,12 @@ holds an append-only `stage_event` — the stage it moved from, the stage it mov
 it, when, and an optional note. The database itself polices the history: a write must name a stage from the matter
 Firm's own vocabulary, must continue the chain from the matter's current stage, and can never be edited or deleted.
 Moving backward is legal — a matter can return to discovery — because the Firm's list orders the workflow, not the
-calendar. Re-staging to the stage a matter already holds records no event. **Storage.** `stage_definition` and
-`stage_event` are PostgreSQL-native (`store/src/case_stages.rs`) — net-new tables with no Surreal source. The Project
-must already belong to a Firm and be mirrored to PostgreSQL before it can hold a Case Stage. Schema:
+calendar. Re-staging to the stage a matter already holds records no event. **Default odds.** A stage may carry the
+Firm's default win-at-trial, settle and lose odds, three basis-point values summing to 10000
+(`case_stages::set_default_odds`). When a matter with a [Contingency Term](contingency-term.md) has no [Outcome
+Estimate](outcome-estimate.md), its current stage's defaults stand in, always labeled a default, so nobody reads a Firm
+default as a lawyer's judgment. A default carries odds but no recovery, so such a matter shows odds and no expected fee
+until a lawyer enters an estimate. **Storage.** `stage_definition` and `stage_event` are PostgreSQL-native
+(`store/src/case_stages.rs`) — net-new tables with no Surreal source. The Project must already belong to a Firm and be
+mirrored to PostgreSQL before it can hold a Case Stage. Schema:
 `store/postgres/migrations/20261031130000_create_case_stage.sql`.

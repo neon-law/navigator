@@ -365,6 +365,7 @@ mod tests {
             label: label.to_string(),
             position,
             case_type: None,
+            default_odds: None,
             inserted_at: DateTime::default(),
             updated_at: DateTime::default(),
         }
