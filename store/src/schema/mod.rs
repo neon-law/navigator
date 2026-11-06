@@ -29,10 +29,10 @@ use thiserror::Error;
 
 use crate::surreal::SurrealDb;
 
-/// The version this build of Navigator applies. Bump it whenever
-/// `navigator.surql` changes so a database prepared by another build
-/// reports as drifted instead of silently disagreeing.
-pub const SCHEMA_VERSION: u32 = 111;
+/// The version this build applies. Bump it for schema definitions or
+/// versioned data repairs so a database still needing an upgrade reports
+/// as drifted instead of silently disagreeing.
+pub const SCHEMA_VERSION: u32 = 112;
 
 /// The table holding the applied version.
 const VERSION_TABLE: &str = "schema_version";
@@ -88,6 +88,9 @@ const DRAFT_PIN_BACKFILL: &str = "\
     WHERE template_body_sha256 IS NONE AND template_id.body_sha256 IS NOT NONE; \
     UPDATE notation SET template_source_commit_sha = template_id.source_commit_sha \
     WHERE template_source_commit_sha IS NONE AND template_id.source_commit_sha IS NOT NONE;";
+
+/// The one-time category repair leaves later explicit clears untouched.
+const DEADLINE_CATEGORY_BACKFILL_VERSION: u32 = 112;
 
 /// Categories follow the stored hearing role before internal authority.
 /// An ambiguous date keeps NONE for lawyer review; no stored choice changes.
@@ -819,10 +822,12 @@ pub async fn apply(db: &SurrealDb) -> Result<(), SchemaError> {
         .await
         .and_then(surrealdb::IndexedResults::check)
         .map_err(SchemaError::Apply)?;
-    db.query(DEADLINE_CATEGORY_BACKFILL)
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(SchemaError::Apply)?;
+    if installed.is_none_or(|version| version < DEADLINE_CATEGORY_BACKFILL_VERSION) {
+        db.query(DEADLINE_CATEGORY_BACKFILL)
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .map_err(SchemaError::Apply)?;
+    }
     db.query(DRAFT_PIN_BACKFILL)
         .await
         .and_then(surrealdb::IndexedResults::check)

@@ -109,6 +109,29 @@ async fn deadline_category_upgrade_recovers_defaults_without_guessing_or_overwri
             assert_eq!(&row.1, preserved, "only the category may change");
         }
     }
+    let cleared_id = ids[0].0;
+    sqlx::query("UPDATE project_deadlines SET category = NULL WHERE id = $1")
+        .bind(cleared_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let cleared: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(d) FROM project_deadlines d WHERE id = $1")
+            .bind(cleared_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    db.pg.migrate_embedded(None).await.unwrap();
+    let after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(d) FROM project_deadlines d WHERE id = $1")
+            .bind(cleared_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        after, cleared,
+        "a recorded migration preserves a later explicit clear"
+    );
     db.close().await;
 }
 

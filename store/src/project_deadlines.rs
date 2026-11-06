@@ -877,6 +877,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn applying_preserves_a_lawyers_cleared_category() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let mut ids = Vec::new();
+        for role in ["hearing", "firm"] {
+            let mut input = sample(project_id);
+            input.calendar_role = role.into();
+            input.authority_kind = "internal".into();
+            input.category = None;
+            ids.push(create(&surreal, &input).await.unwrap().id);
+        }
+        surreal
+            .query("UPSERT schema_version:current SET version = 111")
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        crate::schema::apply(&surreal).await.unwrap();
+        for id in ids {
+            let cleared = update(
+                &surreal,
+                project_id,
+                id,
+                &DeadlinePatch {
+                    category: Some(None),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(cleared.category, None);
+            crate::schema::apply(&surreal).await.unwrap();
+            assert_eq!(find(&surreal, project_id, id).await.unwrap(), Some(cleared));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_repaired_category_retries_until_the_schema_upgrade_is_recorded() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let mut input = sample(project_id);
+        input.authority_kind = "internal".into();
+        input.category = None;
+        let created = create(&surreal, &input).await.unwrap();
+        surreal
+            .query("UPDATE $id UNSET category; UPSERT schema_version:current SET version = 111")
+            .bind((
+                "id",
+                crate::surreal::record_id("project_deadlines", created.id),
+            ))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        surreal
+            .query(
+                "DEFINE EVENT interrupt_category_upgrade ON TABLE schema_version \
+            WHEN $after.version > 111 THEN { THROW 'synthetic version write interruption'; };",
+            )
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert!(matches!(
+            crate::schema::apply(&surreal).await,
+            Err(crate::schema::SchemaError::RecordVersion(_))
+        ));
+        assert_eq!(
+            crate::schema::installed_version(&surreal).await.unwrap(),
+            Some(111)
+        );
+        let repaired = find(&surreal, project_id, created.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(repaired.category.as_deref(), Some("internal"));
+        surreal
+            .query("REMOVE EVENT interrupt_category_upgrade ON TABLE schema_version")
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        crate::schema::apply(&surreal).await.unwrap();
+        assert_eq!(
+            crate::schema::installed_version(&surreal).await.unwrap(),
+            Some(crate::schema::SCHEMA_VERSION)
+        );
+        assert_eq!(
+            find(&surreal, project_id, created.id).await.unwrap(),
+            Some(repaired)
+        );
+    }
+
+    #[tokio::test]
     async fn applying_recovers_only_unambiguous_missing_categories() {
         let surreal = mem_surreal().await;
         let project_id = project(&surreal).await;
@@ -904,6 +998,12 @@ mod tests {
             let historical = find(&surreal, project_id, row.id).await.unwrap().unwrap();
             ids.push((historical, category));
         }
+        surreal
+            .query("UPSERT schema_version:current SET version = 111")
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
         for _ in 0..2 {
             crate::schema::apply(&surreal).await.unwrap();
             for (before, expected) in &ids {
