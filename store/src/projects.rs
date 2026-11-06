@@ -1756,6 +1756,11 @@ pub const CALENDAR_ID_INVALID: &str =
 
 /// Human-readable reason [`is_valid_drive_folder_id`] refuses a value.
 pub const DRIVE_FOLDER_ID_INVALID: &str =
+    "A Drive folder id is the opaque id of the folder in the Firm's Projects shared drive, not a link.";
+
+/// Human-readable reason [`drive_folder_id_from_input`] refuses what a lawyer
+/// entered on the CLI or the matter edit form, where a link is welcome.
+pub const DRIVE_FOLDER_INPUT_INVALID: &str =
     "A Drive folder is its drive.google.com folder link or its id, a folder in the Firm's Projects shared drive.";
 
 /// Human-readable reason a well-formed Drive folder id is refused because the
@@ -1771,7 +1776,8 @@ pub const DRIVE_FOLDER_NOT_IN_PROJECTS_DRIVE: &str =
 /// folder has the same link shapes as any other folder, so it needs no case
 /// of its own. `None` for anything else, including a link to another host.
 ///
-/// The result always satisfies [`is_valid_drive_folder_id`], so the CLI and
+/// Refused input is reported with [`DRIVE_FOLDER_INPUT_INVALID`]. The result
+/// always satisfies [`is_valid_drive_folder_id`], so the CLI and
 /// the matter edit form store the same id whichever form was entered.
 #[must_use]
 pub fn drive_folder_id_from_input(value: &str) -> Option<String> {

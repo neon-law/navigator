@@ -4384,7 +4384,7 @@ async fn edited_drive_folder(
     let Some(folder_id) = store::projects::drive_folder_id_from_input(posted) else {
         return Err((
             StatusCode::BAD_REQUEST,
-            store::projects::DRIVE_FOLDER_ID_INVALID,
+            store::projects::DRIVE_FOLDER_INPUT_INVALID,
         )
             .into_response());
     };

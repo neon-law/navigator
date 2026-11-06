@@ -321,7 +321,7 @@ fn drive_folder_id(raw: Option<&str>) -> Result<Option<String>> {
     }
     store::projects::drive_folder_id_from_input(raw)
         .map(Some)
-        .ok_or_else(|| anyhow!(store::projects::DRIVE_FOLDER_ID_INVALID))
+        .ok_or_else(|| anyhow!(store::projects::DRIVE_FOLDER_INPUT_INVALID))
 }
 
 /// Send the live-row patch, then report how the deployment checked a Drive
