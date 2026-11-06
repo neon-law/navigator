@@ -242,10 +242,20 @@ pub enum Section {
     PathChooser,
     /// What the client must satisfy for the chosen path to stand.
     EligibilityChecklist,
+    /// A contingent matter's projected profit: one bar per outcome with its
+    /// net and odds, the expected value, the costs at risk, and where the
+    /// odds came from. Firm work product, on the lawyer lens only.
+    OutcomeProjection,
 }
 
 /// The sections every kind carries, whatever else it carries.
 pub const UNIVERSAL: &[Section] = &[Section::BoundaryNote, Section::ProvenanceStatement];
+
+/// Sections that are the firm's own work product on every kind that carries
+/// them: [`Skeleton::permits`] keeps them on the lawyer lens whatever a
+/// kind's [`Skeleton::lawyer_only`] lists, so no client or clerk face and no
+/// Litigation Pitch can ever declare one.
+pub const FIRM_WORK_PRODUCT: &[Section] = &[Section::OutcomeProjection];
 
 impl Section {
     /// Every section type, in declaration order.
@@ -308,6 +318,7 @@ impl Section {
         Section::RuleClocks,
         Section::PathChooser,
         Section::EligibilityChecklist,
+        Section::OutcomeProjection,
     ];
 
     /// The name this section is authored as.
@@ -372,6 +383,7 @@ impl Section {
             Section::RuleClocks => "rule_clocks",
             Section::PathChooser => "path_chooser",
             Section::EligibilityChecklist => "eligibility_checklist",
+            Section::OutcomeProjection => "outcome_projection",
         }
     }
 
@@ -457,6 +469,9 @@ impl Section {
             Section::RuleClocks => "Each clock the matter runs against, and how close",
             Section::PathChooser => "The path chosen for the matter, and why",
             Section::EligibilityChecklist => "What the client must satisfy for the path to stand",
+            Section::OutcomeProjection => {
+                "Projected profit by outcome: net and odds, expected value, and costs at risk"
+            }
         }
     }
 
@@ -516,7 +531,8 @@ impl Skeleton {
     /// [`D005LensSection`](crate::D005LensSection) checks.
     #[must_use]
     pub fn permits(&self, lens: Lens, section: Section) -> bool {
-        lens == Lens::Lawyer || !self.lawyer_only.contains(&section)
+        lens == Lens::Lawyer
+            || !(self.lawyer_only.contains(&section) || FIRM_WORK_PRODUCT.contains(&section))
     }
 }
 
@@ -557,8 +573,9 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
                 S::NotationChecklist,
                 S::CapTable,
                 S::EvidenceIndex,
+                S::OutcomeProjection,
             ],
-            lawyer_only: &[S::EvidenceIndex],
+            lawyer_only: &[S::EvidenceIndex, S::OutcomeProjection],
         },
         // The litigation board: the deadlines spine, with the case caption,
         // its fact strip, and the docket timeline beside it.
@@ -576,8 +593,9 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
                 S::RelationshipGraph,
                 S::AdministrationSteps,
                 S::EvidenceIndex,
+                S::OutcomeProjection,
             ],
-            lawyer_only: &[S::RelationshipGraph, S::EvidenceIndex],
+            lawyer_only: &[S::RelationshipGraph, S::EvidenceIndex, S::OutcomeProjection],
         },
         Kind::DocumentWorkbench => Skeleton {
             family: Family::Dashboard,
@@ -635,8 +653,8 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
         Kind::EngagementBillingRecords => Skeleton {
             family: Family::Dashboard,
             required: &[S::EngagementLetter, S::Invoice],
-            optional: &[S::PrebillReview, S::DownloadList],
-            lawyer_only: &[S::PrebillReview],
+            optional: &[S::PrebillReview, S::DownloadList, S::OutcomeProjection],
+            lawyer_only: &[S::PrebillReview, S::OutcomeProjection],
         },
         // A transaction's closing: what must happen, who has signed, which
         // terms are still open, and how each document changed. The
@@ -1061,6 +1079,39 @@ mod tests {
             assert!(log.permits(Lens::Client, section), "{}", section.as_str());
         }
         assert_eq!(Section::parse("activity_log"), Some(Section::ActivityLog));
+    }
+
+    #[test]
+    fn the_outcome_projection_never_leaves_the_lawyer_lens() {
+        use super::FIRM_WORK_PRODUCT;
+        assert_eq!(
+            Section::parse("outcome_projection"),
+            Some(Section::OutcomeProjection)
+        );
+        let carriers: Vec<Kind> = dashboard_kinds()
+            .into_iter()
+            .filter(|kind| catalog(*kind).contains(&Section::OutcomeProjection))
+            .collect();
+        assert_eq!(
+            carriers,
+            [
+                Kind::MatterStatusConsole,
+                Kind::DocketDeadlineBoard,
+                Kind::EngagementBillingRecords,
+            ]
+        );
+        for kind in dashboard_kinds() {
+            let s = skeleton(kind).unwrap();
+            for section in FIRM_WORK_PRODUCT {
+                assert!(s.permits(Lens::Lawyer, *section));
+                assert!(!s.permits(Lens::Client, *section), "{}", kind.as_str());
+                assert!(!s.permits(Lens::Clerk, *section), "{}", kind.as_str());
+            }
+        }
+        // A pitch promises the person pitched that nothing on it is
+        // firm-only, so its catalog never carries firm work product.
+        let pitch = catalog(Kind::LitigationPitch);
+        assert!(FIRM_WORK_PRODUCT.iter().all(|s| !pitch.contains(s)));
     }
 
     #[test]

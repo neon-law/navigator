@@ -224,7 +224,7 @@ pub async fn resolve(
 }
 
 /// [`resolve`] after the caller has established the reader is firm-side.
-async fn resolve_unchecked(
+pub(crate) async fn resolve_unchecked(
     pg: &PostgresDb,
     project_id: Uuid,
     on: NaiveDate,
@@ -319,7 +319,7 @@ async fn load(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{ContingencyTermError, ContingencyTier, CostsDeducted, NewContingencyTerm};
     use chrono::NaiveDate;
     use uuid::Uuid;

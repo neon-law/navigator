@@ -5207,10 +5207,10 @@
 {"file":"webapp/src/sections/instruments.rs","line":557,"function":"load","operation":"insert","sql_operations":[],"tables":["entity"],"transaction":false}
 {"file":"webapp/src/sections/instruments.rs","line":675,"function":"formalities","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/sections/page.rs","line":316,"function":"page_sections","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/sections/page.rs","line":1039,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/sections/page.rs","line":1045,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/sections/page.rs","line":1052,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/sections/page.rs","line":1100,"function":"receipt_backed_costs_follow_invoices_for_both_lenses","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/sections/page.rs","line":1074,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/sections/page.rs","line":1080,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/sections/page.rs","line":1087,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/sections/page.rs","line":1135,"function":"receipt_backed_costs_follow_invoices_for_both_lenses","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"word/src/notation.rs","line":411,"function":"flush","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"word/src/outline.rs","line":734,"function":"alpha","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"workflows-service/src/dbos_email_summary.rs","line":315,"function":"database_url","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
