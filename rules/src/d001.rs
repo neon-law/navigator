@@ -61,6 +61,25 @@ mod tests {
     use crate::Rule;
 
     #[test]
+    fn an_estate_page_can_opt_into_private_chart_calculation() {
+        let file = one_page(
+            "estate_plan_console",
+            &[
+                ("lawyer", "instrument_set, astrology_chart"),
+                ("client", "instrument_set, astrology_chart"),
+            ],
+        );
+        assert!(
+            D001UnknownSection.lint(&file).is_empty(),
+            "the chart is a registered Matter Page Section"
+        );
+        assert!(
+            crate::D002OutOfCatalogSection.lint(&file).is_empty(),
+            "the existing estate console permits the opt-in section"
+        );
+    }
+
+    #[test]
     fn a_known_section_passes() {
         let file = one_page("authority_library", &[("lawyer", "authority_table")]);
         assert!(D001UnknownSection.lint(&file).is_empty());

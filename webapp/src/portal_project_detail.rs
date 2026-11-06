@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::components::{Choice, Field, FormCard, Heading};
 use crate::people::ViewerRole;
+#[cfg(feature = "server")]
 use crate::portal_project_list::PersonId;
 use crate::sections::page::MatterTab;
 

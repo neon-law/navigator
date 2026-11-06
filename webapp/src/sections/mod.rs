@@ -178,6 +178,7 @@ pub enum SectionView {
     AdministrationSteps(estate::StagesView),
     FiduciaryRoster(Vec<estate::FiduciaryRow>),
     AssetSchedule(Vec<estate::AssetRow>),
+    AstrologyChart(crate::private_chart::ChartSectionView),
     CapTable(Vec<transactional::HoldingRow>),
     ClosingChecklist(Vec<transactional::ChecklistItem>),
     SignatureTracker(Vec<transactional::SignatureRow>),
@@ -242,6 +243,7 @@ impl SectionView {
             Self::AdministrationSteps(_) => "administration_steps",
             Self::FiduciaryRoster(_) => "fiduciary_roster",
             Self::AssetSchedule(_) => "asset_schedule",
+            Self::AstrologyChart(_) => "astrology_chart",
             Self::CapTable(_) => "cap_table",
             Self::ClosingChecklist(_) => "closing_checklist",
             Self::SignatureTracker(_) => "signature_tracker",
@@ -306,6 +308,7 @@ impl SectionView {
             Self::AdministrationSteps(estate::StagesView::default()),
             Self::FiduciaryRoster(Vec::new()),
             Self::AssetSchedule(Vec::new()),
+            Self::AstrologyChart(crate::private_chart::ChartSectionView::default()),
             Self::CapTable(Vec::new()),
             Self::ClosingChecklist(Vec::new()),
             Self::SignatureTracker(Vec::new()),
@@ -649,6 +652,9 @@ pub fn SectionBody(view: SectionView) -> Element {
         }
         SectionView::FiduciaryRoster(rows) => rsx! { estate::FiduciaryRosterSection { rows } },
         SectionView::AssetSchedule(rows) => rsx! { estate::AssetScheduleSection { rows } },
+        SectionView::AstrologyChart(view) => {
+            rsx! { crate::private_chart::PrivateChartSection { view } }
+        }
         SectionView::CapTable(rows) => rsx! { transactional::CapTableSection { rows } },
         SectionView::ClosingChecklist(rows) => {
             rsx! { transactional::ClosingChecklistSection { rows } }
@@ -682,7 +688,7 @@ pub(crate) mod tests {
     /// wasm build of this crate never links `rules`; the server-side test
     /// below proves the two agree.
     fn rules_section_count() -> usize {
-        57
+        58
     }
 
     pub(super) fn render(view: SectionView) -> String {

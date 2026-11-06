@@ -24,3 +24,15 @@ Time](birth-time.md) supplies no assumed instant or positions; an approximate cl
 results remain within request handling and its private response, outside the shared result cache and standing stores.
 Responses, including refusals, use `private, no-store`. No saved chart or chart history is created; the caller controls
 the lifetime of its response copy.
+
+A Project can opt into the `astrology_chart` Section on an `estate_plan_console` Matter Page, separately for its
+declared Client and Lawyer lenses. The private form starts blank and disabled until its matching page hydrates. It asks
+for clock precision, explicit birth inputs, supported bodies and house convention, and consent for personal reflection.
+It uses the same calculated wheel and position tables as the reference renderer. Read-only viewing and local Project
+previews expose no calculation controls.
+
+The form keeps its draft and result only in page-owned browser state. Editing, clearing, changing Project or leaving the
+page discards them and invalidates any in-flight response. Page hiding synchronously hides personal controls and
+results; a back-forward-cache restoration loads a fresh authorized blank page. No browser storage, chart history,
+analytics or third-party map request receives personal chart values. Clearing releases application-owned values; it does
+not promise secure erasure of browser memory or a response the reader has copied.

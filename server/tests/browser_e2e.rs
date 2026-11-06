@@ -50,6 +50,9 @@ mod practice_preview;
 #[path = "common/inbox_triage.rs"]
 mod inbox_triage;
 
+#[path = "common/private_chart.rs"]
+mod private_chart;
+
 /// Nautilus collects contact details before sign-in and keeps them when going Back.
 #[tokio::test]
 async fn nautilus_intake_preserves_answers_and_reviews_before_sign_in() {

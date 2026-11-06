@@ -20,6 +20,7 @@ use super::{
 #[derive(Clone, Debug)]
 pub struct LoadContext {
     pub lens: PageLens,
+    pub private_chart: crate::private_chart::ChartSectionView,
     /// Open deadlines this lens may see, soonest first.
     pub deadlines: Vec<DeadlineCard>,
     /// The next dated items still ahead that this lens may see, from the
@@ -94,6 +95,7 @@ impl LoadContext {
     pub fn empty(lens: PageLens) -> Self {
         Self {
             lens,
+            private_chart: crate::private_chart::ChartSectionView::default(),
             deadlines: Vec::new(),
             key_dates: Vec::new(),
             roster: RosterView::default(),
@@ -196,6 +198,7 @@ fn lawyer_only<T: Default>(cx: &LoadContext, build: impl FnOnce(&LoadContext) ->
 #[must_use]
 pub fn load(section: Section, cx: &LoadContext) -> SectionView {
     match section {
+        Section::AstrologyChart => SectionView::AstrologyChart(cx.private_chart.clone()),
         Section::BoundaryNote => SectionView::BoundaryNote(NoteView {
             text: boundary_note(cx.lens),
         }),
