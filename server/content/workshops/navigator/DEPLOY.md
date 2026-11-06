@@ -1250,8 +1250,8 @@ completed, Navigator-sent onboarding envelope on the matter's onboarding notatio
 completed a loop Navigator itself sent. It is additive to `MatterLifecycle` (`pitch`/`active`/`closed`), which it does
 not change, and surfaces on the matter page, through `navigator project lifecycle`, and in the Portal. The funnel the
 prospective client walks is itself a closed enum, `FunnelEvent` (`telemetry/src/lib.rs`), whose steps are enumerated
-with their fields in `docs/observability.md` — `lead_captured`, `offer_accepted` (a start-door acceptance: the
-offer's matter, notation, and proposed terms exist), `intake_complete`, `review_entered`, and `sent` — every field an
+with their fields in `docs/observability.md` — `lead_captured`, `offer_accepted` (a start-door acceptance: the offer's
+matter, notation, and proposed terms exist), `intake_complete`, `review_entered`, and `sent` — every field an
 identifier, never client content.
 
 ---
