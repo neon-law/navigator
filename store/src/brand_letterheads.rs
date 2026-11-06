@@ -103,6 +103,10 @@ pub struct BrandLetterhead {
     /// is the renderer's own default face.
     pub font_family: Option<String>,
     pub font_object_key: Option<String>,
+    /// The stored row's last edit as RFC 3339 — the revision a render's
+    /// provenance names. `None` when no row was read (an in-memory
+    /// preview resolve, or no admin has saved a row yet).
+    pub updated_at: Option<String>,
 }
 
 fn optional(value: Option<&str>) -> Option<String> {
@@ -293,7 +297,24 @@ pub fn resolve(brand: &Brand, stored: Option<&LetterheadFields>) -> BrandLetterh
         postal_address: stored.postal_address.clone(),
         font_family,
         font_object_key,
+        // Only a stored row carries a revision; the callers that read one
+        // stamp it from PostgreSQL.
+        updated_at: None,
     }
+}
+
+/// A stored row and its revision: the fields an admin set, and the
+/// `updated_at` a render's provenance names.
+struct StoredRow {
+    fields: LetterheadFields,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+fn from_row_with_updated_at(row: &sqlx::postgres::PgRow) -> Result<StoredRow, sqlx::Error> {
+    Ok(StoredRow {
+        fields: from_row(row)?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 fn from_row(row: &sqlx::postgres::PgRow) -> Result<LetterheadFields, sqlx::Error> {
@@ -317,11 +338,16 @@ pub async fn find(
     pg: &PostgresDb,
     brand_id: Uuid,
 ) -> Result<Option<LetterheadFields>, LetterheadError> {
+    Ok(find_row(pg, brand_id).await?.map(|row| row.fields))
+}
+
+/// The stored row and its revision, or `None` when none is set.
+async fn find_row(pg: &PostgresDb, brand_id: Uuid) -> Result<Option<StoredRow>, LetterheadError> {
     let row = sqlx::query("SELECT * FROM brand_letterhead WHERE brand_id = $1")
         .bind(brand_id)
         .fetch_optional(&pg.0)
         .await?;
-    Ok(row.as_ref().map(from_row).transpose()?)
+    Ok(row.as_ref().map(from_row_with_updated_at).transpose()?)
 }
 
 /// Replace a Brand's stored letterhead with already-[`validate`]d fields.
@@ -334,6 +360,15 @@ pub async fn put(
     brand_id: Uuid,
     fields: &LetterheadFields,
 ) -> Result<LetterheadFields, LetterheadError> {
+    Ok(put_row(pg, brand_id, fields).await?.fields)
+}
+
+/// [`put`], keeping the revision the write stamped.
+async fn put_row(
+    pg: &PostgresDb,
+    brand_id: Uuid,
+    fields: &LetterheadFields,
+) -> Result<StoredRow, LetterheadError> {
     let row = sqlx::query(
         "INSERT INTO brand_letterhead (brand_id, wordmark, mark, phone, email, site_url, postal_address, font_family) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
@@ -352,7 +387,7 @@ pub async fn put(
     .bind(fields.font_family.as_deref())
     .fetch_one(&pg.0)
     .await?;
-    Ok(from_row(&row)?)
+    Ok(from_row_with_updated_at(&row)?)
 }
 
 /// Save a Brand's letterhead as an actor: Owner, or the Admin DRI of the
@@ -382,8 +417,10 @@ pub async fn save_for_actor(
             Err(error) => return Err(error.into()),
         };
     let fields = validate(&brand, input)?;
-    let stored = put(pg, brand.id, &fields).await?;
-    Ok(resolve(&brand, Some(&stored)))
+    let stored = put_row(pg, brand.id, &fields).await?;
+    let mut resolved = resolve(&brand, Some(&stored.fields));
+    resolved.updated_at = Some(stored.updated_at.to_rfc3339());
+    Ok(resolved)
 }
 
 /// The resolved letterhead for a Brand key, or `None` for an unknown key —
@@ -399,8 +436,10 @@ pub async fn for_brand_key(
     let Some(brand) = crate::brands::find_by_key(surreal, key).await? else {
         return Ok(None);
     };
-    let stored = find(pg, brand.id).await?;
-    Ok(Some(resolve(&brand, stored.as_ref())))
+    let stored = find_row(pg, brand.id).await?;
+    let mut resolved = resolve(&brand, stored.as_ref().map(|row| &row.fields));
+    resolved.updated_at = stored.map(|row| row.updated_at.to_rfc3339());
+    Ok(Some(resolved))
 }
 
 #[cfg(test)]
