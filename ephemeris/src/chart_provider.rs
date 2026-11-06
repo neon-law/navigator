@@ -14,8 +14,8 @@ use std::{
 };
 
 const DAY_SECONDS: f64 = 86_400.0;
-const RATE_STEP_SECONDS: f64 = 30.0;
-const ALGORITHM: &str =
+pub(crate) const RATE_STEP_SECONDS: f64 = 30.0;
+pub(crate) const ALGORITHM: &str =
     "navigator-local-SPK/apparent-IAU2006-2000B/IERS2003-node/USNO-deltaT/civil-UT1-before-1972/chart-v3";
 
 /// One body's apparent geocentric state. Orbital points have no physical range.
@@ -157,7 +157,7 @@ impl AstrologyChartProvider {
                 request
                     .bodies
                     .iter()
-                    .map(|body| self.body_position(*body, instant))
+                    .map(|body| body_position(&self.loaded.ephemeris, *body, instant))
                     .collect::<Result<Vec<_>, _>>()
             })
             .transpose()?;
@@ -256,67 +256,70 @@ impl AstrologyChartProvider {
         key.copy_from_slice(&Sha256::digest(bytes));
         Ok(key)
     }
+}
 
-    fn body_position(
-        &self,
-        body: LineBody,
-        instant: TdbSeconds,
-    ) -> Result<BodyPosition, ChartError> {
-        let center = self.sample(body, instant)?;
-        let before = self.sample(body, TdbSeconds(instant.0 - RATE_STEP_SECONDS))?;
-        let after = self.sample(body, TdbSeconds(instant.0 + RATE_STEP_SECONDS))?;
-        let rate = DAY_SECONDS / (2.0 * RATE_STEP_SECONDS);
-        let result = BodyPosition {
-            body: body.name(),
-            source_id: body.spk_body().map(crate::Body::naif_id),
-            longitude_deg: center.position.lon_deg,
-            latitude_deg: center.position.lat_deg,
-            right_ascension_deg: center.position.ra_deg,
-            declination_deg: center.position.dec_deg,
-            distance_km: center.distance_km,
-            longitude_speed_deg_per_day: ((after.position.lon_deg - before.position.lon_deg
-                + 180.0)
-                .rem_euclid(360.0)
-                - 180.0)
-                * rate,
-            latitude_speed_deg_per_day: (after.position.lat_deg - before.position.lat_deg) * rate,
-            distance_speed_km_per_day: before
-                .distance_km
-                .zip(after.distance_km)
-                .map(|(before, after)| (after - before) * rate),
-        };
-        if [
-            result.longitude_deg,
-            result.latitude_deg,
-            result.right_ascension_deg,
-            result.declination_deg,
-            result.longitude_speed_deg_per_day,
-            result.latitude_speed_deg_per_day,
-        ]
-        .into_iter()
-        .chain(result.distance_km)
-        .chain(result.distance_speed_km_per_day)
-        .any(|value| !value.is_finite())
-        {
-            return Err(ChartError::CalculationFailed);
-        }
-        Ok(result)
+pub(crate) fn body_position(
+    ephemeris: &crate::Ephemeris,
+    body: LineBody,
+    instant: TdbSeconds,
+) -> Result<BodyPosition, ChartError> {
+    let center = sample(ephemeris, body, instant)?;
+    let before = sample(ephemeris, body, TdbSeconds(instant.0 - RATE_STEP_SECONDS))?;
+    let after = sample(ephemeris, body, TdbSeconds(instant.0 + RATE_STEP_SECONDS))?;
+    let rate = DAY_SECONDS / (2.0 * RATE_STEP_SECONDS);
+    let result = BodyPosition {
+        body: body.name(),
+        source_id: body.spk_body().map(crate::Body::naif_id),
+        longitude_deg: center.position.lon_deg,
+        latitude_deg: center.position.lat_deg,
+        right_ascension_deg: center.position.ra_deg,
+        declination_deg: center.position.dec_deg,
+        distance_km: center.distance_km,
+        longitude_speed_deg_per_day: ((after.position.lon_deg - before.position.lon_deg + 180.0)
+            .rem_euclid(360.0)
+            - 180.0)
+            * rate,
+        latitude_speed_deg_per_day: (after.position.lat_deg - before.position.lat_deg) * rate,
+        distance_speed_km_per_day: before
+            .distance_km
+            .zip(after.distance_km)
+            .map(|(before, after)| (after - before) * rate),
+    };
+    if [
+        result.longitude_deg,
+        result.latitude_deg,
+        result.right_ascension_deg,
+        result.declination_deg,
+        result.longitude_speed_deg_per_day,
+        result.latitude_speed_deg_per_day,
+    ]
+    .into_iter()
+    .chain(result.distance_km)
+    .chain(result.distance_speed_km_per_day)
+    .any(|value| !value.is_finite())
+    {
+        return Err(ChartError::CalculationFailed);
     }
+    Ok(result)
+}
 
-    fn sample(&self, body: LineBody, instant: TdbSeconds) -> Result<BodySample, ChartError> {
-        if let Some(body) = body.spk_body() {
-            let state = crate::apparent_geocentric_state(&self.loaded.ephemeris, body, instant)
-                .map_err(|_| ChartError::CalculationFailed)?;
-            Ok(BodySample {
-                position: state.position,
-                distance_km: Some(state.distance_km),
-            })
-        } else {
-            Ok(BodySample {
-                position: crate::mean_node(instant),
-                distance_km: None,
-            })
-        }
+fn sample(
+    ephemeris: &crate::Ephemeris,
+    body: LineBody,
+    instant: TdbSeconds,
+) -> Result<BodySample, ChartError> {
+    if let Some(body) = body.spk_body() {
+        let state = crate::apparent_geocentric_state(ephemeris, body, instant)
+            .map_err(|_| ChartError::CalculationFailed)?;
+        Ok(BodySample {
+            position: state.position,
+            distance_km: Some(state.distance_km),
+        })
+    } else {
+        Ok(BodySample {
+            position: crate::mean_node(instant),
+            distance_km: None,
+        })
     }
 }
 

@@ -24,6 +24,7 @@ mod chart_time;
 mod daf;
 mod error;
 mod loader;
+mod reference_table;
 mod spk;
 mod time;
 
@@ -63,4 +64,9 @@ pub use lines::deltat::{
 pub use astrocartography::{
     AstrocartographyGeometry, GeographicLine, GeometryConvention, GeometryPointRow,
     GeometryProvenance,
+};
+
+pub use reference_table::{
+    EphemerisReferenceRow, EphemerisReferenceTable, ReferenceMetadata, ReferenceTableError,
+    MAX_REFERENCE_BATCH_DAYS,
 };

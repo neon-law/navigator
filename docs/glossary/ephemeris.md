@@ -67,6 +67,12 @@ corrupt contents, links, and concurrent destination creation are refused without
 remove only their own staging directory. This command acquires raw reference sources; it creates no personal chart
 export or derived numerical table.
 
+## Daily reference rows
+
+An [Ephemeris Reference Table](ephemeris-reference-table.md) calculates bounded batches of exact daily rows for the
+eligible nonpersonal body inventory. It preserves historical UT1 versus modern UTC, precise TT/TDB coordinates, source
+identities, explicit frame/rate units and unavailable quantities, independently of private chart requests and caches.
+
 ## Private calculation boundary
 
 `AstrologyChartProvider` loads a version-2 manifest and calculates locally. It makes no network calls and creates no
