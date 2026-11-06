@@ -3332,3 +3332,34 @@ test_ci_cannot_calculate_private_charts_even_with_owner_tier if {
         "method": "POST", "session": session,
     }
 }
+
+# ---------- Contingent-fee work product under /app/api/projects/{id} (lawyer tier) ----------
+
+# The Contingency Term doors are firm work product. Lawyer tier at route
+# admission; the handler answers 404 for a caller with no firm-side
+# participation row.
+
+test_lawyer_can_read_and_record_contingency_work_product if {
+	every door in contingency_doors {
+		authz.allow with input as {"path": ["app", "api", "projects", "p1", door], "method": "GET", "session": lawyer_session}
+		authz.allow with input as {"path": ["app", "api", "projects", "p1", door], "method": "POST", "session": lawyer_session}
+	}
+}
+
+test_clerk_client_and_anonymous_cannot_record_contingency_work_product if {
+	every door in contingency_doors {
+		not authz.allow with input as {"path": ["app", "api", "projects", "p1", door], "method": "POST", "session": clerk_session}
+		not authz.allow with input as {"path": ["app", "api", "projects", "p1", door], "method": "POST", "session": client_session}
+		not authz.allow with input as {"path": ["app", "api", "projects", "p1", door], "method": "POST", "session": null}
+		not authz.allow with input as {"path": ["app", "api", "projects", "p1", door], "method": "GET", "session": null}
+	}
+}
+
+test_contingency_doors_are_shape_bound if {
+	every door in contingency_doors {
+		not authz.allow with input as {"path": ["app", "api", "projects", "p1", door], "method": "DELETE", "session": lawyer_session}
+		not authz.allow with input as {"path": ["app", "api", "projects", "p1", door, "x"], "method": "POST", "session": lawyer_session}
+	}
+}
+
+contingency_doors := {"contingency-terms"}

@@ -23,3 +23,5 @@ Each row holds:
 
 Amounts are integer cents and percentages are basis points (`3330` is 33.3%), never floats. Only a firm-side participant
 on the matter may record or read a term. It never reaches a client or clerk [Lens](lens.md).
+
+- Vocabulary: [`store::contingency_terms`](../../store/src/contingency_terms.rs)

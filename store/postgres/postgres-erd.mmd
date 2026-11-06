@@ -267,6 +267,22 @@ erDiagram
         string subject
         datetime updated_at
     }
+    contingency_term {
+        uuid author_person_id
+        string costs_deducted
+        datetime effective_on
+        uuid fee_agreement_notation_id
+        uuid id
+        datetime inserted_at
+        uuid project_id
+        int rate_cents_per_hour
+    }
+    contingency_term_tier {
+        uuid contingency_term_id
+        int fee_bps
+        int ordinal
+        uuid stage_definition_id
+    }
     contract_review {
         uuid asset_id
         json findings
@@ -1854,6 +1870,10 @@ erDiagram
     communication }o--|| communication : references
     person }o--|| communication : references
     project }o--|| communication : references
+    person }o--|| contingency_term : references
+    project }o--|| contingency_term : references
+    contingency_term }o--|| contingency_term_tier : references
+    stage_definition }o--|| contingency_term_tier : references
     jurisdiction }o--|| credential : references
     person }o--|| credential : references
     document_chain_archive }o--|| document_chain_archive_item : references

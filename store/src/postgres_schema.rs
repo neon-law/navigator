@@ -1447,6 +1447,10 @@ mod tests {
                     "../postgres/migrations/20261105150000_create_esignature_webhook_journal.sql"
                 ),
             ),
+            (
+                "20261106000000_create_contingency_term.sql",
+                include_str!("../postgres/migrations/20261106000000_create_contingency_term.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

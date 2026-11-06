@@ -1,6 +1,9 @@
 #![allow(clippy::doc_markdown)]
 //! Integration tests for the matter's stage doors: the stage chip's read and
-//! the set command beside the project-costs and project-task APIs.
+//! the set command beside the project-costs and project-task APIs — and, in
+//! [`contingency`], the contingent-fee doors whose tiers hang off the same
+//! Firm stage vocabulary. They share this binary because every server test
+//! binary links the whole application, and the merge gate is bound by disk.
 //!
 //! The stage store is PostgreSQL-native, so these tests run on the PostgreSQL
 //! lane (`NAVIGATOR_TEST_POSTGRES_PORT`, the store crate's own fixture
@@ -28,6 +31,9 @@ use portal::test_support::TEST_SESSION_KEY as KEY;
 mod bearer_common;
 
 use bearer_common::bearer;
+#[path = "api_project_stages/contingency.rs"]
+mod contingency;
+
 
 static DATABASE: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
 
@@ -103,6 +109,7 @@ async fn stage_store() -> Option<&'static str> {
 
 struct Fixture {
     app: axum::Router,
+    surreal: store::surreal::SurrealDb,
     firm_id: Uuid,
     project_id: Uuid,
     other_project_id: Uuid,
@@ -306,6 +313,7 @@ async fn build_fixture() -> Fixture {
     };
     Fixture {
         app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
+        surreal,
         firm_id,
         project_id,
         other_project_id,
