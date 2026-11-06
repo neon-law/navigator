@@ -816,11 +816,11 @@
 {"file":"portal/src/purchases.rs","line":630,"function":"database","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/purchases.rs","line":630,"function":"database","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
 {"file":"portal/src/rate_limit.rs","line":171,"function":"enforce","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/retainer_walk.rs","line":3491,"function":"default_governing_law","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/retainer_walk.rs","line":3492,"function":"default_governing_law","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/retainer_walk.rs","line":3530,"function":"context_from_answers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/retainer_walk.rs","line":3537,"function":"context_from_answers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/retainer_walk.rs","line":3556,"function":"insert_dotted_answer_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/retainer_walk.rs","line":3520,"function":"default_governing_law","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/retainer_walk.rs","line":3521,"function":"default_governing_law","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/retainer_walk.rs","line":3559,"function":"context_from_answers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/retainer_walk.rs","line":3566,"function":"context_from_answers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/retainer_walk.rs","line":3585,"function":"insert_dotted_answer_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/session.rs","line":309,"function":"sign","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/session.rs","line":315,"function":"verify","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/signature.rs","line":533,"function":"tabs_object","operation":"insert","sql_operations":[],"tables":[],"transaction":false}

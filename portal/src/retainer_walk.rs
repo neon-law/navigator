@@ -3246,14 +3246,25 @@ pub fn resolve_client_recipient(
 /// [`resolve_client_recipient`] for a caller that holds only a notation id:
 /// read the answers, the bound Person, and the delivery mode, then resolve.
 ///
-/// The view and send paths use the same scoped body answers and bound
-/// Person when resolving the captive recipient.
+/// Frozen intakes use the same scoped answers as a new send. An existing
+/// envelope without a frozen definition keeps its identity-only answer lookup:
+/// missing body metadata cannot revoke delivery access. This legacy lookup
+/// authorizes neither document rendering nor Re-ask, and certifies no artifact freshness.
 pub async fn client_recipient_for_notation(
     surreal: &store::surreal::SurrealDb,
     storage: &Arc<dyn cloud::StorageService>,
     notation_row: &store::notations::Notation,
 ) -> Result<ClientRecipient, ContextError> {
-    let ctx = render_context_from_answers(surreal, Some(storage), notation_row.id).await?;
+    let legacy_envelope = notation_row.questionnaire_snapshot.is_none()
+        && store::signatures::request_id_for_notation(surreal, notation_row.id)
+            .await
+            .map_err(|error| ContextError::Db(error.to_string()))?
+            .is_some();
+    let ctx = if legacy_envelope {
+        legacy_client_identity_context(surreal, notation_row.id).await?
+    } else {
+        render_context_from_answers(surreal, Some(storage), notation_row.id).await?
+    };
     let client = store::persons::find_by_id(surreal, notation_row.person_id).await?;
     let captive = notation_row.delivery != store::notations::DELIVERY_EMAILED;
     Ok(resolve_client_recipient(
@@ -3262,6 +3273,24 @@ pub async fn client_recipient_for_notation(
         client.as_ref(),
         captive,
     ))
+}
+
+/// Identity fields only, retaining the existing latest-answer precedence.
+async fn legacy_client_identity_context(
+    surreal: &store::surreal::SurrealDb,
+    notation_id: Uuid,
+) -> Result<BTreeMap<String, String>, ContextError> {
+    let answers = store::answers::for_notation(surreal, notation_id)
+        .await
+        .map_err(|error| ContextError::Db(error.to_string()))?;
+    let mut context = BTreeMap::new();
+    for answer in answers
+        .iter()
+        .filter(|answer| answer.state_name.as_deref() == Some("person__client"))
+    {
+        insert_dotted_answer_fields(&mut context, "person__client", &answer.value);
+    }
+    Ok(context)
 }
 
 /// The declared signer role a provider recipient id names. The manifest

@@ -52,6 +52,7 @@ const CLIENT_EMAIL: &str = "libra@example.com";
 /// own sign page on this server's loopback (`http://127.0.0.1:3001/…`), the
 /// same arrangement `hosting` wires in a dev boot.
 struct Fixture {
+    storage: Arc<dyn cloud::StorageService>,
     app: axum::Router,
     surreal: store::surreal::SurrealDb,
     sessions: SessionStore,
@@ -132,13 +133,6 @@ async fn build() -> Fixture {
     .await
     .unwrap();
 
-    let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
-        &surreal,
-        Some(&storage),
-        &tmpl,
-    )
-    .await
-    .unwrap();
     let notation_id = store::notations::create(
         &surreal,
         &store::notations::NewNotation::new(
@@ -146,8 +140,7 @@ async fn build() -> Fixture {
             signer,
             project.id,
             "sent_for_signature__pending",
-        )
-        .with_questionnaire_snapshot(snapshot),
+        ),
     )
     .await
     .unwrap()
@@ -160,18 +153,20 @@ async fn build() -> Fixture {
     // The envelope the route redirects to must be one the provider holds:
     // send the rendered anchor PDF through the fake first, then record the
     // provider-issued id against the notation.
-    let portal::signature::SignatureRequestId(envelope_id) = provider
+    let request_id = provider
         .send_for_signature(notation_id, &anchor_pdf(), &signing_manifest())
         .await
         .unwrap();
+    let envelope_id = request_id.0;
     let state = AppState {
-        storage,
+        storage: storage.clone(),
         sessions: SessionStore::new(KEY),
         signature_provider: provider.clone(),
         fake_signature_dir: Some(provider.root().to_owned()),
         ..portal::test_support::app_state(surreal.clone()).await
     };
     Fixture {
+        storage,
         app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
         surreal,
         sessions: SessionStore::new(KEY),
@@ -501,12 +496,6 @@ async fn an_emailed_envelope_has_no_embedded_session_to_open() {
     // replay and the honest answer is a conflict rather than a minted URL the
     // provider would refuse.
     let f = build().await;
-    let snapshot = store::notations::find_by_id(&f.surreal, f.notation_id)
-        .await
-        .unwrap()
-        .unwrap()
-        .questionnaire_snapshot
-        .unwrap();
     let emailed = store::notations::create(
         &f.surreal,
         &store::notations::NewNotation {
@@ -517,7 +506,6 @@ async fn an_emailed_envelope_has_no_embedded_session_to_open() {
                 f.project_id,
                 "sent_for_signature__pending",
             )
-            .with_questionnaire_snapshot(snapshot)
         },
     )
     .await
@@ -559,4 +547,86 @@ async fn an_unknown_notation_is_not_found() {
         response.headers().get(header::LOCATION).is_none(),
         "a miss is not a redirect"
     );
+}
+
+#[tokio::test]
+async fn legacy_pending_envelope_opens_even_when_body_questionnaire_authority_is_missing() {
+    let f = build().await;
+    let notation = store::notations::find_by_id(&f.surreal, f.notation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(notation.questionnaire_snapshot.is_none());
+    assert!(matches!(
+        workflows::notation_session::render_answer_projection(
+            &f.surreal,
+            Some(&f.storage),
+            f.notation_id
+        )
+        .await,
+        Err(workflows::notation_session::NotationSessionError::QuestionnaireAuthorityMissing)
+    ));
+    assert!(
+        portal::retainer_walk::client_recipient_for_notation(&f.surreal, &f.storage, &notation)
+            .await
+            .is_err(),
+        "the legacy identity lane requires an existing stored envelope"
+    );
+    record_envelope(&f).await;
+    let response = get(
+        &f,
+        &client_sign_uri(f.notation_id),
+        &cookie_for(&f.sessions, Role::Client, f.signer),
+    )
+    .await;
+    assert!(location_of(&response).contains(&f.envelope_id));
+}
+
+#[tokio::test]
+async fn frozen_pending_envelope_does_not_use_stale_off_route_recipient_identity() {
+    let f = build().await;
+    record_envelope(&f).await;
+    store::notations::update_questionnaire_snapshot(
+        &f.surreal,
+        f.notation_id,
+        serde_json::json!({
+            "spec": {"BEGIN": {"_": "custom_single_choice__path"},
+                "custom_single_choice__path": {"a": "END", "b": "person__client"},
+                "person__client": {"_": "END"}, "END": {}},
+            "prompts": {}, "choices": {"path": {"a": "A", "b": "B"}}
+        }),
+    )
+    .await
+    .unwrap();
+    for (question, state, value) in [
+        (
+            "custom_single_choice",
+            "custom_single_choice__path",
+            store::answers::primitive("a"),
+        ),
+        (
+            "person",
+            "person__client",
+            serde_json::json!({"value": "Wrong", "name": "Wrong", "email": "wrong@example.com"}),
+        ),
+    ] {
+        let question = store::questions::find_by_code(&f.surreal, question)
+            .await
+            .unwrap()
+            .unwrap();
+        store::answers::record(
+            &f.surreal,
+            &store::answers::NewAnswer::new(question.id, f.signer, value)
+                .in_notation(f.notation_id, state),
+        )
+        .await
+        .unwrap();
+    }
+    let response = get(
+        &f,
+        &client_sign_uri(f.notation_id),
+        &cookie_for(&f.sessions, Role::Client, f.signer),
+    )
+    .await;
+    assert!(location_of(&response).contains(&f.envelope_id));
 }
