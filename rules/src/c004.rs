@@ -11,10 +11,7 @@
 //! `documents/` bytes: PDFs, images, DOCX), so the check does not run
 //! through `ClassifiedRuleEngine` like `C003`'s does. The CLI's document
 //! walk (`project gate --check`, `project documents check`) enforces it on
-//! every file and reports this code. Two shipped conventions govern their
-//! own folders and are exempt: `Docket Filings/` keeps the docket names
-//! (`DKT NNNN - <title>.pdf`, and the older `di-…` form), and
-//! `documents/invoices/` keeps `INV-<digits>.<ext>`.
+//! every file and reports this code.
 
 use chrono::NaiveDate;
 
@@ -47,6 +44,26 @@ pub fn is_conventional_filename(filename: &str) -> bool {
     }
     let name = name.strip_suffix("_signed").unwrap_or(name);
     is_hyphenated_name(name)
+}
+
+/// True when `filename` is Markdown work product: an `.md` or `.markdown`
+/// file. A memo or draft is the lawyer's editable source, not a filed
+/// document, so the convention does not govern it.
+#[must_use]
+pub fn is_markdown_work_product(filename: &str) -> bool {
+    matches!(
+        filename.rsplit_once('.').map(|(_, extension)| extension),
+        Some("md" | "markdown")
+    )
+}
+
+/// True when `dir_name` carries the date itself — `2026-09-05` or
+/// `2026.09.05` — as exhibit and discovery folders do. A file inside one
+/// is dated by its folder; the convention does not ask for the date twice.
+#[must_use]
+pub fn is_date_named_directory(dir_name: &str) -> bool {
+    NaiveDate::parse_from_str(dir_name, "%Y-%m-%d").is_ok()
+        || NaiveDate::parse_from_str(dir_name, "%Y.%m.%d").is_ok()
 }
 
 /// True when `name` is a non-empty run of lowercase letters and digits
@@ -153,7 +170,10 @@ pub fn finding_message(filename: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{finding_message, is_conventional_filename, proposed_filename};
+    use super::{
+        finding_message, is_conventional_filename, is_date_named_directory,
+        is_markdown_work_product, proposed_filename,
+    };
 
     #[test]
     fn accepts_the_conventional_shape() {
@@ -260,5 +280,25 @@ mod tests {
             message.contains("2026.10.12_complaint-annulment.pdf"),
             "{message}"
         );
+    }
+
+    #[test]
+    fn markdown_work_product_is_not_a_filed_document() {
+        assert!(is_markdown_work_product("memo.md"));
+        assert!(is_markdown_work_product("agreement.markdown"));
+        assert!(!is_markdown_work_product("memo.txt"));
+        assert!(!is_markdown_work_product(
+            "2026.10.12_complaint-annulment.pdf"
+        ));
+        assert!(!is_markdown_work_product("no-extension"));
+    }
+
+    #[test]
+    fn a_date_named_directory_dates_its_own_files() {
+        assert!(is_date_named_directory("2026-09-05"));
+        assert!(is_date_named_directory("2026.09.05"));
+        assert!(!is_date_named_directory("exhibits"));
+        assert!(!is_date_named_directory("2026-13-05"));
+        assert!(!is_date_named_directory("2026-09-05-morning"));
     }
 }

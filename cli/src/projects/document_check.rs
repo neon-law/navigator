@@ -1054,11 +1054,13 @@ pub(crate) fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>
         }
         // A document's filename follows `YYYY.MM.DD_name.ext` (LAW-196), so
         // the matter folder sorts chronologically and an agent never guesses
-        // a name or a date. Two shipped conventions govern their own folders
-        // and are exempt: docket ingest's names under `Docket Filings/`
-        // (`DKT NNNN - <title>.pdf`, and the older `di-…` form), and the
-        // `INV-<digits>` invoices the check above; an Authority sidecar is
-        // metadata, not a document.
+        // a name or a date. Names that already carry their own date or
+        // convention are exempt: docket ingest's names under `Docket
+        // Filings/` (`DKT NNNN - <title>.pdf`, and the older `di-…` form),
+        // the `INV-<digits>` invoices the check above, an Authority sidecar
+        // (metadata, not a document), Markdown work product (the lawyer's
+        // editable source), and a file inside a date-named folder, whose
+        // folder already dates it.
         if let Some(message) = document_filename_finding(relative, &path, &file_name) {
             errors.push(CheckFailure { location, message });
             continue;
@@ -1083,7 +1085,8 @@ pub(crate) fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>
 /// The filename finding for a file at `path`, at `relative` below a
 /// documents tree: `None` when the name is one of the shipped folder
 /// conventions (docket ingest's names under `Docket Filings/`, the
-/// `INV-<digits>` invoices, an Authority sidecar) or already follows the
+/// `INV-<digits>` invoices, an Authority sidecar), is Markdown work
+/// product, sits in a date-named folder, or already follows the
 /// `YYYY.MM.DD_name.ext` convention (C004); the message naming the
 /// convention otherwise. Shared by the document walk and the gate's
 /// name-only pass.
@@ -1094,9 +1097,16 @@ pub(crate) fn document_filename_finding(
 ) -> Option<String> {
     let is_docket_filing = crate::document_layout::matter_folder_of(relative)
         == Some(store::document_pointers::MatterFolder::DocketFilings);
+    let is_in_date_named_folder = relative
+        .parent()
+        .and_then(std::path::Path::file_name)
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(rules::c004::is_date_named_directory);
     if is_docket_filing
         || crate::document_sync::is_invoice_capture(relative)
         || crate::document_sync::is_authority_sidecar_path(path)
+        || rules::c004::is_markdown_work_product(file_name)
+        || is_in_date_named_folder
         || rules::c004::is_conventional_filename(file_name)
     {
         return None;

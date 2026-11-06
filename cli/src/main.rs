@@ -7377,6 +7377,20 @@ fn document_filename_pass(dir: &std::path::Path) -> std::io::Result<Vec<GateErro
             let Ok(relative) = path.strip_prefix(&documents) else {
                 continue;
             };
+            // Bytes a pointer already records — a sibling legacy pointer,
+            // or the `blobs/` pointer the blobs/ layout keeps for the same
+            // document — are the materialization of a named document, not
+            // a new file to name; the pointer pass holds that name.
+            let pointer = |base: &std::path::Path| {
+                let mut pointer = base.join(relative).into_os_string();
+                pointer.push(format!(".{}", crate::document_sync::POINTER_EXTENSION));
+                std::path::PathBuf::from(pointer)
+            };
+            if pointer(&documents).exists()
+                || pointer(&dir.join(crate::document_sync::POINTER_DIRECTORY)).exists()
+            {
+                continue;
+            }
             let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
