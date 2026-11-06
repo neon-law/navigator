@@ -89,6 +89,14 @@ const DRAFT_PIN_BACKFILL: &str = "\
     UPDATE notation SET template_source_commit_sha = template_id.source_commit_sha \
     WHERE template_source_commit_sha IS NONE AND template_id.source_commit_sha IS NOT NONE;";
 
+/// Categories follow the stored hearing role before internal authority.
+/// An ambiguous date keeps NONE for lawyer review; no stored choice changes.
+const DEADLINE_CATEGORY_BACKFILL: &str = "\
+    UPDATE project_deadlines SET category = 'hearing' \
+    WHERE category IS NONE AND calendar_role = 'hearing'; \
+    UPDATE project_deadlines SET category = 'internal' \
+    WHERE category IS NONE AND authority_kind = 'internal';";
+
 const SUMMARY_APPROVAL_PROJECT_BACKFILL: &str = "\
     UPDATE summary_sender_approval SET status = 'revoked', updated_at = time::now() \
     WHERE project_id IS NONE AND status = 'approved';";
@@ -808,6 +816,10 @@ pub async fn apply(db: &SurrealDb) -> Result<(), SchemaError> {
         .and_then(surrealdb::IndexedResults::check)
         .map_err(SchemaError::Apply)?;
     db.query(SUMMARY_APPROVAL_PROJECT_BACKFILL)
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(SchemaError::Apply)?;
+    db.query(DEADLINE_CATEGORY_BACKFILL)
         .await
         .and_then(surrealdb::IndexedResults::check)
         .map_err(SchemaError::Apply)?;

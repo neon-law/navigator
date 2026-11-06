@@ -4125,3 +4125,13 @@ ALTER TABLE stage_definition ADD COLUMN default_win_at_trial_bps INTEGER CHECK (
 ALTER TABLE stage_definition ADD COLUMN default_settle_bps INTEGER CHECK (default_settle_bps BETWEEN 0 AND 10000);
 ALTER TABLE stage_definition ADD COLUMN default_lose_bps INTEGER CHECK (default_lose_bps BETWEEN 0 AND 10000);
 ALTER TABLE stage_definition ADD CONSTRAINT stage_definition_default_odds CHECK ((default_win_at_trial_bps IS NULL AND default_settle_bps IS NULL AND default_lose_bps IS NULL) OR (default_win_at_trial_bps IS NOT NULL AND default_settle_bps IS NOT NULL AND default_lose_bps IS NOT NULL AND default_win_at_trial_bps + default_settle_bps + default_lose_bps = 10000));
+
+-- Migration: 20261106120000_backfill_deadline_category.sql
+-- Recover only categories determined by the stored facts. A hearing role
+-- wins over internal authority; court and discovery require lawyer review.
+DO $$
+BEGIN
+UPDATE project_deadlines
+SET category = CASE WHEN calendar_role = 'hearing' THEN 'hearing' ELSE 'internal' END
+WHERE category IS NULL AND (calendar_role = 'hearing' OR authority_kind = 'internal');
+END $$;

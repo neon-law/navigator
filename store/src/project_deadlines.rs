@@ -854,6 +854,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_null_category_is_refused_without_changing_the_deadline() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let before = create(&surreal, &sample(project_id)).await.unwrap();
+        let attempted = surreal
+            .query("UPDATE $id SET category = NULL")
+            .bind((
+                "id",
+                crate::surreal::record_id("project_deadlines", before.id),
+            ))
+            .await
+            .and_then(surrealdb::IndexedResults::check);
+        assert!(
+            attempted.is_err(),
+            "a missing optional category is NONE, not NULL"
+        );
+        assert_eq!(
+            find(&surreal, project_id, before.id).await.unwrap(),
+            Some(before)
+        );
+    }
+
+    #[tokio::test]
+    async fn applying_recovers_only_unambiguous_missing_categories() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let mut ids = Vec::new();
+        for (role, authority, category) in [
+            ("hearing", "internal", Some("hearing")),
+            ("firm", "internal", Some("internal")),
+            ("opponent", "court_rule", None),
+            ("hearing", "internal", Some("discovery")),
+        ] {
+            let mut input = sample(project_id);
+            input.calendar_role = role.into();
+            input.authority_kind = authority.into();
+            input.category = Some(category.unwrap_or("court").into());
+            let row = create(&surreal, &input).await.unwrap();
+            if category != Some("discovery") {
+                surreal
+                    .query("UPDATE $id UNSET category")
+                    .bind(("id", crate::surreal::record_id("project_deadlines", row.id)))
+                    .await
+                    .unwrap()
+                    .check()
+                    .unwrap();
+            }
+            let historical = find(&surreal, project_id, row.id).await.unwrap().unwrap();
+            ids.push((historical, category));
+        }
+        for _ in 0..2 {
+            crate::schema::apply(&surreal).await.unwrap();
+            for (before, expected) in &ids {
+                let after = find(&surreal, project_id, before.id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(after.category.as_deref(), *expected);
+                assert_eq!(after.due_at, before.due_at);
+                assert_eq!(after.authority, before.authority);
+                assert_eq!(after.status, before.status);
+                assert_eq!(after.owner_person_id, before.owner_person_id);
+                assert_eq!(after.replay_key, before.replay_key);
+                assert_eq!(after.inserted_at, before.inserted_at);
+                assert_eq!(after.updated_at, before.updated_at);
+                assert_eq!(after.calendar_sequence, before.calendar_sequence);
+                if before.category.is_none() && after.category.is_some() {
+                    assert_ne!(
+                        crate::deadline_calendar::body_sha(before, "synthetic", None),
+                        crate::deadline_calendar::body_sha(&after, "synthetic", None),
+                        "the existing mirror detects the repaired color without a timestamp change"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn a_historical_row_without_a_category_reads_and_updates() {
         let surreal = mem_surreal().await;
         let project_id = project(&surreal).await;

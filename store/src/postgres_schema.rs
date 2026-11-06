@@ -1463,6 +1463,10 @@ mod tests {
                 "20261106030000_add_stage_default_odds.sql",
                 include_str!("../postgres/migrations/20261106030000_add_stage_default_odds.sql"),
             ),
+            (
+                "20261106120000_backfill_deadline_category.sql",
+                include_str!("../postgres/migrations/20261106120000_backfill_deadline_category.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

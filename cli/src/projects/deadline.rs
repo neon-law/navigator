@@ -51,12 +51,15 @@ pub(super) async fn call(request: reqwest::RequestBuilder, action: &str) -> Resu
     serde_json::from_str(&body).context("parse deadline response")
 }
 
-fn annotate_visibility(row: &mut Value) {
+fn annotate_row(row: &mut Value) {
     if let Some(rows) = row.as_array_mut() {
         for row in rows {
-            annotate_visibility(row);
+            annotate_row(row);
         }
     } else if let Some(object) = row.as_object_mut() {
+        if let Some(category) = object.get("category") {
+            object.insert("category_review_required".into(), json!(category.is_null()));
+        }
         if let Some(lead) = object.get("client_lead_days") {
             let visibility = if lead.is_null() { "internal" } else { "client" };
             object.insert("visibility".into(), json!(visibility));
@@ -67,7 +70,7 @@ fn annotate_visibility(row: &mut Value) {
 pub(super) fn finish(result: Result<Value>) -> ExitCode {
     match result {
         Ok(mut row) => {
-            annotate_visibility(&mut row);
+            annotate_row(&mut row);
             println!("{row}");
             ExitCode::SUCCESS
         }
@@ -472,7 +475,7 @@ async fn post_transition(
 
 #[cfg(test)]
 mod tests {
-    use super::{annotate_visibility, apply_visibility, export_row, finish_write, post_transition};
+    use super::{annotate_row, apply_visibility, export_row, finish_write, post_transition};
     use uuid::Uuid;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -552,7 +555,7 @@ mod tests {
         )
         .unwrap();
         assert!(body["client_lead_days"].is_null());
-        annotate_visibility(&mut body);
+        annotate_row(&mut body);
         assert_eq!(body["visibility"], "internal");
         assert!(
             apply_visibility(body.as_object_mut().unwrap(), Some("client"), None, false).is_err()
@@ -565,7 +568,7 @@ mod tests {
             true,
         )
         .unwrap();
-        annotate_visibility(&mut client);
+        annotate_row(&mut client);
         assert_eq!(client["visibility"], "client");
         apply_visibility(client.as_object_mut().unwrap(), None, Some(3), true).unwrap();
         assert!(client["client_lead_days"].is_null());
