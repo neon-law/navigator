@@ -408,6 +408,7 @@ pub async fn get_matter_page() -> Result<MatterPageView, ServerFnError> {
             document_on_page: sections.contains(&rules::dashboard::Section::NotationDocument),
             side: side_filter(&query),
             discovery: super::discovery::discovery_filter(&query),
+            viewer_person_id: person_id,
         },
     )
     .await?;
@@ -486,6 +487,8 @@ struct PageAddress {
     /// link to their paragraphs.
     document_on_page: bool,
     discovery: super::DiscoveryFilter,
+    /// The signed-in Person, whom firm work product is read as.
+    viewer_person_id: Option<uuid::Uuid>,
 }
 
 /// Who is on the matter: the client Entity's name and each participant as
@@ -646,6 +649,8 @@ async fn load_context(
         cx.graph = super::graph::derive::load(surreal, project)
             .await
             .map_err(ServerFnError::new)?;
+        cx.outcome_projection =
+            load_outcome_projection(surreal, project.id, address.viewer_person_id).await;
     }
     super::instruments::load_sections(
         surreal,
@@ -660,6 +665,36 @@ async fn load_context(
     .await
     .map_err(ServerFnError::new)?;
     Ok(cx)
+}
+
+/// The matter's projected profit, read as the signed-in lawyer. A store
+/// that cannot answer marks the section unavailable rather than failing the
+/// whole page; a reader the store does not count as firm-side sees the empty
+/// state.
+#[cfg(feature = "server")]
+async fn load_outcome_projection(
+    surreal: &store::surreal::SurrealDb,
+    project_id: uuid::Uuid,
+    viewer: Option<uuid::Uuid>,
+) -> super::OutcomeProjectionView {
+    let unavailable = super::OutcomeProjectionView {
+        unavailable: true,
+        ..super::OutcomeProjectionView::default()
+    };
+    let Some(viewer) = viewer else {
+        return super::OutcomeProjectionView::default();
+    };
+    let Ok(pg) = store::postgres::PostgresDb::from_env().await else {
+        return unavailable;
+    };
+    let today = chrono::Utc::now().date_naive();
+    match store::matter_projections::for_project(surreal, &pg, viewer, project_id, today).await {
+        Ok(projection) => super::outcome_projection::derive::view(&projection),
+        Err(store::matter_projections::MatterProjectionError::NotFirmSide) => {
+            super::OutcomeProjectionView::default()
+        }
+        Err(_) => unavailable,
+    }
 }
 
 /// The caption, the timeline, its fact strip and key dates, the deadline

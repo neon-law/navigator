@@ -28,6 +28,7 @@ pub mod estate;
 pub mod evidence;
 pub mod graph;
 pub mod notations;
+pub mod outcome_projection;
 pub mod page;
 pub mod records;
 pub mod timeline;
@@ -41,6 +42,7 @@ pub use engagement::{EngagementLetterView, LetterDocument, PageDraft};
 pub use evidence::{EvidenceClaim, EvidenceExhibit, EvidenceIndexSection, EvidenceIndexView};
 pub use graph::{GraphEdge, GraphNode, GraphView};
 pub use notations::{ChecklistView, DocumentState, NotationDocumentView, NotationListRow};
+pub use outcome_projection::{OutcomeBar, OutcomeProjectionSection, OutcomeProjectionView};
 
 pub use records::{DeadlineCard, ReceiptRow, RosterGroup, RosterView};
 
@@ -194,6 +196,7 @@ pub enum SectionView {
     RuleClocks(Vec<SectionRow>),
     PathChooser(Vec<SectionRow>),
     EligibilityChecklist(Vec<SectionRow>),
+    OutcomeProjection(OutcomeProjectionView),
 }
 
 impl SectionView {
@@ -259,6 +262,7 @@ impl SectionView {
             Self::RuleClocks(_) => "rule_clocks",
             Self::PathChooser(_) => "path_chooser",
             Self::EligibilityChecklist(_) => "eligibility_checklist",
+            Self::OutcomeProjection(_) => "outcome_projection",
         }
     }
 
@@ -324,6 +328,7 @@ impl SectionView {
             Self::RuleClocks(Vec::new()),
             Self::PathChooser(Vec::new()),
             Self::EligibilityChecklist(Vec::new()),
+            Self::OutcomeProjection(OutcomeProjectionView::default()),
         ]
     }
 }
@@ -676,6 +681,7 @@ pub fn SectionBody(view: SectionView) -> Element {
         SectionView::RuleClocks(rows) => rsx! { RuleClocksSection { rows } },
         SectionView::PathChooser(rows) => rsx! { PathChooserSection { rows } },
         SectionView::EligibilityChecklist(rows) => rsx! { EligibilityChecklistSection { rows } },
+        SectionView::OutcomeProjection(view) => rsx! { OutcomeProjectionSection { view } },
     }
 }
 
@@ -688,7 +694,7 @@ pub(crate) mod tests {
     /// wasm build of this crate never links `rules`; the server-side test
     /// below proves the two agree.
     fn rules_section_count() -> usize {
-        58
+        59
     }
 
     pub(super) fn render(view: SectionView) -> String {

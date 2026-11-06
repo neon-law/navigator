@@ -11951,6 +11951,7 @@
       "webapp/src/sections/graph.rs",
       "webapp/src/sections/instruments.rs",
       "webapp/src/sections/load.rs",
+      "webapp/src/sections/outcome_projection.rs",
       "webapp/src/sections/page.rs",
       "webapp/src/sections/timeline.rs",
       "webapp/src/team_home.rs",
