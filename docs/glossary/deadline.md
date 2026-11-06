@@ -59,7 +59,13 @@ defaults to `hearing` when the calendar role is `hearing` and `internal` when th
 otherwise it must be supplied rather than guessed, because `court` and `discovery` share authority kinds. The matter
 calendar colors each category from a fixed map — Tomato for `court`, Grape for `hearing`, Banana for `discovery`,
 Graphite for `internal` — so every matter calendar looks the same, and the map is Navigator's, never set per Project.
-The ICS feed renders no category; the color travels only with the mirrored Google Calendar event.
+The ICS feed renders no category; the color travels only with the mirrored Google Calendar event. The one-time migration
+recovers a missing category as `hearing` for a hearing role, then as `internal` for internal authority, without changing
+an explicit category or the Deadline's dates and revision. Later explicit clears remain unset. Rows whose category
+cannot be settled keep it unset.
+
+`navigator project deadline list` marks any unset category with `category_review_required: true`. After review, use
+`navigator project deadline update <id> --category <category>` to select the appropriate closed category.
 
 **Status.** `status` is `open`, `complete`, or `cancelled`. Complete and cancel are transitions. Neither deletes the
 row. Reopen restores a cancelled row to open and preserves its id, replay key, and stored fields. Reopening an open row

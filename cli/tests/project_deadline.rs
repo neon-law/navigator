@@ -197,6 +197,63 @@ async fn deadline_create_list_update_and_complete_print_the_stored_row() {
 }
 
 #[tokio::test]
+async fn deadline_list_identifies_unassigned_categories_without_changing_the_rows() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let project_id = Uuid::new_v4();
+    let credentials = root.path().join("credentials.json");
+    std::fs::write(
+        &credentials,
+        json!({"hosts": {host.clone(): {
+            "token": "test-token", "person_email": "lawyer@example.com", "role": "lawyer",
+            "expires_at": i64::MAX
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id":project_id, "code":"acme"}
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let rows = json!([
+        {"id": "unassigned", "category": null, "client_lead_days": null, "authority": "Synthetic rule"},
+        {"id": "assigned", "category": "discovery", "client_lead_days": 7, "authority": "Synthetic rule"}
+    ]);
+    Mock::given(method("GET"))
+        .and(path(format!("/app/api/projects/{project_id}/deadlines")))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&rows))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = run(
+        root.path(),
+        &credentials,
+        &host,
+        &["project", "deadline", "list"],
+    );
+    assert_eq!(result[0]["category_review_required"], true);
+    assert_eq!(result[1]["category_review_required"], false);
+    assert_eq!(result[0]["visibility"], "internal");
+    assert_eq!(result[1]["visibility"], "client");
+    for (index, row) in rows.as_array().unwrap().iter().enumerate() {
+        for (key, value) in row.as_object().unwrap() {
+            assert_eq!(
+                &result[index][key], value,
+                "the stored {key} survives listing"
+            );
+        }
+    }
+    server.verify().await;
+}
+
+#[tokio::test]
 async fn deadline_ics_prints_one_calendar_event_per_row() {
     let server = MockServer::start().await;
     let root = TempDir::new().unwrap();

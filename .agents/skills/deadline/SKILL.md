@@ -74,6 +74,8 @@ navigator project deadline create \
 - **Name what is due.** Creation requires `--title`, a short name for the pleading or response (at most 200 characters).
   Rows recorded without one show only the authority and role. `update <id> --title ""` clears it.
 - **Name the category.** `update <id> --category ""` clears it; an update without the flag keeps it.
+  Review any `category_review_required: true` row and choose its category with `update <id> --category <category>`.
+  Never infer `court` versus `discovery` from the authority kind alone.
 - **Explain the obligation.** `--description` adds optional detail; an empty one on update clears it.
 - **Choose visibility.** Creation defaults to `--visibility internal`. Selecting `internal` clears the client lead;
   `--visibility client` requires `--client-lead-days` and the store's internal lead. Updates preserve the current choice

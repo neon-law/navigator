@@ -54,6 +54,87 @@ async fn sandbox_credit_has_one_row_per_person_and_period() {
     db.close().await;
 }
 
+#[tokio::test]
+async fn deadline_category_upgrade_recovers_defaults_without_guessing_or_overwriting() {
+    let Some(db) = Database::new().await else {
+        return;
+    };
+    let before_recovery = store::postgres::embedded_migrator()
+        .iter()
+        .map(|migration| migration.version)
+        .filter(|version| *version < 20_261_106_120_000)
+        .max()
+        .unwrap();
+    db.pg.migrate_embedded(Some(before_recovery)).await.unwrap();
+    let project_id = Uuid::new_v4();
+    sqlx::query("WITH j AS (INSERT INTO jurisdiction (name) VALUES ('Synthetic Jurisdiction') RETURNING id), t AS (INSERT INTO entity_type (name) VALUES ('Synthetic Entity Type') RETURNING id), e AS (INSERT INTO entity (name, entity_type_id, jurisdiction_id) SELECT 'Synthetic Entity', t.id, j.id FROM t, j RETURNING id) INSERT INTO project (id, code, name, status, entity_id) SELECT $1, 'synthetic-category', 'Synthetic Project', 'open', id FROM e")
+        .bind(project_id).execute(&db.pool).await.unwrap();
+    let mut ids = Vec::new();
+    for (role, authority, explicit, expected) in [
+        ("hearing", "internal", None, Some("hearing")),
+        ("firm", "internal", None, Some("internal")),
+        ("opponent", "court_rule", None, None),
+        ("hearing", "internal", Some("discovery"), Some("discovery")),
+    ] {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO project_deadlines (id, project_id, due_at, authority_kind, authority, source, status, calendar_role, category, inserted_at, updated_at) VALUES ($1, $2, '2026-11-07T12:00:00Z', $3, 'Synthetic authority', 'lawyer', 'open', $4, $5, '2026-11-01T12:00:00Z', '2026-11-01T12:00:00Z')")
+            .bind(id).bind(project_id).bind(authority).bind(role).bind(explicit)
+            .execute(&db.pool).await.unwrap();
+        let preserved: serde_json::Value = sqlx::query_scalar(
+            "SELECT to_jsonb(d) - 'category' FROM project_deadlines d WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        ids.push((id, expected, preserved));
+    }
+    for _ in 0..2 {
+        db.pg.migrate_embedded(None).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../postgres/migrations/20261106120000_backfill_deadline_category.sql"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        for (id, expected, preserved) in &ids {
+            let row: (Option<String>, serde_json::Value) = sqlx::query_as(
+                "SELECT category, to_jsonb(d) - 'category' FROM project_deadlines d WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            assert_eq!(row.0.as_deref(), *expected);
+            assert_eq!(&row.1, preserved, "only the category may change");
+        }
+    }
+    let cleared_id = ids[0].0;
+    sqlx::query("UPDATE project_deadlines SET category = NULL WHERE id = $1")
+        .bind(cleared_id)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let cleared: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(d) FROM project_deadlines d WHERE id = $1")
+            .bind(cleared_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    db.pg.migrate_embedded(None).await.unwrap();
+    let after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(d) FROM project_deadlines d WHERE id = $1")
+            .bind(cleared_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        after, cleared,
+        "a recorded migration preserves a later explicit clear"
+    );
+    db.close().await;
+}
+
 impl Database {
     async fn new() -> Option<Self> {
         let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
