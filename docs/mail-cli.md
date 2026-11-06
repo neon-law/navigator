@@ -189,8 +189,9 @@ makes for a whole thread, but for a single message the lawyer points at:
 
 Like `file`, `parse` takes `--project` and `--host` (each defaulting to `navigator.yaml`). For a Gmail message it warns
 when the message's participants do not match the Project's client contact, and refuses a message that carries
-attachments before it writes anything; save it with `mail save` and parse the .eml instead. When Navigator refuses a
-filing, the error names the status and the server's `error` code and `message`.
+attachments before it writes anything; save it with `mail save` and parse the .eml instead. Known filing refusal codes
+include local guidance alongside the HTTP status. The CLI limits refusal parsing to 4 KiB and suppresses arbitrary
+response values; other refusals show only their HTTP status.
 
 ## Save a message's .eml copy
 
