@@ -1451,6 +1451,10 @@ mod tests {
                 "20261106000000_create_contingency_term.sql",
                 include_str!("../postgres/migrations/20261106000000_create_contingency_term.sql"),
             ),
+            (
+                "20261106010000_create_outcome_estimate.sql",
+                include_str!("../postgres/migrations/20261106010000_create_outcome_estimate.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

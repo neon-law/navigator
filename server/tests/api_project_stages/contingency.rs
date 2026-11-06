@@ -1,4 +1,5 @@
-//! The contingent-fee doors: a matter's dated Contingency Terms. Firm work
+//! The contingent-fee doors: a matter's dated Contingency Terms and its
+//! Outcome Estimates. Firm work
 //! product — a firm-side lawyer records and reads it, and everyone else gets
 //! the same refusals the stage doors give.
 
@@ -40,6 +41,22 @@ async fn fee_agreement(fx: &Fixture, project_id: Uuid) -> Uuid {
 
 fn terms_path(project_id: Uuid) -> String {
     format!("/app/api/projects/{project_id}/contingency-terms")
+}
+
+fn estimates_path(project_id: Uuid) -> String {
+    format!("/app/api/projects/{project_id}/outcome-estimates")
+}
+
+fn estimate(settle_bps: i64, lose_bps: i64) -> serde_json::Value {
+    json!({
+        "expected_resolution_on": "2027-06-30",
+        "note": "After the deposition",
+        "outcomes": {
+            "win_at_trial": {"probability_bps": 1500, "gross_recovery_cents": 40_000_000},
+            "settle": {"probability_bps": settle_bps, "gross_recovery_cents": 15_000_000},
+            "lose": {"probability_bps": lose_bps, "gross_recovery_cents": 0},
+        },
+    })
 }
 
 fn term(intake: Uuid, discovery: Uuid, notation: Uuid) -> serde_json::Value {
@@ -116,6 +133,25 @@ fn only_a_firm_side_lawyer_reaches_the_contingency_doors() {
         let notation = fee_agreement(&fx, fx.project_id).await;
         let path = terms_path(fx.project_id);
         let body = term(intake, discovery, notation);
+        let estimates = estimates_path(fx.project_id);
+        assert_eq!(
+            post(&fx, &estimates, Some(&fx.outsider), estimate(6000, 2500))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        for actor in [&fx.client, &fx.clerk] {
+            assert_eq!(
+                get(&fx, &estimates, Some(actor)).await.status(),
+                StatusCode::FORBIDDEN
+            );
+            assert_eq!(
+                post(&fx, &estimates, Some(actor), estimate(6000, 2500))
+                    .await
+                    .status(),
+                StatusCode::FORBIDDEN
+            );
+        }
 
         // Off the matter: the matter does not exist for them.
         assert_eq!(
@@ -146,5 +182,34 @@ fn only_a_firm_side_lawyer_reaches_the_contingency_doors() {
         // Nothing was written by any refused caller.
         let listed = body_json(get(&fx, &path, Some(&fx.lawyer)).await).await;
         assert_eq!(listed["terms"], json!([]));
+    });
+}
+
+#[test]
+fn the_newest_outcome_estimate_is_current_and_the_sum_is_checked() {
+    lane().block_on(async {
+        let Some(_) = stage_store().await else {
+            return;
+        };
+        let fx = build_fixture().await;
+        let path = estimates_path(fx.project_id);
+
+        let resp = post(&fx, &path, Some(&fx.lawyer), estimate(6000, 2400)).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "odds that do not sum to 10000 are refused"
+        );
+        let first = post(&fx, &path, Some(&fx.lawyer), estimate(6000, 2500)).await;
+        assert_eq!(first.status(), StatusCode::CREATED);
+        let first = body_json(first).await;
+        let second =
+            body_json(post(&fx, &path, Some(&fx.lawyer), estimate(5000, 3500)).await).await;
+        let listed = body_json(get(&fx, &path, Some(&fx.lawyer)).await).await;
+        assert_eq!(listed["estimates"], json!([first, second]));
+        assert_eq!(
+            listed["estimates"][1]["outcomes"]["settle"]["probability_bps"],
+            5000
+        );
     });
 }

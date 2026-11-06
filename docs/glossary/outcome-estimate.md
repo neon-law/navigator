@@ -25,3 +25,5 @@ figure replaces the estimate.
 
 An estimate is firm work product. Only a firm-side participant may record or read one. It never loads on a client or
 clerk [Lens](lens.md), and never on a [Litigation Pitch](litigation-pitch.md).
+
+- Vocabulary: [`store::outcome_estimates`](../../store/src/outcome_estimates.rs)

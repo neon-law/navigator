@@ -1,5 +1,5 @@
 //! The lawyer-only doors for a contingent matter's firm work product: its
-//! dated Contingency Terms.
+//! dated Contingency Terms and its Outcome Estimates.
 //!
 //! Route admission is lawyer tier (the `LawyerSession` extractor plus an
 //! embedded-Rego `route_allow` rule). The matter-scope question is asked once
@@ -15,7 +15,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use store::{contingency_terms, postgres_mirror};
+use store::{contingency_terms, outcome_estimates, postgres_mirror};
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
@@ -49,6 +49,22 @@ fn term_error(
         E::Invalid(_) | E::FeeAgreementNotOnMatter | E::StageNotInFirmVocabulary => {
             Ok(refused(StatusCode::UNPROCESSABLE_ENTITY))
         }
+        E::Database(_) => {
+            store_failed(operation, project_id, error);
+            Ok(refused(StatusCode::INTERNAL_SERVER_ERROR))
+        }
+    }
+}
+
+fn estimate_error(
+    error: &outcome_estimates::OutcomeEstimateError,
+    operation: &'static str,
+    project_id: Uuid,
+) -> Result<Response, ApiError> {
+    use outcome_estimates::OutcomeEstimateError as E;
+    match error {
+        E::NotFirmSide => Err(ApiError::NotFound),
+        E::Invalid(_) => Ok(refused(StatusCode::UNPROCESSABLE_ENTITY)),
         E::Database(_) => {
             store_failed(operation, project_id, error);
             Ok(refused(StatusCode::INTERNAL_SERVER_ERROR))
@@ -169,5 +185,42 @@ pub(crate) async fn record_term(
     match contingency_terms::record(&pg, project_id, actor, &input).await {
         Ok(term) => Ok((StatusCode::CREATED, Json(term)).into_response()),
         Err(e) => term_error(&e, "record_term", project_id),
+    }
+}
+
+/// `GET /app/api/projects/{id}/outcome-estimates` — every Outcome Estimate on
+/// the matter, oldest first; the newest is the current estimate.
+pub(crate) async fn list_estimates(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path(project_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let actor = firm_side_actor(&state, &session, project_id).await?;
+    let pg = match prepared_store(&state, "list_estimates", project_id, &[]).await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    match outcome_estimates::history(&pg, actor, project_id).await {
+        Ok(estimates) => Ok(Json(serde_json::json!({ "estimates": estimates })).into_response()),
+        Err(e) => estimate_error(&e, "list_estimates", project_id),
+    }
+}
+
+/// `POST /app/api/projects/{id}/outcome-estimates` — record a new estimate,
+/// which becomes the current one.
+pub(crate) async fn record_estimate(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path(project_id): Path<Uuid>,
+    Json(input): Json<outcome_estimates::NewOutcomeEstimate>,
+) -> Result<Response, ApiError> {
+    let actor = firm_side_actor(&state, &session, project_id).await?;
+    let pg = match prepared_store(&state, "record_estimate", project_id, &[]).await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    match outcome_estimates::record(&pg, project_id, actor, &input).await {
+        Ok(estimate) => Ok((StatusCode::CREATED, Json(estimate)).into_response()),
+        Err(e) => estimate_error(&e, "record_estimate", project_id),
     }
 }

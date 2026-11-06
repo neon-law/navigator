@@ -1188,6 +1188,20 @@ erDiagram
         json result
         boolean started
     }
+    outcome_estimate {
+        uuid author_person_id
+        datetime expected_resolution_on
+        uuid id
+        int lose_gross_recovery_cents
+        int lose_probability_bps
+        string note
+        uuid project_id
+        datetime recorded_at
+        int settle_gross_recovery_cents
+        int settle_probability_bps
+        int win_at_trial_gross_recovery_cents
+        int win_at_trial_probability_bps
+    }
     person {
         string apple_subject
         string email
@@ -1961,6 +1975,8 @@ erDiagram
     template }o--|| notation_package_template : references
     communication }o--|| notation_source : references
     notation }o--|| notation_source : references
+    person }o--|| outcome_estimate : references
+    project }o--|| outcome_estimate : references
     person }o--|| person_delegate : references
     person }o--|| person_external_identity : references
     firm }o--|| person_firm_role : references
