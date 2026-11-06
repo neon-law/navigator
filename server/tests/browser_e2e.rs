@@ -171,6 +171,10 @@ async fn markdown_mermaid_viewer_renders_and_preserves_source_on_failure() {
     c.goto(&format!("{}/glossary", base_url()))
         .await
         .expect("Markdown glossary page");
+    c.execute(
+        "const pre = document.createElement('pre'); const code = document.createElement('code'); code.className = 'language-mermaid'; code.textContent = 'graph TD\\nA --> B'; pre.append(code); document.body.append(pre);",
+        vec![],
+    ).await.expect("insert a Markdown diagram");
     let rendered = c
         .execute_async(
             r"const done = arguments[arguments.length - 1];
@@ -213,6 +217,93 @@ async fn markdown_mermaid_viewer_renders_and_preserves_source_on_failure() {
         .await
         .expect("malformed diagram keeps its source");
     assert_eq!(fallback, serde_json::json!(true));
+    c.close().await.expect("close browser");
+}
+
+/// Definitions remain readable while a reader chooses which schema to inspect.
+#[tokio::test]
+async fn glossary_table_definitions_open_with_the_keyboard_and_fit_on_mobile() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    c.goto(&format!("{}/glossary#cap-table-holding", base_url()))
+        .await
+        .expect("glossary term");
+    set_practice_viewport(&c, 1280, 844).await;
+    let summary = c
+        .find(Locator::Css("#cap-table-holding details summary"))
+        .await
+        .expect("table disclosure");
+    let closed = c.execute("return !document.querySelector('#cap-table-holding details').open && document.querySelectorAll('.glossary__preamble .language-mermaid').length === 0", vec![]).await.unwrap();
+    assert_eq!(closed, serde_json::json!(true));
+    std::fs::create_dir_all("/tmp/navigator-screenshots").expect("capture directory");
+    std::fs::write(
+        "/tmp/navigator-screenshots/glossary-closed.png",
+        c.screenshot().await.unwrap(),
+    )
+    .unwrap();
+    summary
+        .send_keys(&Key::Return.to_string())
+        .await
+        .expect("keyboard expand");
+    assert_eq!(
+        c.execute(
+            "return document.querySelector('#cap-table-holding details').open",
+            vec![]
+        )
+        .await
+        .unwrap(),
+        serde_json::json!(true)
+    );
+    std::fs::write(
+        "/tmp/navigator-screenshots/glossary-open.png",
+        c.screenshot().await.unwrap(),
+    )
+    .unwrap();
+    let sql = c
+        .find(Locator::Css("#cap-table-holding details code.language-sql"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(sql.contains("\"shares\" BIGINT NOT NULL"));
+    assert!(!sql.contains("CREATE TABLE \"case\""));
+    for width in [390, 1280] {
+        set_practice_viewport(&c, width, 844).await;
+        assert_eq!(
+            c.execute(
+                "return document.documentElement.scrollWidth <= window.innerWidth",
+                vec![]
+            )
+            .await
+            .unwrap(),
+            serde_json::json!(true),
+            "glossary overflow at {width}px"
+        );
+    }
+    summary
+        .send_keys(&Key::Return.to_string())
+        .await
+        .expect("keyboard collapse");
+    assert_eq!(
+        c.execute(
+            "return document.querySelector('#cap-table-holding details').open",
+            vec![]
+        )
+        .await
+        .unwrap(),
+        serde_json::json!(false)
+    );
+    c.find(Locator::Css(
+        ".glossary__preamble a[href='/public/glossary/postgres/ERD.svg']",
+    ))
+    .await
+    .expect("full diagram link");
+    c.goto(&format!("{}/public/glossary/postgres/ERD.svg", base_url()))
+        .await
+        .expect("diagram");
+    assert_eq!(c.execute("return document.documentElement.localName === 'svg' && document.documentElement.hasAttribute('data-source-sha256')", vec![]).await.unwrap(), serde_json::json!(true));
     c.close().await.expect("close browser");
 }
 

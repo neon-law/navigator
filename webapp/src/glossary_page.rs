@@ -27,7 +27,16 @@ pub const GLOSSARY_TITLE: &str = "Glossary";
 
 /// The `<meta description>` the page carries.
 const GLOSSARY_DESCRIPTION: &str =
-    "Neon Law Navigator's vocabulary, with a diagram of every SurrealDB table.";
+    "Neon Law Navigator's vocabulary, with table definitions and a link to the full database diagram.";
+
+/// One term's PostgreSQL declarations, selected from the canonical schema.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct GlossaryTable {
+    /// The canonical PostgreSQL table name.
+    pub name: String,
+    /// CREATE, ALTER, and index declarations in migration order.
+    pub sql: String,
+}
 
 /// One rendered term.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -40,6 +49,9 @@ pub struct GlossaryEntry {
     pub description: String,
     /// The rendered definition (already sanitized; NOT raw markdown).
     pub body_html: String,
+    /// Generated schema for the records this term defines.
+    #[serde(default)]
+    pub tables: Vec<GlossaryTable>,
 }
 
 /// Everything the page shows besides its chrome.
@@ -219,6 +231,18 @@ pub fn glossary_body(view: &GlossaryPageView) -> Element {
                                 class: "glossary__definition",
                                 dangerous_inner_html: "{entry.body_html}",
                             }
+                            for table in &entry.tables {
+                                details { class: "glossary__schema",
+                                    summary {
+                                        "Table definition "
+                                        code { "{table.name}" }
+                                    }
+                                    p { "PostgreSQL declarations in migration order." }
+                                    pre { tabindex: "0", "aria-label": "{table.name} SQL definition",
+                                        code { class: "language-sql", "{table.sql}" }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -253,6 +277,7 @@ mod tests {
                         title: (*title).to_string(),
                         description: "A short definition.".to_string(),
                         body_html: (*body_html).to_string(),
+                        tables: Vec::new(),
                     })
                     .collect(),
             },
@@ -347,9 +372,40 @@ mod tests {
     }
 
     #[test]
-    fn the_description_names_the_diagram() {
-        assert!(super::GLOSSARY_DESCRIPTION.contains("every SurrealDB table"));
-        assert!(!super::GLOSSARY_DESCRIPTION.contains("defined in one place"));
+    fn table_definitions_are_closed_and_keep_sql_as_text() {
+        let mut view = sample();
+        view.content.entries[0].tables.push(GlossaryTable {
+            name: "asset".into(),
+            sql: "CREATE TABLE asset (note TEXT DEFAULT '</code><script>alert(1)</script>');"
+                .into(),
+        });
+        let out = render(&view);
+        let disclosure = out
+            .split_once("<details")
+            .unwrap()
+            .1
+            .split_once("</details>")
+            .unwrap()
+            .0;
+        assert!(!disclosure.split_once('>').unwrap().0.contains("open"));
+        assert!(disclosure.contains("<summary>Table definition <code>asset</code></summary>"));
+        assert!(
+            !disclosure.contains("<script>"),
+            "SQL cannot inject an element"
+        );
+        assert!(
+            disclosure.contains("alert(1)"),
+            "the SQL text remains readable"
+        );
+        assert_eq!(
+            out.matches("<details").count(),
+            1,
+            "concepts have no empty disclosure"
+        );
+        assert!(
+            out.contains("id=\"asset\""),
+            "the term anchor stays outside the disclosure"
+        );
     }
 
     #[test]

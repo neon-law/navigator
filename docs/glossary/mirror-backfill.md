@@ -12,3 +12,5 @@ that only PostgreSQL holds, are left to the mirror's reconciliation and keep the
 invocation reports per-table drift counts and up to 50 divergent UUID keys; other key forms are counted only. Run
 `navigator ops postgres backfill`; see [`docs/postgres-tooling.md`](../postgres-tooling.md#mirror-backfill) and
 [`store::postgres_backfill`](../../store/src/postgres_backfill.rs).
+
+The table is `mirror_backfill_run`.

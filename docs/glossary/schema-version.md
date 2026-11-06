@@ -9,4 +9,4 @@ requests; see [PostgreSQL access and migrations](../postgres-tooling.md).
 
 The compatibility engine's version marker is described in [SurrealDB compatibility](../surreal-compatibility.md#schema).
 
-The table is `schema_version`.
+The SurrealDB compatibility table is `schema_version`.

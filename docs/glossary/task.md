@@ -17,3 +17,5 @@ carries no audit context, and the event log is immutable. This is the `project_c
 caller, keeps the record honest. **Storage.** `project_task` is PostgreSQL-native (`store/src/tasks.rs`) — a net-new
 table with no Surreal source. The Project must already be mirrored to PostgreSQL before it can hold Tasks. Schema:
 `store/postgres/migrations/20261030120000_create_project_task.sql`.
+
+The table is `project_task`.

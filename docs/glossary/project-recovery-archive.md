@@ -26,3 +26,5 @@ buckets, not one Project.
 - Tables: `project_archive_generation` and `project_archive_item` in
   [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 - Operations: [Project recovery archives](../project-recovery-archives.md)
+
+The table is `project_archive_generation`.

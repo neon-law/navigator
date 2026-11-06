@@ -8,3 +8,5 @@ A **Project Cost** is a third-party charge recorded against a [Project](project.
 was linked to a later invoice, or was resolved another way. Every cost names the bank transaction its money came from
 through its [Cost Source Reference](cost-source-reference.md). The record keeps its own audit history and never changes
 an invoice in Xero.
+
+The table is `project_costs`.

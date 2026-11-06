@@ -32,3 +32,5 @@ operator's own account; see [Forgejo beside Navigator](../forgejo-deployment.md#
 
 - Vocabulary: [`store::ssh_public_keys`](../../store/src/ssh_public_keys.rs) ·
   [`cloud::forgejo_user_keys`](../../cloud/src/forgejo_user_keys.rs)
+
+The table is `ssh_public_key`.

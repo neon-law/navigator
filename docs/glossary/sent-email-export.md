@@ -20,3 +20,5 @@ that outlives the PostgreSQL rows.
 - Schema: [`sent_email_export`](../../store/postgres/schema.sql)
 - Workflow: [`archives::sent_email_export`](../../archives/src/sent_email_export.rs)
 - Pipeline: [the email events pipeline](../email-events-pipeline.md#the-request-side-store)
+
+The table is `sent_email_export`.

@@ -11,3 +11,5 @@ firm default, taking the latest row effective on or before the date asked. [Time
 they were captured under, so edits here never reprice recorded work. Part of a [Fee Structure](fee-structure.md).
 
 - Vocabulary: [`store::attorney_rates`](../../store/src/attorney_rates.rs)
+
+The table is `attorney_rate`.

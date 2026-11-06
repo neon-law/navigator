@@ -18,3 +18,5 @@ A Matter Outcome is firm work product. Only a firm-side participant may record o
 client or clerk [Lens](lens.md).
 
 - Vocabulary: [`store::matter_outcomes`](../../store/src/matter_outcomes.rs)
+
+The table is `matter_outcome`.

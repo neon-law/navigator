@@ -10,7 +10,7 @@ copies are consolidated; other prose, supplied recipients, reply headers and att
 A matching standalone signature before other text requires review before Gmail access. Clearly quoted history and inline
 prose are preserved; an ambiguous body leaves the existing draft untouched.
 
-The block is stored as one `mail_signature` row per Person — see
+The table is `mail_signature`. The block is stored as one row per Person — see
 [`store::mail_signatures`](../../store/src/mail_signatures.rs) — and the attorney themself is the only writer. The draft
 command reads the row when the deployment's stores are reachable and falls back to `NAVIGATOR_GMAIL_SIGNATURE`,
 announced, otherwise. The row's `updated_at` names the revision a signed draft's provenance prints.

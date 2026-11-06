@@ -38,3 +38,5 @@ PostgreSQL table: `matter_billing_batch`.
 Schema: [`matter_billing_batch`](../../store/postgres/schema.sql).
 
 Vocabulary: [`store::billing_batches`](../../store/src/billing_batches.rs).
+
+The table is `matter_billing_batch`.

@@ -5,12 +5,11 @@ fn tables(schema: &str) -> BTreeSet<&str> {
     schema
         .lines()
         .filter_map(|line| {
-            let rest = line.trim().strip_prefix("DEFINE TABLE ")?;
-            let rest = rest
-                .strip_prefix("IF NOT EXISTS ")
-                .or_else(|| rest.strip_prefix("OVERWRITE "))
-                .unwrap_or(rest);
-            rest.split_whitespace().next()
+            let rest = line.trim().strip_prefix("CREATE TABLE ")?;
+            let rest = rest.strip_prefix("IF NOT EXISTS ").unwrap_or(rest);
+            rest.split_whitespace()
+                .next()
+                .map(|name| name.trim_matches('"'))
         })
         .collect()
 }
@@ -78,14 +77,16 @@ fn every_schema_table_has_exactly_one_glossary_definition() {
         .iter()
         .map(|(name, body)| (name.as_str(), body.as_str()))
         .collect();
-    let errors = coverage_errors(include_str!("../src/schema/navigator.surql"), &entries);
+    let schema = store::postgres_schema::canonical_schema();
+    let parsed = store::postgres_schema::parse_schema(schema).expect("canonical PostgreSQL schema");
+    assert_eq!(tables(schema), parsed.keys().map(String::as_str).collect());
+    let errors = coverage_errors(schema, &entries);
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 }
 
 #[test]
 fn gate_detects_new_tables_duplicate_definitions_and_stale_attributions() {
-    let schema =
-        "DEFINE TABLE IF NOT EXISTS matter SCHEMAFULL;\nDEFINE TABLE OVERWRITE token SCHEMAFULL;";
+    let schema = "CREATE TABLE matter (id UUID);\nCREATE TABLE \"token\" (id UUID);";
     assert_eq!(tables(schema), BTreeSet::from(["matter", "token"]));
     let errors = coverage_errors(
         schema,

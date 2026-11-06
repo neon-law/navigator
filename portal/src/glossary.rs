@@ -22,7 +22,9 @@ use std::sync::LazyLock;
 use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag, TagEnd};
 
 use store::glossary::{link_target, LinkTarget};
-use webapp::glossary_page::{GlossaryContent, GlossaryEntry};
+use webapp::glossary_page::{GlossaryContent, GlossaryEntry, GlossaryTable};
+
+mod schema;
 
 /// The box-arrow-up-right glyph [`webapp::components::IconName::BoxArrowUpRight`]
 /// draws. Inlined here because docs bodies are baked HTML, not Dioxus
@@ -36,35 +38,44 @@ const OFFSITE_ARROW: &str = concat!(
     "</svg>",
 );
 
-/// The PostgreSQL schema diagram the public page embeds. The viewer rejects a
-/// longer fence, so this stays at or under that limit.
-const SCHEMA_ERD: &str = include_str!("../../store/postgres/postgres-erd.mmd");
-const MERMAID_SOURCE_LIMIT: usize = 200_000;
-const _: () = assert!(SCHEMA_ERD.len() <= MERMAID_SOURCE_LIMIT);
-
-/// The opening a reader sees, plus the schema diagram.
+/// The opening a reader sees, with the full diagram available separately.
 fn published_preamble() -> String {
     let mut markdown = store::glossary::preamble().trim_end().to_string();
-    markdown.push_str("\n\n```mermaid\n");
-    markdown.push_str(SCHEMA_ERD.trim_end());
-    markdown.push_str("\n```\n");
+    markdown.push_str(
+        "\n\n[View the full database diagram (SVG)](/public/glossary/postgres/ERD.svg).\n",
+    );
     markdown
 }
 
 /// The rendered glossary, built once from the embedded terms.
 #[must_use]
 pub fn content() -> &'static GlossaryContent {
-    static CONTENT: LazyLock<GlossaryContent> = LazyLock::new(|| GlossaryContent {
-        preamble_html: render_markdown(&published_preamble()),
-        entries: store::glossary::terms()
-            .iter()
-            .map(|term| GlossaryEntry {
-                slug: term.slug.clone(),
-                title: term.title.clone(),
-                description: term.description.clone(),
-                body_html: render_markdown(&term.body),
-            })
-            .collect(),
+    static CONTENT: LazyLock<GlossaryContent> = LazyLock::new(|| {
+        let tables = schema::table_sql(store::postgres_schema::canonical_schema());
+        GlossaryContent {
+            preamble_html: render_markdown(&published_preamble()),
+            entries: store::glossary::terms()
+                .iter()
+                .map(|term| GlossaryEntry {
+                    slug: term.slug.clone(),
+                    title: term.title.clone(),
+                    description: term.description.clone(),
+                    body_html: render_markdown(&term.body),
+                    tables: term
+                        .body
+                        .lines()
+                        .filter_map(|line| {
+                            let rest = line.strip_prefix("The table is `")?;
+                            let (name, _) = rest.split_once("`.")?;
+                            tables.get(name).map(|sql| GlossaryTable {
+                                name: name.to_string(),
+                                sql: sql.clone(),
+                            })
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
     });
     &CONTENT
 }
@@ -266,7 +277,7 @@ fn heading_text(rest: &[Event]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{content, is_off_site, rewrite_link, strip_md_label};
+    use super::{content, is_off_site, rewrite_link, schema, strip_md_label};
 
     fn at_release(kind: &str, path: &str) -> String {
         format!(
@@ -393,21 +404,10 @@ mod tests {
                 .contains("store/postgres/schema.sql"),
             "the opening links the PostgreSQL model"
         );
-        assert!(
-            content()
-                .preamble_html
-                .contains("class=\"language-mermaid\""),
-            "the opening embeds the schema diagram"
-        );
-        assert!(
-            content().preamble_html.contains("erDiagram"),
-            "the embedded diagram is the entity-relationship diagram"
-        );
-        assert_eq!(
-            super::SCHEMA_ERD,
-            store::postgres_schema::render_erd().expect("PostgreSQL schema renders"),
-            "the glossary diagram must match the PostgreSQL model"
-        );
+        assert!(content()
+            .preamble_html
+            .contains("/public/glossary/postgres/ERD.svg"));
+        assert!(!content().preamble_html.contains("language-mermaid"));
         assert!(
             !content().preamble_html.contains("defined in one place"),
             "the opening states the vocabulary without restating the page"
@@ -472,6 +472,49 @@ mod tests {
         assert!(
             !html.contains("href=\"#matter\" target=\"_blank\""),
             "an in-page anchor must not open a new tab"
+        );
+    }
+
+    #[test]
+    fn each_stored_noun_gets_only_its_own_schema_and_concepts_stay_prose() {
+        let entries = &content().entries;
+        let holding = entries
+            .iter()
+            .find(|e| e.slug == "cap-table-holding")
+            .unwrap();
+        assert_eq!(holding.tables.len(), 1);
+        assert_eq!(holding.tables[0].name, "cap_table_holding");
+        assert!(holding.tables[0].sql.contains("\"shares\" BIGINT NOT NULL"));
+        assert!(!holding.tables[0].sql.contains("CREATE TABLE \"case\""));
+        assert!(entries
+            .iter()
+            .find(|e| e.slug == "cap-table")
+            .unwrap()
+            .tables
+            .is_empty());
+        let selected = schema::table_sql(store::postgres_schema::canonical_schema());
+        let parsed =
+            store::postgres_schema::parse_schema(store::postgres_schema::canonical_schema())
+                .unwrap();
+        assert_eq!(
+            selected.keys().collect::<Vec<_>>(),
+            parsed.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            entries.iter().map(|e| e.tables.len()).sum::<usize>(),
+            parsed.len()
+        );
+    }
+
+    #[test]
+    fn linked_svg_matches_the_current_canonical_diagram() {
+        let source = include_str!("../../store/postgres/postgres-erd.mmd");
+        assert_eq!(source, store::postgres_schema::render_erd().unwrap());
+        let svg = include_str!("../../server/public/glossary/postgres/ERD.svg");
+        let digest = store::assets::sha256_hex(source.as_bytes());
+        assert!(
+            svg.contains(&format!("data-source-sha256=\"{digest}\"")),
+            "regenerate with cargo run -p portal --example glossary_erd against a local ChromeDriver"
         );
     }
 }
