@@ -154,11 +154,15 @@ The last four leave the firm. Keep client identities and matter facts out of tho
 
 For a client email:
 
-* Run `navigator mail draft --body-file` to create an unsent draft of the substantive message body.
-* Add nothing else: do not add a complimentary close, typed name, title, bar admission, contact block, or signature.
-* The attorney reviews the complete draft in Gmail before any separate sending action.
-* The CLI strips the `--` signature delimiter and an exact trailing `NAVIGATOR_GMAIL_SIGNATURE`, but not other prose, so
-  inspect the draft.
+* Run `navigator mail draft --body-file` to create an unsent draft of the substantive message body. Do not paste a
+  signature from another message: the CLI adds the configured `NAVIGATOR_GMAIL_SIGNATURE`, including its confidentiality
+  notice, exactly once. Missing configuration is an error; do not invent signature text.
+* If the CLI reports an embedded signature, stop for attorney review. Preserve quoted history rather than stripping it
+  to force the draft through.
+* The attorney reviews the complete draft in Gmail, confirms one signature and sends it personally. Do not insert
+  another signature during review.
+* A `--draft-id` update replaces the complete draft. Supply every recipient, the thread and every attachment that must
+  remain; signature handling preserves those supplied headers and attachment bytes.
 * To file a received message into the matter's Communication log, run `navigator mail parse <gmail-web-url>` (the URL
   copied from the browser), `navigator mail parse <message.eml>`, or `navigator mail parse <document.pdf>` — the last
   uploads through the document lane. Filing is a record write only; it never sends or archives in Gmail.
