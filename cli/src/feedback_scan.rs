@@ -51,7 +51,7 @@ const PATTERNS: &[(&str, &str, &str)] = &[
 
 /// Scan `text` for personal or matter identifiers. `terms` are exact names the
 /// caller knows to be private (Project codes, client and counterparty names);
-/// they match case-insensitively on word boundaries.
+/// they match literally and case-insensitively, with boundaries at word edges.
 #[must_use]
 pub fn scan(text: &str, terms: &[String]) -> Vec<Finding> {
     let mut found = Vec::new();
@@ -59,10 +59,25 @@ pub fn scan(text: &str, terms: &[String]) -> Vec<Finding> {
         .iter()
         .filter_map(|(k, p, re)| Regex::new(re).ok().map(|r| (*k, *p, r)))
         .collect();
+    let starts_word = Regex::new(r"^\w").ok();
+    let ends_word = Regex::new(r"\w$").ok();
     let named: Vec<Regex> = terms
         .iter()
-        .filter(|t| !t.trim().is_empty())
-        .filter_map(|t| Regex::new(&format!(r"(?i)\b{}\b", regex::escape(t.trim()))).ok())
+        .map(|term| term.trim())
+        .filter(|term| !term.is_empty())
+        .filter_map(|term| {
+            let start = if starts_word.as_ref().is_some_and(|re| re.is_match(term)) {
+                r"\b"
+            } else {
+                ""
+            };
+            let end = if ends_word.as_ref().is_some_and(|re| re.is_match(term)) {
+                r"\b"
+            } else {
+                ""
+            };
+            Regex::new(&format!(r"(?i){start}{}{end}", regex::escape(term))).ok()
+        })
         .collect();
     for (index, line) in text.lines().enumerate() {
         for (kind, placeholder, re) in &generic {
@@ -114,6 +129,29 @@ mod tests {
     fn hex_ids_and_street_addresses_are_refused() {
         assert!(!scan("tx 0x9f86d081884c7d659a2feaa0c55ad015a3bf4f1b", &[]).is_empty());
         assert!(!scan("mail goes to 1234 Main Street", &[]).is_empty());
+    }
+
+    #[test]
+    fn private_literal_terms_keep_punctuation_and_match_case_insensitively() {
+        for (term, draft) in [
+            (
+                "Synthetic Widget Company, Inc.",
+                "Synthetic Widget Company, Inc. reports a command failure.",
+            ),
+            (
+                "Synthetic Widget Company, Inc.",
+                "synthetic widget company, inc. reports a command failure.",
+            ),
+            (
+                "https://private.example/",
+                "see https://private.example/path for the failure",
+            ),
+            ("(private-id)", "identifier (private-id) was refused"),
+            ("12-3456789", "the EIN 12-3456789 is private"),
+        ] {
+            assert!(!scan(draft, &[term.into()]).is_empty());
+        }
+        assert!(scan("embeddedprivatenameword", &["privatename".into()]).is_empty());
     }
 
     #[test]

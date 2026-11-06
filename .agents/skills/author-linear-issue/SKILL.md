@@ -13,8 +13,10 @@ Read [`docs/agent-workflows.md`](../../../docs/agent-workflows.md),
 - Keep current truth in the description and the decision trail in dated comments.
 - Use only abstract or synthetic examples. Linear never receives client data, legal files, real contact details, or
   production identifiers.
-- Before filing, run `navigator project feedback-check --project <Project code>` on the draft title and body (repeat
-  `--project` for each matter the draft names); file the issue only when the check is clean.
+- Before filing, run `navigator project feedback-check --all-projects` on the draft title and body. It resolves every
+  Project visible through the caller's firm-side participation, including attached Person and Entity identifiers,
+  through the site API; the draft stays local. Add `--term` for private names the store does not know. Refuse to file
+  when any read or the check fails. Show the checked text to the lawyer before filing.
 
 Use `triage-projects` for portfolio reconciliation and `implement-issue` for one existing issue that needs code. Use
 `triage-issue` only for an explicit plan-only request.

@@ -1046,6 +1046,10 @@ enum ProjectsCmd {
         /// for each matter in the draft.
         #[arg(long = "project")]
         projects: Vec<String>,
+        /// Resolve every Project visible through firm-side participation, by
+        /// stable id, including attached Person and Entity identifiers.
+        #[arg(long, conflicts_with = "projects")]
+        all_projects: bool,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -5739,8 +5743,18 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             file,
             terms,
             projects,
+            all_projects,
             host,
-        } => projects::feedback_check::run(file, &terms, &projects, host.host.as_deref()).await,
+        } => {
+            projects::feedback_check::run(
+                file,
+                &terms,
+                &projects,
+                all_projects,
+                host.host.as_deref(),
+            )
+            .await
+        }
         ProjectsCmd::Docket {
             action:
                 DocketCmd::Ingest {

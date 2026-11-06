@@ -2736,10 +2736,10 @@ fn canonical_document(base: &str) -> Value {
           "get": {
             "summary": "Read the identifiers a pre-filing PII check refuses",
             "description":
-              "The Project's code, its matter name, and every participant's name, mailbox, and \
-               phone. `navigator project feedback-check --project` scans a draft against them \
-               before it is filed in an outside tracker. Authorization: a firm-side participant \
-               on the Project; a client-side participant, a Clerk, or a caller with no \
+              "The Project's code and matter name, participating and referenced Person identities, \
+               and its client and referenced Entity identifiers. `navigator project feedback-check` \
+               scans the draft locally against them before external filing. Missing attached rows refuse \
+               the read. Authorization: a firm-side participant on the Project; a client-side participant, a Clerk, or a caller with no \
                participation → 404.",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
@@ -2747,10 +2747,11 @@ fn canonical_document(base: &str) -> Value {
             "responses": {
               "200": { "description": "The Project's private terms", "content": { "application/json": { "schema": {
                 "type": "object",
-                "required": ["code", "name", "participants"],
+                "required": ["code", "name", "participants", "identifiers"],
                 "properties": {
                   "code": { "type": "string" },
                   "name": { "type": "string" },
+                  "identifiers": { "type": "array", "items": { "type": "string" } },
                   "participants": { "type": "array", "items": {
                     "type": "object",
                     "required": ["name", "email"],
