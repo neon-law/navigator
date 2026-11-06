@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::scraper::adapter::NoticeKey;
-use crate::scraper::fetcher::{FetchResponse, HttpFetcher};
 
 /// Why a download could not be staged.
 #[derive(Debug, thiserror::Error)]
@@ -203,7 +202,6 @@ impl DownloadSink {
     /// # Errors
     ///
     /// When the part file cannot be written.
-    #[cfg_attr(not(test), allow(dead_code))] // adapters stream bytes through this
     pub(crate) fn extend(&mut self, bytes: &[u8]) -> Result<(), DownloadError> {
         std::io::Write::write_all(&mut self.file, bytes).map_err(|source| DownloadError::Io {
             path: self.part_path.clone(),
@@ -219,7 +217,6 @@ impl DownloadSink {
     /// # Errors
     ///
     /// When the part file cannot be truncated.
-    #[cfg_attr(not(test), allow(dead_code))] // adapters restart on a checksum mismatch
     pub(crate) fn restart(&mut self) -> Result<(), DownloadError> {
         self.file.set_len(0).map_err(|source| DownloadError::Io {
             path: self.part_path.clone(),
@@ -263,36 +260,6 @@ impl DownloadSink {
     }
 }
 
-/// Fetch `url` into `sink`, resuming: the first request carries no `Range`
-/// header, a resumed request carries `bytes=<offset>-`, and a server that
-/// answers a range request with a full `200` body discards the stale part
-/// and restarts. Adapter `download` implementations fill their sink through
-/// this helper.
-///
-/// # Errors
-///
-/// Fetch failures and staging I/O; see [`DownloadError`].
-#[cfg_attr(not(test), allow(dead_code))] // adapters fetch through this helper
-pub(crate) async fn fetch_into(
-    sink: &mut DownloadSink,
-    fetcher: &dyn HttpFetcher,
-    url: &str,
-) -> Result<(), DownloadError> {
-    let resume_offset = sink.resume_offset();
-    let request = crate::scraper::fetcher::FetchRequest {
-        url: url.to_owned(),
-        range_start: (resume_offset > 0).then_some(resume_offset),
-        headers: std::collections::BTreeMap::new(),
-    };
-    let FetchResponse { status, body } = fetcher.fetch(&request).await?;
-    // 206 Partial Content continues the staged bytes; anything else answers
-    // the whole document, so the stale part must go.
-    if resume_offset > 0 && status != 206 {
-        sink.restart()?;
-    }
-    sink.extend(&body)
-}
-
 /// The part/final file name for one notice key: a stable digest of the key
 /// itself, so court titles and entry numbers never reach the filesystem.
 pub(crate) fn staging_name(key: &NoticeKey) -> String {
@@ -332,12 +299,11 @@ fn read_chunks(file: &mut std::fs::File) -> Result<Vec<Vec<u8>>, DownloadError> 
 #[cfg(test)]
 mod tests {
     use super::{
-        fetch_into, hex_digest, staging_name, CompletedDownload, DownloadError, DownloadLedger,
-        DownloadSink,
+        hex_digest, staging_name, CompletedDownload, DownloadError, DownloadLedger, DownloadSink,
     };
     use crate::scraper::adapter::{NoticeKey, SiteKey};
     use crate::scraper::fetcher::{FetchRequest, FetchResponse};
-    use crate::scraper::testing::MockFetcher;
+    use crate::scraper::testing::{fetch_into, MockFetcher};
     use sha2::{Digest, Sha256};
     use std::path::PathBuf;
     use std::sync::Arc;

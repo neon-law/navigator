@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use crate::scraper::adapter::{AdapterError, NoticeQuery, NoticeRef, SiteAdapter, SiteKey};
 use crate::scraper::credentials::SiteLogin;
-use crate::scraper::download::{fetch_into, DownloadSink};
+use crate::scraper::download::{DownloadError, DownloadSink};
 use crate::scraper::fetcher::{FetchError, FetchRequest, FetchResponse, HttpFetcher};
+use crate::scraper::intake::{InboxIntake, IntakeError, IntakeReceipt, ScrapedDocument};
 use crate::scraper::retry::RetryClock;
 use crate::scraper::session::{BrowserSession, SessionError, SessionFactory};
 
@@ -416,4 +417,104 @@ pub(crate) async fn put_portal_secret(
     )
     .await
     .expect("provision the portal login secret");
+}
+
+/// Fetch `url` into `sink`, resuming: the first request carries no `Range`
+/// header, a resumed request carries `bytes=<offset>-`, and a server that
+/// answers a range request with a full `200` body discards the stale part
+/// and restarts. The scripted adapters' no-script download path fills its
+/// sink through this helper, so orchestration tests exercise the same
+/// resume semantics a production adapter gets from the sink.
+///
+/// # Errors
+///
+/// Fetch failures and staging I/O; see [`DownloadError`].
+pub(crate) async fn fetch_into(
+    sink: &mut DownloadSink,
+    fetcher: &dyn HttpFetcher,
+    url: &str,
+) -> Result<(), DownloadError> {
+    let resume_offset = sink.resume_offset();
+    let request = FetchRequest {
+        url: url.to_owned(),
+        range_start: (resume_offset > 0).then_some(resume_offset),
+        headers: std::collections::BTreeMap::new(),
+    };
+    let FetchResponse { status, body } = fetcher.fetch(&request).await?;
+    // 206 Partial Content continues the staged bytes; anything else answers
+    // the whole document, so the stale part must go.
+    if resume_offset > 0 && status != 206 {
+        sink.restart()?;
+    }
+    sink.extend(&body)
+}
+
+/// The intake double: records every document handed across the seam and can
+/// be scripted to reject transiently, so orchestration tests exercise the
+/// retry path without an inbox.
+#[derive(Debug, Default)]
+pub(crate) struct RecordingIntake {
+    received: Mutex<Vec<ScrapedDocument>>,
+    /// The first N `enqueue` calls fail with [`IntakeError::Transient`].
+    pub(crate) transient_failures_first: AtomicU32,
+    calls: AtomicU32,
+}
+
+impl RecordingIntake {
+    /// Snapshots, in enqueue order, everything the intake accepted.
+    #[must_use]
+    pub(crate) fn received(&self) -> Vec<ScrapedDocument> {
+        self.received.lock().expect("uncontended").clone()
+    }
+
+    #[must_use]
+    pub(crate) fn calls(&self) -> u32 {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    /// A double whose first `n` `enqueue` calls fail transiently, then
+    /// recover — for retry-path tests.
+    pub(crate) fn with_transient_failures_first(n: u32) -> Self {
+        Self {
+            received: Mutex::new(Vec::new()),
+            transient_failures_first: AtomicU32::new(n),
+            calls: AtomicU32::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl InboxIntake for RecordingIntake {
+    async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        let failures = self.transient_failures_first.load(Ordering::SeqCst);
+        if call < failures {
+            return Err(IntakeError::Transient {
+                detail: "the inbox is not answering (scripted)".to_owned(),
+            });
+        }
+        self.received
+            .lock()
+            .expect("uncontended")
+            .push(document.clone());
+        Ok(IntakeReceipt {
+            message_id: uuid::Uuid::now_v7(),
+            deduped: false,
+        })
+    }
+}
+
+/// An intake double that always fails with a transient error — for tests
+/// of the retry budget and of the boundary between staging and enqueue.
+#[derive(Debug, Default)]
+pub(crate) struct FailingIntake;
+
+#[async_trait::async_trait]
+impl InboxIntake for FailingIntake {
+    async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError> {
+        let _ = document;
+        Err(IntakeError::Transient {
+            detail: "the inbox service is restarting".to_owned(),
+        })
+    }
 }

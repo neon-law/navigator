@@ -101,7 +101,6 @@ impl LaSuperiorAdapter {
 
     /// The portal base this run was bound to.
     #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))] // tests assert the binding
     pub(crate) fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -408,9 +407,6 @@ struct CaseDetailsEnvelope {
 
 #[derive(Debug, serde::Deserialize)]
 struct CaseDetails {
-    #[serde(rename = "caseId")]
-    #[allow(dead_code)] // the envelope's identity; parsed for shape, not used
-    case_id: String,
     documents: Option<Vec<CourtDocument>>,
 }
 

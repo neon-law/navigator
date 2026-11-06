@@ -700,11 +700,8 @@ mod tests {
         project_scope_from_reference, record_reconcile, upsert, ProjectScopeRef, UpsertXeroInvoice,
     };
     use crate::surreal::SurrealDb;
+    use crate::test_support::seed_project_surreal as seed_project;
     use chrono::{Duration, TimeZone, Utc};
-
-    async fn seed_project(db: &SurrealDb, name: &str) -> uuid::Uuid {
-        crate::test_support::seed_project_surreal(db, name).await
-    }
 
     fn input(project_id: uuid::Uuid, xero_id: &str, cents: i64) -> UpsertXeroInvoice {
         UpsertXeroInvoice {

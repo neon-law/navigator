@@ -55,18 +55,6 @@ pub(crate) struct SiteLogin {
 }
 
 impl SiteLogin {
-    #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))] // adapters read these when logging in
-    pub(crate) fn username(&self) -> &str {
-        std::str::from_utf8(&self.username).unwrap_or("")
-    }
-
-    #[must_use]
-    #[cfg_attr(not(test), allow(dead_code))] // adapters read these when logging in
-    pub(crate) fn password(&self) -> &str {
-        std::str::from_utf8(&self.password).unwrap_or("")
-    }
-
     /// Fail fast on a mis-provisioned entry — before a browser opens and
     /// before a portal can lock the account out over bad submissions.
     ///
@@ -87,6 +75,22 @@ impl SiteLogin {
             });
         }
         Ok(())
+    }
+}
+// The credential accessors are test-only today: the registered adapters
+// hand the session hook the `SiteLogin` whole, and no adapter reads the
+// parts yet. When an authenticated flow lands, its accessors move back
+// into the production impl.
+#[cfg(test)]
+impl SiteLogin {
+    #[must_use]
+    pub(crate) fn username(&self) -> &str {
+        std::str::from_utf8(&self.username).unwrap_or("")
+    }
+
+    #[must_use]
+    pub(crate) fn password(&self) -> &str {
+        std::str::from_utf8(&self.password).unwrap_or("")
     }
 }
 

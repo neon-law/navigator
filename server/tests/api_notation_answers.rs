@@ -14,7 +14,6 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::seed;
@@ -28,7 +27,12 @@ const VALID_TEMPLATE: &str =
 fn amendment_template() -> String {
     VALID_TEMPLATE.replace("code: onboarding__letter", "code: amendment")
 }
-const KEY: &str = "api-notation-answers-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer_new_person;
 
 // Every case configures the process-wide repo root and commits through the
 // same filesystem-backed test forge. Keep that environment/filesystem seam
@@ -76,30 +80,6 @@ async fn build_app() -> Harness {
 
 async fn open_project(surreal: &store::surreal::SurrealDb) -> store::projects::Project {
     store::test_support::seed_project(surreal, "Matter").await
-}
-
-/// A `Bearer` header for a session of `role`, optionally a firm-side
-/// participant of `project`.
-async fn bearer(
-    surreal: &store::surreal::SurrealDb,
-    email: &str,
-    role: Role,
-    project: Option<uuid::Uuid>,
-) -> String {
-    let actor = store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(email, email, role),
-    )
-    .await
-    .unwrap();
-    if let Some(project_id) = project {
-        store::projects::add_participation(surreal, project_id, actor.id, "lawyer")
-            .await
-            .unwrap();
-    }
-    let mut s = SessionData::fresh("api-answer-sub", role);
-    s.person_id = Some(actor.id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 /// Open a notation on `project` (committing its template first) and return its
@@ -178,7 +158,7 @@ async fn client_is_403() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let (notation_id, code) = open_notation(&h, &project).await;
-    let client = bearer(&h.surreal, "client@example.com", Role::Client, None).await;
+    let client = bearer_new_person(&h.surreal, "client@example.com", Role::Client, None).await;
 
     let resp = post_answer(&h.app, Some(&client), notation_id, &code, "Aquarius Lumen").await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -191,7 +171,7 @@ async fn lawyer_outside_the_matter_scope_is_404() {
     let project = open_project(&h.surreal).await;
     let (notation_id, code) = open_notation(&h, &project).await;
     // Lawyer tier, but not a participant of this notation's matter.
-    let outsider = bearer(&h.surreal, "outsider@example.com", Role::Lawyer, None).await;
+    let outsider = bearer_new_person(&h.surreal, "outsider@example.com", Role::Lawyer, None).await;
 
     let resp = post_answer(
         &h.app,
@@ -210,11 +190,11 @@ async fn participant_lawyer_answers_the_step_and_gets_the_next() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let (notation_id, code) = open_notation(&h, &project).await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 
@@ -244,7 +224,7 @@ async fn admin_bypasses_scope_and_answers() {
     let project = open_project(&h.surreal).await;
     let (notation_id, code) = open_notation(&h, &project).await;
     // Admin does NOT participate; the scope check bypasses for admin.
-    let admin = bearer(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
 
     let resp = post_answer(&h.app, Some(&admin), notation_id, &code, "Aquarius Lumen").await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -256,11 +236,11 @@ async fn out_of_order_question_code_is_409() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let (notation_id, _code) = open_notation(&h, &project).await;
-    let lawyer = bearer(
+    let lawyer = bearer_new_person(
         &h.surreal,
         "acting-lawyer@example.com",
         Role::Lawyer,
-        Some(project.id),
+        Some((project.id, "lawyer")),
     )
     .await;
 

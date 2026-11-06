@@ -878,26 +878,6 @@ mod tests {
         }
     }
 
-    async fn seed_project(
-        db: &store::surreal::SurrealDb,
-        firm_id: Option<uuid::Uuid>,
-    ) -> uuid::Uuid {
-        store::projects::create(
-            db,
-            &store::projects::NewProject {
-                code: format!("triage-{}", uuid::Uuid::now_v7().simple()),
-                name: "Synthetic triage matter".into(),
-                status: "open".into(),
-                entity_id: store::test_support::seed_entity(db).await,
-                firm_id,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("seed the Project")
-        .id
-    }
-
     #[test]
     fn the_enabled_flag_accepts_only_booleans_and_blank_is_off() {
         let lookup = |value: &'static str| {
@@ -1121,9 +1101,24 @@ mod tests {
         .await
         .unwrap()
         .id;
-        let own = seed_project(&db, Some(firm_id)).await;
-        let foreign = seed_project(&db, Some(other_firm)).await;
-        let unowned = seed_project(&db, None).await;
+        let own = store::test_support::seed_project_on_firm(
+            &db,
+            Some(firm_id),
+            "Synthetic triage matter",
+        )
+        .await
+        .id;
+        let foreign = store::test_support::seed_project_on_firm(
+            &db,
+            Some(other_firm),
+            "Synthetic triage matter",
+        )
+        .await
+        .id;
+        let unowned =
+            store::test_support::seed_project_on_firm(&db, None, "Synthetic triage matter")
+                .await
+                .id;
 
         assert_eq!(
             super::validate_suggestion(&db, firm_id, None)

@@ -265,6 +265,9 @@ const PORTAL_ARCHETYPE_ROUTES: &[&str] = &[
     "/app/admin/clauses/governing_law",
     // A person detail page: a read view rather than a list or a form.
     "/app/admin/entities",
+    // The omnichannel inbox: a folder rail of filter navs beside a dense
+    // conversation table — a composition no other archetype carries.
+    "/app/inbox",
 ];
 
 /// The lawyer create forms, scoped to the form body.
@@ -800,6 +803,112 @@ async fn portal_and_lawyer_surfaces_pass_axe_wcag_a_and_aa() {
         for route in PORTAL_ARCHETYPE_ROUTES {
             assert_route_passes_axe(&c, route, PUBLIC_AXE_SCOPE, scheme).await;
         }
+        c.close().await.unwrap();
+    }
+}
+
+/// The inbox's reading pane: a selected row and a populated transcript are a
+/// different composition from the archetype audit's load state — aria-current
+/// on a table row, a second heading level inside the pane, and transcript
+/// links — so the selection interaction itself is audited, in both schemes.
+#[tokio::test]
+async fn the_inbox_reading_pane_passes_axe_wcag_a_and_aa() {
+    // The file's skip policy: probe the harness before touching the
+    // database, so an absent KIND cluster skips cleanly.
+    if new_client_or_skip_in_scheme(ColorScheme::Light)
+        .await
+        .is_none()
+    {
+        return;
+    }
+    let db = store::surreal::connect_from_env().await.unwrap();
+    let firm = store::firms::firm_id_for_brand_key(&db, "neon")
+        .await
+        .unwrap()
+        .unwrap();
+    let saved = store::inbox::ingest_inbound(
+        &db,
+        &store::inbox::IngestInbound {
+            raw_storage_key: None,
+            project_id: None,
+            firm_id: firm,
+            brand_key: Some("neon"),
+            interaction_type: Some("message"),
+            provider_post_id: None,
+            parent_provider_message_id: None,
+            visibility: Some("private"),
+            channel: "sms",
+            provider_account: "synthetic-receiving-account",
+            provider_message_id: &uuid::Uuid::now_v7().to_string(),
+            provider_thread_ref: None,
+            external_address: "synthetic-sender",
+            external_name: None,
+            subject: Some("Synthetic Inbox audit"),
+            body: "Synthetic inquiry for the reading-pane audit.",
+            source_page: None,
+            source_channel: Some("sms"),
+            matter_consent: false,
+            promotional_opt_in: false,
+            email_conversation_id: None,
+            attachments: Vec::new(),
+            occurred_at: "2026-10-10T12:00:00Z",
+        },
+    )
+    .await
+    .unwrap();
+
+    let row_link = format!("#inbox-row-{} a", saved.conversation_id);
+    for scheme in ColorScheme::both() {
+        let Some(c) = session_in_scheme(scheme, &base_url()).await else {
+            return;
+        };
+        login_as_lawyer(&c).await;
+        c.goto(&format!("{}/app/inbox", base_url())).await.unwrap();
+        c.wait()
+            .at_most(Duration::from_secs(10))
+            .for_element(Locator::Css(&row_link))
+            .await
+            .unwrap_or_else(|error| panic!("the seeded inbox row never rendered: {error}"));
+        // The local macOS driver can drop native input; activate the anchor
+        // through its DOM click, as the browser suite's harness does.
+        c.execute(
+            "document.querySelector(arguments[0]).click(); return true;",
+            vec![row_link.clone().into()],
+        )
+        .await
+        .unwrap();
+        c.wait()
+            .at_most(Duration::from_secs(10))
+            .for_element(Locator::Css("#inbox-pane .inbox-pane__thread"))
+            .await
+            .unwrap_or_else(|error| panic!("the reading pane never filled: {error}"));
+        let report = axe_report(&c, PUBLIC_AXE_SCOPE).await;
+        if !report.incomplete.is_empty() {
+            println!(
+                "axe could not decide {} check(s) within the inbox reading pane [{}]:\n  {}",
+                report.incomplete.len(),
+                scheme.label(),
+                report.incomplete.join("\n  "),
+            );
+        }
+        assert!(
+            report.violations.is_empty(),
+            "axe found {} WCAG A/AA violation(s) within the inbox reading pane [{}]:\n  {}",
+            report.violations.len(),
+            scheme.label(),
+            report.violations.join("\n  "),
+        );
+        assert!(
+            report.undecidable_contrast.is_empty(),
+            "in the inbox reading pane [{}], {} element(s) carry text over no \
+             declared background at all — axe found no opaque ancestor to measure \
+             against:\n  {}\n\
+             Give the element (or an ancestor) an opaque background in the theme's \
+             own tokens.",
+            scheme.label(),
+            report.undecidable_contrast.len(),
+            report.undecidable_contrast.join("\n  "),
+        );
         c.close().await.unwrap();
     }
 }

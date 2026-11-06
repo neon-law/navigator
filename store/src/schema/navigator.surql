@@ -2640,6 +2640,12 @@ DEFINE FIELD OVERWRITE promotional_opt_in ON inbox_conversation TYPE bool DEFAUL
 DEFINE FIELD OVERWRITE promotional_opt_out ON inbox_conversation TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE email_conversation_id ON inbox_conversation
     TYPE option<record<email_conversation>>;
+-- The Person the inbound email sender resolves to — written at ingest from
+-- primary or `person_mailbox` alias resolution, never by an address-book
+-- claim. Identity only: automation never writes relationship or entity_role
+-- edges from correspondence, and a lawyer- or clerk-tier sender never links
+-- as an inbound counterparty. See the `Inbox` glossary term.
+DEFINE FIELD OVERWRITE person_id ON inbox_conversation TYPE option<record<person>>;
 DEFINE FIELD OVERWRITE inserted_at ON inbox_conversation TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON inbox_conversation TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE inbox_conversation_firm ON inbox_conversation FIELDS firm_id;

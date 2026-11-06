@@ -12,14 +12,18 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const KEY: &str = "api-reads-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer;
 /// Synthetic Firm-private coordinates the fixture matter carries so the
 /// client-payload redaction has something to redact.
 const PRIVATE_NOTION: &str = "https://notion.example/private-workup";
@@ -50,12 +54,6 @@ struct Fixture {
     participating_admin: String,
     /// A Clerk: the supervised non-lawyer tier, which `LawyerSession` refuses.
     clerk: String,
-}
-
-fn bearer(person_id: Uuid, role: Role) -> String {
-    let mut s = SessionData::fresh("api-reads-sub", role);
-    s.person_id = Some(person_id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 /// The privileged and supervised tiers the participation gate has to answer

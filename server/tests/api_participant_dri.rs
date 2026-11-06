@@ -12,14 +12,18 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const KEY: &str = "api-participant-dri-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer;
 
 struct Fixture {
     app: axum::Router,
@@ -107,13 +111,6 @@ async fn build_fixture() -> Fixture {
         nonholder_id: nonholder.id,
         client_id: client.id,
     }
-}
-
-/// A `Bearer` header for a session of `role` acting as `person_id`.
-fn bearer(person_id: Uuid, role: Role) -> String {
-    let mut session = SessionData::fresh("api-dri-sub", role);
-    session.person_id = Some(person_id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&session))
 }
 
 async fn dri_call(

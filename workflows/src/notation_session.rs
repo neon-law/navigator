@@ -1709,22 +1709,6 @@ mod tests {
             .id
     }
 
-    async fn seed_project(surreal: &SurrealDb) -> Uuid {
-        store::projects::create(
-            surreal,
-            &store::projects::NewProject {
-                code: format!("test-project-{}", Uuid::now_v7()),
-                name: "test project".into(),
-                status: "open".into(),
-                entity_id: store::test_support::seed_entity(surreal).await,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .id
-    }
-
     async fn seed_retainer_template(surreal: &SurrealDb) {
         // The retainer template body is bundled via include_str!;
         // for tests we only need the row to exist with the
@@ -1816,7 +1800,7 @@ mod tests {
             None,
             "onboarding__letter",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -1863,7 +1847,7 @@ mod tests {
             None,
             "onboarding__letter",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -1898,7 +1882,7 @@ mod tests {
             None,
             "onboarding__letter",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -1972,7 +1956,7 @@ mod tests {
                 .unwrap(),
         );
         let person_id = seed_person(&surreal, "libra@example.com").await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
         let project = store::projects::find_by_id(&surreal, project_id)
             .await
             .unwrap()
@@ -2097,7 +2081,7 @@ It has been our privilege to do this work alongside you. A future engagement req
                 .unwrap(),
         );
         let person_id = seed_person(&surreal, "client@example.com").await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
         let project = store::projects::find_by_id(&surreal, project_id)
             .await
             .unwrap()
@@ -2217,7 +2201,7 @@ It has been our privilege to do this work alongside you. A future engagement req
         let storage: Arc<dyn StorageService> =
             Arc::new(cloud::FsStorage::new(assets.path()).await.unwrap());
         let person_id = seed_person(&surreal, "client@example.com").await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
         let project = store::projects::find_by_id(&surreal, project_id)
             .await
             .unwrap()
@@ -2263,7 +2247,7 @@ It has been our privilege to do this work alongside you. A future engagement req
                 .unwrap(),
         );
         let person_id = seed_person(&surreal, "libra@example.com").await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
         let project = store::projects::find_by_id(&surreal, project_id)
             .await
             .unwrap()
@@ -2331,7 +2315,7 @@ It has been our privilege to do this work alongside you. A future engagement req
                 .unwrap(),
         );
         let person_id = seed_person(&surreal, "libra@example.com").await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
         let project = store::projects::find_by_id(&surreal, project_id)
             .await
             .unwrap()
@@ -2423,7 +2407,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -2519,7 +2503,7 @@ It has been our privilege to do this work alongside you. A future engagement req
     async fn scoped_template_blob_questionnaire_wins_over_bundled_yaml() {
         let surreal = db().await;
         let storage = fs_storage().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
 
         let divergent = "---\nquestionnaire:\n  BEGIN:\n    _: project__engagement\n  \
              project__engagement:\n    _: END\n  END: {}\n---\nScoped retainer body.\n";
@@ -2550,7 +2534,7 @@ It has been our privilege to do this work alongside you. A future engagement req
     async fn scoped_body_only_override_falls_back_to_bundled_questionnaire() {
         let surreal = db().await;
         let storage = fs_storage().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
 
         // A frontmatter with a non-questionnaire key, then a body: a genuine
         // body-only override of the bundled retainer.
@@ -2589,7 +2573,7 @@ It has been our privilege to do this work alongside you. A future engagement req
     async fn bundled_and_blobless_scoped_rows_fall_back_to_bundled_yaml() {
         let surreal = db().await;
         let storage = fs_storage().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
         let bundled_chain = vec![
             "entity".to_string(),
             "address__principal_office".to_string(),
@@ -2655,7 +2639,7 @@ It has been our privilege to do this work alongside you. A future engagement req
     async fn questionnaire_chain_for_notation_reads_the_scoped_snapshot() {
         let surreal = db().await;
         let storage = fs_storage().await;
-        let project_id = seed_project(&surreal).await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
         let person_id = seed_person(&surreal, "libra@example.com").await;
         let runtime = InMemoryRuntime::new();
 
@@ -2714,7 +2698,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "nv__dissolution",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -2741,7 +2725,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "nv__dissolution",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -2773,7 +2757,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "does_not_exist",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -2798,7 +2782,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -2861,7 +2845,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -2900,7 +2884,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -2960,7 +2944,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -3018,7 +3002,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -3120,7 +3104,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             person_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -3199,7 +3183,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             client_id,
-            seed_project(&surreal).await,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
             None,
         )
         .await
@@ -3318,7 +3302,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             person_id,
-            seed_project(surreal).await,
+            store::test_support::seed_project_surreal(surreal, "test project").await,
             None,
         )
         .await
@@ -3337,7 +3321,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             person_id,
-            seed_project(surreal).await,
+            store::test_support::seed_project_surreal(surreal, "test project").await,
             None,
         )
         .await
@@ -3389,7 +3373,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             &store::notations::NewNotation::new(
                 template_row.id,
                 person_id,
-                seed_project(surreal).await,
+                store::test_support::seed_project_surreal(surreal, "test project").await,
                 StateName::BEGIN,
             )
             .with_questionnaire_snapshot(serde_json::to_value(&definition).unwrap()),
@@ -4127,7 +4111,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             None,
             "onboarding__letter",
             person_id,
-            seed_project(surreal).await,
+            store::test_support::seed_project_surreal(surreal, "test project").await,
             None,
         )
         .await

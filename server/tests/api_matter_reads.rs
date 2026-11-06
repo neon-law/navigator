@@ -12,14 +12,18 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const KEY: &str = "api-matter-reads-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer;
 
 struct Fixture {
     app: axum::Router,
@@ -28,12 +32,6 @@ struct Fixture {
     lawyer: String,
     client: String,
     outsider: String,
-}
-
-fn bearer(person_id: Uuid, role: Role) -> String {
-    let mut s = SessionData::fresh("api-mr-sub", role);
-    s.person_id = Some(person_id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&s))
 }
 
 #[allow(clippy::too_many_lines)]

@@ -22,14 +22,18 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const KEY: &str = "api-project-repositories-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer;
 const PATH: &str = "/app/api/project-repositories";
 
 /// A synthetic forge. No real organization is a fixture value in this
@@ -49,12 +53,6 @@ struct Fixture {
     matched: String,
     drifted: String,
     unrecorded: String,
-}
-
-fn bearer(person_id: Uuid, role: Role) -> String {
-    let mut session = SessionData::fresh("api-project-repositories-sub", role);
-    session.person_id = Some(person_id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&session))
 }
 
 async fn person(surreal: &store::surreal::SurrealDb, name: &str, role: Role) -> Uuid {

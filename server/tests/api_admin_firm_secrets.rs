@@ -21,14 +21,18 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-const KEY: &str = "api-admin-firm-secrets-test-key";
+use portal::test_support::TEST_SESSION_KEY as KEY;
+
+#[path = "common/bearer.rs"]
+mod bearer_common;
+
+use bearer_common::bearer;
 const SECRET_VALUE: &str = "s3cret-notion-token-value";
 
 struct Fixture {
@@ -38,12 +42,6 @@ struct Fixture {
     dri: String,
     other_admin: String,
     owner: String,
-}
-
-fn bearer(person_id: Uuid, role: Role) -> String {
-    let mut session = SessionData::fresh("api-admin-firm-secrets-test-sub", role);
-    session.person_id = Some(person_id);
-    format!("Bearer {}", SessionStore::new(KEY).encode(&session))
 }
 
 async fn person(surreal: &store::surreal::SurrealDb, name: &str, role: Role) -> Uuid {

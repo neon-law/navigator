@@ -14,8 +14,15 @@ Navigator-managed systems and approved stores. Follow [public contributor safety
 - Keep private plans, firm records, operational details, and client content out of Git, PRs, comments, and captures.
 
 Use Cargo, isolated worktrees, focused TDD, and shared code. Follow the [Agent Skills](.agents/skills) and name domain
-tables from the glossary. Target macOS for development and the CLI, and Linux/amd64 for deployed services. Add no
-Windows paths, jobs, or release archives.
+tables from the glossary. The load-bearing members of the 29-crate workspace: `store` owns PostgreSQL-backed accessors
+and the graph; `portal` is the mountable Axum application (authenticated API, inbound email, Dioxus server-side
+rendering); `webapp` is the Dioxus client bundle; `neon` is the brand binary that publishes the public face; `server`
+runs the integration tests against the mounted app; `cli` is the `navigator` binary and its dev tooling; `views`,
+`workflows`, `workflows-service`, `billing`, `cloud`, and `archives` round out the surfaces the docs name. `Cargo.toml`
+is the authoritative member list.
+
+Target macOS for development and the CLI, and Linux/amd64 for deployed services. Add no Windows paths, jobs, or release
+archives.
 
 ## Current contracts
 
@@ -31,6 +38,31 @@ Before naming a table, field, state, or UI concept, search the glossary. Run `na
 and plain-language descriptions. Then run `navigator glossary show "<Term>"` for a term's full definition. Use the
 glossary's term when one fits; when none fits, add a glossary entry in `docs/glossary/` in the same change rather than
 inventing a synonym.
+
+## The omnichannel inbox and the Person CRM
+
+The inbox is a three-layer slice of the workspace: `store/src/inbox.rs` owns the PostgreSQL conversation, message,
+ingress, and assignment accessors; `portal` owns the seams — `inbound_email.rs` receives SendGrid Inbound Parse,
+archives the raw message, and hands it to the store, while `lawyer_mailbox.rs` keeps a lawyer's own outgoing address
+from re-entering the queue as a counterparty; `webapp/src/inbox.rs` renders the Dioxus list, thread, and triage
+surfaces. Inbound email resolves its sender to a Person (alias-aware, primary plus `person_mailbox`) at ingest and
+persists that association on the conversation; unknown senders may create a Person row. Automation writes identity and
+Relationship Log entries only — never a typed `relationship` or `entity_role` edge, and never a `person_mailbox` alias
+row. Conflicts read the one firm-wide graph through `store/src/conflicts.rs`; email-derived identity lands there by
+being a correct Person, not by minting edges.
+
+## Email is draft-only
+
+An agent never sends, replies to, or forwards email. Every email an agent touches ends as a draft for lawyer review —
+the same doctrine the [Project-repo contract](cli/src/projects/agent_contract.md) states for Project repositories,
+applied to this one. To send something, prepare the draft and hand it to the lawyer.
+
+## Least code, coverage never lower
+
+Write the least amount of code the behavior needs: delete dead code instead of annotating it, consolidate duplicated
+helpers into the sanctioned seams, and name a test before the change that satisfies it. CI holds the workspace at a
+92.2% line-coverage floor and that floor is never lowered — a subtraction lands only with coverage re-verified
+(`docs/agent-workflows.md` explains the measurement).
 
 ## Helpful commands
 
@@ -125,4 +157,6 @@ navigator validate
 
 When `navigator` is not on `PATH`, run the same check through the CLI crate: `cargo run -p cli --quiet -- validate`.
 
-Start SurrealDB and set `NAVIGATOR_SURREAL_*` (root/root) to include the server-mode lane; otherwise it self-skips.
+SurrealDB is the legacy compatibility lane: PostgreSQL is the storage authority for every new model (see
+[`postgres`](.agents/skills/postgres/SKILL.md)). Start SurrealDB and set `NAVIGATOR_SURREAL_*` (root/root) only to run
+the compatibility lane's tests; without it those tests self-skip.
