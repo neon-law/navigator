@@ -7,3 +7,5 @@ A Source Reference carries provider, tenant or network scope, account, object ty
 sub-object locator. A payment and invoice have different identities. Several references may support one [Journal
 Entry](journal-entry.md); a reference cannot authorize changing its quantities. Records live in
 `journal_source_reference`.
+
+The table is `journal_source_reference`.

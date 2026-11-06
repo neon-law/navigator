@@ -22,3 +22,5 @@ until a lawyer enters an estimate. **Storage.** `stage_definition` and `stage_ev
 (`store/src/case_stages.rs`) — net-new tables with no Surreal source. The Project must already belong to a Firm and be
 mirrored to PostgreSQL before it can hold a Case Stage. Schema:
 `store/postgres/migrations/20261031130000_create_case_stage.sql`.
+
+The table is `stage_definition`.

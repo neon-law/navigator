@@ -11,6 +11,8 @@ use std::fmt::Write as _;
 use serde_yaml::Value;
 use thiserror::Error;
 
+mod declarations;
+
 const CANONICAL_SCHEMA: &str = include_str!("../postgres/schema.sql");
 const INITIAL_MIGRATION: &str =
     include_str!("../postgres/migrations/20261010120000_create_core_tenancy.sql");
@@ -130,7 +132,7 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
     let mut procedural = false;
     let mut index_continuation = false;
 
-    for raw in sql.lines() {
+    for raw in declarations::lines(sql) {
         let line = raw.trim();
         if procedural {
             if line == "$$;" || line == "END $$;" {

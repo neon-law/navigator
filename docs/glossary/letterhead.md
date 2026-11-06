@@ -16,3 +16,5 @@ face.
 - Schema: `brand_letterhead` in [`store/postgres/migrations/`](../../store/postgres/), one row per Brand id ·
   [`store::brand_letterheads`](../../store/src/brand_letterheads.rs), whose `for_brand_key` is the read every letterhead
   renderer uses
+
+The table is `brand_letterhead`.

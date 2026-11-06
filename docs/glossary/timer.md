@@ -11,3 +11,5 @@ the elapsed whole minutes as a [Time Entry](time-entry.md) in one transaction; d
 nothing. A Timer left running past one day is refused: the attorney discards it or logs the time by hand.
 
 - Vocabulary: [`store::timers`](../../store/src/timers.rs)
+
+The table is `timer`.

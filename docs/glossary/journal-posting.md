@@ -8,3 +8,5 @@ and optional Project allocation. Client and Firm ownership remain distinct even 
 unspecified ownership stays explicit; new postings require reviewed ownership. Postings balance separately for each unit
 within their [Journal Entry](journal-entry.md). Their records live in `journal_posting`. A Project allocation does not
 change which Firm owns the entry.
+
+The table is `journal_posting`.

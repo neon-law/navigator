@@ -25,3 +25,5 @@ Amounts are integer cents and percentages are basis points (`3330` is 33.3%), ne
 on the matter may record or read a term. It never reaches a client or clerk [Lens](lens.md).
 
 - Vocabulary: [`store::contingency_terms`](../../store/src/contingency_terms.rs)
+
+The table is `contingency_term`.

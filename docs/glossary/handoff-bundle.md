@@ -19,3 +19,5 @@ converges and a different digest is refused.
 
 - Service: [`store::project_handoffs`](../../store/src/project_handoffs.rs)
 - Table: `project_handoff` in [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
+
+The table is `project_handoff`.

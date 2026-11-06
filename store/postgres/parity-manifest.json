@@ -4984,7 +4984,6 @@
       },
       "project_task": {
         "columns": {
-          "REFERENCES": "person_project_role",
           "assignee_id": "UUID",
           "body": "TEXT",
           "due_on": "DATE",
@@ -4996,10 +4995,6 @@
           "updated_at": "TIMESTAMPTZ"
         },
         "foreign_keys": [
-          [
-            "REFERENCES",
-            "person_project_role"
-          ],
           [
             "project_id",
             "project"
@@ -5601,8 +5596,6 @@
       },
       "time_entry": {
         "columns": {
-          "(billing_status": "=",
-          "REFERENCES": "person_project_role",
           "attorney_id": "UUID",
           "billable": "BOOLEAN",
           "billing_status": "TEXT",
@@ -5619,10 +5612,6 @@
           "xero_invoice_id": "TEXT"
         },
         "foreign_keys": [
-          [
-            "REFERENCES",
-            "person_project_role"
-          ],
           [
             "project_id",
             "project"

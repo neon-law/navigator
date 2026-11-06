@@ -15,3 +15,5 @@ A reserved binding records identity, not remote existence or proof of isolation.
 folder identity, parent and access before setting `verified_at`. Resources and imports read only verified bindings. A
 retry clears prior verification before checking again, so a failed check leaves the binding internal. Navigator's
 participation checks continue to govern its own reads and imports.
+
+The table is `project_folder`.

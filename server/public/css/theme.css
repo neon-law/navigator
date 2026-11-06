@@ -741,6 +741,44 @@ a.nav-pagination__link:hover {
   overflow-x: auto;
 }
 
+.glossary__schema {
+  margin-top: 1rem;
+  border: 1px solid color-mix(in oklab, var(--nav-color-text) 20%, transparent);
+  border-radius: var(--nav-radius-sm, 0.5rem);
+  background: var(--nav-color-surface);
+}
+
+.glossary__schema summary {
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.glossary__schema summary code {
+  overflow-wrap: anywhere;
+  font-weight: 400;
+}
+
+.glossary__schema summary:focus-visible,
+.glossary__schema pre:focus-visible {
+  outline: 2px solid var(--nav-color-primary);
+  outline-offset: 2px;
+}
+
+.glossary__schema p {
+  margin: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.glossary__schema pre {
+  margin: 0;
+  padding: 1rem;
+  max-height: 30rem;
+  overflow: auto;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
 /* A full schema diagram keeps its own size. The figure scrolls so the
    column does not shrink every table label to fit. */
 .nav-mermaid {

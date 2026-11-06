@@ -18,3 +18,5 @@ numeric `forgejo_id`, the `owner_login` kept in the owners team, the first `prov
 `reconciled_at`.
 
 - Vocabulary: [`store::firms::forgejo_organization`](../../store/src/firms/forgejo_organization.rs)
+
+The table is `firm_forgejo_organization`.
