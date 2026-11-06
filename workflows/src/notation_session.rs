@@ -1386,7 +1386,12 @@ pub async fn record_extracted_answer(
         &store::answers::NewAnswer::new(
             question_row.id,
             notation_row.person_id,
-            store::answers::primitive(value),
+            // The same envelope a typed answer carries, so the read-back is
+            // exactly like a typed answer — including the dotted fields. A
+            // record state (`project__engagement`) must expose `.name` or a
+            // document rendering `{{project__engagement.name}}` comes out
+            // empty even though the proposal is on record.
+            answer_value_for_state(state_name, value, None),
         )
         .in_notation(notation_id, state_name)
         .authored_by(author.source, author.authored_by),
@@ -4418,5 +4423,61 @@ It has been our privilege to do this work alongside you. A future engagement req
         .await
         .unwrap();
         assert!(stored, "a declared proposal must still be recorded");
+    }
+
+    #[tokio::test]
+    async fn record_extracted_answer_carries_the_record_envelope_for_project_states() {
+        // The proposal is read back by the render exactly like a typed
+        // answer, and a typed `project__engagement` answer carries
+        // `{value, name}` — the dotted fields the retainer letter's
+        // `{{project__engagement.name}}` placeholder resolves. A primitive
+        // envelope here would file the answer yet render the placeholder
+        // empty, so the envelope shape is the contract this test pins.
+        use super::record_extracted_answer;
+        let surreal = db().await;
+        let runtime = InMemoryRuntime::new();
+        seed_retainer_template(&surreal).await;
+        seed_retainer_questions(&surreal).await;
+        let person_id = seed_person(&surreal, "libra@example.com").await;
+        let notation_id = start_notation(
+            &surreal,
+            &runtime,
+            None,
+            "onboarding__letter",
+            person_id,
+            store::test_support::seed_project_surreal(&surreal, "test project").await,
+            None,
+        )
+        .await
+        .unwrap()
+        .notation_id;
+
+        let stored = record_extracted_answer(
+            &surreal,
+            None,
+            notation_id,
+            "project__engagement",
+            "Estate plan",
+        )
+        .await
+        .unwrap();
+        assert!(stored, "a proposal for a reached state must be recorded");
+
+        let row = store::answers::for_notation(&surreal, notation_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|a| a.state_name.as_deref() == Some("project__engagement"))
+            .expect("the proposed answer is on record");
+        assert_eq!(
+            store::answers::primitive_str(&row.value),
+            Some("Estate plan"),
+            "the display value is the offer's term"
+        );
+        assert_eq!(
+            row.value.get("name").and_then(serde_json::Value::as_str),
+            Some("Estate plan"),
+            "the dotted `name` field must render `{{project__engagement.name}}`"
+        );
     }
 }

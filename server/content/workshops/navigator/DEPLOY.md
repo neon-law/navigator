@@ -1248,7 +1248,11 @@ recipient, or `SignatureError::AnchorValidation` when the prepared PDF's text la
 loop, a matter's execution reading is another closed enum, `OnboardingStatus` (`store/src/projects.rs`): `pitch` — no
 completed, Navigator-sent onboarding envelope on the matter's onboarding notation — or `official` — that envelope has
 completed a loop Navigator itself sent. It is additive to `MatterLifecycle` (`pitch`/`active`/`closed`), which it does
-not change, and surfaces on the matter page, through `navigator project lifecycle`, and in the Portal.
+not change, and surfaces on the matter page, through `navigator project lifecycle`, and in the Portal. The funnel the
+prospective client walks is itself a closed enum, `FunnelEvent` (`telemetry/src/lib.rs`), whose steps are enumerated
+with their fields in `docs/observability.md` — `lead_captured`, `offer_accepted` (a start-door acceptance: the offer's
+matter, notation, and proposed terms exist), `intake_complete`, `review_entered`, and `sent` — every field an
+identifier, never client content.
 
 ---
 
