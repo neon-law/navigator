@@ -198,7 +198,7 @@ pub async fn current(
 }
 
 /// [`current`] after the caller has established the reader is firm-side.
-async fn current_unchecked(
+pub(crate) async fn current_unchecked(
     pg: &PostgresDb,
     project_id: Uuid,
 ) -> Result<Option<MatterOutcome>, MatterOutcomeError> {
