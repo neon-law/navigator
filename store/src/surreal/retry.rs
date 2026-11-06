@@ -66,34 +66,48 @@ const FIRST_BACKOFF: Duration = Duration::from_millis(2);
 /// would exceed the whole budget, so a writer would get far fewer
 /// attempts than the budget nominally buys it.
 const BACKOFF_CEILING: Duration = Duration::from_millis(64);
+/// The engine's own marker on a conflict it has already rolled back: the
+/// transaction can be re-run as-is. At the key-value layer the conflict
+/// surfaces as an untyped internal error whose display text carries the
+/// marker, so the message is the only signal left.
+const KV_TRANSACTION_CONFLICT_MARKER: &str = "This transaction can be retried";
 
 /// Is this the engine asking the caller to try again?
 ///
-/// Both variants mean "your transaction did not run", never "your
-/// statement was wrong":
+/// A conflicting transaction is rolled back before its error is returned,
+/// so a retry re-runs from clean state. The same conflict arrives in two
+/// shapes:
 ///
-/// - [`QueryError::TransactionConflict`] is the optimistic layer
-///   reporting a lost write race.
-/// - [`QueryError::NotExecuted`] is a statement the engine skipped
-///   because the transaction around it had already failed.
+/// - The query layer's typed [`QueryError::TransactionConflict`] — the
+///   optimistic layer reporting a lost write race — and
+///   [`QueryError::NotExecuted`], a statement the engine skipped because
+///   the transaction around it had already failed. Retrying the second
+///   cannot hide a real fault:
+///   [`surrealdb::IndexedResults::check`] surfaces the *first* failing
+///   statement, so a statement that failed on its own merits is the error
+///   the caller sees; `NotExecuted` reaches here only when the transaction
+///   itself is what went wrong.
+/// - After the SDK flattens an error chain to an untyped
+///   [`ErrorDetails::Internal`] — the key-value layer's conflict, whose
+///   display text carries the engine's retryable marker
+///   ([`KV_TRANSACTION_CONFLICT_MARKER`]). The same shape
+///   [`unique_violation`] handles for uniqueness errors; when the engine
+///   gains a typed conflict detail there, this is the place that changes.
 ///
-/// Retrying the second cannot hide a real fault.
-/// [`surrealdb::IndexedResults::check`] surfaces the *first* failing
-/// statement, so a statement that failed on its own merits is the error
-/// the caller sees; `NotExecuted` reaches here only when the transaction
-/// itself is what went wrong. Even then the worst case is that a
-/// deterministic failure is re-run until the budget expires and is then
-/// reported unchanged.
-///
-/// Matched on the typed detail, never on message text.
+/// Even then the worst case is that a deterministic failure is re-run
+/// until the budget expires and is then reported unchanged.
 #[must_use]
 pub fn is_retryable(error: &surrealdb::Error) -> bool {
-    matches!(
+    if matches!(
         error.details(),
         ErrorDetails::Query(Some(
             QueryError::TransactionConflict | QueryError::NotExecuted
         ))
-    )
+    ) {
+        return true;
+    }
+    matches!(error.details(), ErrorDetails::Internal)
+        && error.to_string().contains(KV_TRANSACTION_CONFLICT_MARKER)
 }
 
 /// The unique indexes whose names SurrealDB includes in an untyped
@@ -248,6 +262,27 @@ mod tests {
 
     fn cancelled() -> surrealdb::Error {
         surrealdb::Error::query("Query was cancelled".to_string(), QueryError::Cancelled)
+    }
+
+    #[test]
+    fn a_key_value_layer_conflict_names_itself_retryable() {
+        // The shape an embedded-engine conflict arrives in: the SDK
+        // flattens the error chain to an untyped internal error, and
+        // the engine's marker is the only signal left.
+        let error = surrealdb::Error::internal(
+            "There was a problem with the key-value store: Transaction conflict: \
+             Write conflict, retry the transaction. This transaction can be retried"
+                .to_string(),
+        );
+
+        assert!(is_retryable(&error));
+    }
+
+    #[test]
+    fn an_untyped_internal_error_without_the_marker_is_not_retryable() {
+        let error = surrealdb::Error::internal("connection closed".to_string());
+
+        assert!(!is_retryable(&error));
     }
 
     #[tokio::test]
