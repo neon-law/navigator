@@ -8526,11 +8526,18 @@ fn run_render(
         return ExitCode::from(1);
     }
 
-    let Ok(letterhead) =
+    let Ok(rendered) =
         project_letterhead(file, &format).map_err(|message| eprintln!("navigator: {message}"))
     else {
         return ExitCode::from(2);
     };
+    // Every letter render names the letterhead it wore: which source
+    // framed it, which revision of that source (LAW-266).
+    eprintln!("{}", rendered.provenance);
+    for warning in &rendered.warnings {
+        eprintln!("navigator: {warning}");
+    }
+    let letterhead = rendered.letterhead;
     // A memo is the Firm's analysis for its client, so every page of it
     // says it is privileged, whatever its author typed (LAW-224).
     let privileged = field("kind").as_deref() == Some("memo");
@@ -8628,28 +8635,159 @@ fn project_firm_legal_name(file: &Path) -> Option<String> {
     }
 }
 
-/// The letterhead for a render of `file` framed as `format`.
+/// The letterhead for a render of `file` framed as `format`, with the
+/// provenance the render reports on stderr.
 ///
-/// The Project's Brand frames the letter (LAW-265): `cli::letterhead`
-/// resolves `project.brand`, else `project.host`, from the nearest
-/// `navigator.yaml` against the compiled Brand registry — source, not
-/// whatever brand bundle is mounted, so a re-render of a sent letter prints
-/// the same letterhead. A Brand the registry does not know is a refusal,
-/// never the default letterhead. Only the letter frame carries one, so no
-/// other frame reads the manifest; a template outside any Project renders
-/// on the default Brand's letterhead.
-fn project_letterhead(file: &Path, format: &pdf::OutputFormat) -> Result<pdf::Letterhead, String> {
+/// The Project's Brand frames the letter (LAW-265, ENG-1148):
+/// `cli::letterhead` resolves `project.brand`, else `project.host`, from
+/// the nearest `navigator.yaml`. Which letterhead that Brand wears comes
+/// from one of two sources. When the deployment's stores are reachable,
+/// the Brand's runtime letterhead row — the same rows `/app/admin/brands`
+/// edits — frames the letter; when they are not, the compiled registry
+/// does, and the fallback is announced, never silent: a template
+/// re-render reflects the letterhead its Brand currently publishes, while
+/// executed and filed artifacts keep their stored bytes (ENG-1148), so a
+/// re-render may differ from what was sent — on purpose. A Brand the
+/// registry does not know is a refusal, never the default letterhead.
+/// Only the letter frame carries one, so no other frame reads the
+/// manifest; a template outside any Project renders on the default
+/// Brand's letterhead.
+struct ProjectLetterhead {
+    letterhead: pdf::Letterhead,
+    provenance: String,
+    warnings: Vec<String>,
+}
+
+fn project_letterhead(
+    file: &Path,
+    format: &pdf::OutputFormat,
+) -> Result<ProjectLetterhead, String> {
     if !matches!(format, pdf::OutputFormat::Letter(_)) {
-        return Ok(pdf::Letterhead::default());
+        return Ok(ProjectLetterhead {
+            letterhead: pdf::Letterhead::default(),
+            provenance: String::new(),
+            warnings: Vec::new(),
+        });
     }
     let Some(path) = projects::matter::find_manifest(file) else {
-        return Ok(pdf::Letterhead::default());
+        return Ok(ProjectLetterhead {
+            letterhead: pdf::Letterhead::default(),
+            provenance: String::new(),
+            warnings: Vec::new(),
+        });
     };
     let contents = std::fs::read_to_string(&path)
         .map_err(|error| format!("read {}: {error}", projects::manifest::FILE))?;
     let manifest = projects::manifest::parse(&contents)?;
-    cli::letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref())
-        .map_err(|error| error.to_string())
+    let key = cli::letterhead::resolve_brand(manifest.brand.as_deref(), manifest.host.as_deref())
+        .map_err(|error| error.to_string())?;
+    attempt_runtime_letterhead(key)
+}
+
+/// The runtime source, tried within a bounded budget so a hung store
+/// cannot hang the render; any failure — connect, read, or budget — falls
+/// back to the compiled registry, announced.
+fn attempt_runtime_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetterhead, String> {
+    let budget = std::time::Duration::from_secs(3);
+    // The timeout's timer is built under the runtime, not as a `block_on`
+    // argument — `tokio::time::timeout` constructs its `Sleep` eagerly, and
+    // eager construction needs the time driver it is about to run under.
+    let attempted = tokio::runtime::Runtime::new()
+        .expect("tokio runtime")
+        .block_on(async move { tokio::time::timeout(budget, runtime_letterhead(key)).await });
+    match attempted {
+        Ok(Ok(rendered)) => Ok(rendered),
+        Ok(Err(reason)) => compiled_fallback(key, &reason),
+        Err(elapsed) => compiled_fallback(
+            key,
+            &format!("the letterhead store did not answer within {budget:?}: {elapsed:?}"),
+        ),
+    }
+}
+
+/// The Brand's letterhead from the deployment's stores — the same rows
+/// `/app/admin/brands` edits. `Err` names why the stores could not answer;
+/// the caller falls back to the compiled registry and announces it.
+async fn runtime_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetterhead, String> {
+    let surreal = store::surreal::connect_from_env()
+        .await
+        .map_err(|error| format!("the deployment's document store is unreachable: {error}"))?;
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|error| format!("the deployment's relational store is unreachable: {error}"))?;
+    let compiled = cli::letterhead::for_brand(key).map_err(|error| error.to_string())?;
+    let runtime = cli::letterhead::for_brand_runtime(
+        key,
+        &credentials::base_url(&compiled.web),
+        &surreal,
+        &pg,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let Some(runtime) = runtime else {
+        // A Brand with no runtime row wears its compiled frame — the
+        // compiled mark included — but the render still names the source.
+        return compiled_letterhead(key);
+    };
+    let mark = match runtime.letterhead.mark {
+        pdf::LetterheadMark::Png(_) => "logo",
+        pdf::LetterheadMark::Wordmark => "wordmark",
+        pdf::LetterheadMark::Compiled => "compiled",
+    };
+    let revision = runtime
+        .revision
+        .clone()
+        .unwrap_or_else(|| "n/a".to_string());
+    let mut provenance = format!(
+        "letterhead: source=runtime brand={} revision={revision} mark={mark}",
+        key.as_str()
+    );
+    if let Some(font) = runtime.font_object_key.as_deref() {
+        provenance.push_str(" font=");
+        provenance.push_str(provenance_font(font));
+    }
+    Ok(ProjectLetterhead {
+        provenance,
+        letterhead: runtime.letterhead,
+        warnings: runtime.warnings,
+    })
+}
+
+/// The compiled frame for `key`, with its provenance line.
+fn compiled_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetterhead, String> {
+    let compiled = cli::letterhead::for_brand(key).map_err(|error| error.to_string())?;
+    let mark = match compiled.mark {
+        pdf::LetterheadMark::Compiled => "compiled",
+        _ => "wordmark",
+    };
+    Ok(ProjectLetterhead {
+        provenance: format!(
+            "letterhead: source=compiled brand={} revision=n/a mark={mark}",
+            key.as_str()
+        ),
+        letterhead: compiled,
+        warnings: Vec::new(),
+    })
+}
+
+/// The compiled fallback, announced: a plain connectivity miss renders on
+/// the compiled registry rather than refusing, and says so.
+fn compiled_fallback(
+    key: views::brand::BrandKey,
+    reason: &str,
+) -> Result<ProjectLetterhead, String> {
+    let mut compiled = compiled_letterhead(key)?;
+    compiled.warnings.push(format!(
+        "letterhead: source=compiled brand={} revision=n/a (deployment unreachable: {reason}; \
+         using compiled registry — re-render may differ from admin-set letterhead)",
+        key.as_str()
+    ));
+    Ok(compiled)
+}
+
+/// A font object's bare file name for the provenance line.
+fn provenance_font(font: &str) -> &str {
+    font.rsplit('/').next().unwrap_or(font)
 }
 
 /// A preview's drafting markers, rewritten as visible flags (LAW-183): each
@@ -8763,10 +8901,12 @@ fn render_notation_artifact(
                 phone: &letterhead.phone,
                 email: &letterhead.email,
                 web: &letterhead.web,
-                logo_png: if letterhead.logo {
-                    pdf::firm_logo_png()
-                } else {
-                    &[]
+                postal_address: &letterhead.postal_address,
+                font_family: &letterhead.font_family,
+                logo_png: match &letterhead.mark {
+                    pdf::LetterheadMark::Png(bytes) => bytes.as_slice(),
+                    pdf::LetterheadMark::Compiled => pdf::firm_logo_png(),
+                    pdf::LetterheadMark::Wordmark => &[],
                 },
             });
         // A pleading's Word render takes the same calibrated court-paper

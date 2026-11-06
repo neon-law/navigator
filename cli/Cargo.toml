@@ -111,6 +111,9 @@ predicates.workspace = true
 tower.workspace = true
 regorus.workspace = true
 store = { workspace = true, features = ["test-support"] }
+# The disposable PostgreSQL databases the runtime-letterhead render tests
+# seed the canonical schema into.
+sqlx.workspace = true
 wiremock.workspace = true
 
 [lints]

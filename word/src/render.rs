@@ -17,8 +17,14 @@ pub struct RenderLetterhead<'a> {
     pub phone: &'a str,
     pub email: &'a str,
     pub web: &'a str,
+    /// The Brand's postal address, one centred line per stored row
+    /// beneath the contact line; empty prints nothing.
+    pub postal_address: &'a str,
+    /// The letterhead's font family, set on the header's runs when the
+    /// Brand's admin named one; empty keeps the document's own face.
+    pub font_family: &'a str,
     /// The mark heading the page; empty draws none, so a Brand without a
-    /// compiled mark opens on its wordmark.
+    /// mark opens on its wordmark.
     pub logo_png: &'a [u8],
 }
 
@@ -234,7 +240,7 @@ pub fn render_notation(
             )?;
             write_entry(
                 &mut archive,
-                "word/media/logo-neon-law.png",
+                "word/media/letterhead-mark.png",
                 letterhead.logo_png,
                 file_options,
             )?;
@@ -1109,6 +1115,21 @@ fn field(instruction: &str) -> String {
 /// The letterhead's rule, a bottom border on the mark's last paragraph.
 const RULE: &str = r#"<w:pBdr><w:bottom w:val="single" w:sz="8" w:color="06B6D4"/></w:pBdr>"#;
 
+/// The run properties every header run carries: the letterhead font when
+/// the Brand named one, then the run's own emphasis. Word walks its font
+/// list per run, so a family the host cannot resolve falls through the
+/// same way the PDF's stack does.
+fn run_properties(font_family: &str, emphasis: &str) -> String {
+    let family = font_family.trim();
+    let rfonts = if family.is_empty() {
+        String::new()
+    } else {
+        let name = xml(family);
+        format!(r#"<w:rFonts w:ascii="{name}" w:hAnsi="{name}"/>"#)
+    };
+    format!("<w:rPr>{rfonts}{emphasis}</w:rPr>")
+}
+
 fn first_header_xml(letterhead: &RenderLetterhead<'_>) -> String {
     let contact = [letterhead.phone, letterhead.email, letterhead.web]
         .into_iter()
@@ -1118,7 +1139,7 @@ fn first_header_xml(letterhead: &RenderLetterhead<'_>) -> String {
     let logo = if letterhead.logo_png.is_empty() {
         ""
     } else {
-        r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline><wp:extent cx="329184" cy="329184"/><wp:docPr id="1" name="Neon Law mark"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="logo-neon-law.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="329184" cy="329184"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline><wp:extent cx="329184" cy="329184"/><wp:docPr id="1" name="Brand mark"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="letterhead-mark.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="329184" cy="329184"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
     };
     // The rule sits under the last line of the mark: beneath the Firm's
     // name when the letterhead carries one, else beneath the wordmark.
@@ -1128,16 +1149,38 @@ fn first_header_xml(letterhead: &RenderLetterhead<'_>) -> String {
         (
             "",
             format!(
-                r#"<w:p><w:pPr><w:jc w:val="center"/>{RULE}</w:pPr><w:r><w:rPr><w:sz w:val="16"/></w:rPr><w:t>{}</w:t></w:r></w:p>"#,
+                r#"<w:p><w:pPr><w:jc w:val="center"/>{RULE}</w:pPr>{}<w:t>{}</w:t></w:r></w:p>"#,
+                run_properties(letterhead.font_family, r#"<w:sz w:val="16"/>"#),
                 xml(entity)
             ),
         )
     } else {
         (RULE, String::new())
     };
+    // The postal address prints one centred line per stored row beneath
+    // the contact line; a Brand whose admin set none leaves no trace.
+    let postal: String = letterhead
+        .postal_address
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .fold(String::new(), |mut paragraphs, line| {
+            let _ = write!(
+                paragraphs,
+                r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr>{}<w:t>{}</w:t></w:r></w:p>"#,
+                run_properties(letterhead.font_family, ""),
+                xml(line)
+            );
+            paragraphs
+        });
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">{logo}<w:p><w:pPr><w:jc w:val="center"/>{wordmark_rule}</w:pPr><w:r><w:rPr><w:b/><w:color w:val="06B6D4"/><w:spacing w:val="80"/></w:rPr><w:t>{}</w:t></w:r></w:p>{entity}<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>{}</w:t></w:r></w:p></w:hdr>"#,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">{logo}<w:p><w:pPr><w:jc w:val="center"/>{wordmark_rule}</w:pPr><w:r>{}<w:t>{}</w:t></w:r></w:p>{entity}<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r>{}<w:t>{}</w:t></w:r></w:p>{postal}</w:hdr>"#,
+        run_properties(
+            letterhead.font_family,
+            r#"<w:b/><w:color w:val="06B6D4"/><w:spacing w:val="80"/>"#
+        ),
         xml(&letterhead.name.to_uppercase()),
+        run_properties(letterhead.font_family, ""),
         xml(&contact)
     )
 }
@@ -1200,7 +1243,7 @@ fn root_rels(provenance: bool) -> String {
     rels.push_str(CLOSE);
     rels
 }
-const HEADER_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/logo-neon-law.png"/></Relationships>"#;
+const HEADER_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/letterhead-mark.png"/></Relationships>"#;
 const APP_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Neon Law Navigator</Application></Properties>"#;
 const STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Noto Serif" w:hAnsi="Noto Serif"/><w:sz w:val="22"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:qFormat/><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading5"><w:name w:val="heading 5"/><w:basedOn w:val="Normal"/></w:style></w:styles>"#;
 
@@ -1538,6 +1581,8 @@ mod tests {
                 phone: "+1 510 800 2090",
                 email: "contact@neonlaw.com",
                 web: "www.neonlaw.com",
+                postal_address: "",
+                font_family: "",
                 logo_png: b"png",
             }),
             &RenderOptions {
@@ -1559,7 +1604,7 @@ mod tests {
     fn a_letterhead_names_the_firm_and_an_empty_mark_draws_no_image() {
         let first_header = |bytes: Vec<u8>| {
             let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-            let has_logo = archive.by_name("word/media/logo-neon-law.png").is_ok();
+            let has_logo = archive.by_name("word/media/letterhead-mark.png").is_ok();
             let mut header = String::new();
             archive
                 .by_name("word/header2.xml")
@@ -1580,6 +1625,8 @@ mod tests {
                 phone: "",
                 email: "contact@examplefirm.test",
                 web: "examplefirm.test",
+                postal_address: "",
+                font_family: "",
                 logo_png: &[],
             }),
             &RenderOptions::default(),
@@ -1603,7 +1650,7 @@ mod tests {
             .unwrap();
         assert!(document.contains("w:pStyle w:val=\"Heading1\""));
         assert!(document.contains("<w:titlePg/>"));
-        assert!(archive.by_name("word/media/logo-neon-law.png").is_ok());
+        assert!(archive.by_name("word/media/letterhead-mark.png").is_ok());
         let mut footer = String::new();
         archive
             .by_name("word/footer1.xml")
