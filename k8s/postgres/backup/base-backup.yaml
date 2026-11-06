@@ -35,7 +35,7 @@ spec:
               type: RuntimeDefault
           initContainers:
             - name: basebackup
-              image: neon-law-postgres:16.15-age1.6.0-vector0.8.2
+              image: navigator/postgres:16.15-age1.6.0-vector0.8.7
               imagePullPolicy: IfNotPresent
               command:
                 - /bin/sh

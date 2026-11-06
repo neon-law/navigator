@@ -70,7 +70,7 @@ install neon-law/navigator/navigator` resolves the formula in
 [`neon-law/homebrew-navigator`](https://github.com/neon-law/homebrew-navigator), which holds no binaries and no source.
 The [Zed extension](https://github.com/neon-law/zed-navigator-lsp) attaches the Navigator language server. The
 PostgreSQL image is built from [`images/postgres`](images/postgres/README.md) and published weekly to
-`ghcr.io/neon-law/neon-law-postgres`. Navigator's service images live in a private Artifact Registry repository and are
+`ghcr.io/neon-law/navigator/postgres`. Navigator's service images live in a private Artifact Registry repository and are
 mirrored to GHCR; see [self-hosting](docs/self-hosting.md#images).
 
 Font licensing is separate: see the [GORP Serif notice](server/public/fonts/gorp-serif/LICENSE.txt) and the [Tinos

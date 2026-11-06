@@ -1,6 +1,6 @@
 name: PostgreSQL image
 # Builds `images/postgres`, tests each architecture's candidate, and publishes
-# the tested manifests to ghcr.io/<owner>/neon-law-postgres. The Monday run
+# the tested manifests to ghcr.io/<owner>/navigator/postgres. The Monday run
 # rebuilds without cache so Debian security fixes reach a new image every week;
 # a change to the recipe publishes on merge. Each publish is then dogfooded:
 # `scripts/postgres-image-pin.sh` moves every Navigator pin to the new digest
@@ -19,6 +19,8 @@ on:
     paths:
       - 'images/postgres/**'
       - 'scripts/postgres-image-pin.sh'
+      - 'scripts/postgres-image-bump.sh'
+      - 'scripts/open-signed-pr.sh'
       - '.github/workflows/postgres-image.yml'
 permissions:
   contents: read
@@ -29,8 +31,8 @@ defaults:
   run:
     shell: bash
 env:
-  REGISTRY: ghcr.io/${{ github.repository_owner }}/neon-law-postgres
-  VERSION: 16.15-age1.6.0-vector0.8.2
+  REGISTRY: ghcr.io/${{ github.repository_owner }}/navigator/postgres
+  VERSION: 16.15-age1.6.0-vector0.8.7
   PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 jobs:
   test:
@@ -68,13 +70,13 @@ jobs:
           no-cache: ${{ github.event_name == 'schedule' }}
           load: ${{ env.PUBLISH != 'true' }}
           push: ${{ env.PUBLISH == 'true' }}
-          tags: ${{ env.PUBLISH == 'true' && format('{0}:candidate-{1}-{2}-{3}', env.REGISTRY, github.run_id, github.run_attempt, matrix.arch) || 'neon-law-postgres:smoke' }}
+          tags: ${{ env.PUBLISH == 'true' && format('{0}:candidate-{1}-{2}-{3}', env.REGISTRY, github.run_id, github.run_attempt, matrix.arch) || 'navigator-postgres:smoke' }}
           sbom: ${{ env.PUBLISH == 'true' }}
           provenance: ${{ env.PUBLISH == 'true' && 'mode=max' || 'false' }}
       - name: Test exact candidate
         working-directory: images/postgres
         env:
-          IMAGE: ${{ env.PUBLISH == 'true' && format('{0}@{1}', env.REGISTRY, steps.build.outputs.digest) || 'neon-law-postgres:smoke' }}
+          IMAGE: ${{ env.PUBLISH == 'true' && format('{0}@{1}', env.REGISTRY, steps.build.outputs.digest) || 'navigator-postgres:smoke' }}
         run: |
           bash tests/run.sh "$IMAGE" | tee smoke.log
           echo "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
@@ -158,32 +160,45 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          set -euo pipefail
           digest="${REFERENCE##*:}"
-          branch="postgres-image/$(date -u +%Y%m%d)-${digest::12}"
-          base=$(git rev-parse HEAD)
-          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/heads/$branch" -f "sha=$base" >/dev/null
-          # createCommitOnBranch makes a commit GitHub signs, which the
-          # `production` ruleset's required signatures accept; a runner's own
-          # `git commit` would be unsigned.
-          payload=$(jq -n --arg repo "$GITHUB_REPOSITORY" --arg branch "$branch" --arg base "$base" \
-            --arg headline "build(postgres): pin the weekly neon-law-postgres image" \
-            --arg body "Moves every pin to $REFERENCE, published by run $GITHUB_RUN_ID." \
-            '{repo: $repo, branch: $branch, base: $base, headline: $headline, body: $body}')
-          files='[]'
-          while IFS= read -r path; do
-            files=$(jq --arg path "$path" --arg contents "$(base64 -w0 < "$path")" \
-              '. + [{path: $path, contents: $contents}]' <<<"$files")
-          done < <(git diff --name-only)
-          jq -n --argjson p "$payload" --argjson files "$files" '{
-            query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
-            variables: { input: {
-              branch: { repositoryNameWithOwner: $p.repo, branchName: $p.branch },
-              expectedHeadOid: $p.base,
-              message: { headline: $p.headline, body: $p.body },
-              fileChanges: { additions: $files }
-            } }
-          }' | gh api graphql --input -
-          gh pr create --base main --head "$branch" \
-            --title "build(postgres): pin the weekly neon-law-postgres image" \
-            --body "Dogfoods \`$REFERENCE\`, published and signed by [run $GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID). PostgreSQL compatibility and PVC persistence run against this digest on this pull request; staging takes it with the next release."
+          scripts/open-signed-pr.sh "postgres-image/$(date -u +%Y%m%d)-${digest::12}" \
+            "build(postgres): pin the weekly navigator/postgres image" \
+            "Dogfoods \`$REFERENCE\`, published and signed by [run $GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID). PostgreSQL compatibility and PVC persistence run against this digest on this pull request; staging takes it with the next release."
+  bump:
+    # Dependabot cannot read the recipe's source pins, so the weekly run opens
+    # the equivalent pull request: the newest PostgreSQL minor, base digest,
+    # Apache AGE, and pgvector for the pinned major. Merging it changes
+    # images/postgres, which publishes the bumped image and then dogfoods it.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    env:
+      AUTOMERGE_APP_ID: ${{ secrets.AUTOMERGE_APP_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Bump the recipe to the newest upstream releases
+        id: bump
+        run: |
+          set -euo pipefail
+          scripts/postgres-image-bump.sh | tee bump.txt
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "summary=$(sed 's/^postgres-image-bump: //' bump.txt)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: mint app token
+        id: app-token
+        if: steps.bump.outputs.changed == 'true' && env.AUTOMERGE_APP_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.AUTOMERGE_APP_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+      - name: Open the bump pull request
+        if: steps.bump.outputs.changed == 'true' && env.AUTOMERGE_APP_ID != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SUMMARY: ${{ steps.bump.outputs.summary }}
+        run: |
+          scripts/open-signed-pr.sh "postgres-image/bump-$(date -u +%Y%m%d)" \
+            "build(postgres): bump navigator/postgres upstream versions" \
+            "Moves images/postgres to $SUMMARY. Each changed source checksum was fetched fresh by scripts/postgres-image-bump.sh; the image workflow builds and tests both architectures on this pull request and publishes on merge."

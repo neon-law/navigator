@@ -11,11 +11,15 @@
 
 version: 2
 updates:
-  # Rust crates — the whole Cargo workspace (root manifest + members).
+  # Rust crates — the whole Cargo workspace (root manifest + members), plus
+  # the standalone DBOS smoke application the PostgreSQL image is tested with,
+  # so its DBOS pin follows the workspace's.
   # Minor/patch bumps are grouped into one PR to cut noise; majors come as
   # individual PRs and stay gated behind /council per the workspace rules.
   - package-ecosystem: "cargo"
-    directory: "/"
+    directories:
+      - "/"
+      - "/images/postgres/tests/dbos"
     schedule:
       interval: "cron"
       cronjob: "0 9 * * *"

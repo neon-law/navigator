@@ -21,7 +21,14 @@ ready() {
 docker run -d --name "$name" -e POSTGRES_PASSWORD=synthetic -e POSTGRES_DB=smoke -v "$volume:/var/lib/postgresql/data" -p 127.0.0.1::5432 "$image"
 ready
 [[ $(docker exec "$name" stat -c %U /proc/1) == postgres ]]
-docker exec -i "$name" psql -U postgres -d smoke < tests/extensions.sql
+# The image declares what it ships; the test proves the extensions match.
+description=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.description"}}' "$image")
+declared=('' '' '')
+if [[ "$description" =~ ^PostgreSQL\ ([0-9]+)\.([0-9]+)\ with\ Apache\ AGE\ ([0-9.]+)\ and\ pgvector\ ([0-9.]+), ]]; then
+  declared=("$((BASH_REMATCH[1] * 10000 + BASH_REMATCH[2]))" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}")
+fi
+docker exec -i "$name" psql -U postgres -d smoke -v ON_ERROR_STOP=1 -v server_version_num="${declared[0]}" \
+  -v age="${declared[1]}" -v vector="${declared[2]}" < tests/extensions.sql
 docker restart "$name" >/dev/null
 ready
 docker exec -i "$name" psql -U postgres -d smoke < tests/persistence.sql

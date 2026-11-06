@@ -21,7 +21,8 @@ handlers and the runtime importer perform no DDL. Deployment configuration selec
 
 ## The image
 
-- **Published image:** `ghcr.io/neon-law/neon-law-postgres`, built from this repository every week and pinned by digest.
+- **Published image:** `ghcr.io/neon-law/navigator/postgres`, built here weekly, upstream versions bumped weekly,
+  and pinned by digest.
 - **Digest pins (keep identical):** [`k8s/postgres/kustomization.yaml`](../../../k8s/postgres/kustomization.yaml),
   its `access/`, `backup/`, and `restore-drill/` kustomizations,
   [`k8s/forgejo/database/kustomization.yaml`](../../../k8s/forgejo/database/kustomization.yaml), and
@@ -66,7 +67,7 @@ application dependency, not part of the image.
 Build the recipe from the repository root:
 
 ```bash
-docker build -f images/postgres/Containerfile -t neon-law-postgres:local images/postgres
+docker build -f images/postgres/Containerfile -t navigator-postgres:local images/postgres
 ```
 
 Run the published image in this worktree's KIND tier, beside the existing SurrealDB and Restate dependencies:
