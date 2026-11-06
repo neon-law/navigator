@@ -2213,30 +2213,48 @@ async fn post_eml(
     response.json().await.context("read the door's response")
 }
 
-/// The error for a non-success Navigator response: the status, plus the
-/// door's structured `error` code and `message` when it sent them. Any other
-/// body is never echoed, since it may repeat what the request carried.
-async fn refused(action: &str, response: reqwest::Response) -> anyhow::Error {
+/// Report the status and local guidance for known refusal codes. Server
+/// message fields may contain private input, so they never enter diagnostics.
+async fn refused(action: &str, mut response: reqwest::Response) -> anyhow::Error {
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    anyhow!("{action} refused: {status}{}", refusal_reason(&body))
+    let reason = refusal_reason(&mut response).await.unwrap_or_default();
+    anyhow!("{action} refused: {status}{reason}")
 }
 
-/// `": <code>: <message>"` from a structured refusal body, else empty.
-fn refusal_reason(body: &str) -> String {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
-        return String::new();
-    };
-    let parts: Vec<&str> = [value["error"].as_str(), value["message"].as_str()]
-        .into_iter()
-        .flatten()
-        .filter(|part| !part.trim().is_empty())
-        .collect();
-    if parts.is_empty() {
-        String::new()
-    } else {
-        format!(": {}", parts.join(": "))
+/// Buffer at most 4 KiB before decoding a refusal. Unknown or oversized
+/// responses retain only their HTTP status, never arbitrary response values.
+async fn refusal_reason(response: &mut reqwest::Response) -> Option<String> {
+    const MAX_REFUSAL_BYTES: usize = 4096;
+    #[derive(Deserialize)]
+    struct Refusal {
+        error: String,
     }
+    let mut body = Vec::with_capacity(MAX_REFUSAL_BYTES);
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if chunk.len() > MAX_REFUSAL_BYTES.saturating_sub(body.len()) {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let refusal: Refusal = serde_json::from_slice(&body).ok()?;
+    let guidance = match refusal.error.as_str() {
+        "kind_required" => "A document kind is required for attachments; pass --kind.",
+        "invalid_kind" => "Choose a supported --kind value.",
+        "not_base64" | "invalid_base64" => "The message could not be decoded.",
+        "not_mime" | "unparseable_message" => "The file must contain an email message.",
+        "no_date" => "The saved message requires a Date header.",
+        "bad_date" => "The saved message Date header is out of range.",
+        "no_body" => "The saved message has no supported text body.",
+        "message_too_large" => "The message exceeds the inbound size cap.",
+        "project_has_no_firm" => "The Project needs an owning Firm before inbox filing.",
+        "unauthenticated" => "Sign in to Navigator again.",
+        "forbidden" => "The Navigator session does not allow this action.",
+        "not_found" => "The requested resource is not available to this session.",
+        "invalid_request" => "Check the filing request fields.",
+        "internal" => "Navigator could not complete the filing.",
+        _ => return None,
+    };
+    Some(format!(": {}: {guidance}", refusal.error))
 }
 
 /// What the .eml door's response means for the operator. Pure, so the
@@ -4200,6 +4218,58 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
             "the door's message reaches the operator: {error}"
         );
         server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn mail_refusals_suppress_structured_private_values() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        for code in ["kind_required", "SYNTHETIC_PRIVATE_CODE"] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                    "error": code,
+                    "message": "SYNTHETIC_PRIVATE_MESSAGE",
+                })))
+                .mount(&server)
+                .await;
+            let response = reqwest::Client::new()
+                .post(server.uri())
+                .send()
+                .await
+                .unwrap();
+            let error = refused("file the .eml", response).await.to_string();
+            assert!(!error.contains("SYNTHETIC_PRIVATE"), "{error}");
+            if code == "kind_required" {
+                assert!(error.contains("kind_required"), "{error}");
+                assert!(error.contains("--kind"), "{error}");
+            } else {
+                assert_eq!(error, "file the .eml refused: 400 Bad Request");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn mail_refusals_reject_oversized_bodies() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": "kind_required",
+                "message": "x".repeat(8192),
+            })))
+            .mount(&server)
+            .await;
+        let response = reqwest::Client::new()
+            .post(server.uri())
+            .send()
+            .await
+            .unwrap();
+        let error = refused("file the .eml", response).await.to_string();
+        assert_eq!(error, "file the .eml refused: 400 Bad Request");
     }
 
     #[tokio::test]
