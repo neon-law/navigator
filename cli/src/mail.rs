@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 mod attachments;
 mod login;
+mod signature;
 
 const GMAIL_API: &str = "https://gmail.googleapis.com/gmail/v1";
 const GOOGLE_TOKEN_API: &str = "https://oauth2.googleapis.com/token";
@@ -39,7 +40,13 @@ const MAIL_DIRECTORY: &str = "mail";
 /// is not passed: mail correspondence is served correspondence.
 const DEFAULT_PARSE_UPLOAD_KIND: &str = "letter";
 
-const DRAFT_ATTACH_HELP: &str = "\
+const DRAFT_HELP: &str = "\
+Signature:
+  Set NAVIGATOR_GMAIL_SIGNATURE privately to the attorney's approved signature
+  and confidentiality notice. The CLI includes one copy in the unsent draft;
+  missing or blank configuration is refused before Gmail is contacted.
+  A matching signature embedded before other text requires review before saving.
+
 Attachments:
   --attach is repeatable. Each file is read from disk, keeps its file name, and
   takes its MIME type from the extension (.pdf is application/pdf; an unknown
@@ -65,7 +72,7 @@ pub enum MailAction {
     /// Read a Gmail thread as plain text.
     Read { thread: String },
     /// Create or update an unsent draft. Use --thread to draft a reply.
-    #[command(after_long_help = DRAFT_ATTACH_HELP)]
+    #[command(after_long_help = DRAFT_HELP)]
     Draft {
         /// Recipient. Repeat or comma-separate for several. Defaults to the latest sender when
         /// replying with --thread.
@@ -80,7 +87,7 @@ pub enum MailAction {
         /// Subject. Defaults to the latest thread subject when replying.
         #[arg(long)]
         subject: Option<String>,
-        /// Plain-text draft body.
+        /// Plain-text message body. The CLI adds the configured attorney signature.
         #[arg(long)]
         body_file: PathBuf,
         /// Gmail thread ID to reply within.
@@ -565,26 +572,6 @@ fn attachments(part: &MessagePart, output: &mut Vec<String>) {
     }
 }
 
-fn without_signature<'a>(body: &'a str, configured_signature: Option<&str>) -> &'a str {
-    if let Some(signature) = configured_signature
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        if let Some(start) = body.trim_end().strip_suffix(signature) {
-            return start.trim_end();
-        }
-    }
-    let mut offset = 0;
-    for line in body.split_inclusive('\n') {
-        let content = line.trim_end_matches(['\r', '\n']);
-        if content == "-- " || content == "--" {
-            return body[..offset].trim_end();
-        }
-        offset += line.len();
-    }
-    body.trim_end()
-}
-
 fn safe_header<'a>(value: &'a str, name: &str) -> Result<&'a str> {
     if value.contains(['\r', '\n']) {
         return Err(anyhow!("{name} cannot contain a line break"));
@@ -774,12 +761,7 @@ fn draft_raw(
             raw.push_str("\r\n");
         }
     }
-    let text = without_signature(
-        body,
-        std::env::var("NAVIGATOR_GMAIL_SIGNATURE").ok().as_deref(),
-    )
-    .replace("\r\n", "\n")
-    .replace('\n', "\r\n");
+    let text = body.replace("\r\n", "\n").replace('\n', "\r\n");
     if attachments.is_empty() {
         raw.push_str("Content-Type: text/plain; charset=UTF-8\r\n\r\n");
         raw.push_str(&text);
@@ -1699,6 +1681,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
                 thread,
                 draft_id,
                 attach,
+                configured_signature: std::env::var("NAVIGATOR_GMAIL_SIGNATURE").ok(),
             };
             let saved = save_draft_command(request, client).await?;
             println!(
@@ -1787,6 +1770,7 @@ struct DraftRequest {
     thread: Option<String>,
     draft_id: Option<String>,
     attach: Vec<PathBuf>,
+    configured_signature: Option<String>,
 }
 
 struct SavedDraft {
@@ -1811,12 +1795,14 @@ where
         thread,
         draft_id,
         attach,
+        configured_signature,
     } = request;
     let body = std::fs::read_to_string(&body_file)
         .with_context(|| format!("read draft body {}", body_file.display()))?;
     if body.trim().is_empty() {
         return Err(anyhow!("draft body is empty"));
     }
+    let body = signature::with_signature(&body, configured_signature.as_deref())?;
     let attachments = load_attachments(&attach, &body)?;
     let gmail = connect().await?;
     let profile = gmail.profile().await?;
@@ -2351,6 +2337,8 @@ async fn post_communication(target: &FileTarget<'_>, request: &serde_json::Value
 mod tests {
     use super::*;
 
+    const CONFIGURED_SIGNATURE: &str = "Example Attorney\nConfidential: intended recipient only.";
+
     fn synthetic_message(headers: &[(&str, &str)]) -> GmailMessage {
         GmailMessage {
             id: "message-1".into(),
@@ -2664,43 +2652,6 @@ mod tests {
         assert!(contract.contains("navigator mail parse"));
         assert!(contract.contains("navigator mail save"));
         assert!(contract.contains("`mail/` is git-ignored"));
-    }
-
-    #[test]
-    fn draft_text_ends_at_the_signoff_and_omits_a_trailing_signature() {
-        assert_eq!(
-            without_signature("Thanks!\n-- \nName\nBar admission", None),
-            "Thanks!"
-        );
-        assert_eq!(without_signature("Thanks!\n--", None), "Thanks!");
-        assert_eq!(without_signature("Thanks!", None), "Thanks!");
-        assert_eq!(
-            without_signature("Please review.\n\nBest regards,\nName", None),
-            "Please review.\n\nBest regards,\nName"
-        );
-        assert_eq!(
-            without_signature("Thanks!\n\nI also need the attached order checked.", None),
-            "Thanks!\n\nI also need the attached order checked."
-        );
-    }
-
-    #[test]
-    fn draft_text_removes_only_an_exact_configured_signature_block() {
-        assert_eq!(
-            without_signature(
-                "Please review.\n\nJane Doe\nAttorney at Law",
-                Some("Jane Doe\nAttorney at Law")
-            ),
-            "Please review."
-        );
-    }
-
-    #[test]
-    fn agent_contract_requires_body_only_drafts_and_attorney_review() {
-        let contract = include_str!("projects/agent_contract.md");
-        assert!(contract.contains("navigator mail draft --body-file"));
-        assert!(contract.contains("do not add a complimentary close"));
-        assert!(contract.contains("The attorney reviews the complete draft in Gmail"));
     }
 
     #[test]
@@ -3267,6 +3218,7 @@ mod tests {
             let connected = std::cell::Cell::new(false);
             let error = save_draft_command(
                 DraftRequest {
+                    configured_signature: Some(CONFIGURED_SIGNATURE.into()),
                     to: vec!["client@example.test".into()],
                     cc: Vec::new(),
                     bcc: Vec::new(),
@@ -3346,9 +3298,10 @@ mod tests {
 
         let created = save_draft_command(
             DraftRequest {
+                configured_signature: Some(CONFIGURED_SIGNATURE.into()),
                 to: vec!["client@example.test".into()],
-                cc: Vec::new(),
-                bcc: Vec::new(),
+                cc: vec!["copy@example.test".into()],
+                bcc: vec!["blind@example.test".into()],
                 subject: Some("Letter".into()),
                 body_file: body_file.clone(),
                 thread: None,
@@ -3368,11 +3321,17 @@ mod tests {
             ("draft-1", "lawyer@example.test", 2)
         );
 
+        std::fs::write(
+            &body_file,
+            format!("Revised body\n\n-- \n{CONFIGURED_SIGNATURE}\n\n-- \n{CONFIGURED_SIGNATURE}"),
+        )
+        .unwrap();
         let updated = save_draft_command(
             DraftRequest {
+                configured_signature: Some(CONFIGURED_SIGNATURE.into()),
                 to: Vec::new(),
-                cc: Vec::new(),
-                bcc: Vec::new(),
+                cc: vec!["copy@example.test".into()],
+                bcc: vec!["blind@example.test".into()],
                 subject: None,
                 body_file: body_file.clone(),
                 thread: Some("thread-1".into()),
@@ -3387,6 +3346,7 @@ mod tests {
 
         let cleared = save_draft_command(
             DraftRequest {
+                configured_signature: Some(CONFIGURED_SIGNATURE.into()),
                 to: Vec::new(),
                 cc: Vec::new(),
                 bcc: Vec::new(),
@@ -3424,6 +3384,10 @@ mod tests {
         );
 
         let (body, raw) = decoded_draft(saves[0]);
+        assert!(raw.contains("Cc: copy@example.test\r\n"));
+        assert!(raw.contains("Bcc: blind@example.test\r\n"));
+        let text = parsed(&raw).body_text(0).unwrap().replace("\r\n", "\n");
+        assert_eq!(text.matches(CONFIGURED_SIGNATURE).count(), 1);
         assert!(body["message"]["threadId"].is_null());
         assert_eq!(
             attachment_summary(&parsed(&raw)),
@@ -3442,8 +3406,13 @@ mod tests {
         );
 
         let (body, raw) = decoded_draft(saves[1]);
+        assert!(raw.contains("Cc: copy@example.test\r\n"));
+        assert!(raw.contains("Bcc: blind@example.test\r\n"));
         assert_eq!(body["message"]["threadId"], "thread-1");
         let message = parsed(&raw);
+        let text = message.body_text(0).unwrap().replace("\r\n", "\n");
+        assert!(text.starts_with("Revised body"));
+        assert_eq!(text.matches(CONFIGURED_SIGNATURE).count(), 1);
         assert_eq!(message.subject(), Some("Re: A question"));
         assert_eq!(
             message.in_reply_to().and_then(|ids| ids.last()),
@@ -4019,11 +3988,70 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
     }
 
     #[tokio::test]
+    async fn an_embedded_signature_requires_review_before_updating_a_draft() {
+        for body in [
+            format!("{CONFIGURED_SIGNATURE}\n\n> Quoted history"),
+            format!("Please review.\n\n{CONFIGURED_SIGNATURE}\n\n> Quoted history"),
+            format!(
+                "Please review.\n\n-- \n{CONFIGURED_SIGNATURE}\n\nFollowing text.\n\n-- \n{CONFIGURED_SIGNATURE}"
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let body_file = write_file(directory.path(), "body.txt", body.as_bytes());
+            let mut request =
+                draft_request(body_file, &["client@example.test"], Some("Review"), None);
+            request.draft_id = Some("existing-draft".into());
+            let connected = std::cell::Cell::new(false);
+            let error = save_draft_command(request, || async {
+                connected.set(true);
+                Err(anyhow!("provider must remain untouched"))
+            })
+            .await
+            .err()
+            .unwrap();
+            assert!(
+                !connected.get(),
+                "ambiguous signatures must refuse before reading or updating the existing draft"
+            );
+            let message = error.to_string();
+            assert!(message.contains("signature needs review"), "{message}");
+            assert!(!message.contains("NAVIGATOR_GMAIL_SIGNATURE"), "{message}");
+            assert!(!message.contains("Example Attorney"), "{message}");
+            assert!(!message.contains("Confidential:"), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_draft_signature_is_refused_before_connecting() {
+        let directory = tempfile::tempdir().unwrap();
+        let body_file = write_file(directory.path(), "body.txt", b"Please review.");
+        let mut request = draft_request(body_file, &["client@example.test"], Some("Review"), None);
+        request.configured_signature = None;
+        let connected = std::cell::Cell::new(false);
+        let error = save_draft_command(request, || async {
+            connected.set(true);
+            Err(anyhow!("must not connect"))
+        })
+        .await
+        .err()
+        .unwrap();
+        assert!(
+            !connected.get(),
+            "missing signature must refuse before Gmail access"
+        );
+        assert!(
+            error.to_string().contains("NAVIGATOR_GMAIL_SIGNATURE"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
     async fn an_empty_or_missing_draft_body_is_refused_before_connecting() {
         let directory = tempfile::tempdir().unwrap();
 
         let missing = save_draft_command(
             DraftRequest {
+                configured_signature: Some(CONFIGURED_SIGNATURE.into()),
                 to: vec!["a@x.test".into()],
                 cc: vec![],
                 bcc: vec![],
@@ -4045,6 +4073,7 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
         std::fs::write(&body_file, "   \n").unwrap();
         let empty = save_draft_command(
             DraftRequest {
+                configured_signature: Some(CONFIGURED_SIGNATURE.into()),
                 to: vec!["a@x.test".into()],
                 cc: vec![],
                 bcc: vec![],
@@ -4375,6 +4404,7 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
         thread: Option<&str>,
     ) -> DraftRequest {
         DraftRequest {
+            configured_signature: Some(CONFIGURED_SIGNATURE.into()),
             to: to.iter().map(|value| (*value).to_string()).collect(),
             cc: vec![],
             bcc: vec![],

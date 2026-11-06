@@ -139,10 +139,18 @@ search convenience, not an authorization boundary. Filing compares the message p
 when they do not match. The authenticated Navigator API still enforces Project participation. The message idempotency
 key combines the normalized Gmail profile address and Gmail message id; reusing it in a different Project is rejected.
 
-For drafting, provide only the substantive message body. The CLI removes the `--` signature delimiter and an exact
-trailing signature from `NAVIGATOR_GMAIL_SIGNATURE`. It preserves common sign-offs and cannot identify arbitrary
-undelimited prose as a signature, so this cleanup is not a signature-detection guarantee; an attorney must review the
-complete draft in Gmail before any separate sending action.
+For drafting, provide the substantive message body. Set `NAVIGATOR_GMAIL_SIGNATURE` privately to the approved attorney
+signature, including its confidentiality notice. Missing or blank configuration is refused before Gmail is contacted.
+The CLI appends one copy, replacing repeated matching trailing copies without changing other prose or quoted context.
+Signature insertion preserves the draft's recipients, reply headers and attachment bytes.
+
+A matching signature on its own lines before quoted history or other text requires review. The CLI refuses before
+contacting Gmail, leaving any existing draft untouched. Clearly quoted lines prefixed with `>` and inline prose stay
+intact. An attorney decides which unquoted block is current or historical.
+
+Gmail's [account signature](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.settings.sendAs)
+is a web-UI composition setting; the CLI supplies its own complete draft body. The attorney reviews the complete unsent
+draft and confirms one signature before personally sending. Do not insert another signature during that review.
 
 ## Recipients
 
