@@ -276,6 +276,7 @@ impl ServiceSecrets {
                 if keys.contains(FORGEJO_SIGNING_KEYS[0]) {
                     targets.push("navigator-forgejo-signing");
                 }
+                targets.push(FORGEJO_METRICS_SECRET);
                 targets
             }
         }
@@ -1397,9 +1398,37 @@ fn build_service_secrets(
             if forgejo_signing_identity(deployment)?.is_some() {
                 secrets.push(forgejo_signing_secret(payloads)?);
             }
+            secrets.push(KubernetesSecretPayload {
+                name: FORGEJO_METRICS_SECRET,
+                secret_type: "Opaque",
+                data: BTreeMap::from([("token".to_owned(), forgejo_metrics_token(payloads)?)]),
+            });
             Ok(secrets)
         }
     }
+}
+
+/// The Secret holding Forgejo's `/metrics` bearer token, which the `OTel`
+/// collector in the same namespace scrapes with (ENG-1238).
+const FORGEJO_METRICS_SECRET: &str = "navigator-forgejo-metrics";
+
+/// Forgejo's `/metrics` bearer token, derived from the internal token so no
+/// new SOPS key is needed and rotating the internal token rotates it too.
+/// One-way: the scrape token reveals nothing about the internal token.
+fn forgejo_metrics_token(payloads: &BTreeMap<String, String>) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let internal = required_payload(payloads, "NAVIGATOR_FORGEJO_INTERNAL_TOKEN")?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"navigator-forgejo-metrics\0");
+    hasher.update(internal.as_bytes());
+    Ok(hasher
+        .finalize()
+        .iter()
+        .fold(String::new(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        }))
 }
 
 fn forgejo_signing_secret(payloads: &BTreeMap<String, String>) -> Result<KubernetesSecretPayload> {
@@ -1444,6 +1473,17 @@ fn render_service_forgejo_app_ini(
     );
     if forgejo_actions_enabled(deployment)? {
         rendered = rendered.replacen(disabled, "[actions]\nENABLED = true\n", 1);
+    }
+    {
+        use std::fmt::Write as _;
+        // Bounded, installation-wide gauges only: no per-repository or
+        // per-label series, so nothing a repository name could leak through.
+        write!(
+            rendered,
+            "[metrics]\nENABLED = true\nENABLED_ISSUE_BY_REPOSITORY = false\n\
+             ENABLED_ISSUE_BY_LABEL = false\nTOKEN = {}\n",
+            forgejo_metrics_token(payloads)?
+        )?;
     }
     if let Some((name, email)) = signing {
         use std::fmt::Write as _;
@@ -2762,6 +2802,7 @@ sops:
                 "navigator-forgejo-config",
                 "navigator-forgejo-postgres-ca",
                 "navigator-forgejo-database",
+                "navigator-forgejo-metrics",
             ]
         );
         assert_eq!(
@@ -2823,6 +2864,32 @@ sops:
             render(&deployment).is_err(),
             "Actions requires the signing prerequisites"
         );
+    }
+
+    /// ENG-1238: Forgejo exposes `/metrics` only behind a bearer token, and
+    /// the collector's Secret carries that same token, never the internal one.
+    #[test]
+    fn forgejo_metrics_are_token_gated_with_a_token_derived_one_way() {
+        let deployment = service_deployment(ServiceSecrets::Forgejo);
+        let payloads = synthetic_service_payloads(ServiceSecrets::Forgejo);
+        let keys = service_plan(&deployment, ServiceSecrets::Forgejo).unwrap();
+        let secrets =
+            build_service_secrets(ServiceSecrets::Forgejo, &deployment, "navigator", &payloads)
+                .unwrap();
+        let token = &secrets
+            .iter()
+            .find(|secret| secret.name == FORGEJO_METRICS_SECRET)
+            .expect("metrics Secret")
+            .data["token"];
+        assert_eq!(token.len(), 64);
+        assert_ne!(token, &payloads["NAVIGATOR_FORGEJO_INTERNAL_TOKEN"]);
+        let ini = &secrets[0].data["app.ini"];
+        assert!(ini.contains("[metrics]\nENABLED = true\n"));
+        assert!(ini.contains(&format!("TOKEN = {token}\n")));
+        assert!(ini.contains("ENABLED_ISSUE_BY_REPOSITORY = false\n"));
+        assert!(ServiceSecrets::Forgejo
+            .targets(&keys)
+            .contains(&FORGEJO_METRICS_SECRET));
     }
 
     #[test]

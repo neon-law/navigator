@@ -1283,6 +1283,7 @@ fn forgejo_actions_document_oidc_trust_is_optional_and_has_no_manifest_defaults(
         ("NAVIGATOR_FORGEJO_ACTIONS_OIDC_ISSUER", "issuer"),
         ("NAVIGATOR_FORGEJO_ACTIONS_OIDC_AUDIENCE", "audience"),
         ("NAVIGATOR_FORGEJO_ACTIONS_OIDC_WORKFLOW", "workflow"),
+        ("NAVIGATOR_FORGEJO_ACTIONS_OIDC_CD_WORKFLOW", "cd_workflow"),
     ];
     for (environment, path) in [
         ("base KIND", KIND),

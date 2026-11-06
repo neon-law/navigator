@@ -14,4 +14,6 @@ operations](../../../../docs/cloud-operations.md).
 
 `dash0-check-rules.yaml` holds the Dash0 check rules for the Nightly Project Update: a degraded run and a missed run.
 Apply it to the deployment's Dash0 dataset with the Dash0 CLI or the Dash0 operator. The file header gives both
-commands.
+commands. `dash0-forgejo-check-rules.yaml` holds the Forgejo Actions rules, applied the same way: a job waiting with no
+runner, a stopped runner controller, a gate or CD failure on `main`, a merge with no CD run, leftover runners, and
+missing Forgejo metrics.

@@ -2194,6 +2194,7 @@ dependencies = [
  "word",
  "workflows",
  "zip",
+ "zstd",
 ]
 
 [[package]]

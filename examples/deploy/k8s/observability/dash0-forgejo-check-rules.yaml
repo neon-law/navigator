@@ -1,0 +1,156 @@
+# Dash0 check rules for Forgejo Actions (ENG-1239).
+#
+# Slack hears about Forgejo Actions only when something is wrong, including
+# when something did not happen. Every signal comes from the runner
+# controller (`navigator ops forgejo runner-controller`, telemetry/src/lib.rs)
+# or the collector's Forgejo scrape:
+#   navigator.forgejo.controller.tick                  outcome = ok | error
+#   navigator.forgejo.run.oldest_waiting_seconds       forgejo.repository
+#   navigator.forgejo.run.finished                     forgejo.repository, forgejo.workflow,
+#                                                      forgejo.event, outcome
+#   navigator.forgejo.runner.orphan_cleaned            (no attributes)
+#   navigator.forgejo.cd.missed                        forgejo.repository
+#   up{job="forgejo"}                                  the collector's Forgejo scrape
+# The repository is `<firm>/<project code>`. No rule, label or annotation
+# carries a PR title, branch name or commit message: each can hold
+# client-identifying text. The run number is on the controller's
+# `forgejo.job.*` log records; `navigator ops forgejo logs <repository> --run
+# <n>` prints the run.
+#
+# One rule per group, so each group also loads as a Terraform
+# `dash0_check_rule`. Apply to the staging dataset with either:
+#   dash0 check-rules create -f dash0-forgejo-check-rules.yaml --dataset <dataset>
+#   kubectl apply -f dash0-forgejo-check-rules.yaml
+# Route with a label filter (`workflow = forgejo_actions`) on the Slack
+# notification channel ENG-759 set up, not in this file. Staging only:
+# production check rules are ENG-895. Each rule resolves on its own once its
+# expression stops matching.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: forgejo-actions
+  namespace: YOUR_NAMESPACE
+  labels:
+    dash0.com/dataset: YOUR_DASH0_DATASET
+spec:
+  groups:
+    - name: forgejo-job-waiting-no-runner
+      interval: 1m
+      rules:
+        # The controller starts a runner within one 20-second tick, so a run
+        # that waits five minutes has no runner coming.
+        - alert: ForgejoJobWaitingNoRunner
+          expr: |
+            max by ("forgejo.repository") (
+              {otel_metric_name="navigator.forgejo.run.oldest_waiting_seconds"}
+            ) > 300
+          for: 0m
+          annotations:
+            summary: "Forgejo: a {{ $labels.forgejo_repository }} run has waited {{ $value | humanizeDuration }} for a runner"
+            description: "Check ForgejoRunnerControllerMissed first. Open the repository's Actions page to find the waiting run; `kubectl -n navigator logs deploy/navigator-forgejo-runner-controller` shows why no runner started."
+            dash0-enabled: "true"
+          labels:
+            workflow: forgejo_actions
+    - name: forgejo-runner-controller-missed
+      interval: 1m
+      rules:
+        # The controller ticks every 20 seconds and zero-starts the series at
+        # boot, so five minutes with no successful tick means it stopped,
+        # crash-loops, or cannot reach Forgejo or the Kubernetes API.
+        - alert: ForgejoRunnerControllerMissed
+          expr: |
+            (
+              sum(increase({otel_metric_name="navigator.forgejo.controller.tick", outcome="ok"}[5m]))
+              or vector(0)
+            ) < 1
+          for: 0m
+          annotations:
+            summary: "Forgejo runner controller has not completed a tick in 5 minutes"
+            description: "No Forgejo job will run until it recovers. `kubectl -n navigator get deploy navigator-forgejo-runner-controller`; until then `navigator ops forgejo runner-once` runs one job by hand."
+            dash0-enabled: "true"
+          labels:
+            workflow: forgejo_actions
+    - name: forgejo-gate-failed-on-main
+      interval: 1m
+      rules:
+        # A gate-style workflow failing on a push to main. A pull request's
+        # failure stays in the pull request.
+        - alert: ForgejoGateFailedOnMain
+          expr: |
+            sum by ("forgejo.repository", "forgejo.workflow") (
+              increase({otel_metric_name="navigator.forgejo.run.finished", outcome="failure", "forgejo.event"!="pull_request", "forgejo.workflow"!="cd.yml"}[15m])
+            ) > 0
+          for: 0m
+          annotations:
+            summary: "Forgejo: {{ $labels.forgejo_workflow }} failed on main in {{ $labels.forgejo_repository }}"
+            description: "`navigator ops forgejo logs {{ $labels.forgejo_repository }} --run <n>` prints the run; the controller's forgejo.job.finished record names <n>."
+            dash0-enabled: "true"
+          labels:
+            workflow: forgejo_actions
+    - name: forgejo-cd-failed
+      interval: 1m
+      rules:
+        # documents, seeds or notify failed. notify is continue-on-error, so
+        # in practice this is the document check or the seed import.
+        - alert: ForgejoCdFailed
+          expr: |
+            sum by ("forgejo.repository") (
+              increase({otel_metric_name="navigator.forgejo.run.finished", outcome="failure", "forgejo.workflow"="cd.yml"}[15m])
+            ) > 0
+          for: 0m
+          annotations:
+            summary: "Forgejo CD failed on main in {{ $labels.forgejo_repository }}"
+            description: "`navigator ops forgejo logs {{ $labels.forgejo_repository }} --run <n>` prints the run. A failed `seeds` job left the live Project unreconciled."
+            dash0-enabled: "true"
+          labels:
+            workflow: forgejo_actions
+    - name: forgejo-cd-missed
+      interval: 1m
+      rules:
+        # main's head is 15 minutes to 24 hours old and no cd.yml run names
+        # it: the push did not trigger CD, or the run was never created.
+        - alert: ForgejoCdMissed
+          expr: |
+            max by ("forgejo.repository") (
+              {otel_metric_name="navigator.forgejo.cd.missed"}
+            ) > 0
+          for: 0m
+          annotations:
+            summary: "Forgejo: a merge to main in {{ $labels.forgejo_repository }} produced no CD run"
+            description: "Check that `.forgejo/workflows/cd.yml` matches the release (`navigator project repository sync-skills`) and that Actions is enabled for the repository. A `workflow_dispatch` on main runs it now."
+            dash0-enabled: "true"
+          labels:
+            workflow: forgejo_actions
+    - name: forgejo-runner-orphan
+      interval: 5m
+      rules:
+        # Recovery removed a leftover runner Job or registration: a sign of
+        # Kubernetes API or Forgejo API flakiness during a launch.
+        - alert: ForgejoRunnerOrphan
+          expr: |
+            sum(increase({otel_metric_name="navigator.forgejo.runner.orphan_cleaned"}[1h])) > 0
+          for: 0m
+          annotations:
+            summary: "Forgejo runner controller cleaned {{ $value }} leftover runners in the last hour"
+            description: "The controller's forgejo.runner.orphan_cleaned and forgejo.runner.launch_failed log records name each Job."
+            dash0-enabled: "true"
+          labels:
+            workflow: forgejo_actions
+    - name: forgejo-metrics-absent
+      interval: 1m
+      rules:
+        # The collector cannot scrape Forgejo: Forgejo is down, or the
+        # `navigator-forgejo-metrics` token is missing or stale.
+        - alert: ForgejoMetricsAbsent
+          expr: |
+            (
+              max({otel_metric_name="up", "service.name"="forgejo"})
+              or vector(0)
+            ) < 1
+          for: 10m
+          annotations:
+            summary: "Forgejo metrics have been absent for 10 minutes"
+            description: "Check the Forgejo pod, then rerun `navigator ops secrets apply --service forgejo` so app.ini and navigator-forgejo-metrics carry the same token."
+            dash0-enabled: "true"
+          labels:
+            workflow: forgejo_actions

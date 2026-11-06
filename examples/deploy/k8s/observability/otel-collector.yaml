@@ -71,6 +71,23 @@ data:
               scrape_interval: 30s
               static_configs:
                 - targets: ["${env:POD_IP}:8888"]
+      # Forgejo's own gauges (ENG-1238): repositories, users, Actions and the
+      # Go runtime, installation-wide only — `app.ini` turns per-repository
+      # and per-label series off. `/metrics` answers only the bearer token
+      # `ops secrets apply --service forgejo` writes to
+      # `navigator-forgejo-metrics`; without it the scrape reports `up == 0`,
+      # which is what the ForgejoMetricsAbsent check rule watches.
+      prometheus/forgejo:
+        config:
+          scrape_configs:
+            - job_name: forgejo
+              scrape_interval: 30s
+              metrics_path: /metrics
+              authorization:
+                type: Bearer
+                credentials: "${env:FORGEJO_METRICS_TOKEN}"
+              static_configs:
+                - targets: ["navigator-forgejo.YOUR_NAMESPACE.svc.cluster.local:3000"]
     processors:
       # Guard the collector's own memory before anything else in the chain.
       memory_limiter:
@@ -167,6 +184,15 @@ data:
           - duration_seconds
           - count
           - audit
+          # Forgejo Actions (ENG-1238): the repository is `<firm>/<project
+          # code>`, opaque by construction; the run number and workflow file
+          # are mechanism. No PR title, branch name or commit message is ever
+          # emitted.
+          - forgejo.repository
+          - forgejo.run_number
+          - forgejo.workflow
+          - forgejo.event
+          - job
           # Workflow root spans set `navigator.keep = true` so the tail sampler
           # keeps every run (see `keep-navigator` below). It is a flag, not an
           # identifier, and is separate from `audit`, which is the authorization
@@ -333,6 +359,9 @@ data:
                   - duration_ms
                   - count
                   - audit
+                  - forgejo.repository
+                  - forgejo.workflow
+                  - forgejo.event
                   - event
                   - decision
                   - tool
@@ -493,7 +522,7 @@ data:
           processors: [memory_limiter, resourcedetection, redaction, filter/dash0_noise, tail_sampling/dash0, batch]
           exporters: [otlp/dash0]
         metrics:
-          receivers: [otlp, prometheus/self]
+          receivers: [otlp, prometheus/self, prometheus/forgejo]
           processors: [memory_limiter, resourcedetection, transform/metric_identity, redaction, transform/drop_redaction_keys, metricstransform, batch]
           exporters: [googlecloud, otlp/dash0]
         logs:
@@ -565,6 +594,12 @@ spec:
                 secretKeyRef:
                   name: YOUR_WEB_SECRET_NAME
                   key: DASH0_TOKEN
+                  optional: true
+            - name: FORGEJO_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-forgejo-metrics
+                  key: token
                   optional: true
           ports:
             - containerPort: 4317

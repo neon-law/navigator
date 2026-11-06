@@ -14,8 +14,12 @@
 
 pub(in crate::devx) mod bundle;
 mod cluster;
+pub(in crate::devx) mod controller;
+mod kubeapi;
+pub(in crate::devx) mod logs;
 mod oidc;
 pub(in crate::devx) mod policy;
+pub(in crate::devx) mod release;
 pub(in crate::devx) mod runner;
 mod smoke;
 
@@ -500,7 +504,8 @@ mod tests {
     /// the context `main`'s branch protection requires.
     #[test]
     fn the_scaffolded_project_gate_posts_the_required_context() {
-        use crate::projects::repository::{forgejo_gate_workflow, FORGEJO_REQUIRED_CHECK};
+        use crate::projects::repository::FORGEJO_REQUIRED_CHECK;
+        use project_scaffold::forgejo_gate_workflow;
         let workflow = forgejo_gate_workflow();
         assert_eq!(
             actions_context(&workflow, "pull_request").unwrap(),
