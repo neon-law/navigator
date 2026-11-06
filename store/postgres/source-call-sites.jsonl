@@ -2220,8 +2220,8 @@
 {"file":"store/src/letters.rs","line":362,"function":"a_historical_letter_with_no_project_id_reads_as_none","operation":"bind","sql_operations":[],"tables":["letter"],"transaction":false}
 {"file":"store/src/letters.rs","line":362,"function":"a_historical_letter_with_no_project_id_reads_as_none","operation":"bind","sql_operations":[],"tables":["mailroom"],"transaction":false}
 {"file":"store/src/letters.rs","line":362,"function":"a_historical_letter_with_no_project_id_reads_as_none","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
-{"file":"store/src/mail_signatures.rs","line":128,"function":"find_row","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"store/src/mail_signatures.rs","line":154,"function":"put_row","operation":"query","sql_operations":["INSERT","UPDATE"],"tables":[],"transaction":false}
+{"file":"store/src/mail_signatures.rs","line":131,"function":"find_row","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"store/src/mail_signatures.rs","line":157,"function":"put_row","operation":"query","sql_operations":["INSERT","UPDATE"],"tables":[],"transaction":false}
 {"file":"store/src/mailrooms.rs","line":138,"function":"create","operation":"bind","sql_operations":[],"tables":["address"],"transaction":false}
 {"file":"store/src/mailrooms.rs","line":138,"function":"create","operation":"bind","sql_operations":[],"tables":["mailroom"],"transaction":false}
 {"file":"store/src/mailrooms.rs","line":138,"function":"create","operation":"query","sql_operations":["SELECT","CREATE"],"tables":[],"transaction":false}
