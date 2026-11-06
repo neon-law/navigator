@@ -3319,7 +3319,7 @@ fn canonical_document(base: &str) -> Value {
             },
             "responses": {
               "204": { "description": "The notation was sent back for changes" },
-              "400": { "description": "No answer was flagged", "content": { "application/json": {
+              "400": { "description": "No answer was flagged, a flagged question is off-route, or completed questionnaire authority is unavailable", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "401": { "description": "No authenticated session", "content": { "application/json": {
@@ -3373,7 +3373,7 @@ fn canonical_document(base: &str) -> Value {
             },
             "responses": {
               "204": { "description": "The notation was resubmitted for review" },
-              "400": { "description": "A flagged answer was left blank", "content": { "application/json": {
+              "400": { "description": "A flagged answer is blank or off-route, a correction changes the question chain, or completed questionnaire authority is unavailable; a fresh intake may be required", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "401": { "description": "No authenticated session", "content": { "application/json": {

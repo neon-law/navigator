@@ -73,9 +73,17 @@ async fn build_app_and_notation() -> (axum::Router, store::surreal::SurrealDb, u
         .await
         .unwrap();
 
+    let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
+        &surreal,
+        Some(&storage),
+        &tmpl,
+    )
+    .await
+    .unwrap();
     let notation_id = store::notations::create(
         &surreal,
-        &store::notations::NewNotation::new(tmpl.id, libra.id, proj.id, "BEGIN"),
+        &store::notations::NewNotation::new(tmpl.id, libra.id, proj.id, "BEGIN")
+            .with_questionnaire_snapshot(snapshot),
     )
     .await
     .unwrap()
@@ -385,11 +393,7 @@ async fn reask_post_when_not_parked_returns_409() {
 }
 
 #[tokio::test]
-async fn reask_post_rolls_back_and_400s_when_an_answer_cannot_be_saved() {
-    // Flag a code whose question isn't seeded (a stale or hand-crafted flag):
-    // re-collection can't persist it, so the whole resubmit is refused and
-    // rolled back rather than landing a partial correction. Also exercises
-    // the re-ask surface's label fallback to the bare code.
+async fn an_unseeded_question_cannot_be_flagged_or_recollected() {
     let (app, surreal, nid) = build_app_and_notation().await;
     walk_to_lawyer_review(&app, nid, &surreal).await;
     let resp = post_form(
@@ -398,19 +402,28 @@ async fn reask_post_rolls_back_and_400s_when_an_answer_cannot_be_saved() {
         "q:zzz_stale_code=on",
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(notation_state(&surreal, nid).await, "lawyer_review");
+    assert!(store::reask::flagged_questions(&surreal, nid)
+        .await
+        .unwrap()
+        .is_empty());
 
-    // The re-ask surface renders, falling back to the bare code as its label.
+    // An existing stale flag is not authority to offer or collect an unknown question.
+    let actor = store::persons::default_firm_dri(&surreal)
+        .await
+        .unwrap()
+        .unwrap();
+    store::reask::record_change_request(&surreal, nid, actor, &["zzz_stale_code".into()], None)
+        .await
+        .unwrap();
+    store::notations::update_state(&surreal, nid, "reask__client")
+        .await
+        .unwrap();
+    let before = store::answers::for_notation(&surreal, nid).await.unwrap();
     let resp = get(&app, &format!("/app/lawyer/notations/{nid}/reask")).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let html = body_string(resp).await;
-    assert!(
-        html.contains("a:zzz_stale_code"),
-        "re-ask form offers the flagged field even with no seeded question: {html}"
-    );
-
-    // A non-empty answer clears the completeness guard but fails to persist —
-    // the write is refused whole, the matter stays parked.
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(!body_string(resp).await.contains("a:zzz_stale_code"));
     let resp = post_form(
         &app,
         &format!("/app/lawyer/notations/{nid}/reask"),
@@ -418,10 +431,10 @@ async fn reask_post_rolls_back_and_400s_when_an_answer_cannot_be_saved() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(notation_state(&surreal, nid).await, "reask__client");
     assert_eq!(
-        notation_state(&surreal, nid).await,
-        "reask__client",
-        "a failed re-collection must leave the matter parked, not resubmitted"
+        store::answers::for_notation(&surreal, nid).await.unwrap(),
+        before
     );
 }
 

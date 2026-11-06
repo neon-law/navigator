@@ -45,8 +45,8 @@ workflow:
 
 Engagement shape: {{custom_single_choice__path}}.
 
-Closing date: {{custom_datetime__closing_date}}.
-
-{{> arbitration}}
+{{#if custom_single_choice__path=transactional}}
+Closing date: {{custom_datetime__closing_date}}. {{else}} {{> arbitration}}
+{{/if}}
 
 {{client.signature}} {{client.date}} {{firm.signature}} {{firm.date}}

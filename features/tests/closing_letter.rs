@@ -28,6 +28,7 @@ const TEMPLATE_CODE: &str = "offboarding__letter";
 #[world(init = Self::default)]
 struct ClosingWorld {
     app: Option<axum::Router>,
+    storage: Option<Arc<dyn cloud::StorageService>>,
     notation_id: Option<Uuid>,
     runtime: Option<Arc<InMemoryRuntime>>,
     last_status: Option<StatusCode>,
@@ -72,13 +73,14 @@ async fn build_app(world: &mut ClosingWorld) {
     let runtime = Arc::new(InMemoryRuntime::new());
     let state = app_state(
         runtime.clone(),
-        storage,
+        storage.clone(),
         PolicyClient::passthrough(),
         None,
         SessionStore::new("test-session-key-not-for-production"),
     )
     .await;
     let router = features::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    world.storage = Some(storage);
     world.app = Some(router);
     world.runtime = Some(runtime);
 }
@@ -104,9 +106,17 @@ async fn seed_notation(world: &mut ClosingWorld, name: String, email: String) {
     store::projects::add_participation(&surreal, proj.id, lawyer, "lawyer")
         .await
         .unwrap();
+    let snapshot = workflows::notation_session::questionnaire_snapshot_for_template(
+        &surreal,
+        Some(world.storage.as_ref().expect("app storage")),
+        &tmpl,
+    )
+    .await
+    .unwrap();
     let notation_id = store::notations::create(
         &surreal,
-        &store::notations::NewNotation::new(tmpl.id, person.id, proj.id, "BEGIN"),
+        &store::notations::NewNotation::new(tmpl.id, person.id, proj.id, "BEGIN")
+            .with_questionnaire_snapshot(snapshot),
     )
     .await
     .unwrap()

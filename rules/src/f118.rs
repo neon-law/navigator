@@ -101,7 +101,7 @@ impl Rule for F118QuestionnaireRoutes {
 /// Mirrors `workflows::QuestionnaireSpec::validate` and
 /// `validate_routes` exactly; the drift test pins the classification to
 /// them.
-fn route_finding(
+pub(crate) fn route_finding(
     questionnaire: &BTreeMap<String, BTreeMap<String, String>>,
     choices: &BTreeMap<String, BTreeMap<String, String>>,
 ) -> Option<(String, String)> {

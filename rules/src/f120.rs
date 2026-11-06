@@ -1,5 +1,5 @@
 //! `N120` — a template body's undotted typed placeholders must be declared
-//! questionnaire states.
+//! questionnaire states collected on every route that renders the read.
 //!
 //! [`crate::F115PathResolution`] grounds the *dotted* half of the body
 //! grammar: `{{person__trustor.name}}` reads a field off a typed answer, so
@@ -146,6 +146,7 @@ impl Rule for F120BodyStateGrounding {
                 ),
             });
         }
+        violations.extend(crate::route_safety::findings(file, Self::CODE));
         violations
     }
 }
@@ -154,7 +155,7 @@ impl Rule for F120BodyStateGrounding {
 mod tests {
     use super::F120BodyStateGrounding;
     use crate::{Rule, SourceFile};
-    use std::path::PathBuf;
+    use std::{fmt::Write, path::PathBuf};
 
     fn file(contents: &str) -> SourceFile {
         SourceFile {
@@ -183,6 +184,143 @@ mod tests {
         lines.push("---".to_string());
         lines.push(String::new());
         format!("{}\n{body}", lines.join("\n"))
+    }
+
+    fn branched(body: &str) -> SourceFile {
+        file(&format!("---\nkind: onboarding\ntitle: T\nchoices:\n  path:\n    a: A\n    b: B\nquestionnaire:\n  BEGIN: {{_: custom_single_choice__path}}\n  custom_single_choice__path: {{a: person__a, b: custom_text__b}}\n  person__a: {{_: END}}\n  custom_text__b: {{_: END}}\n  END: {{}}\n---\n{body}\n"))
+    }
+
+    #[test]
+    fn an_unconditional_placeholder_must_be_collected_on_every_route() {
+        let findings = F120BodyStateGrounding.lint(&branched("{{custom_text__b}}"));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].message.contains("route"));
+    }
+
+    #[test]
+    fn conditional_placeholders_follow_their_selected_routes() {
+        let safe = "{{#if custom_single_choice__path=a}}{{person__a.name}}{{else}}{{custom_text__b}}{{/if}}";
+        assert!(F120BodyStateGrounding.lint(&branched(safe)).is_empty());
+        let unsafe_body = "{{#if custom_single_choice__path=a}}{{custom_text__b}}{{else}}B{{/if}}";
+        assert_eq!(F120BodyStateGrounding.lint(&branched(unsafe_body)).len(), 1);
+    }
+
+    #[test]
+    fn nested_alternatives_and_dotted_reads_are_route_sensitive() {
+        use crate::F115PathResolution;
+        for (body, expected) in [
+            ("{{person__a.name}}", 1),
+            ("{{#if custom_single_choice__path=a}}{{person__a.name}}{{else}}{{custom_text__b}}{{/if}}", 0),
+            ("{{#if custom_single_choice__path=a}}{{#if custom_single_choice__path=b}}{{custom_text__b}}{{/if}}{{else}}B{{/if}}", 0),
+            ("{{#if custom_single_choice__path=a}}A{{else if custom_single_choice__path=b}}{{person__a.name}}{{else}}Other{{/if}}", 1),
+            ("{{#if custom_single_choice__path=a}}A{{else}}{{#if custom_text__b}}{{custom_text__b}}{{/if}}{{/if}}", 0),
+            ("{{#if custom_text__b=}}{{person__a.name}}{{/if}}", 1),
+        ] {
+            let source = branched(body);
+            let actual = F120BodyStateGrounding.lint(&source).into_iter()
+                .chain(F115PathResolution.lint(&source))
+                .filter(|finding| finding.message.contains("questionnaire route"))
+                .count();
+            assert_eq!(actual, expected, "{body}");
+        }
+    }
+
+    #[test]
+    fn fallback_and_shared_questions_preserve_safe_reads() {
+        let source = branched("{{#if custom_single_choice__path=a}}{{person__a.name}}{{else}}{{custom_text__b}}{{/if}}");
+        let fallback = file(&source.contents.replace(
+            "a: person__a, b: custom_text__b",
+            "a: person__a, _: custom_text__b",
+        ));
+        assert!(F120BodyStateGrounding.lint(&fallback).is_empty());
+        let shared = file(
+            &branched("{{custom_text__b}}")
+                .contents
+                .replace("person__a: {_: END}", "person__a: {_: custom_text__b}"),
+        );
+        assert!(F120BodyStateGrounding.lint(&shared).is_empty());
+    }
+
+    #[test]
+    fn numeric_choice_keys_follow_the_authored_route() {
+        let source =
+            branched("{{#if custom_single_choice__path=1}}{{custom_text__b}}{{else}}Other{{/if}}");
+        let numeric = file(
+            &source
+                .contents
+                .replace("a: A", "\"1\": A")
+                .replace("a: person__a", "\"1\": person__a"),
+        );
+        assert_eq!(F120BodyStateGrounding.lint(&numeric).len(), 1);
+    }
+
+    #[test]
+    fn converging_routes_do_not_enumerate_every_combination() {
+        let count = 28;
+        let mut source = String::from("---\nkind: onboarding\ntitle: T\nchoices:\n  initial: {include: Include, skip: Skip}\n");
+        for i in 0..count {
+            writeln!(source, "  path_{i}: {{a: A, b: B}}").unwrap();
+        }
+        source.push_str("questionnaire:\n  BEGIN: {_: custom_single_choice__initial}\n  custom_single_choice__initial: {include: custom_text__read, skip: custom_single_choice__path_0}\n  custom_text__read: {_: custom_single_choice__path_0}\n");
+        for i in 0..count {
+            let next = if i + 1 == count {
+                "END".into()
+            } else {
+                format!("custom_single_choice__path_{}", i + 1)
+            };
+            writeln!(source, "  custom_single_choice__path_{i}: {{a: custom_text__guard_{i}, b: {next}}}\n  custom_text__guard_{i}: {{_: {next}}}").unwrap();
+        }
+        source.push_str("  END: {}\n---\n");
+        for i in 0..count {
+            write!(source, "{{{{#if custom_text__guard_{i}=yes}}}}").unwrap();
+        }
+        source.push_str("{{custom_text__read}}");
+        source.push_str(&"{{/if}}".repeat(count));
+        assert_eq!(F120BodyStateGrounding.lint(&file(&source)).len(), 1);
+    }
+
+    #[test]
+    fn reusable_clause_reads_obey_the_enclosing_route_condition() {
+        use crate::F115PathResolution;
+        let source = file(include_str!(
+            "../../workflows/tests/fixtures/onboarding_branched.txt"
+        ));
+        let route_findings = |source: &SourceFile| {
+            F115PathResolution
+                .lint(source)
+                .into_iter()
+                .chain(F120BodyStateGrounding.lint(source))
+                .filter(|finding| finding.message.contains("questionnaire route"))
+                .count()
+        };
+        assert_eq!(route_findings(&source), 0);
+        let unguarded = file(
+            &source
+                .contents
+                .replace("{{#if custom_single_choice__path=transactional}}", "")
+                .replace("{{else}}", "")
+                .replace("{{/if}}", ""),
+        );
+        assert_eq!(route_findings(&unguarded), 2);
+    }
+
+    #[test]
+    fn invalid_routes_are_refused_by_the_route_gate() {
+        for source in [
+            branched("{{custom_text__b}}")
+                .contents
+                .replace("person__a: {_: END}", "person__a: {_: person__a}"),
+            branched("{{custom_text__b}}").contents.replace(
+                "a: person__a, b: custom_text__b",
+                "a: person__a, b: person__a",
+            ),
+        ] {
+            let source = file(&source);
+            assert!(crate::engine::blocking_violations_without_checkout(&source)
+                .iter()
+                .any(|finding| finding.code == "N118"));
+            assert!(F120BodyStateGrounding.lint(&source).is_empty());
+        }
     }
 
     #[test]
