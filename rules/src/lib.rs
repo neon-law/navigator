@@ -6,6 +6,7 @@
 pub mod c001;
 pub mod c002;
 pub mod c003;
+pub mod c004;
 pub mod citation;
 pub mod clauses;
 pub mod d001;
@@ -412,6 +413,7 @@ pub fn description_for_code(code: &str) -> &'static str {
         "C001" => "Content page must declare a non-empty `title`",
         "C002" => "Content page must declare a non-empty `description`",
         "C003" => "Blog post filename must be `YYYYMMDD_slug.md`",
+        "C004" => "Document filename must be `YYYY.MM.DD_name.ext`",
         "D001" => "Matter page section must be a recognized section type",
         "D002" => "Matter page section must be in the declared kind's catalog",
         "D003" => "Matter page must carry its required sections",

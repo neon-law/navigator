@@ -7333,9 +7333,70 @@ fn standalone_tree_passes(dir: &std::path::Path) -> std::io::Result<Vec<GateErro
     errors.append(&mut seed_document_pass(dir)?);
     errors.append(&mut locale_document_pass(dir)?);
     errors.append(&mut document_pointer_pass(dir)?);
+    errors.append(&mut document_filename_pass(dir)?);
     errors.extend(project_manifest_pass(dir));
     errors.append(&mut mutable_tag_pass(dir)?);
     errors.append(&mut snapshot_audit_pass(dir)?);
+    Ok(errors)
+}
+
+/// `C004` (LAW-196) — every document file the checkout holds under
+/// `documents/` keeps the `YYYY.MM.DD_name.ext` convention, with the same
+/// shipped-folder exemptions the document walk applies. Name-only: a
+/// checkout that never downloaded the bytes finds nothing here, and
+/// `project gate --check` still holds the bytes it has to their pointers.
+fn document_filename_pass(dir: &std::path::Path) -> std::io::Result<Vec<GateError>> {
+    let mut errors = Vec::new();
+    let mut files_scanned = 0usize;
+    let documents = dir.join(crate::document_sync::DOCUMENT_DIRECTORY);
+    if is_project_repository(dir) && documents.is_dir() {
+        for entry in walkdir::WalkDir::new(&documents)
+            .into_iter()
+            .filter_entry(|entry| entry.file_name() != ".git")
+        {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error)
+                    if error
+                        .io_error()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    break;
+                }
+                Err(error) => return Err(std::io::Error::other(error)),
+            };
+            let path = entry.path();
+            if !entry.file_type().is_file()
+                || path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+                || crate::document_sync::is_pointer_path(path)
+            {
+                continue;
+            }
+            let Ok(relative) = path.strip_prefix(&documents) else {
+                continue;
+            };
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            files_scanned += 1;
+            if let Some(message) =
+                projects::document_check::document_filename_finding(relative, path, file_name)
+            {
+                print_violation(&path.display().to_string(), 1, "C004", &message);
+                errors.push(GateError::new(
+                    path.display().to_string(),
+                    Some("C004"),
+                    message,
+                ));
+            }
+        }
+    }
+    println!(
+        "Validated {files_scanned} document filename(s), found {} error(s)",
+        errors.len()
+    );
     Ok(errors)
 }
 
@@ -9915,6 +9976,63 @@ mod gate_helpers_tests {
             "{}",
             errors[0].message
         );
+    }
+
+    #[test]
+    fn document_filename_pass_fails_a_non_conventional_name_and_passes_the_rename() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("navigator.yaml"), "project: acme\n").expect("write");
+        let documents = dir.path().join("documents");
+        std::fs::create_dir_all(documents.join("Client Production")).expect("mkdir");
+
+        // Nothing downloaded: the name-only pass finds nothing.
+        let empty = document_filename_pass(dir.path()).expect("walks");
+        assert!(empty.is_empty());
+
+        // A non-conventional document name fails, naming C004 and the
+        // convention.
+        std::fs::write(
+            documents
+                .join("Client Production")
+                .join("complaint-annulment-2026-10-12.pdf"),
+            "bytes",
+        )
+        .expect("write");
+        let errors = document_filename_pass(dir.path()).expect("walks");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].code.as_deref(), Some("C004"));
+        assert!(errors[0].message.contains("C004"), "{}", errors[0].message);
+
+        // Renamed to the convention, the same tree passes.
+        std::fs::rename(
+            documents
+                .join("Client Production")
+                .join("complaint-annulment-2026-10-12.pdf"),
+            documents
+                .join("Client Production")
+                .join("2026.10.12_complaint-annulment.pdf"),
+        )
+        .expect("rename");
+        let renamed = document_filename_pass(dir.path()).expect("walks");
+        assert!(renamed.is_empty());
+
+        // A docket filing keeps its own shipped convention, and a pointer
+        // left under documents/ is not a filename finding.
+        std::fs::create_dir_all(documents.join("Docket Filings")).expect("mkdir");
+        std::fs::write(
+            documents
+                .join("Docket Filings")
+                .join("DKT 1234 - answer.pdf"),
+            "bytes",
+        )
+        .expect("write");
+        std::fs::write(
+            documents.join("2026.10.12_declaration.pdf.yaml"),
+            "kind: pleading\n",
+        )
+        .expect("write");
+        let exempt = document_filename_pass(dir.path()).expect("walks");
+        assert!(exempt.is_empty());
     }
 
     #[test]
