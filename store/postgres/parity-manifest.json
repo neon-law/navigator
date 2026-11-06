@@ -212,6 +212,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "contingency_term",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "contingency_term_tier",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "dbos_workflow_request",
       "missing_column": null,
       "missing_table": null,
@@ -303,6 +317,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "matter_outcome",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "mirror_backfill_checkpoint",
       "missing_column": null,
       "missing_table": null,
@@ -332,6 +353,13 @@
     {
       "extra_column": null,
       "extra_table": "notation_transition",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "outcome_estimate",
       "missing_column": null,
       "missing_table": null,
       "table": null
@@ -1886,7 +1914,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 154,
+    "table_count": 158,
     "tables": {
       "address": {
         "columns": {
@@ -2368,6 +2396,56 @@
           "communication",
           "person",
           "project"
+        ]
+      },
+      "contingency_term": {
+        "columns": {
+          "author_person_id": "UUID",
+          "costs_deducted": "TEXT",
+          "effective_on": "DATE",
+          "fee_agreement_notation_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "rate_cents_per_hour": "INTEGER"
+        },
+        "foreign_keys": [
+          [
+            "author_person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "contingency_term",
+        "references": [
+          "person",
+          "project"
+        ]
+      },
+      "contingency_term_tier": {
+        "columns": {
+          "contingency_term_id": "UUID",
+          "fee_bps": "INTEGER",
+          "ordinal": "SMALLINT",
+          "stage_definition_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "contingency_term_id",
+            "contingency_term"
+          ],
+          [
+            "stage_definition_id",
+            "stage_definition"
+          ]
+        ],
+        "name": "contingency_term_tier",
+        "references": [
+          "contingency_term",
+          "stage_definition"
         ]
       },
       "contract_review": {
@@ -3728,6 +3806,42 @@
           "project"
         ]
       },
+      "matter_outcome": {
+        "columns": {
+          "author_person_id": "UUID",
+          "correction_reason": "TEXT",
+          "costs_recovered_cents": "BIGINT",
+          "fee_received_cents": "BIGINT",
+          "gross_recovery_cents": "BIGINT",
+          "id": "UUID",
+          "iolta_allocation_id": "TEXT",
+          "project_id": "UUID",
+          "recorded_at": "TIMESTAMPTZ",
+          "resolved_on": "DATE",
+          "result": "TEXT",
+          "supersedes_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "author_person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ],
+          [
+            "supersedes_id",
+            "matter_outcome"
+          ]
+        ],
+        "name": "matter_outcome",
+        "references": [
+          "matter_outcome",
+          "person",
+          "project"
+        ]
+      },
       "matter_page": {
         "columns": {
           "clerk_sections": "TEXT[]",
@@ -4203,6 +4317,37 @@
         "foreign_keys": [],
         "name": "notation_transition",
         "references": []
+      },
+      "outcome_estimate": {
+        "columns": {
+          "author_person_id": "UUID",
+          "expected_resolution_on": "DATE",
+          "id": "UUID",
+          "lose_gross_recovery_cents": "BIGINT",
+          "lose_probability_bps": "INTEGER",
+          "note": "TEXT",
+          "project_id": "UUID",
+          "recorded_at": "TIMESTAMPTZ",
+          "settle_gross_recovery_cents": "BIGINT",
+          "settle_probability_bps": "INTEGER",
+          "win_at_trial_gross_recovery_cents": "BIGINT",
+          "win_at_trial_probability_bps": "INTEGER"
+        },
+        "foreign_keys": [
+          [
+            "author_person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "outcome_estimate",
+        "references": [
+          "person",
+          "project"
+        ]
       },
       "person": {
         "columns": {

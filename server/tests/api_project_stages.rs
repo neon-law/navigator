@@ -34,7 +34,6 @@ use bearer_common::bearer;
 #[path = "api_project_stages/contingency.rs"]
 mod contingency;
 
-
 static DATABASE: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
 
 /// Create one canonical-schema database on the lane and point the app's
