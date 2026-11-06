@@ -150,7 +150,8 @@ pub enum MailAction {
         /// Navigator host. Defaults to host in navigator.yaml.
         #[arg(long)]
         host: Option<String>,
-        /// Asset-lane kind for a file-path upload. Defaults to `letter`.
+        /// Asset-lane kind for a file-path upload, or for a local .eml's
+        /// attachments. Defaults to `letter`.
         #[arg(long, value_parser = crate::parse_asset_kind)]
         kind: Option<String>,
     },
@@ -1941,11 +1942,10 @@ async fn ingest_provider_message(
         .send()
         .await
         .context("ingest provider message")?;
-    let status = response.status();
-    let text = response.text().await.context("read ingest response")?;
-    if !status.is_success() {
-        return Err(anyhow!("ingest refused: {status} {text}"));
+    if !response.status().is_success() {
+        return Err(refused("ingest", response).await);
     }
+    let text = response.text().await.context("read ingest response")?;
     println!("{text}");
     Ok(())
 }
@@ -2130,13 +2130,13 @@ async fn parse_local_file(
         .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
         .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
     let path = Path::new(reference);
+    let kind = kind.unwrap_or(DEFAULT_PARSE_UPLOAD_KIND);
     if path
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("eml"))
     {
-        return parse_eml_file(path, project_code, host).await;
+        return parse_eml_file(path, project_code, host, kind).await;
     }
-    let kind = kind.unwrap_or(DEFAULT_PARSE_UPLOAD_KIND);
     println!("Uploading {} as a {kind} document", path.display());
     let exit = crate::remote::document_upload(
         host,
@@ -2159,7 +2159,12 @@ async fn parse_local_file(
     }
 }
 
-async fn parse_eml_file(path: &Path, project_code: &str, host: Option<&str>) -> Result<()> {
+async fn parse_eml_file(
+    path: &Path,
+    project_code: &str,
+    host: Option<&str>,
+    kind: &str,
+) -> Result<()> {
     let local = crate::projects::manifest::read(Path::new("."));
     let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
     let (base, navigator_token) = crate::remote::resolve(host)?;
@@ -2167,21 +2172,7 @@ async fn parse_eml_file(path: &Path, project_code: &str, host: Option<&str>) -> 
         crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
             .await?;
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    // The door parses and files the message server-side, so a local .eml
-    // files without any per-machine Gmail OAuth setup.
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    let response = reqwest::Client::new()
-        .post(format!("{base}/app/api/projects/{project_id}/mail/eml"))
-        .bearer_auth(&navigator_token)
-        .json(&json!({ "raw_base64": encoded }))
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .context("file the .eml through the mail/eml door")?;
-    if !response.status().is_success() {
-        return Err(anyhow!("file the .eml refused: {}", response.status()));
-    }
-    let filed: serde_json::Value = response.json().await.context("read the door's response")?;
+    let filed = post_eml(&base, &navigator_token, project_id, &bytes, kind).await?;
     let summary = eml_filing_summary(&filed);
     println!("Filed {} as a Communication", path.display());
     if summary.deduped {
@@ -2194,6 +2185,58 @@ async fn parse_eml_file(path: &Path, project_code: &str, host: Option<&str>) -> 
         );
     }
     Ok(())
+}
+
+/// Post a raw .eml to the door, which parses and files it server-side, so a
+/// local .eml files without any per-machine Gmail OAuth setup. The door
+/// decides direction from the signed-in lawyer's own address; `kind` is the
+/// asset-lane kind its attachments file under.
+async fn post_eml(
+    base: &str,
+    navigator_token: &str,
+    project_id: Uuid,
+    bytes: &[u8],
+    kind: &str,
+) -> Result<serde_json::Value> {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let response = reqwest::Client::new()
+        .post(format!("{base}/app/api/projects/{project_id}/mail/eml"))
+        .bearer_auth(navigator_token)
+        .json(&json!({ "raw_base64": encoded, "kind": kind }))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("file the .eml through the mail/eml door")?;
+    if !response.status().is_success() {
+        return Err(refused("file the .eml", response).await);
+    }
+    response.json().await.context("read the door's response")
+}
+
+/// The error for a non-success Navigator response: the status, plus the
+/// door's structured `error` code and `message` when it sent them. Any other
+/// body is never echoed, since it may repeat what the request carried.
+async fn refused(action: &str, response: reqwest::Response) -> anyhow::Error {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    anyhow!("{action} refused: {status}{}", refusal_reason(&body))
+}
+
+/// `": <code>: <message>"` from a structured refusal body, else empty.
+fn refusal_reason(body: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return String::new();
+    };
+    let parts: Vec<&str> = [value["error"].as_str(), value["message"].as_str()]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.trim().is_empty())
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", parts.join(": "))
+    }
 }
 
 /// What the .eml door's response means for the operator. Pure, so the
@@ -2281,10 +2324,7 @@ async fn post_communication(target: &FileTarget<'_>, request: &serde_json::Value
         .await
         .context("file email Communication")?;
     if !response.status().is_success() {
-        return Err(anyhow!(
-            "file email Communication refused: {}",
-            response.status()
-        ));
+        return Err(refused("file email Communication", response).await);
     }
     Ok(())
 }
@@ -4125,6 +4165,41 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
             .to_string();
         assert!(error.contains("refused: 403"), "{error}");
         assert!(!error.contains("secret echo"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn an_eml_refusal_names_the_doors_reason_and_the_kind_is_sent() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/projects/{}/mail/eml", Uuid::nil())))
+            .and(body_partial_json(json!({ "kind": "letter" })))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": "kind_required",
+                "message": "A document kind is required when the message carries attachments.",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = post_eml(
+            &server.uri(),
+            "navigator-token",
+            Uuid::nil(),
+            b"From: lawyer@example.test\r\n\r\nbody\r\n",
+            "letter",
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("refused: 400 Bad Request"), "{error}");
+        assert!(error.contains("kind_required"), "{error}");
+        assert!(
+            error.contains("A document kind is required"),
+            "the door's message reaches the operator: {error}"
+        );
+        server.verify().await;
     }
 
     #[tokio::test]
