@@ -403,7 +403,7 @@ pub async fn mirror(
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
     match key {
-        MirrorKey::Communication(id) => mirror_communication(s, pg, *id).await,
+        MirrorKey::Communication(id) => Box::pin(mirror_communication(s, pg, *id)).await,
         MirrorKey::EmailConversation(id) => {
             let rows: Vec<ConvRow> = s.query("SELECT id, token, external_email, external_name, person_id, subject, status, notation_id, firm_id, project_id, inserted_at, updated_at FROM email_conversation WHERE id=$id")
                 .bind(("id", crate::surreal::record_id("email_conversation", *id))).await
