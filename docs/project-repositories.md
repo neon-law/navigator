@@ -999,12 +999,20 @@ Library](glossary/firm-library.md), then resolves the workspace-shared catalog r
 on the Notation. A local file intentionally overrides the catalog for that Project. Use one only for a genuinely
 Project-specific blueprint. Do not recode, rename, or copy a catalog template into a Project repository merely to
 reference it. The `navigator project onboard` and `navigator project offboard` commands open the local lifecycle letter
-after it has been drafted, committed to `main`, and the local copy matches `origin/main`. Each command selects the
+after it has been drafted, committed to `main`, and the local copy matches `origin/main`. Onboarding first selects the
+`draft:` declared by the `engagement_billing_records` Matter Page. Without that declaration, each command selects the
 single authored Draft declaring its lifecycle `kind`, so an existing `onboarding.md` or `offboarding.md` needs no
-rename. Unedited stubs are ignored during that selection. Multiple authored Drafts of the requested kind require the
-lawyer to choose one before opening a notation. The selected filename stem is the template code sent to Navigator. When
-no authored letter exists, the command writes the canonical `onboarding__letter.md` or `offboarding__letter.md` stub and
-waits for the lawyer to draft it.
+rename. Unedited stubs are ignored during that selection. Conflicting declared letters or multiple authored Drafts
+require the lawyer to choose one before opening a notation. The selected filename stem is the template code sent to
+Navigator. Only when no authored letter exists does the command write the canonical `onboarding__letter.md` or
+`offboarding__letter.md` stub and wait for the lawyer to draft it.
+
+An agreement Draft with an `onboarding__*` lineage requires `navigator project migrate-letter` before onboarding. The
+migration retypes the letter as `onboarding`, moves it to the canonical path and updates every Matter Page reference to
+that Draft. It preserves the body, lineage and unrelated manifest text. Missing, ambiguous or unsafe declarations are
+refused before file changes; an authored canonical letter is protected. Outputs are staged before replacement, and a
+failed source removal restores the manifest and destination. The migration does not execute an engagement or change
+which notation kinds open a matter.
 
 The filename stem of a Project-local template carries no required Project-code prefix (ENG-693). A `template` row is
 already scoped to its Project by `template.project_id`, so `code` only has to be unique *within* that one repository —
