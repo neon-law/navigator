@@ -7,7 +7,8 @@ port=${3:-25473}
 [[ "$context" == kind-* && "$port" =~ ^[0-9]+$ && -x "$dbos_binary" ]]
 kubectl_cmd=(kubectl --context "$context" -n navigator)
 target=$(kubectl kustomize k8s/overlays/postgres-spike | awk '/image:/ {print $2}')
-base=$(awk '/^FROM / {print $2; exit}' images/postgres/Containerfile)
+recipe_arg() { sed -n "s/^ARG $1=//p" images/postgres/Containerfile; }
+base="postgres:$(recipe_arg PG_VERSION)-bookworm@$(recipe_arg PG_DIGEST)"
 [[ "$target" =~ @sha256:[a-f0-9]{64}$ && "$base" =~ @sha256:[a-f0-9]{64}$ ]]
 scratch=$(mktemp -d)
 worker_pid=''
