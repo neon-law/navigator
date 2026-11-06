@@ -13,6 +13,24 @@ Distinct from a [House Brand](house-brand.md), the compiled routing key that map
 identity. Every House Brand has a `brand` row, seeded on first boot; a runtime row has no compiled House Brand, so it
 routes no host and publishes no marketing page.
 
+## Engagement identity
+
+The Project manifest's `project.host` selects the Brand for the engagement. An optional `project.brand` asserts the same
+identity; it cannot override the host-selected Brand or contradict the live Project. Use that identity for the
+engagement's letterhead, questionnaire, preview and generated artifacts. The agreement, legal-party text and signature
+identify the legal [Firm](firm.md) associated with the Brand and Project, even when its name differs from the Brand's
+display name.
+
+The CLI letterhead resolver uses the compiled [House Brand](house-brand.md) registry. It refuses a missing or unknown
+host, an unknown declared key, or a declaration that disagrees with the host. A runtime Brand row alone supplies no
+routable host or compiled letterhead. The live Project's Firm/Brand pair is checked separately against [Firm
+Brand](firm-brand.md); a valid host does not grant ownership or Project access.
+
+Keep an executed or filed artifact's original identity and bytes. Changing the current host or Brand does not authorize
+restyling a signed engagement. New drafts use the current resolved identity; the signed artifact remains its own record.
+
+## Stored presentation and administration
+
 A row may carry a canonical **website URL**, `https://<host>`. Its host is the Brand's approved email domain, and the
 set of those domains across every Brand is the only allowlist for account admission
 ([`store::brand_domains`](../../store/src/brand_domains.rs)); no second list exists. Only Owner sets or clears it, in

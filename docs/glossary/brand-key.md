@@ -17,9 +17,13 @@ case-sensitive, `Neon` is not `neon`, and a key holding a `/` cannot be reached 
 
 **Unique across the deployment.** A key names at most one Brand (`brand.brand_key UNIQUE` in PostgreSQL,
 `brand_key_unique` in SurrealDB) and is worn by at most one Firm (`firm_brand.brand_key UNIQUE`, `firm_brand_key` in
-SurrealDB). **A Brand Key therefore implies its Firm**: the Firm wearing it is the one [Firm Brand](firm-brand.md) row
-that names it. `navigator project set --firm <name> --brand <key>` names which rule refused a pair: a key no Brand
-carries, a key no Firm wears, or a key a different Firm wears.
+SurrealDB). **An attached Brand Key therefore implies its Firm**: the Firm wearing it is the one [Firm
+Brand](firm-brand.md) row that names it. An unattached Brand row has no wearing Firm. `navigator project set --firm
+<name> --brand <key>` names which rule refused a pair: a key no Brand carries, a key no Firm wears, or a key a different
+Firm wears.
+
+In a Project manifest, `project.brand` asserts the identity selected by `project.host`. See [Brand's engagement identity
+contract](brand.md#engagement-identity) for host resolution, legal-Firm identity and executed artifacts.
 
 **Finding a key.** An operator reads it from:
 
@@ -27,6 +31,10 @@ carries, a key no Firm wears, or a key a different Firm wears.
 - the Edit link on each card at `/app/admin/brands`, whose path carries the key;
 - the edit page itself, `/app/admin/brands/{key}/edit`, which answers 404 both for a key no Brand carries and for a
   Brand the caller may not manage, so the page never discloses another Firm's row.
+
+The CLI uses the caller's visible Firm directory for its pre-check. It identifies another wearing Firm only when that
+Firm is visible; otherwise an unknown key and a key outside the directory share one refusal. This preserves Firm
+isolation while listing the selected Firm's available keys.
 
 The column is `brand.brand_key`.
 
