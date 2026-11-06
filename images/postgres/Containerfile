@@ -1,29 +1,49 @@
-FROM postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4 AS build
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential postgresql-server-dev-16 curl ca-certificates flex bison && rm -rf /var/lib/apt/lists/*
+# scripts/postgres-image-bump.sh rewrites these pins every week to the newest
+# PostgreSQL minor, Apache AGE, and pgvector releases for PG_MAJOR. A major
+# upgrade is a data migration, so PG_MAJOR changes only by hand.
+ARG PG_MAJOR=16
+ARG PG_VERSION=16.15
+ARG PG_DIGEST=sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
+ARG AGE_VERSION=1.6.0
+ARG AGE_SHA512=1e0a434d53d669e5d067721e1eba8c3c3c2ae072709d5f90783beeba6f5e88f592fa5d8808d621b720c22edfe8c698baa9b0adb9c7b4e3e2a83e7a753bd795c8
+ARG PGVECTOR_VERSION=0.8.7
+ARG PGVECTOR_SHA256=cac0b10c360f05b2d521200105ba3697e773d4cd3731f5a915a7e37ebe0bea85
+
+FROM postgres:${PG_VERSION}-bookworm@${PG_DIGEST} AS build
+ARG PG_MAJOR
+ARG AGE_VERSION
+ARG AGE_SHA512
+ARG PGVECTOR_VERSION
+ARG PGVECTOR_SHA256
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential postgresql-server-dev-${PG_MAJOR} curl ca-certificates flex bison && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 # downloads.apache.org is the primary dist server (CDN-backed); the
 # archive.apache.org mirror has been unreachable from CI runners, and the
 # sha512 below still pins the content either way.
-RUN curl -fLsS https://downloads.apache.org/age/PG16/1.6.0/apache-age-1.6.0-src.tar.gz -o age.tar.gz \
- && echo '1e0a434d53d669e5d067721e1eba8c3c3c2ae072709d5f90783beeba6f5e88f592fa5d8808d621b720c22edfe8c698baa9b0adb9c7b4e3e2a83e7a753bd795c8  age.tar.gz' | sha512sum -c - \
+RUN curl -fLsS https://downloads.apache.org/age/PG${PG_MAJOR}/${AGE_VERSION}/apache-age-${AGE_VERSION}-src.tar.gz -o age.tar.gz \
+ && echo "${AGE_SHA512}  age.tar.gz" | sha512sum -c - \
  && mkdir age && tar xzf age.tar.gz -C age --strip-components=1 \
- && make -C age PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config -j2 \
- && make -C age PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config DESTDIR=/out install
-RUN curl -fLsS https://github.com/pgvector/pgvector/archive/refs/tags/v0.8.2.tar.gz -o vector.tar.gz \
- && echo '69f4019389af05dc1c9548deb8628e62878e6e207c03907f2b8af2016472cdaa  vector.tar.gz' | sha256sum -c - \
+ && make -C age PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config -j2 \
+ && make -C age PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config DESTDIR=/out install
+RUN curl -fLsS https://github.com/pgvector/pgvector/archive/refs/tags/v${PGVECTOR_VERSION}.tar.gz -o vector.tar.gz \
+ && echo "${PGVECTOR_SHA256}  vector.tar.gz" | sha256sum -c - \
  && mkdir vector && tar xzf vector.tar.gz -C vector --strip-components=1 \
- && make -C vector PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config OPTFLAGS='' -j2 \
- && make -C vector PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config DESTDIR=/out install
-FROM postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
+ && make -C vector PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config OPTFLAGS='' -j2 \
+ && make -C vector PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config DESTDIR=/out install
+
+FROM postgres:${PG_VERSION}-bookworm@${PG_DIGEST}
+ARG PG_VERSION
+ARG AGE_VERSION
+ARG PGVECTOR_VERSION
 LABEL org.opencontainers.image.source="https://github.com/neon-law/navigator"
-LABEL org.opencontainers.image.description="PostgreSQL 16.15 with Apache AGE 1.6.0 and pgvector 0.8.2, rebuilt weekly with Debian security updates"
+LABEL org.opencontainers.image.description="PostgreSQL ${PG_VERSION} with Apache AGE ${AGE_VERSION} and pgvector ${PGVECTOR_VERSION}, rebuilt weekly with Debian security updates"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 # The weekly rebuild exists for this layer: the base digest is pinned, so
 # only an upgrade here carries Debian security fixes into a new image. The
-# PostgreSQL packages are held so the server stays at the tagged 16.15.
+# PostgreSQL packages are held so the server stays at the pinned minor.
 RUN apt-mark hold $(dpkg-query -W -f '${db:Status-Abbrev}${Package}\n' 'postgresql*' 'libpq*' | sed -n 's/^ii *//p') \
  && apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/ /
 COPY --from=build /src/age/LICENSE /src/age/NOTICE /usr/share/doc/apache-age/
 COPY --from=build /src/vector/LICENSE /usr/share/doc/pgvector/LICENSE
-COPY LICENSE NOTICE /usr/share/doc/neon-law-postgres/
+COPY LICENSE NOTICE /usr/share/doc/navigator-postgres/
