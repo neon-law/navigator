@@ -1455,6 +1455,10 @@ mod tests {
                 "20261106010000_create_outcome_estimate.sql",
                 include_str!("../postgres/migrations/20261106010000_create_outcome_estimate.sql"),
             ),
+            (
+                "20261106020000_create_matter_outcome.sql",
+                include_str!("../postgres/migrations/20261106020000_create_matter_outcome.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

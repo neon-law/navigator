@@ -607,6 +607,16 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "GET",
+            "/app/api/projects/{id}/matter-outcome",
+            get(crate::contingency_api::list_outcomes),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/matter-outcome",
+            post(crate::contingency_api::record_outcome),
+        ),
+        (
+            "GET",
             "/app/api/projects/{id}/stages",
             get(crate::project_stages_api::list),
         ),

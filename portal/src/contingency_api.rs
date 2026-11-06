@@ -1,5 +1,5 @@
 //! The lawyer-only doors for a contingent matter's firm work product: its
-//! dated Contingency Terms and its Outcome Estimates.
+//! dated Contingency Terms, its Outcome Estimates, and its Matter Outcome.
 //!
 //! Route admission is lawyer tier (the `LawyerSession` extractor plus an
 //! embedded-Rego `route_allow` rule). The matter-scope question is asked once
@@ -15,7 +15,8 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use store::{contingency_terms, outcome_estimates, postgres_mirror};
+use serde::Deserialize;
+use store::{contingency_terms, matter_outcomes, outcome_estimates, postgres_mirror};
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
@@ -65,6 +66,23 @@ fn estimate_error(
     match error {
         E::NotFirmSide => Err(ApiError::NotFound),
         E::Invalid(_) => Ok(refused(StatusCode::UNPROCESSABLE_ENTITY)),
+        E::Database(_) => {
+            store_failed(operation, project_id, error);
+            Ok(refused(StatusCode::INTERNAL_SERVER_ERROR))
+        }
+    }
+}
+
+fn outcome_error(
+    error: &matter_outcomes::MatterOutcomeError,
+    operation: &'static str,
+    project_id: Uuid,
+) -> Result<Response, ApiError> {
+    use matter_outcomes::MatterOutcomeError as E;
+    match error {
+        E::NotFirmSide => Err(ApiError::NotFound),
+        E::Invalid(_) => Ok(refused(StatusCode::UNPROCESSABLE_ENTITY)),
+        E::AlreadyRecorded | E::NotRecorded => Ok(refused(StatusCode::CONFLICT)),
         E::Database(_) => {
             store_failed(operation, project_id, error);
             Ok(refused(StatusCode::INTERNAL_SERVER_ERROR))
@@ -222,5 +240,57 @@ pub(crate) async fn record_estimate(
     match outcome_estimates::record(&pg, project_id, actor, &input).await {
         Ok(estimate) => Ok((StatusCode::CREATED, Json(estimate)).into_response()),
         Err(e) => estimate_error(&e, "record_estimate", project_id),
+    }
+}
+
+/// `GET /app/api/projects/{id}/matter-outcome` — the matter's outcome chain,
+/// original first; the last row is the outcome.
+pub(crate) async fn list_outcomes(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path(project_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let actor = firm_side_actor(&state, &session, project_id).await?;
+    let pg = match prepared_store(&state, "list_outcomes", project_id, &[]).await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    match matter_outcomes::history(&pg, actor, project_id).await {
+        Ok(outcomes) => Ok(Json(serde_json::json!({ "outcomes": outcomes })).into_response()),
+        Err(e) => outcome_error(&e, "list_outcomes", project_id),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecordOutcomeInput {
+    outcome: matter_outcomes::NewMatterOutcome,
+    /// Present on a correction: why the current outcome is superseded.
+    #[serde(default)]
+    correction_reason: Option<String>,
+}
+
+/// `POST /app/api/projects/{id}/matter-outcome` — record the matter's
+/// outcome, or, with a `correction_reason`, supersede the current one.
+pub(crate) async fn record_outcome(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path(project_id): Path<Uuid>,
+    Json(input): Json<RecordOutcomeInput>,
+) -> Result<Response, ApiError> {
+    let actor = firm_side_actor(&state, &session, project_id).await?;
+    let pg = match prepared_store(&state, "record_outcome", project_id, &[]).await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let written = match input.correction_reason.as_deref() {
+        Some(reason) => {
+            matter_outcomes::correct(&pg, project_id, actor, &input.outcome, reason).await
+        }
+        None => matter_outcomes::record(&pg, project_id, actor, &input.outcome).await,
+    };
+    match written {
+        Ok(outcome) => Ok((StatusCode::CREATED, Json(outcome)).into_response()),
+        Err(e) => outcome_error(&e, "record_outcome", project_id),
     }
 }

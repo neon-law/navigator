@@ -16,3 +16,5 @@ estimate.
 
 A Matter Outcome is firm work product. Only a firm-side participant may record or read one, and it never reaches a
 client or clerk [Lens](lens.md).
+
+- Vocabulary: [`store::matter_outcomes`](../../store/src/matter_outcomes.rs)

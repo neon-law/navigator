@@ -1,5 +1,5 @@
-//! The contingent-fee doors: a matter's dated Contingency Terms and its
-//! Outcome Estimates. Firm work
+//! The contingent-fee doors: a matter's dated Contingency Terms, its Outcome
+//! Estimates, and its Matter Outcome. Firm work
 //! product — a firm-side lawyer records and reads it, and everyone else gets
 //! the same refusals the stage doors give.
 
@@ -211,5 +211,61 @@ fn the_newest_outcome_estimate_is_current_and_the_sum_is_checked() {
             listed["estimates"][1]["outcomes"]["settle"]["probability_bps"],
             5000
         );
+    });
+}
+
+#[test]
+fn a_matter_has_one_outcome_and_a_correction_supersedes_it() {
+    lane().block_on(async {
+        let Some(_) = stage_store().await else {
+            return;
+        };
+        let fx = build_fixture().await;
+        let path = format!("/app/api/projects/{}/matter-outcome", fx.project_id);
+        let outcome = json!({
+            "result": "settled",
+            "resolved_on": "2027-03-01",
+            "gross_recovery_cents": 15_000_000,
+            "fee_received_cents": 4_995_000,
+            "costs_recovered_cents": 1_200_000,
+        });
+        for actor in [&fx.client, &fx.clerk] {
+            assert_eq!(
+                post(&fx, &path, Some(actor), json!({"outcome": outcome}))
+                    .await
+                    .status(),
+                StatusCode::FORBIDDEN
+            );
+        }
+        assert_eq!(
+            post(&fx, &path, Some(&fx.outsider), json!({"outcome": outcome}))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let original = post(&fx, &path, Some(&fx.lawyer), json!({"outcome": outcome})).await;
+        assert_eq!(original.status(), StatusCode::CREATED);
+        let original = body_json(original).await;
+        assert_eq!(
+            post(&fx, &path, Some(&fx.lawyer), json!({"outcome": outcome}))
+                .await
+                .status(),
+            StatusCode::CONFLICT,
+            "one outcome per matter"
+        );
+        let correction = body_json(
+            post(
+                &fx,
+                &path,
+                Some(&fx.lawyer),
+                json!({"outcome": outcome, "correction_reason": "Wire fee netted out"}),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(correction["supersedes_id"], original["id"]);
+        let listed = body_json(get(&fx, &path, Some(&fx.lawyer)).await).await;
+        assert_eq!(listed["outcomes"], json!([original, correction]));
     });
 }

@@ -957,6 +957,20 @@ erDiagram
         string inserted_at
         string project_id
     }
+    matter_outcome {
+        uuid author_person_id
+        string correction_reason
+        int costs_recovered_cents
+        int fee_received_cents
+        int gross_recovery_cents
+        uuid id
+        string iolta_allocation_id
+        uuid project_id
+        datetime recorded_at
+        datetime resolved_on
+        string result
+        uuid supersedes_id
+    }
     matter_page {
         string clerk_sections
         string client_sections
@@ -1950,6 +1964,9 @@ erDiagram
     firm }o--|| matter_caption : references
     project }o--|| matter_caption : references
     project }o--|| matter_flat_fee : references
+    matter_outcome }o--|| matter_outcome : references
+    person }o--|| matter_outcome : references
+    project }o--|| matter_outcome : references
     firm }o--|| matter_page : references
     project }o--|| matter_page : references
     asset }o--|| message : references

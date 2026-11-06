@@ -88,6 +88,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "contingency_term",
     "contingency_term_tier",
     "outcome_estimate",
+    "matter_outcome",
     "time_entry",
     "billed_call",
     "time_entry_events",

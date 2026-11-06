@@ -151,6 +151,7 @@ pub mod letters;
 pub mod mailrooms;
 pub mod matter_captions;
 pub mod matter_financials;
+pub mod matter_outcomes;
 pub mod matter_pages;
 pub(crate) mod matter_record_links;
 pub mod nef;

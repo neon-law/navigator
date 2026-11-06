@@ -3335,7 +3335,8 @@ test_ci_cannot_calculate_private_charts_even_with_owner_tier if {
 
 # ---------- Contingent-fee work product under /app/api/projects/{id} (lawyer tier) ----------
 
-# The Contingency Term and Outcome Estimate doors are firm work product. Lawyer tier at route
+# The Contingency Term, Outcome Estimate, and Matter Outcome doors are firm
+# work product. Lawyer tier at route
 # admission; the handler answers 404 for a caller with no firm-side
 # participation row.
 
@@ -3362,4 +3363,4 @@ test_contingency_doors_are_shape_bound if {
 	}
 }
 
-contingency_doors := {"contingency-terms", "outcome-estimates"}
+contingency_doors := {"contingency-terms", "outcome-estimates", "matter-outcome"}
