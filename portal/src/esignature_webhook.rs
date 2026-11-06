@@ -585,11 +585,30 @@ async fn replay_one(
                     state = terminal_state.as_str(),
                     "esignature webhook journal: pending receipt recovered"
                 ),
-                Err(e) => tracing::error!(
-                    receipt_id = %receipt.id,
-                    error = %e,
-                    "esignature webhook journal: consumption recovered but marking consumed failed"
-                ),
+                Err(e) => {
+                    tracing::error!(
+                        receipt_id = %receipt.id,
+                        error = %e,
+                        "esignature webhook journal: consumption recovered but marking consumed failed"
+                    );
+                    // A mark that failed after successful consumption
+                    // must not sit pending with nothing on it — name
+                    // the transient on the receipt so the journal
+                    // shows what happened; the next sweep retries it.
+                    if let Err(recorded) = store::signature_webhook_journal::record_attempt_failure(
+                        &state.surreal,
+                        receipt.id,
+                        &format!("marking consumed failed after recovery: {e}"),
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            receipt_id = %receipt.id,
+                            error = %recorded,
+                            "esignature webhook journal: recording the replay failure failed"
+                        );
+                    }
+                }
             }
         }
         Err(failure) => record_replay_failure(state, receipt, &failure.to_string()).await,
