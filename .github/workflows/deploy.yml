@@ -898,7 +898,7 @@ jobs:
           step: "install kind"
       - name: install kind
         timeout-minutes: 90
-        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: navigator
           config: k8s/kind-config.yaml
@@ -1366,7 +1366,7 @@ jobs:
           step: "install cargo-nextest"
       - name: install cargo-nextest
         timeout-minutes: 90
-        uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           # Pin the runner version: the browser gate now depends on
           # nextest-specific retry, JUnit-path, and --no-capture behavior, so a
