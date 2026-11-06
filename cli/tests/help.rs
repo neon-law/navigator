@@ -78,6 +78,7 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
             // operator has to scan.
             "clause",
             "dev",
+            "ephemeris",
             "forms",
             "glossary",
             "inbox",
@@ -126,6 +127,33 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
     assert!(!output.contains("  deploy"));
     assert!(!command_names(&output).contains(&"login"));
     assert!(!command_names(&output).contains(&"projects"));
+}
+
+#[test]
+fn ephemeris_help_keeps_download_nested_and_requires_an_explicit_bundle_directory() {
+    assert_eq!(
+        command_names(&help(&["ephemeris", "--help"])),
+        vec!["download", "help"]
+    );
+    let isolated = tempfile::tempdir().unwrap();
+    let missing_credentials = isolated.path().join("missing-session.json");
+    let output = Command::cargo_bin("navigator")
+        .unwrap()
+        .env("NAVIGATOR_CREDENTIALS_FILE", &missing_credentials)
+        .args(["ephemeris", "download", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let output = String::from_utf8(output.stdout).unwrap();
+    assert!(output.contains("--host <HOST>"));
+    assert!(output.contains("--dir <DIR>"));
+    Command::cargo_bin("navigator")
+        .unwrap()
+        .env("NAVIGATOR_CREDENTIALS_FILE", &missing_credentials)
+        .args(["ephemeris", "download"])
+        .assert()
+        .failure()
+        .stderr(str::contains("--dir <DIR>"));
 }
 
 #[test]
