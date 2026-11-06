@@ -15,6 +15,24 @@ const MANIFEST_NAME: &str = "source-manifest.json";
 
 #[derive(Subcommand)]
 pub(crate) enum EphemerisCmd {
+    /// Generate verified local Parquet and CSV reference files from a raw DE440 bundle.
+    Tables {
+        /// Logged-in deployment; its server authorizes Owner/Admin before local reads.
+        #[arg(long)]
+        host: Option<String>,
+        /// Verified immutable raw DE440 bundle produced by ephemeris download.
+        #[arg(long)]
+        source_dir: PathBuf,
+        /// First included civil midnight (UT1 before 1972, UTC thereafter).
+        #[arg(long)]
+        from: chrono::NaiveDate,
+        /// First excluded civil midnight; at most 366 days per bundle.
+        #[arg(long)]
+        to_exclusive: chrono::NaiveDate,
+        /// New immutable completed table bundle; existing paths are never replaced.
+        #[arg(long)]
+        dir: PathBuf,
+    },
     /// Acquire the pinned raw DE440 kernel into a new immutable local bundle.
     Download {
         /// Logged-in Navigator deployment; its server authorizes Owner/Admin access.
@@ -27,19 +45,36 @@ pub(crate) enum EphemerisCmd {
 }
 
 pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
-    let EphemerisCmd::Download { host, dir } = action;
-    let result = async {
-        let (base, token) = crate::remote::resolve(host.as_deref())?;
-        acquire(&base, &token, &dir).await
-    }
-    .await;
+    let result = match action {
+        EphemerisCmd::Download { host, dir } => {
+            async {
+                let (base, token) = crate::remote::resolve(host.as_deref())?;
+                acquire(&base, &token, &dir).await
+            }
+            .await
+        }
+        EphemerisCmd::Tables {
+            host,
+            source_dir,
+            from,
+            to_exclusive,
+            dir,
+        } => {
+            async {
+                let (base, token) = crate::remote::resolve(host.as_deref())?;
+                let manifest = catalogue(&base, &token).await?;
+                crate::ephemeris_tables::publish(&source_dir, &manifest, from, to_exclusive, &dir)
+            }
+            .await
+        }
+    };
     match result {
         Ok(()) => {
-            println!("Verified local DE440 source bundle ready.");
+            println!("Verified local ephemeris bundle ready.");
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("Ephemeris acquisition failed: {error:#}");
+            eprintln!("Ephemeris operation failed: {error:#}");
             ExitCode::FAILURE
         }
     }
@@ -54,7 +89,7 @@ fn client() -> Result<reqwest::Client> {
         .context("build bounded reference HTTP client")
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
+pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     bytes.iter().fold(String::new(), |mut output, byte| {
         let _ = write!(output, "{byte:02x}");
@@ -62,7 +97,7 @@ fn hex_digest(bytes: &[u8]) -> String {
     })
 }
 
-fn expected_manifest() -> Result<EphemerisManifest> {
+pub(crate) fn expected_manifest() -> Result<EphemerisManifest> {
     let mut manifest: EphemerisManifest =
         serde_json::from_str(include_str!("../../ephemeris/manifest.json"))?;
     manifest.files.retain(|file| file.name == "de440.bsp");
@@ -118,7 +153,7 @@ async fn acquire(base: &str, token: &str, dir: &Path) -> Result<()> {
     acquire_manifest(&client()?, &manifest, dir).await
 }
 
-fn open_regular(path: &Path) -> Result<std::fs::File> {
+pub(crate) fn open_regular(path: &Path) -> Result<std::fs::File> {
     let descriptor = rustix::fs::openat(
         rustix::fs::CWD,
         path,
@@ -162,7 +197,7 @@ fn verify_file(path: &Path, expected: &EphemerisFile) -> Result<()> {
     Ok(())
 }
 
-fn verify_bundle(dir: &Path, manifest: &EphemerisManifest) -> Result<()> {
+pub(crate) fn verify_bundle(dir: &Path, manifest: &EphemerisManifest) -> Result<()> {
     ensure!(
         std::fs::symlink_metadata(dir)?.file_type().is_dir(),
         "existing bundle is not an ordinary directory"
