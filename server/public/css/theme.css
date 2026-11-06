@@ -4178,6 +4178,31 @@ a.lawyer-detail__fact-value:focus-visible {
   fill-opacity: 0.55;
 }
 
+.projected-cash-legend {
+  display: flex;
+  gap: 1rem;
+  list-style: none;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.projected-cash-key {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-right: 0.35rem;
+  background: var(--nav-color-primary);
+}
+
+.projected-cash-key--projected {
+  background: transparent;
+  border: 1px dashed var(--nav-color-primary);
+}
+
+.projected-cash-key--paid {
+  opacity: 0.55;
+}
+
 .lawyer-pipeline__totals {
   display: grid;
   grid-template-columns: max-content 1fr;

@@ -4,6 +4,11 @@
 //!
 //! - [`PipelineCard`]: the lawyer workbench's Contingency Pipeline over the
 //!   caller's own matters (`store::projected_cash::lawyer_pipeline`).
+//! - [`FirmProjectedCash`]: the Firm show page's rollup beside the invoice
+//!   graphs, for Admin and Owner (`store::projected_cash::firm_rollup`). Its
+//!   view has no field that could carry a Project code, matter name, client
+//!   name, or invoice id: every label is a brand's name, a lead lawyer's
+//!   name, `Unassigned`, or a quarter.
 //!
 //! Every value is display-ready and wasm-safe; the server half formats it
 //! from `store::projected_cash`. Firm work product: none of it reaches a
@@ -217,12 +222,122 @@ pub fn PipelineCard(view: PipelineCardView) -> Element {
     }
 }
 
+/// One brand's or lead lawyer's expected cash.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct CashGroupView {
+    /// A brand's display name, a lead lawyer's display name, or `Unassigned`.
+    pub label: String,
+    pub cash: String,
+    pub matters: usize,
+}
+
+/// The Firm show page's projected contingency cash.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub struct FirmProjectedCashView {
+    /// The store could not answer.
+    #[serde(default)]
+    pub unavailable: bool,
+    pub expected_cash: String,
+    pub cash_range: String,
+    /// Projected, invoiced, and paid bars per quarter.
+    pub quarters: Vec<QuarterBarsView>,
+    pub by_brand: Vec<CashGroupView>,
+    pub by_lead_lawyer: Vec<CashGroupView>,
+    /// The largest single matter's share, e.g. `42%`, past the threshold.
+    pub concentration: Option<String>,
+    pub unestimated_matters: usize,
+}
+
+#[component]
+fn CashGroupTable(heading: String, groups: Vec<CashGroupView>) -> Element {
+    rsx! {
+        h3 { "{heading}" }
+        div { class: "nav-table-wrap",
+            table { class: "nav-table",
+                thead {
+                    tr {
+                        th { scope: "col", "Name" }
+                        th { scope: "col", "Expected cash" }
+                        th { scope: "col", "Matters" }
+                    }
+                }
+                tbody {
+                    for group in groups.iter() {
+                        tr { key: "{group.label}",
+                            td { "{group.label}" }
+                            td { "{group.cash}" }
+                            td { "{group.matters}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The Firm show page's projected contingency cash: expected cash by
+/// quarter beside the USD invoiced and paid, by brand and by lead lawyer,
+/// and a warning when one matter holds too much of it. Names no matter.
+#[component]
+pub fn FirmProjectedCash(view: FirmProjectedCashView) -> Element {
+    let any = !view.by_brand.is_empty();
+    rsx! {
+        section { id: "firm-projected-cash",
+            h2 { "Projected contingency cash" }
+            p { class: "nav-muted",
+                "Expected fees and costs recovered on open contingent matters, by quarter of expected resolution, beside the USD invoiced and paid on invoices issued each quarter."
+            }
+            if view.unavailable {
+                p { class: "nav-muted", "The projection is unavailable right now." }
+            } else {
+                if any {
+                    dl { class: "lawyer-pipeline__totals",
+                        dt { "Expected cash" }
+                        dd { "{view.expected_cash}" }
+                        dt { "Range" }
+                        dd { "{view.cash_range}" }
+                    }
+                } else {
+                    p { class: "nav-muted", "No open contingent matter carries an estimate yet." }
+                }
+                if let Some(share) = view.concentration.clone() {
+                    p { class: "firm-projected-cash__warning", role: "note",
+                        Badge { tone: BadgeTone::Review, "Concentration" }
+                        " One matter holds {share} of the Firm's expected cash."
+                    }
+                }
+                if view.unestimated_matters > 0 {
+                    p { class: "nav-muted",
+                        "Open contingent matters with no recovery estimated yet: {view.unestimated_matters}."
+                    }
+                }
+                QuarterChart {
+                    quarters: view.quarters.clone(),
+                    aria_label: "Projected cash, invoiced, and paid by quarter".to_string(),
+                }
+                ul { class: "projected-cash-legend",
+                    li { span { class: "projected-cash-key projected-cash-key--projected", aria_hidden: "true" } "Projected" }
+                    li { span { class: "projected-cash-key projected-cash-key--invoiced", aria_hidden: "true" } "Invoiced" }
+                    li { span { class: "projected-cash-key projected-cash-key--paid", aria_hidden: "true" } "Paid" }
+                }
+                if any {
+                    CashGroupTable { heading: "By brand".to_string(), groups: view.by_brand.clone() }
+                    CashGroupTable { heading: "By lead lawyer".to_string(), groups: view.by_lead_lawyer.clone() }
+                }
+            }
+        }
+    }
+}
+
 /// The server half: views from `store::projected_cash`.
 #[cfg(feature = "server")]
 pub mod derive {
-    use store::projected_cash::LawyerPipeline;
+    use store::projected_cash::{CashGroup, FirmProjectedCash, LawyerPipeline};
 
-    use super::{BarView, PipelineCardView, PipelineRowView, QuarterBarsView};
+    use super::{
+        BarView, CashGroupView, FirmProjectedCashView, PipelineCardView, PipelineRowView,
+        QuarterBarsView,
+    };
     use crate::portal_project_detail::format_usd;
     use crate::sections::outcome_projection::derive::source_label;
 
@@ -297,13 +412,86 @@ pub mod derive {
             }
         }
     }
+    fn groups(groups: &[CashGroup]) -> Vec<CashGroupView> {
+        groups
+            .iter()
+            .map(|group| CashGroupView {
+                label: group.label.clone(),
+                cash: format_usd(group.expected_cash_cents),
+                matters: group.matters,
+            })
+            .collect()
+    }
+
+    fn bar(quarter: &str, series: &str, cents: i64) -> BarView {
+        BarView {
+            series: series.to_string(),
+            cents,
+            title: format!("{quarter} {series}: {}", format_usd(cents)),
+        }
+    }
+
+    /// The Firm section's view of `rollup`.
+    #[must_use]
+    pub fn firm(rollup: &FirmProjectedCash) -> FirmProjectedCashView {
+        FirmProjectedCashView {
+            unavailable: false,
+            expected_cash: format_usd(rollup.expected_cash_cents),
+            cash_range: range(rollup.cash_range_cents),
+            quarters: rollup
+                .quarters
+                .iter()
+                .map(|quarter| QuarterBarsView {
+                    label: quarter.label.clone(),
+                    bars: vec![
+                        bar(&quarter.label, "projected", quarter.projected_cash_cents),
+                        bar(&quarter.label, "invoiced", quarter.invoiced_cents),
+                        bar(&quarter.label, "paid", quarter.paid_cents),
+                    ],
+                })
+                .collect(),
+            by_brand: groups(&rollup.by_brand),
+            by_lead_lawyer: groups(&rollup.by_lead_lawyer),
+            concentration: rollup
+                .concentration_bps
+                .map(|bps| format!("{}%", bps / 100)),
+            unestimated_matters: rollup.unestimated_matters,
+        }
+    }
+
+    /// The Firm's projected cash, read as `viewer`. A store that cannot
+    /// answer marks the section unavailable rather than failing the page.
+    pub async fn load_firm(
+        surreal: &store::surreal::SurrealDb,
+        viewer: Option<uuid::Uuid>,
+        firm_id: uuid::Uuid,
+    ) -> FirmProjectedCashView {
+        let unavailable = FirmProjectedCashView {
+            unavailable: true,
+            ..FirmProjectedCashView::default()
+        };
+        let Some(viewer) = viewer else {
+            return unavailable;
+        };
+        let Ok(pg) = store::postgres::PostgresDb::from_env().await else {
+            return unavailable;
+        };
+        let today = chrono::Utc::now().date_naive();
+        match store::projected_cash::firm_rollup(surreal, &pg, viewer, firm_id, today).await {
+            Ok(rollup) => firm(&rollup),
+            Err(error) => {
+                tracing::warn!(error = %error, "firm page: projected cash failed");
+                unavailable
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        BarView, PipelineCard, PipelineCardProps, PipelineCardView, PipelineRowView,
-        QuarterBarsView,
+        BarView, CashGroupView, FirmProjectedCash, FirmProjectedCashProps, FirmProjectedCashView,
+        PipelineCard, PipelineCardProps, PipelineCardView, PipelineRowView, QuarterBarsView,
     };
     use dioxus::prelude::VirtualDom;
 
@@ -390,5 +578,88 @@ mod tests {
             down.contains("The pipeline is unavailable right now."),
             "{down}"
         );
+    }
+
+    fn render_firm(view: FirmProjectedCashView) -> String {
+        let mut dom =
+            VirtualDom::new_with_props(FirmProjectedCash, FirmProjectedCashProps { view });
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    fn group(label: &str) -> CashGroupView {
+        CashGroupView {
+            label: label.to_string(),
+            cash: "$62,970.00".to_string(),
+            matters: 1,
+        }
+    }
+
+    fn firm_view() -> FirmProjectedCashView {
+        let bars = |label: &str| QuarterBarsView {
+            label: label.to_string(),
+            bars: ["projected", "invoiced", "paid"]
+                .iter()
+                .map(|series| BarView {
+                    series: (*series).to_string(),
+                    cents: 1_000,
+                    title: format!("{label} {series}: $10.00"),
+                })
+                .collect(),
+        };
+        FirmProjectedCashView {
+            expected_cash: "$125,940.00".to_string(),
+            cash_range: "$0.00 to $344,000.00".to_string(),
+            quarters: vec![bars("2026 Q3"), bars("2026 Q4")],
+            by_brand: vec![group("Neon Law")],
+            by_lead_lawyer: vec![group("Lawyer One"), group("Unassigned")],
+            concentration: Some("50%".to_string()),
+            unestimated_matters: 2,
+            ..FirmProjectedCashView::default()
+        }
+    }
+
+    #[test]
+    fn the_firm_section_shows_quarters_beside_invoices_groups_and_a_concentration_warning() {
+        let html = render_firm(firm_view());
+        for text in [
+            r#"id="firm-projected-cash""#,
+            "$125,940.00",
+            "2026 Q4 projected: $10.00",
+            "2026 Q4 invoiced: $10.00",
+            "2026 Q4 paid: $10.00",
+            "By brand",
+            "By lead lawyer",
+            "Unassigned",
+            "One matter holds 50% of the Firm",
+            "no recovery estimated yet: 2.",
+        ] {
+            assert!(html.contains(text), "{text}: {html}");
+        }
+    }
+
+    #[test]
+    fn a_firm_with_no_estimates_says_so_and_raises_no_warning() {
+        let html = render_firm(FirmProjectedCashView::default());
+        assert!(
+            html.contains("No open contingent matter carries an estimate yet."),
+            "{html}"
+        );
+        assert!(!html.contains("Concentration"), "{html}");
+        assert!(!html.contains("By brand"), "{html}");
+    }
+
+    /// ENG-1250 privacy: the view has no field to carry a Project code,
+    /// matter name, client name, or invoice id, and the rendered section
+    /// names no matter and links to none.
+    #[test]
+    fn no_project_code_matter_name_or_invoice_id_appears_in_the_firm_section() {
+        let html = render_firm(firm_view());
+        for forbidden in ["/app/projects/", "xero", "INV-", "project_id", "matter-"] {
+            assert!(
+                !html.to_lowercase().contains(&forbidden.to_lowercase()),
+                "{forbidden} leaked into: {html}"
+            );
+        }
     }
 }

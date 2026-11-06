@@ -308,8 +308,8 @@
 {"file":"cli/src/document_sync.rs","line":845,"function":"local_pointer_assets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/document_sync.rs","line":1014,"function":"project_sync_plans_scoped","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/document_sync.rs","line":2613,"function":"ensure_pull_batch_targets_are_distinct","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/ephemeris_download.rs","line":191,"function":"verify_file","operation":"update","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/ephemeris_download.rs","line":296,"function":"acquire_manifest","operation":"update","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/ephemeris_download.rs","line":203,"function":"verify_file","operation":"update","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/ephemeris_download.rs","line":308,"function":"acquire_manifest","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/import.rs","line":164,"function":"question_codes_from_frontmatter","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/import.rs","line":298,"function":"question_codes_skip_control_states_and_strip_labels","operation":"insert","sql_operations":[],"tables":[],"transaction":true}
 {"file":"cli/src/import.rs","line":299,"function":"question_codes_skip_control_states_and_strip_labels","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
@@ -318,7 +318,7 @@
 {"file":"cli/src/journal.rs","line":78,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":318,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail/login.rs","line":415,"function":"prompt_hidden","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/main.rs","line":8312,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/main.rs","line":8313,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/notices.rs","line":500,"function":"identical_texts_collapse_into_one_entry","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/pii_audit.rs","line":399,"function":"audit_tree","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/postgres_backfill.rs","line":75,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
@@ -4414,6 +4414,7 @@
 {"file":"store/src/project_source_imports.rs","line":336,"function":"process","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/project_source_imports.rs","line":336,"function":"process","operation":"query","sql_operations":["UPDATE"],"tables":[],"transaction":false}
 {"file":"store/src/project_surfaces.rs","line":1818,"function":"a_repository_holding_other_source_is_preserved_and_still_governed","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/projected_cash.rs","line":410,"function":"firm_rollup","operation":"insert","sql_operations":[],"tables":["brand","project"],"transaction":false}
 {"file":"store/src/projects.rs","line":406,"function":"participations_for_project","operation":"bind","sql_operations":[],"tables":["project"],"transaction":false}
 {"file":"store/src/projects.rs","line":406,"function":"participations_for_project","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"store/src/projects.rs","line":443,"function":"all_participations","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
