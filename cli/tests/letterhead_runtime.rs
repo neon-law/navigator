@@ -35,14 +35,26 @@ const VESTA_EMAIL: &str = "letters@vestaestateplanning.com";
 const VESTA_SITE: &str = "https://www.vestaestateplanning.com";
 const VESTA_POSTAL: &str = "1 Main Street\nSuite 200\nSpringfield, California 90000";
 
-/// The provenance line the seeded row's render prints: the runtime source,
-/// the Brand, the row's `updated_at` revision, and the mark it drew.
-const RUNTIME_PROVENANCE: &str =
-    "letterhead: source=runtime brand=vesta revision=2026-11-05T22:41:19Z mark=wordmark";
+/// The Firm the fixture Brand belongs to. `seed_vesta_brand` derives the
+/// Firm's slug from this name, so the two cannot drift.
+const FIXTURE_FIRM_NAME: &str = "Vesta Fixture Firm";
 
-/// The default Brand's compiled wordmark — the frame a letter must NOT wear
-/// when the host selected Vesta.
-const DEFAULT_WORDMARK: &str = "NEON LAW";
+/// The revision the fixture letterhead row carries — the `updated_at` the
+/// provenance line names. Seeded explicitly so the assertion is
+/// deterministic against `to_rfc3339`'s `+00:00` rendering.
+const FIXTURE_REVISION_SEEDED: &str = "2026-11-05T22:41:19Z";
+
+/// The provenance line the seeded row's render prints: the runtime source,
+/// the Brand, the row's `updated_at` revision (`DateTime::to_rfc3339` renders
+/// the whole-second UTC stamp with a `+00:00` offset), and the mark it drew.
+const RUNTIME_PROVENANCE: &str =
+    "letterhead: source=runtime brand=vesta revision=2026-11-05T22:41:19+00:00 mark=wordmark";
+
+/// The default Brand's compiled wordmark as the PDF renders it — authored
+/// mixed-case. (The Word renderer sets its name run in caps; nothing here
+/// asserts that form against the default Brand.) This is the frame a letter
+/// must NOT wear when the host selected Vesta.
+const DEFAULT_WORDMARK: &str = "Neon Law";
 
 const VALID: &str = "\
 ---
@@ -178,13 +190,18 @@ async fn seed_vesta_brand(
     surreal
         .db
         .query(format!(
-            "CREATE $firm SET name = $firm_name, inserted_at = $now, updated_at = $now; \
+            "CREATE $firm SET name = $firm_name, slug = $slug, \
+             inserted_at = $now, updated_at = $now; \
              CREATE $id SET name = $name, brand_key = 'vesta', firm_id = $firm, \
              is_law_firm = true, legal_entity = $entity, website_url = $site{logo_fields}, \
              inserted_at = $now, updated_at = $now"
         ))
         .bind(("firm", record_id("firm", firm_id)))
-        .bind(("firm_name", "Vesta Fixture Firm".to_string()))
+        .bind(("firm_name", FIXTURE_FIRM_NAME.to_string()))
+        // The applied schema tightens `slug` to `string READONLY` after its
+        // backfill, so a Firm is born with the slug its name derives — the
+        // way `store::firms::create` writes one.
+        .bind(("slug", store::firms::slug::derive(FIXTURE_FIRM_NAME)))
         .bind(("id", record_id("brand", brand_id)))
         .bind(("name", "Vesta".to_string()))
         .bind(("entity", VESTA_ENTITY.to_string()))
@@ -204,8 +221,9 @@ async fn seed_vesta_brand(
 async fn seed_letterhead_row(pg: &sqlx::PgPool, brand_id: uuid::Uuid, mark: &str) {
     sqlx::query(
         "INSERT INTO brand_letterhead \
-         (brand_id, wordmark, mark, phone, email, site_url, postal_address) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+         (brand_id, wordmark, mark, phone, email, site_url, postal_address, \
+         inserted_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)",
     )
     .bind(brand_id)
     .bind(VESTA_WORDMARK)
@@ -214,9 +232,34 @@ async fn seed_letterhead_row(pg: &sqlx::PgPool, brand_id: uuid::Uuid, mark: &str
     .bind(VESTA_EMAIL)
     .bind(VESTA_SITE)
     .bind(VESTA_POSTAL)
+    .bind(
+        chrono::DateTime::parse_from_rfc3339(FIXTURE_REVISION_SEEDED)
+            .expect("the fixture revision is RFC 3339")
+            .with_timezone(&chrono::Utc),
+    )
     .execute(pg)
     .await
     .expect("seed the letterhead row");
+}
+
+/// The full store fixture for a store-backed render: the Vesta Brand (with
+/// the uploaded mark only when the test asks) and the admin-set letterhead
+/// row of `mark`. The store-backed tests call this before rendering.
+async fn seed_vesta_letterhead_row(stores: &StoreEnv, mark: &str, with_logo: bool) {
+    let brand_id = seed_vesta_brand(&stores.surreal, with_logo).await;
+    let pg = sqlx::PgPool::connect_with(
+        sqlx::postgres::PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(stores.postgres_port.parse().expect("test postgres port"))
+            .username("postgres")
+            .password("synthetic")
+            .ssl_mode(sqlx::postgres::PgSslMode::Disable)
+            .database(&stores.postgres_database),
+    )
+    .await
+    .expect("connect to the disposable letterhead database");
+    seed_letterhead_row(&pg, brand_id, mark).await;
+    pg.close().await;
 }
 
 /// A letter template inside a Project whose `navigator.yaml` selects Vesta
@@ -331,6 +374,7 @@ async fn a_runtime_row_frames_the_pdf_letter() {
     let Some(stores) = store_env("letterhead_runtime_pdf").await else {
         return;
     };
+    seed_vesta_letterhead_row(&stores, "wordmark", false).await;
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.pdf");
@@ -370,6 +414,7 @@ async fn a_runtime_row_frames_the_word_letter() {
     let Some(stores) = store_env("letterhead_runtime_word").await else {
         return;
     };
+    seed_vesta_letterhead_row(&stores, "wordmark", false).await;
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.docx");
@@ -378,8 +423,15 @@ async fn a_runtime_row_frames_the_word_letter() {
     assert!(result.status.success(), "render failed: {stderr}");
     let bytes = fs::read(&out).expect("docx written");
     let header = docx_part(&bytes, "word/header2.xml");
+    // The Word letterhead's name run is set in caps — the renderer's
+    // letterhead typography, pinned by `word`'s own unit test and mirrored
+    // by the offline fallback test below. The remaining lines render as
+    // authored.
+    assert!(
+        header.contains(VESTA_WORDMARK.to_uppercase().as_str()),
+        "the Word letterhead lacks the wordmark: {header}"
+    );
     for line in [
-        VESTA_WORDMARK,
         VESTA_ENTITY,
         VESTA_PHONE,
         VESTA_EMAIL,
@@ -399,6 +451,10 @@ async fn a_runtime_row_frames_the_word_letter() {
         stderr.contains(RUNTIME_PROVENANCE),
         "the provenance line must name the runtime source: {stderr}"
     );
+    assert!(
+        !stderr.contains("source=compiled") && !stderr.contains("deployment unreachable"),
+        "a runtime render must not announce a fallback: {stderr}"
+    );
 }
 
 #[tokio::test]
@@ -406,20 +462,7 @@ async fn an_unfetchable_uploaded_mark_degrades_to_the_wordmark_loudly() {
     let Some(stores) = store_env("letterhead_runtime_logo").await else {
         return;
     };
-    let brand_id = seed_vesta_brand(&stores.surreal, true).await;
-    let pg = sqlx::PgPool::connect_with(
-        sqlx::postgres::PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(stores.postgres_port.parse().expect("test postgres port"))
-            .username("postgres")
-            .password("synthetic")
-            .ssl_mode(sqlx::postgres::PgSslMode::Disable)
-            .database(&stores.postgres_database),
-    )
-    .await
-    .expect("connect to the disposable letterhead database");
-    seed_letterhead_row(&pg, brand_id, "logo").await;
-    pg.close().await;
+    seed_vesta_letterhead_row(&stores, "logo", true).await;
 
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
@@ -436,7 +479,7 @@ async fn an_unfetchable_uploaded_mark_degrades_to_the_wordmark_loudly() {
     );
     let header = docx_part(&fs::read(&out).expect("docx written"), "word/header2.xml");
     assert!(
-        header.contains(VESTA_WORDMARK),
+        header.contains(VESTA_WORDMARK.to_uppercase().as_str()),
         "the degraded frame still carries the runtime wordmark: {header}"
     );
     assert!(

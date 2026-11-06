@@ -369,11 +369,16 @@ jobs:
           swap-storage: false
       # lld is absent from this image (`ld.lld: absent`, run 144671916) and
       # RUSTFLAGS below requires it, so the install is not optional here.
-      - name: install lld
+      # poppler-utils supplies `pdftotext` for the real-binary PDF letterhead
+      # tests: without it they early-return silently, and the store-backed PDF
+      # render — which this job's databases are the only CI fixture for — would
+      # never assert anything.
+      - name: install lld and poppler-utils
         run: |
           sudo apt-get update
-          sudo apt-get install -y lld
+          sudo apt-get install -y lld poppler-utils
           ld.lld --version
+          pdftotext -v 2>&1 | head -1
       # Build on whichever disk is actually large enough.
       #
       # `blacksmith-4vcpu-ubuntu-2404` now splits storage: a 150 GB `/dev/root`
