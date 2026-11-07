@@ -85,10 +85,11 @@ pub struct DocumentPointer {
 /// One of the lawyer-facing folders a Project checkout's `documents/`
 /// holds a document's bytes in (LAW-189, LAW-215), named the way a
 /// case-management system names them. A pointer's `folder:` is one of these,
-/// spelled exactly. The seven `Work Product` subfolders spell their whole
-/// path below `documents/`, so a folder name read out of context — a search
-/// result, an email attachment list — says which tree it came from and never
-/// collides with its served twin (`Correspondence (Work Product)` vs
+/// spelled exactly. The nine fixed subfolders — seven below `Work Product`,
+/// two below `Client Production` — spell their whole path below `documents/`,
+/// so a folder name read out of context — a search result, an email
+/// attachment list — says which tree it came from and never collides with
+/// its served twin (`Correspondence (Work Product)` vs
 /// `Correspondence (Served)`). The bare `Discovery` folder predates
 /// LAW-215: [`Self::parse`] still reads it so older pointers and checkouts
 /// keep working, but [`Self::TREE`] — what a fresh checkout creates — leaves
@@ -98,6 +99,12 @@ pub enum MatterFolder {
     /// What the client supplied: exhibits, records, and screenshots.
     #[serde(rename = "Client Production")]
     ClientProduction,
+    /// The client's executed private agreements (LAW-215).
+    #[serde(rename = "Client Production/Agreements")]
+    ClientProductionAgreements,
+    /// Screenshots the client supplied (LAW-215).
+    #[serde(rename = "Client Production/Screenshots")]
+    ClientProductionScreenshots,
     /// Letters served on, or received from, another party.
     #[serde(rename = "Correspondence (Served)")]
     CorrespondenceServed,
@@ -148,8 +155,10 @@ pub enum MatterFolder {
 impl MatterFolder {
     /// Every matter folder, in the order a Finder window lists them,
     /// including the bare `Discovery` folder older checkouts hold.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::ClientProduction,
+        Self::ClientProductionAgreements,
+        Self::ClientProductionScreenshots,
         Self::CorrespondenceServed,
         Self::Discovery,
         Self::DiscoveryServed,
@@ -168,8 +177,10 @@ impl MatterFolder {
 
     /// The tree a fresh checkout creates (LAW-215): [`Self::ALL`] without
     /// the bare `Discovery` folder, which only a migration refiles.
-    pub const TREE: [Self; 14] = [
+    pub const TREE: [Self; 16] = [
         Self::ClientProduction,
+        Self::ClientProductionAgreements,
+        Self::ClientProductionScreenshots,
         Self::CorrespondenceServed,
         Self::DiscoveryServed,
         Self::DocketFilings,
@@ -190,6 +201,8 @@ impl MatterFolder {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ClientProduction => "Client Production",
+            Self::ClientProductionAgreements => "Client Production/Agreements",
+            Self::ClientProductionScreenshots => "Client Production/Screenshots",
             Self::CorrespondenceServed => "Correspondence (Served)",
             Self::Discovery => "Discovery",
             Self::DiscoveryServed => "Discovery (Served)",
@@ -207,21 +220,48 @@ impl MatterFolder {
         }
     }
 
+    /// Whether this folder is one of the nine fixed subfolders below
+    /// `Work Product` or `Client Production` (LAW-215). Their names span two
+    /// path components, so a path below `documents/` names one only after
+    /// both are matched.
+    #[must_use]
+    pub const fn is_nested_subfolder(self) -> bool {
+        self.nested_parent().is_some()
+    }
+
     /// Whether this folder is one of the seven fixed subfolders below
-    /// `Work Product` (LAW-215). Their names span two path components, so a
-    /// path below `documents/` names one only after both are matched.
+    /// `Work Product` (LAW-215).
     #[must_use]
     pub const fn is_work_product_subfolder(self) -> bool {
-        matches!(
-            self,
+        matches!(self.nested_parent(), Some(Self::WorkProduct))
+    }
+
+    /// The fixed folder this subfolder hangs under (LAW-215): the seven
+    /// `Work Product` subfolders under `Work Product`, and the two Client
+    /// Production subfolders under `Client Production`. A top-level folder
+    /// has none.
+    #[must_use]
+    pub const fn nested_parent(self) -> Option<Self> {
+        match self {
+            Self::ClientProductionAgreements | Self::ClientProductionScreenshots => {
+                Some(Self::ClientProduction)
+            }
             Self::ClientCallsWorkProduct
-                | Self::CorrespondenceWorkProduct
-                | Self::DiscoveryWorkProduct
-                | Self::MotionsWorkProduct
-                | Self::PleadingsWorkProduct
-                | Self::ResearchWorkProduct
-                | Self::StipulationsWorkProduct
-        )
+            | Self::CorrespondenceWorkProduct
+            | Self::DiscoveryWorkProduct
+            | Self::MotionsWorkProduct
+            | Self::PleadingsWorkProduct
+            | Self::ResearchWorkProduct
+            | Self::StipulationsWorkProduct => Some(Self::WorkProduct),
+            Self::ClientProduction
+            | Self::CorrespondenceServed
+            | Self::Discovery
+            | Self::DiscoveryServed
+            | Self::DocketFilings
+            | Self::CourtRules
+            | Self::Engagement
+            | Self::WorkProduct => None,
+        }
     }
 
     /// The folder named exactly `name`, or `None`.
@@ -239,6 +279,7 @@ impl MatterFolder {
     pub fn for_kind(kind: &str) -> Self {
         match kind {
             "exhibit" => Self::ClientProduction,
+            "agreement" => Self::ClientProductionAgreements,
             "letter" => Self::CorrespondenceServed,
             // A court's order is neither a pleading nor a filing, but it is
             // docket paper all the same (LAW-189).
@@ -257,6 +298,7 @@ impl MatterFolder {
     pub const fn default_kind(self) -> &'static str {
         match self {
             Self::ClientProduction => "exhibit",
+            Self::ClientProductionAgreements => "agreement",
             Self::CorrespondenceServed => "letter",
             Self::DocketFilings => "pleading",
             Self::ClientCallsWorkProduct => "transcript",
@@ -573,7 +615,11 @@ mod tests {
     fn folder_is_optional_round_trips_and_defaults_from_kind() {
         let mut plain = pointer();
         assert!(!plain.to_yaml().unwrap().contains("folder"));
-        assert_eq!(plain.matter_folder(), MatterFolder::WorkProduct);
+        // An agreement pointer defaults to Client Production/Agreements (LAW-215).
+        assert_eq!(
+            plain.matter_folder(),
+            MatterFolder::ClientProductionAgreements
+        );
 
         plain.folder = Some(MatterFolder::Discovery);
         let yaml = plain.to_yaml().unwrap();
@@ -592,7 +638,7 @@ mod tests {
             ("memo", MatterFolder::ResearchWorkProduct),
             ("transcript", MatterFolder::ClientCallsWorkProduct),
             ("onboarding", MatterFolder::Engagement),
-            ("agreement", MatterFolder::WorkProduct),
+            ("agreement", MatterFolder::ClientProductionAgreements),
             ("unclassified", MatterFolder::WorkProduct),
         ] {
             assert_eq!(MatterFolder::for_kind(kind), folder, "{kind}");
@@ -776,13 +822,13 @@ mod tests {
         );
     }
 
-    /// LAW-215: a fresh checkout creates the fourteen-folder tree, which
+    /// LAW-215: a fresh checkout creates the sixteen-folder tree, which
     /// keeps the bare `Discovery` folder out (a migration refiles it), while
     /// `parse` still reads every name ever written.
     #[test]
-    fn the_fresh_checkout_tree_has_fourteen_folders_and_keeps_bare_discovery_out() {
-        assert_eq!(MatterFolder::ALL.len(), 15);
-        assert_eq!(MatterFolder::TREE.len(), 14);
+    fn the_fresh_checkout_tree_has_sixteen_folders_and_keeps_bare_discovery_out() {
+        assert_eq!(MatterFolder::ALL.len(), 17);
+        assert_eq!(MatterFolder::TREE.len(), 16);
         assert!(MatterFolder::ALL.contains(&MatterFolder::Discovery));
         assert!(!MatterFolder::TREE.contains(&MatterFolder::Discovery));
 
@@ -790,7 +836,7 @@ mod tests {
         let mut names: Vec<&str> = MatterFolder::TREE.iter().map(|f| f.as_str()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 14);
+        assert_eq!(names.len(), 16);
         for folder in MatterFolder::TREE {
             assert_eq!(MatterFolder::parse(folder.as_str()), Some(folder));
         }
@@ -814,6 +860,33 @@ mod tests {
                 folder.as_str()
             );
         }
+        // Every nested subfolder — Work Product's seven and Client
+        // Production's two — hangs under its parent and nowhere else.
+        for folder in MatterFolder::ALL {
+            assert_eq!(
+                folder.is_nested_subfolder(),
+                folder.as_str().contains('/'),
+                "{}",
+                folder.as_str()
+            );
+        }
+        assert_eq!(
+            MatterFolder::ClientProductionAgreements.nested_parent(),
+            Some(MatterFolder::ClientProduction)
+        );
+        assert_eq!(
+            MatterFolder::ClientProductionScreenshots.nested_parent(),
+            Some(MatterFolder::ClientProduction)
+        );
+        assert!(!MatterFolder::ClientProduction.is_nested_subfolder());
+        assert_eq!(
+            documents_path("agreement.pdf", MatterFolder::ClientProductionAgreements),
+            "Client Production/Agreements/agreement.pdf"
+        );
+        assert_eq!(
+            documents_path("img.png", MatterFolder::ClientProductionScreenshots),
+            "Client Production/Screenshots/img.png"
+        );
         assert!(!MatterFolder::WorkProduct.is_work_product_subfolder());
 
         let research = MatterFolder::ResearchWorkProduct;

@@ -586,11 +586,9 @@ pub async fn reconcile<D: DriveService + ?Sized>(
     let mut rows = BTreeMap::new();
     rows.insert(ProjectFolderSlot::Root.key(), root.clone());
     for folder in MatterFolder::TREE {
-        let parent_slot = if folder.is_work_product_subfolder() {
-            ProjectFolderSlot::Matter(MatterFolder::WorkProduct)
-        } else {
-            ProjectFolderSlot::Root
-        };
+        let parent_slot = folder
+            .nested_parent()
+            .map_or(ProjectFolderSlot::Root, ProjectFolderSlot::Matter);
         let parent = rows
             .get(parent_slot.key())
             .ok_or(FolderReconcileError::Matter)?;
