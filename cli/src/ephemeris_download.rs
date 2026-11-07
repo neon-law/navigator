@@ -43,6 +43,36 @@ pub(crate) enum EphemerisCmd {
         #[arg(long)]
         dir: PathBuf,
     },
+    /// Promote an existing verified reference bundle in a local release directory.
+    Promote {
+        /// Logged-in deployment that authorizes Owner/Admin before local reads.
+        #[arg(long)]
+        host: Option<String>,
+        /// Existing local directory containing the bundle and latest-validated manifest.
+        #[arg(long)]
+        release_dir: PathBuf,
+        /// Existing direct child directory, named with ASCII letters, digits, hyphens or underscores.
+        #[arg(long)]
+        bundle: String,
+        /// Current release ID, or absent for the first promotion.
+        #[arg(long)]
+        expect_current: String,
+        /// Verified immutable raw DE440 bundle produced by ephemeris download.
+        #[arg(long)]
+        source_dir: PathBuf,
+        /// First included civil midnight of the completed bundle.
+        #[arg(long)]
+        from: chrono::NaiveDate,
+        /// First excluded civil midnight of the completed bundle.
+        #[arg(long)]
+        to_exclusive: chrono::NaiveDate,
+        /// Verify the completed bundle's fixed-location Iceberg layout.
+        #[arg(long)]
+        iceberg: bool,
+        /// Verify the completed bundle's portable `DuckDB` snapshot with this pinned executable.
+        #[arg(long)]
+        duckdb_bin: Option<PathBuf>,
+    },
     /// Acquire the pinned raw DE440 kernel into a new immutable local bundle.
     Download {
         /// Logged-in Navigator deployment; its server authorizes Owner/Admin access.
@@ -55,11 +85,16 @@ pub(crate) enum EphemerisCmd {
 }
 
 pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
+    use crate::ephemeris_tables::{TableOperation, TableResult};
+
+    let promoting = matches!(&action, EphemerisCmd::Promote { .. });
     let result = match action {
         EphemerisCmd::Download { host, dir } => {
             async {
                 let (base, token) = crate::remote::resolve(host.as_deref())?;
-                acquire(&base, &token, &dir).await.map(|()| None)
+                acquire(&base, &token, &dir)
+                    .await
+                    .map(|()| TableResult::Ready)
             }
             .await
         }
@@ -77,13 +112,13 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
                 let (base, token) = crate::remote::resolve(host.as_deref())?;
                 let manifest = catalogue(&base, &token).await?;
                 let operation = if measure {
-                    crate::ephemeris_tables::TableOperation::Measure(
+                    TableOperation::Measure(
                         duckdb_bin
                             .as_deref()
                             .context("measurement requires a verified executable")?,
                     )
                 } else {
-                    crate::ephemeris_tables::TableOperation::Generate(duckdb_bin.as_deref())
+                    TableOperation::Generate(duckdb_bin.as_deref())
                 };
                 crate::ephemeris_tables::publish(
                     &source_dir,
@@ -98,9 +133,52 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
             }
             .await
         }
+        EphemerisCmd::Promote {
+            host,
+            release_dir,
+            bundle,
+            expect_current,
+            source_dir,
+            from,
+            to_exclusive,
+            iceberg,
+            duckdb_bin,
+        } => {
+            async {
+                let (base, token) = crate::remote::resolve(host.as_deref())?;
+                let manifest = catalogue(&base, &token).await?;
+                let promotion = crate::ephemeris_release::Promotion::begin(
+                    &release_dir,
+                    bundle,
+                    expect_current,
+                )?;
+                let verified = crate::ephemeris_tables::publish(
+                    &source_dir,
+                    &manifest,
+                    from,
+                    to_exclusive,
+                    &promotion.bundle_path(),
+                    iceberg,
+                    TableOperation::Verify(duckdb_bin.as_deref()),
+                )
+                .await?;
+                let TableResult::Verified(reference) = verified else {
+                    anyhow::bail!("promotion requires a verified existing bundle");
+                };
+                promotion.commit(reference)?;
+                Ok(TableResult::Ready)
+            }
+            .await
+        }
     };
+    report_result(result, promoting)
+}
+
+fn report_result(result: Result<crate::ephemeris_tables::TableResult>, promoting: bool) -> ExitCode {
+    use crate::ephemeris_tables::TableResult;
+
     match result {
-        Ok(Some(report)) => match serde_json::to_string(&report) {
+        Ok(TableResult::Measured(report)) => match serde_json::to_string(&report) {
             Ok(json) if json.len() <= MAX_REPORT_BYTES => {
                 println!("{json}");
                 ExitCode::SUCCESS
@@ -110,9 +188,17 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Ok(None) => {
-            println!("Verified local ephemeris bundle ready.");
+        Ok(TableResult::Ready) => {
+            if promoting {
+                println!("Local latest-validated.json is ready. Read release_id for the next promotion.");
+            } else {
+                println!("Verified local ephemeris bundle ready.");
+            }
             ExitCode::SUCCESS
+        }
+        Ok(TableResult::Verified(_)) => {
+            eprintln!("Ephemeris operation did not complete.");
+            ExitCode::FAILURE
         }
         Err(error) => {
             eprintln!("Ephemeris operation failed: {error:#}");
