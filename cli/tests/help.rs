@@ -78,6 +78,7 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
             // operator has to scan.
             "clause",
             "dev",
+            "downloads",
             "ephemeris",
             "forms",
             "glossary",
