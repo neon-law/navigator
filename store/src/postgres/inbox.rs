@@ -219,38 +219,131 @@ async fn insert_message(
 /// here too: a lawyer- or clerk-tier sender never links.
 pub(crate) async fn inbound_counterparty_on(
     pg: &PostgresDb,
-    external_address: &str,
+    db: &SurrealDb,
+    inbound: &IngestInbound<'_>,
 ) -> Result<Option<Uuid>, InboxError> {
-    let person = match crate::postgres::people::by_email(pg, external_address.trim()).await? {
+    resolve_or_create_sender_on(pg, db, inbound.external_address, inbound.external_name).await
+}
+
+/// The shared resolve-or-create behind ingest and the backfill, in the
+/// PostgreSQL People mirror: primary first, then any `person_mailbox`
+/// alias claim — the same exact, case-insensitive resolution
+/// `persons::find_by_any_email` serves on the Surreal lane. The
+/// [`crate::inbox::counterparty_decision`] guard applies here too: a
+/// lawyer- or clerk-tier sender never links. A sender no Person claims
+/// becomes a new client-tier Person in the same engine — `find_or_create`
+/// re-checks under the unique `email_lower` backstop, so a concurrent
+/// create collapses — and the Surreal projection stays fresh for
+/// alias-aware reads.
+pub(crate) async fn resolve_or_create_sender_on(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    external_address: &str,
+    display_name: Option<&str>,
+) -> Result<Option<Uuid>, InboxError> {
+    let address = external_address.trim();
+    let person = match crate::postgres::people::by_email(pg, address).await? {
         Some(person) => Some(person),
         None => {
-            match crate::postgres::people::mailbox_holder(
-                pg,
-                external_address.trim().to_lowercase().as_str(),
-            )
-            .await?
+            match crate::postgres::people::mailbox_holder(pg, address.to_lowercase().as_str())
+                .await?
             {
                 Some(holder) => crate::postgres::people::by_id(pg, holder).await?,
                 None => None,
             }
         }
     };
-    Ok(person
-        .as_ref()
-        .and_then(crate::inbox::counterparty_decision))
+    if let Some(person) = person {
+        // A known lawyer- or clerk-tier sender is outgoing mail: decision
+        // None, and certainly no second Person for the same address.
+        return Ok(crate::inbox::counterparty_decision(&person));
+    }
+    let created = crate::postgres::people::find_or_create(
+        pg,
+        db,
+        &crate::persons::NewPerson::new(
+            crate::inbox::sender_display_name(display_name, address),
+            address,
+        ),
+    )
+    .await
+    .map_err(|error| InboxError::Db(error.to_string()))?;
+    Ok(Some(created.id))
+}
+
+/// Backfills `person_id` on still-unassociated email conversations — the
+/// same resolve-or-create the ingest uses — and reports how many
+/// conversations gained a link. Idempotent: only rows with `person_id IS
+/// NULL` are selected, so a re-run finds nothing and writes nothing.
+pub(crate) async fn backfill_person_links_on(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+) -> Result<u64, InboxError> {
+    let unassociated: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, external_address, external_name FROM inbox_conversation \\
+         WHERE channel = $1 AND person_id IS NULL",
+    )
+    .bind(channel::EMAIL)
+    .fetch_all(&pg.0)
+    .await
+    .map_err(db_error)?;
+    let mut linked = 0u64;
+    for (conversation_id, external_address, external_name) in unassociated {
+        let Some(person_id) =
+            resolve_or_create_sender_on(pg, db, &external_address, external_name.as_deref())
+                .await?
+        else {
+            continue;
+        };
+        // First association wins: the WHERE guard keeps a concurrent
+        // ingest or backfill pass from double-writing.
+        let updated = sqlx::query(
+            "UPDATE inbox_conversation SET person_id = $2, updated_at = now() \\
+             WHERE id = $1 AND person_id IS NULL",
+        )
+        .bind(conversation_id)
+        .bind(person_id)
+        .execute(&pg.0)
+        .await
+        .map_err(db_error)?
+        .rows_affected();
+        if updated > 0 {
+            linked += 1;
+            crate::inbox::record_association_log(
+                db,
+                conversation_id,
+                Some(person_id),
+                channel::EMAIL,
+                &external_address,
+            )
+            .await;
+        }
+    }
+    Ok(linked)
 }
 
 /// The ingest entry for provider-webhook-shaped deliveries: direction
 /// `inbound`, no author, exactly `store::inbox::ingest_inbound`'s contract.
 pub(crate) async fn ingest_inbound_on(
     pg: &PostgresDb,
+    db: &SurrealDb,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
     let sender_person_id = match inbound.channel {
-        channel::EMAIL => inbound_counterparty_on(pg, inbound.external_address).await?,
+        channel::EMAIL => inbound_counterparty_on(pg, db, inbound).await?,
         _ => None,
     };
-    ingest_message_on(pg, direction::INBOUND, None, sender_person_id, inbound).await
+    let ingested =
+        ingest_message_on(pg, direction::INBOUND, None, sender_person_id, inbound).await?;
+    crate::inbox::record_association_log(
+        db,
+        ingested.conversation_id,
+        ingested.person_linked.then_some(sender_person_id).flatten(),
+        inbound.channel,
+        inbound.external_address,
+    )
+    .await;
+    Ok(ingested)
 }
 
 /// The direction-aware ingest entry. Inbound traffic behaves exactly like
