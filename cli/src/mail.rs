@@ -42,10 +42,13 @@ const DEFAULT_PARSE_UPLOAD_KIND: &str = "letter";
 
 const DRAFT_HELP: &str = "\
 Signature:
-  Set NAVIGATOR_GMAIL_SIGNATURE privately to the attorney's approved signature
-  and confidentiality notice. The CLI includes one copy in the unsent draft;
-  missing or blank configuration is refused before Gmail is contacted.
-  A matching signature embedded before other text requires review before saving.
+  When the deployment's stores are reachable, the draft wears the attorney's
+  stored signature row (resolved by the sending Gmail account), and stderr
+  prints the provenance line naming its source and revision. Offline, the
+  command falls back to NAVIGATOR_GMAIL_SIGNATURE — announced on stderr,
+  never silent. With neither source set, configuration is refused before
+  Gmail is contacted. A matching signature embedded before other text
+  requires review before saving.
 
 Attachments:
   --attach is repeatable. Each file is read from disk, keeps its file name, and
@@ -1672,6 +1675,15 @@ async fn run_inner(action: MailAction) -> Result<()> {
             draft_id,
             attach,
         } => {
+            // The signature resolves before any Gmail contact: the runtime
+            // source is the deployment's stored row for the sending
+            // account's Person, the env var is the announced offline
+            // fallback, and neither yielding a block refuses below.
+            let env_signature = std::env::var("NAVIGATOR_GMAIL_SIGNATURE").ok();
+            let sending_account = configured_setup().ok().map(|(account, _)| account);
+            let resolved =
+                resolve_draft_signature(env_signature.as_deref(), sending_account.as_deref()).await;
+            announce_signature_resolution(&resolved);
             let request = DraftRequest {
                 to,
                 cc,
@@ -1681,7 +1693,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
                 thread,
                 draft_id,
                 attach,
-                configured_signature: std::env::var("NAVIGATOR_GMAIL_SIGNATURE").ok(),
+                configured_signature: resolved.signature_body(),
             };
             let saved = save_draft_command(request, client).await?;
             println!(
@@ -1777,6 +1789,132 @@ struct SavedDraft {
     id: String,
     account: String,
     attachments: usize,
+}
+
+/// The signature a draft wears, with the provenance naming its source: the
+/// line PR #472's letterhead provenance prints, for the mail path (LAW-280).
+struct DraftSignature {
+    body: String,
+    provenance: String,
+}
+
+/// What signature resolution decided. The resolution runs before any Gmail
+/// contact, so a missing-configuration refusal stays a local refusal — the
+/// shape the draft tests pin.
+enum ResolvedSignature {
+    /// The deployment's stored row for the sending account's Person.
+    Stored(DraftSignature),
+    /// The `NAVIGATOR_GMAIL_SIGNATURE` env var, announced on stderr — the
+    /// offline fallback, never silent, never a refusal.
+    Env {
+        signature: DraftSignature,
+        announcement: String,
+    },
+    /// Neither source yielded a usable block: `with_signature` refuses with
+    /// the missing-configuration error. The reason says why the runtime
+    /// source did not answer, announced before the refusal.
+    Neither(String),
+}
+
+impl ResolvedSignature {
+    /// The block that signs the draft, `None` when neither source yielded
+    /// one.
+    fn signature_body(self) -> Option<String> {
+        match self {
+            Self::Stored(signature) | Self::Env { signature, .. } => Some(signature.body),
+            Self::Neither(_) => None,
+        }
+    }
+}
+
+/// Print what resolution decided, on stderr: the fallback announcement when
+/// the runtime source did not answer, then the provenance line a stored or
+/// env-signed draft carries.
+fn announce_signature_resolution(resolved: &ResolvedSignature) {
+    match resolved {
+        ResolvedSignature::Stored(signature) => eprintln!("{}", signature.provenance),
+        ResolvedSignature::Env {
+            signature,
+            announcement,
+        } => {
+            eprintln!("{announcement}");
+            eprintln!("{}", signature.provenance);
+        }
+        ResolvedSignature::Neither(reason) => eprintln!("{reason}"),
+    }
+}
+
+/// Resolve the signature a draft wears: the deployment's stored row for the
+/// sending account's Person when the stores answer within a bounded budget,
+/// else the `NAVIGATOR_GMAIL_SIGNATURE` env var — announced, never silent
+/// (LAW-280). A lawyer drafting from a plane without the deployment keeps
+/// drafting; only when neither source yields a block does the draft refuse,
+/// still before any Gmail contact.
+async fn resolve_draft_signature(
+    env_signature: Option<&str>,
+    sending_account: Option<&str>,
+) -> ResolvedSignature {
+    let budget = std::time::Duration::from_secs(3);
+    match tokio::time::timeout(budget, runtime_signature(sending_account)).await {
+        Ok(Ok(signature)) => ResolvedSignature::Stored(DraftSignature {
+            body: signature.body,
+            provenance: format!(
+                "signature: source=runtime person={} revision={}",
+                signature.person_id,
+                signature.updated_at.as_deref().unwrap_or("n/a"),
+            ),
+        }),
+        Ok(Err(reason)) => env_fallback(env_signature, &reason),
+        Err(elapsed) => env_fallback(
+            env_signature,
+            &format!("the signature store did not answer within {budget:?}: {elapsed:?}"),
+        ),
+    }
+}
+
+/// The stored signature for the sending account's Person, or `Err` naming
+/// why the deployment's stores could not answer — the caller falls back to
+/// the env var and announces it. The account resolves against `Person.email`
+/// exactly: a sending account that is no Person has no row to fetch, and the
+/// fallback says so rather than signing with another attorney's block.
+async fn runtime_signature(
+    sending_account: Option<&str>,
+) -> Result<store::mail_signatures::MailSignature, String> {
+    let account = sending_account.ok_or("no configured Gmail account; run navigator mail setup")?;
+    let surreal = store::surreal::connect_from_env()
+        .await
+        .map_err(|error| format!("the deployment's document store is unreachable: {error}"))?;
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|error| format!("the deployment's relational store is unreachable: {error}"))?;
+    let person = store::persons::find_by_email_ci(&surreal, account)
+        .await
+        .map_err(|error| format!("the sending account's Person lookup failed: {error}"))?
+        .ok_or_else(|| format!("no Person matches the sending account {account}"))?;
+    store::mail_signatures::for_person(&surreal, &pg, person.id)
+        .await
+        .map_err(|error| format!("the stored signature read failed: {error}"))?
+        .ok_or_else(|| format!("no stored signature row for the sending account {account}"))
+}
+
+/// The env fallback for a runtime reason: announced, never silent. A blank
+/// env value is not a usable block either — `with_signature` would refuse
+/// it, so it leaves `Neither` and the refusal names the env var itself.
+fn env_fallback(env_signature: Option<&str>, reason: &str) -> ResolvedSignature {
+    let announcement = format!(
+        "navigator mail: the deployment's stored signature is unavailable ({reason}); \
+         signing from the NAVIGATOR_GMAIL_SIGNATURE fallback"
+    );
+    match env_signature.filter(|value| !value.trim().is_empty()) {
+        Some(body) => ResolvedSignature::Env {
+            signature: DraftSignature {
+                body: body.to_owned(),
+                provenance: "signature: source=env person=n/a revision=n/a".to_owned(),
+            },
+            announcement,
+        },
+        None => ResolvedSignature::Neither(announcement),
+    }
 }
 
 /// Reads the body and every attachment from disk, then connects to Gmail and
@@ -4042,6 +4180,45 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
         assert!(
             error.to_string().contains("NAVIGATOR_GMAIL_SIGNATURE"),
             "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_draft_without_a_configured_account_falls_back_to_the_env_signature() {
+        let resolved = resolve_draft_signature(Some(CONFIGURED_SIGNATURE), None).await;
+        let ResolvedSignature::Env {
+            signature,
+            announcement,
+        } = resolved
+        else {
+            panic!("an account resolution failure must fall back to the env signature");
+        };
+        assert_eq!(signature.body, CONFIGURED_SIGNATURE);
+        assert_eq!(
+            signature.provenance,
+            "signature: source=env person=n/a revision=n/a"
+        );
+        assert!(
+            announcement.contains("NAVIGATOR_GMAIL_SIGNATURE"),
+            "{announcement}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blank_env_signature_is_not_a_usable_fallback_block() {
+        let resolved = resolve_draft_signature(Some("   "), None).await;
+        assert!(
+            matches!(resolved, ResolvedSignature::Neither(_)),
+            "a blank env value must leave the missing-configuration refusal to with_signature"
+        );
+    }
+
+    #[tokio::test]
+    async fn neither_resolution_source_yields_no_signature_body() {
+        let resolved = resolve_draft_signature(None, None).await;
+        assert!(
+            resolved.signature_body().is_none(),
+            "neither source must leave the draft to refuse missing configuration"
         );
     }
 
