@@ -483,7 +483,9 @@ pub async fn matter_economics(
         let plan_fee_cents: Option<i32> = row.try_get("plan_fee_cents")?;
         let minutes: i64 = row.try_get("minutes")?;
         let time_cost_cents: i64 = row.try_get("time_cost_cents")?;
-        let margin_cents = plan_fee_cents.map(i64::from).map(|fee| fee - time_cost_cents);
+        let margin_cents = plan_fee_cents
+            .map(i64::from)
+            .map(|fee| fee - time_cost_cents);
         Ok(MatterEconomics {
             project_id: row.try_get("project_id")?,
             code: row.try_get("code")?,
@@ -497,7 +499,8 @@ pub async fn matter_economics(
             minutes,
             time_cost_cents,
             margin_cents,
-            margin_cents_per_hour: margin_cents.map(|margin| margin_cents_per_hour(margin, minutes)),
+            margin_cents_per_hour: margin_cents
+                .map(|margin| margin_cents_per_hour(margin, minutes)),
         })
     })
     .collect::<Result<Vec<_>, PlanMetricsError>>()?;
@@ -731,7 +734,6 @@ fn parse_matter_type(raw: &str) -> Result<PlanMatterType, PlanMetricsError> {
     PlanMatterType::parse(raw).map_err(|_| PlanMetricsError::Invalid("plan_matter_type"))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,8 +791,8 @@ mod database {
     use super::*;
     use crate::firms::{self, FirmMembership, NewFirm, NewPersonFirmRole};
     use crate::legal_plans::{self, NewLegalPlan, NewPlanFeeSchedule};
-    use crate::postgres_mirror::tests::{connect, fresh_schema};
     use crate::persons::{self, NewPerson, Role};
+    use crate::postgres_mirror::tests::{connect, fresh_schema};
     use crate::test_support::{mem_surreal, seed_entity};
     use crate::time_entries::{self, NewTimeEntry, TimeEntrySource};
     use chrono::{DateTime, NaiveDate, TimeZone, Utc};
@@ -800,7 +802,9 @@ mod database {
     }
 
     fn stamp(hour: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 11, 1, hour, 0, 0).single().unwrap_or_else(|| panic!("valid stamp"))
+        Utc.with_ymd_and_hms(2026, 11, 1, hour, 0, 0)
+            .single()
+            .unwrap_or_else(|| panic!("valid stamp"))
     }
 
     /// A Firm, its entity, and one attorney — the rows every metric test
@@ -1075,16 +1079,66 @@ mod database {
         // Firm A: two ARAG New York matters (one still open), one ARAG
         // California matter, one LegalShield matter never staged with a
         // state, and one assigned before the window.
-        let _ = matter(&pg, &a, "plan-a1", Some(arag_a), Some("document_review"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 3)), Some(day(11, 6))).await;
-        let _ = matter(&pg, &a, "plan-a2", Some(arag_a), Some("document_review"), Some("ny"),
-            Some(day(11, 10)), None, None).await;
-        let _ = matter(&pg, &a, "plan-a3", Some(arag_a), Some("letter"), Some("ca"),
-            Some(day(11, 12)), Some(day(11, 13)), None).await;
-        let _ = matter(&pg, &a, "plan-a4", Some(shield_a), None, None,
-            Some(day(11, 14)), None, None).await;
-        let _ = matter(&pg, &a, "plan-a5", Some(arag_a), Some("document_review"), Some("ny"),
-            Some(day(10, 30)), Some(day(10, 30)), Some(day(10, 31))).await;
+        let _ = matter(
+            &pg,
+            &a,
+            "plan-a1",
+            Some(arag_a),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 3)),
+            Some(day(11, 6)),
+        )
+        .await;
+        let _ = matter(
+            &pg,
+            &a,
+            "plan-a2",
+            Some(arag_a),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(11, 10)),
+            None,
+            None,
+        )
+        .await;
+        let _ = matter(
+            &pg,
+            &a,
+            "plan-a3",
+            Some(arag_a),
+            Some("letter"),
+            Some("ca"),
+            Some(day(11, 12)),
+            Some(day(11, 13)),
+            None,
+        )
+        .await;
+        let _ = matter(
+            &pg,
+            &a,
+            "plan-a4",
+            Some(shield_a),
+            None,
+            None,
+            Some(day(11, 14)),
+            None,
+            None,
+        )
+        .await;
+        let _ = matter(
+            &pg,
+            &a,
+            "plan-a5",
+            Some(arag_a),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(10, 30)),
+            Some(day(10, 30)),
+            Some(day(10, 31)),
+        )
+        .await;
 
         let counts = matter_counts(&pg, a.firm_id, day(11, 1), day(11, 30))
             .await
@@ -1109,7 +1163,10 @@ mod database {
             .await
             .unwrap_or_else(|error| panic!("firm b counts: {error}"));
         assert!(other.is_empty(), "firm B has no plan matters in the window");
-        assert_ne!(other.iter().map(|row| row.legal_plan_id).next(), Some(arag_a));
+        assert_ne!(
+            other.iter().map(|row| row.legal_plan_id).next(),
+            Some(arag_a)
+        );
     }
 
     #[tokio::test]
@@ -1124,14 +1181,44 @@ mod database {
         let arag_b = plan(&pg, b.firm_id, "ARAG").await;
 
         // Same-day acceptance is never a miss, whatever the budget.
-        let _ = matter(&pg, &a, "plan-ok", Some(arag_a), Some("document_review"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 3)), None).await;
+        let _ = matter(
+            &pg,
+            &a,
+            "plan-ok",
+            Some(arag_a),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 3)),
+            None,
+        )
+        .await;
         // One day over a 24-hour budget is one miss.
-        let late = matter(&pg, &a, "plan-late", Some(arag_a), Some("document_review"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 5)), None).await;
+        let late = matter(
+            &pg,
+            &a,
+            "plan-late",
+            Some(arag_a),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 5)),
+            None,
+        )
+        .await;
         // 30 days acceptance-to-close over a 7-day budget is one miss.
-        let slow = matter(&pg, &a, "plan-slow", Some(arag_a), Some("letter"), Some("ny"),
-            Some(day(11, 1)), Some(day(11, 2)), Some(day(11, 30))).await;
+        let slow = matter(
+            &pg,
+            &a,
+            "plan-slow",
+            Some(arag_a),
+            Some("letter"),
+            Some("ny"),
+            Some(day(11, 1)),
+            Some(day(11, 2)),
+            Some(day(11, 30)),
+        )
+        .await;
 
         let acceptance = acceptance_sla_misses(&pg, a.firm_id, day(11, 1), day(11, 30))
             .await
@@ -1147,12 +1234,26 @@ mod database {
         assert_eq!(turnaround.len(), 1);
         assert_eq!(turnaround[0].project_id, slow);
         assert_eq!(turnaround[0].elapsed_days, 28);
-        assert_eq!(turnaround[0].turnaround_sla_days, 30 - 23, "the seed budget is 7 days");
+        assert_eq!(
+            turnaround[0].turnaround_sla_days,
+            30 - 23,
+            "the seed budget is 7 days"
+        );
 
         // Firm B accepts its matter just as late — its miss must not
         // appear in Firm A's list, and vice versa.
-        let _ = matter(&pg, &b, "plan-b-late", Some(arag_b), Some("document_review"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 5)), None).await;
+        let _ = matter(
+            &pg,
+            &b,
+            "plan-b-late",
+            Some(arag_b),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 5)),
+            None,
+        )
+        .await;
         assert_eq!(
             acceptance_sla_misses(&pg, a.firm_id, day(11, 1), day(11, 30))
                 .await
@@ -1188,8 +1289,18 @@ mod database {
         let hearing = stage(&pg, a.firm_id, "hearing", 5).await;
         let draft = stage(&pg, a.firm_id, "draft", 2).await;
 
-        let matter_a = matter(&pg, &a, "plan-a1", Some(arag_a), Some("document_review"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 3)), None).await;
+        let matter_a = matter(
+            &pg,
+            &a,
+            "plan-a1",
+            Some(arag_a),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 3)),
+            None,
+        )
+        .await;
         let _ = entry(&pg, matter_a, a.attorney, 30, 20_000, Some(hearing)).await;
         let _ = entry(&pg, matter_a, a.attorney, 20, 20_000, Some(hearing)).await;
         let _ = entry(&pg, matter_a, a.attorney, 40, 20_000, Some(draft)).await;
@@ -1213,18 +1324,41 @@ mod database {
         assert_eq!(by_plan, by_stage, "one matter is the whole plan so far");
 
         // A second Firm's matter of the same shape answers nothing here.
-        let _ = matter(&pg, &b, "plan-b1", None, None, None, Some(day(11, 3)), None, None).await;
-        assert!(minutes_by_stage_for_project(&pg, a.firm_id, b_attorney_matter(
-            &pg, &b, &arag_a
-        ).await)
+        let _ = matter(
+            &pg,
+            &b,
+            "plan-b1",
+            None,
+            None,
+            None,
+            Some(day(11, 3)),
+            None,
+            None,
+        )
+        .await;
+        assert!(minutes_by_stage_for_project(
+            &pg,
+            a.firm_id,
+            b_attorney_matter(&pg, &b, &arag_a).await
+        )
         .await
         .unwrap()
         .is_empty());
     }
 
     async fn b_attorney_matter(pg: &PostgresDb, fixture_b: &FirmFixture, arag_b: &Uuid) -> Uuid {
-        matter(pg, fixture_b, "plan-b2", Some(*arag_b), Some("letter"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 3)), None).await
+        matter(
+            pg,
+            fixture_b,
+            "plan-b2",
+            Some(*arag_b),
+            Some("letter"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 3)),
+            None,
+        )
+        .await
     }
 
     #[tokio::test]
@@ -1240,19 +1374,63 @@ mod database {
 
         // Two generations of the same fee: a matter priced on or after
         // June 1 reads the newer fee.
-        let _old = schedule(&pg, a.firm_id, arag_a, &PlanMatterType::DocumentReview, 15_000, day(1, 1)).await;
-        let _new = schedule(&pg, a.firm_id, arag_a, &PlanMatterType::DocumentReview, 17_500, day(6, 1)).await;
+        let _old = schedule(
+            &pg,
+            a.firm_id,
+            arag_a,
+            &PlanMatterType::DocumentReview,
+            15_000,
+            day(1, 1),
+        )
+        .await;
+        let _new = schedule(
+            &pg,
+            a.firm_id,
+            arag_a,
+            &PlanMatterType::DocumentReview,
+            17_500,
+            day(6, 1),
+        )
+        .await;
         // Firm B's own schedule for the same plan name and type — never
         // Firm A's answer.
-        let _b_fee = schedule(&pg, b.firm_id, arag_b, &PlanMatterType::DocumentReview, 100, day(1, 1)).await;
+        let _b_fee = schedule(
+            &pg,
+            b.firm_id,
+            arag_b,
+            &PlanMatterType::DocumentReview,
+            100,
+            day(1, 1),
+        )
+        .await;
 
-        let priced = matter(&pg, &a, "plan-priced", Some(arag_a), Some("document_review"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 4)), None).await;
+        let priced = matter(
+            &pg,
+            &a,
+            "plan-priced",
+            Some(arag_a),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 4)),
+            None,
+        )
+        .await;
         let _ = entry(&pg, priced, a.attorney, 90, 25_000, None).await;
         let _ = entry(&pg, priced, a.attorney, 30, 25_000, None).await;
         // The unpriced matter: no schedule row for the type.
-        let unpriced = matter(&pg, &a, "plan-unpriced", Some(arag_a), Some("letter"), Some("ny"),
-            Some(day(11, 3)), None, None).await;
+        let unpriced = matter(
+            &pg,
+            &a,
+            "plan-unpriced",
+            Some(arag_a),
+            Some("letter"),
+            Some("ny"),
+            Some(day(11, 3)),
+            None,
+            None,
+        )
+        .await;
         let _ = entry(&pg, unpriced, a.attorney, 60, 25_000, None).await;
 
         let economics = matter_economics(&pg, a.firm_id, day(11, 1), day(11, 30))
@@ -1263,8 +1441,15 @@ mod database {
             .iter()
             .find(|row| row.project_id == priced)
             .unwrap_or_else(|| panic!("priced matter"));
-        assert_eq!(priced_row.plan_fee_cents, Some(17_500), "the newer effective fee");
-        assert_eq!(priced_row.time_cost_cents, 50_000, "37_500 + 12_500, the entry pieces");
+        assert_eq!(
+            priced_row.plan_fee_cents,
+            Some(17_500),
+            "the newer effective fee"
+        );
+        assert_eq!(
+            priced_row.time_cost_cents, 50_000,
+            "37_500 + 12_500, the entry pieces"
+        );
         assert_eq!(priced_row.margin_cents, Some(17_500 - 50_000));
         assert_eq!(priced_row.margin_cents_per_hour, Some(-16_250));
         assert_eq!(priced_row.matter_type, PlanMatterType::DocumentReview);
@@ -1298,15 +1483,28 @@ mod database {
 
         // Firm B's matter — same dates, same type, its own cheap fee —
         // never appears in Firm A's economics.
-        let _ = matter(&pg, &b, "plan-b-priced", Some(arag_b), Some("document_review"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 4)), None).await;
+        let _ = matter(
+            &pg,
+            &b,
+            "plan-b-priced",
+            Some(arag_b),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 4)),
+            None,
+        )
+        .await;
         let firm_a_codes: Vec<String> = matter_economics(&pg, a.firm_id, day(11, 1), day(11, 30))
             .await
             .unwrap()
             .into_iter()
             .map(|row| row.code)
             .collect();
-        assert_eq!(firm_a_codes, vec!["plan-priced".to_owned(), "plan-unpriced".to_owned()]);
+        assert_eq!(
+            firm_a_codes,
+            vec!["plan-priced".to_owned(), "plan-unpriced".to_owned()]
+        );
     }
 
     #[tokio::test]
@@ -1328,31 +1526,82 @@ mod database {
         let _v1 = template_version(&pg, "demand-letter", Some(a.firm_id), stamp(500), false).await;
         let _v2 = template_version(&pg, "demand-letter", Some(a.firm_id), stamp(501), true).await;
 
-        let with_one = matter(&pg, &a, "plan-with-1", Some(arag_a), Some("letter"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 3)), None).await;
+        let with_one = matter(
+            &pg,
+            &a,
+            "plan-with-1",
+            Some(arag_a),
+            Some("letter"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 3)),
+            None,
+        )
+        .await;
         let _ = notation(&pg, _v1, scribe, with_one, stamp(0)).await;
         let _ = entry(&pg, with_one, a.attorney, 60, 20_000, Some(draft)).await;
 
-        let with_two = matter(&pg, &a, "plan-with-2", Some(arag_a), Some("letter"), Some("ny"),
-            Some(day(11, 4)), Some(day(11, 4)), None).await;
+        let with_two = matter(
+            &pg,
+            &a,
+            "plan-with-2",
+            Some(arag_a),
+            Some("letter"),
+            Some("ny"),
+            Some(day(11, 4)),
+            Some(day(11, 4)),
+            None,
+        )
+        .await;
         let _ = notation(&pg, _v2, scribe, with_two, stamp(0)).await;
         let _ = entry(&pg, with_two, a.attorney, 40, 20_000, Some(draft)).await;
         let _ = entry(&pg, with_two, a.attorney, 20, 20_000, Some(review)).await;
 
         // Uses a February 1 template before it existed — the guard keeps
         // it in the "before" cohort.
-        let guard = matter(&pg, &a, "plan-guard", Some(arag_a), Some("letter"), Some("ny"),
-            Some(day(11, 5)), Some(day(11, 5)), None).await;
-        let early = template_version(&pg, "demand-letter", Some(a.firm_id), stamp(600), false).await;
+        let guard = matter(
+            &pg,
+            &a,
+            "plan-guard",
+            Some(arag_a),
+            Some("letter"),
+            Some("ny"),
+            Some(day(11, 5)),
+            Some(day(11, 5)),
+            None,
+        )
+        .await;
+        let early =
+            template_version(&pg, "demand-letter", Some(a.firm_id), stamp(600), false).await;
         let _ = notation(&pg, early, scribe, guard, stamp(1)).await;
         let _ = entry(&pg, guard, a.attorney, 100, 20_000, Some(draft)).await;
 
-        let plain = matter(&pg, &a, "plan-plain", Some(arag_a), Some("letter"), Some("ny"),
-            Some(day(11, 6)), Some(day(11, 6)), None).await;
+        let plain = matter(
+            &pg,
+            &a,
+            "plan-plain",
+            Some(arag_a),
+            Some("letter"),
+            Some("ny"),
+            Some(day(11, 6)),
+            Some(day(11, 6)),
+            None,
+        )
+        .await;
         let _ = entry(&pg, plain, a.attorney, 100, 20_000, Some(draft)).await;
 
-        let other_type = matter(&pg, &a, "plan-other", Some(arag_a), Some("document_review"), Some("ny"),
-            Some(day(11, 7)), Some(day(11, 7)), None).await;
+        let other_type = matter(
+            &pg,
+            &a,
+            "plan-other",
+            Some(arag_a),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(11, 7)),
+            Some(day(11, 7)),
+            None,
+        )
+        .await;
         let _ = notation(&pg, _v2, scribe, other_type, stamp(0)).await;
         let _ = entry(&pg, other_type, a.attorney, 10, 20_000, Some(draft)).await;
 
@@ -1361,10 +1610,7 @@ mod database {
             .unwrap_or_else(|error| panic!("template effect: {error}"));
         let letter_draft = effects
             .iter()
-            .find(|row| {
-                row.matter_type == PlanMatterType::Letter
-                    && row.stage_id == Some(draft)
-            })
+            .find(|row| row.matter_type == PlanMatterType::Letter && row.stage_id == Some(draft))
             .unwrap_or_else(|| panic!("letter draft row"));
         assert_eq!(letter_draft.with_matters, 2);
         assert_eq!(letter_draft.with_minutes, 100);
@@ -1377,37 +1623,70 @@ mod database {
             .iter()
             .find(|row| row.stage_id == Some(review))
             .unwrap_or_else(|| panic!("letter review row"));
-        assert_eq!((letter_review.with_matters, letter_review.with_minutes), (1, 20));
-        assert_eq!((letter_review.before_matters, letter_review.before_minutes), (0, 0));
+        assert_eq!(
+            (letter_review.with_matters, letter_review.with_minutes),
+            (1, 20)
+        );
+        assert_eq!(
+            (letter_review.before_matters, letter_review.before_minutes),
+            (0, 0)
+        );
 
         let review_draft = effects
             .iter()
-            .find(|row| row.matter_type == PlanMatterType::DocumentReview && row.stage_id == Some(draft))
+            .find(|row| {
+                row.matter_type == PlanMatterType::DocumentReview && row.stage_id == Some(draft)
+            })
             .unwrap_or_else(|| panic!("document review draft row"));
-        assert_eq!((review_draft.with_matters, review_draft.before_matters), (1, 0));
+        assert_eq!(
+            (review_draft.with_matters, review_draft.before_matters),
+            (1, 0)
+        );
 
         // Firm B holds its own demand-letter library row inserted January
         // 1 and a "with" matter — none of it shifts Firm A's cohorts.
-        let _b_library = template_version(&pg, "demand-letter", Some(b.firm_id), stamp(0), true).await;
+        let _b_library =
+            template_version(&pg, "demand-letter", Some(b.firm_id), stamp(0), true).await;
         let _ = template_version(&pg, "demand-letter", Some(b.firm_id), stamp(100), false).await;
-        let b_matter = matter(&pg, &b, "plan-b-with", Some(arag_b), Some("letter"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 3)), None).await;
+        let b_matter = matter(
+            &pg,
+            &b,
+            "plan-b-with",
+            Some(arag_b),
+            Some("letter"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 3)),
+            None,
+        )
+        .await;
         let _ = notation(&pg, _b_library, scribe, b_matter, stamp(200)).await;
         let _ = entry(&pg, b_matter, b.attorney, 999, 20_000, Some(draft)).await;
-        let firm_a_rows: Vec<(String, i64, i64)> = template_effect(&pg, a.firm_id, &["demand-letter".to_owned()])
-            .await
-            .unwrap()
-            .iter()
-            .filter(|row| row.stage_id == Some(draft) && row.matter_type == PlanMatterType::Letter)
-            .map(|row| (row.template_code.clone(), row.with_minutes, row.before_minutes))
-            .collect();
+        let firm_a_rows: Vec<(String, i64, i64)> =
+            template_effect(&pg, a.firm_id, &["demand-letter".to_owned()])
+                .await
+                .unwrap()
+                .iter()
+                .filter(|row| {
+                    row.stage_id == Some(draft) && row.matter_type == PlanMatterType::Letter
+                })
+                .map(|row| {
+                    (
+                        row.template_code.clone(),
+                        row.with_minutes,
+                        row.before_minutes,
+                    )
+                })
+                .collect();
         assert_eq!(firm_a_rows, vec![("demand-letter".to_owned(), 100, 200)]);
 
         // A code with no template rows in scope answers nothing.
-        assert!(template_effect(&pg, a.firm_id, &["missing-code".to_owned()])
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            template_effect(&pg, a.firm_id, &["missing-code".to_owned()])
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1433,7 +1712,11 @@ mod database {
         .unwrap_or_else(|error| panic!("admin: {error}"));
         let lawyer = persons::create(
             &surreal,
-            &NewPerson::with_role("Synthetic Lawyer", "lawyer-metrics@example.com", Role::Lawyer),
+            &NewPerson::with_role(
+                "Synthetic Lawyer",
+                "lawyer-metrics@example.com",
+                Role::Lawyer,
+            ),
         )
         .await
         .unwrap_or_else(|error| panic!("lawyer: {error}"));
@@ -1485,8 +1768,18 @@ mod database {
             .await
             .unwrap_or_else(|error| panic!("mirrored firm row: {error}"));
         let arag = plan(&pg, created.id, "ARAG").await;
-        let matter_a = matter(&pg, &fixture, "plan-a1", Some(arag), Some("document_review"), Some("ny"),
-            Some(day(11, 3)), Some(day(11, 4)), None).await;
+        let matter_a = matter(
+            &pg,
+            &fixture,
+            "plan-a1",
+            Some(arag),
+            Some("document_review"),
+            Some("ny"),
+            Some(day(11, 3)),
+            Some(day(11, 4)),
+            None,
+        )
+        .await;
         let _ = entry(&pg, matter_a, fixture.attorney, 45, 20_000, None).await;
 
         let window = (day(11, 1), day(11, 30));
