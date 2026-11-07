@@ -82,6 +82,7 @@ fn back_to_profile(flash: &str, code: &str) -> Response {
 /// so a refused body never reaches for a store.
 async fn save_for_session(
     surreal: &store::surreal::SurrealDb,
+    pg: Option<&store::postgres::PostgresDb>,
     session: &SessionData,
     body: &str,
 ) -> Result<store::mail_signatures::MailSignature, SaveRefusal> {
@@ -98,10 +99,12 @@ async fn save_for_session(
             SaveRefusal::Failed
         }
     })?;
-    let pg = store::postgres::PostgresDb::from_env()
-        .await
-        .map_err(|_| SaveRefusal::Unavailable)?;
-    store::mail_signatures::save_for_actor(surreal, &pg, person_id, person_id, &fields)
+    // The handle is only needed for the write; a deployment whose PostgreSQL
+    // is unreachable cannot store a signature at all.
+    let Some(pg) = pg else {
+        return Err(SaveRefusal::Unavailable);
+    };
+    store::mail_signatures::save_for_actor(surreal, pg, person_id, person_id, &fields)
         .await
         .map_err(|error| match error {
             store::mail_signatures::MailSignatureError::NotFound => SaveRefusal::NotFound,
@@ -135,7 +138,11 @@ async fn profile_mail_signature(
     let Some(Extension(session)) = session else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    match save_for_session(&state.surreal, &session, &form.body).await {
+    // The production PG handle comes from the deployment's environment, the
+    // established portal pattern (see `post_brand_letterhead`); the None
+    // mapping is the same refusal the unreachable-store path returns.
+    let pg = store::postgres::PostgresDb::from_env().await.ok();
+    match save_for_session(&state.surreal, pg.as_ref(), &session, &form.body).await {
         Ok(_) => back_to_profile("signature", "saved"),
         Err(refusal) => {
             if matches!(refusal, SaveRefusal::Failed) {
@@ -261,7 +268,7 @@ mod tests {
     #[tokio::test]
     async fn a_session_without_a_linked_person_is_refused_before_any_store() {
         let surreal = mem_surreal().await;
-        let refused = save_for_session(&surreal, &session(None), &body("Example Attorney"))
+        let refused = save_for_session(&surreal, None, &session(None), &body("Example Attorney"))
             .await
             .unwrap_err();
         assert!(matches!(refused, SaveRefusal::NoPerson), "{refused:?}");
@@ -277,7 +284,7 @@ mod tests {
             ("Example Attorney\n--\nConfidential.", "delimiter"),
             (&"x".repeat(2001), "too long"),
         ] {
-            let refused = save_for_session(&surreal, &session, &body(text))
+            let refused = save_for_session(&surreal, None, &session, &body(text))
                 .await
                 .unwrap_err();
             assert!(
@@ -323,6 +330,7 @@ mod tests {
 
         let saved = save_for_session(
             &surreal,
+            Some(&pg),
             &session(Some(attorney)),
             &body("Example Attorney\nConfidential: intended recipient only."),
         )
@@ -343,7 +351,7 @@ mod tests {
         // A session whose Person the directory does not know: the store's
         // non-disclosing refusal, and no row written.
         let stranger = session(Some(Uuid::now_v7()));
-        let refused = save_for_session(&surreal, &stranger, &body("Example Attorney"))
+        let refused = save_for_session(&surreal, Some(&pg), &stranger, &body("Example Attorney"))
             .await
             .unwrap_err();
         assert!(matches!(refused, SaveRefusal::NotFound), "{refused:?}");
