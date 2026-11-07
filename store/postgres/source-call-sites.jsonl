@@ -308,6 +308,7 @@
 {"file":"cli/src/document_sync.rs","line":874,"function":"local_pointer_assets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/document_sync.rs","line":1043,"function":"project_sync_plans_scoped","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/document_sync.rs","line":2642,"function":"ensure_pull_batch_targets_are_distinct","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/downloads.rs","line":314,"function":"file_sha256","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/ephemeris_download.rs","line":232,"function":"verify_file","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/ephemeris_download.rs","line":337,"function":"acquire_manifest","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/ephemeris_duckdb.rs","line":247,"function":"copy_checked","operation":"update","sql_operations":[],"tables":[],"transaction":false}
@@ -324,7 +325,7 @@
 {"file":"cli/src/journal.rs","line":78,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":321,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail/login.rs","line":415,"function":"prompt_hidden","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/main.rs","line":8389,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/main.rs","line":8398,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/notices.rs","line":500,"function":"identical_texts_collapse_into_one_entry","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/pii_audit.rs","line":399,"function":"audit_tree","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/postgres_backfill.rs","line":75,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
