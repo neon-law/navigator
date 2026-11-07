@@ -45,10 +45,15 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # only an upgrade here carries Debian security fixes into a new image. The
 # PostgreSQL packages are held so the server stays at the pinned minor.
 RUN apt-mark hold $(dpkg-query -W -f '${db:Status-Abbrev}${Package}\n' 'postgresql*' 'libpq*' | sed -n 's/^ii *//p') \
+ && sed -e 's/^deb /deb-src /' -e 's/ main .*/ main/' \
+      /etc/apt/sources.list.d/pgdg.list > /etc/apt/sources.list.d/postgis-source.list \
  && apt-get update && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends \
       "postgresql-${PG_MAJOR}-postgis-3=${POSTGIS_PACKAGE_VERSION}" \
       "postgresql-${PG_MAJOR}-postgis-3-scripts=${POSTGIS_PACKAGE_VERSION}" \
+ && mkdir -p /usr/share/source/postgis \
+ && (cd /usr/share/source/postgis && apt-get source --download-only "postgis=${POSTGIS_PACKAGE_VERSION}") \
+ && rm /etc/apt/sources.list.d/postgis-source.list \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/ /
 COPY --from=build /src/age/LICENSE /src/age/NOTICE /usr/share/doc/apache-age/

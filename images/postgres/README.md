@@ -12,7 +12,8 @@ and is absent from the image. AGE needs `LOAD 'age'` and `SET search_path = ag_c
 preload is assumed.
 
 The recipe pins the matching PGDG Bookworm PostGIS binary and SQL script packages for PostgreSQL 16. Their package
-copyright files identify the upstream licenses and source. Applications that need spatial types require an ordered
+copyright files identify the upstream licenses. The image includes the matching PGDG source package, with the Debian
+packaging and patches, under `/usr/share/source/postgis`. Applications that need spatial types require an ordered
 migration to enable `postgis` in the target database after the image digest has been updated. The image provides the
 extension files for both fresh and retained databases.
 
