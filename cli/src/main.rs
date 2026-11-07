@@ -26,6 +26,7 @@ mod downloads;
 mod ephemeris_download;
 mod ephemeris_duckdb;
 mod ephemeris_iceberg;
+mod ephemeris_release;
 mod ephemeris_tables;
 mod firm_forgejo;
 mod firms_doctor;

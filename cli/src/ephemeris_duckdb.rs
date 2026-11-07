@@ -500,21 +500,21 @@ impl Tool {
             "DuckDB receipt exceeds its bound"
         );
         write_new(&dir.join(RECEIPT), &bytes)?;
-        self.verify(dir, reference).await
+        self.verify(dir, reference).await.map(|_| ())
     }
 
-    pub(super) async fn verify(&self, dir: &Path, reference: &Reference<'_>) -> Result<()> {
-        self.verified_database(dir, reference).await?;
-        Ok(())
+    pub(super) async fn verify(&self, dir: &Path, reference: &Reference<'_>) -> Result<String> {
+        let (_, receipt_sha256) = self.verified_database(dir, reference).await?;
+        Ok(receipt_sha256)
     }
 
     async fn verified_database(
         &self,
         dir: &Path,
         reference: &Reference<'_>,
-    ) -> Result<tempfile::TempDir> {
-        let receipt: Receipt =
-            serde_json::from_slice(&read_bounded(&dir.join(RECEIPT), MAX_MANIFEST_BYTES)?)?;
+    ) -> Result<(tempfile::TempDir, String)> {
+        let bytes = read_bounded(&dir.join(RECEIPT), MAX_MANIFEST_BYTES)?;
+        let receipt: Receipt = serde_json::from_slice(&bytes)?;
         let content = &receipt.content;
         ensure!(
             receipt.artifact_id == digest(&serde_json::to_vec(content)?)
@@ -553,7 +553,7 @@ impl Tool {
         self.validate(work.path(), &setup, reference).await?;
         no_sidecars(&copy)?;
         no_sidecars(&dir.join(DATABASE))?;
-        Ok(work)
+        Ok((work, digest(&bytes)))
     }
 
     async fn profile_process(
@@ -590,7 +590,7 @@ impl Tool {
         dir: &Path,
         reference: &Reference<'_>,
     ) -> Result<QueryObservations> {
-        let work = self.verified_database(dir, reference).await?;
+        let (work, _) = self.verified_database(dir, reference).await?;
         let copy = work.path().join(DATABASE);
         let setup = bootstrap(&copy, None, &self.pins.storage_version)?;
         let days = reference
