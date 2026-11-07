@@ -249,6 +249,7 @@ mod tests {
             inserted_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             evidence: None,
+            folder: None,
         }
     }
 

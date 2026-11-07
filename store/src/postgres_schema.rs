@@ -1499,6 +1499,10 @@ mod tests {
                     "../postgres/migrations/20261107130000_add_client_production_subfolder_slots.sql"
                 ),
             ),
+            (
+                "20261107140000_add_asset_folder.sql",
+                include_str!("../postgres/migrations/20261107140000_add_asset_folder.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

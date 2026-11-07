@@ -4357,3 +4357,12 @@ CREATE INDEX person_email_trgm ON person USING gin ((email::text) gin_trgm_ops);
 ALTER TABLE project_folder DROP CONSTRAINT project_folder_slot_check;
 
 ALTER TABLE project_folder ADD CONSTRAINT project_folder_slot_check CHECK (slot IN ( 'root', 'client_submissions', 'Client Production', 'Client Production/Agreements', 'Client Production/Screenshots', 'Correspondence (Served)', 'Discovery (Served)', 'Docket Filings', 'Court Rules', 'Engagement', 'Work Product', 'Work Product/Client Calls (Work Product)', 'Work Product/Correspondence (Work Product)', 'Work Product/Discovery (Work Product)', 'Work Product/Motions (Work Product)', 'Work Product/Pleadings (Work Product)', 'Work Product/Research (Work Product)', 'Work Product/Stipulations (Work Product)' ));
+
+-- Migration: 20261107140000_add_asset_folder.sql
+-- The matter folder a document is filed in (LAW-241): one of the Firm's
+-- matter folders (`store::document_pointers::MatterFolder`), as the
+-- pointer's `folder:` key spells it, persisted so the live matter files the
+-- document where the pointer says. NULL for rows written before the field
+-- existed and for rows whose placement is the kind's default; the write
+-- seam (`store::assets::set_folder`) validates the value fails-closed.
+ALTER TABLE asset ADD COLUMN folder TEXT;

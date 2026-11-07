@@ -4004,6 +4004,7 @@ fn canonical_document(base: &str) -> Value {
                     },
                     "visibility": { "type": "string", "enum": ["client", "internal"] },
                     "description": { "type": "string" },
+                    "folder": { "type": "string", "description": "The matter folder the document is filed in (LAW-241), spelled exactly as the Firm's matter folders spell it. An unknown value is refused with `400 invalid_folder` and writes nothing." },
                     "signing": { "$ref": "#/components/schemas/DocumentSigning" },
                     "notarization": { "type": "array", "items": { "$ref": "#/components/schemas/DocumentNotarization" } }
                   }
@@ -4066,6 +4067,7 @@ fn canonical_document(base: &str) -> Value {
                     "transcript_quality": { "type": "string" },
                     "signing": { "$ref": "#/components/schemas/DocumentSigning" },
                     "notarization": { "type": "array", "items": { "$ref": "#/components/schemas/DocumentNotarization" } },
+                    "folder": { "type": "string", "description": "The matter folder the document is filed in (LAW-241), spelled exactly as the Firm's matter folders spell it. An unknown value is refused with `400 invalid_folder` and opens no session." },
                     "declared_size": { "type": "integer", "description": "The byte size of the whole file, as the client counts it; at most the streaming cap" },
                     "declared_sha256": { "type": "string", "description": "Lowercase hex SHA-256 of the whole file, as the client hashed it" }
                   }

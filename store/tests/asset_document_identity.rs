@@ -51,6 +51,7 @@ async fn insert_revision(
             signing: None,
             notarization: Vec::new(),
             evidence: None,
+            folder: None,
         },
         bytes,
     )

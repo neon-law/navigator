@@ -8,6 +8,13 @@
       "table": "cap_table_holding"
     },
     {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "folder",
+      "missing_table": null,
+      "table": "document_upload_session"
+    },
+    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -572,6 +579,7 @@
         "description": "option<string>",
         "evidence": "any",
         "filename": "option<string>",
+        "folder": "option<string>",
         "id": "record",
         "inserted_at": "datetime",
         "kind": "option<string>",
@@ -833,6 +841,7 @@
         "description": "option<string>",
         "expires_at": "datetime",
         "filename": "string",
+        "folder": "option<string>",
         "id": "record",
         "kind": "string",
         "metadata": "any",
@@ -2036,6 +2045,7 @@
           "description": "TEXT",
           "evidence": "JSONB",
           "filename": "TEXT",
+          "folder": "TEXT",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
           "kind": "TEXT",

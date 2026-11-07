@@ -1098,6 +1098,7 @@ pub mod derive {
                 inserted_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
                 evidence: None,
+                folder: None,
             };
             let assets = vec![
                 revision("spa-v1.docx", true, "client"),

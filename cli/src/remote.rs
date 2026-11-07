@@ -1112,6 +1112,10 @@ pub(crate) struct LiveDocumentSummary {
     pub(crate) signing: Option<store::documents::Signing>,
     #[serde(default)]
     pub(crate) notarization: Vec<store::documents::Notarization>,
+    /// The folder the live row sits in (LAW-241); `None` is the kind's
+    /// default placement, not a folder the API refuses to say.
+    #[serde(default)]
+    pub(crate) folder: Option<String>,
 }
 
 /// How an executed document was executed, as an upload records it. Empty for
@@ -2062,6 +2066,34 @@ impl DocumentClient {
         if !status.is_success() {
             return Err(anyhow!(
                 "document visibility failed: {status}: {}",
+                first_line(&text)
+            ));
+        }
+        Ok(())
+    }
+
+    /// File the document in `folder` (LAW-241); `None` is an explicit clear
+    /// back to the kind's default placement. `null` on the wire carries the
+    /// clear — the PATCH door's tri-state folder field needs the field
+    /// present, not absent.
+    pub(crate) async fn set_folder(&self, asset_id: Uuid, folder: Option<&str>) -> Result<()> {
+        let url = format!(
+            "{}/app/api/projects/{}/documents/{asset_id}",
+            self.base, self.project_id
+        );
+        let response = self
+            .client
+            .patch(&url)
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({ "folder": folder }))
+            .send()
+            .await
+            .with_context(|| format!("PATCH {url}"))?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!(
+                "document folder failed: {status}: {}",
                 first_line(&text)
             ));
         }
@@ -5312,6 +5344,41 @@ mod tests {
                 previous,
             }
         }
+    }
+
+    /// LAW-241: `set_folder` `PATCH`es the document door with the folder
+    /// alone; a clear goes on the wire as an explicit `null`, not an absent
+    /// field, because the door's tri-state folder needs the field present.
+    #[tokio::test]
+    async fn set_folder_patches_the_folder_or_an_explicit_null() {
+        let server = wiremock::MockServer::start().await;
+        let asset_id = Uuid::now_v7();
+        let project_id = Uuid::now_v7();
+        let url_path = format!("/app/api/projects/{project_id}/documents/{asset_id}");
+        wiremock::Mock::given(method("PATCH"))
+            .and(path(url_path.clone()))
+            .and(body_json(serde_json::json!({ "folder": "Discovery" })))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(method("PATCH"))
+            .and(path(url_path.clone()))
+            .and(body_json(
+                serde_json::json!({ "folder": serde_json::Value::Null }),
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = super::DocumentClient::for_check_tests(server.uri(), project_id);
+        client
+            .set_folder(asset_id, Some("Discovery"))
+            .await
+            .expect("set the folder");
+        client
+            .set_folder(asset_id, None)
+            .await
+            .expect("clear the folder");
     }
 
     #[tokio::test]

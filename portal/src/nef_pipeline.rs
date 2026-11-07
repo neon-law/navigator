@@ -281,6 +281,7 @@ async fn file_notice_documents(
             signing: None,
             notarization: Vec::new(),
             evidence: None,
+            folder: None,
         };
         let args = store::documents::IngestArgs {
             project_id,

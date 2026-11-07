@@ -5204,6 +5204,12 @@ struct UploadDocumentRequest {
     /// Optional on every kind; validated before any byte is stored.
     #[serde(default)]
     evidence: Option<store::documents::Evidence>,
+    /// The matter folder the document is filed in (LAW-241), spelled
+    /// exactly as the Firm's matter folders spell it (`Client Production`,
+    /// `Work Product`, ...). Optional; an unknown value is `400
+    /// invalid_folder` and writes nothing — never a silent default.
+    #[serde(default)]
+    folder: Option<String>,
 }
 
 fn invalid_document_slug_response(filename: &str, slug: &str) -> Option<Response> {
@@ -5404,6 +5410,16 @@ async fn upload_document_door(
     if let Some(error) = input.evidence.as_ref().and_then(|e| e.validate().err()) {
         return Ok(bad_request("invalid_evidence", &error.to_string()));
     }
+    let folder = match store::document_pointers::MatterFolder::parse_checked_folder(
+        input
+            .folder
+            .as_deref()
+            .map(str::trim)
+            .filter(|folder| !folder.is_empty()),
+    ) {
+        Ok(folder) => folder,
+        Err(error) => return Ok(bad_request("invalid_folder", &error.to_string())),
+    };
     if input.derived_from.is_some() && kind != "transcript" {
         return Ok(bad_request(
             "invalid_derived_from",
@@ -5557,6 +5573,7 @@ async fn upload_document_door(
             signing: input.signing,
             notarization: input.notarization.clone(),
             evidence: input.evidence.clone(),
+            folder: folder.map(store::document_pointers::MatterFolder::as_str),
         },
         &bytes,
     )
@@ -5589,6 +5606,11 @@ struct CreateUploadSessionRequest {
     signing: Option<store::documents::Signing>,
     #[serde(default)]
     notarization: Vec<store::documents::Notarization>,
+    /// The matter folder the document is filed in (LAW-241), spelled
+    /// exactly as the Firm's matter folders spell it. Optional; an unknown
+    /// value is `400 invalid_folder` and opens no session.
+    #[serde(default)]
+    folder: Option<String>,
     /// The byte size of the whole file, as the client counts it.
     declared_size: usize,
     /// Lowercase hex SHA-256 of the whole file, as the client hashed it.
@@ -5731,6 +5753,7 @@ fn streaming_session_args<'a>(
     kind: &'a str,
     slug: &'a str,
     derived_from: Option<serde_json::Value>,
+    folder: Option<&'a str>,
 ) -> store::documents::UploadSessionArgs<'a> {
     let visibility = if input.visibility.as_deref() == Some(store::documents::visibility::CLIENT) {
         store::documents::visibility::CLIENT
@@ -5771,9 +5794,70 @@ fn streaming_session_args<'a>(
         derived_from,
         signing,
         notarization,
+        folder,
         declared_size: input.declared_size,
         declared_sha256: &input.declared_sha256,
     }
+}
+
+/// The metadata checks the streaming door shares with the buffered one: a
+/// non-empty filename, a known `kind`, transcript-quality rules,
+/// notarization validity, a recognized `folder`, and a derived source only
+/// on transcripts. Returns the trimmed filename, resolved kind, and parsed
+/// folder, or the `400` response the door replies with.
+fn validate_upload_session_metadata(
+    input: &CreateUploadSessionRequest,
+) -> Result<(&str, &str, Option<store::document_pointers::MatterFolder>), Response> {
+    let filename = input.filename.trim();
+    if filename.is_empty() {
+        return Err(bad_request("filename_required", "A filename is required."));
+    }
+    let Some(kind) = input
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Err(bad_request(
+            "kind_required",
+            &format!(
+                "A document kind is required. Accepted values are: {}.",
+                accepted_asset_kinds().join(", ")
+            ),
+        ));
+    };
+    if let Some(quality) = input.transcript_quality.as_deref() {
+        if kind != "transcript" || !matches!(quality, "machine" | "proofread") {
+            return Err(bad_request(
+                "invalid_transcript_quality",
+                "Transcript quality must be `machine` or `proofread` and requires kind `transcript`.",
+            ));
+        }
+    }
+    if let Some(error) = input
+        .notarization
+        .iter()
+        .find_map(|notarization| notarization.validate().err())
+    {
+        return Err(bad_request("invalid_notarization", &error.to_string()));
+    }
+    let folder = match store::document_pointers::MatterFolder::parse_checked_folder(
+        input
+            .folder
+            .as_deref()
+            .map(str::trim)
+            .filter(|folder| !folder.is_empty()),
+    ) {
+        Ok(folder) => folder,
+        Err(error) => return Err(bad_request("invalid_folder", &error.to_string())),
+    };
+    if input.derived_from.is_some() && kind != "transcript" {
+        return Err(bad_request(
+            "invalid_derived_from",
+            "A source revision may be attached only to a transcript.",
+        ));
+    }
+    Ok((filename, kind, folder))
 }
 
 /// `POST /app/api/projects/{id}/documents/upload-session` — open (or resume)
@@ -5802,45 +5886,10 @@ async fn create_upload_session_door(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    let filename = input.filename.trim();
-    if filename.is_empty() {
-        return Ok(bad_request("filename_required", "A filename is required."));
-    }
-    let Some(kind) = input
-        .kind
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    else {
-        return Ok(bad_request(
-            "kind_required",
-            &format!(
-                "A document kind is required. Accepted values are: {}.",
-                accepted_asset_kinds().join(", ")
-            ),
-        ));
+    let (filename, kind, folder) = match validate_upload_session_metadata(&input) {
+        Ok(parsed) => parsed,
+        Err(response) => return Ok(response),
     };
-    if let Some(quality) = input.transcript_quality.as_deref() {
-        if kind != "transcript" || !matches!(quality, "machine" | "proofread") {
-            return Ok(bad_request(
-                "invalid_transcript_quality",
-                "Transcript quality must be `machine` or `proofread` and requires kind `transcript`.",
-            ));
-        }
-    }
-    if let Some(error) = input
-        .notarization
-        .iter()
-        .find_map(|notarization| notarization.validate().err())
-    {
-        return Ok(bad_request("invalid_notarization", &error.to_string()));
-    }
-    if input.derived_from.is_some() && kind != "transcript" {
-        return Ok(bad_request(
-            "invalid_derived_from",
-            "A source revision may be attached only to a transcript.",
-        ));
-    }
     let derived_from = match input.derived_from.as_ref() {
         Some(source) => match streaming_source_revision(&state, id, source).await {
             Ok(source) => Some(source),
@@ -5874,7 +5923,15 @@ async fn create_upload_session_door(
     if let Some(response) = invalid_document_slug_response(filename, &slug) {
         return Ok(response);
     }
-    let args = streaming_session_args(id, &input, filename, kind, &slug, derived_from);
+    let args = streaming_session_args(
+        id,
+        &input,
+        filename,
+        kind,
+        &slug,
+        derived_from,
+        folder.map(store::document_pointers::MatterFolder::as_str),
+    );
     match store::documents::create_upload_session(&state.surreal, &args).await {
         Ok(session) => {
             let status = if session.received_bytes > 0 {
@@ -6087,7 +6144,14 @@ async fn document_pointer(
         checkout_path: current.drive_checkout_path().map(str::to_owned),
         kind: kind.to_string(),
         visibility: current.visibility.clone(),
-        folder: None,
+        // LAW-241: the live row's persisted folder renders back on the
+        // pointer — the same value `project sync` reconciles. Validated at
+        // every write, so a value that fails to parse is a corrupted row,
+        // not a caller error; it renders as the kind's default placement.
+        folder: current
+            .folder
+            .as_deref()
+            .and_then(store::document_pointers::MatterFolder::parse),
         current_version: store::document_pointers::PointerVersion {
             version: revisions.len(),
             asset_id: current.id,
@@ -6338,6 +6402,7 @@ pub(crate) async fn file_mail_attachments(
             signing: None,
             notarization: Vec::new(),
             evidence: None,
+            folder: None,
         };
         let provenance = store::documents::MailProvenance {
             message_id: &message_id_str,
@@ -7076,6 +7141,14 @@ struct UpdateDocumentRequest {
     /// row's filename, or already names a chain.
     #[serde(default)]
     reslug: bool,
+    /// Set or clear the matter folder (LAW-241). Tri-state: the outer
+    /// `Some` means the field was sent; the inner `None` is an explicit
+    /// clear back to the kind's default placement, and the inner `Some`
+    /// names the folder, spelled exactly. Sent alone; combined with
+    /// `visibility`, `slug`, or `kind` is `400 invalid_request`.
+    #[serde(default)]
+    #[allow(clippy::option_option)]
+    folder: Option<Option<String>>,
     /// Validate and report the write. The row is left unchanged.
     #[serde(default)]
     dry_run: bool,
@@ -7245,6 +7318,26 @@ async fn reslug_document_door(
     }
 }
 
+/// The `folder` branch of [`update_document_door`], split out to keep that
+/// function under the line-count lint: set or clear the matter folder, the
+/// same shape as the `reslug` branch beside it.
+#[allow(clippy::result_large_err)]
+async fn set_folder_door(
+    state: &ApiState,
+    project_id: Uuid,
+    asset_id: Uuid,
+    folder: Option<&str>,
+) -> Result<Response, ApiError> {
+    match store::assets::set_folder(&state.surreal, project_id, asset_id, folder).await {
+        Ok(Some(changed)) => Ok(Json(serde_json::json!({ "changed": changed })).into_response()),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(store::assets::SetFolderError::UnknownFolder(error)) => {
+            Ok(bad_request("invalid_folder", &error.to_string()))
+        }
+        Err(store::assets::SetFolderError::Asset(error)) => Err(ApiError::Asset(error)),
+    }
+}
+
 /// Reconcile a committed pointer's visibility, set `slug` (and optionally
 /// `kind`) on a row that has no slug, replace a legacy `kind` the asset lane
 /// rejects, or (with `reslug`) move a document identity to another valid slug. The standard API audit middleware
@@ -7270,6 +7363,15 @@ async fn update_document_door(
     }
     if input.reslug {
         return reslug_document_door(&state, project_id, asset_id, &input).await;
+    }
+    if let Some(folder) = &input.folder {
+        if input.visibility.is_some() || input.slug.is_some() || input.kind.is_some() {
+            return Ok(bad_request(
+                "invalid_request",
+                "Send `folder` alone, not with `visibility`, `slug`, or `kind`.",
+            ));
+        }
+        return set_folder_door(&state, project_id, asset_id, folder.as_deref()).await;
     }
     match (input.visibility.as_deref(), input.slug.as_deref()) {
         (Some(visibility), None) => {
@@ -9340,8 +9442,8 @@ mod tests {
     };
     use super::{
         append_upload_chunk_door, complete_upload_session_door, create_upload_session_door,
-        upload_session_status_door, CreateUploadSessionRequest, JsonOrForm, UploadChunkRequest,
-        UploadSessionRefRequest,
+        upload_document_door, upload_session_status_door, CreateUploadSessionRequest, JsonOrForm,
+        UploadChunkRequest, UploadDocumentRequest, UploadSessionRefRequest,
     };
     use axum::extract::{Path, Query, State};
     use axum::http::StatusCode;
@@ -10135,6 +10237,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             evidence: None,
+            folder: None,
         };
         store::documents::ingest_bytes_as(
             surreal,
@@ -10400,6 +10503,7 @@ mod tests {
                 transcript_quality: Some("machine".into()),
                 signing: None,
                 notarization: vec![],
+                folder: None,
                 declared_size: bytes.len(),
                 declared_sha256: store::documents::sha256_hex(bytes),
             }),
@@ -14078,5 +14182,153 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
         assert_eq!(status, StatusCode::OK, "{json}");
         assert_eq!(json["path"], "Bad Name.md");
         assert_eq!(json["clean"], false, "{json}");
+    }
+
+    /// The matter folder an upload names is persisted, rendered back on the
+    /// returned pointer, and read back on the live row (LAW-241); a
+    /// folder-less upload keeps the old behavior — slug from the filename,
+    /// the kind's default placement.
+    #[tokio::test]
+    async fn an_upload_with_folder_files_the_document_there() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "folder-upload").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let response = upload_document_door(
+            State(state.clone()),
+            LawyerSession(session.clone()),
+            Path(project_id),
+            JsonOrForm(UploadDocumentRequest {
+                filename: "agreement.pdf".to_string(),
+                slug: None,
+                content_base64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"retainer bytes",
+                ),
+                content_type: Some("application/pdf".to_string()),
+                kind: Some("agreement".to_string()),
+                visibility: None,
+                description: None,
+                metadata: None,
+                derived_from: None,
+                transcript_quality: None,
+                signing: None,
+                notarization: Vec::new(),
+                evidence: None,
+                folder: Some("Discovery".to_string()),
+            }),
+        )
+        .await
+        .expect("a lawyer on the matter can upload with a folder");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json["folder"],
+            store::document_pointers::MatterFolder::Discovery.as_str(),
+            "the pointer renders the persisted folder"
+        );
+
+        // A folder-less upload keeps prior behavior: the slug comes from the
+        // filename and the row names no folder at all.
+        let response = upload_document_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            JsonOrForm(UploadDocumentRequest {
+                filename: "letter.pdf".to_string(),
+                slug: None,
+                content_base64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"letter bytes",
+                ),
+                content_type: Some("application/pdf".to_string()),
+                kind: Some("agreement".to_string()),
+                visibility: None,
+                description: None,
+                metadata: None,
+                derived_from: None,
+                transcript_quality: None,
+                signing: None,
+                notarization: Vec::new(),
+                evidence: None,
+                folder: None,
+            }),
+        )
+        .await
+        .expect("a lawyer on the matter can upload without a folder");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let rows = store::assets::for_project(&db, project_id)
+            .await
+            .expect("list the matter's documents");
+        assert_eq!(rows.len(), 2);
+        let discovery = rows
+            .iter()
+            .find(|row| row.filename.as_deref() == Some("agreement.pdf"))
+            .expect("the folder upload is filed");
+        assert_eq!(
+            discovery.folder.as_deref(),
+            Some(store::document_pointers::MatterFolder::Discovery.as_str()),
+            "the live row carries the requested folder"
+        );
+        let plain = rows
+            .iter()
+            .find(|row| row.filename.as_deref() == Some("letter.pdf"))
+            .expect("the folder-less upload is filed");
+        assert_eq!(plain.slug.as_deref(), Some("letter.pdf"));
+        assert_eq!(plain.folder, None);
+    }
+
+    /// A folder that is not one of the Firm's matter folders is `400
+    /// invalid_folder` and writes nothing — never a silent default (LAW-241).
+    #[tokio::test]
+    async fn an_upload_names_an_unknown_folder_and_writes_nothing() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "folder-refusal").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let response = upload_document_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            JsonOrForm(UploadDocumentRequest {
+                filename: "agreement.pdf".to_string(),
+                slug: None,
+                content_base64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"retainer bytes",
+                ),
+                content_type: Some("application/pdf".to_string()),
+                kind: Some("agreement".to_string()),
+                visibility: None,
+                description: None,
+                metadata: None,
+                derived_from: None,
+                transcript_quality: None,
+                signing: None,
+                notarization: Vec::new(),
+                evidence: None,
+                folder: Some("Left Drawer".to_string()),
+            }),
+        )
+        .await
+        .expect("the door answers a request with an unknown folder");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "invalid_folder");
+
+        assert!(
+            store::assets::for_project(&db, project_id)
+                .await
+                .expect("list the matter's documents")
+                .is_empty(),
+            "a refused folder writes no asset row"
+        );
     }
 }

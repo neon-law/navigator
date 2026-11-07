@@ -61,6 +61,7 @@ const ASSET_COLUMNS: &[&str] = &[
     "signing",
     "notarization",
     "evidence",
+    "folder",
     "deleted_at",
     "purge_after",
     "deleted_by_person_id",
@@ -79,7 +80,7 @@ const ASSET_SOURCE_FIELDS: &str = "id, storage_key, secondary_storage_key, conte
     byte_size, sha256_hex, project_id, filename, kind, source, received_at, description, \
     visibility, slug, published_at, source_message_id, source_sender, source_received_at, \
     source_subject, metadata, derived_from, transcript_quality, signing, notarization, evidence, \
-    deleted_at, purge_after, deleted_by_person_id, deleted_commit_sha, legal_hold_at, purged_at, \
+    folder, deleted_at, purge_after, deleted_by_person_id, deleted_commit_sha, legal_hold_at, purged_at, \
     inserted_at, updated_at";
 
 /// The asset row as SurrealDB stores it.
@@ -110,6 +111,7 @@ struct AssetSource {
     signing: Option<Json>,
     notarization: Option<Json>,
     evidence: Option<Json>,
+    folder: Option<String>,
     deleted_at: Option<surrealdb::types::Datetime>,
     purge_after: Option<surrealdb::types::Datetime>,
     deleted_by_person_id: Option<surrealdb::types::RecordId>,
@@ -147,6 +149,7 @@ struct AssetImage {
     signing: Option<Json>,
     notarization: Option<Json>,
     evidence: Option<Json>,
+    folder: Option<String>,
     deleted_at: Option<DateTime<Utc>>,
     purge_after: Option<DateTime<Utc>>,
     deleted_by_person_id: Option<Uuid>,
@@ -202,6 +205,7 @@ impl AssetImage {
             signing: json(row.signing),
             notarization: json(row.notarization),
             evidence: json(row.evidence),
+            folder: row.folder,
             deleted_at: instant(row.deleted_at),
             purge_after: instant(row.purge_after),
             deleted_by_person_id: link(row.deleted_by_person_id.as_ref())?,
@@ -244,6 +248,7 @@ impl AssetImage {
             signing: jsonb("signing")?,
             notarization: jsonb("notarization")?,
             evidence: jsonb("evidence")?,
+            folder: row.try_get("folder")?,
             deleted_at: row.try_get("deleted_at")?,
             purge_after: row.try_get("purge_after")?,
             deleted_by_person_id: row.try_get("deleted_by_person_id")?,
@@ -342,6 +347,7 @@ async fn upsert_asset(pg: &PostgresDb, asset: &AssetImage) -> Result<Mirrored, M
         .bind(asset.signing.as_ref().map(Jsonb))
         .bind(asset.notarization.as_ref().map(Jsonb))
         .bind(asset.evidence.as_ref().map(Jsonb))
+        .bind(&asset.folder)
         .bind(asset.deleted_at)
         .bind(asset.purge_after)
         .bind(asset.deleted_by_person_id)

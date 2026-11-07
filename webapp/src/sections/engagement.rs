@@ -488,6 +488,7 @@ mod tests {
                 inserted_at: at,
                 updated_at: at,
                 evidence: None,
+                folder: None,
             }
         }
 

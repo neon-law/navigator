@@ -517,6 +517,7 @@ async fn file_one(
         signing: None,
         notarization: Vec::new(),
         evidence: None,
+        folder: None,
     };
     let result = store::assets::file_revision(
         &state.surreal,

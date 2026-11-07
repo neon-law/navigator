@@ -646,6 +646,9 @@ struct ProjectSyncPlan {
     /// The newest live revision's number (the chain length) and size.
     live_revision: usize,
     live_size: i64,
+    /// The folder the live row sits in (LAW-241); `None` is the kind's
+    /// default placement.
+    live_folder: Option<String>,
     decision: Decision,
     /// The commit that removed this document's pointer, when it did.
     removed_in: Option<String>,
@@ -712,6 +715,53 @@ fn dropped_keys_note(plan: &ProjectSyncPlan) -> String {
             "them"
         }
     )
+}
+
+/// The folder reconciliation `project sync` carries out for one document
+/// (LAW-241): the committed pointer's `folder:` key is the lawyer's stated
+/// intent, and the live row is moved to agree with it.
+#[derive(Debug, PartialEq, Eq)]
+enum FolderChange {
+    /// File the document in this matter folder.
+    Set(&'static str),
+    /// File the document where its kind's default placement puts it.
+    Clear,
+}
+
+/// What sync must change so the live row sits where the committed pointer
+/// says (LAW-241). `None` — nothing to do — when the document is being
+/// deleted, cannot be reconciled at all, the committed pointer records
+/// nothing about the row it does not govern (its `asset_id` names a
+/// different revision), or the live row already agrees with the pointer.
+fn folder_reconcile(plan: &ProjectSyncPlan) -> Option<FolderChange> {
+    if plan.removed_in.is_some() || matches!(plan.decision, Decision::CouldNotReconcile(_)) {
+        return None;
+    }
+    let committed = plan.committed.as_ref()?;
+    if committed.current_version.asset_id != plan.pointer.current_version.asset_id {
+        return None;
+    }
+    let target = committed.folder.as_ref().map(|folder| folder.as_str());
+    if target == plan.live_folder.as_deref() {
+        return None;
+    }
+    Some(match target {
+        Some(folder) => FolderChange::Set(folder),
+        None => FolderChange::Clear,
+    })
+}
+
+/// The dry-run line for a folder change (LAW-241), pure so tests can pin
+/// the wording without capturing stdout.
+fn folder_dry_run_note(plan: &ProjectSyncPlan) -> Option<String> {
+    match folder_reconcile(plan) {
+        Some(FolderChange::Set(folder)) => Some(format!("would refile {} in {folder}", plan.label)),
+        Some(FolderChange::Clear) => Some(format!(
+            "would refile {} where its kind's default placement puts it",
+            plan.label
+        )),
+        None => None,
+    }
 }
 
 /// The local file at `path`, hashed, or `None` when it does not exist.
@@ -1085,6 +1135,7 @@ fn project_sync_plans_scoped(
             local: local_copy,
             live_revision: revisions.len(),
             live_size: current.byte_size,
+            live_folder: current.folder.clone(),
             decision,
             removed_in,
             dropped_keys,
@@ -1973,6 +2024,9 @@ fn report_dry_run_plans(
         if !plan.dropped_keys.is_empty() {
             println!("  {}", dropped_keys_note(plan));
         }
+        if let Some(note) = folder_dry_run_note(plan) {
+            println!("{note}");
+        }
         match plan.decision {
             Decision::Nothing | Decision::UploadNew => skipped += 1,
             Decision::Download if !plan.pointer_target.exists() => added += 1,
@@ -2010,6 +2064,9 @@ struct Tally {
     skipped: usize,
     uploaded: usize,
     deleted: usize,
+    /// Documents `project sync` refiled in their pointer's matter folder
+    /// (LAW-241).
+    refiled: usize,
     declined: usize,
     refused: Vec<String>,
     failures: Vec<String>,
@@ -2243,6 +2300,32 @@ pub(crate) async fn reconcile_project(
         }
     }
 
+    for (plan, step) in &steps {
+        if matches!(
+            step,
+            Step::Delete | Step::Unreconciled | Step::Refused | Step::Declined
+        ) {
+            continue;
+        }
+        let (target, note) = match folder_reconcile(plan) {
+            Some(FolderChange::Set(folder)) => (Some(folder), folder),
+            Some(FolderChange::Clear) => (None, "where its kind's default placement puts it"),
+            None => continue,
+        };
+        match client
+            .set_folder(plan.pointer.current_version.asset_id, target)
+            .await
+        {
+            Ok(()) => {
+                tally.refiled += 1;
+                println!("filed {} in {note}", plan.label);
+            }
+            Err(error) => tally
+                .failures
+                .push(format!("{}: could not refile: {error:#}", plan.label)),
+        }
+    }
+
     let to_fetch = authorities.iter().filter(|copy| copy.missing).count();
     println!(
         "{} added, {} updated, {} skipped",
@@ -2253,6 +2336,9 @@ pub(crate) async fn reconcile_project(
     }
     if tally.uploaded > 0 {
         println!("{} uploaded", tally.uploaded);
+    }
+    if tally.refiled > 0 {
+        println!("{} refiled", tally.refiled);
     }
     if tally.deleted > 0 {
         println!(
@@ -3129,16 +3215,19 @@ mod interactive_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        authority_capture_folder, authority_class_belongs_in_folder, content_type, inferred_kind,
-        is_authority_sidecar_path, is_invoice_capture, is_invoice_filename, is_pointer_path,
-        is_signed_pdf_filename, legacy_layout, matches_digest, migrate_legacy_layout,
-        normalize_created_at, pointer_path_for_slug, project_sync_plans, pull_target,
-        pull_transaction_path, read_manifest, recover_interrupted_pull, slug_for_pointer,
-        strip_pointer_extension, validate_folder_pointer_keys, write_pull_transaction_state,
-        write_uploaded_pointer, PullTransactionPhase, PullTransactionState, PullTransactionTarget,
-        AUTHORITY_SIDECAR_EXTENSION, POINTER_EXTENSION, POINTER_READ_EXTENSIONS,
+        authority_capture_folder, authority_class_belongs_in_folder, content_type,
+        folder_dry_run_note, folder_reconcile, inferred_kind, is_authority_sidecar_path,
+        is_invoice_capture, is_invoice_filename, is_pointer_path, is_signed_pdf_filename,
+        legacy_layout, matches_digest, migrate_legacy_layout, normalize_created_at,
+        pointer_path_for_slug, project_sync_plans, pull_target, pull_transaction_path,
+        read_manifest, recover_interrupted_pull, slug_for_pointer, strip_pointer_extension,
+        validate_folder_pointer_keys, write_pull_transaction_state, write_uploaded_pointer,
+        FolderChange, ProjectSyncPlan, PullTransactionPhase, PullTransactionState,
+        PullTransactionTarget, AUTHORITY_SIDECAR_EXTENSION, POINTER_EXTENSION,
+        POINTER_READ_EXTENSIONS,
     };
     use crate::document_deletion::RemovedPointers;
+    use crate::document_reconcile::Decision;
     use std::path::Path;
     use uuid::Uuid;
 
@@ -3264,6 +3353,7 @@ mod tests {
             inserted_at: "2026-09-23T20:53:07.132412551Z".into(),
             signing: None,
             notarization: Vec::new(),
+            folder: None,
         };
         let root = tempfile::tempdir().unwrap();
         let plans =
@@ -3292,6 +3382,7 @@ mod tests {
             inserted_at: "2026-09-23T20:53:07Z".into(),
             signing: None,
             notarization: Vec::new(),
+            folder: None,
         }
     }
 
@@ -3427,6 +3518,128 @@ mod tests {
         .unwrap();
         assert_eq!(plans[0].pointer.signing, Some(wet_ink));
         assert!(!plans[0].pointer_changed);
+    }
+
+    /// A pointer's `folder:` key is the lawyer's stated intent, and sync
+    /// moves the live row to agree (LAW-241). These tests pin the
+    /// reconciliation decisions from committed pointer + live row pairs.
+    fn plans_with_folder(
+        root: &Path,
+        asset_id: Uuid,
+        folder: Option<store::document_pointers::MatterFolder>,
+        live: crate::remote::LiveDocumentSummary,
+    ) -> Vec<ProjectSyncPlan> {
+        let mut pointer = project_sync_plans(
+            root,
+            vec![live_signed_letter(asset_id)],
+            &RemovedPointers::default(),
+        )
+        .unwrap()
+        .remove(0)
+        .pointer;
+        pointer.folder = folder;
+        let target = root.join("blobs/onboarding/letter_signed.pdf.yaml");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, pointer.to_yaml().unwrap()).unwrap();
+        project_sync_plans(root, vec![live], &RemovedPointers::default()).unwrap()
+    }
+
+    #[test]
+    fn folder_reconcile_refiles_to_the_pointers_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let asset_id = Uuid::now_v7();
+        let mut live = live_signed_letter(asset_id);
+        live.folder = Some("Work Product".to_string());
+
+        let plans = plans_with_folder(
+            root.path(),
+            asset_id,
+            Some(store::document_pointers::MatterFolder::Discovery),
+            live,
+        );
+        assert_eq!(
+            folder_reconcile(&plans[0]),
+            Some(FolderChange::Set("Discovery")),
+            "the committed pointer's folder wins over the live row's"
+        );
+        assert_eq!(
+            folder_dry_run_note(&plans[0]).as_deref(),
+            Some("would refile documents/onboarding/letter_signed.pdf in Discovery"),
+        );
+    }
+
+    #[test]
+    fn folder_reconcile_clears_to_the_default_placement() {
+        let root = tempfile::tempdir().unwrap();
+        let asset_id = Uuid::now_v7();
+        let mut live = live_signed_letter(asset_id);
+        live.folder = Some("Discovery".to_string());
+
+        let plans = plans_with_folder(root.path(), asset_id, None, live);
+        assert_eq!(folder_reconcile(&plans[0]), Some(FolderChange::Clear));
+        assert_eq!(
+            folder_dry_run_note(&plans[0]).as_deref(),
+            Some(format!(
+                "would refile {} where its kind's default placement puts it",
+                plans[0].label
+            ))
+            .as_deref(),
+        );
+    }
+
+    #[test]
+    fn folder_reconcile_skips_a_row_that_already_agrees() {
+        let root = tempfile::tempdir().unwrap();
+        let asset_id = Uuid::now_v7();
+        let mut live = live_signed_letter(asset_id);
+        live.folder = Some("Discovery".to_string());
+
+        let plans = plans_with_folder(
+            root.path(),
+            asset_id,
+            Some(store::document_pointers::MatterFolder::Discovery),
+            live,
+        );
+        assert_eq!(folder_reconcile(&plans[0]), None);
+        assert_eq!(folder_dry_run_note(&plans[0]), None);
+    }
+
+    #[test]
+    fn folder_reconcile_ignores_a_deleted_or_unreconciled_document() {
+        let root = tempfile::tempdir().unwrap();
+        let asset_id = Uuid::now_v7();
+        let live = live_signed_letter(asset_id);
+        let mut plans = plans_with_folder(
+            root.path(),
+            asset_id,
+            Some(store::document_pointers::MatterFolder::Discovery),
+            live,
+        );
+
+        plans[0].removed_in = Some("abc1234".to_string());
+        assert_eq!(folder_reconcile(&plans[0]), None);
+
+        plans[0].removed_in = None;
+        plans[0].decision = Decision::CouldNotReconcile("the bytes diverged");
+        assert_eq!(folder_reconcile(&plans[0]), None);
+    }
+
+    /// A pointer records nothing about a row it does not govern: when its
+    /// `asset_id` names a different revision, sync refiles nothing.
+    #[test]
+    fn folder_reconcile_ignores_a_pointer_that_records_a_different_row() {
+        let root = tempfile::tempdir().unwrap();
+        let committed_row = Uuid::now_v7();
+        let mut live = live_signed_letter(Uuid::now_v7());
+        live.folder = Some("Work Product".to_string());
+
+        let plans = plans_with_folder(
+            root.path(),
+            committed_row,
+            Some(store::document_pointers::MatterFolder::Discovery),
+            live,
+        );
+        assert_eq!(folder_reconcile(&plans[0]), None);
     }
 
     #[test]

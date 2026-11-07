@@ -354,7 +354,7 @@ const UPLOAD_SESSION_TABLE: &str = "document_upload_session";
 /// The upload session's columns, in the read order every accessor shares.
 const UPLOAD_SESSION_SELECT: &str = "id, project_id, filename, kind, content_type, \
      visibility, description, slug, transcript_quality, metadata, derived_from, \
-     signing, notarization, declared_size, declared_sha256, chunk_size, \
+     signing, notarization, folder, declared_size, declared_sha256, chunk_size, \
      received_bytes, created_at, expires_at";
 
 /// One in-flight streaming upload: the document the caller means to file and
@@ -376,6 +376,9 @@ pub struct UploadSession {
     pub derived_from: Option<Json>,
     pub signing: Option<Json>,
     pub notarization: Option<Json>,
+    /// The matter folder the document files into at completion (LAW-241),
+    /// validated when the session opens. `None` keeps the kind's default.
+    pub folder: Option<String>,
     /// The byte size the client declared for the whole file. The last chunk
     /// must close on exactly this.
     pub declared_size: i64,
@@ -406,6 +409,10 @@ pub enum UploadSessionError {
     Project(#[from] crate::projects::ProjectStoreError),
     #[error("`{0}` is not a valid asset-lane kind")]
     InvalidKind(String),
+    /// The session files into a folder that is not one of the Firm's matter
+    /// folders (LAW-241). Fails closed at session open.
+    #[error(transparent)]
+    UnknownFolder(#[from] crate::document_pointers::UnknownFolderError),
     #[error("a filename is required")]
     BlankFilename,
     #[error("visibility must be `internal` or `client`")]
@@ -456,6 +463,9 @@ pub struct UploadSessionArgs<'a> {
     pub derived_from: Option<Json>,
     pub signing: Option<Json>,
     pub notarization: Option<Json>,
+    /// The matter folder the document files into at completion (LAW-241).
+    /// `None` keeps the kind's default placement.
+    pub folder: Option<&'a str>,
     pub declared_size: usize,
     pub declared_sha256: &'a str,
 }
@@ -525,6 +535,10 @@ fn validate_upload_session(args: &UploadSessionArgs<'_>) -> Result<i64, UploadSe
     if args.visibility != visibility::INTERNAL && args.visibility != visibility::CLIENT {
         return Err(UploadSessionError::InvalidVisibility);
     }
+    // LAW-241: fail closed on an unknown folder before any session row or
+    // staged byte exists.
+    crate::document_pointers::MatterFolder::parse_checked_folder(args.folder)
+        .map_err(UploadSessionError::from)?;
     if args.declared_sha256.len() != 64
         || !args
             .declared_sha256
@@ -584,6 +598,7 @@ pub async fn create_upload_session(
              derived_from = $derived_from, \
              signing = $signing, \
              notarization = $notarization, \
+             folder = $folder, \
              declared_size = $declared_size, \
              declared_sha256 = $declared_sha256, \
              chunk_size = $chunk_size, \
@@ -611,6 +626,7 @@ pub async fn create_upload_session(
         .bind(("derived_from", args.derived_from.clone()))
         .bind(("signing", args.signing.clone()))
         .bind(("notarization", args.notarization.clone()))
+        .bind(("folder", args.folder.map(String::from)))
         .bind(("declared_size", declared_size))
         .bind(("declared_sha256", args.declared_sha256.to_string()))
         .bind((
@@ -639,6 +655,7 @@ pub async fn create_upload_session(
         derived_from: args.derived_from.clone(),
         signing: args.signing.clone(),
         notarization: args.notarization.clone(),
+        folder: args.folder.map(String::from),
         declared_size,
         declared_sha256: args.declared_sha256.to_string(),
         chunk_size: i64::try_from(STREAMING_UPLOAD_CHUNK_SIZE).unwrap_or(i64::MAX),
@@ -867,6 +884,7 @@ fn upload_identity(session: &UploadSession) -> Result<DocumentIdentity<'_>, Uplo
             .map_err(|error| UploadSessionError::CorruptDetail(format!("notarization: {error}")))?
             .unwrap_or_default(),
         evidence: None,
+        folder: session.folder.as_deref(),
     })
 }
 
@@ -922,6 +940,7 @@ struct UploadSessionRow {
     derived_from: Option<Json>,
     signing: Option<Json>,
     notarization: Option<Json>,
+    folder: Option<String>,
     declared_size: i64,
     declared_sha256: String,
     chunk_size: i64,
@@ -948,6 +967,7 @@ impl UploadSessionRow {
             derived_from: self.derived_from,
             signing: self.signing,
             notarization: self.notarization,
+            folder: self.folder,
             declared_size: self.declared_size,
             declared_sha256: self.declared_sha256,
             chunk_size: self.chunk_size,
@@ -984,6 +1004,10 @@ pub enum IngestError {
     /// under a value the caller never chose.
     #[error("`{0}` is not a valid asset-lane kind")]
     InvalidKind(String),
+    /// The identity names a folder that is not one of the Firm's matter
+    /// folders (LAW-241). Fails closed, before any byte is stored.
+    #[error(transparent)]
+    UnknownFolder(#[from] crate::document_pointers::UnknownFolderError),
 }
 
 /// Inputs to [`ingest_bytes`]. Held in a struct (rather than a long
@@ -1063,6 +1087,12 @@ pub struct DocumentIdentity<'a> {
     /// The exhibit metadata the evidence index reads (LAW-185). Optional on
     /// every kind; validated by the caller before any byte is stored.
     pub evidence: Option<Evidence>,
+    /// The matter folder the document is filed in (LAW-241) — a pointer's
+    /// `folder:` key, spelled exactly. `None` keeps the kind's default
+    /// placement; a value that is not a
+    /// [`MatterFolder`](crate::document_pointers::MatterFolder) is refused
+    /// before anything is written.
+    pub folder: Option<&'a str>,
 }
 
 /// How an executed document was signed: in wet ink on paper, or through
@@ -1584,6 +1614,10 @@ async fn ingest_bytes_as_inner(
     if !rules::kind::Kind::parse(args.kind).is_some_and(|k| k.valid_for(rules::kind::Lane::Asset)) {
         return Err(IngestError::InvalidKind(args.kind.to_string()));
     }
+    // LAW-241: a folder that is not one of the Firm's matter folders is
+    // refused before anything is stored — validation runs before the
+    // storage write, so a refused ingest leaves no bytes and no row.
+    crate::document_pointers::MatterFolder::parse_checked_folder(identity.folder)?;
 
     let sha_hex = sha256_hex(bytes);
     let byte_size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
@@ -1726,7 +1760,9 @@ async fn insert_asset_row(
              derived_from = $derived_from, \
              transcript_quality = $transcript_quality, \
              signing = $signing, \
-             notarization = $notarization \
+             notarization = $notarization, \
+             evidence = $evidence, \
+             folder = $folder \
              RETURN {SELECT}"
         ))
         .bind(("id", record_id(TABLE, id)))
@@ -1785,6 +1821,7 @@ async fn insert_asset_row(
                 .as_ref()
                 .and_then(|evidence| serde_json::to_value(evidence).ok()),
         ))
+        .bind(("folder", identity.folder.map(String::from)))
     })
     .await?;
 
@@ -2379,6 +2416,7 @@ mod tests {
             derived_from: None,
             signing: None,
             notarization: None,
+            folder: None,
             declared_size: declared,
             declared_sha256: "0".repeat(64),
             chunk_size,
@@ -2402,6 +2440,7 @@ mod tests {
             derived_from: None,
             signing: None,
             notarization: None,
+            folder: None,
             declared_size: size,
             declared_sha256: sha,
         }
