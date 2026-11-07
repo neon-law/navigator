@@ -398,9 +398,15 @@
   },
   "estate_asset": {
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
+    "runtime_tests": [
+      {
+        "file": "store/src/estate_assets/mirror_tests.rs",
+        "function": "estate_asset_write_hook_probe",
+        "proves": "Actual Estate Asset writes mirror complete rows and timestamps; updates, replay, single and Project-wide deletions converge, including deletion of rows missing a current schedule field, while refused cross-Project writes leave the target untouched."
+      }
+    ],
     "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+      "Equivalent application reads, cross-Firm authorization, parent ownership, and deployment cutover require separate acceptance."
     ]
   },
   "expunge_record": {
