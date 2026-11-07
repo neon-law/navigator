@@ -129,7 +129,7 @@ and attributes escape `&` as `&#38;`.
 [`webapp::keyboard`](../webapp/src/keyboard.rs) is the one registry every shortcut is declared in, and the one place its
 notation and chord map are defined. A declaration is a key, a description, a scope (`global` or `page`) and an action.
 `server/public/js/keyboard-shortcuts.js` reads the declarations out of the page, runs the action a match names, and
-fills the `?` overlay from the same list, so a key that works is a key that is listed.
+fills the `?` overlay and the `/` palette from the same list, so a key that works is a key that is listed.
 
 - **Notation.** `?`, `1`, `Mod+Enter`, `Alt+ArrowLeft`; `Mod` is ⌘ on Apple platforms and Ctrl elsewhere. A chord is
   keys separated by spaces (`g m`) and lapses after one second. `1-9` is one declaration for the digit row.
@@ -141,6 +141,14 @@ fills the `?` overlay from the same list, so a key that works is a key that is l
   `PageShortcuts`; `QuestionStage` does, for both questionnaire walkers.
 - **The overlay** is a native modal `<dialog>` labelled "Keyboard shortcuts": the platform supplies the focus trap, the
   inert background and `Esc`, and focus returns to where it was when it closes.
+- **The palette.** `/` opens a second native `<dialog>`, `nav-palette-dialog`, listing the page's role-scoped
+  destinations — the same `app_chrome` links the navbar renders, carried in `data-nav-palette-destinations`. Typing
+  narrows the rows with a client-side substring match; `ArrowDown` and `ArrowUp` move the selection, `Enter` navigates,
+  and `Escape` closes it with focus back where it was. Open unfiltered, every destination for the role is visible, the
+  first is pre-selected and the filter is focused. A filter matching nothing shows "No matching destinations" rather
+  than a silently empty list. Without JavaScript the palette is inert markup and the navbar links remain the path.
+- **One overlay at a time.** While the palette is up it owns the keyboard — `Escape`, the arrows, `Enter` — and the
+  help overlay stays shut; while the help overlay is up, `/` does nothing. The dialogs never stack.
 - **Chords.** `g m`, `g n` and `g d` are defined once in `NAVIGATION_CHORDS`. `app_pages()` names the pages this
   application has a top-level route for, and a page left out has no chord and no row in the overlay. A matter's
   notations and documents live under the matter, so only `g m` is registered here.
@@ -151,8 +159,8 @@ fills the `?` overlay from the same list, so a key that works is a key that is l
   answer, preserving the earlier answer while reads select the latest. A stale form cannot bind its value to a new
   question, and a completed or reviewed questionnaire cannot be reopened.
 
-`server/tests/browser_e2e.rs` walks both questionnaires to completion with the keyboard, and checks the overlay and the
-chords against a live page.
+`server/tests/browser_e2e.rs` walks both questionnaires to completion with the keyboard, and checks the overlay, the
+palette and the chords against a live page — on a firm app page and a Portal page alike.
 
 ## Gates
 

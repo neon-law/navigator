@@ -5232,6 +5232,90 @@ a.nav-steps__step:focus-visible {
   white-space: nowrap;
 }
 
+/* The `/` palette — a native modal <dialog> beside the help overlay. */
+.nav-palette-dialog {
+  width: min(100%, 32rem);
+  padding: 1.25rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  color: var(--nav-color-text);
+}
+
+.nav-palette-dialog::backdrop {
+  background: var(--nav-color-scrim, rgb(0 0 0 / 0.5));
+}
+
+.nav-palette-dialog:not([open]) {
+  display: none;
+}
+
+.nav-palette-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.nav-palette-dialog__title {
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.nav-palette-dialog__close {
+  flex: 0 0 auto;
+  padding: 0 0.375rem;
+  border: 0;
+  background: transparent;
+  color: var(--nav-color-text-muted);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.nav-palette-dialog__close:hover {
+  color: var(--nav-color-text);
+}
+
+.nav-palette-dialog__close:focus-visible {
+  outline: var(--nav-focus-ring, 2px) solid var(--nav-color-focus);
+  outline-offset: var(--nav-focus-offset, 2px);
+}
+
+.nav-palette-dialog__filter {
+  width: 100%;
+  margin-top: 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-bg);
+  color: var(--nav-color-text);
+  font: inherit;
+}
+
+.nav-palette-dialog__filter:focus-visible {
+  outline: var(--nav-focus-ring, 2px) solid var(--nav-color-focus);
+  outline-offset: var(--nav-focus-offset, 2px);
+  border-color: var(--nav-color-focus);
+}
+
+.nav-palette-dialog__results {
+  max-height: 16rem;
+  overflow-y: auto;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-palette-dialog__option {
+  padding: 0.375rem 0.5rem;
+  border-bottom: 1px solid var(--nav-color-border);
+  cursor: pointer;
+}
+
+.nav-palette-dialog__option[aria-selected="true"] {
+  background: var(--nav-color-surface-subtle);
+}
+
 /* Owner credential rows use only metadata; saved secret values never render. */
 #deployment-keys {
   max-width: 70rem;
