@@ -82,7 +82,7 @@
 //! routed and so cannot be reached by a browser at all — lives in
 //! `webapp/src/error_pages.rs`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fantoccini::{Client, Locator};
 use features::webdriver::{
@@ -810,11 +810,27 @@ async fn portal_and_lawyer_surfaces_pass_axe_wcag_a_and_aa() {
 /// Select a row from a fresh `/app/inbox` load and wait for the reading pane.
 /// In-page selection is the hydrated client's click handler. A fresh load
 /// renders the row before the wasm hydrates, and a click in that window
-/// follows the anchor to the full-width thread instead, so retry from the
-/// list until the pane fills.
+/// follows the anchor to the full-width thread instead. Stay on the list
+/// until the client bundle has loaded, then retry the click until the pane
+/// fills — reloading mid-compile aborts the 17 MiB wasm instantiate.
 async fn select_inbox_row_in_pane(c: &Client, row_link: &str) {
     let inbox = format!("{}/app/inbox", base_url());
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    if !c
+        .current_url()
+        .await
+        .unwrap()
+        .path()
+        .ends_with("/app/inbox")
+    {
+        c.goto(&inbox).await.unwrap();
+    }
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(row_link))
+        .await
+        .unwrap_or_else(|error| panic!("the seeded inbox row never rendered: {error}"));
+    wait_for_inbox_client(c).await;
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if !c
             .current_url()
@@ -824,12 +840,8 @@ async fn select_inbox_row_in_pane(c: &Client, row_link: &str) {
             .ends_with("/app/inbox")
         {
             c.goto(&inbox).await.unwrap();
+            wait_for_inbox_client(c).await;
         }
-        c.wait()
-            .at_most(Duration::from_secs(10))
-            .for_element(Locator::Css(row_link))
-            .await
-            .unwrap_or_else(|error| panic!("the seeded inbox row never rendered: {error}"));
         // The local macOS driver can drop native input; activate the
         // anchor through its DOM click, as the browser suite's harness does.
         c.execute(
@@ -840,16 +852,45 @@ async fn select_inbox_row_in_pane(c: &Client, row_link: &str) {
         .unwrap();
         let filled = c
             .wait()
-            .at_most(Duration::from_secs(3))
+            .at_most(Duration::from_secs(10))
             .for_element(Locator::Css("#inbox-pane .inbox-pane__thread"))
             .await;
         match filled {
             Ok(_) => break,
             Err(error) => assert!(
-                std::time::Instant::now() < deadline,
+                Instant::now() < deadline,
                 "the reading pane never filled: {error}"
             ),
         }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Wait until the Dioxus client wasm has downloaded on this document so a
+/// row click can `preventDefault` instead of following the SSR anchor.
+async fn wait_for_inbox_client(c: &Client) {
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        let loaded = c
+            .execute(
+                "return performance.getEntriesByType('resource').some((r) => \
+                 typeof r.name === 'string' && r.name.includes('webapp_bg.wasm') \
+                 && r.responseEnd > 0);",
+                vec![],
+            )
+            .await
+            .ok()
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if loaded {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "inbox wasm never loaded on /app/inbox"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
