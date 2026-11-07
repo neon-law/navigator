@@ -10,10 +10,10 @@
 //! accepted what) is the matter's audit trail and lives in `notation_events`,
 //! not here.
 //!
-//! # This table lives in SurrealDB
+//! # Storage and scope
 //!
-//! `contract_reviews` moved with wave five of #1093 (ENG-121), in the
-//! playbooks-and-contract-reviews slice. Matter scoping flows through
+//! SurrealDB determines each command's write outcome. Successful creates and
+//! updates project through the opt-in PostgreSQL mirror. Matter scoping flows through
 //! `notation_id → notation.project_id`; this table carries no `project_id`
 //! of its own — every caller that needs project-level authorization
 //! resolves the notation first, the same shape `store::authorities`
@@ -171,9 +171,11 @@ pub async fn create(db: &SurrealDb, new: &NewContractReview) -> Result<Uuid, Con
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<ContractReviewRow> = response.take(0)?;
-    row.and_then(ContractReviewRow::into_contract_review)
-        .map(|r| r.id)
-        .ok_or(ContractReviewError::WriteReturnedNothing)
+    let review = row
+        .and_then(ContractReviewRow::into_contract_review)
+        .ok_or(ContractReviewError::WriteReturnedNothing)?;
+    crate::postgres_mirror::records::after_write(db, TABLE, review.id).await;
+    Ok(review.id)
 }
 
 /// Load one contract review by id.
@@ -275,8 +277,9 @@ pub async fn record_analysis(
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<ContractReviewRow> = response.take(0)?;
     row.and_then(ContractReviewRow::into_contract_review)
-        .map(|_| ())
-        .ok_or(ContractReviewError::NotFound(id))
+        .ok_or(ContractReviewError::NotFound(id))?;
+    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
+    Ok(())
 }
 
 /// Replace the findings (the reviewing attorney's per-finding edits).
@@ -301,8 +304,9 @@ pub async fn update_findings(
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<ContractReviewRow> = response.take(0)?;
     row.and_then(ContractReviewRow::into_contract_review)
-        .map(|_| ())
-        .ok_or(ContractReviewError::NotFound(id))
+        .ok_or(ContractReviewError::NotFound(id))?;
+    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
+    Ok(())
 }
 
 /// Replace the risk summary (the reviewing attorney's edit), leaving the
@@ -328,8 +332,9 @@ pub async fn update_risk_summary(
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<ContractReviewRow> = response.take(0)?;
     row.and_then(ContractReviewRow::into_contract_review)
-        .map(|_| ())
-        .ok_or(ContractReviewError::NotFound(id))
+        .ok_or(ContractReviewError::NotFound(id))?;
+    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
+    Ok(())
 }
 
 /// Set the review status ([`STATUS_APPROVED`] / [`STATUS_REJECTED`]).
@@ -349,8 +354,9 @@ pub async fn set_status(db: &SurrealDb, id: Uuid, status: &str) -> Result<(), Co
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<ContractReviewRow> = response.take(0)?;
     row.and_then(ContractReviewRow::into_contract_review)
-        .map(|_| ())
-        .ok_or(ContractReviewError::NotFound(id))
+        .ok_or(ContractReviewError::NotFound(id))?;
+    crate::postgres_mirror::records::after_write(db, TABLE, id).await;
+    Ok(())
 }
 
 /// The typed findings stored on a contract-review row.
@@ -520,3 +526,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "contract_reviews/postgres_tests.rs"]
+mod postgres_tests;

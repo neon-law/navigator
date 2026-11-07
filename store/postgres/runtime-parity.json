@@ -178,9 +178,20 @@
   },
   "contract_review": {
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
+    "runtime_tests": [
+      {
+        "file": "store/src/contract_reviews/postgres_tests.rs",
+        "function": "command_lifecycle_is_mirrored_in_an_isolated_process",
+        "proves": "Successful creates and all analysis, findings, risk-summary and status edits project exact Contract Review fields into PostgreSQL; missing source IDs retain NotFound and leave target-only evidence unchanged; Notation links remain distinct."
+      },
+      {
+        "file": "store/src/contract_reviews/postgres_tests.rs",
+        "function": "unavailable_mirror_does_not_change_successful_source_writes",
+        "proves": "All five source commands retain their committed result when the optional PostgreSQL mirror is unavailable."
+      }
+    ],
     "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+      "Application reads, authorization decisions, parent-reference reconciliation and deployment cutover remain outside this write-hook acceptance."
     ]
   },
   "credential": {
