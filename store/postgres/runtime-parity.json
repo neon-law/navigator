@@ -170,10 +170,26 @@
         "file": "store/src/postgres_mirror/conversations_tests.rs",
         "function": "communications_and_email_threads_replay_reconcile_and_delete",
         "proves": "Communication and thread images replay, repair drift and remove deleted source rows."
+      },
+      {
+        "file": "store/src/postgres_mirror/conversations_tests.rs",
+        "function": "reconciliation_refuses_cyclic_receipts_without_writing_them",
+        "proves": "Actual reconciliation refuses self-linked and two-row receipt cycles without writing cyclic Communication rows."
+      },
+      {
+        "file": "store/src/postgres_mirror/conversations_tests.rs",
+        "function": "reconciliation_preserves_deep_receipts_and_shared_ancestors",
+        "proves": "A 32-row acyclic receipt chain and independent rows sharing an ancestor reconcile and replay with full row parity."
+      },
+      {
+        "file": "store/src/postgres_mirror/conversations_tests.rs",
+        "function": "missing_receipt_ancestor_refuses_repair_without_changing_target_rows",
+        "proves": "A missing source ancestor causes refusal while its stale PostgreSQL copy and the receipt body and link remain unchanged."
       }
     ],
     "remaining": [
-      "Equivalent client-visible projections and cross-Firm/cross-Project read/write refusal require separate acceptance."
+      "Equivalent client-visible projections and cross-Firm/cross-Project read/write refusal require separate acceptance.",
+      "PostgreSQL application authority and deployment cutover remain outside this mirror acceptance."
     ]
   },
   "contract_review": {
