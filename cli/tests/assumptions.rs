@@ -55,7 +55,7 @@ async fn assumptions_list_reads_the_firm_rows_over_the_authenticated_door() {
     let output = Command::cargo_bin("navigator")
         .unwrap()
         .current_dir(root.path())
-        .env("NAVIGATOR_CREDENTIALS_FILE", credentials(root, &host))
+        .env("NAVIGATOR_CREDENTIALS_FILE", credentials(&root, &host))
         .args(["assumptions", "--firm", &firm.to_string(), "--host", &host, "list"])
         .assert()
         .success()
@@ -84,7 +84,7 @@ async fn assumptions_set_posts_the_value_and_reason_and_prints_the_row() {
     let output = Command::cargo_bin("navigator")
         .unwrap()
         .current_dir(root.path())
-        .env("NAVIGATOR_CREDENTIALS_FILE", credentials(root, &host))
+        .env("NAVIGATOR_CREDENTIALS_FILE", credentials(&root, &host))
         .args([
             "assumptions",
             "--firm",
@@ -131,7 +131,7 @@ async fn assumptions_show_and_history_read_one_key() {
         Command::cargo_bin("navigator")
             .unwrap()
             .current_dir(root.path())
-            .env("NAVIGATOR_CREDENTIALS_FILE", credentials(root, &host))
+            .env("NAVIGATOR_CREDENTIALS_FILE", credentials(&root, &host))
             .args([
                 "assumptions",
                 "--firm",
@@ -165,7 +165,7 @@ async fn assumptions_commands_refuse_when_the_capability_denies() {
     Command::cargo_bin("navigator")
         .unwrap()
         .current_dir(root.path())
-        .env("NAVIGATOR_CREDENTIALS_FILE", credentials(root, &host))
+        .env("NAVIGATOR_CREDENTIALS_FILE", credentials(&root, &host))
         .args(["assumptions", "--firm", &firm.to_string(), "--host", &host, "list"])
         .assert()
         .failure()
