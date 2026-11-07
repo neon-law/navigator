@@ -608,9 +608,7 @@ mod tests {
 
         grant_lawyer_in(&surreal).await.unwrap();
 
-        let rows = store::persons::list_directory(&surreal, "", "", &[])
-            .await
-            .unwrap();
+        let rows = store::persons::list_directory(&surreal).await.unwrap();
         assert_eq!(
             rows.len(),
             1,

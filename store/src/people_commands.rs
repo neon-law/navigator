@@ -692,7 +692,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(row.role, Role::Client);
-        let all = persons::list_directory(&db, "", "", &[]).await.unwrap();
+        let all = persons::list_directory(&db).await.unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].email, "libra@example.com");
     }

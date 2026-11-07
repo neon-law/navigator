@@ -1467,6 +1467,10 @@ mod tests {
                 "20261106120000_backfill_deadline_category.sql",
                 include_str!("../postgres/migrations/20261106120000_backfill_deadline_category.sql"),
             ),
+            (
+                "20261107120000_person_directory_list_indexes.sql",
+                include_str!("../postgres/migrations/20261107120000_person_directory_list_indexes.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

@@ -680,11 +680,31 @@ fn canonical_document(base: &str) -> Value {
       "paths": {
         "/app/api/people": {
           "get": {
-            "summary": "List all people",
+            "summary": "List people, one keyset page at a time",
             "x-mcp-tool": "show_person",
+            "description":
+              "JSON:API filtering, sorting, and cursor pagination. `filter[name]` and \
+               `filter[email]` match a case-insensitive substring. `sort` takes `name` and \
+               `email`, comma separated, `-` for descending; the default is `name`. \
+               `page[size]` is 1 to 100 (default 50). Follow `links.next` / `links.prev`, \
+               whose `page[after]` / `page[before]` cursors are opaque and valid only for \
+               the sort they were cut for. An unsupported member or a stale cursor is a 400.",
+            "parameters": [
+              { "name": "filter[name]", "in": "query", "schema": { "type": "string" } },
+              { "name": "filter[email]", "in": "query", "schema": { "type": "string" } },
+              { "name": "sort", "in": "query", "schema": { "type": "string", "example": "-name,email" } },
+              { "name": "page[size]", "in": "query",
+                "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } },
+              { "name": "page[after]", "in": "query", "schema": { "type": "string" } },
+              { "name": "page[before]", "in": "query", "schema": { "type": "string" } }
+            ],
             "responses": {
-              "200": { "description": "Person list", "content": { "application/json": {
-                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Person" } }
+              "200": { "description": "One page of people", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/PersonPage" }
+              } } },
+              "400": { "description": "Unsupported filter, sort, or page member, or a stale cursor",
+                "content": { "application/json": {
+                  "schema": { "$ref": "#/components/schemas/ApiError" }
               } } }
             }
           },
@@ -5127,6 +5147,28 @@ fn canonical_document(base: &str) -> Value {
               "state": { "type": "string", "pattern": "^[A-Z]{2}$" },
               "county": { "type": "string" },
               "commission_expires": { "type": "string", "format": "date" }
+            }
+          },
+          "PersonPage": {
+            "type": "object",
+            "required": ["data", "links", "meta"],
+            "properties": {
+              "data": { "type": "array", "items": { "$ref": "#/components/schemas/Person" } },
+              "links": {
+                "type": "object",
+                "required": ["self"],
+                "properties": {
+                  "self": { "type": "string" },
+                  "next": { "type": "string" },
+                  "prev": { "type": "string" }
+                }
+              },
+              "meta": {
+                "type": "object",
+                "properties": {
+                  "page": { "type": "object", "properties": { "size": { "type": "integer" } } }
+                }
+              }
             }
           },
           "ApiError": {

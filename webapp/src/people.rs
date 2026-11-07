@@ -4,27 +4,21 @@
 //! The first Dioxus page to consume server-side data. [`list_admin_people`] is
 //! a Dioxus **server function**: its body runs in the `web` process (the
 //! `#[server]` macro compiles the body only for the server target and generates
-//! an HTTP stub for the wasm client). It reads the request's `?sort=` /
-//! `filter[...]` query parameters and the database handle `web` injected into
-//! the render context, then queries the shared `store` directory. During SSR
-//! [`use_server_future`] resolves it so the sorted, filtered rows are in the
-//! server-rendered HTML — readable before hydration — with the sort links as
-//! real anchors that work pre-hydration and for crawlers.
+//! an HTTP stub for the wasm client). It parses the request's JSON:API
+//! `filter[...]`, `sort`, and `page[...]` parameters
+//! ([`store::listing::ListParams`]) and reads one keyset page of the shared
+//! `store` directory. During SSR [`use_server_future`] resolves it so the
+//! page's rows are in the server-rendered HTML — readable before hydration —
+//! with the sort and page links as real anchors that work pre-hydration and
+//! for crawlers.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// The people list's URL contract: JSON:API `?sort=` plus `filter[name]` /
-/// `filter[email]`. Mirrors the existing `portal::admin::PeopleListQuery` so the
-/// migrated page keeps the same query parameters.
+/// The people list's own query parameter beside the JSON:API list members
+/// [`store::firms::PEOPLE_DIRECTORY`] advertises.
 #[derive(Deserialize, Default)]
 pub struct PeopleQuery {
-    #[serde(default)]
-    pub sort: Option<String>,
-    #[serde(rename = "filter[name]", default)]
-    pub filter_name: Option<String>,
-    #[serde(rename = "filter[email]", default)]
-    pub filter_email: Option<String>,
     /// The `?error=` flash the admin surface's `POST /app/admin/people/{id}/delete`
     /// sets when the command blocks a delete (the bootstrap Owner, or a non-client
     /// record), redirecting back to the list. Surfaced above the table so the
@@ -147,6 +141,12 @@ pub struct PeopleView {
     /// white-label deploy's tab reads its own name.
     #[serde(default)]
     pub firm_name: String,
+    /// The next page's link; `None` on the last page.
+    #[serde(default)]
+    pub next_href: Option<String>,
+    /// The previous page's link; `None` on the first page.
+    #[serde(default)]
+    pub prev_href: Option<String>,
 }
 
 /// Fetch the people directory for the **admin console** (`/app/admin/people`):
@@ -158,12 +158,20 @@ pub async fn list_admin_people() -> Result<PeopleView, ServerFnError> {
     let axum::extract::Query(query) =
         dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<PeopleQuery>, _>()
             .await?;
-    let sort = query.sort.unwrap_or_default();
-    let filter_name = query.filter_name.unwrap_or_default();
-    let filter_email = query.filter_email.unwrap_or_default();
+    let axum::extract::RawQuery(raw) =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::extract::RawQuery, _>().await?;
     // The blocked-delete flash the `POST /app/admin/people/{id}/delete` route sets
     // when the command refuses the delete; surfaced above the table.
     let error = query.error.filter(|message| !message.is_empty());
+    // The route's pre-handler has already answered a refused request with 400.
+    let params = store::listing::ListParams::parse(
+        raw.as_deref().unwrap_or(""),
+        &store::firms::PEOPLE_DIRECTORY,
+    )
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let sort = params.sort_param();
+    let filter_name = params.filter("name").to_string();
+    let filter_email = params.filter("email").to_string();
 
     // Defense in depth: the admin console is admin-only. `require_admin` reads
     // the injected tier and commits a real 403 for a non-admin (the status the
@@ -210,43 +218,35 @@ pub async fn list_admin_people() -> Result<PeopleView, ServerFnError> {
                 role,
                 error,
                 csrf_token,
+                next_href: None,
+                prev_href: None,
             });
         };
         scope = store::firms::DirectoryScope::VisibleToAdmin(viewer_id);
     }
 
-    // One directory read for the whole page — never a membership lookup per
-    // row, which timed the page out on a large directory.
-    let entries = store::firms::people_directory(
-        &surreal,
-        &filter_name,
-        &filter_email,
-        &parse_sort(&sort),
-        scope,
-    )
-    .await
-    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    // One keyset page per request — never the whole directory, and never a
+    // membership lookup per row.
+    let page = store::firms::people_directory(&surreal, &params, scope)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let link = |member: &str, cursor: &Option<String>| {
+        cursor.as_ref().map(|cursor| {
+            format!(
+                "{}&{member}={}",
+                list_href(&sort, &filter_name, &filter_email, LIST_PATH),
+                encode(cursor)
+            )
+        })
+    };
+    let next_href = link("page[after]", &page.next);
+    let prev_href = link("page[before]", &page.prev);
 
-    let mut rows = Vec::with_capacity(entries.len());
-    for store::firms::DirectoryEntry {
-        person: p,
-        firm_names: firms,
-    } in entries
-    {
-        let is_client = p.role == store::persons::Role::Client;
-        let is_bootstrap_owner = bootstrap_owner_email
-            .as_deref()
-            .is_some_and(|configured| configured.eq_ignore_ascii_case(&p.email));
-        rows.push(PersonRow {
-            id: p.id.to_string(),
-            name: p.name,
-            email: p.email,
-            role: p.role.as_str().to_string(),
-            // The command blocks deleting privileged roles and the bootstrap Owner.
-            can_delete: is_client && !is_bootstrap_owner,
-            firms,
-        });
-    }
+    let rows = page
+        .items
+        .into_iter()
+        .map(|entry| person_row(entry, bootstrap_owner_email.as_deref()))
+        .collect();
 
     Ok(PeopleView {
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
@@ -258,23 +258,33 @@ pub async fn list_admin_people() -> Result<PeopleView, ServerFnError> {
         role,
         error,
         csrf_token,
+        next_href,
+        prev_href,
     })
 }
 
-/// Parse a JSON:API `sort` value into `(key, descending)` pairs: comma
-/// separated, a leading `-` flips a field descending. Empty and lone-`-`
-/// segments are dropped. Server-only — the client build stubs the server
-/// function that is its sole caller.
+/// One directory entry as a table row, with its delete eligibility: the
+/// command blocks deleting privileged roles and the bootstrap Owner.
 #[cfg(feature = "server")]
-fn parse_sort(raw: &str) -> Vec<(String, bool)> {
-    raw.split(',')
-        .map(str::trim)
-        .filter(|segment| !segment.is_empty() && *segment != "-")
-        .map(|segment| match segment.strip_prefix('-') {
-            Some(key) => (key.to_string(), true),
-            None => (segment.to_string(), false),
-        })
-        .collect()
+fn person_row(
+    entry: store::firms::DirectoryEntry,
+    bootstrap_owner_email: Option<&str>,
+) -> PersonRow {
+    let store::firms::DirectoryEntry {
+        person: p,
+        firm_names,
+    } = entry;
+    let is_client = p.role == store::persons::Role::Client;
+    let is_bootstrap_owner =
+        bootstrap_owner_email.is_some_and(|configured| configured.eq_ignore_ascii_case(&p.email));
+    PersonRow {
+        id: p.id.to_string(),
+        name: p.name,
+        email: p.email,
+        role: p.role.as_str().to_string(),
+        can_delete: is_client && !is_bootstrap_owner,
+        firms: firm_names,
+    }
 }
 
 /// The `?sort=` link for a sortable column header: toggles that column between
@@ -287,12 +297,18 @@ fn sort_href(
     filter_email: &str,
     base_path: &str,
 ) -> String {
-    use std::fmt::Write as _;
     let next = if active_sort == column {
         format!("-{column}")
     } else {
         column.to_string()
     };
+    list_href(&next, filter_name, filter_email, base_path)
+}
+
+/// The list's link for a sort and the active filters — the first page of
+/// that order. Page links append their cursor to it.
+fn list_href(sort: &str, filter_name: &str, filter_email: &str, base_path: &str) -> String {
+    use std::fmt::Write as _;
     let mut query = format!("{base_path}?");
     if !filter_email.is_empty() {
         let _ = write!(query, "filter[email]={}&", encode(filter_email));
@@ -300,7 +316,7 @@ fn sort_href(
     if !filter_name.is_empty() {
         let _ = write!(query, "filter[name]={}&", encode(filter_name));
     }
-    let _ = write!(query, "sort={}", encode(&next));
+    let _ = write!(query, "sort={}", encode(sort));
     query
 }
 
@@ -443,12 +459,31 @@ fn render_people(resource: &Resource<Result<PeopleView, ServerFnError>>) -> Elem
                             }
                         }
                     }
+                    {people_pager(&view)}
                 }
             }
         }
         None => rsx! {
             main { id: "admin-people", p { "Loading…" } }
         },
+    }
+}
+
+/// Previous / Next anchors for the page's neighbours; nothing on a list that
+/// fits one page.
+fn people_pager(view: &PeopleView) -> Element {
+    if view.prev_href.is_none() && view.next_href.is_none() {
+        return rsx! {};
+    }
+    rsx! {
+        nav { class: "people-pages", "aria-label": "People pages",
+            if let Some(href) = view.prev_href.as_ref() {
+                a { class: "nav-link people-prev", rel: "prev", href: "{href}", "Previous" }
+            }
+            if let Some(href) = view.next_href.as_ref() {
+                a { class: "nav-link people-next", rel: "next", href: "{href}", "Next" }
+            }
+        }
     }
 }
 

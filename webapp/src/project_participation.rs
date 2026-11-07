@@ -217,7 +217,7 @@ async fn load(
         None => None,
     };
 
-    let people: Vec<PersonChoice> = store::persons::list_directory(&surreal, "", "", &[])
+    let people: Vec<PersonChoice> = store::persons::list_directory(&surreal)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()

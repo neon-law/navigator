@@ -50,13 +50,7 @@ async fn first_import_creates_orgs_people_and_links() {
 
     // Entities, persons, and the client_contact links all landed.
     assert_eq!(store::entities::all(&surreal).await.unwrap().len(), 4);
-    assert_eq!(
-        persons::list_directory(&surreal, "", "", &[])
-            .await
-            .unwrap()
-            .len(),
-        6
-    );
+    assert_eq!(persons::list_directory(&surreal).await.unwrap().len(), 6);
     let links = store::entity_roles::all(&surreal).await.unwrap();
     assert_eq!(links.len(), 6);
     assert!(links.iter().all(|l| l.role == "client_contact"));
@@ -90,13 +84,7 @@ async fn reimport_is_idempotent() {
     assert_eq!(second.count(Outcome::Unchanged), 10);
     // No duplicate rows from the re-run.
     assert_eq!(store::entities::all(&surreal).await.unwrap().len(), 4);
-    assert_eq!(
-        persons::list_directory(&surreal, "", "", &[])
-            .await
-            .unwrap()
-            .len(),
-        6
-    );
+    assert_eq!(persons::list_directory(&surreal).await.unwrap().len(), 6);
     assert_eq!(store::entity_roles::all(&surreal).await.unwrap().len(), 6);
 }
 
@@ -109,10 +97,7 @@ async fn reimport_with_different_email_casing_resolves_to_the_same_person() {
     let surreal = store::surreal::test_support::mem().await;
     seed_reference_data(&surreal).await;
     apply(&surreal, &sample()).await.expect("first apply");
-    let before = persons::list_directory(&surreal, "", "", &[])
-        .await
-        .unwrap()
-        .len();
+    let before = persons::list_directory(&surreal).await.unwrap().len();
 
     let recased = SAMPLE.replace("acounsel@justice.example", "ACounsel@Justice.example");
     let report = apply(&surreal, &parse(&recased).unwrap())
@@ -125,10 +110,7 @@ async fn reimport_with_different_email_casing_resolves_to_the_same_person() {
         "a case variant is the same mailbox, not a new person"
     );
     assert_eq!(
-        persons::list_directory(&surreal, "", "", &[])
-            .await
-            .unwrap()
-            .len(),
+        persons::list_directory(&surreal).await.unwrap().len(),
         before
     );
 }

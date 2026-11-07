@@ -1033,64 +1033,106 @@ pub async fn default_firm_dri(db: &SurrealDb) -> Result<Option<Uuid>, PersonErro
         .map(|person| person.id))
 }
 
-/// The person directory the lawyer people page renders, filtered and sorted by
-/// the JSON:API `?sort=` / `filter[...]` query parameters. `filter_name` /
-/// `filter_email` are case-insensitive substring matches (empty = no filter);
-/// `sort` is a list of `(key, descending)` pairs where `key` is `"name"` or
-/// `"email"` (any other key is ignored — the caller validates and 400s on an
-/// unadvertised field before reaching here). With no sort, rows come back
-/// ordered by display name. The shared base query so the Dioxus people
-/// component (issue #641 / #355) and the existing admin handler agree.
+/// Every Person in name order, for a picker or an export that needs the
+/// whole directory. A list a person reads page by page goes through
+/// [`crate::firms::people_directory`] instead.
 ///
 /// # Errors
 ///
 /// [`PersonError::Db`] if the lookup fails.
-pub async fn list_directory(
-    db: &SurrealDb,
-    filter_name: &str,
-    filter_email: &str,
-    sort: &[(String, bool)],
-) -> Result<Vec<Person>, PersonError> {
+pub async fn list_directory(db: &SurrealDb) -> Result<Vec<Person>, PersonError> {
     if let Some(pg) = postgres_authority().await? {
-        return Box::pin(crate::postgres::people::directory(
-            &pg,
-            filter_name,
-            filter_email,
-            sort,
-        ))
-        .await;
+        return Box::pin(crate::postgres::people::directory(&pg)).await;
     }
-    let mut order = Vec::new();
-    for (key, descending) in sort {
-        // The column list is a whitelist, never the caller's string —
-        // an unadvertised key is ignored here and 400s upstream.
-        let column = match key.as_str() {
-            "name" => "name",
-            "email" => "email",
-            _ => continue,
-        };
-        order.push(format!(
-            "{column} {}",
-            if *descending { "DESC" } else { "ASC" }
-        ));
-    }
-    if order.is_empty() {
-        order.push("name ASC".to_string());
-    }
-
     let response = db
         .query(format!(
-            "SELECT {SELECT} FROM person \
-             WHERE ($name = '' OR string::contains(string::lowercase(name), $name)) \
-               AND ($email = '' OR string::contains(email_lower, $email)) \
-             ORDER BY {}",
-            order.join(", ")
+            "SELECT {SELECT} FROM {TABLE} ORDER BY name ASC, id ASC"
         ))
-        .bind(("name", filter_name.to_lowercase()))
-        .bind(("email", filter_email.to_lowercase()))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     many(response)
+}
+
+/// One keyset page of the people directory from SurrealDB, for deployments
+/// where PostgreSQL is not the People authority. `visible` narrows the rows to
+/// those ids. The filters, the keyset, and the `LIMIT` run in the query, so
+/// the store returns one page, never the directory.
+///
+/// # Errors
+///
+/// [`PersonError::Db`] if the read fails.
+pub(crate) async fn surreal_directory_page(
+    db: &SurrealDb,
+    params: &crate::listing::ListParams,
+    visible: Option<&[Uuid]>,
+) -> Result<crate::listing::Page<Person>, PersonError> {
+    // Field names come from the spec's allowlist, never the caller's string.
+    let mut fields: Vec<&str> = params
+        .sort
+        .iter()
+        .map(|(field, _)| if field == "email" { "email" } else { "name" })
+        .collect();
+    fields.push("id");
+    let reversed = params.reversed();
+    let mut directions: Vec<bool> = params.sort.iter().map(|(_, d)| *d != reversed).collect();
+    directions.push(directions.last().copied().unwrap_or(reversed));
+    let mut clauses = vec![
+        "($name = '' OR string::contains(string::lowercase(name), $name))".to_string(),
+        "($email = '' OR string::contains(email_lower, $email))".to_string(),
+    ];
+    if visible.is_some() {
+        clauses.push("id IN $visible".to_string());
+    }
+    if params.cursor.is_some() {
+        let arms: Vec<String> = fields
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                let mut terms: Vec<String> =
+                    (0..i).map(|j| format!("{} = $c{j}", fields[j])).collect();
+                let op = if directions[i] { "<" } else { ">" };
+                terms.push(format!("{field} {op} $c{i}"));
+                format!("({})", terms.join(" AND "))
+            })
+            .collect();
+        clauses.push(format!("({})", arms.join(" OR ")));
+    }
+    let order: Vec<String> = fields
+        .iter()
+        .zip(&directions)
+        .map(|(field, desc)| format!("{field} {}", if *desc { "DESC" } else { "ASC" }))
+        .collect();
+    let mut query = db
+        .query(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE {} ORDER BY {} LIMIT $limit",
+            clauses.join(" AND "),
+            order.join(", ")
+        ))
+        .bind(("name", params.filter("name").to_lowercase()))
+        .bind(("email", params.filter("email").to_lowercase()))
+        .bind(("limit", params.fetch_limit()));
+    if let Some(ids) = visible {
+        let records: Vec<_> = ids.iter().map(|id| record_id(TABLE, *id)).collect();
+        query = query.bind(("visible", records));
+    }
+    // `ListParams::parse` admits only a cursor whose last value is a UUID.
+    if let Some((id, values)) = params.cursor.as_ref().and_then(|c| c.values.split_last()) {
+        for (i, value) in values.iter().enumerate() {
+            query = query.bind((format!("c{i}"), value.clone()));
+        }
+        let id = Uuid::parse_str(id).unwrap_or_default();
+        query = query.bind((format!("c{}", values.len()), record_id(TABLE, id)));
+    }
+    let rows = many(query.await.and_then(surrealdb::IndexedResults::check)?)?;
+    Ok(crate::listing::Page::from_rows(
+        rows,
+        params,
+        |person, field| match field {
+            "email" => person.email.clone(),
+            "name" => person.name.clone(),
+            _ => person.id.to_string(),
+        },
+    ))
 }
 
 /// Fuzzy-find people by an optional name and/or email substring. Both
@@ -2171,7 +2213,7 @@ mod tests {
 
         assert_eq!(ids.len(), 1, "the racers disagreed about which row won");
         assert_eq!(
-            list_directory(&db, "", "", &[]).await.unwrap().len(),
+            list_directory(&db).await.unwrap().len(),
             1,
             "a race must not leave a second row behind",
         );
@@ -2361,7 +2403,7 @@ mod tests {
             .expect("the unclaimed row is the answer, not a refusal");
         assert_eq!(found.id, unclaimed);
         assert_eq!(
-            list_directory(&db, "", "", &[]).await.unwrap().len(),
+            list_directory(&db).await.unwrap().len(),
             1,
             "no second row was written",
         );
@@ -2521,7 +2563,7 @@ mod tests {
         person(&db, "Aries", "aries@example.com").await;
         person(&db, "Virgo", "virgo@example.com").await;
 
-        assert_eq!(list_directory(&db, "", "", &[]).await.unwrap().len(), 3);
+        assert_eq!(list_directory(&db).await.unwrap().len(), 3);
     }
 
     #[tokio::test]
@@ -2720,7 +2762,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_directory_sorts_by_name_and_filters_case_insensitively() {
+    async fn the_directory_sorts_by_name_and_pages_filter_case_insensitively() {
         let db = mem().await;
         person(&db, "Sagittarius", "sagittarius@example.com").await;
         person(&db, "Aquarius", "aquarius@neonlaw.com").await;
@@ -2729,56 +2771,27 @@ mod tests {
         let names = |rows: Vec<super::Person>| -> Vec<String> {
             rows.into_iter().map(|p| p.name).collect()
         };
-
-        assert_eq!(
-            names(list_directory(&db, "", "", &[]).await.unwrap()),
-            vec!["Aquarius", "Aries", "Sagittarius"]
-        );
-        assert_eq!(
-            names(list_directory(&db, "ARI", "", &[]).await.unwrap()),
-            vec!["Aquarius", "Aries", "Sagittarius"]
-        );
-        assert_eq!(
-            names(list_directory(&db, "", "NEONLAW", &[]).await.unwrap()),
-            vec!["Aquarius"]
-        );
-    }
-
-    #[tokio::test]
-    async fn the_directory_honours_a_sort_key_and_ignores_an_unknown_one() {
-        let db = mem().await;
-        person(&db, "Aquarius", "zeta@example.com").await;
-        person(&db, "Sagittarius", "alpha@example.com").await;
-
-        let sorted = |rows: Vec<super::Person>| -> Vec<String> {
-            rows.into_iter().map(|p| p.email).collect()
+        let page = |query: &str| {
+            let params =
+                crate::listing::ListParams::parse(query, &crate::firms::PEOPLE_DIRECTORY).unwrap();
+            let db = db.clone();
+            async move {
+                super::surreal_directory_page(&db, &params, None)
+                    .await
+                    .unwrap()
+                    .items
+            }
         };
 
         assert_eq!(
-            sorted(
-                list_directory(&db, "", "", &[("email".into(), false)])
-                    .await
-                    .unwrap()
-            ),
-            vec!["alpha@example.com", "zeta@example.com"]
+            names(list_directory(&db).await.unwrap()),
+            vec!["Aquarius", "Aries", "Sagittarius"]
         );
         assert_eq!(
-            sorted(
-                list_directory(&db, "", "", &[("name".into(), true)])
-                    .await
-                    .unwrap()
-            ),
-            vec!["alpha@example.com", "zeta@example.com"]
+            names(page("filter[name]=ARI").await),
+            vec!["Aquarius", "Aries", "Sagittarius"]
         );
-        // An unadvertised key falls back to the default name order.
-        assert_eq!(
-            sorted(
-                list_directory(&db, "", "", &[("shoe_size".into(), true)])
-                    .await
-                    .unwrap()
-            ),
-            vec!["zeta@example.com", "alpha@example.com"]
-        );
+        assert_eq!(names(page("filter[email]=NEONLAW").await), vec!["Aquarius"]);
     }
 
     #[tokio::test]
@@ -2930,7 +2943,7 @@ mod tests {
             .is_none());
 
         assert!(
-            list_directory(&db, "", "", &[]).await.unwrap().is_empty(),
+            list_directory(&db).await.unwrap().is_empty(),
             "a no-op write must not have created a row"
         );
     }

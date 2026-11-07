@@ -3735,7 +3735,7 @@ async fn workshops_material_404s_when_slug_missing() {
 }
 
 #[tokio::test]
-async fn api_people_returns_empty_array_when_no_rows() {
+async fn api_people_returns_an_empty_page_when_no_rows() {
     let (state, _surreal) = state_with_engines().await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
     let resp = get_signed_in(app, "/app/api/people").await;
@@ -3746,7 +3746,80 @@ async fn api_people_returns_empty_array_when_no_rows() {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     assert!(ctype.contains("application/json"), "got: {ctype}");
-    assert_eq!(body_string(resp).await, "[]");
+    let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(body["data"], serde_json::json!([]));
+    assert_eq!(body["meta"]["page"]["size"], 50);
+    assert!(body["links"].get("next").is_none() && body["links"].get("prev").is_none());
+}
+
+/// `GET /app/api/people` follows JSON:API: `filter[...]`, `sort`, and keyset
+/// `page[...]`, with `links.next` / `links.prev` carrying the request's own
+/// filters and sort; an unadvertised member is a 400.
+#[tokio::test]
+async fn api_people_pages_with_json_api_filter_sort_and_cursor_links() {
+    let (state, surreal) = state_with_engines().await;
+    for name in ["Ada", "Bo", "Cy", "Di", "Ed"] {
+        store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::new(name, format!("{}@page.test", name.to_lowercase())),
+        )
+        .await
+        .unwrap();
+    }
+    store::persons::create(
+        &surreal,
+        &store::persons::NewPerson::new("Zed", "zed@elsewhere.test"),
+    )
+    .await
+    .unwrap();
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    let read = |uri: String| {
+        let app = app.clone();
+        async move {
+            let resp = get_signed_in(app, &uri).await;
+            let status = resp.status();
+            let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+            (status, body)
+        }
+    };
+    let names = |body: &serde_json::Value| -> Vec<String> {
+        body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let (status, first) =
+        read("/app/api/people?filter[email]=page.test&sort=-name&page[size]=2".into()).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(names(&first), ["Ed", "Di"]);
+    assert!(first["links"].get("prev").is_none());
+    let next = first["links"]["next"].as_str().unwrap().to_string();
+    assert!(
+        next.contains("filter%5Bemail%5D=page.test") && next.contains("sort=-name"),
+        "{next}"
+    );
+
+    let (_, second) = read(next).await;
+    assert_eq!(names(&second), ["Cy", "Bo"]);
+    let (_, third) = read(second["links"]["next"].as_str().unwrap().into()).await;
+    assert_eq!(names(&third), ["Ada"]);
+    assert!(third["links"].get("next").is_none());
+    let (_, back) = read(third["links"]["prev"].as_str().unwrap().into()).await;
+    assert_eq!(names(&back), ["Cy", "Bo"]);
+
+    for refused in [
+        "sort=role",
+        "filter[role]=x",
+        "page[size]=500",
+        "page[after]=stale",
+    ] {
+        let (status, body) = read(format!("/app/api/people?{refused}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}: {body}");
+        assert_eq!(body["error"], "invalid_request");
+    }
 }
 
 #[tokio::test]
@@ -3803,9 +3876,7 @@ async fn api_people_create_persists_person_with_default_role_and_name_parts() {
     assert_eq!(body["family_name"], "Example");
     assert!(body["middle_name"].is_null());
 
-    let rows = store::persons::list_directory(&surreal, "", "", &[])
-        .await
-        .unwrap();
+    let rows = store::persons::list_directory(&surreal).await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].role, store::persons::Role::Client);
     assert_eq!(rows[0].middle_name, None);
@@ -3971,7 +4042,7 @@ async fn api_people_create_trims_name_and_email_before_insert() {
     assert_eq!(body["name"], "Libra Example");
     assert_eq!(body["email"], "libra-trim@example.com");
 
-    let row = store::persons::list_directory(&surreal, "", "", &[])
+    let row = store::persons::list_directory(&surreal)
         .await
         .unwrap()
         .into_iter()
@@ -12925,15 +12996,72 @@ async fn admin_people_index_drops_id_column_and_renders_sort_links() {
         !body.contains("<th>ID</th>"),
         "expected ID column to be gone, got: {body}",
     );
-    // Sortable Name + Email headers expose JSON:API ?sort= links.
+    // Sortable Name + Email headers expose JSON:API ?sort= links; the list
+    // already reads in name order, so the Name header offers the reverse.
     assert!(
-        body.contains("href=\"/app/admin/people?sort=name\""),
-        "expected ?sort=name link, got: {body}",
+        body.contains("href=\"/app/admin/people?sort=-name\""),
+        "expected ?sort=-name link, got: {body}",
     );
     assert!(
         body.contains("href=\"/app/admin/people?sort=email\""),
         "expected ?sort=email link, got: {body}",
     );
+}
+
+/// The admin directory reads one keyset page: Previous / Next anchors carry
+/// the cursor with the active filter and sort, and any member the list
+/// contract refuses is a 400, not only an unadvertised sort.
+#[tokio::test]
+async fn admin_people_index_pages_with_cursor_links() {
+    let (state, surreal) = state_with_engines().await;
+    seed_three_people(&surreal).await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    let first = body_string(
+        get_with_role(
+            app.clone(),
+            "/app/admin/people?filter%5Bemail%5D=example.com&page%5Bsize%5D=2",
+            store::persons::Role::Owner,
+        )
+        .await,
+    )
+    .await;
+    assert!(first.contains("Leo") && first.contains("Libra") && !first.contains("Taurus"));
+    assert!(!first.contains("people-prev"), "{first}");
+    let next = first
+        .split("class=\"nav-link people-next\" rel=\"next\" href=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("a Next link")
+        .replace("&#38;", "&")
+        .replace("&amp;", "&");
+    assert!(
+        next.contains("filter[email]=example.com") && next.contains("page[after]="),
+        "{next}"
+    );
+    let second =
+        body_string(get_with_role(app.clone(), &next, store::persons::Role::Owner).await).await;
+    assert!(
+        second.contains("Taurus") && !second.contains(">Leo<"),
+        "{second}"
+    );
+    assert!(
+        second.contains("people-prev") && !second.contains("people-next"),
+        "{second}"
+    );
+
+    for refused in [
+        "filter%5Brole%5D=x",
+        "page%5Bsize%5D=0",
+        "page%5Bafter%5D=stale",
+    ] {
+        let resp = get_with_role(
+            app.clone(),
+            &format!("/app/admin/people?{refused}"),
+            store::persons::Role::Owner,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{refused}");
+    }
 }
 
 #[tokio::test]
@@ -13041,7 +13169,7 @@ async fn admin_people_index_stitches_filter_through_sort_links() {
     .await;
     let body = body_string(resp).await;
     assert!(
-        body.contains("href=\"/app/admin/people?filter[name]=Libra&#38;sort=name\""),
+        body.contains("href=\"/app/admin/people?filter[name]=Libra&#38;sort=-name\""),
         "expected filter to survive sort link, got: {body}",
     );
 }

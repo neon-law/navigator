@@ -155,7 +155,7 @@ async fn client_create_redirects_back_with_the_new_client_selected() {
 #[tokio::test]
 async fn client_bad_email_redirects_back_with_the_error_and_creates_nothing() {
     let (app, surreal) = build_app().await;
-    let before = store::persons::list_directory(&surreal, "", "", &[])
+    let before = store::persons::list_directory(&surreal)
         .await
         .unwrap()
         .len();
@@ -171,7 +171,7 @@ async fn client_bad_email_redirects_back_with_the_error_and_creates_nothing() {
     // The typed values ride back so nothing is retyped.
     assert!(loc.contains("client_name=Libra"), "{loc}");
     assert!(loc.contains("client_email=not-an-email"), "{loc}");
-    let after = store::persons::list_directory(&surreal, "", "", &[])
+    let after = store::persons::list_directory(&surreal)
         .await
         .unwrap()
         .len();

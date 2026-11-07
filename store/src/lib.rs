@@ -148,6 +148,7 @@ pub mod journal_startup_migration;
 pub mod jurisdictions;
 pub mod leads;
 pub mod letters;
+pub mod listing;
 pub mod mailrooms;
 pub mod matter_captions;
 pub mod matter_financials;

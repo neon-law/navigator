@@ -8,6 +8,7 @@
 use sqlx::{AssertSqlSafe, Postgres, QueryBuilder, Row, Transaction};
 use uuid::Uuid;
 
+use crate::listing::{self, ListParams, Page};
 use crate::persons::{NewPerson, Person, PersonEdit, PersonError, Role};
 use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, SurrealDb};
@@ -137,69 +138,98 @@ pub(crate) async fn by_role(pg: &PostgresDb, role: Role) -> Result<Vec<Person>, 
 
 /// The directory's `ORDER BY`: only `name` and `email` are honored, never
 /// the caller's string, and an empty sort falls back to name.
-fn directory_order(sort: &[(String, bool)]) -> String {
-    let order = sort
-        .iter()
-        .filter_map(|(key, desc)| match key.as_str() {
-            "name" => Some(format!("name {}", if *desc { "DESC" } else { "ASC" })),
-            "email" => Some(format!("email {}", if *desc { "DESC" } else { "ASC" })),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if order.is_empty() {
-        "name ASC".to_string()
-    } else {
-        order.join(", ")
-    }
-}
-
-/// The people directory in one query over the `person_directory` view: each
-/// Person with their Firm names. `visible_to_firms` narrows the rows to those
-/// the `firm_visible_person` view admits for any of those Firms; `None` lists
-/// everyone.
-pub(crate) async fn directory_entries(
+/// One keyset page of the people directory over the `person_directory` view:
+/// each Person with their Firm names. `visible_to_firms` narrows the rows to
+/// those the `firm_visible_person` view admits for any of those Firms; `None`
+/// lists everyone.
+///
+/// Only the clauses the request uses are in the SQL, so each filter reaches
+/// its trigram index and each sort its `(field, id)` index
+/// (`20261107120000_person_directory_list_indexes.sql`); the view's Firm-name
+/// lookup runs for the page's rows alone.
+pub(crate) async fn directory_page(
     pg: &PostgresDb,
-    filter_name: &str,
-    filter_email: &str,
-    sort: &[(String, bool)],
+    params: &ListParams,
     visible_to_firms: Option<&[Uuid]>,
-) -> Result<Vec<(Person, Vec<String>)>, PersonError> {
-    let order = directory_order(sort);
+) -> Result<Page<(Person, Vec<String>)>, PersonError> {
+    let mut columns: Vec<(&str, &str)> = params
+        .sort
+        .iter()
+        .map(|(field, _)| match field.as_str() {
+            "email" => ("email", "citext"),
+            _ => ("name", "text"),
+        })
+        .collect();
+    columns.push(("id", "uuid"));
+    let mut clauses = Vec::new();
+    let mut texts = Vec::new();
+    for (member, column) in [("name", "name"), ("email", "email::text")] {
+        let needle = params.filter(member);
+        if !needle.is_empty() {
+            texts.push(listing::like_contains(needle));
+            clauses.push(format!("{column} ILIKE ${}", texts.len()));
+        }
+    }
+    let firms_bind = texts.len() + 1;
+    if visible_to_firms.is_some() {
+        clauses.push(format!(
+            "id IN (SELECT person_id FROM firm_visible_person WHERE firm_id = ANY(${firms_bind}))"
+        ));
+    }
+    let limit_bind = firms_bind + usize::from(visible_to_firms.is_some());
+    let cursor_values = params
+        .cursor
+        .as_ref()
+        .map(|c| c.values.as_slice())
+        .unwrap_or_default();
+    if let Some(keyset) = listing::pg_keyset(params, &columns, limit_bind + 1) {
+        clauses.push(keyset);
+    }
+    let filter = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", clauses.join(" AND "))
+    };
     let sql = format!(
-        "SELECT {COLUMNS}, firm_names FROM person_directory \
-         WHERE ($1 = '' OR strpos(lower(name), $1) > 0) \
-           AND ($2 = '' OR strpos(lower(email::text), $2) > 0) \
-           AND ($3::uuid[] IS NULL OR id IN \
-                (SELECT person_id FROM firm_visible_person WHERE firm_id = ANY($3))) \
-         ORDER BY {order}"
+        "SELECT {COLUMNS}, firm_names FROM person_directory {filter} \
+         ORDER BY {} LIMIT ${limit_bind}",
+        listing::pg_order(params, &columns)
     );
-    let rows = sqlx::query(AssertSqlSafe(sql))
-        .bind(filter_name.to_lowercase())
-        .bind(filter_email.to_lowercase())
-        .bind(visible_to_firms)
-        .fetch_all(&pg.0)
-        .await
-        .map_err(database)?;
-    rows.iter()
+    let mut query = sqlx::query(AssertSqlSafe(sql));
+    for text in texts {
+        query = query.bind(text);
+    }
+    if let Some(firms) = visible_to_firms {
+        query = query.bind(firms);
+    }
+    query = query.bind(params.fetch_limit());
+    for value in cursor_values {
+        query = query.bind(value);
+    }
+    let rows = query.fetch_all(&pg.0).await.map_err(database)?;
+    let rows = rows
+        .iter()
         .map(|row| Ok((person(row)?, row.try_get("firm_names")?)))
         .collect::<Result<Vec<_>, sqlx::Error>>()
-        .map_err(database)
+        .map_err(database)?;
+    Ok(Page::from_rows(
+        rows,
+        params,
+        |(person, _), field| match field {
+            "email" => person.email.clone(),
+            "name" => person.name.clone(),
+            _ => person.id.to_string(),
+        },
+    ))
 }
 
-pub(crate) async fn directory(
-    pg: &PostgresDb,
-    filter_name: &str,
-    filter_email: &str,
-    sort: &[(String, bool)],
-) -> Result<Vec<Person>, PersonError> {
-    let order = directory_order(sort);
-    let sql = format!("SELECT {COLUMNS} FROM person WHERE ($1 = '' OR strpos(lower(name), $1) > 0) AND ($2 = '' OR strpos(lower(email::text), $2) > 0) ORDER BY {order}");
-    let rows = sqlx::query(AssertSqlSafe(sql))
-        .bind(filter_name.to_lowercase())
-        .bind(filter_email.to_lowercase())
-        .fetch_all(&pg.0)
-        .await
-        .map_err(database)?;
+pub(crate) async fn directory(pg: &PostgresDb) -> Result<Vec<Person>, PersonError> {
+    let rows = sqlx::query(AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM person ORDER BY name ASC, id ASC"
+    )))
+    .fetch_all(&pg.0)
+    .await
+    .map_err(database)?;
     rows.iter()
         .map(person)
         .collect::<Result<Vec<_>, _>>()

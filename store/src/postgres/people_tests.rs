@@ -621,22 +621,13 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
     assert_eq!(super::by_role(&pg, Role::Owner).await.unwrap().len(), 1);
     assert_eq!(super::by_role(&pg, Role::Client).await.unwrap().len(), 1);
 
-    // The directory filters on name and email substrings with explicit sort.
-    let owner_email_suffix = owner.email.split('@').next().unwrap().to_string();
-    let directory = super::directory(&pg, "helper", &owner_email_suffix, &[])
-        .await
-        .unwrap();
-    assert_eq!(directory.len(), 1);
-    assert_eq!(directory[0].id, owner.id);
-    let sorted_desc = super::directory(&pg, "", "", &[("name".into(), true)])
-        .await
-        .unwrap();
-    assert_eq!(sorted_desc.len(), 3);
-    assert!(sorted_desc[0].name > sorted_desc[1].name);
-    let unknown_sort_key = super::directory(&pg, "nobody-matches", "", &[("bogus".into(), false)])
-        .await
-        .unwrap();
-    assert!(unknown_sort_key.is_empty());
+    // The whole directory reads in name order; filtered pages are
+    // `directory_page`'s, covered below.
+    let directory = super::directory(&pg).await.unwrap();
+    assert_eq!(directory.len(), 3);
+    assert!(directory
+        .windows(2)
+        .all(|pair| pair[0].name <= pair[1].name));
     let limited = super::search(&pg, Some("helper"), None, 2).await.unwrap();
     assert_eq!(limited.len(), 2);
 
@@ -807,31 +798,100 @@ async fn directory_views_join_firm_names_and_scope_to_visible_people() {
     .await
     .unwrap();
 
+    let params = |query: &str| {
+        crate::listing::ListParams::parse(query, &crate::firms::PEOPLE_DIRECTORY).unwrap()
+    };
+    let ids = |page: &crate::listing::Page<(Person, Vec<String>)>| -> Vec<Uuid> {
+        page.items.iter().map(|(p, _)| p.id).collect()
+    };
+
     // Everyone, name order, each with Firm names in membership order.
-    let everyone = super::directory_entries(&pg, "", "", &[], None)
-        .await
-        .unwrap();
-    let names: Vec<_> = everyone.iter().map(|(p, _)| p.id).collect();
-    assert_eq!(names, vec![member.id, participant.id, stranger.id]);
-    assert_eq!(everyone[0].1, vec!["Second Firm", "First Firm"]);
-    assert!(everyone[1].1.is_empty());
+    let everyone = super::directory_page(&pg, &params(""), None).await.unwrap();
+    assert_eq!(ids(&everyone), vec![member.id, participant.id, stranger.id]);
+    assert_eq!(everyone.items[0].1, vec!["Second Firm", "First Firm"]);
+    assert!(everyone.items[1].1.is_empty());
+    assert!(everyone.next.is_none() && everyone.prev.is_none());
 
     // An Admin of the first Firm sees its member and its matter's participant.
-    let scoped = super::directory_entries(&pg, "", "", &[("name".into(), true)], Some(&[first]))
+    let scoped = super::directory_page(&pg, &params("sort=-name"), Some(&[first]))
         .await
         .unwrap();
-    let ids: Vec<_> = scoped.iter().map(|(p, _)| p.id).collect();
-    assert_eq!(ids, vec![participant.id, member.id]);
+    assert_eq!(ids(&scoped), vec![participant.id, member.id]);
 
-    // Filters still apply, and no Firm admits nobody.
-    let filtered = super::directory_entries(&pg, "participant", "", &[], Some(&[first]))
+    // Filters still apply, match literally, and no Firm admits nobody.
+    let filtered = super::directory_page(&pg, &params("filter[name]=PARTICIPANT"), Some(&[first]))
         .await
         .unwrap();
-    assert_eq!(filtered.len(), 1);
-    assert!(super::directory_entries(&pg, "", "", &[], Some(&[]))
+    assert_eq!(ids(&filtered), vec![participant.id]);
+    let literal = super::directory_page(&pg, &params("filter[name]=Directory%25"), None)
+        .await
+        .unwrap();
+    assert!(literal.items.is_empty());
+    assert!(super::directory_page(&pg, &params(""), Some(&[]))
         .await
         .unwrap()
+        .items
         .is_empty());
+    pg.0.close().await;
+}
+
+/// Keyset pages walk the whole directory forward and back without a gap or a
+/// repeat — through tied names, under each sort direction.
+#[tokio::test]
+async fn directory_pages_walk_every_row_once_in_both_directions() {
+    let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+        return;
+    };
+    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    let surreal = crate::test_support::mem_surreal().await;
+    let mut created = Vec::new();
+    for name in ["Ann", "Bea", "Bea", "Bea", "Cy", "Di", "Ed"] {
+        let input = NewPerson::new(name, format!("{}@example.test", Uuid::now_v7()));
+        created.push(super::create(&pg, &surreal, &input).await.unwrap());
+    }
+    for sort in ["name", "-name", "email", "name,-email"] {
+        let parse = |query: String| {
+            crate::listing::ListParams::parse(&query, &crate::firms::PEOPLE_DIRECTORY).unwrap()
+        };
+        let mut forward = Vec::new();
+        let mut pages = Vec::new();
+        let mut query = format!("sort={sort}&page[size]=3");
+        loop {
+            let page = super::directory_page(&pg, &parse(query.clone()), None)
+                .await
+                .unwrap();
+            forward.extend(page.items.iter().map(|(p, _)| p.id));
+            pages.push(page.items.len());
+            let Some(next) = page.next.clone() else { break };
+            query = format!("sort={sort}&page[size]=3&page[after]={next}");
+        }
+        assert_eq!(pages, vec![3, 3, 1], "{sort}");
+        let mut unique = forward.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            created.len(),
+            "{sort}: no row twice, none missed"
+        );
+
+        // Walking back from the last page retraces the same rows.
+        let last = super::directory_page(&pg, &parse(query.clone()), None)
+            .await
+            .unwrap();
+        let prev = last.prev.expect("the last page links back");
+        let back = super::directory_page(
+            &pg,
+            &parse(format!("sort={sort}&page[size]=3&page[before]={prev}")),
+            None,
+        )
+        .await
+        .unwrap();
+        let back_ids: Vec<_> = back.items.iter().map(|(p, _)| p.id).collect();
+        assert_eq!(back_ids, forward[3..6].to_vec(), "{sort}");
+        assert!(back.next.is_some() && back.prev.is_some(), "{sort}");
+    }
+    pg.0.close().await;
 }
 
 #[tokio::test]
@@ -856,10 +916,11 @@ async fn email_is_citext_matching_any_case_and_keeping_the_entered_casing() {
         (found.id, found.email.as_str()),
         (person.id, entered.as_str())
     );
-    let filtered = super::directory_entries(&pg, "", &entered.to_uppercase(), &[], None)
-        .await
-        .unwrap();
-    assert_eq!(filtered.len(), 1);
+    let query = format!("filter[email]={}", entered.to_uppercase());
+    let params =
+        crate::listing::ListParams::parse(&query, &crate::firms::PEOPLE_DIRECTORY).unwrap();
+    let filtered = super::directory_page(&pg, &params, None).await.unwrap();
+    assert_eq!(filtered.items.len(), 1);
 
     // A case variant is the same mailbox: the unique index refuses it.
     assert!(matches!(
