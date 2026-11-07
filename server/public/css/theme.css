@@ -4187,6 +4187,70 @@ a.lawyer-detail__fact-value:focus-visible {
   color: var(--nav-color-text-muted);
 }
 
+/* Projected contingency cash: the workbench pipeline card and the Firm
+   rollup. A projection is drawn as an outline in the brand's primary colour
+   so it never reads as cash already invoiced (solid) or paid (faded). */
+.projected-cash-chart {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.5rem 0 1rem;
+}
+
+.projected-cash-label {
+  font-size: 0.7rem;
+  fill: var(--nav-color-text);
+}
+
+.projected-cash-bar {
+  fill: var(--nav-color-primary);
+}
+
+.projected-cash-bar--projected {
+  fill-opacity: 0.2;
+  stroke: var(--nav-color-primary);
+  stroke-dasharray: 3 2;
+}
+
+.projected-cash-bar--paid {
+  fill-opacity: 0.55;
+}
+
+.projected-cash-legend {
+  display: flex;
+  gap: 1rem;
+  list-style: none;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.projected-cash-key {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-right: 0.35rem;
+  background: var(--nav-color-primary);
+}
+
+.projected-cash-key--projected {
+  background: transparent;
+  border: 1px dashed var(--nav-color-primary);
+}
+
+.projected-cash-key--paid {
+  opacity: 0.55;
+}
+
+.lawyer-pipeline__totals {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+}
+
+.lawyer-pipeline__totals dd {
+  margin: 0;
+}
+
 /* Matter billing chart: the same total-against-paid convention as the firm
    invoice chart — primary fill for the total, the same fill at reduced
    opacity for paid-to-date, and a legend swatch per series. */

@@ -137,6 +137,10 @@ pub struct FirmFields {
     /// `ViewDirectory` has already gated `fields` to `Some`.
     #[serde(default)]
     pub invoices: crate::firm_invoice_graphs::FirmInvoiceGraphsView,
+    /// Projected contingency cash by quarter, brand, and lead lawyer
+    /// (ENG-1250). Names no matter.
+    #[serde(default)]
+    pub projected_cash: crate::projected_cash::FirmProjectedCashView,
     /// The Firm's integration-secret metadata (ENG-491) — populated only when
     /// `FirmCapability::ViewIntegrationSecretMetadata` resolves `Allowed` for
     /// this caller (Owner, or the Firm's own Admin DRI). Empty for anyone
@@ -355,6 +359,8 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
             .await
             .map_err(|error| ServerFnError::new(error.to_string()))?
             .into();
+    let projected_cash =
+        crate::projected_cash::derive::load_firm(&surreal, actor_person_id, firm.id).await;
 
     // Integration-secret metadata (ENG-491): a separate, stricter capability
     // than `ViewDirectory` above. Owner holds it (governance without
@@ -525,6 +531,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
             members,
             can_edit,
             invoices,
+            projected_cash,
             secrets,
             can_view_secrets,
             can_manage_secrets,
@@ -824,6 +831,7 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                 }
             }
             crate::firm_invoice_graphs::FirmInvoiceGraphs { view: fields.invoices.clone() }
+            crate::projected_cash::FirmProjectedCash { view: fields.projected_cash.clone() }
             p { a { href: "{back_href}", "← Back" } }
         }
     }
@@ -984,6 +992,12 @@ mod tests {
         }));
         assert!(html.contains(r#"id="firm-invoice-graphs""#), "{html}");
         assert!(html.contains("Neon Law invoiced: $100"), "{html}");
+        // ENG-1250: projected cash sits right after the invoice graphs.
+        let graphs = html.find(r#"id="firm-invoice-graphs""#).unwrap();
+        assert!(
+            html.find(r#"id="firm-projected-cash""#).unwrap() > graphs,
+            "{html}"
+        );
     }
 
     /// A Firm with no invoices in the window renders the graphs section's
