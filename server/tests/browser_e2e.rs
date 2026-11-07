@@ -1640,7 +1640,9 @@ async fn focus_nav_link(c: &fantoccini::Client) -> bool {
         vec![],
     )
     .await
-    .unwrap()
+    .expect("focus the nav link")
+    .as_bool()
+    .unwrap_or(false)
 }
 
 /// The palette's live state in one read: open, whether the filter is focused,
