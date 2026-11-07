@@ -170,6 +170,14 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         "seed applied"
     );
 
+    // The PostgreSQL-native Plan-panel tables seed here, not in the SurrealDB
+    // loader: the six canonical stages and the anchor Firm's sample plans and
+    // fee schedules (ENG-1269). A no-op when PostgreSQL is not configured;
+    // idempotent on every later boot.
+    store::plan_seeds::seed_quickstart(&surreal)
+        .await
+        .context("seeding plan panel fixtures")?;
+
     // Startup convergence has a finite budget; nightly reconciliation retries unfinished slots.
     match tokio::time::timeout(
         std::time::Duration::from_secs(20),
@@ -688,7 +696,7 @@ pub struct Site {
 /// Propagates a failure to assemble the runtime (configuration, database,
 /// storage, content) or to bind and serve the configured port.
 pub async fn run(brand: Site) -> anyhow::Result<()> {
-    boot(brand, false).await
+    Box::pin(boot(brand, false)).await
 }
 
 /// Boot one brand like [`run`], hosting the DBOS executor in this process when
@@ -704,7 +712,7 @@ pub async fn run(brand: Site) -> anyhow::Result<()> {
 /// settings, or a failed DBOS launch: with the flag on, the boot fails closed
 /// rather than serving without the executor.
 pub async fn run_with_dbos(brand: Site) -> anyhow::Result<()> {
-    boot(brand, true).await
+    Box::pin(boot(brand, true)).await
 }
 
 /// Run `serve`, hosting the DBOS executor beside it when `lookup` sets

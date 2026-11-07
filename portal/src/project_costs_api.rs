@@ -161,7 +161,15 @@ pub(crate) async fn create(
         Ok(pg) => pg,
         Err(response) => return Ok(response),
     };
-    match costs::create(&state.surreal, &pg, project_id, actor_id, &input).await {
+    match Box::pin(costs::create(
+        &state.surreal,
+        &pg,
+        project_id,
+        actor_id,
+        &input,
+    ))
+    .await
+    {
         Ok(row) => Ok((StatusCode::CREATED, Json(row)).into_response()),
         Err(e) => Ok(error(&e, "create", project_id, None)),
     }

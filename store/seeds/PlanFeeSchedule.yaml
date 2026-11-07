@@ -1,0 +1,263 @@
+# The anchor Firm's sample Plan Fee Schedule rows (ENG-1269): round numbers
+# demonstrating the effective-dated shape. Plans are Firm data; the public
+# repository carries only these conspicuously synthetic rows. A fee change
+# is a new effective_on row, never an edit.
+lookup_fields:
+  - covered_benefit
+records:
+  - plan:
+      name: Sample Panel Plan
+    matter_type: document_review
+    state: ny
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 25000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: letter
+    state: ny
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 10000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: uncontested_divorce
+    state: ny
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 150000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: court_appearance
+    state: ny
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 50000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: document_review
+    state: nv
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 25000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: letter
+    state: nv
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 10000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: uncontested_divorce
+    state: nv
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 150000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: court_appearance
+    state: nv
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 50000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: document_review
+    state: ca
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 25000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: letter
+    state: ca
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 10000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: uncontested_divorce
+    state: ca
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 150000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: court_appearance
+    state: ca
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 50000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: document_review
+    state: wa
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 25000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: letter
+    state: wa
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 10000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: uncontested_divorce
+    state: wa
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 150000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Panel Plan
+    matter_type: court_appearance
+    state: wa
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 50000
+    supplemental_hourly_cents: 25000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: document_review
+    state: ny
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 30000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: letter
+    state: ny
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 12500
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: uncontested_divorce
+    state: ny
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 175000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: court_appearance
+    state: ny
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 60000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: document_review
+    state: nv
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 30000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: letter
+    state: nv
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 12500
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: uncontested_divorce
+    state: nv
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 175000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: court_appearance
+    state: nv
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 60000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: document_review
+    state: ca
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 30000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: letter
+    state: ca
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 12500
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: uncontested_divorce
+    state: ca
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 175000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: court_appearance
+    state: ca
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 60000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: document_review
+    state: wa
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 30000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: letter
+    state: wa
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 12500
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: uncontested_divorce
+    state: wa
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 175000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01
+  - plan:
+      name: Sample Court Panel
+    matter_type: court_appearance
+    state: wa
+    covered_benefit: Standard covered benefit
+    plan_fee_cents: 60000
+    supplemental_hourly_cents: 30000
+    effective_on: 2026-01-01

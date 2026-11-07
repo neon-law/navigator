@@ -360,6 +360,7 @@ mod tests {
             rate_cents_per_hour: 25_000,
             source: TimeEntrySource::Timer,
             billing_status: BillingStatus::Unbilled,
+            stage: None,
             inserted_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

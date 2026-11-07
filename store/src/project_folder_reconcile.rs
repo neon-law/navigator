@@ -830,7 +830,9 @@ pub async fn reconcile_from_env(
     let pg = PostgresDb::from_env()
         .await
         .map_err(|_| FolderReconcileError::PostgresUnavailable)?;
-    reconcile(db, &pg, &drive, project_id, &policy)
+    // Box::pin because the PlanColumns added to Project in ENG-1269 pushed
+    // this future just past the 16 KiB `large_futures` lint threshold.
+    Box::pin(reconcile(db, &pg, &drive, project_id, &policy))
         .await
         .map(Some)
 }
@@ -1222,7 +1224,7 @@ mod tests {
             .execute(pg.pool())
             .await
             .unwrap();
-        let report = reconcile(&db, &pg, &drive, project_id, &policy)
+        let report = Box::pin(reconcile(&db, &pg, &drive, project_id, &policy))
             .await
             .unwrap();
         assert_eq!(report.outcome, FolderOutcome::Complete);
@@ -1266,7 +1268,9 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        let first = reconcile(&db, &pg, &drive, id, &policy).await.unwrap();
+        let first = Box::pin(reconcile(&db, &pg, &drive, id, &policy))
+            .await
+            .unwrap();
         assert_eq!(first.outcome, FolderOutcome::Complete);
         let before = project_folders::list_verified(&pg, id).await.unwrap();
         assert_eq!(before.len(), 16);
@@ -1278,7 +1282,9 @@ mod tests {
                 .drive_folder_id,
             reserved
         );
-        let retry = reconcile(&db, &pg, &drive, id, &policy).await.unwrap();
+        let retry = Box::pin(reconcile(&db, &pg, &drive, id, &policy))
+            .await
+            .unwrap();
         assert_eq!(retry.outcome, FolderOutcome::Complete);
         let after = project_folders::list_verified(&pg, id).await.unwrap();
         assert_eq!(
@@ -1299,7 +1305,7 @@ mod tests {
         };
         let (db, id, drive, policy) = fixture(&pg).await;
         assert_eq!(
-            reconcile(&db, &pg, &drive, id, &policy)
+            Box::pin(reconcile(&db, &pg, &drive, id, &policy))
                 .await
                 .unwrap()
                 .outcome,
@@ -1311,7 +1317,7 @@ mod tests {
             .unwrap();
         assert!(drive.set_folder_access_state(&root.drive_folder_id, false, false));
         assert_eq!(
-            reconcile(&db, &pg, &drive, id, &policy)
+            Box::pin(reconcile(&db, &pg, &drive, id, &policy))
                 .await
                 .unwrap()
                 .outcome,
@@ -1324,7 +1330,7 @@ mod tests {
         assert_eq!(project_folders::list(&pg, id).await.unwrap().len(), 16);
         assert!(drive.set_folder_access_state(&root.drive_folder_id, false, true));
         assert_eq!(
-            reconcile(&db, &pg, &drive, id, &policy)
+            Box::pin(reconcile(&db, &pg, &drive, id, &policy))
                 .await
                 .unwrap()
                 .outcome,
@@ -1362,14 +1368,15 @@ mod tests {
                 let pg = &pg;
                 async move {
                     let context = if id == later.1 { later } else { blocked };
-                    let outcome = match reconcile(&context.0, pg, &context.2, id, &context.3).await
-                    {
-                        Ok(report) if report.outcome == FolderOutcome::Complete => {
-                            NightlyFolderOutcome::Verified
-                        }
-                        Ok(_) => NightlyFolderOutcome::Blocked,
-                        Err(_) => NightlyFolderOutcome::Failed,
-                    };
+                    let outcome =
+                        match Box::pin(reconcile(&context.0, pg, &context.2, id, &context.3)).await
+                        {
+                            Ok(report) if report.outcome == FolderOutcome::Complete => {
+                                NightlyFolderOutcome::Verified
+                            }
+                            Ok(_) => NightlyFolderOutcome::Blocked,
+                            Err(_) => NightlyFolderOutcome::Failed,
+                        };
                     Ok::<_, std::convert::Infallible>(outcome)
                 }
             }),

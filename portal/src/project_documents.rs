@@ -1170,7 +1170,7 @@ mod tests {
         store::projects::set_drive_folder_id(&state.surreal, project_id, Some(folder_id))
             .await
             .unwrap();
-        let report = store::project_folder_reconcile::reconcile(
+        let report = Box::pin(store::project_folder_reconcile::reconcile(
             &state.surreal,
             pg,
             drive,
@@ -1179,7 +1179,7 @@ mod tests {
                 projects_parent_id: parent_id.into(),
                 trusted_organizers: std::collections::BTreeSet::new(),
             },
-        )
+        ))
         .await
         .unwrap();
         assert_eq!(
@@ -1322,7 +1322,10 @@ mod tests {
         assert_eq!(refused.status(), axum::http::StatusCode::NOT_FOUND);
         assert_eq!(drive.download_calls(), 0);
 
-        verified_drive_folders(&state, &pg, &drive, project_id, &folder.id, &parent.id).await;
+        Box::pin(verified_drive_folders(
+            &state, &pg, &drive, project_id, &folder.id, &parent.id,
+        ))
+        .await;
         let response = drive_import_with(
             &state,
             project_id,
@@ -1755,14 +1758,14 @@ mod tests {
 
     impl DriveFixture {
         async fn link_folder(&self) {
-            verified_drive_folders(
+            Box::pin(verified_drive_folders(
                 &self.state,
                 &self.pg,
                 &self.drive,
                 self.project_id,
                 &self.folder_id,
                 &self.parent_id,
-            )
+            ))
             .await;
         }
 

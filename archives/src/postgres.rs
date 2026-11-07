@@ -88,6 +88,8 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "matter_flat_fee",
     "contingency_term",
     "contingency_term_tier",
+    "legal_plan",
+    "plan_fee_schedule",
     "outcome_estimate",
     "matter_outcome",
     "time_entry",

@@ -1,0 +1,19 @@
+# The six canonical matter stages (ENG-1269): the vocabulary a new Firm
+# seeds so minutes attribute to a step from day one. Stages are Firm data;
+# a Firm reorders or renames them through its own vocabulary at any time,
+# and the seed never overwrites a row the Firm has touched.
+lookup_fields:
+  - label
+records:
+  - label: Intake
+    position: 0
+  - label: Draft
+    position: 1
+  - label: Review
+    position: 2
+  - label: Filing
+    position: 3
+  - label: Hearing
+    position: 4
+  - label: Close
+    position: 5
