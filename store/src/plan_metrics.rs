@@ -293,7 +293,7 @@ pub async fn acceptance_sla_misses(
         "SELECT p.id AS project_id, p.code, lp.name AS plan_name, \
          lp.acceptance_sla_hours, \
          ((p.plan_accepted_on - p.plan_assigned_on) * 24)::bigint AS elapsed_hours, \
-         p.plan_assigned_on, p.plan_accepted_on \
+         p.plan_assigned_on AS assigned_on, p.plan_accepted_on AS accepted_on \
          FROM project p \
          JOIN legal_plan lp ON lp.id = p.legal_plan_id \
          WHERE p.firm_id = $1 AND lp.firm_id = $1 \
@@ -339,7 +339,7 @@ pub async fn turnaround_sla_misses(
         "SELECT p.id AS project_id, p.code, lp.name AS plan_name, \
          lp.turnaround_sla_days, \
          (p.plan_closed_on - p.plan_accepted_on)::bigint AS elapsed_days, \
-         p.plan_accepted_on, p.plan_closed_on \
+         p.plan_accepted_on AS accepted_on, p.plan_closed_on AS closed_on \
          FROM project p \
          JOIN legal_plan lp ON lp.id = p.legal_plan_id \
          WHERE p.firm_id = $1 AND lp.firm_id = $1 \
@@ -795,16 +795,19 @@ mod database {
     use crate::postgres_mirror::tests::{connect, fresh_schema};
     use crate::test_support::{mem_surreal, seed_entity};
     use crate::time_entries::{self, NewTimeEntry, TimeEntrySource};
-    use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+    use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 
     fn day(month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, month, day).unwrap_or_else(|| panic!("valid date"))
     }
 
     fn stamp(hour: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 11, 1, hour, 0, 0)
+        // Hours are offsets from the base morning so the fixtures can
+        // order rows arbitrarily far apart without leaving the day.
+        Utc.with_ymd_and_hms(2026, 11, 1, 0, 0, 0)
             .single()
             .unwrap_or_else(|| panic!("valid stamp"))
+            + Duration::hours(i64::from(hour))
     }
 
     /// A Firm, its entity, and one attorney — the rows every metric test
@@ -832,7 +835,10 @@ mod database {
         sqlx::query("INSERT INTO person (id, name, email, role) VALUES ($1, $2, $3, 'lawyer')")
             .bind(id)
             .bind(name)
-            .bind(format!("{name}@metrics.example.com"))
+            .bind(format!(
+                "{name}-{}@metrics.example.com",
+                Uuid::new_v4().simple()
+            ))
             .execute(&pg.0)
             .await
             .unwrap_or_else(|error| panic!("person row: {error}"));
@@ -840,19 +846,24 @@ mod database {
     }
 
     async fn entity(pg: &PostgresDb) -> Uuid {
+        // Jurisdiction and entity-type names are globally unique, and a
+        // test seeds two firms, so every fixture call mints its own rows.
+        let unique = Uuid::new_v4().simple().to_string();
         let jurisdiction: Uuid = sqlx::query(
-            "INSERT INTO jurisdiction (id, name, code) VALUES ($1, 'Synthetic Metrics Jurisdiction', 'PMJ') RETURNING id",
+            "INSERT INTO jurisdiction (id, name, code) VALUES ($1, $2, 'PMJ') RETURNING id",
         )
         .bind(Uuid::new_v4())
+        .bind(format!("Synthetic Metrics Jurisdiction {unique}"))
         .fetch_one(&pg.0)
         .await
         .unwrap_or_else(|error| panic!("jurisdiction row: {error}"))
         .try_get(0)
         .unwrap_or_else(|error| panic!("jurisdiction id: {error}"));
         let entity_type: Uuid = sqlx::query(
-            "INSERT INTO entity_type (id, name) VALUES ($1, 'Synthetic Metrics Entity Type') RETURNING id",
+            "INSERT INTO entity_type (id, name) VALUES ($1, $2) RETURNING id",
         )
         .bind(Uuid::new_v4())
+        .bind(format!("Synthetic Metrics Entity Type {unique}"))
         .fetch_one(&pg.0)
         .await
         .unwrap_or_else(|error| panic!("entity_type row: {error}"))
@@ -882,6 +893,18 @@ mod database {
     }
 
     async fn plan(pg: &PostgresDb, firm_id: Uuid, name: &str) -> Uuid {
+        budgeted_plan(pg, firm_id, name, 24, 30).await
+    }
+
+    /// A plan with the budgets a test asserts against — the SLA test
+    /// pins its misses to a 7-day turnaround the default seed lacks.
+    async fn budgeted_plan(
+        pg: &PostgresDb,
+        firm_id: Uuid,
+        name: &str,
+        acceptance_sla_hours: i32,
+        turnaround_sla_days: i32,
+    ) -> Uuid {
         legal_plans::create(
             pg,
             firm_id,
@@ -889,8 +912,8 @@ mod database {
                 name: name.to_owned(),
                 contact: None,
                 portal: None,
-                acceptance_sla_hours: 24,
-                turnaround_sla_days: 30,
+                acceptance_sla_hours,
+                turnaround_sla_days,
                 reporting_requirements: None,
             },
         )
@@ -1177,7 +1200,7 @@ mod database {
         let pg = connect(&options, &database).await;
         let a = seed_firm(&pg).await;
         let b = seed_firm(&pg).await;
-        let arag_a = plan(&pg, a.firm_id, "ARAG").await;
+        let arag_a = budgeted_plan(&pg, a.firm_id, "ARAG", 24, 7).await;
         let arag_b = plan(&pg, b.firm_id, "ARAG").await;
 
         // Same-day acceptance is never a miss, whatever the budget.
@@ -1235,8 +1258,7 @@ mod database {
         assert_eq!(turnaround[0].project_id, slow);
         assert_eq!(turnaround[0].elapsed_days, 28);
         assert_eq!(
-            turnaround[0].turnaround_sla_days,
-            30 - 23,
+            turnaround[0].turnaround_sla_days, 7,
             "the seed budget is 7 days"
         );
 
@@ -1286,6 +1308,7 @@ mod database {
         let a = seed_firm(&pg).await;
         let b = seed_firm(&pg).await;
         let arag_a = plan(&pg, a.firm_id, "ARAG").await;
+        let arag_b = plan(&pg, b.firm_id, "ARAG").await;
         let hearing = stage(&pg, a.firm_id, "hearing", 5).await;
         let draft = stage(&pg, a.firm_id, "draft", 2).await;
 
@@ -1339,7 +1362,7 @@ mod database {
         assert!(minutes_by_stage_for_project(
             &pg,
             a.firm_id,
-            b_attorney_matter(&pg, &b, &arag_a).await
+            b_attorney_matter(&pg, &b, &arag_b).await
         )
         .await
         .unwrap()
@@ -1519,10 +1542,11 @@ mod database {
         let arag_b = plan(&pg, b.firm_id, "ARAG").await;
         let draft = stage(&pg, a.firm_id, "draft", 1).await;
         let review = stage(&pg, a.firm_id, "review", 2).await;
+        let draft_b = stage(&pg, b.firm_id, "draft", 1).await;
         let scribe = person(&pg, "Scribe").await;
 
         // Two versions of the demand-letter code in Firm A's library:
-        // first existence is the oldest row's insert, February 1.
+        // first existence is the oldest row's insert, stamp(500).
         let _v1 = template_version(&pg, "demand-letter", Some(a.firm_id), stamp(500), false).await;
         let _v2 = template_version(&pg, "demand-letter", Some(a.firm_id), stamp(501), true).await;
 
@@ -1538,7 +1562,7 @@ mod database {
             None,
         )
         .await;
-        let _ = notation(&pg, _v1, scribe, with_one, stamp(0)).await;
+        let _ = notation(&pg, _v1, scribe, with_one, stamp(502)).await;
         let _ = entry(&pg, with_one, a.attorney, 60, 20_000, Some(draft)).await;
 
         let with_two = matter(
@@ -1553,12 +1577,12 @@ mod database {
             None,
         )
         .await;
-        let _ = notation(&pg, _v2, scribe, with_two, stamp(0)).await;
+        let _ = notation(&pg, _v2, scribe, with_two, stamp(503)).await;
         let _ = entry(&pg, with_two, a.attorney, 40, 20_000, Some(draft)).await;
         let _ = entry(&pg, with_two, a.attorney, 20, 20_000, Some(review)).await;
 
-        // Uses a February 1 template before it existed — the guard keeps
-        // it in the "before" cohort.
+        // Uses the code before it existed — the guard keeps it in the
+        // "before" cohort.
         let guard = matter(
             &pg,
             &a,
@@ -1602,7 +1626,7 @@ mod database {
             None,
         )
         .await;
-        let _ = notation(&pg, _v2, scribe, other_type, stamp(0)).await;
+        let _ = notation(&pg, _v2, scribe, other_type, stamp(502)).await;
         let _ = entry(&pg, other_type, a.attorney, 10, 20_000, Some(draft)).await;
 
         let effects = template_effect(&pg, a.firm_id, &["demand-letter".to_owned()])
@@ -1661,7 +1685,7 @@ mod database {
         )
         .await;
         let _ = notation(&pg, _b_library, scribe, b_matter, stamp(200)).await;
-        let _ = entry(&pg, b_matter, b.attorney, 999, 20_000, Some(draft)).await;
+        let _ = entry(&pg, b_matter, b.attorney, 999, 20_000, Some(draft_b)).await;
         let firm_a_rows: Vec<(String, i64, i64)> =
             template_effect(&pg, a.firm_id, &["demand-letter".to_owned()])
                 .await
@@ -1732,17 +1756,8 @@ mod database {
         )
         .await
         .unwrap_or_else(|error| panic!("firm: {error}"));
-        firms::add_membership(
-            &surreal,
-            &NewPersonFirmRole {
-                person_id: admin.id,
-                firm_id: created.id,
-                membership: FirmMembership::Admin,
-                is_dri: true,
-            },
-        )
-        .await
-        .unwrap_or_else(|error| panic!("admin membership: {error}"));
+        // `firms::create` already seats the admin DRI in the firm; only
+        // the lawyer needs an explicit membership row.
         firms::add_membership(
             &surreal,
             &NewPersonFirmRole {
