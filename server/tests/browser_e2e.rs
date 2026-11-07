@@ -2056,6 +2056,16 @@ async fn slash_opens_the_destination_palette_and_escape_restores_focus() {
         "the first destination is pre-selected: {state}"
     );
 
+    if std::env::var("NAV_KEYBOARD_SHOTS").as_deref() == Ok("1") {
+        let dir = std::path::Path::new("/tmp/navigator-screenshots");
+        std::fs::create_dir_all(dir).expect("create screenshot directory");
+        std::fs::write(
+            dir.join("palette-open-unfiltered.png"),
+            c.screenshot().await.expect("capture the open palette"),
+        )
+        .expect("write the palette screenshot");
+    }
+
     press_arrow(&c, "ArrowDown").await;
     let state = palette_state(&c).await;
     assert_eq!(
@@ -2121,6 +2131,16 @@ async fn the_palette_filter_narrows_and_enter_navigates() {
         serde_json::json!("/app/team"),
         "the selection did not reset to the first match: {state}"
     );
+
+    if std::env::var("NAV_KEYBOARD_SHOTS").as_deref() == Ok("1") {
+        let dir = std::path::Path::new("/tmp/navigator-screenshots");
+        std::fs::create_dir_all(dir).expect("create screenshot directory");
+        std::fs::write(
+            dir.join("palette-open-filtered.png"),
+            c.screenshot().await.expect("capture the filtered palette"),
+        )
+        .expect("write the palette screenshot");
+    }
 
     type_text(&c, "zzz").await;
     let state = palette_state(&c).await;
@@ -2296,6 +2316,16 @@ async fn the_client_portal_palette_behaves_like_the_firm_app() {
         serde_json::json!(["/app/projects", "/app/profile"]),
         "the client's palette is not the client's destination set: {state}"
     );
+
+    if std::env::var("NAV_KEYBOARD_SHOTS").as_deref() == Ok("1") {
+        let dir = std::path::Path::new("/tmp/navigator-screenshots");
+        std::fs::create_dir_all(dir).expect("create screenshot directory");
+        std::fs::write(
+            dir.join("palette-portal-open.png"),
+            c.screenshot().await.expect("capture the portal palette"),
+        )
+        .expect("write the palette screenshot");
+    }
 
     type_text(&c, "profile").await;
     let state = palette_state(&c).await;
