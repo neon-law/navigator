@@ -502,7 +502,10 @@ pub(crate) async fn publish(
         TableOperation::Measure(path) => (Some(path), true),
         TableOperation::Verify(path) => (path, true),
     };
-    ensure!(valid_coverage(from, to), "invalid bounded reference interval");
+    ensure!(
+        valid_coverage(from, to),
+        "invalid bounded reference interval"
+    );
     let duckdb = duckdb_bin.map(Tool::verified).transpose()?;
     let location = iceberg
         .then(|| crate::ephemeris_iceberg::location(dir))
@@ -534,12 +537,7 @@ pub(crate) async fn publish(
             saved.content == content,
             "existing bundle settings or file identities differ"
         );
-        for (name, expected) in &files {
-            ensure!(
-                read_bounded(&dir.join(name), MAX_FILE_BYTES)? == *expected,
-                "existing bundle data differs from its checksum"
-            );
-        }
+        verify_existing_files(dir, &files)?;
         let iceberg_sha256 = if let Some(location) = &location {
             Some(crate::ephemeris_iceberg::verify(dir, location, &saved.snapshot_id, &batch).await?)
         } else {
@@ -594,6 +592,16 @@ pub(crate) async fn publish(
     )
     .await?;
     Ok(TableResult::Ready)
+}
+
+fn verify_existing_files(dir: &Path, files: &[(&str, Vec<u8>)]) -> Result<()> {
+    for (name, expected) in files {
+        ensure!(
+            read_bounded(&dir.join(name), MAX_FILE_BYTES)? == *expected,
+            "existing bundle data differs from its checksum"
+        );
+    }
+    Ok(())
 }
 
 fn calculate_table(

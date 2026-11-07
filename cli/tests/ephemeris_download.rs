@@ -295,14 +295,12 @@ async fn refuse_incomplete_or_corrupt(
     let receipt = native.join("iceberg-manifest.json");
     let valid_receipt = std::fs::read(&receipt).unwrap();
     std::fs::write(&receipt, b"{}").unwrap();
-    assert!(
-        !command("promote", "native", old_id)
-            .output()
-            .await
-            .unwrap()
-            .status
-            .success()
-    );
+    assert!(!command("promote", "native", old_id)
+        .output()
+        .await
+        .unwrap()
+        .status
+        .success());
     assert_eq!(&pointer(), original);
     std::fs::write(&receipt, &valid_receipt).unwrap();
 
@@ -310,14 +308,12 @@ async fn refuse_incomplete_or_corrupt(
         let database = native.join("reference.duckdb");
         let valid_database = std::fs::read(&database).unwrap();
         std::fs::write(&database, b"corrupt").unwrap();
-        assert!(
-            !command("promote", "native", old_id)
-                .output()
-                .await
-                .unwrap()
-                .status
-                .success()
-        );
+        assert!(!command("promote", "native", old_id)
+            .output()
+            .await
+            .unwrap()
+            .status
+            .success());
         assert_eq!(&pointer(), original);
         std::fs::write(&database, valid_database).unwrap();
     }

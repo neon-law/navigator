@@ -174,7 +174,10 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
     report_result(result, promoting)
 }
 
-fn report_result(result: Result<crate::ephemeris_tables::TableResult>, promoting: bool) -> ExitCode {
+fn report_result(
+    result: Result<crate::ephemeris_tables::TableResult>,
+    promoting: bool,
+) -> ExitCode {
     use crate::ephemeris_tables::TableResult;
 
     match result {
@@ -190,7 +193,9 @@ fn report_result(result: Result<crate::ephemeris_tables::TableResult>, promoting
         },
         Ok(TableResult::Ready) => {
             if promoting {
-                println!("Local latest-validated.json is ready. Read release_id for the next promotion.");
+                println!(
+                    "Local latest-validated.json is ready. Read release_id for the next promotion."
+                );
             } else {
                 println!("Verified local ephemeris bundle ready.");
             }
