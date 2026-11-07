@@ -778,10 +778,10 @@ mod tests {
         // $250/hr truncates to 416 cents, which re-splitting forgets.
         let pieces: i64 = [90, 1, 29]
             .iter()
-            .map(|minutes| i64::from(entry_amount_cents(*minutes, 25_000)))
+            .map(|minutes| entry_amount_cents(*minutes, 25_000))
             .sum();
         assert_eq!(pieces, 37_500 + 416 + 12_083);
-        let resplit = i64::from(120) * i64::from(25_000) / 60;
+        let resplit: i64 = 120 * 25_000 / 60;
         assert_ne!(pieces, resplit, "truncation makes the pieces the rule");
     }
 }
@@ -859,16 +859,15 @@ mod database {
         .unwrap_or_else(|error| panic!("jurisdiction row: {error}"))
         .try_get(0)
         .unwrap_or_else(|error| panic!("jurisdiction id: {error}"));
-        let entity_type: Uuid = sqlx::query(
-            "INSERT INTO entity_type (id, name) VALUES ($1, $2) RETURNING id",
-        )
-        .bind(Uuid::new_v4())
-        .bind(format!("Synthetic Metrics Entity Type {unique}"))
-        .fetch_one(&pg.0)
-        .await
-        .unwrap_or_else(|error| panic!("entity_type row: {error}"))
-        .try_get(0)
-        .unwrap_or_else(|error| panic!("entity_type id: {error}"));
+        let entity_type: Uuid =
+            sqlx::query("INSERT INTO entity_type (id, name) VALUES ($1, $2) RETURNING id")
+                .bind(Uuid::new_v4())
+                .bind(format!("Synthetic Metrics Entity Type {unique}"))
+                .fetch_one(&pg.0)
+                .await
+                .unwrap_or_else(|error| panic!("entity_type row: {error}"))
+                .try_get(0)
+                .unwrap_or_else(|error| panic!("entity_type id: {error}"));
         let id: Uuid = sqlx::query(
             "INSERT INTO entity (id, name, entity_type_id, jurisdiction_id) \
              VALUES ($1, 'Synthetic Metrics Entity', $2, $3) RETURNING id",
@@ -1385,6 +1384,7 @@ mod database {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One pricing-to-margin scenario, fixtures and assertions together.
     async fn economics_resolve_the_effective_fee_and_the_entry_pieces() {
         let Some((options, database)) = fresh_schema().await else {
             return;
@@ -1531,6 +1531,7 @@ mod database {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One cohort-classification scenario, fixtures and assertions together.
     async fn template_effect_splits_the_cohorts_by_first_use() {
         let Some((options, database)) = fresh_schema().await else {
             return;
@@ -1547,8 +1548,10 @@ mod database {
 
         // Two versions of the demand-letter code in Firm A's library:
         // first existence is the oldest row's insert, stamp(500).
-        let _v1 = template_version(&pg, "demand-letter", Some(a.firm_id), stamp(500), false).await;
-        let _v2 = template_version(&pg, "demand-letter", Some(a.firm_id), stamp(501), true).await;
+        let letter_v1 =
+            template_version(&pg, "demand-letter", Some(a.firm_id), stamp(500), false).await;
+        let letter_v2 =
+            template_version(&pg, "demand-letter", Some(a.firm_id), stamp(501), true).await;
 
         let with_one = matter(
             &pg,
@@ -1562,7 +1565,7 @@ mod database {
             None,
         )
         .await;
-        let _ = notation(&pg, _v1, scribe, with_one, stamp(502)).await;
+        notation(&pg, letter_v1, scribe, with_one, stamp(502)).await;
         let _ = entry(&pg, with_one, a.attorney, 60, 20_000, Some(draft)).await;
 
         let with_two = matter(
@@ -1577,7 +1580,7 @@ mod database {
             None,
         )
         .await;
-        let _ = notation(&pg, _v2, scribe, with_two, stamp(503)).await;
+        notation(&pg, letter_v2, scribe, with_two, stamp(503)).await;
         let _ = entry(&pg, with_two, a.attorney, 40, 20_000, Some(draft)).await;
         let _ = entry(&pg, with_two, a.attorney, 20, 20_000, Some(review)).await;
 
@@ -1597,7 +1600,7 @@ mod database {
         .await;
         let early =
             template_version(&pg, "demand-letter", Some(a.firm_id), stamp(600), false).await;
-        let _ = notation(&pg, early, scribe, guard, stamp(1)).await;
+        notation(&pg, early, scribe, guard, stamp(1)).await;
         let _ = entry(&pg, guard, a.attorney, 100, 20_000, Some(draft)).await;
 
         let plain = matter(
@@ -1626,7 +1629,7 @@ mod database {
             None,
         )
         .await;
-        let _ = notation(&pg, _v2, scribe, other_type, stamp(502)).await;
+        notation(&pg, letter_v2, scribe, other_type, stamp(502)).await;
         let _ = entry(&pg, other_type, a.attorney, 10, 20_000, Some(draft)).await;
 
         let effects = template_effect(&pg, a.firm_id, &["demand-letter".to_owned()])
@@ -1669,7 +1672,7 @@ mod database {
 
         // Firm B holds its own demand-letter library row inserted January
         // 1 and a "with" matter — none of it shifts Firm A's cohorts.
-        let _b_library =
+        let b_library =
             template_version(&pg, "demand-letter", Some(b.firm_id), stamp(0), true).await;
         let _ = template_version(&pg, "demand-letter", Some(b.firm_id), stamp(100), false).await;
         let b_matter = matter(
@@ -1684,7 +1687,7 @@ mod database {
             None,
         )
         .await;
-        let _ = notation(&pg, _b_library, scribe, b_matter, stamp(200)).await;
+        notation(&pg, b_library, scribe, b_matter, stamp(200)).await;
         let _ = entry(&pg, b_matter, b.attorney, 999, 20_000, Some(draft_b)).await;
         let firm_a_rows: Vec<(String, i64, i64)> =
             template_effect(&pg, a.firm_id, &["demand-letter".to_owned()])
