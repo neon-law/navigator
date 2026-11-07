@@ -1574,6 +1574,7 @@ async fn press_char(c: &fantoccini::Client, ch: char) -> bool {
             press_key(c, &text, &code, u32::from(ch), 0, Some(&text)).await
         }
         '?' => press_key(c, "?", "Slash", 191, SHIFT, Some("?")).await,
+        '/' => press_key(c, "/", "Slash", 191, 0, Some("/")).await,
         other => panic!("press_char has no key for `{other}`"),
     }
 }
@@ -1611,6 +1612,53 @@ async fn type_text(c: &fantoccini::Client, text: &str) {
 
 async fn press_escape(c: &fantoccini::Client) {
     press_key(c, "Escape", "Escape", 27, 0, None).await;
+}
+
+/// `Enter`, outside a field — the palette's "go" key.
+async fn press_enter(c: &fantoccini::Client) {
+    press_key(c, "Enter", "Enter", 13, 0, None).await;
+}
+
+/// A bare arrow key — the palette's selection mover.
+async fn press_arrow(c: &fantoccini::Client, key: &str) {
+    let virtual_key = match key {
+        "ArrowDown" => 40,
+        "ArrowUp" => 38,
+        other => panic!("press_arrow has no virtual key for `{other}`"),
+    };
+    press_key(c, key, key, virtual_key, 0, None).await;
+}
+
+/// Park focus on a recoverable element — the first app link in the navbar —
+/// returning whether focus landed there, so an Escape-restores-focus
+/// assertion has an element to name.
+async fn focus_nav_link(c: &fantoccini::Client) -> bool {
+    c.execute(
+        "const link = document.querySelector('a[href^=\"/app\"]'); \
+         if (!link) { return false; } link.focus(); \
+         return link.isSameNode(document.activeElement);",
+        vec![],
+    )
+    .await
+    .unwrap()
+}
+
+/// The palette's live state in one read: open, whether the filter is focused,
+/// the visible rows' hrefs, and the selected row's href.
+async fn palette_state(c: &fantoccini::Client) -> serde_json::Value {
+    c.execute(
+        "const d = document.querySelector('#nav-palette-dialog'); \
+         const rows = Array.from(d.querySelectorAll('[role=option]:not([hidden])')); \
+         const sel = d.querySelector('[aria-selected=true]'); \
+         return {open: d.open, modal: d.matches(':modal'), \
+                 filterFocused: \
+                   document.activeElement === d.querySelector('[data-nav-palette-filter]'), \
+                 rows: rows.map(r => r.getAttribute('data-href')), \
+                 selected: sel ? sel.getAttribute('data-href') : null};",
+        vec![],
+    )
+    .await
+    .unwrap()
 }
 
 /// `Ctrl+Enter` — the questionnaire's "next question, or submit" chord.
@@ -1947,6 +1995,346 @@ async fn a_chord_lapses_after_a_second() {
         before,
         "a lapsed chord fired"
     );
+    c.close().await.unwrap();
+}
+
+/// `/` opens the palette on a signed-in page: a modal dialog, the filter
+/// focused, every role-scoped destination visible with the first
+/// pre-selected. The arrows move the selection within the row set, and
+/// `Escape` dismisses with focus back where the page had it.
+#[tokio::test]
+async fn slash_opens_the_destination_palette_and_escape_restores_focus() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+    c.goto(&format!("{}/app/profile", base_url()))
+        .await
+        .unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#nav-palette-dialog"))
+        .await
+        .unwrap();
+
+    // Closed in the markup, and the rendered rows are exactly the
+    // destinations the server scoped for this page's role.
+    let closed = c
+        .execute(
+            "const d = document.querySelector('#nav-palette-dialog'); \
+             return {open: d.open, \
+                     dests: JSON.parse(d.getAttribute('data-nav-palette-destinations')) \
+                       .map(x => x.href), \
+                     rows: Array.from(d.querySelectorAll('[role=option]')) \
+                       .map(r => r.getAttribute('data-href'))};",
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(closed["open"], false, "the palette must ship closed");
+    assert_eq!(
+        closed["rows"], closed["dests"],
+        "the rows are not the role-scoped destination set: {closed}"
+    );
+
+    // Out of any field, parked on a recoverable element.
+    assert!(focus_nav_link(&c).await, "no focusable app link to park on");
+    press_char(&c, '/').await;
+
+    let state = palette_state(&c).await;
+    assert_eq!(state["open"], true, "{state}");
+    assert_eq!(state["modal"], true, "the palette is a modal dialog: {state}");
+    assert_eq!(state["filterFocused"], true, "the filter is focused: {state}");
+    assert_eq!(
+        state["rows"],
+        serde_json::json!(["/app/projects", "/app/team", "/app/inbox", "/app/profile"]),
+        "the lawyer's palette is not the lawyer's destination set: {state}"
+    );
+    assert_eq!(
+        state["selected"],
+        serde_json::json!("/app/projects"),
+        "the first destination is pre-selected: {state}"
+    );
+
+    press_arrow(&c, "ArrowDown").await;
+    let state = palette_state(&c).await;
+    assert_eq!(
+        state["selected"],
+        serde_json::json!("/app/team"),
+        "ArrowDown did not move the selection: {state}"
+    );
+    press_arrow(&c, "ArrowUp").await;
+    press_arrow(&c, "ArrowUp").await;
+    let state = palette_state(&c).await;
+    assert_eq!(
+        state["selected"],
+        serde_json::json!("/app/projects"),
+        "ArrowUp did not stop at the first row: {state}"
+    );
+
+    press_escape(&c).await;
+    let state = palette_state(&c).await;
+    assert_eq!(state["open"], false, "Escape did not close the palette");
+    let restored = c
+        .execute(
+            "return document.querySelector('a[href^=\"/app\"]') \
+               .isSameNode(document.activeElement);",
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(restored, true, "focus did not return to the parked element");
+    c.close().await.unwrap();
+}
+
+/// Typing narrows the rows to the matches, the selection resets to the first
+/// match, a filter matching nothing says so instead of leaving a silently
+/// empty list, and `Enter` jumps to the selected destination.
+#[tokio::test]
+async fn the_palette_filter_narrows_and_enter_navigates() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+    c.goto(&format!("{}/app/profile", base_url()))
+        .await
+        .unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#nav-palette-dialog"))
+        .await
+        .unwrap();
+    c.execute("document.activeElement.blur(); return true;", vec![])
+        .await
+        .unwrap();
+    press_char(&c, '/').await;
+
+    type_text(&c, "tea").await;
+    let state = palette_state(&c).await;
+    assert_eq!(
+        state["rows"],
+        serde_json::json!(["/app/team"]),
+        "the filter did not narrow to the matching row: {state}"
+    );
+    assert_eq!(
+        state["selected"],
+        serde_json::json!("/app/team"),
+        "the selection did not reset to the first match: {state}"
+    );
+
+    type_text(&c, "zzz").await;
+    let state = palette_state(&c).await;
+    assert_eq!(state["rows"], serde_json::json!([]), "{state}");
+    assert_eq!(
+        state["selected"],
+        serde_json::Value::Null,
+        "nothing is selected when nothing matches: {state}"
+    );
+    let empty = c
+        .execute(
+            "const e = document.querySelector('#nav-palette-dialog \
+               [data-nav-palette-empty]'); \
+             return e && !e.hasAttribute('hidden') ? e.textContent : null;",
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        empty,
+        serde_json::json!("No matching destinations"),
+        "an empty filter result did not say so: {empty}"
+    );
+
+    type_text(&c, "tea").await;
+    press_enter(&c).await;
+    wait_url_ends(&c, "/app/team").await;
+    c.close().await.unwrap();
+}
+
+/// `/` inside a text field is typing: the field receives the character and
+/// the palette stays shut. The bare-key guard is what makes a one-key
+/// shortcut safe at all — and the same key opens once focus leaves the field.
+#[tokio::test]
+async fn slash_in_a_text_field_is_typing_not_a_palette() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+    c.goto(&format!("{}/app/profile", base_url()))
+        .await
+        .unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#nav-palette-dialog"))
+        .await
+        .unwrap();
+    c.execute(
+        "const i = document.createElement('input'); \
+         i.setAttribute('data-nav-e2e-field', ''); \
+         document.body.appendChild(i); i.focus(); return true;",
+        vec![],
+    )
+    .await
+    .unwrap();
+    press_char(&c, '/').await;
+
+    let state = palette_state(&c).await;
+    assert_eq!(
+        state["open"], false,
+        "/ opened the palette from inside a text field"
+    );
+    let typed = c
+        .execute(
+            "return document.querySelector('[data-nav-e2e-field]').value;",
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(typed, serde_json::json!("/"), "the field did not receive the /");
+
+    c.execute(
+        "document.querySelector('[data-nav-e2e-field]').remove(); \
+         document.activeElement.blur(); return true;",
+        vec![],
+    )
+    .await
+    .unwrap();
+    press_char(&c, '/').await;
+    let state = palette_state(&c).await;
+    assert_eq!(
+        state["open"], true,
+        "/ stopped opening the palette once focus left the field: {state}"
+    );
+    c.close().await.unwrap();
+}
+
+/// Exactly one overlay owns the keyboard: while the help overlay is up, `/`
+/// does nothing and help stays open; once help closes, the palette opens.
+#[tokio::test]
+async fn the_help_overlay_keeps_the_palette_shut_while_it_is_open() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+    c.goto(&format!("{}/app/profile", base_url()))
+        .await
+        .unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#nav-palette-dialog"))
+        .await
+        .unwrap();
+    c.execute("document.activeElement.blur(); return true;", vec![])
+        .await
+        .unwrap();
+
+    press_char(&c, '?').await;
+    let help_open = c
+        .execute(
+            "return document.querySelector('#nav-shortcuts-dialog').open;",
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(help_open, true, "? did not open the help overlay");
+
+    press_char(&c, '/').await;
+    let state = palette_state(&c).await;
+    assert_eq!(
+        state["open"], false,
+        "the palette opened over the help overlay: {state}"
+    );
+    let help_open = c
+        .execute(
+            "return document.querySelector('#nav-shortcuts-dialog').open;",
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(help_open, true, "pressing / closed the help overlay");
+
+    press_escape(&c).await;
+    press_char(&c, '/').await;
+    let state = palette_state(&c).await;
+    assert_eq!(
+        state["open"], true,
+        "the palette did not open once help closed: {state}"
+    );
+    press_escape(&c).await;
+    c.close().await.unwrap();
+}
+
+/// The client portal renders the same palette the firm app does: `/` opens
+/// it, the rows are the client's own destinations (no firm or admin doors),
+/// filter + `Enter` navigate, and `Escape` restores focus — parity
+/// demonstrated on the portal page, not assumed from the firm app.
+#[tokio::test]
+async fn the_client_portal_palette_behaves_like_the_firm_app() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_client(&c).await;
+    c.goto(&format!("{}/app/projects", base_url()))
+        .await
+        .unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#nav-palette-dialog"))
+        .await
+        .unwrap();
+    c.execute("document.activeElement.blur(); return true;", vec![])
+        .await
+        .unwrap();
+    assert!(focus_nav_link(&c).await, "no focusable app link to park on");
+    press_char(&c, '/').await;
+
+    let state = palette_state(&c).await;
+    assert_eq!(state["open"], true, "{state}");
+    assert_eq!(state["filterFocused"], true, "{state}");
+    assert_eq!(
+        state["rows"],
+        serde_json::json!(["/app/projects", "/app/profile"]),
+        "the client's palette is not the client's destination set: {state}"
+    );
+
+    type_text(&c, "profile").await;
+    let state = palette_state(&c).await;
+    assert_eq!(
+        state["rows"],
+        serde_json::json!(["/app/profile"]),
+        "the filter did not narrow on the portal page: {state}"
+    );
+    press_enter(&c).await;
+    wait_url_ends(&c, "/app/profile").await;
+
+    c.goto(&format!("{}/app/projects", base_url()))
+        .await
+        .unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#nav-palette-dialog"))
+        .await
+        .unwrap();
+    c.execute("document.activeElement.blur(); return true;", vec![])
+        .await
+        .unwrap();
+    assert!(focus_nav_link(&c).await, "no focusable app link to park on");
+    press_char(&c, '/').await;
+    press_escape(&c).await;
+    let state = palette_state(&c).await;
+    assert_eq!(
+        state["open"], false,
+        "Escape did not close the palette on the portal page"
+    );
+    let restored = c
+        .execute(
+            "return document.querySelector('a[href^=\"/app\"]') \
+               .isSameNode(document.activeElement);",
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(restored, true, "focus did not return on the portal page");
     c.close().await.unwrap();
 }
 
