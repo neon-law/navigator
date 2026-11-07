@@ -232,6 +232,7 @@ async fn surreal() -> store::surreal::SurrealDb {
     }
 }
 
+#[cfg(feature = "server")]
 pub(crate) async fn csrf_token() -> String {
     dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<crate::csrf::CsrfToken>, _>()
         .await
