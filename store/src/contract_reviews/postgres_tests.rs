@@ -5,18 +5,15 @@ use crate::postgres_mirror::tests::fresh_schema;
 use chrono::{DateTime, SubsecRound, Utc};
 use serde_json::Value;
 use sqlx::Row;
-use std::process::Command;
+use tokio::process::Command;
 use uuid::Uuid;
 
 const PROBE: &str = "NAV_CONTRACT_REVIEW_MIRROR_PROBE";
 const TEST: &str = "contract_reviews::postgres_tests::lifecycle_probe";
 
-#[test]
-fn command_lifecycle_is_mirrored_in_an_isolated_process() {
-    let Some((options, database)) = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(fresh_schema())
-    else {
+#[tokio::test]
+async fn command_lifecycle_is_mirrored_in_an_isolated_process() {
+    let Some((options, database)) = fresh_schema().await else {
         return;
     };
     let output = Command::new(std::env::current_exe().unwrap())
@@ -31,6 +28,7 @@ fn command_lifecycle_is_mirrored_in_an_isolated_process() {
         .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
         .env_remove("NAVIGATOR_POSTGRES_ROOT_CERT")
         .output()
+        .await
         .unwrap();
     assert!(
         output.status.success(),
@@ -186,8 +184,8 @@ async fn lifecycle_probe() {
     pg.0.close().await;
 }
 
-#[test]
-fn unavailable_mirror_does_not_change_successful_source_writes() {
+#[tokio::test]
+async fn unavailable_mirror_does_not_change_successful_source_writes() {
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", TEST, "--nocapture"])
         .env(PROBE, "unavailable")
@@ -200,6 +198,7 @@ fn unavailable_mirror_does_not_change_successful_source_writes() {
         .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
         .env_remove("NAVIGATOR_POSTGRES_ROOT_CERT")
         .output()
+        .await
         .unwrap();
     assert!(
         output.status.success(),
