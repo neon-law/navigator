@@ -170,6 +170,14 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         "seed applied"
     );
 
+    // The PostgreSQL-native Plan-panel tables seed here, not in the SurrealDB
+    // loader: the six canonical stages and the anchor Firm's sample plans and
+    // fee schedules (ENG-1269). A no-op when PostgreSQL is not configured;
+    // idempotent on every later boot.
+    store::plan_seeds::seed_quickstart(&surreal)
+        .await
+        .context("seeding plan panel fixtures")?;
+
     // Startup convergence has a finite budget; nightly reconciliation retries unfinished slots.
     match tokio::time::timeout(
         std::time::Duration::from_secs(20),

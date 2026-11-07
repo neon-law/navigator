@@ -1473,6 +1473,14 @@ mod tests {
                 "20261106130000_create_mail_signature.sql",
                 include_str!("../postgres/migrations/20261106130000_create_mail_signature.sql"),
             ),
+            (
+                "20261107000000_create_legal_plan.sql",
+                include_str!("../postgres/migrations/20261107000000_create_legal_plan.sql"),
+            ),
+            (
+                "20261107010000_create_plan_fee_schedule.sql",
+                include_str!("../postgres/migrations/20261107010000_create_plan_fee_schedule.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

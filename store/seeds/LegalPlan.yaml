@@ -1,0 +1,13 @@
+# The anchor Firm's sample Legal Plans (ENG-1269): the panel vocabulary the
+# quickstart Firm seeds from. Plans are Firm data; the public repository
+# carries only these two conspicuously synthetic rows.
+lookup_fields:
+  - name
+records:
+  - name: Sample Panel Plan
+    acceptance_sla_hours: 24
+    turnaround_sla_days: 14
+    reporting_requirements: Monthly utilization summary
+  - name: Sample Court Panel
+    acceptance_sla_hours: 48
+    turnaround_sla_days: 30
