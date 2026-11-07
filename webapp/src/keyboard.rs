@@ -55,6 +55,8 @@ pub enum Scope {
 pub enum Action {
     /// Open the `?` overlay.
     Help,
+    /// Open the `/` search palette.
+    OpenPalette,
     /// Go to [`Shortcut::href`].
     Navigate,
     /// Submit the questionnaire's question form (the server advances it, or
@@ -117,17 +119,15 @@ pub fn app_pages() -> Vec<(Page, &'static str)> {
     vec![(Page::Matters, crate::app_chrome::APP_PROJECTS_HREF)]
 }
 
-/// The global shortcuts for the pages a portal has: the `?` overlay, then a
-/// chord for each page in `pages`. A page left out has no chord, so it is
-/// neither fired nor listed.
+/// The global shortcuts for the pages a portal has: the `?` overlay, the `/`
+/// palette, then a chord for each page in `pages`. A page left out has no
+/// chord, so it is neither fired nor listed.
 #[must_use]
 pub fn global_shortcuts(pages: &[(Page, &str)]) -> Vec<Shortcut> {
-    let mut shortcuts = vec![Shortcut::new(
-        "?",
-        "Show keyboard shortcuts",
-        Scope::Global,
-        Action::Help,
-    )];
+    let mut shortcuts = vec![
+        Shortcut::new("?", "Show keyboard shortcuts", Scope::Global, Action::Help),
+        Shortcut::new("/", "Open search", Scope::Global, Action::OpenPalette),
+    ];
     for (page, keys, description) in NAVIGATION_CHORDS {
         if let Some((_, href)) = pages.iter().find(|(candidate, _)| *candidate == page) {
             shortcuts.push(Shortcut {
