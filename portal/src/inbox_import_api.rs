@@ -468,6 +468,7 @@ async fn file_import_attachment(
         signing: None,
         notarization: Vec::new(),
         evidence: None,
+        folder: None,
     };
     let provenance = store::documents::MailProvenance {
         message_id: &message_id_str,
