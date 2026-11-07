@@ -56,13 +56,23 @@ async fn assumptions_list_reads_the_firm_rows_over_the_authenticated_door() {
         .unwrap()
         .current_dir(root.path())
         .env("NAVIGATOR_CREDENTIALS_FILE", credentials(&root, &host))
-        .args(["assumptions", "--firm", &firm.to_string(), "--host", &host, "list"])
+        .args([
+            "assumptions",
+            "--firm",
+            &firm.to_string(),
+            "--host",
+            &host,
+            "list",
+        ])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
-    assert_eq!(serde_json::from_slice::<serde_json::Value>(&output).unwrap(), rows);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
+        rows
+    );
     server.verify().await;
 }
 
@@ -103,7 +113,10 @@ async fn assumptions_set_posts_the_value_and_reason_and_prints_the_row() {
         .get_output()
         .stdout
         .clone();
-    assert_eq!(serde_json::from_slice::<serde_json::Value>(&output).unwrap(), row);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
+        row
+    );
     server.verify().await;
 }
 
@@ -166,10 +179,19 @@ async fn assumptions_commands_refuse_when_the_capability_denies() {
         .unwrap()
         .current_dir(root.path())
         .env("NAVIGATOR_CREDENTIALS_FILE", credentials(&root, &host))
-        .args(["assumptions", "--firm", &firm.to_string(), "--host", &host, "list"])
+        .args([
+            "assumptions",
+            "--firm",
+            &firm.to_string(),
+            "--host",
+            &host,
+            "list",
+        ])
         .assert()
         .failure()
-        .stderr(predicates::str::contains("assumptions command refused (404)"));
+        .stderr(predicates::str::contains(
+            "assumptions command refused (404)",
+        ));
     server.verify().await;
 }
 
@@ -195,5 +217,7 @@ async fn assumptions_set_rejects_a_malformed_value_before_any_request() {
         ])
         .assert()
         .failure()
-        .stderr(predicates::str::contains("the --value must be one JSON value"));
+        .stderr(predicates::str::contains(
+            "the --value must be one JSON value",
+        ));
 }

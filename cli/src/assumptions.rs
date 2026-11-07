@@ -99,7 +99,9 @@ async fn execute_at(firm: Uuid, base: &str, token: &str, action: AssumptionsCmd)
     match action {
         AssumptionsCmd::List => println!(
             "{}",
-            serde_json::to_string_pretty(&call(base, token, reqwest::Method::GET, &route, None).await?)?
+            serde_json::to_string_pretty(
+                &call(base, token, reqwest::Method::GET, &route, None).await?
+            )?
         ),
         AssumptionsCmd::Show { key } => println!(
             "{}",
@@ -114,19 +116,21 @@ async fn execute_at(firm: Uuid, base: &str, token: &str, action: AssumptionsCmd)
                 .await?
             )?
         ),
-        AssumptionsCmd::Set {
-            key,
-            value,
-            reason,
-        } => {
-            let parsed: serde_json::Value = serde_json::from_str(&value)
-                .context("the --value must be one JSON value")?;
+        AssumptionsCmd::Set { key, value, reason } => {
+            let parsed: serde_json::Value =
+                serde_json::from_str(&value).context("the --value must be one JSON value")?;
             let body = serde_json::json!({"value": parsed, "reason": reason});
             println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &call(base, token, reqwest::Method::POST, &format!("{route}/{key}"), Some(&body))
-                        .await?
+                    &call(
+                        base,
+                        token,
+                        reqwest::Method::POST,
+                        &format!("{route}/{key}"),
+                        Some(&body)
+                    )
+                    .await?
                 )?
             );
         }
@@ -145,13 +149,16 @@ async fn execute_at(firm: Uuid, base: &str, token: &str, action: AssumptionsCmd)
         ),
         AssumptionsCmd::Catalog => println!(
             "{}",
-            serde_json::to_string_pretty(&call(
-                base,
-                token,
-                reqwest::Method::GET,
-                "/app/api/assumptions",
-                None
-            ).await?)?
+            serde_json::to_string_pretty(
+                &call(
+                    base,
+                    token,
+                    reqwest::Method::GET,
+                    "/app/api/assumptions",
+                    None
+                )
+                .await?
+            )?
         ),
     }
     Ok(())

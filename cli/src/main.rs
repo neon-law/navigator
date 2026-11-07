@@ -7,8 +7,8 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde::Deserialize;
 
 mod answers_file;
-mod assumptions;
 mod assets;
+mod assumptions;
 mod atomic_directory;
 mod authorities;
 mod blog;

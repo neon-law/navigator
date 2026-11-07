@@ -108,10 +108,7 @@ pub fn catalog() -> &'static BTreeMap<String, AssumptionKeySpec> {
                     )
                     .expect("every catalog type is one of integer, number, string, boolean"),
                     default: serde_json::to_value(
-                        entry
-                            .get("default")
-                            .cloned()
-                            .unwrap_or(YamlValue::Null),
+                        entry.get("default").cloned().unwrap_or(YamlValue::Null),
                     )
                     .unwrap_or(serde_json::Value::Null),
                     description: entry
@@ -152,10 +149,7 @@ pub enum FirmAssumptionError {
 
 /// Validates a key and its value against the catalog: the pure half of
 /// [`set`], unit-testable without a database.
-fn validate(
-    key: &str,
-    value: &serde_json::Value,
-) -> Result<AssumptionType, FirmAssumptionError> {
+fn validate(key: &str, value: &serde_json::Value) -> Result<AssumptionType, FirmAssumptionError> {
     let spec = catalog()
         .get(key)
         .ok_or_else(|| FirmAssumptionError::UnknownKey(key.to_string()))?;
@@ -369,7 +363,10 @@ mod tests {
             ("plan.target_minutes.nope", json!(45)),
             ("plan.target_minutes", json!(45)),
             ("Plan.Target_Minutes.Document_Review", json!(45)),
-            ("plan.target_minutes.document_review", serde_json::Value::Null),
+            (
+                "plan.target_minutes.document_review",
+                serde_json::Value::Null,
+            ),
             ("plan.target_minutes.document_review", json!(45.5)),
             ("plan.target_minutes.document_review", json!("45")),
             ("plan.target_minutes.document_review", json!(true)),
@@ -378,8 +375,7 @@ mod tests {
             assert!(
                 matches!(
                     error,
-                    FirmAssumptionError::UnknownKey(_)
-                        | FirmAssumptionError::TypeMismatch
+                    FirmAssumptionError::UnknownKey(_) | FirmAssumptionError::TypeMismatch
                 ),
                 "{key} refuses with a typed error, not a panic"
             );
@@ -460,7 +456,10 @@ mod tests {
             let result = if statement.starts_with("TRUNCATE") {
                 sqlx::query(statement).execute(pg.pool()).await
             } else {
-                sqlx::query(statement).bind(firm_id).execute(pg.pool()).await
+                sqlx::query(statement)
+                    .bind(firm_id)
+                    .execute(pg.pool())
+                    .await
             };
             assert!(result.is_err(), "{statement} must be refused");
         }
@@ -507,7 +506,9 @@ mod tests {
         );
 
         // The same key is one Firm's row each: the second Firm sets its own.
-        super::set(&pg, other_firm, admin, &setting(90)).await.unwrap();
+        super::set(&pg, other_firm, admin, &setting(90))
+            .await
+            .unwrap();
         assert_eq!(
             super::lookup(&pg, other_firm, "plan.target_minutes.document_review")
                 .await

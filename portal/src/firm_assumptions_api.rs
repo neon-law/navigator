@@ -43,7 +43,11 @@ fn assumption_error(error: &FirmAssumptionError) -> Response {
         FirmAssumptionError::Catalog => StatusCode::INTERNAL_SERVER_ERROR,
         FirmAssumptionError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    (status, Json(serde_json::json!({"error": "assumption_refused"}))).into_response()
+    (
+        status,
+        Json(serde_json::json!({"error": "assumption_refused"})),
+    )
+        .into_response()
 }
 
 /// The Firm's current assumptions: one row per key, the newest version of
@@ -112,8 +116,13 @@ pub(super) async fn set(
         value: body.value,
         reason: body.reason,
     };
-    match firm_assumptions::set(&pg, firm, session.person_id.ok_or(ApiError::Forbidden)?, &input)
-        .await
+    match firm_assumptions::set(
+        &pg,
+        firm,
+        session.person_id.ok_or(ApiError::Forbidden)?,
+        &input,
+    )
+    .await
     {
         Ok(assumption) => Ok(Json(assumption).into_response()),
         Err(e) => Ok(assumption_error(&e)),

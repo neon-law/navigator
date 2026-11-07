@@ -1,9 +1,9 @@
 //! JSON API commands and reads over the canonical store.
 
-#[path = "firm_journal_api.rs"]
-mod firm_journal_api;
 #[path = "firm_assumptions_api.rs"]
 mod firm_assumptions_api;
+#[path = "firm_journal_api.rs"]
+mod firm_journal_api;
 
 use std::sync::Arc;
 
