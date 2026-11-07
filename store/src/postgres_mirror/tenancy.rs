@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use chrono::{DateTime, SubsecRound, Utc};
+use chrono::{DateTime, NaiveDate, SubsecRound, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -81,6 +81,18 @@ const PROJECT_COLUMNS: &[&str] = &[
     "calendar_id",
     "booking_url",
     "onboarding_jurisdiction",
+    // Plan-panel economics (ENG-1269). The three plan dates are DATE in
+    // PostgreSQL; the SurrealDB source carries them as ISO `YYYY-MM-DD`
+    // text, parsed by [`date`].
+    "legal_plan_id",
+    "plan_member_id",
+    "benefit_code",
+    "plan_matter_type",
+    "plan_state",
+    "plan_assigned_on",
+    "plan_accepted_on",
+    "plan_closed_on",
+    "kit_version",
     "inserted_at",
     "updated_at",
 ];
@@ -229,6 +241,13 @@ pub(super) fn timestamp(text: &str) -> Result<DateTime<Utc>, MirrorError> {
     DateTime::parse_from_rfc3339(text)
         .map(|at| at.with_timezone(&Utc).trunc_subsecs(6))
         .map_err(|_| MirrorError::SourceTimestamp)
+}
+
+/// A Surreal ISO date (`YYYY-MM-DD`) at PostgreSQL's DATE type. One that
+/// does not parse is refused as [`MirrorError::SourceDate`]; a date is
+/// never substituted.
+pub(super) fn date(text: &str) -> Result<NaiveDate, MirrorError> {
+    NaiveDate::parse_from_str(text, "%F").map_err(|_| MirrorError::SourceDate)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -391,6 +410,18 @@ struct ProjectImage {
     calendar_id: Option<String>,
     booking_url: Option<String>,
     onboarding_jurisdiction: Option<String>,
+    /// Plan-panel economics (ENG-1269). The three plan dates hold
+    /// PostgreSQL DATE values; the SurrealDB source carries ISO text that
+    /// [`ProjectImage::from_source`] parses.
+    legal_plan_id: Option<Uuid>,
+    plan_member_id: Option<String>,
+    benefit_code: Option<String>,
+    plan_matter_type: Option<String>,
+    plan_state: Option<String>,
+    plan_assigned_on: Option<NaiveDate>,
+    plan_accepted_on: Option<NaiveDate>,
+    plan_closed_on: Option<NaiveDate>,
+    kit_version: Option<String>,
     inserted_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -421,6 +452,15 @@ impl ProjectImage {
             calendar_id: project.calendar_id.clone(),
             booking_url: project.booking_url.clone(),
             onboarding_jurisdiction: project.onboarding_jurisdiction.clone(),
+            legal_plan_id: project.legal_plan_id,
+            plan_member_id: project.plan_member_id.clone(),
+            benefit_code: project.benefit_code.clone(),
+            plan_matter_type: project.plan_matter_type.clone(),
+            plan_state: project.plan_state.clone(),
+            plan_assigned_on: project.plan_assigned_on.as_deref().map(date).transpose()?,
+            plan_accepted_on: project.plan_accepted_on.as_deref().map(date).transpose()?,
+            plan_closed_on: project.plan_closed_on.as_deref().map(date).transpose()?,
+            kit_version: project.kit_version.clone(),
             inserted_at: timestamp(&project.inserted_at)?,
             updated_at: timestamp(&project.updated_at)?,
         })
@@ -454,6 +494,15 @@ impl ProjectImage {
             calendar_id: row.try_get("calendar_id")?,
             booking_url: row.try_get("booking_url")?,
             onboarding_jurisdiction: row.try_get("onboarding_jurisdiction")?,
+            legal_plan_id: row.try_get("legal_plan_id")?,
+            plan_member_id: row.try_get("plan_member_id")?,
+            benefit_code: row.try_get("benefit_code")?,
+            plan_matter_type: row.try_get("plan_matter_type")?,
+            plan_state: row.try_get("plan_state")?,
+            plan_assigned_on: row.try_get("plan_assigned_on")?,
+            plan_accepted_on: row.try_get("plan_accepted_on")?,
+            plan_closed_on: row.try_get("plan_closed_on")?,
+            kit_version: row.try_get("kit_version")?,
             inserted_at: row.try_get("inserted_at")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -758,6 +807,15 @@ async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirro
         .bind(&project.calendar_id)
         .bind(&project.booking_url)
         .bind(&project.onboarding_jurisdiction)
+        .bind(project.legal_plan_id)
+        .bind(&project.plan_member_id)
+        .bind(&project.benefit_code)
+        .bind(&project.plan_matter_type)
+        .bind(&project.plan_state)
+        .bind(project.plan_assigned_on)
+        .bind(project.plan_accepted_on)
+        .bind(project.plan_closed_on)
+        .bind(&project.kit_version)
         .bind(project.inserted_at)
         .bind(project.updated_at)
         .execute(&mut *tx)

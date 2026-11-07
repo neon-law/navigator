@@ -141,6 +141,24 @@ DEFINE FIELD OVERWRITE calendar_id ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE booking_url ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON project TYPE string;
 DEFINE FIELD OVERWRITE updated_at ON project TYPE string;
+-- Plan-panel economics (ENG-1269). Every field is optional: commercial
+-- litigation and pro bono matters leave all nine unset, which is also how
+-- reporting separates the Firm's three matter lines. `legal_plan_id` is a
+-- bare `uuid` pointer to the Firm's `legal_plan` row — that table is
+-- authored in PostgreSQL, so the foreign key lives there and SurrealDB
+-- carries the same UUID as a plain value (the `document_comment`
+-- communication_id precedent). `plan_matter_type` stays a plain string
+-- here; the closed vocabulary is enforced in Rust by
+-- `store::legal_plans::PlanMatterType` and by the PostgreSQL CHECK.
+DEFINE FIELD OVERWRITE legal_plan_id ON project TYPE option<uuid>;
+DEFINE FIELD OVERWRITE plan_member_id ON project TYPE option<string>;
+DEFINE FIELD OVERWRITE benefit_code ON project TYPE option<string>;
+DEFINE FIELD OVERWRITE plan_matter_type ON project TYPE option<string>;
+DEFINE FIELD OVERWRITE plan_state ON project TYPE option<string>;
+DEFINE FIELD OVERWRITE plan_assigned_on ON project TYPE option<string>;
+DEFINE FIELD OVERWRITE plan_accepted_on ON project TYPE option<string>;
+DEFINE FIELD OVERWRITE plan_closed_on ON project TYPE option<string>;
+DEFINE FIELD OVERWRITE kit_version ON project TYPE option<string>;
 DEFINE INDEX OVERWRITE project_code ON project FIELDS code UNIQUE;
 
 -- `xero_invoice`: local mirror of a Project's Xero invoices — many per

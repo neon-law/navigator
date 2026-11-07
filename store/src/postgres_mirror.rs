@@ -468,6 +468,8 @@ pub enum MirrorError {
     InboxAuthority,
     #[error("the SurrealDB source row carries an unreadable timestamp")]
     SourceTimestamp,
+    #[error("the SurrealDB source row carries an unreadable date")]
+    SourceDate,
     #[error("the SurrealDB source row in table {table} has {count} unmapped field(s); update its PostgreSQL import mapping")]
     UnmappedSourceFields { table: &'static str, count: usize },
     #[error("PostgreSQL is unavailable")]
@@ -482,9 +484,10 @@ impl MirrorError {
     fn retryable(&self) -> bool {
         match self {
             Self::Source | Self::Unavailable | Self::Timeout => true,
-            Self::InboxAuthority | Self::SourceTimestamp | Self::UnmappedSourceFields { .. } => {
-                false
-            }
+            Self::InboxAuthority
+            | Self::SourceTimestamp
+            | Self::SourceDate
+            | Self::UnmappedSourceFields { .. } => false,
             Self::Target(code) => {
                 code.starts_with("08")
                     || matches!(

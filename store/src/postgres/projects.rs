@@ -77,6 +77,24 @@ fn row(row: &sqlx::postgres::PgRow) -> Result<Project, ProjectError> {
         shared_notion_page_url: row.try_get("shared_notion_page_url")?,
         calendar_id: row.try_get("calendar_id")?,
         booking_url: row.try_get("booking_url")?,
+        // Plan-panel economics (ENG-1269). PG-native rows carry the dates
+        // as DATE; the SurrealDB-authored surface keeps ISO text, so this
+        // reader renders the same shape both lanes read.
+        legal_plan_id: row.try_get("legal_plan_id")?,
+        plan_member_id: row.try_get("plan_member_id")?,
+        benefit_code: row.try_get("benefit_code")?,
+        plan_matter_type: row.try_get("plan_matter_type")?,
+        plan_state: row.try_get("plan_state")?,
+        plan_assigned_on: row
+            .try_get::<Option<chrono::NaiveDate>, _>("plan_assigned_on")?
+            .map(|date| date.to_string()),
+        plan_accepted_on: row
+            .try_get::<Option<chrono::NaiveDate>, _>("plan_accepted_on")?
+            .map(|date| date.to_string()),
+        plan_closed_on: row
+            .try_get::<Option<chrono::NaiveDate>, _>("plan_closed_on")?
+            .map(|date| date.to_string()),
+        kit_version: row.try_get("kit_version")?,
         inserted_at: time("inserted_at")?,
         updated_at: time("updated_at")?,
     })

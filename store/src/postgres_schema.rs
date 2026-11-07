@@ -1481,6 +1481,10 @@ mod tests {
                 "20261107010000_create_plan_fee_schedule.sql",
                 include_str!("../postgres/migrations/20261107010000_create_plan_fee_schedule.sql"),
             ),
+            (
+                "20261107020000_add_project_plan_columns.sql",
+                include_str!("../postgres/migrations/20261107020000_add_project_plan_columns.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
