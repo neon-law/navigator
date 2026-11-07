@@ -495,12 +495,13 @@ const ELIGIBILITY_LABELS: &[(&str, &str)] = &[
     ("tiktok", "TikTok for Business"),
 ];
 
-/// The schedule split into what will go out (soonest first) and what went out
-/// (most recent first). It reads only the page's rows and publication states.
-#[must_use]
-pub fn schedule_entries(page: &BlogCatalogPage) -> (Vec<ScheduleEntry>, Vec<ScheduleEntry>) {
+/// Group website and provider outcomes for the publishing schedule.
+fn schedule_entries(
+    page: &BlogCatalogPage,
+) -> (Vec<ScheduleEntry>, Vec<ScheduleEntry>, Vec<ScheduleEntry>) {
     let mut upcoming = Vec::new();
     let mut sent = Vec::new();
+    let mut attention = Vec::new();
     for row in &page.rows {
         let entry = |when: &str, what: String, link: Option<String>| ScheduleEntry {
             when: when.to_string(),
@@ -520,23 +521,35 @@ pub fn schedule_entries(page: &BlogCatalogPage) -> (Vec<ScheduleEntry>, Vec<Sche
             .filter(|item| item.post_id == row.id)
         {
             let provider = provider_label(&publication.provider);
-            let what = match publication.state.as_str() {
-                "confirmed" => format!("Sent to {provider}"),
-                "sending" => format!("Sending to {provider}"),
-                "failed" => format!("Could not send to {provider}"),
-                "unknown" => format!("{provider}: outcome unknown, needs reconciliation"),
-                other => format!("{provider}: {other}"),
+            let (bucket, what, link) = match publication.state.as_str() {
+                "confirmed" => {
+                    let what = if publication.permalink.is_some() {
+                        format!("Sent to {provider}")
+                    } else {
+                        format!("Sent to {provider} · Link pending")
+                    };
+                    (&mut sent, what, publication.permalink.clone())
+                }
+                "sending" => (&mut upcoming, format!("Sending to {provider}"), None),
+                "failed" => (
+                    &mut attention,
+                    format!("Could not send to {provider}"),
+                    None,
+                ),
+                "unknown" => (
+                    &mut attention,
+                    format!("{provider}: outcome unknown, needs reconciliation"),
+                    None,
+                ),
+                other => (&mut attention, format!("{provider}: {other}"), None),
             };
-            sent.push(entry(
-                &publication.updated_at,
-                what,
-                publication.permalink.clone(),
-            ));
+            bucket.push(entry(&publication.updated_at, what, link));
         }
     }
     upcoming.sort_by(|a, b| a.when.cmp(&b.when).then_with(|| a.title.cmp(&b.title)));
     sent.sort_by(|a, b| b.when.cmp(&a.when).then_with(|| a.title.cmp(&b.title)));
-    (upcoming, sent)
+    attention.sort_by(|a, b| b.when.cmp(&a.when).then_with(|| a.title.cmp(&b.title)));
+    (upcoming, sent, attention)
 }
 
 fn schedule_table(
@@ -569,8 +582,7 @@ fn schedule_table(
     }
 }
 
-/// The publishing schedule shown at the top of the social pages: what will go
-/// out, and what went out. Sending itself is a durable workflow; this only
+/// The publishing schedule shown at the top of the social pages. Sending itself is a durable workflow; this only
 /// reads the outcome tables.
 fn schedule_section(page: &BlogCatalogPage) -> Element {
     rsx! {
@@ -594,11 +606,12 @@ fn calendar_schedule_section(page: &BlogCatalogPage, base: &str) -> Element {
 }
 
 fn schedule_tables(page: &BlogCatalogPage) -> Element {
-    let (upcoming, sent) = schedule_entries(page);
+    let (upcoming, sent, attention) = schedule_entries(page);
     rsx! {
         p { "Times are UTC." }
         {schedule_table("Going out", upcoming, "Nothing is scheduled.")}
         {schedule_table("Went out", sent, "Nothing has gone out yet.")}
+        {schedule_table("Needs attention", attention, "No deliveries need attention.")}
     }
 }
 
@@ -797,7 +810,10 @@ pub fn schedule_refusal_html(
             }
         }
     });
-    format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Review Post schedule</title><link rel=\"stylesheet\" href=\"{}\"></head><body>{content}</body></html>", crate::components::THEME_STYLESHEET_HREF)
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Review Post schedule</title><link rel=\"stylesheet\" href=\"{}\"></head><body>{content}</body></html>",
+        crate::components::THEME_STYLESHEET_HREF
+    )
 }
 
 fn schedule_post_form(page: &BlogCatalogPage) -> Element {
@@ -1378,15 +1394,45 @@ mod tests {
     }
 
     #[test]
-    fn the_schedule_orders_upcoming_soonest_first_and_sent_most_recent_first() {
-        let (upcoming, sent) = schedule_entries(&page());
-        assert_eq!(upcoming.len(), 1);
-        assert_eq!(upcoming[0].title, "A welcome post");
-        assert_eq!(upcoming[0].what, "Scheduled");
-        let whats: Vec<&str> = sent.iter().map(|entry| entry.what.as_str()).collect();
-        assert_eq!(
-            whats,
-            vec!["Could not send to Instagram", "Sent to Facebook"]
+    fn the_schedule_separates_delivery_from_processing_and_attention() {
+        let mut page = page();
+        for (provider, state) in [
+            ("youtube", "confirmed"),
+            ("threads", "sending"),
+            ("x", "unknown"),
+        ] {
+            page.publications.push(SocialPublicationRow {
+                post_id: "post-1".into(),
+                provider: provider.into(),
+                state: state.into(),
+                provider_post_id: None,
+                permalink: None,
+                last_error: None,
+                updated_at: "2026-10-03T16:00:00+00:00".into(),
+            });
+        }
+
+        let html = dioxus_ssr::render_element(schedule_tables(&page));
+        let table = |caption: &str| {
+            let start = html.find(caption).expect("schedule caption");
+            html[start..].split("</table>").next().unwrap()
+        };
+        let upcoming = table("Going out");
+        let sent = table("Went out");
+        let attention = table("Needs attention");
+        assert!(upcoming.contains("Scheduled"), "{upcoming}");
+        assert!(upcoming.contains("Sending to Threads"), "{upcoming}");
+        assert!(sent.contains("Sent to Facebook"), "{sent}");
+        assert!(sent.contains("Sent to YouTube · Link pending"), "{sent}");
+        assert!(!sent.contains("Could not send"), "{sent}");
+        assert!(!sent.contains("outcome unknown"), "{sent}");
+        assert!(
+            attention.contains("Could not send to Instagram"),
+            "{attention}"
+        );
+        assert!(
+            attention.contains("X: outcome unknown, needs reconciliation"),
+            "{attention}"
         );
     }
 
