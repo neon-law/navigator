@@ -867,14 +867,16 @@ async fn select_inbox_row_in_pane(c: &Client, row_link: &str) {
 }
 
 /// Wait until the Dioxus client wasm has downloaded on this document so a
-/// row click can `preventDefault` instead of following the SSR anchor.
+/// row click can `preventDefault` instead of following the SSR anchor. A
+/// release `dx build` content-hashes the bundle (`webapp_bg-dxh<hash>.wasm`),
+/// so match the stem and extension rather than the debug build's bare name.
 async fn wait_for_inbox_client(c: &Client) {
     let deadline = Instant::now() + Duration::from_secs(45);
     loop {
         let loaded = c
             .execute(
                 "return performance.getEntriesByType('resource').some((r) => \
-                 typeof r.name === 'string' && r.name.includes('webapp_bg.wasm') \
+                 typeof r.name === 'string' && /\\/webapp_bg[^/]*\\.wasm(\\?|$)/.test(r.name) \
                  && r.responseEnd > 0);",
                 vec![],
             )

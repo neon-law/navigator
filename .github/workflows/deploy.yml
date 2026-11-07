@@ -1366,7 +1366,7 @@ jobs:
           step: "install cargo-nextest"
       - name: install cargo-nextest
         timeout-minutes: 90
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with:
           # Pin the runner version: the browser gate now depends on
           # nextest-specific retry, JUnit-path, and --no-capture behavior, so a
@@ -2047,7 +2047,7 @@ jobs:
           stage: "publish-service ${{ matrix.image }}"
           step: "install cosign"
       - name: install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -2377,7 +2377,7 @@ jobs:
           stage: "publish-triggers ${{ matrix.image }}"
           step: "install cosign"
       - name: install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -3777,7 +3777,7 @@ jobs:
               >/dev/null && jq -r '.["containerimage.digest"]' /tmp/cli-image-metadata.json)"
           test -n "${digest}"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - name: sign and record CLI image
         env:
           IMAGE_REF: ${{ env.NAVIGATOR_IMAGE_REGISTRY }}/navigator-cli

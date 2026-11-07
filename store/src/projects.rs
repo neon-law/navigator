@@ -10,6 +10,7 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::persons::Role;
+use crate::postgres::PostgresDb;
 use crate::postgres_mirror::MirrorKey;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
@@ -61,6 +62,43 @@ pub struct Project {
     /// for onboarding prose, deliberately editable, and read live at render
     /// time by a Clause input bound to `project.onboarding_jurisdiction`.
     pub onboarding_jurisdiction: Option<String>,
+    /// The legal-plan panel economics this matter carries (ENG-1269). All
+    /// nine are optional: commercial-litigation and pro-bono matters leave
+    /// every one unset, which is also how reporting separates the Firm's
+    /// three matter lines.
+    ///
+    /// [`Self::legal_plan_id`] is a bare `uuid` pointer to the Firm's
+    /// [`crate::legal_plans::LegalPlan`] row — that table is authored in
+    /// PostgreSQL, so the foreign key lives there and the SurrealDB source
+    /// carries the same UUID as a plain value.
+    pub legal_plan_id: Option<Uuid>,
+    /// The plan's member identifier for this matter, verbatim from the
+    /// assignment.
+    pub plan_member_id: Option<String>,
+    /// The benefit code the plan's assignment named, verbatim.
+    pub benefit_code: Option<String>,
+    /// Which kind of plan matter this is — a closed vocabulary shared with
+    /// `plan_fee_schedule.matter_type` and the assumption keys, enforced by
+    /// the PostgreSQL CHECK and [`crate::legal_plans::PlanMatterType`] at
+    /// the write site. A plain validated `String` here, like [`Self::brand`],
+    /// so a legacy row's value always reads back.
+    pub plan_matter_type: Option<String>,
+    /// The two-letter state code the plan matter answers to (`ny`, `nv`,
+    /// `ca`, `wa`), lowercase, like `plan_fee_schedule.state`.
+    pub plan_state: Option<String>,
+    /// When the plan's assignment email landed (ISO `YYYY-MM-DD`). The
+    /// acceptance clock starts here.
+    pub plan_assigned_on: Option<String>,
+    /// When the attorney accepted the staged matter (ISO `YYYY-MM-DD`).
+    /// The attestation click and the turnaround clock start together.
+    pub plan_accepted_on: Option<String>,
+    /// When the matter closed (ISO `YYYY-MM-DD`), for plan turnaround
+    /// reporting.
+    pub plan_closed_on: Option<String>,
+    /// Which kit version this matter applied (ENG-1271), recorded when a
+    /// kit is applied so the digest's template-effect query can compare
+    /// cohorts.
+    pub kit_version: Option<String>,
     pub description: Option<String>,
     pub drive_folder_id: Option<String>,
     /// The full URL of the one source repository holding this Project's
@@ -152,6 +190,18 @@ struct ProjectRow {
     /// Optional because rows written before the field existed keep no value;
     /// reads collapse the absence to `None`.
     onboarding_jurisdiction: Option<String>,
+    /// Plan-panel economics (ENG-1269). Bare `uuid` for the plan pointer;
+    /// everything else plain text. Optional for the same reason as
+    /// `onboarding_jurisdiction`.
+    legal_plan_id: Option<Uuid>,
+    plan_member_id: Option<String>,
+    benefit_code: Option<String>,
+    plan_matter_type: Option<String>,
+    plan_state: Option<String>,
+    plan_assigned_on: Option<String>,
+    plan_accepted_on: Option<String>,
+    plan_closed_on: Option<String>,
+    kit_version: Option<String>,
     inserted_at: String,
     updated_at: String,
 }
@@ -188,6 +238,15 @@ impl ProjectRow {
             shared_notion_page_url: self.shared_notion_page_url,
             calendar_id: self.calendar_id,
             booking_url: self.booking_url,
+            legal_plan_id: self.legal_plan_id,
+            plan_member_id: self.plan_member_id,
+            benefit_code: self.benefit_code,
+            plan_matter_type: self.plan_matter_type,
+            plan_state: self.plan_state,
+            plan_assigned_on: self.plan_assigned_on,
+            plan_accepted_on: self.plan_accepted_on,
+            plan_closed_on: self.plan_closed_on,
+            kit_version: self.kit_version,
             inserted_at: self.inserted_at,
             updated_at: self.updated_at,
         })
@@ -206,6 +265,9 @@ const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id,
                               internal_slack_channel_id, \
                               private_notion_page_url, shared_notion_page_url, \
                               calendar_id, booking_url, \
+                              legal_plan_id, plan_member_id, benefit_code, \
+                              plan_matter_type, plan_state, plan_assigned_on, \
+                              plan_accepted_on, plan_closed_on, kit_version, \
                               inserted_at, updated_at";
 
 /// Errors from the SurrealDB Project read seam.
@@ -1302,6 +1364,11 @@ pub async fn restore_archived(
                  private_notion_page_url = $private_notion_page_url, \
                  shared_notion_page_url = $shared_notion_page_url, \
                  calendar_id = $calendar_id, booking_url = $booking_url, \
+                 legal_plan_id = $legal_plan_id, plan_member_id = $plan_member_id, \
+                 benefit_code = $benefit_code, plan_matter_type = $plan_matter_type, \
+                 plan_state = $plan_state, plan_assigned_on = $plan_assigned_on, \
+                 plan_accepted_on = $plan_accepted_on, plan_closed_on = $plan_closed_on, \
+                 kit_version = $kit_version, \
                  inserted_at = $inserted_at, updated_at = $updated_at RETURN {PROJECT_SELECT}"
             ))
             .bind(("id", record_id(PROJECT_TABLE, project.id)))
@@ -1349,6 +1416,15 @@ pub async fn restore_archived(
             ))
             .bind(("calendar_id", project.calendar_id.clone()))
             .bind(("booking_url", project.booking_url.clone()))
+            .bind(("legal_plan_id", project.legal_plan_id))
+            .bind(("plan_member_id", project.plan_member_id.clone()))
+            .bind(("benefit_code", project.benefit_code.clone()))
+            .bind(("plan_matter_type", project.plan_matter_type.clone()))
+            .bind(("plan_state", project.plan_state.clone()))
+            .bind(("plan_assigned_on", project.plan_assigned_on.clone()))
+            .bind(("plan_accepted_on", project.plan_accepted_on.clone()))
+            .bind(("plan_closed_on", project.plan_closed_on.clone()))
+            .bind(("kit_version", project.kit_version.clone()))
             .bind(("inserted_at", project.inserted_at.clone()))
             .bind(("updated_at", project.updated_at.clone()))
     })
@@ -2394,6 +2470,137 @@ pub async fn set_jurisdiction(
             "jurisdiction_id",
             jurisdiction_id.map(|id| record_id(crate::jurisdictions::TABLE, id)),
         ))
+        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    let updated: Option<ProjectRow> = response
+        .take(0)
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+}
+
+/// The legal-plan panel columns staged onto a plan matter (ENG-1269). The
+/// intake path (ENG-1270) sets them when the attorney accepts a staged
+/// matter; every field is optional and a `None` clears the column. The nine
+/// land in one patch so a staged matter never reads with half its plan
+/// identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanColumns {
+    /// The Firm's `legal_plan` row this matter works under. A bare UUID:
+    /// the table is authored in PostgreSQL, and the SurrealDB source keeps
+    /// the value plain.
+    pub legal_plan_id: Option<Uuid>,
+    pub plan_member_id: Option<String>,
+    pub benefit_code: Option<String>,
+    /// A word from the closed [`crate::legal_plans::PlanMatterType`]
+    /// vocabulary — `as_str()`, so `plan_fee_schedule` and the assumption
+    /// keys match on it.
+    pub plan_matter_type: Option<String>,
+    /// A lowercase jurisdiction code, as [`plan_fee_schedule.state`] holds.
+    ///
+    /// [`plan_fee_schedule.state`]: crate::legal_plans::PlanFeeSchedule
+    pub plan_state: Option<String>,
+    /// ISO `YYYY-MM-DD` (the mirror's DATE parse rule).
+    pub plan_assigned_on: Option<String>,
+    pub plan_accepted_on: Option<String>,
+    pub plan_closed_on: Option<String>,
+    /// Which kit version this matter applied (ENG-1271).
+    pub kit_version: Option<String>,
+}
+
+const PLAN_MATTER_TYPE_INVALID: &str =
+    "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance";
+const PLAN_STATE_INVALID: &str = "plan_state is not a lowercase jurisdiction code";
+const PLAN_DATE_INVALID: &str = "plan date is not an ISO YYYY-MM-DD date";
+const PLAN_UNKNOWN: &str = "legal_plan_id does not name a legal plan";
+const PLAN_FIRM_MISMATCH: &str = "legal_plan_id names a plan of another firm";
+
+/// Validates one plan date. ISO `YYYY-MM-DD` only — the same shape the
+/// PostgreSQL DATE mirror parses (`[super::postgres_mirror]::date`), so a
+/// value accepted here also mirrors.
+fn valid_plan_date(text: &str) -> bool {
+    chrono::NaiveDate::parse_from_str(text, "%F")
+        .is_ok_and(|date| date.format("%F").to_string() == text)
+}
+
+/// Writes the legal-plan panel columns onto one Project in one patch
+/// (ENG-1269). Passing `None` for a field clears it, so the same setter
+/// stages an assignment, records acceptance, and records the applied kit.
+/// A plan id must name one of the Firm's own `legal_plan` rows; the matter
+/// type and state follow the same closed rules `plan_fee_schedule` enforces.
+///
+/// # Errors
+/// [`ProjectCommandError::Invalid`] for a matter type outside the closed
+/// vocabulary, a malformed state or date, or a plan of another Firm, and
+/// propagates a database error.
+///
+/// [`ProjectCommandError::Invalid`] names the field; the PostgreSQL foreign
+/// key is the backstop for a writer that skips this accessor.
+pub async fn set_plan_columns(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    project_id: Uuid,
+    columns: &PlanColumns,
+) -> Result<Option<Project>, ProjectCommandError> {
+    if let Some(matter_type) = &columns.plan_matter_type {
+        if crate::legal_plans::PlanMatterType::parse(matter_type).is_err() {
+            return Err(ProjectCommandError::Invalid(PLAN_MATTER_TYPE_INVALID));
+        }
+    }
+    if let Some(state) = &columns.plan_state {
+        if !crate::legal_plans::valid_state_code(state) {
+            return Err(ProjectCommandError::Invalid(PLAN_STATE_INVALID));
+        }
+    }
+    for text in [
+        &columns.plan_assigned_on,
+        &columns.plan_accepted_on,
+        &columns.plan_closed_on,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !valid_plan_date(text) {
+            return Err(ProjectCommandError::Invalid(PLAN_DATE_INVALID));
+        }
+    }
+    let Some(project) = find_by_id(surreal, project_id)
+        .await
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    if let Some(plan_id) = columns.legal_plan_id {
+        let plan_firm = crate::legal_plans::firm_of(pg, plan_id)
+            .await
+            .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+        match plan_firm {
+            Some(firm_id) if project.firm_id == Some(firm_id) => {}
+            Some(_) => return Err(ProjectCommandError::Invalid(PLAN_FIRM_MISMATCH)),
+            None => return Err(ProjectCommandError::Invalid(PLAN_UNKNOWN)),
+        }
+    }
+    let mut response = surreal
+        .query(format!(
+            "UPDATE $id SET legal_plan_id = $legal_plan_id, \
+             plan_member_id = $plan_member_id, benefit_code = $benefit_code, \
+             plan_matter_type = $plan_matter_type, plan_state = $plan_state, \
+             plan_assigned_on = $plan_assigned_on, \
+             plan_accepted_on = $plan_accepted_on, \
+             plan_closed_on = $plan_closed_on, kit_version = $kit_version, \
+             updated_at = $updated_at RETURN {PROJECT_SELECT}"
+        ))
+        .bind(("id", record_id(PROJECT_TABLE, project_id)))
+        .bind(("legal_plan_id", columns.legal_plan_id))
+        .bind(("plan_member_id", columns.plan_member_id.clone()))
+        .bind(("benefit_code", columns.benefit_code.clone()))
+        .bind(("plan_matter_type", columns.plan_matter_type.clone()))
+        .bind(("plan_state", columns.plan_state.clone()))
+        .bind(("plan_assigned_on", columns.plan_assigned_on.clone()))
+        .bind(("plan_accepted_on", columns.plan_accepted_on.clone()))
+        .bind(("plan_closed_on", columns.plan_closed_on.clone()))
+        .bind(("kit_version", columns.kit_version.clone()))
         .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
         .await
         .and_then(surrealdb::IndexedResults::check)

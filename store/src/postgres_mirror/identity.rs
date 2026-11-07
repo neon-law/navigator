@@ -365,6 +365,15 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    // Keep the row writer's provider/store futures off callers' stack frames.
+    Box::pin(mirror_inner(surreal, pg, key)).await
+}
+
+async fn mirror_inner(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    key: &MirrorKey,
+) -> Result<Mirrored, MirrorError> {
     match key {
         MirrorKey::Jurisdiction(id) => mirror_jurisdiction(surreal, pg, *id).await,
         MirrorKey::EntityType(id) => mirror_entity_type(surreal, pg, *id).await,
@@ -425,7 +434,8 @@ const PERSON_PRESENT: &str = "SELECT EXISTS (SELECT 1 FROM person WHERE id = $1)
 
 /// Whether PostgreSQL holds the row one of the `*_PRESENT` queries names.
 async fn present(pg: &PostgresDb, sql: &'static str, id: Uuid) -> Result<bool, MirrorError> {
-    Ok(sqlx::query_scalar(sql).bind(id).fetch_one(&pg.0).await?)
+    // Keep the SQLx row future off the mirror walk's stack frames.
+    Ok(Box::pin(sqlx::query_scalar(sql).bind(id).fetch_one(&pg.0)).await?)
 }
 
 async fn delete(pg: &PostgresDb, sql: &'static str, id: Uuid) -> Result<Mirrored, MirrorError> {

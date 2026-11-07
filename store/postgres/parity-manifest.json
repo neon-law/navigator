@@ -303,6 +303,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "legal_plan",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "mail_signature",
       "missing_column": null,
       "missing_table": null,
@@ -367,6 +374,13 @@
     {
       "extra_column": null,
       "extra_table": "outcome_estimate",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "plan_fee_schedule",
       "missing_column": null,
       "missing_table": null,
       "table": null
@@ -1591,6 +1605,7 @@
         "youtube_caption": "option<string>"
       },
       "project": {
+        "benefit_code": "option<string>",
         "booking_url": "option<string>",
         "brand": "option<string>",
         "calendar_id": "option<string>",
@@ -1609,8 +1624,16 @@
         "internal_slack_channel_id": "option<string>",
         "internal_slack_channel_url": "option<string>",
         "jurisdiction_id": "option<record<jurisdiction>>",
+        "kit_version": "option<string>",
+        "legal_plan_id": "option<uuid>",
         "name": "string",
         "onboarding_jurisdiction": "option<string>",
+        "plan_accepted_on": "option<string>",
+        "plan_assigned_on": "option<string>",
+        "plan_closed_on": "option<string>",
+        "plan_matter_type": "option<string>",
+        "plan_member_id": "option<string>",
+        "plan_state": "option<string>",
         "private_notion_page_url": "option<string>",
         "repository_url": "option<string>",
         "shared_notion_page_url": "option<string>",
@@ -1921,7 +1944,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 159,
+    "table_count": 161,
     "tables": {
       "address": {
         "columns": {
@@ -3685,6 +3708,29 @@
         "name": "lead_consent",
         "references": []
       },
+      "legal_plan": {
+        "columns": {
+          "acceptance_sla_hours": "INTEGER",
+          "contact": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "name": "TEXT",
+          "portal": "TEXT",
+          "reporting_requirements": "TEXT",
+          "turnaround_sla_days": "INTEGER"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "legal_plan",
+        "references": [
+          "firm"
+        ]
+      },
       "letter": {
         "columns": {
           "direction": "TEXT",
@@ -4536,6 +4582,36 @@
           "project"
         ]
       },
+      "plan_fee_schedule": {
+        "columns": {
+          "covered_benefit": "TEXT",
+          "effective_on": "DATE",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "legal_plan_id": "UUID",
+          "matter_type": "TEXT",
+          "plan_fee_cents": "INTEGER",
+          "state": "TEXT",
+          "supplemental_flat_cents": "INTEGER",
+          "supplemental_hourly_cents": "INTEGER"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "legal_plan_id",
+            "legal_plan"
+          ]
+        ],
+        "name": "plan_fee_schedule",
+        "references": [
+          "firm",
+          "legal_plan"
+        ]
+      },
       "playbook": {
         "columns": {
           "active": "BOOLEAN",
@@ -4595,6 +4671,7 @@
       },
       "project": {
         "columns": {
+          "benefit_code": "TEXT",
           "booking_url": "TEXT",
           "brand": "TEXT",
           "calendar_id": "TEXT",
@@ -4613,8 +4690,16 @@
           "internal_slack_channel_id": "TEXT",
           "internal_slack_channel_url": "TEXT",
           "jurisdiction_id": "UUID",
+          "kit_version": "TEXT",
+          "legal_plan_id": "UUID",
           "name": "TEXT",
           "onboarding_jurisdiction": "TEXT",
+          "plan_accepted_on": "DATE",
+          "plan_assigned_on": "DATE",
+          "plan_closed_on": "DATE",
+          "plan_matter_type": "TEXT",
+          "plan_member_id": "TEXT",
+          "plan_state": "TEXT",
           "private_notion_page_url": "TEXT",
           "repository_url": "TEXT",
           "shared_notion_page_url": "TEXT",
@@ -4633,13 +4718,18 @@
           [
             "jurisdiction_id",
             "jurisdiction"
+          ],
+          [
+            "legal_plan_id",
+            "legal_plan"
           ]
         ],
         "name": "project",
         "references": [
           "entity",
           "firm",
-          "jurisdiction"
+          "jurisdiction",
+          "legal_plan"
         ]
       },
       "project_archive_generation": {
@@ -5607,6 +5697,7 @@
           "project_id": "UUID",
           "rate_cents_per_hour": "INTEGER",
           "source": "TEXT",
+          "stage": "UUID",
           "updated_at": "TIMESTAMPTZ",
           "written_off_reason": "TEXT",
           "xero_invoice_id": "TEXT"
@@ -5615,12 +5706,17 @@
           [
             "project_id",
             "project"
+          ],
+          [
+            "stage",
+            "stage_definition"
           ]
         ],
         "name": "time_entry",
         "references": [
           "person_project_role",
-          "project"
+          "project",
+          "stage_definition"
         ]
       },
       "time_entry_events": {

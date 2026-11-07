@@ -4153,6 +4153,179 @@ CREATE TABLE IF NOT EXISTS mail_signature (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Migration: 20261107000000_create_legal_plan.sql
+-- A Legal Plan: a panel program the Firm performs work for (ARAG,
+-- LegalShield, …), one row per plan the Firm itself works. The vocabulary is
+-- Firm data — two Firms on one deployment each hold their own ARAG row with
+-- their own contact and service levels — never shared reference data
+-- (docs/glossary/legal-plan.md).
+CREATE TABLE legal_plan (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    firm_id UUID NOT NULL REFERENCES firm(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    contact TEXT,
+    portal TEXT,
+    acceptance_sla_hours INTEGER NOT NULL CHECK (acceptance_sla_hours > 0),
+    turnaround_sla_days INTEGER NOT NULL CHECK (turnaround_sla_days > 0),
+    reporting_requirements TEXT,
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (firm_id, name)
+);
+CREATE INDEX legal_plan_firm ON legal_plan (firm_id);
+
+-- Migration: 20261107010000_create_plan_fee_schedule.sql
+-- A Legal Plan's fee schedule: what the plan pays for one covered benefit.
+-- Rows are dated by effective_on and only ever added to; resolution takes
+-- the latest row effective on or before the date asked, the attorney_rate
+-- rule. Percentages never appear here — supplemental amounts are integer
+-- cents, never floats. `matter_type` is a closed vocabulary shared with
+-- project.plan_matter_type and the firm_assumption keys (ENG-1264);
+-- `state` is a seeded jurisdiction code ('ny', 'nv', 'ca', 'wa'), the same
+-- shape onboarding_jurisdiction stores.
+CREATE TABLE plan_fee_schedule (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    firm_id UUID NOT NULL REFERENCES firm(id) ON DELETE CASCADE,
+    legal_plan_id UUID NOT NULL REFERENCES legal_plan(id),
+    matter_type TEXT NOT NULL CHECK (matter_type IN ('document_review', 'letter', 'uncontested_divorce', 'court_appearance')),
+    state TEXT NOT NULL,
+    covered_benefit TEXT NOT NULL,
+    plan_fee_cents INTEGER NOT NULL CHECK (plan_fee_cents >= 0),
+    supplemental_hourly_cents INTEGER CHECK (supplemental_hourly_cents IS NULL OR supplemental_hourly_cents >= 0),
+    supplemental_flat_cents INTEGER CHECK (supplemental_flat_cents IS NULL OR supplemental_flat_cents >= 0),
+    effective_on DATE NOT NULL,
+    inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (firm_id, legal_plan_id, matter_type, state, effective_on)
+);
+CREATE INDEX plan_fee_schedule_lookup ON plan_fee_schedule (legal_plan_id, matter_type, state, effective_on DESC);
+
+-- A schedule row must belong to a Legal Plan of the same Firm; joining the
+-- plan's firm_id proves it the way a Contingency Term tier proves its stage.
+CREATE FUNCTION enforce_plan_fee_schedule_firm() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM legal_plan p
+        WHERE p.id = NEW.legal_plan_id AND p.firm_id = NEW.firm_id
+    ) THEN
+        RAISE EXCEPTION 'A Plan Fee Schedule row must name a Legal Plan of the same Firm';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER plan_fee_schedule_firm
+    BEFORE INSERT ON plan_fee_schedule
+    FOR EACH ROW EXECUTE FUNCTION enforce_plan_fee_schedule_firm();
+
+-- History: a change is a new effective_on, never an edit or a removal.
+CREATE FUNCTION reject_plan_fee_schedule_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Plan Fee Schedule rows are dated history; record a new effective_on instead';
+END;
+$$;
+CREATE TRIGGER plan_fee_schedule_immutable
+    BEFORE UPDATE OR DELETE ON plan_fee_schedule
+    FOR EACH ROW EXECUTE FUNCTION reject_plan_fee_schedule_mutation();
+CREATE TRIGGER plan_fee_schedule_no_truncate
+    BEFORE TRUNCATE ON plan_fee_schedule
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_plan_fee_schedule_mutation();
+
+-- Migration: 20261107020000_add_project_plan_columns.sql
+-- The legal-plan panel economics a plan matter carries (ENG-1269). Every
+-- column is NULL until a plan assignment stages it, which is also how
+-- reporting separates the Firm's three matter lines: commercial litigation
+-- and pro bono leave all nine unset.
+--
+-- `legal_plan_id` points into the Firm's own `legal_plan` vocabulary. The
+-- accessor ([`store::projects`]`::set_plan_columns`) proves the plan belongs
+-- to the Project's Firm before writing; the foreign key is the backstop for
+-- a writer that skips the accessor, the same role `contingency_term`'s
+-- trigger plays for its tiers. The other plan columns are plain values by
+-- design: a legacy or mirrored row always reads back.
+--
+-- `plan_matter_type` shares the closed vocabulary `plan_fee_schedule`
+-- enforces and the assumption keys name, CHECKed here for any writer.
+-- `plan_state` is a lowercase jurisdiction code as `plan_fee_schedule.state`
+-- holds it. The three plan dates are DATE, and `kit_version` records the kit
+-- version a matter applied (ENG-1271) for the digest's template-effect
+-- comparison.
+ALTER TABLE project ADD COLUMN legal_plan_id UUID REFERENCES legal_plan (id);
+ALTER TABLE project ADD COLUMN plan_member_id TEXT;
+ALTER TABLE project ADD COLUMN benefit_code TEXT;
+ALTER TABLE project ADD COLUMN plan_matter_type TEXT CHECK (plan_matter_type IN ('document_review', 'letter', 'uncontested_divorce', 'court_appearance'));
+ALTER TABLE project ADD COLUMN plan_state TEXT;
+ALTER TABLE project ADD COLUMN plan_assigned_on DATE;
+ALTER TABLE project ADD COLUMN plan_accepted_on DATE;
+ALTER TABLE project ADD COLUMN plan_closed_on DATE;
+ALTER TABLE project ADD COLUMN kit_version TEXT;
+
+-- Migration: 20261107030000_add_time_entry_stage.sql
+-- The Firm's stage vocabulary on captured time (ENG-1269): a Time Entry
+-- carries which canonical step the minutes belong to, so plan reporting can
+-- show where an hour went. Nullable — a captured entry keeps its minutes
+-- while the nightly project update nags for the missing stage.
+--
+-- The stage comes from the Firm's own `stage_definition` vocabulary, never a
+-- hardcoded enum, and it must be the matter Firm's vocabulary: the trigger
+-- proves the same-Firm join the way `contingency_term` proves a tier's stage.
+
+ALTER TABLE time_entry ADD COLUMN stage UUID REFERENCES stage_definition (id);
+
+-- Reclassification is visible: the audit event vocabulary learns a kind, and
+-- the update audit below journals every change. The constraint and the audit
+-- allowlist extend the billing batch's list — the reservation kinds stay —
+-- and the constraint is re-added under its auto-assigned name with the
+-- extended list.
+ALTER TABLE time_entry_events DROP CONSTRAINT time_entry_events_event_kind_check;
+ALTER TABLE time_entry_events ADD CONSTRAINT time_entry_events_event_kind_check CHECK (event_kind IN ('created', 'reserved', 'unreserved', 'invoiced', 'written_off', 'stage_changed'));
+
+-- A stage must belong to the entry's Project's own Firm.
+CREATE FUNCTION enforce_time_entry_stage_firm() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    project_firm UUID;
+BEGIN
+    IF NEW.stage IS NULL THEN
+        RETURN NEW;
+    END IF;
+    SELECT firm_id INTO project_firm FROM project WHERE id = NEW.project_id;
+    IF NOT EXISTS (
+        SELECT 1 FROM stage_definition s
+        WHERE s.id = NEW.stage AND s.firm_id = project_firm
+    ) THEN
+        RAISE EXCEPTION 'A time entry stage must come from the matter Firm''s own vocabulary';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER time_entry_stage_firm
+    BEFORE INSERT OR UPDATE ON time_entry
+    FOR EACH ROW EXECUTE FUNCTION enforce_time_entry_stage_firm();
+
+-- The update audit extends to reclassification: `stage_changed` journals the
+-- before and after states like an invoice or write-off, and refuses an event
+-- that would record no change at all. Existing update rules are unchanged.
+CREATE OR REPLACE FUNCTION enforce_time_entry_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    actor_id UUID;
+    event_kind_value TEXT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Time entries are retained; a write-off, never a delete';
+    END IF;
+    actor_id := nullif(current_setting('navigator.time_entry_actor', true), '')::UUID;
+    event_kind_value := current_setting('navigator.time_entry_event_kind', true);
+    IF actor_id IS NULL
+        OR event_kind_value NOT IN ('reserved', 'unreserved', 'invoiced', 'written_off', 'stage_changed')
+    THEN
+        RAISE EXCEPTION 'Time entry updates require an actor and audit event';
+    END IF;
+    IF event_kind_value = 'stage_changed' AND OLD.stage IS NOT DISTINCT FROM NEW.stage THEN
+        RAISE EXCEPTION 'A stage_changed audit event requires a stage change';
+    END IF;
+    INSERT INTO time_entry_events(id,time_entry_id,actor_person_id,event_kind,before_state,after_state,occurred_at)
+    VALUES(gen_random_uuid(),NEW.id,actor_id,event_kind_value,to_jsonb(OLD),to_jsonb(NEW),now());
+    RETURN NEW;
+END;
+$$;
+
 -- Migration: 20261107120000_person_directory_list_indexes.sql
 -- The People directory reads one keyset page at a time (store::listing):
 -- each sort walks a `(field, id)` index from the cursor, and the substring

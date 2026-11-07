@@ -845,7 +845,9 @@ async fn directory_pages_walk_every_row_once_in_both_directions() {
     let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
     let surreal = crate::test_support::mem_surreal().await;
     let mut created = Vec::new();
-    for name in ["Row 1", "Row 2", "Row 2", "Row 2", "Row 3", "Row 4", "Row 5"] {
+    for name in [
+        "Row 1", "Row 2", "Row 2", "Row 2", "Row 3", "Row 4", "Row 5",
+    ] {
         let input = NewPerson::new(name, format!("{}@example.test", Uuid::now_v7()));
         created.push(super::create(&pg, &surreal, &input).await.unwrap());
     }

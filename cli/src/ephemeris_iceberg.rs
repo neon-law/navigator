@@ -255,9 +255,9 @@ pub(super) async fn verify(
     location: &str,
     reference_id: &str,
     expected: &RecordBatch,
-) -> Result<()> {
-    let receipt: LayoutReceipt =
-        serde_json::from_slice(&read_bounded(&dir.join(RECEIPT), MAX_MANIFEST_BYTES)?)?;
+) -> Result<String> {
+    let bytes = read_bounded(&dir.join(RECEIPT), MAX_MANIFEST_BYTES)?;
+    let receipt: LayoutReceipt = serde_json::from_slice(&bytes)?;
     ensure!(
         receipt.artifact_id == artifact_id(&receipt.content)?,
         "Iceberg artifact identity differs"
@@ -314,7 +314,8 @@ pub(super) async fn verify(
         .stream()
         .try_collect()
         .await?;
-    compare(&batches, expected)
+    compare(&batches, expected)?;
+    Ok(digest(&bytes))
 }
 
 fn validate_metadata(

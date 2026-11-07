@@ -225,7 +225,7 @@ async fn seed_cost(
     confirm: bool,
 ) -> store::project_costs::ProjectCost {
     let receipt_document_id = seed_receipt_asset(surreal, project_id).await;
-    let cost = store::project_costs::create(
+    let cost = Box::pin(store::project_costs::create(
         surreal,
         pg,
         project_id,
@@ -241,7 +241,7 @@ async fn seed_cost(
             idempotency_key: format!("receipt:{}", Uuid::now_v7()),
             source_reference: store::project_costs::mercury_source_reference(Uuid::now_v7()),
         },
-    )
+    ))
     .await
     .unwrap();
     if confirm {
@@ -434,7 +434,7 @@ async fn the_hourly_path_bills_time_and_confirmed_costs_once() {
     let Some(_) = invoice_store().await else {
         return;
     };
-    let fx = build_fixture().await;
+    let fx = Box::pin(build_fixture()).await;
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
     let e1 = seed_entry(&pg, fx.project_id, fx.lawyer_id, 90, true).await;
     let e2 = seed_entry(&pg, fx.project_id, fx.lawyer_id, 30, true).await;
@@ -494,7 +494,7 @@ async fn a_flat_fee_bills_the_fee_and_consumes_the_entries() {
     let Some(_) = invoice_store().await else {
         return;
     };
-    let fx = build_fixture().await;
+    let fx = Box::pin(build_fixture()).await;
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
     store::attorney_rates::set_flat_fee(&pg, fx.project_id, 150_000)
         .await
@@ -543,7 +543,7 @@ async fn hourly_billing_refuses_under_a_consumed_flat_fee() {
     let Some(_) = invoice_store().await else {
         return;
     };
-    let fx = build_fixture().await;
+    let fx = Box::pin(build_fixture()).await;
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
     store::attorney_rates::set_flat_fee(&pg, fx.project_id, 150_000)
         .await
@@ -567,7 +567,7 @@ async fn already_invoiced_entries_are_skipped() {
     let Some(_) = invoice_store().await else {
         return;
     };
-    let fx = build_fixture().await;
+    let fx = Box::pin(build_fixture()).await;
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
     let already = seed_entry(&pg, fx.project_id, fx.lawyer_id, 90, true).await;
     seed_entry(&pg, fx.project_id, fx.lawyer_id, 30, true).await;
@@ -614,7 +614,7 @@ async fn nothing_unbilled_is_a_no_op() {
     let Some(_) = invoice_store().await else {
         return;
     };
-    let fx = build_fixture().await;
+    let fx = Box::pin(build_fixture()).await;
 
     // A quiet matter: the guard refuses before the seam is ever crossed —
     // the zero-unbilled no-op.
@@ -700,12 +700,12 @@ async fn a_cost_in_another_currency_is_refused() {
     let Some(_) = invoice_store().await else {
         return;
     };
-    let fx = build_fixture().await;
+    let fx = Box::pin(build_fixture()).await;
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
     // A confirmed, unbilled cost in euros: the matter bills in USD, so the
     // composition refuses the raise rather than silently converting.
     let receipt_document_id = seed_receipt_asset(&fx.surreal, fx.project_id).await;
-    let cost = store::project_costs::create(
+    let cost = Box::pin(store::project_costs::create(
         &fx.surreal,
         &pg,
         fx.project_id,
@@ -721,7 +721,7 @@ async fn a_cost_in_another_currency_is_refused() {
             idempotency_key: format!("receipt:{}", Uuid::now_v7()),
             source_reference: store::project_costs::mercury_source_reference(Uuid::now_v7()),
         },
-    )
+    ))
     .await
     .unwrap();
     store::project_costs::confirm_amount(&pg, cost.id, fx.lawyer_id, 41_00)
@@ -877,7 +877,7 @@ async fn outsiders_and_clients_cannot_generate() {
     let Some(_) = invoice_store().await else {
         return;
     };
-    let fx = build_fixture().await;
+    let fx = Box::pin(build_fixture()).await;
 
     // A lawyer without a participation row: 404, the matter does not exist
     // for them — never a 403 naming it.

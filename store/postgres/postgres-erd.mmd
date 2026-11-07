@@ -899,6 +899,17 @@ erDiagram
         string sms_policy_version
         string source_path
     }
+    legal_plan {
+        int acceptance_sla_hours
+        string contact
+        uuid firm_id
+        uuid id
+        datetime inserted_at
+        string name
+        string portal
+        string reporting_requirements
+        int turnaround_sla_days
+    }
     letter {
         string direction
         uuid id
@@ -1299,6 +1310,19 @@ erDiagram
         uuid project_id
         datetime updated_at
     }
+    plan_fee_schedule {
+        string covered_benefit
+        datetime effective_on
+        uuid firm_id
+        uuid id
+        datetime inserted_at
+        uuid legal_plan_id
+        string matter_type
+        int plan_fee_cents
+        string state
+        int supplemental_flat_cents
+        int supplemental_hourly_cents
+    }
     playbook {
         boolean active
         uuid entity_id
@@ -1333,6 +1357,7 @@ erDiagram
         string youtube_caption
     }
     project {
+        string benefit_code
         string booking_url
         string brand
         string calendar_id
@@ -1351,8 +1376,16 @@ erDiagram
         string internal_slack_channel_id
         string internal_slack_channel_url
         uuid jurisdiction_id
+        string kit_version
+        uuid legal_plan_id
         string name
         string onboarding_jurisdiction
+        datetime plan_accepted_on
+        datetime plan_assigned_on
+        datetime plan_closed_on
+        string plan_matter_type
+        string plan_member_id
+        string plan_state
         string private_notion_page_url
         string repository_url
         string shared_notion_page_url
@@ -1829,6 +1862,7 @@ erDiagram
         uuid project_id
         int rate_cents_per_hour
         string source
+        uuid stage
         datetime updated_at
         string written_off_reason
         string xero_invoice_id
@@ -1963,6 +1997,7 @@ erDiagram
     firm }o--|| journal_source_reference : references
     firm }o--|| journal_source_snapshot : references
     journal_source_reference }o--|| journal_source_snapshot : references
+    firm }o--|| legal_plan : references
     mailroom }o--|| letter : references
     address }o--|| mailroom : references
     person }o--|| matter_billing_batch : references
@@ -2007,11 +2042,14 @@ erDiagram
     person }o--|| person_mailbox : references
     person }o--|| person_project_role : references
     project }o--|| person_project_role : references
+    firm }o--|| plan_fee_schedule : references
+    legal_plan }o--|| plan_fee_schedule : references
     entity }o--|| playbook : references
     brand }o--|| post : references
     entity }o--|| project : references
     firm }o--|| project : references
     jurisdiction }o--|| project : references
+    legal_plan }o--|| project : references
     project_archive_generation }o--|| project_archive_item : references
     person }o--|| project_cost_events : references
     project_costs }o--|| project_cost_events : references
@@ -2067,6 +2105,7 @@ erDiagram
     project }o--|| testimonial : references
     person_project_role }o--|| time_entry : references
     project }o--|| time_entry : references
+    stage_definition }o--|| time_entry : references
     person }o--|| time_entry_events : references
     time_entry }o--|| time_entry_events : references
     person }o--|| timer : references

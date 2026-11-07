@@ -335,6 +335,16 @@ async fn seed_entry(
     .unwrap()
 }
 
+async fn financials_of(fixture: &Fixture) -> store::matter_financials::MatterFinancials {
+    Box::pin(store::matter_financials::for_project(
+        &fixture.surreal,
+        &fixture.pg,
+        fixture.project_id,
+    ))
+    .await
+    .unwrap()
+}
+
 async fn seed_confirmed_cost(fixture: &Fixture, amount_cents: i64) -> Uuid {
     let receipt = store::documents::ingest_bytes_as(
         &fixture.surreal,
@@ -354,7 +364,7 @@ async fn seed_confirmed_cost(fixture: &Fixture, amount_cents: i64) -> Uuid {
     )
     .await
     .unwrap();
-    let cost = store::project_costs::create(
+    let cost = Box::pin(store::project_costs::create(
         &fixture.surreal,
         &fixture.pg,
         fixture.project_id,
@@ -370,7 +380,7 @@ async fn seed_confirmed_cost(fixture: &Fixture, amount_cents: i64) -> Uuid {
             idempotency_key: format!("synthetic-{}", Uuid::new_v4()),
             source_reference: format!("mercury::{}", Uuid::new_v4()),
         },
-    )
+    ))
     .await
     .unwrap();
     store::project_costs::confirm_amount(&fixture.pg, cost.id, fixture.lawyer_id, amount_cents)
@@ -885,10 +895,7 @@ async fn run_recovery_safety() {
     let batch = pending_batch(&fixture.pg, fixture.project_id)
         .await
         .unwrap();
-    let financials =
-        store::matter_financials::for_project(&fixture.surreal, &fixture.pg, fixture.project_id)
-            .await
-            .unwrap();
+    let financials = financials_of(&fixture).await;
     assert_eq!(financials.wip_cents, 20_000, "refused work stays visible");
     assert_eq!(financials.outstanding_cents, 0);
 
@@ -902,19 +909,13 @@ async fn run_recovery_safety() {
     .unwrap();
     let refused = generate(&fixture.app, &fixture).await;
     assert_eq!(refused.status(), StatusCode::CONFLICT);
-    let reason: Value = serde_json::from_slice(
-        &axum::body::to_bytes(refused.into_body(), usize::MAX)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let reason: Value = body_value(refused).await;
     assert_eq!(reason["reason"], "invoice_reconciliation_required");
     assert_eq!(fixture.provider.create_keys(), vec![batch.id]);
 
-    // Model a first attachment just after UTC midnight and a provider invoice
-    // whose date was corrected to a previous calendar day.
-    // Reconciliation found the real invoice. A mirrored but unsettled batch
-    // contributes outstanding balance, never that same work to WIP as well.
+    // A first attachment just after UTC midnight, with the provider invoice
+    // date corrected to a prior day: a mirrored unsettled batch contributes
+    // outstanding balance, never that same work to WIP as well.
     store::billing_batches::attach_invoice(&fixture.pg, batch.id, "synthetic-recovered")
         .await
         .unwrap();
@@ -938,10 +939,7 @@ async fn run_recovery_safety() {
     )
     .await
     .unwrap();
-    let financials =
-        store::matter_financials::for_project(&fixture.surreal, &fixture.pg, fixture.project_id)
-            .await
-            .unwrap();
+    let financials = financials_of(&fixture).await;
     assert_eq!(financials.wip_cents, 0);
     assert_eq!(financials.outstanding_cents, 105_000);
     settle_with_corrected_provider_financials(&fixture).await;
@@ -951,12 +949,11 @@ async fn run_recovery_safety() {
         "saved ids never create again"
     );
 
+    let completed = store::billing_batches::complete(&fixture.pg, batch.id)
+        .await
+        .unwrap();
     assert_eq!(
-        store::billing_batches::complete(&fixture.pg, batch.id)
-            .await
-            .unwrap()
-            .status,
-        "completed",
+        completed.status, "completed",
         "concurrent settlement retries remain idempotent"
     );
 
@@ -970,13 +967,25 @@ async fn run_recovery_safety() {
         ..batch
     };
     assert!(matches!(
-        store::billing_batches::insert_with_reservations(&fixture.pg, &stale, Some(0)).await,
+        Box::pin(store::billing_batches::insert_with_reservations(
+            &fixture.pg,
+            &stale,
+            Some(0)
+        ))
+        .await,
         Err(store::billing_batches::BillingBatchError::FlatFeeAlreadyBilled)
     ));
     assert!(pending_batch(&fixture.pg, fixture.project_id)
         .await
         .is_none());
-    assert_voided_invoice_remains_reserved().await;
+    Box::pin(assert_voided_invoice_remains_reserved()).await;
+}
+
+async fn body_value(response: axum::response::Response) -> serde_json::Value {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 async fn simulate_attachment_after_utc_midnight(fixture: &Fixture, batch_id: Uuid) {
@@ -1238,10 +1247,7 @@ async fn assert_voided_invoice_remains_reserved() {
     assert_eq!(invoices.len(), 1);
     assert_eq!(invoices[0].status, "VOIDED");
     assert_eq!(store::matter_financials::outstanding_cents(&invoices), 0);
-    let financials =
-        store::matter_financials::for_project(&fixture.surreal, &fixture.pg, fixture.project_id)
-            .await
-            .unwrap();
+    let financials = financials_of(&fixture).await;
     assert_eq!(
         financials.wip_cents, 15_000,
         "voided pending work is still unpaid"

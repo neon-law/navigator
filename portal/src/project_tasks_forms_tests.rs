@@ -160,24 +160,24 @@ async fn cross_matter_actions() {
         person_id: Some(actor),
         ..SessionData::fresh("synthetic@example.com", Role::Lawyer)
     };
-    let response = assign(
+    let response = Box::pin(assign(
         State(db.clone()),
         Some(Extension(session.clone())),
         Path((own.code.clone(), task.id)),
         Form(TaskAssignForm {
             assignee_id: String::new(),
         }),
-    )
+    ))
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let response = transition(
+    let response = Box::pin(transition(
         State(db),
         Some(Extension(session)),
         Path((own.code, task.id)),
         Form(TaskTransitionForm {
             next_state: "in_progress".into(),
         }),
-    )
+    ))
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let retained = store::tasks::find_by_id(&pg, task.id).await.unwrap();

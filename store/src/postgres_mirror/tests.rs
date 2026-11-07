@@ -1878,6 +1878,21 @@ async fn every_mirror_reports_reconciles_and_settles_seeded_drift() {
     assert_eq!(again, settled);
 }
 
+/// Boxed so the test's futures stay small: `create` carries the receipt
+/// check and audit plumbing of a full project-cost write.
+async fn create(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    matter: Uuid,
+    actor_id: Uuid,
+    receipt: &crate::project_costs::NewProjectCost,
+) -> Result<crate::project_costs::ProjectCost, crate::project_costs::ProjectCostError> {
+    Box::pin(crate::project_costs::create(
+        surreal, pg, matter, actor_id, receipt,
+    ))
+    .await
+}
+
 #[tokio::test]
 async fn receipt_backed_cost_accepts_normal_project_document_and_replays_idempotently() {
     async fn project(surreal: &SurrealDb, name: &str) -> Uuid {
@@ -1941,30 +1956,29 @@ async fn receipt_backed_cost_accepts_normal_project_document_and_replays_idempot
     let mut foreign_receipt = input.clone();
     foreign_receipt.idempotency_key = "receipt:foreign-project".into();
     assert!(matches!(
-        crate::project_costs::create(&surreal, &pg, other_project, actor_id, &foreign_receipt)
-            .await,
+        create(&surreal, &pg, other_project, actor_id, &foreign_receipt).await,
         Err(crate::project_costs::ProjectCostError::Invalid(
             "receipt must be a live Document on this Project"
         ))
     ));
-    let first = crate::project_costs::create(&surreal, &pg, project_id, actor_id, &input)
+    let first = create(&surreal, &pg, project_id, actor_id, &input)
         .await
         .unwrap();
     assert_eq!(first.amount_status, "estimated");
-    let replay = crate::project_costs::create(&surreal, &pg, project_id, actor_id, &input)
+    let replay = create(&surreal, &pg, project_id, actor_id, &input)
         .await
         .unwrap();
     assert_eq!(replay.id, first.id);
     let (left, right) = tokio::join!(
-        crate::project_costs::create(&surreal, &pg, project_id, actor_id, &input),
-        crate::project_costs::create(&surreal, &pg, project_id, actor_id, &input),
+        create(&surreal, &pg, project_id, actor_id, &input),
+        create(&surreal, &pg, project_id, actor_id, &input)
     );
     assert_eq!(left.unwrap().id, first.id);
     assert_eq!(right.unwrap().id, first.id);
     let mut changed = input.clone();
     changed.description = "Different synthetic payload".into();
     assert!(matches!(
-        crate::project_costs::create(&surreal, &pg, project_id, actor_id, &changed).await,
+        create(&surreal, &pg, project_id, actor_id, &changed).await,
         Err(crate::project_costs::ProjectCostError::Conflict)
     ));
     let confirmed = crate::project_costs::confirm_amount(&pg, first.id, actor_id, 1500)

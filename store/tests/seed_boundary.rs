@@ -66,9 +66,12 @@ const CANONICAL: &[&str] = &[
     "Entity.yaml",
     "EntityType.yaml",
     "Jurisdiction.yaml",
+    "LegalPlan.yaml",
     "Person.yaml",
     "PersonEntityRole.yaml",
+    "PlanFeeSchedule.yaml",
     "Question.yaml",
+    "StageDefinition.yaml",
     "Testimonial.yaml",
     "User.yaml",
 ];

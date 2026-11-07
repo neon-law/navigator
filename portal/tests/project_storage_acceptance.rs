@@ -303,7 +303,7 @@ async fn a_synthetic_project_survives_its_whole_storage_lifecycle() {
         .bind(("jurisdiction",store::surreal::record_id("jurisdiction",store::test_support::SEED_ENTITY_JURISDICTION_ID)))
         .bind(("kind",store::surreal::record_id("entity_type",store::test_support::SEED_ENTITY_TYPE_ID)))
         .await.unwrap().check().unwrap();
-    let folders = store::project_folder_reconcile::reconcile(
+    let folders = Box::pin(store::project_folder_reconcile::reconcile(
         &surreal,
         &pg,
         &drive,
@@ -312,7 +312,7 @@ async fn a_synthetic_project_survives_its_whole_storage_lifecycle() {
             projects_parent_id: parent.id,
             trusted_organizers: std::collections::BTreeSet::new(),
         },
-    )
+    ))
     .await
     .unwrap();
     assert_eq!(

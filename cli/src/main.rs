@@ -22,9 +22,11 @@ mod document_ocr;
 mod document_read;
 mod document_reconcile;
 mod document_sync;
+mod downloads;
 mod ephemeris_download;
 mod ephemeris_duckdb;
 mod ephemeris_iceberg;
+mod ephemeris_release;
 mod ephemeris_tables;
 mod firm_forgejo;
 mod firms_doctor;
@@ -879,6 +881,13 @@ enum Command {
     Inbox {
         #[command(subcommand)]
         action: inbox::InboxAction,
+    },
+    /// The legal files sitting in the lawyer's Downloads folder: scan them,
+    /// propose a matter, kind, and conventional slug for each, file one
+    /// onto its matter, and report what is already filed.
+    Downloads {
+        #[command(subcommand)]
+        action: downloads::DownloadsCmd,
     },
     // ─────────────── Authoring a notation locally ───────────────
     // The notation author's workbench: everything here runs offline (or
@@ -5204,6 +5213,7 @@ fn run() -> ExitCode {
         }
         Command::Mail { action } => runtime().block_on(mail::run(action)),
         Command::Inbox { action } => runtime().block_on(inbox::run(action)),
+        Command::Downloads { action } => runtime().block_on(downloads::run(action)),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Scraper { action } => runtime().block_on(scraper::run(action)),
         // The docs reference helpers need no cluster, so they are handled

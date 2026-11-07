@@ -1474,6 +1474,22 @@ mod tests {
                 include_str!("../postgres/migrations/20261106130000_create_mail_signature.sql"),
             ),
             (
+                "20261107000000_create_legal_plan.sql",
+                include_str!("../postgres/migrations/20261107000000_create_legal_plan.sql"),
+            ),
+            (
+                "20261107010000_create_plan_fee_schedule.sql",
+                include_str!("../postgres/migrations/20261107010000_create_plan_fee_schedule.sql"),
+            ),
+            (
+                "20261107020000_add_project_plan_columns.sql",
+                include_str!("../postgres/migrations/20261107020000_add_project_plan_columns.sql"),
+            ),
+            (
+                "20261107030000_add_time_entry_stage.sql",
+                include_str!("../postgres/migrations/20261107030000_add_time_entry_stage.sql"),
+            ),
+            (
                 "20261107120000_person_directory_list_indexes.sql",
                 include_str!("../postgres/migrations/20261107120000_person_directory_list_indexes.sql"),
             ),
