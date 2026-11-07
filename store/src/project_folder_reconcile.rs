@@ -1271,7 +1271,7 @@ mod tests {
             .unwrap();
         assert_eq!(first.outcome, FolderOutcome::Complete);
         let before = project_folders::list_verified(&pg, id).await.unwrap();
-        assert_eq!(before.len(), 16);
+        assert_eq!(before.len(), 18);
         assert_eq!(
             project_folders::get_verified(&pg, id, ProjectFolderSlot::Root)
                 .await
@@ -1325,7 +1325,7 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
-        assert_eq!(project_folders::list(&pg, id).await.unwrap().len(), 16);
+        assert_eq!(project_folders::list(&pg, id).await.unwrap().len(), 18);
         assert!(drive.set_folder_access_state(&root.drive_folder_id, false, true));
         assert_eq!(
             Box::pin(reconcile(&db, &pg, &drive, id, &policy))
@@ -1336,7 +1336,7 @@ mod tests {
         );
         assert_eq!(
             project_folders::list_verified(&pg, id).await.unwrap().len(),
-            16
+            18
         );
     }
     #[tokio::test]
@@ -1397,7 +1397,7 @@ mod tests {
                 .await
                 .unwrap()
                 .len(),
-            16
+            18
         );
     }
     include!("project_folder_reconcile_boundary_tests.rs");
