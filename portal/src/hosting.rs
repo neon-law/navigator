@@ -696,7 +696,7 @@ pub struct Site {
 /// Propagates a failure to assemble the runtime (configuration, database,
 /// storage, content) or to bind and serve the configured port.
 pub async fn run(brand: Site) -> anyhow::Result<()> {
-    boot(brand, false).await
+    Box::pin(boot(brand, false)).await
 }
 
 /// Boot one brand like [`run`], hosting the DBOS executor in this process when
@@ -712,7 +712,7 @@ pub async fn run(brand: Site) -> anyhow::Result<()> {
 /// settings, or a failed DBOS launch: with the flag on, the boot fails closed
 /// rather than serving without the executor.
 pub async fn run_with_dbos(brand: Site) -> anyhow::Result<()> {
-    boot(brand, true).await
+    Box::pin(boot(brand, true)).await
 }
 
 /// Run `serve`, hosting the DBOS executor beside it when `lookup` sets
