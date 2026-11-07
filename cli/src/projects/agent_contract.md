@@ -76,7 +76,9 @@ each answer terse.
     `kind`.
 * `documents/` is git-ignored. It holds the bytes `navigator project sync` pulls down or uploads, organised the way a
   case-management system organises a matter. `navigator project sync` creates every folder, even when it is empty:
-  * `Client Production/` holds what the client supplied, such as exhibits (`kind: exhibit`).
+  * `Client Production/` holds what the client supplied, such as exhibits (`kind: exhibit`). Its two fixed subfolders
+    nest below it: `Agreements/` and `Screenshots/` — a pointer's `folder:` names them, or `navigator project
+    migrate-folders` files a pointer there; no `kind` defaults to either.
   * `Correspondence (Served)/` holds letters served or received (`kind: letter`).
   * `Discovery (Served)/` holds discovery actually served or received.
   * `Docket Filings/` holds court paper: pleadings, filings, and docket ingest (`kind: pleading`, `filing`).

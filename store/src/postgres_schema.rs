@@ -1493,6 +1493,12 @@ mod tests {
                 "20261107120000_person_directory_list_indexes.sql",
                 include_str!("../postgres/migrations/20261107120000_person_directory_list_indexes.sql"),
             ),
+            (
+                "20261107130000_add_client_production_subfolder_slots.sql",
+                include_str!(
+                    "../postgres/migrations/20261107130000_add_client_production_subfolder_slots.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
