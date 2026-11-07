@@ -2482,6 +2482,7 @@
 {"file":"store/src/notations.rs","line":672,"function":"update_state","operation":"query","sql_operations":["SELECT","UPDATE"],"tables":[],"transaction":false}
 {"file":"store/src/notations.rs","line":701,"function":"update_questionnaire_snapshot","operation":"bind","sql_operations":[],"tables":["notation"],"transaction":false}
 {"file":"store/src/notations.rs","line":701,"function":"update_questionnaire_snapshot","operation":"query","sql_operations":["SELECT","UPDATE"],"tables":[],"transaction":false}
+{"file":"store/src/outcome_calibration.rs","line":351,"function":"stage_at","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/outcome_estimates.rs","line":165,"function":"record","operation":"query_scalar","sql_operations":["INSERT"],"tables":[],"transaction":false}
 {"file":"store/src/outcome_estimates.rs","line":252,"function":"load","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/outcome_estimates.rs","line":432,"function":"the_database_holds_the_sum_and_refuses_edits","operation":"execute","sql_operations":[],"tables":[],"transaction":false}

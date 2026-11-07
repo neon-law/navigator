@@ -10,9 +10,9 @@ Allocation](iolta-allocation.md) the recovery passed through, and it names the f
 recorded it.
 
 A matter has one Matter Outcome. A correction is a new row that supersedes the current one, never an edit, so the chain
-of rows is the audit trail and its newest link is the outcome. Calibration compares these actual figures against the
-matter's [Outcome Estimates](outcome-estimate.md). Once a Matter Outcome exists, its actual figure supersedes any
-estimate.
+of rows is the audit trail and its newest link is the outcome. [Outcome Calibration](outcome-calibration.md) compares
+these actual figures against the matter's [Outcome Estimates](outcome-estimate.md). Once a Matter Outcome exists, its
+actual figure supersedes any estimate.
 
 A Matter Outcome is firm work product. Only a firm-side participant may record or read one, and it never reaches a
 client or clerk [Lens](lens.md).

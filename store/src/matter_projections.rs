@@ -325,7 +325,7 @@ fn without_recovery(
     }
 }
 
-fn result_outcome(result: MatterResult) -> Outcome {
+pub(crate) fn result_outcome(result: MatterResult) -> Outcome {
     match result {
         MatterResult::Won => Outcome::WinAtTrial,
         MatterResult::Settled => Outcome::Settle,

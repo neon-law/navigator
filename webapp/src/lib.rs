@@ -116,6 +116,7 @@ pub mod notation_outline;
 pub mod notation_preview;
 mod notation_preview_storage;
 pub mod notation_workflow;
+pub mod outcome_calibration;
 pub mod owner_home;
 pub mod people;
 pub mod person_show;
