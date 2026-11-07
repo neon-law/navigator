@@ -5863,7 +5863,10 @@ mod tests {
 
     /// A mint that keeps 5xx-ing gives up after four attempts and reports
     /// the same exit-3 refusal it would have reported without the retry.
-    #[tokio::test(start_paused = true)]
+    /// Real clock: a paused clock auto-advances past the request timeout
+    /// while the mock's response is still in flight, turning a 503 into a
+    /// spurious transport timeout.
+    #[tokio::test]
     async fn a_persistently_5xx_mint_gives_up_after_four_attempts() {
         let navigator = MockServer::start().await;
         Mock::given(method("POST"))
@@ -5881,7 +5884,11 @@ mod tests {
         )
         .await
         .expect_err("a door that never answers cannot mint");
-        assert_eq!(exit_code_for(&error), ExitCode::from(3));
+        assert_eq!(
+            exit_code_for(&error),
+            ExitCode::from(3),
+            "a persistent 5xx must end as a refusal, not a plain failure: {error:#}"
+        );
     }
 
     /// The mint path's requests carry the 30 s bound: a hung endpoint burns
