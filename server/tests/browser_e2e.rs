@@ -2296,7 +2296,7 @@ async fn the_help_overlay_keeps_the_palette_shut_while_it_is_open() {
     c.close().await.unwrap();
 }
 
-/// The client portal renders the same palette the firm app does: `/` opens
+/// The Portal on a client's matter page renders the same palette the firm app does: `/` opens
 /// it, the rows are the client's own destinations (no firm or admin doors),
 /// filter + `Enter` navigate, and `Escape` restores focus — parity
 /// demonstrated on the portal page, not assumed from the firm app.

@@ -160,7 +160,7 @@ fills the `?` overlay and the `/` palette from the same list, so a key that work
   question, and a completed or reviewed questionnaire cannot be reopened.
 
 `server/tests/browser_e2e.rs` walks both questionnaires to completion with the keyboard, and checks the overlay, the
-palette and the chords against a live page — on a firm app page and a client-portal page alike.
+palette and the chords against a live page — on a firm app page and a Portal page alike.
 
 ## Gates
 
