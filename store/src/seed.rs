@@ -1021,6 +1021,7 @@ async fn reconcile_people(
     for rec in records {
         let key = rec.email.clone();
         let name = rec.name.clone();
+        let wanted_phones = rec.wanted_phones()?;
         let existing = find_person_for_record(surreal, &rec).await?;
         let new_aliases = rec.wanted_aliases(&rec.email, None);
         match existing {
@@ -1052,6 +1053,7 @@ async fn reconcile_people(
                     .await
                     .map_err(|error| anyhow::anyhow!(error.user_message()))?;
                     record_aliases(surreal, created.id, &new_aliases).await?;
+                    record_phones(surreal, created.id, &wanted_phones).await?;
                     if let Some(project) = scope_project {
                         crate::projects::add_participation(
                             surreal,
@@ -1125,6 +1127,10 @@ async fn reconcile_people(
                 if !missing_aliases.is_empty() {
                     changed_fields.push("emails".to_string());
                 }
+                let missing_phones = missing_phones(surreal, existing.id, &wanted_phones).await?;
+                if !missing_phones.is_empty() {
+                    changed_fields.push("phones".to_string());
+                }
                 let mut warnings = Vec::new();
                 if let Some(role) = rec.role.filter(|role| *role != existing.role) {
                     warnings.extend(seed_role_authority(actor, &key, role)?);
@@ -1148,6 +1154,7 @@ async fn reconcile_people(
                     if !actor.dry_run {
                         update_person_from_seed(surreal, &existing, rec, &update_ctx).await?;
                         record_aliases(surreal, existing.id, &missing_aliases).await?;
+                        record_phones(surreal, existing.id, &missing_phones).await?;
                     }
                 }
             }
@@ -3697,10 +3704,39 @@ struct PersonRec {
     /// Further addresses the same Person answers to, kept as aliases.
     #[serde(default)]
     emails: Vec<String>,
+    /// The Person's phone number — the primary mobile. The short form
+    /// of `phones`; a record may name it or the list or both.
+    #[serde(default)]
+    phone: Option<String>,
+    /// Further phone numbers the Person answers to, mirroring `emails`:
+    /// an E.164 number with a label and a primary flag.
+    #[serde(default)]
+    phones: Vec<PhoneRec>,
     /// The Person's system-wide tier. Omitted means `client` on a create and
     /// leaves an existing Person's tier alone; see [`check_seed_roles`].
     #[serde(default)]
     role: Option<crate::persons::Role>,
+}
+
+/// One entry of a Person record's `phones` list: the number, the kind of
+/// line, and whether it is the number a callback uses first.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PhoneRec {
+    number: String,
+    #[serde(default)]
+    label: crate::person_phones::PhoneLabel,
+    #[serde(default)]
+    primary: bool,
+}
+
+/// One phone number a seed record wants on a Person, normalized to the
+/// stored spelling. The write shape [`record_phones`] applies.
+#[derive(Clone, Debug)]
+struct SeedPhone {
+    e164: String,
+    label: crate::person_phones::PhoneLabel,
+    primary: bool,
 }
 
 impl PersonRec {
@@ -3727,6 +3763,47 @@ impl PersonRec {
         wanted.sort();
         wanted.dedup();
         wanted
+    }
+
+    /// Every phone number the record wants on the Person, normalized to
+    /// E.164. The `phone` shorthand is the primary mobile; the `phones`
+    /// list carries its own label and primary flag, and a number named
+    /// twice — shorthand and list — is written once, first spelling wins.
+    /// A number that will not normalize is refused here, naming the
+    /// expected format, before any write happens — even on a dry run.
+    fn wanted_phones(&self) -> anyhow::Result<Vec<SeedPhone>> {
+        fn normalize(raw: &str) -> anyhow::Result<String> {
+            crate::person_phones::normalize_e164(raw).map_err(|_| {
+                anyhow::anyhow!(
+                    "phone {raw:?}: expected an E.164 number — a leading `+` \
+                     and 8 to 15 digits, like `+17025550123`"
+                )
+            })
+        }
+        let mut wanted: Vec<SeedPhone> = Vec::new();
+        let mut push = |raw: &str, label, primary| -> anyhow::Result<()> {
+            let e164 = normalize(raw)?;
+            if !wanted.iter().any(|known| known.e164 == e164) {
+                wanted.push(SeedPhone {
+                    e164,
+                    label,
+                    primary,
+                });
+            }
+            Ok(())
+        };
+        if let Some(raw) = self
+            .phone
+            .as_deref()
+            .map(str::trim)
+            .filter(|raw| !raw.is_empty())
+        {
+            push(raw, crate::person_phones::PhoneLabel::Mobile, true)?;
+        }
+        for phone in &self.phones {
+            push(phone.number.trim(), phone.label, phone.primary)?;
+        }
+        Ok(wanted)
     }
 }
 
@@ -3775,6 +3852,51 @@ async fn record_aliases(
     Ok(())
 }
 
+/// Record every wanted phone number on `person_id`, mirroring
+/// [`record_aliases`]: writes converge (a number set again updates its
+/// label and primary flag in place) and nothing is ever deleted — a
+/// number the record does not name is left where it is.
+async fn record_phones(
+    surreal: &SurrealDb,
+    person_id: Uuid,
+    wanted: &[SeedPhone],
+) -> anyhow::Result<()> {
+    for phone in wanted {
+        crate::person_phones::set_phone(
+            surreal,
+            person_id,
+            &phone.e164,
+            phone.label,
+            phone.primary,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("phone {}: {error}", phone.e164))?;
+    }
+    Ok(())
+}
+
+/// The wanted phone numbers the Person does not already hold with the
+/// same label and primary flag — the change the record would make.
+async fn missing_phones(
+    surreal: &SurrealDb,
+    person_id: Uuid,
+    wanted: &[SeedPhone],
+) -> anyhow::Result<Vec<SeedPhone>> {
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let held = crate::person_phones::list_phones(surreal, person_id).await?;
+    Ok(wanted
+        .iter()
+        .filter(|want| {
+            !held.iter().any(|row| {
+                row.e164 == want.e164 && row.label == want.label && row.is_primary == want.primary
+            })
+        })
+        .cloned()
+        .collect())
+}
+
 async fn seed_persons(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
     for rec in parse::<PersonRec>(canonical::PERSON, "Person.yaml")? {
         anyhow::ensure!(
@@ -3783,8 +3905,9 @@ async fn seed_persons(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::R
             rec.email
         );
         let email = rec.email.clone();
+        let wanted_phones = rec.wanted_phones()?;
         let before = crate::persons::find_by_email_ci(surreal, &email).await?;
-        crate::persons::find_or_create(
+        let person = crate::persons::find_or_create(
             surreal,
             &crate::persons::NewPerson {
                 profile_image_url: rec.profile_image_url,
@@ -3792,6 +3915,7 @@ async fn seed_persons(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::R
             },
         )
         .await?;
+        record_phones(surreal, person.id, &wanted_phones).await?;
         if before.is_none() {
             report.persons_inserted += 1;
         }
@@ -5193,6 +5317,83 @@ records:
             .await
             .unwrap();
         assert_eq!(found.map(|p| p.id), Some(person.id));
+    }
+
+    #[tokio::test]
+    async fn operator_person_seed_imports_phone_numbers() {
+        let surreal = mem_surreal().await;
+        let yaml = moved_person_yaml(
+            "    phone: \"+17025550123\"\n    phones:\n      - number: \"(702) 555-0142\"\n        label: work\n",
+        );
+        reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &yaml,
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("create with phones");
+        let person = persons::find_by_email_ci(&surreal, "new.firm@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        let phones = crate::person_phones::list_phones(&surreal, person.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            phones
+                .iter()
+                .map(|phone| (phone.e164.as_str(), phone.label.as_str(), phone.is_primary))
+                .collect::<Vec<_>>(),
+            vec![
+                ("+17025550123", "mobile", true),
+                ("+17025550142", "work", false)
+            ],
+            "the shorthand is the primary mobile; the list entry normalizes and keeps its label"
+        );
+
+        // Re-running the same document changes nothing.
+        let again = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &yaml,
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("rerun");
+        assert_eq!(again.updated, 0);
+        assert_eq!(again.unchanged, 1);
+    }
+
+    #[tokio::test]
+    async fn operator_person_seed_refuses_a_number_that_is_not_e164() {
+        let surreal = mem_surreal().await;
+        let yaml = moved_person_yaml("    phone: \"555-1234\"\n");
+        let error = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &yaml,
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect_err("a seven-digit line is not an E.164 number");
+        assert!(
+            error.to_string().contains("E.164") && error.to_string().contains("555-1234"),
+            "the rejection names the bad input and the expected format: {error}"
+        );
+        assert!(
+            persons::find_by_email_ci(&surreal, "new.firm@example.com")
+                .await
+                .expect("read")
+                .is_none(),
+            "validation runs before any write, so the person is not created"
+        );
     }
 
     #[tokio::test]
