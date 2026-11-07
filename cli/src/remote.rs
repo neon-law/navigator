@@ -634,6 +634,68 @@ pub(crate) async fn resolve_ci_document_on(host: &str, forge: CiForge) -> Result
     Ok((base, minted.token))
 }
 
+/// One gate remote-call attempt, classified for [`retry_gate_call`]. A
+/// transient outcome (a connect error, a request timeout, or a 500/502-504
+/// status) is retried while attempts remain; a terminal one gives up on the
+/// first attempt — every 4xx is a deterministic refusal and is never retried.
+pub(crate) enum AttemptOutcome<T> {
+    /// The call succeeded.
+    Done(T),
+    /// Recoverable — retry while attempts remain, then return this error.
+    Transient(anyhow::Error),
+    /// Final — return this error immediately.
+    Terminal(anyhow::Error),
+}
+
+/// Runs `attempt` up to `attempts` times, sleeping `delay` scaled by the
+/// attempt number before each retry. The posture
+/// [`fetch_project_list_with`] established for the gate's idempotent reads,
+/// shared by the mint path and the revision reads. The attempt number lets
+/// an attempt shape its own final error, so an exhausted call reports the
+/// same status, annotation, and exit code it would have carried without the
+/// retry.
+pub(crate) async fn retry_gate_call<T, F, Fut>(
+    attempts: u32,
+    delay: std::time::Duration,
+    mut attempt: F,
+) -> Result<T>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = AttemptOutcome<T>>,
+{
+    for attempt_number in 1..=attempts {
+        match attempt(attempt_number).await {
+            AttemptOutcome::Done(value) => return Ok(value),
+            AttemptOutcome::Terminal(error) => return Err(error),
+            AttemptOutcome::Transient(error) if attempt_number == attempts => {
+                return Err(error);
+            }
+            AttemptOutcome::Transient(_) => tokio::time::sleep(delay * attempt_number).await,
+        }
+    }
+    unreachable!("the final attempt either returns or errors");
+}
+
+/// Tries per gate mint or OIDC token fetch before the run gives up.
+const GATE_MINT_ATTEMPTS: u32 = 4;
+/// Wait before the nth retry of a gate mint or OIDC token fetch.
+const GATE_MINT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+/// Per-request bound on a gate mint or OIDC token fetch, so a hung endpoint
+/// burns an attempt instead of the job's six-hour runner budget.
+const GATE_MINT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Whether a response status is safe to repeat — a plain `500` and the
+/// gateway errors. Every 4xx is a deterministic refusal and never retried.
+pub(crate) fn transient_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 500 | 502..=504)
+}
+
+/// Whether a transport error is recoverable — the request never left
+/// (connect failure) or gave up on its timeout.
+pub(crate) fn transient_transport(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect()
+}
+
 /// Fetch this Actions run's own OIDC ID token, audienced to `base` — shared
 /// by every `/auth/ci/*` mint. GitHub and Forgejo runners export the same two
 /// variables and answer with the same `{"value": …}` body.
@@ -656,25 +718,52 @@ async fn actions_oidc_token(
     };
     let request_url = read("ACTIONS_ID_TOKEN_REQUEST_URL")?;
     let request_token = read("ACTIONS_ID_TOKEN_REQUEST_TOKEN")?;
-    let response = client
-        .get(&request_url)
-        .query(&[("audience", base)])
-        .bearer_auth(&request_token)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .send()
-        .await
-        .with_context(|| format!("request {runner} OIDC token"))?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!(
-            "{runner} OIDC token request failed: {status}: {}",
-            first_line(&body)
-        ));
-    }
-    let token: ActionsOidcResponse = serde_json::from_str(&body)
-        .with_context(|| format!("parse {runner} OIDC token response"))?;
-    Ok(token.value)
+    // The token endpoint answers a plain GET, so a transient failure — the
+    // runner's token service 5xx-ing or hanging — is retried like every
+    // other gate remote call instead of failing the run on one attempt.
+    retry_gate_call(GATE_MINT_ATTEMPTS, GATE_MINT_RETRY_DELAY, |attempt| {
+        let request = client
+            .get(&request_url)
+            .query(&[("audience", base)])
+            .bearer_auth(&request_token)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .timeout(GATE_MINT_TIMEOUT);
+        async move {
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(error) if transient_transport(&error) => {
+                    return AttemptOutcome::Transient(
+                        anyhow::Error::new(error).context(format!("request {runner} OIDC token")),
+                    );
+                }
+                Err(error) => {
+                    return AttemptOutcome::Terminal(
+                        anyhow::Error::new(error).context(format!("request {runner} OIDC token")),
+                    );
+                }
+            };
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if !status.is_success() {
+                let failure = anyhow!(
+                    "{runner} OIDC token request failed: {status}: {}",
+                    first_line(&body)
+                );
+                if transient_status(status) && attempt < GATE_MINT_ATTEMPTS {
+                    return AttemptOutcome::Transient(failure);
+                }
+                return AttemptOutcome::Terminal(failure);
+            }
+            match serde_json::from_str::<ActionsOidcResponse>(&body) {
+                Ok(token) => AttemptOutcome::Done(token.value),
+                Err(error) => AttemptOutcome::Terminal(
+                    anyhow::Error::new(error)
+                        .context(format!("parse {runner} OIDC token response")),
+                ),
+            }
+        }
+    })
+    .await
 }
 
 /// Exchange `github_token` for a Navigator session at one `/auth/ci/*` mint
@@ -692,37 +781,61 @@ async fn mint_ci_token(
     mint_path: &str,
     github_token: &str,
 ) -> Result<CiSeedTokenResponse> {
-    let minted = client
-        .post(format!("{base}{mint_path}"))
-        .json(&serde_json::json!({ "token": github_token }))
-        .send()
-        .await
-        .map_err(|error| {
-            // A DNS miss never got a server response, so — like the non-2xx
-            // path below — the refusal is surfaced as a CI annotation.
-            let dns = is_dns_failure(&error);
-            let mapped = unreachable_host_error(base, &format!("POST {mint_path}"), error);
-            if dns {
-                eprintln!(
-                    "{}",
-                    mint_refusal_annotation(mint_path, &mapped.to_string())
-                );
+    retry_gate_call(GATE_MINT_ATTEMPTS, GATE_MINT_RETRY_DELAY, |attempt| {
+        let request = client
+            .post(format!("{base}{mint_path}"))
+            .json(&serde_json::json!({ "token": github_token }))
+            .timeout(GATE_MINT_TIMEOUT);
+        async move {
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    // A DNS miss never got a server response and does not
+                    // recover by waiting, so it is terminal like a 4xx
+                    // refusal, annotation and all; other transport failures
+                    // and timeouts retry like every other gate remote call.
+                    let dns = is_dns_failure(&error);
+                    let transient = !dns && transient_transport(&error);
+                    let mapped = unreachable_host_error(base, &format!("POST {mint_path}"), error);
+                    if dns {
+                        eprintln!(
+                            "{}",
+                            mint_refusal_annotation(mint_path, &mapped.to_string())
+                        );
+                        return AttemptOutcome::Terminal(mapped);
+                    }
+                    if transient && attempt < GATE_MINT_ATTEMPTS {
+                        return AttemptOutcome::Transient(mapped);
+                    }
+                    return AttemptOutcome::Terminal(mapped);
+                }
+            };
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if status.is_success() {
+                return match serde_json::from_str(&body) {
+                    Ok(minted) => AttemptOutcome::Done(minted),
+                    Err(error) => AttemptOutcome::Terminal(
+                        anyhow::Error::new(error).context(format!("parse {mint_path} response")),
+                    ),
+                };
             }
-            mapped
-        })?;
-    let minted_status = minted.status();
-    let minted_body = minted.text().await.unwrap_or_default();
-    if !minted_status.is_success() {
-        let message = mint_refusal_message(&minted_body);
-        eprintln!(
-            "{}",
-            mint_refusal_annotation(mint_path, &format!("{minted_status}: {message}"))
-        );
-        return Err(anyhow::Error::new(MintRefusal).context(format!(
-            "CI token mint at {mint_path} failed: {minted_status}: {message}"
-        )));
-    }
-    serde_json::from_str(&minted_body).with_context(|| format!("parse {mint_path} response"))
+            let message = mint_refusal_message(&body);
+            if transient_status(status) && attempt < GATE_MINT_ATTEMPTS {
+                return AttemptOutcome::Transient(anyhow!(
+                    "CI token mint at {mint_path} failed: {status}: {message}"
+                ));
+            }
+            eprintln!(
+                "{}",
+                mint_refusal_annotation(mint_path, &format!("{status}: {message}"))
+            );
+            AttemptOutcome::Terminal(anyhow::Error::new(MintRefusal).context(format!(
+                "CI token mint at {mint_path} failed: {status}: {message}"
+            )))
+        }
+    })
+    .await
 }
 
 /// Resolve the serving host before any request leaves the runner, so a host
@@ -919,7 +1032,9 @@ pub(crate) struct RevisionSummary {
 const INTEGRITY_PAGE: usize = 50;
 /// Rows per request when the server re-hashes each object.
 const INTEGRITY_DEEP_PAGE: usize = 10;
-/// Tries per page before the check fails.
+/// Tries per page or per revision read before the check fails. The reads
+/// share one budget: both are bounded idempotent GETs, and both retry a
+/// plain 500 alongside the gateway errors.
 const INTEGRITY_ATTEMPTS: u32 = 3;
 const INTEGRITY_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(100);
 const INTEGRITY_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
@@ -1079,6 +1194,7 @@ pub(crate) fn is_session_refused(error: &anyhow::Error) -> bool {
 }
 
 /// Authenticated client for the one Project's document-sync operations.
+#[derive(Debug)]
 pub(crate) struct DocumentClient {
     base: String,
     token: String,
@@ -1137,12 +1253,14 @@ impl DocumentClient {
     /// Build a client from an already-minted `(base, token)` pair — the
     /// `navigator project gate --check --ci` path, which authenticates via
     /// GitHub Actions OIDC rather than a stored `~/.navigator.json` login.
+    /// Its requests carry the integrity client's 100 s bound, so a hung
+    /// gateway burns an attempt instead of the job's six-hour budget.
     pub(crate) async fn with_credential(
         base: String,
         token: String,
         project_code: &str,
     ) -> Result<Self> {
-        Self::with_timeout(base, token, project_code, None).await
+        Self::with_timeout(base, token, project_code, Some(INTEGRITY_REQUEST_TIMEOUT)).await
     }
 
     /// Bounded, read-only validation requests. The normal client keeps its
@@ -1191,33 +1309,66 @@ impl DocumentClient {
 
     /// The revision chain of `slug` under the caller's own lens
     /// (`GET /app/api/projects/{id}/documents/revisions?slug=`).
+    ///
+    /// The read is idempotent, so a transient failure — a 500, a gateway
+    /// 502-504, a timeout, a dropped connection — is retried before one
+    /// slug's read becomes a `CheckFailure`. A 401 is never retried here:
+    /// it means the session lapsed, and renewal above this layer (`LiveSession`)
+    /// stays the one path that answers it.
     pub(crate) async fn list_revisions(&self, slug: &str) -> Result<RevisionsResponse> {
         let url = format!(
             "{}/app/api/projects/{}/documents/revisions",
             self.base, self.project_id
         );
-        let response = self
-            .client
-            .get(&url)
-            .query(&[("slug", slug)])
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .with_context(|| format!("GET {url}"))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(anyhow::Error::new(SessionRefused {
-                detail: first_line(&text),
-            }));
-        }
-        if !status.is_success() {
-            return Err(anyhow!(
-                "no revision of `{slug}` is visible on this matter: {status}: {}",
-                first_line(&text)
-            ));
-        }
-        serde_json::from_str(&text).context("parse document revisions response")
+        retry_gate_call(INTEGRITY_ATTEMPTS, INTEGRITY_RETRY_DELAY, |attempt| {
+            let url = url.clone();
+            let request = self
+                .client
+                .get(&url)
+                .query(&[("slug", slug)])
+                .bearer_auth(&self.token)
+                .timeout(INTEGRITY_REQUEST_TIMEOUT);
+            async move {
+                let response = match request.send().await {
+                    Ok(response) => response,
+                    Err(error) if transient_transport(&error) => {
+                        return AttemptOutcome::Transient(
+                            anyhow::Error::new(error).context(format!("GET {url}")),
+                        );
+                    }
+                    Err(error) => {
+                        return AttemptOutcome::Terminal(
+                            anyhow::Error::new(error).context(format!("GET {url}")),
+                        );
+                    }
+                };
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    return AttemptOutcome::Terminal(anyhow::Error::new(SessionRefused {
+                        detail: first_line(&text),
+                    }));
+                }
+                if status.is_success() {
+                    return match serde_json::from_str(&text) {
+                        Ok(revisions) => AttemptOutcome::Done(revisions),
+                        Err(error) => AttemptOutcome::Terminal(
+                            anyhow::Error::new(error).context("parse document revisions response"),
+                        ),
+                    };
+                }
+                let failure = anyhow!(
+                    "no revision of `{slug}` is visible on this matter: {status}: {}",
+                    first_line(&text)
+                );
+                if transient_status(status) && attempt < INTEGRITY_ATTEMPTS {
+                    AttemptOutcome::Transient(failure)
+                } else {
+                    AttemptOutcome::Terminal(failure)
+                }
+            }
+        })
+        .await
     }
 
     /// The same deployment, Project, and transport with a freshly minted
@@ -1302,11 +1453,11 @@ impl DocumentClient {
                         });
                     }
                     failure = integrity_failure(Ok((status, &text)), INTEGRITY_REQUEST_TIMEOUT);
-                    matches!(status.as_u16(), 502..=504)
+                    transient_status(status)
                 }
                 Err(error) => {
                     failure = integrity_failure(Err(&error), INTEGRITY_REQUEST_TIMEOUT);
-                    error.is_timeout() || error.is_connect()
+                    transient_transport(&error)
                 }
             };
             if !retryable || attempt == INTEGRITY_ATTEMPTS {
@@ -5565,6 +5716,343 @@ mod tests {
         assert_eq!(result, ExitCode::from(3));
     }
 
+    /// LAW-285: a transient 5xx from the runner's token service recovers —
+    /// the OIDC fetch retries a 500, a gateway 502-504, a connect error, or
+    /// a timeout instead of failing the run on the first attempt.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_oidc_token_fetch_survives_a_transient_5xx() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let github = MockServer::start().await;
+        let previous_url = std::env::var("ACTIONS_ID_TOKEN_REQUEST_URL").ok();
+        let previous_token = std::env::var("ACTIONS_ID_TOKEN_REQUEST_TOKEN").ok();
+        std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_URL", github.uri());
+        std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "github-oidc-request");
+
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(2)
+            .expect(2)
+            .mount(&github)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": "github-jwt"
+            })))
+            .expect(1)
+            .mount(&github)
+            .await;
+
+        let token = super::actions_oidc_token(
+            &reqwest::Client::new(),
+            "https://navigator.example",
+            super::CiForge::GitHub,
+        )
+        .await
+        .expect("the third attempt succeeds");
+        assert_eq!(token, "github-jwt");
+
+        match previous_url {
+            Some(value) => std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_URL", value),
+            None => std::env::remove_var("ACTIONS_ID_TOKEN_REQUEST_URL"),
+        }
+        match previous_token {
+            Some(value) => std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_TOKEN", value),
+            None => std::env::remove_var("ACTIONS_ID_TOKEN_REQUEST_TOKEN"),
+        }
+    }
+
+    /// A 4xx from the token endpoint is a deterministic refusal — terminal on
+    /// the first attempt, like every 4xx the gate sees.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_oidc_token_refusal_is_terminal_on_the_first_attempt() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let github = MockServer::start().await;
+        let previous_url = std::env::var("ACTIONS_ID_TOKEN_REQUEST_URL").ok();
+        let previous_token = std::env::var("ACTIONS_ID_TOKEN_REQUEST_TOKEN").ok();
+        std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_URL", github.uri());
+        std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "github-oidc-request");
+
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&github)
+            .await;
+
+        let error = super::actions_oidc_token(
+            &reqwest::Client::new(),
+            "https://navigator.example",
+            super::CiForge::GitHub,
+        )
+        .await
+        .expect_err("a 403 is never retried");
+        assert!(error.to_string().contains("403"), "{error:#}");
+
+        match previous_url {
+            Some(value) => std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_URL", value),
+            None => std::env::remove_var("ACTIONS_ID_TOKEN_REQUEST_URL"),
+        }
+        match previous_token {
+            Some(value) => std::env::set_var("ACTIONS_ID_TOKEN_REQUEST_TOKEN", value),
+            None => std::env::remove_var("ACTIONS_ID_TOKEN_REQUEST_TOKEN"),
+        }
+    }
+
+    /// A transient 5xx from the mint door recovers: the third attempt mints
+    /// the session the first two could not.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_transient_mint_status_recovers() {
+        let navigator = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/auth/ci/document-token"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(2)
+            .expect(2)
+            .mount(&navigator)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/auth/ci/document-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "token": "ci-session",
+                "project_code": "acme",
+            })))
+            .expect(1)
+            .mount(&navigator)
+            .await;
+
+        let minted = super::mint_ci_token(
+            &reqwest::Client::new(),
+            &navigator.uri(),
+            "/auth/ci/document-token",
+            "oidc",
+        )
+        .await
+        .expect("the third attempt succeeds");
+        assert_eq!(minted.token, "ci-session");
+    }
+
+    /// A 403 refusal from the mint door stays terminal on the first attempt
+    /// with the exit-3 `MintRefusal` vocabulary — retries never soften or
+    /// multiply a deterministic refusal.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_refused_mint_stays_terminal_on_the_first_attempt() {
+        let navigator = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/auth/ci/document-token"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "error": "forbidden",
+                "message": "the run is not bound to a live project",
+            })))
+            .expect(1)
+            .mount(&navigator)
+            .await;
+
+        let error = super::mint_ci_token(
+            &reqwest::Client::new(),
+            &navigator.uri(),
+            "/auth/ci/document-token",
+            "oidc",
+        )
+        .await
+        .expect_err("a 403 refusal is never retried");
+        assert_eq!(exit_code_for(&error), ExitCode::from(3));
+        assert!(error.to_string().contains("403"), "{error:#}");
+    }
+
+    /// A mint that keeps 5xx-ing gives up after four attempts and reports
+    /// the same exit-3 refusal it would have reported without the retry.
+    #[tokio::test(start_paused = true)]
+    async fn a_persistently_5xx_mint_gives_up_after_four_attempts() {
+        let navigator = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/auth/ci/document-token"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(4)
+            .mount(&navigator)
+            .await;
+
+        let error = super::mint_ci_token(
+            &reqwest::Client::new(),
+            &navigator.uri(),
+            "/auth/ci/document-token",
+            "oidc",
+        )
+        .await
+        .expect_err("a door that never answers cannot mint");
+        assert_eq!(exit_code_for(&error), ExitCode::from(3));
+    }
+
+    /// The mint path's requests carry the 30 s bound: a hung endpoint burns
+    /// an attempt instead of hanging the job. The clock is paused, so the
+    /// four timed-out attempts and their delays pass without real waiting —
+    /// the wall-clock assert below proves it.
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_mint_times_out_instead_of_hanging() {
+        let navigator = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/auth/ci/document-token"))
+            .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(60)))
+            .expect(4)
+            .mount(&navigator)
+            .await;
+
+        let started = std::time::Instant::now();
+        let error = super::mint_ci_token(
+            &reqwest::Client::new(),
+            &navigator.uri(),
+            "/auth/ci/document-token",
+            "oidc",
+        )
+        .await
+        .expect_err("a hung endpoint cannot mint");
+        let timed_out = error.chain().any(|cause| {
+            cause
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_timeout)
+        });
+        assert!(timed_out, "{error:#}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the 30 s bound fired without real waiting"
+        );
+    }
+
+    /// Every gate remote call carries an explicit request timeout — the
+    /// configuration the hangs are not testable against, asserted here
+    /// because reqwest does not expose a client's own timeout for reading.
+    #[test]
+    fn the_gate_remote_calls_carry_explicit_bounds() {
+        assert_eq!(super::GATE_MINT_TIMEOUT, std::time::Duration::from_secs(30));
+        assert_eq!(
+            super::INTEGRITY_REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(100)
+        );
+    }
+
+    /// A hung deployment fails a document-client request at its timeout
+    /// instead of hanging, and the timeout is classified transient — the
+    /// projects fetch exhausts its four attempts rather than dying on one.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_document_client_request_times_out_and_retries() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([
+                        {"id": Uuid::now_v7(), "code": "acme"}
+                    ]))
+                    .set_delay(std::time::Duration::from_millis(300)),
+            )
+            .expect(4)
+            .mount(&server)
+            .await;
+
+        let error = DocumentClient::with_timeout(
+            server.uri(),
+            "test-token".into(),
+            "acme",
+            Some(std::time::Duration::from_millis(50)),
+        )
+        .await
+        .expect_err("a 300 ms response cannot pass a 50 ms bound");
+        assert!(error.to_string().contains("attempt 4 of 4"), "{error:#}");
+    }
+
+    /// A plain 500 on a revision read recovers — the read is idempotent, so
+    /// the second attempt answers what the first could not.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_revision_read_recovers_from_a_transient_500() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let revisions_path = format!("/app/api/projects/{project_id}/documents/revisions");
+        Mock::given(method("GET"))
+            .and(path(revisions_path.as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(revisions_path.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "kind": "documents",
+                "revisions": [],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        let revisions = client
+            .list_revisions("will")
+            .await
+            .expect("the second attempt succeeds");
+        assert!(revisions.revisions.is_empty());
+    }
+
+    /// An absent revision is a deterministic refusal — terminal on the first
+    /// attempt, with the message the check reports unchanged.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_missing_revision_is_terminal_on_the_first_attempt() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/revisions"
+            )))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        let error = client
+            .list_revisions("absent")
+            .await
+            .expect_err("a 404 is never retried");
+        assert!(
+            error
+                .to_string()
+                .contains("no revision of `absent` is visible on this matter: 404"),
+            "{error:#}"
+        );
+    }
+
+    /// An integrity page retries a plain 500 like the gateway errors — the
+    /// same read, one more recovered page.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_integrity_page_retries_a_plain_500() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let integrity_path = format!("/app/api/projects/{project_id}/documents/integrity");
+        Mock::given(method("GET"))
+            .and(path(integrity_path.as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(integrity_path.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "assets": [],
+                "integrations": [],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        let page = client
+            .integrity(false)
+            .await
+            .expect("the second attempt succeeds");
+        assert!(page.assets.is_empty());
+    }
+
     /// Forgejo's runner also sets `GITHUB_ACTIONS=true`, so `FORGEJO_ACTIONS`
     /// alone selects the Forgejo door.
     #[test]
@@ -9464,8 +9952,7 @@ mod tests {
             "acme",
         )
         .await
-        .err()
-        .expect("a remote plaintext origin must be refused");
+        .expect_err("a remote plaintext origin must be refused");
         assert!(
             error
                 .to_string()

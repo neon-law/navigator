@@ -113,6 +113,9 @@ assert_cmd.workspace = true
 lopdf.workspace = true
 neon.workspace = true
 predicates.workspace = true
+# `start_paused` lets a test fire the gate's 30 s request timeouts against a
+# slow mock without waiting for them in real time.
+tokio = { workspace = true, features = ["test-util"] }
 # `tower::ServiceExt::oneshot` drives the preview router in-process, with no
 # bind and no port.
 tower.workspace = true
