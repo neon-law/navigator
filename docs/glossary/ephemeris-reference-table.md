@@ -224,3 +224,48 @@ and strict schema, object inventory, provenance and row checks must pass before 
 publication. Failure removes only owned stages; completed or unrelated operator artifacts are preserved. The native file
 shares the 4 MiB artifact cap. This is one immutable reference file, without append, expiry or analytical-server
 lifecycle services.
+
+## Existing-bundle observations
+
+`navigator ephemeris tables --measure` observes an existing matching DuckDB bundle. Supply the same source directory,
+coverage and output directory as the completed bundle, an explicit `--duckdb-bin`, and `--iceberg` when that layout is
+present. The command never creates a missing bundle or changes its files, permissions, modification times, reference
+identity or generation time. A missing, mismatched or corrupt bundle is refused. Server-authoritative Owner/Admin
+admission precedes local tool, source and output access; a cached role grants no access.
+
+Source, coverage, schema, exact artifact bytes and native table semantics are verified before observations begin.
+Verification recalculates the bounded expected reference rows with the current validated source/model/release. Queries
+run against a checksum-verified private read-only database copy using the existing bounded child runner. No arbitrary
+SQL, import selector, original WAL file, persistent report file or analytical service is added.
+
+The stdout JSON report binds the reference snapshot ID, coverage-day/row/body counts, Navigator release, OS,
+architecture, debug-assertion mode and available parallelism when known. Storage fields contain ordinary file lengths:
+Parquet, CSV and DuckDB bytes, auxiliary-file bytes, total file count and the actual Parquet row-group count. These are
+logical file sizes, not allocated disk blocks. The current Arrow writer and closed file inventories remain unchanged.
+
+Four fixed queries read every ordered column: all rows, Moon rows, the first 31 calendar days or the whole shorter
+coverage, and Moon rows in that window. Their complete results are checked against expected values/nulls outside the
+timing phase. The engine uses one thread, a 128 MB working-memory limit and disabled spilling. The report includes the
+verified engine version and these limits.
+
+Each query has five independent fresh-process observations. A separate process performs one excluded prewarm followed by
+five warm observations in the same process. Engine seconds come from the pinned native query profile. Fresh driver
+seconds start before spawning and end after child exit and captured I/O; they include bootstrap, read-only attachment,
+query execution and output transfer, but exclude source verification, private copies and JSON decoding. Warm engine
+seconds exclude the prewarm and process setup. Validation and cleanup are outside the measured query operations.
+
+A fresh process is not a cold OS page cache or cold storage device. The command neither flushes system caches nor claims
+that control. Engine-reported read-byte counters describe engine I/O requests, not physical device reads; they can
+exceed file length and need not fall on repeated queries. Raw profiles, SQL text, file paths and ambiguous rows-scanned
+counters are omitted from the report.
+
+Summaries use the one-based nearest rank `ceil(p * count / 100)` for p50 and p95. With five samples, p95 is the maximum
+observation, not a stable tail-latency estimate or performance guarantee. No timing threshold is a test requirement. For
+reproducible engineering evidence, record CPU model, RAM, exact OS version, Cargo build profile/optimization,
+concurrency and cache conditions alongside the report and its snapshot identity. OS/architecture and debug-assertion
+fields alone do not describe all hardware or build settings.
+
+These observations measure the current bounded inventory. The flat layout is provisional; observations do not promise an
+optimal partition policy for a larger inventory or authorize public publication. The source/model/coverage and resource
+bounds remain those of the reference table. Query profiling is described in the [DuckDB 2.0
+documentation](https://duckdb.org/docs/2.0/sql/statements/profiling).
