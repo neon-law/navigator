@@ -150,3 +150,15 @@ through hifitime's proleptic UTC model and do not resolve historical birth clock
 `navigator ephemeris tables` authorizes through the protected source catalog and creates bounded local Parquet/CSV
 [Ephemeris Reference Table](ephemeris-reference-table.md#authenticated-local-files) bundles from the verified raw DE440
 bundle. Derived manifests identify exact content separately from source manifests and generation time.
+
+The optional `--iceberg` mode adds a [local Iceberg v2
+layout](ephemeris-reference-table.md#fixed-location-iceberg-layout) over those files. Its layout artifact identity
+remains separate from the stable reference-content snapshot ID.
+
+The optional `--duckdb-bin` mode uses an explicitly supplied, verified official executable to create a [portable
+materialized DuckDB file](ephemeris-reference-table.md#portable-duckdb-file). It combines with Iceberg without changing
+the reference-content identity; the native database has its own byte identity and tested reader versions.
+
+`tables --measure` produces [storage and query observations](ephemeris-reference-table.md#existing-bundle-observations)
+for an existing matching DuckDB bundle. It reauthorizes and validates before measuring, preserves the immutable bundle,
+and distinguishes fresh-process timing from warm-process timing without claiming cold OS caches.

@@ -67,6 +67,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "firm",
     "brand",
     "brand_letterhead",
+    "mail_signature",
     "brand_phone_number",
     "firm_brand",
     "firm_integration_secret",

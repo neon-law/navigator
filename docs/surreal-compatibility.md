@@ -34,11 +34,11 @@ Its transaction demotes other primary numbers before setting a primary row.
 
 ## Model references and coverage
 
-The glossary links PostgreSQL definitions and canonical accessors. Compatibility-only records retain their own ownership
-attributions for the `glossary_table_coverage` test, which checks `DEFINE TABLE` names, including views. `draft` is a
-compatibility view; its PostgreSQL model is `template`. `schema_version` is the compatibility marker.
+The glossary links PostgreSQL definitions and canonical accessors. The `glossary_table_coverage` test requires one
+owning definition per PostgreSQL table. Compatibility-only records carry explicit SurrealDB compatibility attributions.
+`draft` is a compatibility view; its PostgreSQL model is `template`. `schema_version` is the compatibility marker.
 
-`store/postgres/surreal-source-erd.mmd` describes the source schema for migration work. The glossary renders
-`store/postgres/postgres-erd.mmd`. Mirror reconciliation, backfill, and shadow reads retain their SurrealDB source
-contracts in [PostgreSQL tooling](postgres-tooling.md). [Surreal archives](surreal-archives.md) covers the source
-export.
+`store/postgres/surreal-source-erd.mmd` describes the source schema for migration work. The glossary links an SVG
+generated from `store/postgres/postgres-erd.mmd`. Mirror reconciliation, backfill, and shadow reads retain their
+SurrealDB source contracts in [PostgreSQL tooling](postgres-tooling.md). [Surreal archives](surreal-archives.md) covers
+the source export.

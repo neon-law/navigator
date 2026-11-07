@@ -15,3 +15,5 @@ checkpointed machine read or effect can discard its unstarted claim; later failu
 
 Completion records the result and releases pending ownership in one database update. This orders distinct runtime
 operations; an external effect can still repeat if its send succeeds before the DBOS checkpoint commits.
+
+The table is `notation_transition`.

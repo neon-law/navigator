@@ -21,3 +21,5 @@ the provider disagrees with.
 
 - Schema: `billed_call` in [`store/postgres/migrations/`](../../store/postgres/) ·
   [`store::billed_calls`](../../store/src/billed_calls.rs) · [`portal::twilio_voice`](../../portal/src/twilio_voice.rs)
+
+The table is `billed_call`.

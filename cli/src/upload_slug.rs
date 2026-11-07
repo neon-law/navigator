@@ -58,8 +58,39 @@ pub(crate) fn resolve(
     };
     let Some((sibling, slug)) = sibling else {
         let folder = crate::remote::slug_from_documents_folder(&root, &file);
+        if let Some(explicit) = explicit {
+            return Ok(UploadTarget {
+                slug: Some(explicit.to_string()),
+                root,
+                file,
+                notice: None,
+            });
+        }
+        // Whatever the server would name the document — the path below
+        // `documents/`, else the file itself — is proposed in the C004
+        // convention when it is not already conventional. An explicit
+        // `--slug` or a sibling pointer is the lawyer's own word and is
+        // never overridden.
+        let candidate = folder.clone().or_else(|| {
+            file.file_name()
+                .and_then(|name| name.to_str())
+                .map(String::from)
+        });
+        if let Some(proposed) = candidate
+            .as_deref()
+            .and_then(|candidate| crate::document_sync::propose_conventional_slug(&root, candidate))
+        {
+            return Ok(UploadTarget {
+                notice: Some(format!(
+                    "using slug `{proposed}`, proposed by the document filename convention (C004)"
+                )),
+                slug: Some(proposed),
+                root,
+                file,
+            });
+        }
         return Ok(UploadTarget {
-            slug: explicit.map(str::to_string).or(folder),
+            slug: folder,
             root,
             file,
             notice: None,
@@ -264,6 +295,64 @@ mod tests {
         assert_eq!(target.slug, None);
         let target = resolve(dir.path(), "acme", &outside, Some("memos/scratch.md")).unwrap();
         assert_eq!(target.slug.as_deref(), Some("memos/scratch.md"));
+    }
+
+    /// LAW-196: with a `matter:` block naming a `filed_on`, an upload whose
+    /// fallback name is not conventional is proposed in the C004 convention
+    /// and says so; an explicit `--slug` and an already-conventional name
+    /// are left alone, and a manifest without a matter proposes nothing.
+    #[test]
+    fn an_unconventional_name_is_proposed_in_the_convention() {
+        let dir = checkout();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            "project:\n  host: navigator.example.com\n  name: acme\nmatter:\n  court:\n    - Ninth Judicial District Court\n  case_number: A-2026-0001\n  judicial_officer: To be assigned\n  department: To be assigned\n  filed_on: '2026-10-12'\n  parties: []\n  counsel:\n    attorney: J. Lawyer\n",
+        )
+        .unwrap();
+        let outside = dir.path().join("complaint-annulment-2026-10-12.pdf");
+        std::fs::write(&outside, "x").unwrap();
+        let target = resolve(dir.path(), "acme", &outside, None).unwrap();
+        assert_eq!(
+            target.slug.as_deref(),
+            Some("2026.10.12_complaint-annulment.pdf")
+        );
+        let notice = target.notice.unwrap();
+        assert!(notice.contains("C004"), "{notice}");
+
+        // An explicit slug is the lawyer's own word and is kept.
+        let target = resolve(dir.path(), "acme", &outside, Some("memos/scratch.md")).unwrap();
+        assert_eq!(target.slug.as_deref(), Some("memos/scratch.md"));
+        assert!(target.notice.is_none());
+
+        // An already-conventional file proposes nothing and stays unnamed.
+        let conventional = dir.path().join("2026.10.12_complaint-annulment.pdf");
+        std::fs::write(&conventional, "x").unwrap();
+        let target = resolve(dir.path(), "acme", &conventional, None).unwrap();
+        assert_eq!(target.slug, None);
+        assert!(target.notice.is_none());
+
+        // A dated path below `documents/` keeps its folder and loses the
+        // embedded date.
+        std::fs::create_dir_all(dir.path().join("documents/communications")).unwrap();
+        let dated = dir
+            .path()
+            .join("documents/communications/2026-10-09-call.md");
+        std::fs::write(&dated, "x").unwrap();
+        let target = resolve(dir.path(), "acme", &dated, None).unwrap();
+        assert_eq!(
+            target.slug.as_deref(),
+            Some("communications/2026.10.09_call.md")
+        );
+    }
+
+    #[test]
+    fn without_a_matter_block_nothing_is_proposed() {
+        let dir = checkout();
+        let outside = dir.path().join("complaint-annulment-2026-10-12.pdf");
+        std::fs::write(&outside, "x").unwrap();
+        let target = resolve(dir.path(), "acme", &outside, None).unwrap();
+        assert_eq!(target.slug, None);
+        assert!(target.notice.is_none());
     }
 
     #[test]

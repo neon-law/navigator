@@ -98,9 +98,10 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
     if firm.is_some() != brand.is_some() {
         return Err(anyhow!("--firm and --brand must be supplied together"));
     }
+    let [lawyer_dri, client_dri, private_slack_channel, private_notion_page] = supplied;
     let drive_folder = drive_folder_id(live_fields.drive_folder_id)?;
     let live_fields = live_fields.with_drive_folder(drive_folder.as_deref());
-    let live_patch = live_patch(live_fields)?;
+    let live_patch = live_patch(live_fields, private_slack_channel)?;
     let path = Path::new(manifest::FILE);
     let contents = std::fs::read_to_string(path).context("read navigator.yaml")?;
     let parsed = manifest::parse(&contents).map_err(|error| anyhow!(error))?;
@@ -113,7 +114,6 @@ async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
             anyhow!("navigator.yaml must declare project.name or pass a Project code")
         })?;
     let ownership = manifest_ownership(host, project, &parsed, firm.zip(brand), from_live).await?;
-    let [lawyer_dri, client_dri, private_slack_channel, private_notion_page] = supplied;
     let mut values: [Option<String>; 6] = [
         lawyer_dri,
         client_dri,
@@ -353,12 +353,23 @@ fn drive_folder_check_note(check: Option<&str>) -> &'static str {
     }
 }
 
-/// The live-row fields `--calendar`, `--booking-url`, `--jurisdiction`, and
-/// `--drive-folder`
-/// name, checked before any file or network write so a malformed value
-/// changes nothing. An empty value clears the field on the live row.
-fn live_patch(fields: LiveFields<'_>) -> Result<serde_json::Map<String, serde_json::Value>> {
+/// Build the live-row patch before any file or network write.
+/// Empty `LiveFields` values clear their corresponding fields. The private
+/// Slack channel takes a resource URL; its not-provisioned sentinel is manifest-only.
+fn live_patch(
+    fields: LiveFields<'_>,
+    private_slack_channel: Option<&str>,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
     let mut patch = serde_json::Map::new();
+    if let Some(url) = private_slack_channel
+        .map(str::trim)
+        .filter(|url| !manifest::is_not_provisioned(url))
+    {
+        if !store::projects::is_valid_resource_url(url) {
+            return Err(anyhow!(store::projects::RESOURCE_URL_INVALID));
+        }
+        patch.extend([("internal_slack_channel_url".into(), url.into())]);
+    }
     if let Some(calendar_id) = fields.calendar_id.map(str::trim) {
         if !calendar_id.is_empty() && !store::projects::is_valid_calendar_id(calendar_id) {
             return Err(anyhow!(store::projects::CALENDAR_ID_INVALID));
@@ -465,13 +476,16 @@ mod tests {
 
     #[test]
     fn live_patch_carries_only_the_named_fields_and_refuses_bad_shapes() {
-        assert!(live_patch(LiveFields::default()).unwrap().is_empty());
-        let patch = live_patch(LiveFields {
-            calendar_id: Some(" c_0123@group.calendar.example.com "),
-            drive_folder_id: Some(" 1QaBcD_2-efG "),
-            booking_url: Some("https://calendar.app.google/synthetic"),
-            ..LiveFields::default()
-        })
+        assert!(live_patch(LiveFields::default(), None).unwrap().is_empty());
+        let patch = live_patch(
+            LiveFields {
+                calendar_id: Some(" c_0123@group.calendar.example.com "),
+                drive_folder_id: Some(" 1QaBcD_2-efG "),
+                booking_url: Some("https://calendar.app.google/synthetic"),
+                ..LiveFields::default()
+            },
+            None,
+        )
         .unwrap();
         assert_eq!(patch["calendar_id"], "c_0123@group.calendar.example.com");
         assert_eq!(patch["drive_folder_id"], "1QaBcD_2-efG");
@@ -479,11 +493,14 @@ mod tests {
             patch["booking_url"],
             "https://calendar.app.google/synthetic"
         );
-        let cleared = live_patch(LiveFields {
-            booking_url: Some(""),
-            drive_folder_id: Some(""),
-            ..LiveFields::default()
-        })
+        let cleared = live_patch(
+            LiveFields {
+                booking_url: Some(""),
+                drive_folder_id: Some(""),
+                ..LiveFields::default()
+            },
+            None,
+        )
         .unwrap();
         assert_eq!(
             cleared["booking_url"], "",
@@ -493,15 +510,21 @@ mod tests {
             cleared["drive_folder_id"], "",
             "an empty value clears the folder, too"
         );
-        assert!(live_patch(LiveFields {
-            calendar_id: Some("https://calendar.google.com/calendar/r"),
-            ..LiveFields::default()
-        })
+        assert!(live_patch(
+            LiveFields {
+                calendar_id: Some("https://calendar.google.com/calendar/r"),
+                ..LiveFields::default()
+            },
+            None
+        )
         .is_err());
-        assert!(live_patch(LiveFields {
-            booking_url: Some("javascript:alert(1)"),
-            ..LiveFields::default()
-        })
+        assert!(live_patch(
+            LiveFields {
+                booking_url: Some("javascript:alert(1)"),
+                ..LiveFields::default()
+            },
+            None
+        )
         .is_err());
         for bad_drive_folder in [
             // Not an id: a link, a path, a query, whitespace, a comma
@@ -512,10 +535,13 @@ mod tests {
             "1QaBcD_2-efG,1AbCdE",
         ] {
             assert!(
-                live_patch(LiveFields {
-                    drive_folder_id: Some(bad_drive_folder),
-                    ..LiveFields::default()
-                })
+                live_patch(
+                    LiveFields {
+                        drive_folder_id: Some(bad_drive_folder),
+                        ..LiveFields::default()
+                    },
+                    None
+                )
                 .is_err(),
                 "{bad_drive_folder} must be refused"
             );

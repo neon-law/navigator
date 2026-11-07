@@ -15,3 +15,5 @@ docket obligation whose miss is a malpractice event, while an entry is the recor
 Vocabulary: [`store::time_entries`](../../store/src/time_entries.rs)
 
 - Vocabulary: [`store::time_entries`](../../store/src/time_entries.rs)
+
+The table is `time_entry`.

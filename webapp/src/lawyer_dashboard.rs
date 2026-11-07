@@ -25,6 +25,10 @@
 //! collection, so the page can never disclose the name of a matter the caller
 //! may not see.
 //!
+//! The Contingency Pipeline card reads that same collection
+//! ([`crate::projected_cash::PipelineCard`]), so it never counts a matter the
+//! KPI list would hide.
+//!
 //! The calendar lists current upcoming appearances from each visible matter's
 //! docket — a hearing or trial's `scheduled_on`, following a continuance chain.
 //! Documents and project rows are not events.
@@ -149,6 +153,9 @@ pub struct DashboardView {
     /// the section's own empty state, never synthesized.
     #[serde(default)]
     pub conflict_findings: Vec<ConflictFindingView>,
+    /// The Contingency Pipeline over the same visible matters.
+    #[serde(default)]
+    pub pipeline: crate::projected_cash::PipelineCardView,
 }
 
 /// The dashboard's query string. All four are lenient: an unrecognised value
@@ -256,6 +263,8 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
 
     let calendar_events = calendar_events_for_projects(&surreal, &projects).await?;
     let conflict_findings = conflict_findings_for_projects(&surreal, &projects).await?;
+    let pipeline =
+        crate::projected_cash::derive::load_pipeline(&surreal, person_id, &projects).await;
 
     Ok(DashboardView {
         firm_name: crate::app_chrome::firm_name_from_context().await,
@@ -279,6 +288,7 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         calendar_events,
         conflict_findings,
+        pipeline,
     })
 }
 
@@ -515,6 +525,7 @@ fn lawyer_dashboard_body(view: &DashboardView) -> Element {
                 }
             }
             ProjectKpiOverview { view: view.clone() }
+            crate::projected_cash::PipelineCard { view: view.pipeline.clone() }
             // The workbench calendar spans every matter the caller can see, and
             // carries the adjacent list's status so re-sorting one control does
             // not reset the other.
@@ -839,6 +850,7 @@ mod tests {
             logo: None,
             calendar_events: vec![],
             conflict_findings: vec![],
+            pipeline: crate::projected_cash::PipelineCardView::default(),
         }
     }
 

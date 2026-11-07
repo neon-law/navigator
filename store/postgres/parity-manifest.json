@@ -303,6 +303,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "mail_signature",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "matter_billing_batch",
       "missing_column": null,
       "missing_table": null,
@@ -1914,7 +1921,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 158,
+    "table_count": 159,
     "tables": {
       "address": {
         "columns": {
@@ -3701,6 +3708,17 @@
           "mailroom"
         ]
       },
+      "mail_signature": {
+        "columns": {
+          "body": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "mail_signature",
+        "references": []
+      },
       "mailroom": {
         "columns": {
           "address_id": "UUID",
@@ -4966,7 +4984,6 @@
       },
       "project_task": {
         "columns": {
-          "REFERENCES": "person_project_role",
           "assignee_id": "UUID",
           "body": "TEXT",
           "due_on": "DATE",
@@ -4978,10 +4995,6 @@
           "updated_at": "TIMESTAMPTZ"
         },
         "foreign_keys": [
-          [
-            "REFERENCES",
-            "person_project_role"
-          ],
           [
             "project_id",
             "project"
@@ -5583,8 +5596,6 @@
       },
       "time_entry": {
         "columns": {
-          "(billing_status": "=",
-          "REFERENCES": "person_project_role",
           "attorney_id": "UUID",
           "billable": "BOOLEAN",
           "billing_status": "TEXT",
@@ -5601,10 +5612,6 @@
           "xero_invoice_id": "TEXT"
         },
         "foreign_keys": [
-          [
-            "REFERENCES",
-            "person_project_role"
-          ],
           [
             "project_id",
             "project"

@@ -770,6 +770,35 @@ fn pointer_target_for_document(root: &Path, relative: &Path) -> Result<PathBuf> 
     Ok(target)
 }
 
+/// The conventional slug (C004) proposed for a document staged as `slug`,
+/// dated by the checkout's `matter:` block: folder components survive and
+/// only the file name is renamed — `Work Product/complaint-2026-10-14.pdf`
+/// proposes `Work Product/2026.10.14_complaint.pdf`. `None` keeps the name
+/// as given: no readable manifest or `filed_on` (a manifest's own problems
+/// are the gate's to report), or a name already conventional.
+pub(crate) fn propose_conventional_slug(root: &Path, slug: &str) -> Option<String> {
+    let path = Path::new(slug);
+    let name = path.file_name()?.to_str()?;
+    if rules::c004::is_conventional_filename(name) {
+        return None;
+    }
+    let document: serde_yaml::Value = serde_yaml::from_str(
+        &std::fs::read_to_string(root.join(crate::projects::manifest::FILE)).ok()?,
+    )
+    .ok()?;
+    let filed_on = document
+        .get(crate::projects::matter::KEY)?
+        .get("filed_on")?
+        .as_str()?;
+    let proposed = rules::c004::proposed_filename(filed_on, name)?;
+    Some(match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            parent.join(proposed).display().to_string()
+        }
+        _ => proposed,
+    })
+}
+
 pub(crate) fn write_uploaded_pointer(
     root: &Path,
     slug: &str,

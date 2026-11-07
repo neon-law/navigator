@@ -21,3 +21,5 @@ ingests nothing.
 - Schema: `brand_phone_number` in [`store/postgres/migrations/`](../../store/postgres/) ·
   [`store::brand_phone_numbers`](../../store/src/brand_phone_numbers.rs) ·
   [`portal::twilio_resolution`](../../portal/src/twilio_resolution.rs)
+
+The table is `brand_phone_number`.

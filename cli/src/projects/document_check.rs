@@ -1052,6 +1052,19 @@ pub(crate) fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>
             });
             continue;
         }
+        // A document's filename follows `YYYY.MM.DD_name.ext` (LAW-196), so
+        // the matter folder sorts chronologically and an agent never guesses
+        // a name or a date. Names that already carry their own date or
+        // convention are exempt: docket ingest's names under `Docket
+        // Filings/` (`DKT NNNN - <title>.pdf`, and the older `di-…` form),
+        // the `INV-<digits>` invoices the check above, an Authority sidecar
+        // (metadata, not a document), Markdown work product (the lawyer's
+        // editable source), and a file inside a date-named folder, whose
+        // folder already dates it.
+        if let Some(message) = document_filename_finding(relative, &path, &file_name) {
+            errors.push(CheckFailure { location, message });
+            continue;
+        }
         // Two files naming one slug cannot both be filed: a Pointer claims
         // the slug, and `project sync` uploads at most one of them.
         let (slug, _) = crate::document_layout::slug_of_bytes(relative);
@@ -1067,6 +1080,38 @@ pub(crate) fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>
         }
     }
     Ok(errors)
+}
+
+/// The filename finding for a file at `path`, at `relative` below a
+/// documents tree: `None` when the name is one of the shipped folder
+/// conventions (docket ingest's names under `Docket Filings/`, the
+/// `INV-<digits>` invoices, an Authority sidecar), is Markdown work
+/// product, sits in a date-named folder, or already follows the
+/// `YYYY.MM.DD_name.ext` convention (C004); the message naming the
+/// convention otherwise. Shared by the document walk and the gate's
+/// name-only pass.
+pub(crate) fn document_filename_finding(
+    relative: &Path,
+    path: &Path,
+    file_name: &str,
+) -> Option<String> {
+    let is_docket_filing = crate::document_layout::matter_folder_of(relative)
+        == Some(store::document_pointers::MatterFolder::DocketFilings);
+    let is_in_date_named_folder = relative
+        .parent()
+        .and_then(std::path::Path::file_name)
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(rules::c004::is_date_named_directory);
+    if is_docket_filing
+        || crate::document_sync::is_invoice_capture(relative)
+        || crate::document_sync::is_authority_sidecar_path(path)
+        || rules::c004::is_markdown_work_product(file_name)
+        || is_in_date_named_folder
+        || rules::c004::is_conventional_filename(file_name)
+    {
+        return None;
+    }
+    Some(rules::c004::finding_message(file_name))
 }
 
 fn known_folders() -> String {
@@ -2361,12 +2406,13 @@ mod tests {
     }
 
     /// A tree laid out like `documents/`: one Matter Folder, a good invoice,
-    /// and a Finder stray.
+    /// and a Finder stray. Document names follow `YYYY.MM.DD_name.ext`
+    /// (LAW-196).
     fn matter_tree(root: &std::path::Path) {
         std::fs::create_dir_all(root.join("Work Product")).unwrap();
         std::fs::create_dir_all(root.join("invoices")).unwrap();
         std::fs::create_dir_all(root.join(".apupdates")).unwrap();
-        std::fs::write(root.join("Work Product/memo.md"), BODY).unwrap();
+        std::fs::write(root.join("Work Product/2026.10.12_memo.md"), BODY).unwrap();
         std::fs::write(root.join("invoices/INV-1.pdf"), BODY).unwrap();
         std::fs::write(root.join(".DS_Store"), b"").unwrap();
     }
@@ -2431,7 +2477,68 @@ mod tests {
     #[test]
     fn a_loose_file_at_the_root_is_the_tolerated_legacy_layout() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("memo.md"), BODY).unwrap();
+        std::fs::write(dir.path().join("2026.10.12_memo.md"), BODY).unwrap();
+        assert!(check_documents_root(dir.path()).unwrap().is_empty());
+    }
+
+    /// LAW-196: a document whose filename is not `YYYY.MM.DD_name.ext` is a
+    /// finding naming the rule code, and the renamed file passes.
+    #[test]
+    fn a_non_conforming_document_name_is_a_finding_naming_the_code() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("Work Product")).unwrap();
+        std::fs::write(
+            dir.path()
+                .join("Work Product/complaint-annulment-2026-10-12.pdf"),
+            BODY,
+        )
+        .unwrap();
+
+        let errors = check_documents_root(dir.path()).unwrap();
+        assert_eq!(
+            locations(&errors),
+            vec!["Work Product/complaint-annulment-2026-10-12.pdf"]
+        );
+        assert!(errors[0].message.contains("C004"), "{}", errors[0].message);
+
+        std::fs::rename(
+            dir.path()
+                .join("Work Product/complaint-annulment-2026-10-12.pdf"),
+            dir.path()
+                .join("Work Product/2026.10.12_complaint-annulment.pdf"),
+        )
+        .unwrap();
+        assert!(check_documents_root(dir.path()).unwrap().is_empty());
+    }
+
+    /// The folders whose naming another shipped convention governs are
+    /// exempt: docket ingest's names under `Docket Filings/`, the
+    /// `INV-<digits>` invoices, and an Authority sidecar.
+    #[test]
+    fn docket_invoice_and_sidecar_names_are_exempt() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("Docket Filings")).unwrap();
+        std::fs::create_dir_all(dir.path().join("invoices")).unwrap();
+        std::fs::create_dir_all(dir.path().join("cases")).unwrap();
+        std::fs::create_dir_all(dir.path().join("onboarding")).unwrap();
+        std::fs::write(
+            dir.path()
+                .join("Docket Filings/DKT 0004 - Notice of Hearing.pdf"),
+            BODY,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("Docket Filings/di-12-order.pdf"), BODY).unwrap();
+        std::fs::write(dir.path().join("invoices/INV-1.pdf"), BODY).unwrap();
+        std::fs::write(dir.path().join("cases/acme.authority.yaml"), BODY).unwrap();
+        // The `_signed` suffix a signed copy requires composes with the
+        // convention.
+        std::fs::write(
+            dir.path()
+                .join("onboarding/2026.10.16_engagement-letter_signed.pdf"),
+            BODY,
+        )
+        .unwrap();
+
         assert!(check_documents_root(dir.path()).unwrap().is_empty());
     }
 
@@ -2440,15 +2547,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("Work Product")).unwrap();
         std::fs::create_dir_all(dir.path().join("Discovery")).unwrap();
-        std::fs::write(dir.path().join("Work Product/complaint.pdf"), BODY).unwrap();
-        std::fs::write(dir.path().join("Discovery/complaint.pdf"), BODY).unwrap();
+        std::fs::write(
+            dir.path().join("Work Product/2026.10.12_complaint.pdf"),
+            BODY,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("Discovery/2026.10.12_complaint.pdf"), BODY).unwrap();
 
         let errors = check_documents_root(dir.path()).unwrap();
-        assert_eq!(locations(&errors), vec!["Work Product/complaint.pdf"]);
+        assert_eq!(
+            locations(&errors),
+            vec!["Work Product/2026.10.12_complaint.pdf"]
+        );
         assert!(
-            errors[0]
-                .message
-                .contains("files as `complaint.pdf`, which `Discovery/complaint.pdf` already"),
+            errors[0].message.contains(
+                "files as `2026.10.12_complaint.pdf`, which `Discovery/2026.10.12_complaint.pdf` already",
+            ),
             "{}",
             errors[0].message
         );

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "engine_version": "v2.0.0",
+  "storage_version": "v0.10.0",
+  "tested_reader_versions": [
+    "v1.4.5",
+    "v2.0.0"
+  ],
+  "binaries": [
+    {
+      "platform": "macos-arm64",
+      "archive_url": "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-osx-arm64.tar.gz",
+      "archive_bytes": 19169633,
+      "archive_sha256": "188a36fe8883ef52e69165a0cbb6031ef679c8e6c448a1ce22951964149b7f96",
+      "binary_bytes": 66244528,
+      "binary_sha256": "432e9c8012d0259e7c4630fa2136bf59fb832769ca7e0f6e374b8af2d2cebed9"
+    },
+    {
+      "platform": "linux-amd64-musl",
+      "archive_url": "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64-musl.tar.gz",
+      "archive_bytes": 22696135,
+      "archive_sha256": "3285e4083a79955b0606ab799ebc1493087307cdc76b4827308b1a4dcdb371c9",
+      "binary_bytes": 72536760,
+      "binary_sha256": "6e238f4f072c09f8735f4a87fa74336633e12a020817c399f575b2d4c1dd670d"
+    },
+    {
+      "platform": "linux-amd64-gnu",
+      "archive_url": "https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz",
+      "archive_bytes": 24424037,
+      "archive_sha256": "c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc",
+      "binary_bytes": 77526584,
+      "binary_sha256": "c41f957db5645d545a9caef430994cf262d24fad9297fef70c691395aadb43fb"
+    }
+  ]
+}

@@ -14,3 +14,5 @@ supplied Asset identifier, filename, hash, or metadata cannot create a receipt.
 
 The PostgreSQL table is `inbox_attachment_receipt`. Source-authoritative historical attachment migration can establish
 receipts from the persisted Message, Conversation, Firm, and verified Asset hash before native Inbox cutover.
+
+The table is `inbox_attachment_receipt`.

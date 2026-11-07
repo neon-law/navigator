@@ -19,6 +19,12 @@ pub const INBOX_PATH: &str = "/app/inbox";
 pub const INBOX_THREAD_PATH: &str = "/app/inbox/{conversation_id}";
 /// Conversations assigned to one Project.
 pub const PROJECT_INBOX_PATH: &str = "/app/projects/{project_code}/inbox";
+/// The firm reading pane's server-function endpoint, mounted only on the
+/// [`INBOX_PATH`] router, under `/app/inbox`'s firm-role admission.
+pub const INBOX_PANE_ENDPOINT: &str = "/app/inbox/pane";
+/// The Project reading pane's server-function endpoint, mounted only on the
+/// [`PROJECT_INBOX_PATH`] router; the store re-checks participation.
+pub const PROJECT_INBOX_PANE_ENDPOINT: &str = "/app/projects/inbox-pane";
 /// One assigned conversation.
 pub const PROJECT_INBOX_THREAD_PATH: &str = "/app/projects/{project_code}/inbox/{conversation_id}";
 
@@ -207,6 +213,23 @@ pub(crate) async fn person_id() -> Option<uuid::Uuid> {
     .ok()
     .and_then(|axum::Extension(pid)| pid.0)
     .and_then(|raw| raw.parse().ok())
+}
+
+#[cfg(feature = "server")]
+/// The Surreal handle: a request extension on the reading pane's directly
+/// mounted endpoints, which run outside the page's Dioxus runtime, else the
+/// render's context provider.
+#[cfg(feature = "server")]
+async fn surreal() -> store::surreal::SurrealDb {
+    match dioxus_fullstack_core::FullstackContext::extract::<
+        axum::Extension<store::surreal::SurrealDb>,
+        _,
+    >()
+    .await
+    {
+        Ok(axum::Extension(surreal)) => surreal,
+        Err(_) => consume_context::<store::surreal::SurrealDb>(),
+    }
 }
 
 #[cfg(feature = "server")]
@@ -677,7 +700,7 @@ pub async fn owner_inbox_thread() -> Result<InboxThreadPage, ServerFnError> {
 
 /// The reading pane's fetch: one firm-inbox conversation by id, the same
 /// firm-person authorization and shape as the thread route.
-#[server]
+#[server(prefix = "", endpoint = "app/inbox/pane")]
 pub async fn inbox_conversation(conversation_id: String) -> Result<InboxThreadPage, ServerFnError> {
     firm_thread_page(
         conversation_id
@@ -690,7 +713,7 @@ pub async fn inbox_conversation(conversation_id: String) -> Result<InboxThreadPa
 #[cfg(feature = "server")]
 async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage, ServerFnError> {
     let role = crate::admin_listing::require_firm_person().await?;
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let surreal = surreal().await;
     let actor = person_id()
         .await
         .ok_or_else(|| ServerFnError::new("owner access required"))?;
@@ -768,7 +791,7 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
 
 #[cfg(feature = "server")]
 async fn project_for_code(code: &str) -> Result<store::projects::Project, ServerFnError> {
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let surreal = surreal().await;
     store::projects::find_by_code(&surreal, code)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?
@@ -861,7 +884,7 @@ pub async fn project_inbox_thread() -> Result<InboxThreadPage, ServerFnError> {
 /// The Project reading pane's fetch: one conversation by id under its
 /// Project code, the same participant authorization and shape as the
 /// Project thread route.
-#[server]
+#[server(prefix = "", endpoint = "app/projects/inbox-pane")]
 pub async fn project_inbox_conversation(
     project_code: String,
     conversation_id: String,
@@ -884,7 +907,7 @@ async fn project_thread_page(
         .await
         .map(|axum::Extension(role)| role)
         .unwrap_or_default();
-    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let surreal = surreal().await;
     let actor = person_id()
         .await
         .ok_or_else(|| ServerFnError::new("not allowed"))?;

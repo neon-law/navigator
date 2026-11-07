@@ -19,3 +19,5 @@ This is the one self-serve invoice Navigator raises. Lawyers bill matters in Xer
   [`store::purchases`](../../store/src/purchases.rs) Door: [`portal::purchases`](../../portal/src/purchases.rs)
 - Activation: the DBOS `PurchaseActivation` schedule,
   [`purchase_activation`](../../workflows/src/dbos_engine/purchase_activation.rs)
+
+The table is `purchase`.

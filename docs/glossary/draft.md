@@ -41,6 +41,6 @@ their own meanings:
   not of the authored source it was rendered from. Schema: [`review_document` in PostgreSQL
   schema](../../store/postgres/schema.sql).
 
-The table is `draft`.
+The SurrealDB compatibility table is `draft`.
 
 Schema: [`template`](../../store/postgres/schema.sql).

@@ -39,14 +39,61 @@ pub const PROFILE_AVATAR_PATH: &str = "/app/avatar";
 /// The SSH key card's native add form posts here.
 pub const PROFILE_SSH_KEYS_PATH: &str = "/app/profile/ssh-keys";
 
-/// The `?ssh_key=` / `?ssh_key_error=` outcome the SSH key forms redirect
-/// back with — a fixed code, never the submitted key.
+/// The signature card's native form posts here. Sibling of [`PROFILE_PATH`]
+/// so a relative resolution from that page still lands here.
+pub const PROFILE_MAIL_SIGNATURE_PATH: &str = "/app/profile/mail-signature";
+
+/// The `?ssh_key=` / `?signature=` outcome the profile page's forms redirect
+/// back with — fixed codes, never the submitted text.
 #[derive(Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
 pub struct ProfileQuery {
     #[serde(default)]
     pub ssh_key: Option<String>,
     #[serde(default)]
     pub ssh_key_error: Option<String>,
+    #[serde(default)]
+    pub signature: Option<String>,
+    #[serde(default)]
+    pub signature_error: Option<String>,
+}
+
+/// The signature card: the attorney's stored block plus the outcome flash.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct SignatureCard {
+    /// The stored signature, prefilled into the form. Empty when none is set
+    /// yet — the attorney starts from a blank block, not an error.
+    pub body: String,
+    /// `false` when the signature store could not be read; the card says so
+    /// rather than offering a form that would silently overwrite.
+    pub available: bool,
+    pub notice: Option<String>,
+    pub error: Option<String>,
+}
+
+/// The sentence for a `?signature=` outcome code.
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+fn signature_notice(code: &str) -> Option<&'static str> {
+    match code {
+        "saved" => Some("Signature saved."),
+        _ => None,
+    }
+}
+
+/// The sentence for a `?signature_error=` code.
+#[cfg_attr(not(feature = "server"), allow(dead_code))]
+fn signature_error_sentence(code: &str) -> &'static str {
+    match code {
+        "invalid" => {
+            "The signature could not be saved. It must not be blank, must be at most \
+             2000 characters, and must not contain a `--` delimiter line — \
+             Navigator adds the delimiter itself."
+        }
+        "not_found" => {
+            "Your signature was not saved: your account has no linked Navigator profile."
+        }
+        "unavailable" => "Signatures are unavailable right now. Try again later.",
+        _ => "The signature could not be saved.",
+    }
 }
 
 /// One of the viewer's registered SSH public keys, as the card lists it.
@@ -131,6 +178,10 @@ pub struct ProfileFields {
     /// The SSH key card, for a Firm-tier viewer only.
     #[serde(default)]
     pub ssh_keys: Option<SshKeysCard>,
+    /// The signature card, for a Firm-tier viewer only — the attorney's own
+    /// mail signature (LAW-280).
+    #[serde(default)]
+    pub signature: Option<SignatureCard>,
 }
 
 /// Read the viewer's SSH keys for the card. A store that cannot be reached
@@ -172,6 +223,47 @@ async fn load_ssh_keys(person_id: uuid::Uuid, query: ProfileQuery) -> SshKeysCar
         available,
         notice,
         error,
+    }
+}
+
+/// Read the viewer's mail signature for the card. A store that cannot be
+/// reached yields an unavailable card, never a failed page — and never a
+/// form that would overwrite a block the card could not read.
+#[cfg(feature = "server")]
+async fn load_signature(
+    surreal: &store::surreal::SurrealDb,
+    person_id: uuid::Uuid,
+    query: ProfileQuery,
+) -> SignatureCard {
+    let notice = query
+        .signature
+        .as_deref()
+        .and_then(signature_notice)
+        .map(str::to_string);
+    let error = query
+        .signature_error
+        .as_deref()
+        .map(|code| signature_error_sentence(code).to_string());
+    let stored = match store::postgres::PostgresDb::from_env().await {
+        Ok(pg) => store::mail_signatures::for_person(surreal, &pg, person_id)
+            .await
+            .ok()
+            .flatten(),
+        Err(_) => None,
+    };
+    match stored {
+        Some(signature) => SignatureCard {
+            body: signature.body,
+            available: true,
+            notice,
+            error,
+        },
+        None => SignatureCard {
+            body: String::new(),
+            available: false,
+            notice,
+            error,
+        },
     }
 }
 
@@ -224,7 +316,7 @@ async fn load_profile(role: ViewerRole) -> Result<ProfileView, ServerFnError> {
     };
 
     let firm_tier = !matches!(person.role, store::persons::Role::Client);
-    let ssh_keys = if firm_tier {
+    let (ssh_keys, signature) = if firm_tier {
         let query = dioxus_fullstack_core::FullstackContext::extract::<
             axum::extract::Query<ProfileQuery>,
             _,
@@ -232,9 +324,12 @@ async fn load_profile(role: ViewerRole) -> Result<ProfileView, ServerFnError> {
         .await
         .map(|axum::extract::Query(query)| query)
         .unwrap_or_default();
-        Some(load_ssh_keys(person_id, query).await)
+        (
+            Some(load_ssh_keys(person_id, query.clone()).await),
+            Some(load_signature(&surreal, person_id, query).await),
+        )
     } else {
-        None
+        (None, None)
     };
 
     Ok(ProfileView {
@@ -247,6 +342,7 @@ async fn load_profile(role: ViewerRole) -> Result<ProfileView, ServerFnError> {
             csrf_token,
             avatar_is_public: firm_tier,
             ssh_keys,
+            signature,
         }),
         logo,
     })
@@ -422,6 +518,44 @@ fn ssh_keys_card(card: &SshKeysCard, csrf_token: &str) -> Element {
     }
 }
 
+/// The signature card: the attorney's own mail signature, prefilled from the
+/// stored row, saving through the self-service route. A store the page could
+/// not read keeps the form off the card, so a save cannot overwrite a block
+/// the card never saw.
+fn signature_card(card: &SignatureCard, csrf_token: &str) -> Element {
+    rsx! {
+        section { id: "profile-signature",
+            h2 { "Email signature" }
+            p { class: "nav-muted",
+                "The block that signs your Gmail drafts. Navigator adds the `-- ` delimiter \
+                 line above it when drafting, so never include the delimiter here."
+            }
+            if let Some(error) = card.error.as_ref() {
+                p { class: "nav-form-error", role: "alert", "{error}" }
+            }
+            if let Some(notice) = card.notice.as_ref() {
+                p { role: "status", "{notice}" }
+            }
+            if !card.available {
+                p { "Your signature is unavailable right now. Try again later." }
+            } else {
+                FormCard {
+                    title: "Email signature".to_string(),
+                    action: PROFILE_MAIL_SIGNATURE_PATH.to_string(),
+                    submit_label: "Save signature".to_string(),
+                    heading: Heading::H2,
+                    csrf_token: Some(csrf_token.to_string()),
+                    fields: vec![
+                        Field::textarea("Signature", "body", card.body.clone(), 6)
+                            .id("profile-signature-body")
+                            .help("At most 2000 characters."),
+                    ],
+                }
+            }
+        }
+    }
+}
+
 /// Render the resolved profile page.
 fn render_profile(resource: &Resource<Result<ProfileView, ServerFnError>>) -> Element {
     let view = match &*resource.read() {
@@ -456,6 +590,9 @@ fn render_profile(resource: &Resource<Result<ProfileView, ServerFnError>>) -> El
                 Some(fields) => rsx! {
                     {avatar_upload_card(&fields.csrf_token, fields.avatar_is_public)}
                     {contact_card(fields)}
+                    if let Some(card) = fields.signature.as_ref() {
+                        {signature_card(card, &fields.csrf_token)}
+                    }
                     if let Some(card) = fields.ssh_keys.as_ref() {
                         {ssh_keys_card(card, &fields.csrf_token)}
                     }
@@ -485,7 +622,38 @@ mod tests {
             csrf_token: "csrf-token".to_string(),
             avatar_is_public: false,
             ssh_keys: None,
+            signature: None,
         }
+    }
+
+    fn signature_app() -> Element {
+        let card = SignatureCard {
+            body: "Example Attorney\nConfidential: intended recipient only.".to_string(),
+            available: true,
+            notice: None,
+            error: Some(signature_error_sentence("invalid").to_string()),
+        };
+        signature_card(&card, "csrf-token")
+    }
+
+    fn fresh_signature_app() -> Element {
+        let card = SignatureCard {
+            body: String::new(),
+            available: true,
+            notice: Some(signature_notice("saved").unwrap().to_string()),
+            error: None,
+        };
+        signature_card(&card, "csrf-token")
+    }
+
+    fn unavailable_signature_app() -> Element {
+        let card = SignatureCard {
+            body: String::new(),
+            available: false,
+            notice: None,
+            error: None,
+        };
+        signature_card(&card, "csrf-token")
     }
 
     fn ssh_keys_app() -> Element {
@@ -623,5 +791,66 @@ mod tests {
         let out = ssr(contact_app);
         assert!(out.contains(r#"value="Libra Scales""#), "{out}");
         assert!(out.contains(r#"value="libra@example.com""#), "{out}");
+    }
+
+    /// The signature card is a native form posting the body to the
+    /// self-service route: CSRF first, then the prefilled textarea. The
+    /// subject is never on the form — the session is the only subject.
+    #[test]
+    fn the_signature_card_posts_the_body_to_the_self_service_route() {
+        let out = ssr(signature_app);
+        assert!(
+            out.contains(r#"action="/app/profile/mail-signature""#),
+            "{out}"
+        );
+        assert!(out.contains(r#"name="body""#), "{out}");
+        assert!(
+            !out.contains("person_id") && !out.contains("person"),
+            "no subject field on the form: {out}"
+        );
+        assert!(
+            out.contains("Confidential: intended recipient only."),
+            "the stored block prefills the textarea: {out}"
+        );
+        let csrf_pos = out.find(r#"name="_csrf""#);
+        let body_pos = out.find(r#"name="body""#);
+        assert!(
+            csrf_pos.is_some() && body_pos.is_some() && csrf_pos < body_pos,
+            "CSRF must be the first field, before the body textarea: {out}"
+        );
+        assert!(
+            out.contains("never include the delimiter here"),
+            "the card warns off the delimiter line: {out}"
+        );
+    }
+
+    #[test]
+    fn the_fresh_signature_card_starts_from_a_blank_block_with_the_saved_flash() {
+        let out = ssr(fresh_signature_app);
+        assert!(
+            out.contains(r#"role="status""#) && out.contains("Signature saved."),
+            "{out}"
+        );
+        assert!(!out.contains("nav-form-error"), "{out}");
+    }
+
+    #[test]
+    fn the_unavailable_signature_card_keeps_the_form_off_the_page() {
+        let out = ssr(unavailable_signature_app);
+        assert!(out.contains("unavailable right now"), "{out}");
+        assert!(!out.contains(r#"name="body""#), "{out}");
+    }
+
+    #[test]
+    fn signature_flash_codes_map_to_fixed_sentences_and_ignore_unknown_codes() {
+        assert_eq!(signature_notice("saved"), Some("Signature saved."));
+        assert_eq!(signature_notice("<script>"), None);
+        assert!(signature_error_sentence("invalid").contains("2000"));
+        assert!(signature_error_sentence("invalid").contains("delimiter"));
+        assert_eq!(
+            signature_error_sentence("<script>"),
+            "The signature could not be saved.",
+            "an unknown code never echoes request text"
+        );
     }
 }

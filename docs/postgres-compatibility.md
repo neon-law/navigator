@@ -1,7 +1,7 @@
 # PostgreSQL compatibility evidence
 
 The compatibility workflow uses the same immutable PostgreSQL image as the KIND overlay. The matrix is PostgreSQL 16.15,
-Apache AGE 1.6.0, pgvector 0.8.2, SQLx 0.9.0, and the native DBOS 0.5.0 synthetic test application in
+Apache AGE 1.6.0, pgvector 0.8.7, SQLx 0.9.0, and the native DBOS 0.5.0 synthetic test application in
 [`images/postgres/tests/dbos`](../images/postgres/tests/dbos). The image is built and published weekly from
 [`images/postgres`](../images/postgres/README.md).
 

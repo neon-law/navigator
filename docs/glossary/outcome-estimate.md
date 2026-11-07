@@ -27,3 +27,5 @@ An estimate is firm work product. Only a firm-side participant may record or rea
 clerk [Lens](lens.md), and never on a [Litigation Pitch](litigation-pitch.md).
 
 - Vocabulary: [`store::outcome_estimates`](../../store/src/outcome_estimates.rs)
+
+The table is `outcome_estimate`.

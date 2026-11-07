@@ -12,8 +12,8 @@ use rules::dashboard::Section;
 use super::notations::NotationsData;
 use super::{
     AuthorityView, CaptionView, DeadlineCard, DiscoveryView, EvidenceIndexView, FactStripView,
-    GraphView, NoteView, PageLens, ProjectCostsView, ProvenanceView, ReceiptRow, RosterView,
-    SectionRow, SectionView, TimelineView,
+    GraphView, NoteView, OutcomeProjectionView, PageLens, ProjectCostsView, ProvenanceView,
+    ReceiptRow, RosterView, SectionRow, SectionView, TimelineView,
 };
 
 /// What a page's sections are built from, already scoped to `lens`.
@@ -72,6 +72,9 @@ pub struct LoadContext {
     pub engagement_filed_any: bool,
     /// The filed engagement letters this lens may open, newest first.
     pub engagement_letters: Vec<super::LetterDocument>,
+    /// The matter's projected profit by outcome; filled on the lawyer lens
+    /// only — firm work product a client or clerk page never carries.
+    pub outcome_projection: OutcomeProjectionView,
 }
 
 impl LoadContext {
@@ -127,6 +130,7 @@ impl LoadContext {
             page_draft: super::PageDraft::default(),
             engagement_filed_any: false,
             engagement_letters: Vec::new(),
+            outcome_projection: OutcomeProjectionView::default(),
         }
     }
 }
@@ -280,6 +284,9 @@ pub fn load(section: Section, cx: &LoadContext) -> SectionView {
         Section::RuleClocks => SectionView::RuleClocks(Vec::new()),
         Section::PathChooser => SectionView::PathChooser(Vec::new()),
         Section::EligibilityChecklist => SectionView::EligibilityChecklist(Vec::new()),
+        Section::OutcomeProjection => {
+            SectionView::OutcomeProjection(lawyer_only(cx, |cx| cx.outcome_projection.clone()))
+        }
     }
 }
 
@@ -383,6 +390,39 @@ mod evidence_tests {
                 assert_eq!(view.unclaimed, Vec::new());
             }
             other => panic!("wrong view: {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod outcome_projection_tests {
+    use super::{load, LoadContext};
+    use crate::sections::{OutcomeProjectionView, PageLens, SectionView};
+    use rules::dashboard::Section;
+
+    fn populated() -> OutcomeProjectionView {
+        OutcomeProjectionView {
+            contingent: true,
+            source: "Lawyer estimate".into(),
+            expected_value: Some("$50,970.00".into()),
+            costs_at_risk: "$12,000.00".into(),
+            ..OutcomeProjectionView::default()
+        }
+    }
+
+    #[test]
+    fn only_the_lawyer_lens_carries_the_projection() {
+        for lens in [PageLens::Lawyer, PageLens::Client, PageLens::Clerk] {
+            let mut cx = LoadContext::empty(lens);
+            cx.outcome_projection = populated();
+            let SectionView::OutcomeProjection(view) = load(Section::OutcomeProjection, &cx) else {
+                panic!("wrong view");
+            };
+            if lens == PageLens::Lawyer {
+                assert_eq!(view, populated());
+            } else {
+                assert_eq!(view, OutcomeProjectionView::default(), "{lens:?}");
+            }
         }
     }
 }

@@ -82,7 +82,7 @@
 //! routed and so cannot be reached by a browser at all — lives in
 //! `webapp/src/error_pages.rs`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fantoccini::{Client, Locator};
 use features::webdriver::{
@@ -807,6 +807,93 @@ async fn portal_and_lawyer_surfaces_pass_axe_wcag_a_and_aa() {
     }
 }
 
+/// Select a row from a fresh `/app/inbox` load and wait for the reading pane.
+/// In-page selection is the hydrated client's click handler. A fresh load
+/// renders the row before the wasm hydrates, and a click in that window
+/// follows the anchor to the full-width thread instead. Stay on the list
+/// until the client bundle has loaded, then retry the click until the pane
+/// fills — reloading mid-compile aborts the 17 MiB wasm instantiate.
+async fn select_inbox_row_in_pane(c: &Client, row_link: &str) {
+    let inbox = format!("{}/app/inbox", base_url());
+    if !c
+        .current_url()
+        .await
+        .unwrap()
+        .path()
+        .ends_with("/app/inbox")
+    {
+        c.goto(&inbox).await.unwrap();
+    }
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(row_link))
+        .await
+        .unwrap_or_else(|error| panic!("the seeded inbox row never rendered: {error}"));
+    wait_for_inbox_client(c).await;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if !c
+            .current_url()
+            .await
+            .unwrap()
+            .path()
+            .ends_with("/app/inbox")
+        {
+            c.goto(&inbox).await.unwrap();
+            wait_for_inbox_client(c).await;
+        }
+        // The local macOS driver can drop native input; activate the
+        // anchor through its DOM click, as the browser suite's harness does.
+        c.execute(
+            "document.querySelector(arguments[0]).click(); return true;",
+            vec![row_link.into()],
+        )
+        .await
+        .unwrap();
+        let filled = c
+            .wait()
+            .at_most(Duration::from_secs(10))
+            .for_element(Locator::Css("#inbox-pane .inbox-pane__thread"))
+            .await;
+        match filled {
+            Ok(_) => break,
+            Err(error) => assert!(
+                Instant::now() < deadline,
+                "the reading pane never filled: {error}"
+            ),
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Wait until the Dioxus client wasm has downloaded on this document so a
+/// row click can `preventDefault` instead of following the SSR anchor.
+async fn wait_for_inbox_client(c: &Client) {
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        let loaded = c
+            .execute(
+                "return performance.getEntriesByType('resource').some((r) => \
+                 typeof r.name === 'string' && r.name.includes('webapp_bg.wasm') \
+                 && r.responseEnd > 0);",
+                vec![],
+            )
+            .await
+            .ok()
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        if loaded {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "inbox wasm never loaded on /app/inbox"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 /// The inbox's reading pane: a selected row and a populated transcript are a
 /// different composition from the archetype audit's load state — aria-current
 /// on a table row, a second heading level inside the pane, and transcript
@@ -863,25 +950,7 @@ async fn the_inbox_reading_pane_passes_axe_wcag_a_and_aa() {
             return;
         };
         login_as_lawyer(&c).await;
-        c.goto(&format!("{}/app/inbox", base_url())).await.unwrap();
-        c.wait()
-            .at_most(Duration::from_secs(10))
-            .for_element(Locator::Css(&row_link))
-            .await
-            .unwrap_or_else(|error| panic!("the seeded inbox row never rendered: {error}"));
-        // The local macOS driver can drop native input; activate the anchor
-        // through its DOM click, as the browser suite's harness does.
-        c.execute(
-            "document.querySelector(arguments[0]).click(); return true;",
-            vec![row_link.clone().into()],
-        )
-        .await
-        .unwrap();
-        c.wait()
-            .at_most(Duration::from_secs(10))
-            .for_element(Locator::Css("#inbox-pane .inbox-pane__thread"))
-            .await
-            .unwrap_or_else(|error| panic!("the reading pane never filled: {error}"));
+        select_inbox_row_in_pane(&c, &row_link).await;
         let report = axe_report(&c, PUBLIC_AXE_SCOPE).await;
         if !report.incomplete.is_empty() {
             println!(

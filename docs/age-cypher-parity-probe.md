@@ -14,7 +14,7 @@ the scoring Rust already owns stays in Rust.** Probe run Oct 30, 2026.
 | pgvector | 0.8.2 | same Containerfile |
 
 The deployed image is `ghcr.io/neon-law-source-code/neon-law-postgres@sha256:4cc70fee…` (tag
-`16.15-age1.6.0-vector0.8.2` in `k8s/postgres/postgres.yaml`), digest-pinned in `k8s/postgres/kustomization.yaml`.
+`16.15-age1.6.0-vector0.8.7` in `k8s/postgres/postgres.yaml`), digest-pinned in `k8s/postgres/kustomization.yaml`.
 
 Image-level compatibility (extension load, `create_graph`, restart persistence, dump/restore) is already evidenced in
 [`postgres-compatibility.md`](postgres-compatibility.md) and CI-tested weekly via `images/postgres/tests/run.sh`. This

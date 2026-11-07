@@ -12,6 +12,8 @@ A [Project](project.md) can enable the `cap_table` [Module](module.md), which ma
 ownership is in play. The module owns the Project's [Cap Table Holding](cap-table-holding.md) rows: each holder's shares
 of each class, imported from the Project repository's seeds. Navigator keeps no ledger of issuances or transfers.
 
+The [Cap Table Holding definition](cap-table-holding.md) includes the table schema for those stored rows.
+
 - Module: [`store::project_modules`](../../store/src/project_modules.rs) · Holdings:
   [`store::cap_table_holdings`](../../store/src/cap_table_holdings.rs) · Schema: [`project_module`,
   `cap_table_holding`](../../store/postgres/schema.sql)

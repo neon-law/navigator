@@ -70,6 +70,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "hifitime",
     "hmac",
     "http-body-util",
+    "iceberg",
     "image",
     "import",
     "include_dir",
@@ -178,8 +179,6 @@ const MEMBER_LOCAL_DEPENDENCIES: &[(&str, &str)] = &[
     ("pdf", "typst-as-lib"),
     ("pdf", "typst-layout"),
     ("pdf", "typst-pdf"),
-    // The Iceberg table format the archive lane writes.
-    ("archives", "iceberg"),
 ];
 
 /// The workspace root (this test crate is `cli`).

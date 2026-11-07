@@ -910,6 +910,12 @@ erDiagram
         string summary
         datetime updated_at
     }
+    mail_signature {
+        string body
+        datetime inserted_at
+        uuid person_id
+        datetime updated_at
+    }
     mailroom {
         uuid address_id
         uuid id
@@ -1515,7 +1521,6 @@ erDiagram
         string tree_sha256
     }
     project_task {
-        string REFERENCES
         uuid assignee_id
         string body
         datetime due_on
@@ -1813,8 +1818,6 @@ erDiagram
         datetime updated_at
     }
     time_entry {
-        string (billing_status
-        string REFERENCES
         uuid attorney_id
         boolean billable
         string billing_status

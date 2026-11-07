@@ -643,9 +643,9 @@ fn digest_pin(kustomization: &str) -> String {
         .as_sequence()
         .expect("images pin")
         .iter()
-        .find(|image| image["name"].as_str() == Some("neon-law-postgres"))
+        .find(|image| image["name"].as_str() == Some("navigator/postgres"))
         .and_then(|image| image["digest"].as_str())
-        .unwrap_or_else(|| panic!("{kustomization} pins neon-law-postgres by digest"))
+        .unwrap_or_else(|| panic!("{kustomization} pins navigator/postgres by digest"))
         .to_owned()
 }
 
@@ -1455,7 +1455,7 @@ fn postgres_image_is_published_weekly_from_this_repository_and_pinned_back() {
     assert!(fields[4].parse::<u8>().is_ok(), "one weekday: {schedule}");
     for required in [
         "context: images/postgres",
-        "REGISTRY: ghcr.io/${{ github.repository_owner }}/neon-law-postgres",
+        "REGISTRY: ghcr.io/${{ github.repository_owner }}/navigator/postgres",
         "bash tests/run.sh",
         "cosign sign --yes",
         "scripts/postgres-image-pin.sh \"$REFERENCE\"",

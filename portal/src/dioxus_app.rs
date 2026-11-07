@@ -2717,7 +2717,29 @@ where
     C: dioxus_core::ComponentFunction<(), M> + Send + Sync + 'static,
     M: 'static,
 {
-    csrf_page_router_providing(path, component, surreal, None, sessions, policy, auth)
+    csrf_page_router_providing(path, component, &[], surreal, None, sessions, policy, auth)
+}
+
+/// [`csrf_page_router`] that also mounts the page's own client-called
+/// `#[server]` endpoints, named by path, behind the same session, policy,
+/// and request context as the page. Only the named endpoints are mounted:
+/// the inventory holds every server function in the binary.
+pub fn csrf_page_router_with_endpoints<C, M>(
+    path: &'static str,
+    component: C,
+    endpoints: &'static [&'static str],
+    surreal: store::surreal::SurrealDb,
+    sessions: crate::session::SessionStore,
+    policy: crate::policy::PolicyClient,
+    auth: crate::auth::AuthConfig,
+) -> Router
+where
+    C: dioxus_core::ComponentFunction<(), M> + Send + Sync + 'static,
+    M: 'static,
+{
+    csrf_page_router_providing(
+        path, component, endpoints, surreal, None, sessions, policy, auth,
+    )
 }
 
 /// [`csrf_page_router`] whose loader also reaches the app storage handle — the
@@ -2739,6 +2761,7 @@ where
     csrf_page_router_providing(
         path,
         component,
+        &[],
         surreal,
         Some(storage),
         sessions,
@@ -2747,9 +2770,11 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn csrf_page_router_providing<C, M>(
     path: &'static str,
     component: C,
+    endpoints: &'static [&'static str],
     surreal: store::surreal::SurrealDb,
     storage: Option<std::sync::Arc<dyn cloud::StorageService>>,
     sessions: crate::session::SessionStore,
@@ -2761,6 +2786,7 @@ where
     M: 'static,
 {
     let project_visit_surreal = surreal.clone();
+    let endpoint_surreal = surreal.clone();
     // A server fn can only reach what this list provides — a route
     // that renders a person and forgets it 500s at `consume_context`,
     // not at build.
@@ -2775,7 +2801,23 @@ where
     }
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(providers));
 
-    Router::<FullstackState>::new()
+    let mut router = Router::<FullstackState>::new();
+    for function in dioxus_server::ServerFunction::collect() {
+        if endpoints.contains(&function.path()) {
+            router = router.route(
+                function.path(),
+                function
+                    .method_router()
+                    // Endpoints run outside the page's Dioxus runtime, so
+                    // the store handle rides the request instead.
+                    .layer(axum::Extension(endpoint_surreal.clone()))
+                    .layer(from_fn(inject_viewer_role))
+                    .layer(from_fn(inject_app_brand_mark))
+                    .layer(from_fn(inject_person_id)),
+            );
+        }
+    }
+    router
         .route(
             path,
             get(render_handler)
@@ -5027,9 +5069,10 @@ pub fn owner_inbox_router(
         auth.clone(),
     ))
     .merge(
-        csrf_page_router(
+        csrf_page_router_with_endpoints(
             webapp::inbox::INBOX_PATH,
             webapp::inbox::OwnerInbox,
+            &[webapp::inbox::INBOX_PANE_ENDPOINT],
             surreal.clone(),
             sessions.clone(),
             policy.clone(),
@@ -5097,9 +5140,10 @@ pub fn project_inbox_router(
     auth: crate::auth::AuthConfig,
     surreal: store::surreal::SurrealDb,
 ) -> Router {
-    csrf_page_router(
+    csrf_page_router_with_endpoints(
         PROJECT_INBOX_PATH,
         webapp::inbox::ProjectInbox,
+        &[webapp::inbox::PROJECT_INBOX_PANE_ENDPOINT],
         surreal,
         sessions,
         policy,

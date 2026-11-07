@@ -94,6 +94,13 @@ each answer terse.
   `blobs/pleadings/motion.pdf.yaml`. A file dropped into a matter folder is uploaded on the next sync with that folder's
   kind, and a lawyer-made subfolder inside one is part of the slug. Never commit anything under `documents/`. Run
   `navigator project repository migrate-folders` to reconcile `Discovery/` with `Discovery (Served)/`.
+* Every document's filename follows the `YYYY.MM.DD_name.ext` convention (rule `C004`): a dotted calendar date, one
+  underscore, and a lowercase hyphenated name — `2026.10.12_complaint-annulment.pdf`. Name a file this way when you
+  stage or create one; an upload without an explicit `--slug` proposes the convention, dated by the `matter:` block's
+  `filed_on` (a date the file's own name already carries wins). The gate refuses any other name, except the shipped
+  docket-ingest names under `Docket Filings/`, the `INV-<digits>` invoices, an Authority sidecar, the `_signed` suffix
+  on a signed copy, Markdown work product (a memo or draft is editable source, not a filed document), and a file inside
+  a date-named folder such as `exhibits/2026-09-05/` — the folder already dates it.
 * `drafts/` holds Drafts, the notation blueprints, directly under it; `templates/` is an alias the gate warns about.
   Memo notations use `kind: memo`. Use placeholders for client data and matter facts; answers and work product stay in
   Navigator. A Notation is a database record, never a file here.
@@ -155,8 +162,9 @@ The last four leave the firm. Keep client identities and matter facts out of tho
 For a client email:
 
 * Run `navigator mail draft --body-file` to create an unsent draft of the substantive message body. Do not paste a
-  signature from another message: the CLI adds the configured `NAVIGATOR_GMAIL_SIGNATURE`, including its confidentiality
-  notice, exactly once. Missing configuration is an error; do not invent signature text.
+  signature from another message: the CLI adds the attorney's stored signature — the deployment's row for the sending
+  Gmail account when reachable, else the `NAVIGATOR_GMAIL_SIGNATURE` fallback it announces — including its
+  confidentiality notice, exactly once. Missing configuration in both sources is an error; do not invent signature text.
 * If the CLI reports an embedded signature, stop for attorney review. Preserve quoted history rather than stripping it
   to force the draft through.
 * The attorney reviews the complete draft in Gmail, confirms one signature and sends it personally. Do not insert

@@ -115,6 +115,31 @@ mod tests {
     }
 
     #[test]
+    fn firm_work_product_is_flagged_on_every_other_lens() {
+        for lens in ["client", "clerk"] {
+            let file = one_page(
+                "matter_status_console",
+                &[(
+                    lens,
+                    "outcome_projection, boundary_note, provenance_statement",
+                )],
+            );
+            let v = D005LensSection.lint(&file);
+            assert_eq!(v.len(), 1, "{lens}: {v:?}");
+            assert!(v[0].message.contains("`outcome_projection`"));
+        }
+        let lawyer = one_page(
+            "matter_status_console",
+            &[(
+                "lawyer",
+                "metric_strip, workstream_cards, decision_queue, outcome_projection, \
+                 boundary_note, provenance_statement",
+            )],
+        );
+        assert!(D005LensSection.lint(&lawyer).is_empty());
+    }
+
+    #[test]
     fn a_section_shared_across_lenses_passes() {
         let file = one_page(
             "engagement_billing_records",

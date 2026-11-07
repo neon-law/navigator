@@ -10,7 +10,7 @@
 #![allow(clippy::unused_async)]
 #![allow(clippy::doc_markdown)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -25,7 +25,20 @@ use portal::{policy::PolicyClient, SessionStore};
 use store::seed;
 use tower::ServiceExt;
 use uuid::Uuid;
-use workflows::{InMemoryRuntime, MachineKind, StateMachineRuntime};
+use workflows::{DispatchingRuntime, InMemoryRuntime, MachineKind, StateMachineRuntime};
+
+// Cucumber drops Worlds inside its async runner. Retain each private engine
+// until process exit so its internal runtime is never dropped there.
+static SCENARIO_ENGINES: Mutex<Vec<store::surreal::SurrealDb>> = Mutex::new(Vec::new());
+
+async fn scenario_store() -> store::surreal::SurrealDb {
+    let db = store::surreal::test_support::mem().await;
+    SCENARIO_ENGINES
+        .lock()
+        .expect("retain scenario engine")
+        .push(db.clone());
+    db
+}
 
 const TEMPLATE_CODE: &str = "onboarding__letter";
 const HMAC_KEY: &str = "test-docusign-hmac-key";
@@ -64,8 +77,7 @@ struct WebhookWorld {
     notation_id: Option<Uuid>,
     /// The envelope id actually recorded in `signatures`, minted by the
     /// held fake provider as `fake-{notation_id}-1`. Notation ids are
-    /// unique per scenario in the process-shared
-    /// [`features::shared_surreal`] engine, so the minted envelope ids
+    /// unique per scenario, so the minted envelope ids
     /// never collide on the `(provider, provider_id)` unique index —
     /// two scenarios both parking on the feature file's literal prefix
     /// resolve to their own notation and their own envelope.
@@ -80,6 +92,7 @@ struct WebhookWorld {
     state: Option<AppState>,
     /// The boot-time sweep's captured outcome, for the step that asserts it.
     sweep_result: Option<Result<(), String>>,
+    independent_world: Option<Box<Self>>,
     last_status: Option<StatusCode>,
     last_body: String,
 }
@@ -94,6 +107,9 @@ impl std::fmt::Debug for WebhookWorld {
 }
 
 impl WebhookWorld {
+    fn store(&self) -> store::surreal::SurrealDb {
+        self.state.as_ref().expect("app not built").surreal.clone()
+    }
     fn app(&self) -> axum::Router {
         self.app.as_ref().expect("app not built").clone()
     }
@@ -113,7 +129,7 @@ impl WebhookWorld {
 
 #[given("a Neon Law Navigator app with an HMAC-secured e-signature webhook")]
 async fn build_app(world: &mut WebhookWorld) {
-    let surreal = features::shared_surreal().await;
+    let surreal = scenario_store().await;
     let storage = fs_storage("esignature-webhook").await;
     seed::seed_canonical(&surreal, &storage)
         .await
@@ -127,6 +143,12 @@ async fn build_app(world: &mut WebhookWorld) {
         SessionStore::new("test-session-key-not-for-production"),
     )
     .await;
+    state.surreal = surreal.clone();
+    let dispatch: Arc<dyn StateMachineRuntime> = Arc::new(
+        DispatchingRuntime::new(runtime.clone(), state.email.clone(), state.storage.clone())
+            .with_store(surreal),
+    );
+    state.workflow_runtime = dispatch;
     // Arm the HMAC gate so the webhook actually verifies signatures —
     // without this the dev posture would accept the forged callback.
     state.esignature_hmac_key = Some(HMAC_KEY.to_string());
@@ -150,8 +172,8 @@ async fn park_retainer(world: &mut WebhookWorld, envelope_id: String) {
     // The feature's literal names the id scheme's prefix only; the fake
     // provider mints the real envelope id below.
     let _ = envelope_id;
-    let surreal = features::shared_surreal().await;
-    let tmpl = store::templates::resolve(&features::shared_surreal().await, None, TEMPLATE_CODE)
+    let surreal = world.store();
+    let tmpl = store::templates::resolve(&surreal, None, TEMPLATE_CODE)
         .await
         .unwrap()
         .expect("seed_canonical inserts onboarding__letter");
@@ -338,7 +360,7 @@ async fn assert_still_at(world: &mut WebhookWorld, state: String) {
 
 #[then(regex = r#"^the notation row state is "([^"]+)"$"#)]
 async fn assert_row_state(world: &mut WebhookWorld, state: String) {
-    let surreal = features::shared_surreal().await;
+    let surreal = world.store();
     let row = store::notations::find_by_id(&surreal, world.notation_id())
         .await
         .unwrap()
@@ -348,7 +370,7 @@ async fn assert_row_state(world: &mut WebhookWorld, state: String) {
 
 #[then(regex = r#"^the signature row state is "([^"]+)"$"#)]
 async fn assert_signature_state(world: &mut WebhookWorld, state: String) {
-    let surreal = features::shared_surreal().await;
+    let surreal = world.store();
     let signature = store::signatures::by_provider(
         &surreal,
         store::signatures::SignatureProvider::DocuSign,
@@ -391,6 +413,33 @@ async fn journal_and_die(world: &mut WebhookWorld) {
     )
     .await
     .expect("journal the verified receipt");
+}
+
+#[given("an independent app has an unconsumed verified receipt")]
+async fn independent_pending(world: &mut WebhookWorld) {
+    let mut independent = WebhookWorld::default();
+    build_app(&mut independent).await;
+    park_retainer(&mut independent, "fake".to_string()).await;
+    journal_and_die(&mut independent).await;
+    world.independent_world = Some(Box::new(independent));
+}
+
+#[then("the independent app still has its pending receipt")]
+async fn independent_still_pending(world: &mut WebhookWorld) {
+    let independent = world
+        .independent_world
+        .as_ref()
+        .expect("independent app built");
+    let state = independent.state.as_ref().expect("independent app state");
+    let pending = store::signature_webhook_journal::pending_receipts(&state.surreal, 100)
+        .await
+        .expect("read independent journal");
+    assert_eq!(
+        pending.len(),
+        1,
+        "another app's sweep cannot consume this receipt"
+    );
+    assert_eq!(pending[0].provider_id, independent.envelope_id());
 }
 
 #[then("the journal holds one pending receipt")]
@@ -450,7 +499,10 @@ async fn assert_journal_empty(world: &mut WebhookWorld) {
 
 #[tokio::main]
 async fn main() {
+    // Each composed site owns SSR worker pools; bound concurrent app construction.
+    // The recovery scenario still exercises two independently stored apps.
     WebhookWorld::cucumber()
+        .max_concurrent_scenarios(Some(1))
         .run_and_exit("tests/features/esignature_webhook.feature")
         .await;
 }

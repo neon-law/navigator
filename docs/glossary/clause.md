@@ -14,12 +14,12 @@ wording when the library changes.
 A retired library version stays readable for provenance and cannot be newly referenced. Its `retired_at` date appears in
 the read model and catalog; `N132` refuses new references. Retirement leaves existing expanded snapshots unchanged.
 
-A lawyer may also add a matter-specific Clause to one Notation. Those paragraphs live in the [`notation_clause`
-table](../../store/src/notation_clauses.rs) and are inserted at `{{custom_clauses}}`; they are separate from the shared
-library. Both uses name legal prose, with different scopes.
+A lawyer may also add a matter-specific [Notation Clause](notation-clause.md) to one Notation. Those paragraphs live in
+the [`notation_clause` table](../../store/src/notation_clauses.rs) and are inserted at `{{custom_clauses}}`; they are
+separate from the shared library. Both uses name legal prose, with different scopes.
 
 See [Clause authoring](../clauses.md) for references, explicit jurisdiction inputs, and the source inventory.
 
-The table is `notation_clause`.
+The table is `clause`.
 
-Schema: [`notation_clause`](../../store/postgres/schema.sql).
+Schema: [`clause`](../../store/postgres/schema.sql).

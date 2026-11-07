@@ -741,6 +741,44 @@ a.nav-pagination__link:hover {
   overflow-x: auto;
 }
 
+.glossary__schema {
+  margin-top: 1rem;
+  border: 1px solid color-mix(in oklab, var(--nav-color-text) 20%, transparent);
+  border-radius: var(--nav-radius-sm, 0.5rem);
+  background: var(--nav-color-surface);
+}
+
+.glossary__schema summary {
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.glossary__schema summary code {
+  overflow-wrap: anywhere;
+  font-weight: 400;
+}
+
+.glossary__schema summary:focus-visible,
+.glossary__schema pre:focus-visible {
+  outline: 2px solid var(--nav-color-primary);
+  outline-offset: 2px;
+}
+
+.glossary__schema p {
+  margin: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.glossary__schema pre {
+  margin: 0;
+  padding: 1rem;
+  max-height: 30rem;
+  overflow: auto;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
 /* A full schema diagram keeps its own size. The figure scrolls so the
    column does not shrink every table label to fit. */
 .nav-mermaid {
@@ -4147,6 +4185,70 @@ a.lawyer-detail__fact-value:focus-visible {
 
 .firm-invoice-currency__code {
   color: var(--nav-color-text-muted);
+}
+
+/* Projected contingency cash: the workbench pipeline card and the Firm
+   rollup. A projection is drawn as an outline in the brand's primary colour
+   so it never reads as cash already invoiced (solid) or paid (faded). */
+.projected-cash-chart {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.5rem 0 1rem;
+}
+
+.projected-cash-label {
+  font-size: 0.7rem;
+  fill: var(--nav-color-text);
+}
+
+.projected-cash-bar {
+  fill: var(--nav-color-primary);
+}
+
+.projected-cash-bar--projected {
+  fill-opacity: 0.2;
+  stroke: var(--nav-color-primary);
+  stroke-dasharray: 3 2;
+}
+
+.projected-cash-bar--paid {
+  fill-opacity: 0.55;
+}
+
+.projected-cash-legend {
+  display: flex;
+  gap: 1rem;
+  list-style: none;
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.projected-cash-key {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-right: 0.35rem;
+  background: var(--nav-color-primary);
+}
+
+.projected-cash-key--projected {
+  background: transparent;
+  border: 1px dashed var(--nav-color-primary);
+}
+
+.projected-cash-key--paid {
+  opacity: 0.55;
+}
+
+.lawyer-pipeline__totals {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+}
+
+.lawyer-pipeline__totals dd {
+  margin: 0;
 }
 
 /* Matter billing chart: the same total-against-paid convention as the firm
