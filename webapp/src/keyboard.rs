@@ -326,6 +326,7 @@ mod tests {
     fn the_notation_rejects_what_the_script_cannot_read() {
         assert_eq!(validate_keys("Mod+Enter"), Ok(()));
         assert_eq!(validate_keys("g m"), Ok(()));
+        assert_eq!(validate_keys("/"), Ok(()));
         assert_eq!(validate_keys("Mod++"), Ok(()));
         assert_eq!(validate_keys("+"), Ok(()));
         assert!(validate_keys("").is_err());
@@ -345,9 +346,51 @@ mod tests {
             .into_iter()
             .map(|shortcut| shortcut.keys)
             .collect();
-        assert_eq!(keys, ["?", "g m"], "only matters has a top-level route");
+        assert_eq!(
+            keys,
+            ["?", "/", "g m"],
+            "only matters has a top-level route"
+        );
         let none = global_shortcuts(&[]);
-        assert_eq!(none.len(), 1, "the overlay key is always there");
+        assert_eq!(
+            none.len(),
+            2,
+            "the overlay key and the palette key are always there"
+        );
+    }
+
+    #[test]
+    fn the_palette_key_opens_the_search_palette() {
+        let palette = global_shortcuts(&app_pages())
+            .into_iter()
+            .find(|shortcut| shortcut.keys == "/")
+            .expect("a global `/` declaration");
+        assert_eq!(palette.action, Action::OpenPalette);
+        assert_eq!(palette.scope, Scope::Global);
+        assert_eq!(palette.description, "Open search");
+        assert_eq!(
+            palette.href, None,
+            "the palette opens instead of navigating"
+        );
+        assert!(!palette.in_fields, "a bare key never fires in a field");
+    }
+
+    /// The help overlay lists every declaration the page carries, so the
+    /// rendered host's declarations — what the script builds the list from —
+    /// must include the `/` row.
+    #[test]
+    fn the_host_declares_the_palette_key_for_the_help_list() {
+        fn app() -> Element {
+            rsx! { ShortcutHost {} }
+        }
+        let html = ssr(app);
+        let row = declared(&html)
+            .into_iter()
+            .find(|row| row["keys"] == "/")
+            .expect("the rendered declarations include `/`");
+        assert_eq!(row["action"], "open_palette", "{row:?}");
+        assert_eq!(row["in_fields"], false, "{row:?}");
+        assert_eq!(row["scope"], "global", "{row:?}");
     }
 
     #[test]
