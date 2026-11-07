@@ -4347,6 +4347,7 @@ CREATE INDEX person_name_id ON person (name, id);
 CREATE INDEX person_email_id ON person (email, id);
 CREATE INDEX person_name_trgm ON person USING gin (name gin_trgm_ops);
 CREATE INDEX person_email_trgm ON person USING gin ((email::text) gin_trgm_ops);
+
 -- Migration: 20261107130000_add_client_production_subfolder_slots.sql
 -- LAW-215 declares the two Client Production subfolders — Agreements and
 -- Screenshots — in the MatterFolder vocabulary. The project_folder slot check
