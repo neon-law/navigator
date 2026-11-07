@@ -143,11 +143,10 @@ fills the `?` overlay and the `/` palette from the same list, so a key that work
   inert background and `Esc`, and focus returns to where it was when it closes.
 - **The palette.** `/` opens a second native `<dialog>`, `nav-palette-dialog`, listing the page's role-scoped
   destinations — the same `app_chrome` links the navbar renders, carried in `data-nav-palette-destinations`. Typing
-  narrows the rows with a client-side substring match; `ArrowDown` and `ArrowUp` move the selection, `Enter`
-  navigates, and `Escape` closes it with focus back where it was. Open unfiltered, every destination for the role is
-  visible, the first is pre-selected and the filter is focused. A filter matching nothing shows "No matching
-  destinations" rather than a silently empty list. Without JavaScript the palette is inert markup and the navbar links
-  remain the path.
+  narrows the rows with a client-side substring match; `ArrowDown` and `ArrowUp` move the selection, `Enter` navigates,
+  and `Escape` closes it with focus back where it was. Open unfiltered, every destination for the role is visible, the
+  first is pre-selected and the filter is focused. A filter matching nothing shows "No matching destinations" rather
+  than a silently empty list. Without JavaScript the palette is inert markup and the navbar links remain the path.
 - **One overlay at a time.** While the palette is up it owns the keyboard — `Escape`, the arrows, `Enter` — and the
   help overlay stays shut; while the help overlay is up, `/` does nothing. The dialogs never stack.
 - **Chords.** `g m`, `g n` and `g d` are defined once in `NAVIGATION_CHORDS`. `app_pages()` names the pages this
