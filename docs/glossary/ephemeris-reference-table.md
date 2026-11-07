@@ -269,3 +269,25 @@ These observations measure the current bounded inventory. The flat layout is pro
 optimal partition policy for a larger inventory or authorize public publication. The source/model/coverage and resource
 bounds remain those of the reference table. Query profiling is described in the [DuckDB 2.0
 documentation](https://duckdb.org/docs/2.0/sql/statements/profiling).
+
+## Local latest-validated manifest
+
+Use `navigator ephemeris promote` with `--release-dir`, `--bundle`, `--source-dir`, `--from`, and `--to-exclusive` to
+select a completed bundle. The release directory is an existing operator-owned local directory without group or world
+write permission. The bundle is its direct child, named with ASCII letters, digits, hyphens or underscores and beginning
+with a letter or digit. Supply `--iceberg` and `--duckdb-bin` when the completed bundle contains those artifacts. The
+protected catalogue authorizes Owner/Admin before the command accesses local files, and the existing bundle verification
+checks the pinned source, data and any native artifacts before promotion.
+
+Use `--expect-current absent` for the first promotion. For a replacement, take the current `release_id` from
+`latest-validated.json` and pass it as `--expect-current`. The manifest identifies the relative bundle location,
+coverage, reference snapshot ID and hashes of the exact verified receipts. The release ID binds those values and can
+distinguish layouts that share a reference snapshot ID. Readers can retain a release ID and its bundle selection for
+reproducibility. An exact, reverified retry preserves the existing manifest. For rollback, explicitly select an older
+completed sibling with the current release ID and reverify it with the same command.
+
+Keep the directory and completed bundles stable while using this workflow. The directory lock serializes cooperating
+promotions on the local filesystem and assumes that other processes leave these files alone. A busy lock or a stale
+expectation for a different selection fails without replacing the manifest. Verification and staging failures preserve
+the previous selection. If directory sync fails after atomic replacement, the command reports that replacement occurred
+and durability is uncertain. The command changes only the local selection and leaves all completed bundles intact.

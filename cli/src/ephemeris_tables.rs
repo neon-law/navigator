@@ -20,17 +20,36 @@ use crate::ephemeris_download::{hex_digest, open_regular, verify_bundle};
 
 pub(super) const MAX_FILE_BYTES: usize = 4_194_304;
 pub(super) const MAX_MANIFEST_BYTES: usize = 65_536;
-const MANIFEST: &str = "derived-manifest.json";
+pub(super) const MANIFEST: &str = "derived-manifest.json";
 const PARQUET: &str = "reference.parquet";
 const CSV: &str = "reference.csv";
-const SOURCE: &str = "source-manifest.json";
+pub(super) const SOURCE: &str = "source-manifest.json";
 // The encoder's pinned major version is part of the artifact byte-format identity.
 const FORMAT: &str = "navigator-reference-parquet60-csv-v1";
 
-/// The operation keeps measurement incapable of publishing a missing bundle.
+/// Only generation can publish a missing bundle.
 pub(crate) enum TableOperation<'a> {
     Generate(Option<&'a Path>),
     Measure(&'a Path),
+    Verify(Option<&'a Path>),
+}
+
+pub(super) enum TableResult {
+    Ready,
+    Measured(Observation),
+    Verified(VerifiedBundle),
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct VerifiedBundle {
+    pub(super) snapshot_id: String,
+    pub(super) from: NaiveDate,
+    pub(super) to_exclusive: NaiveDate,
+    pub(super) derived_sha256: String,
+    pub(super) source_sha256: String,
+    pub(super) iceberg_sha256: Option<String>,
+    pub(super) duckdb_sha256: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -405,7 +424,7 @@ fn existing_manifest(
     source: &[u8],
     iceberg: bool,
     duckdb: bool,
-) -> Result<Option<DerivedManifest>> {
+) -> Result<Option<(DerivedManifest, String)>> {
     match std::fs::symlink_metadata(dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
@@ -444,8 +463,8 @@ fn existing_manifest(
         names == expected,
         "existing path is not a complete reference bundle"
     );
-    let saved: DerivedManifest =
-        serde_json::from_slice(&read_bounded(&dir.join(MANIFEST), MAX_MANIFEST_BYTES)?)?;
+    let bytes = read_bounded(&dir.join(MANIFEST), MAX_MANIFEST_BYTES)?;
+    let saved: DerivedManifest = serde_json::from_slice(&bytes)?;
     let content = &saved.content;
     ensure!(
         saved.snapshot_id == content_digest(content)?
@@ -458,7 +477,14 @@ fn existing_manifest(
             && content.source_manifest_sha256 == digest(source),
         "existing bundle semantics or identity differ from the requested table"
     );
-    Ok(Some(saved))
+    Ok(Some((saved, digest(&bytes))))
+}
+
+pub(super) fn valid_coverage(from: NaiveDate, to: NaiveDate) -> bool {
+    from.year() >= 1900
+        && (to.year() < 2050 || (to.year() == 2050 && to.ordinal() == 1))
+        && (1..=ephemeris::MAX_REFERENCE_BATCH_DAYS)
+            .contains(&to.signed_duration_since(from).num_days())
 }
 
 /// Called only after the canonical protected catalogue has authorized the operator.
@@ -470,41 +496,31 @@ pub(crate) async fn publish(
     dir: &Path,
     iceberg: bool,
     operation: TableOperation<'_>,
-) -> Result<Option<Observation>> {
-    let (duckdb_bin, measure) = match operation {
+) -> Result<TableResult> {
+    let (duckdb_bin, requires_existing) = match operation {
         TableOperation::Generate(path) => (path, false),
         TableOperation::Measure(path) => (Some(path), true),
+        TableOperation::Verify(path) => (path, true),
     };
     ensure!(
-        from.year() >= 1900
-            && to <= NaiveDate::from_ymd_opt(2050, 1, 1).context("valid reference boundary")?
-            && (1..=ephemeris::MAX_REFERENCE_BATCH_DAYS)
-                .contains(&to.signed_duration_since(from).num_days()),
+        valid_coverage(from, to),
         "invalid bounded reference interval"
     );
     let duckdb = duckdb_bin.map(Tool::verified).transpose()?;
-    let location = if iceberg {
-        Some(crate::ephemeris_iceberg::location(dir)?)
-    } else {
-        None
-    };
+    let location = iceberg
+        .then(|| crate::ephemeris_iceberg::location(dir))
+        .transpose()?;
     let source = serde_json::to_vec_pretty(manifest)?;
     let saved = existing_manifest(dir, from, to, &source, iceberg, duckdb.is_some())?;
-    ensure!(
-        !measure || saved.is_some(),
-        "measurement requires an existing complete bundle"
-    );
-    verify_bundle(source_dir, manifest)?;
-    let pin = manifest
-        .files
-        .first()
-        .context("eligible source pin missing")?;
-    let store = PinnedSource {
-        file: Mutex::new(open_regular(&source_dir.join("de440.bsp"))?),
-        bytes: pin.bytes,
-    };
-    // The evaluator re-verifies the bytes read from this same descriptor, not a reopened path.
-    let table = EphemerisReferenceTable::calculate(&store, from, to)?;
+    if requires_existing && saved.is_none() {
+        let operation = if matches!(operation, TableOperation::Measure(_)) {
+            "measurement"
+        } else {
+            "promotion"
+        };
+        anyhow::bail!("{operation} requires an existing complete bundle");
+    }
+    let table = calculate_table(source_dir, manifest, from, to)?;
     let batch = batch(&table.rows)?;
     let files = [
         (SOURCE, source),
@@ -516,22 +532,18 @@ pub(crate) async fn publish(
         "reference artifact exceeds byte bound"
     );
     let content = describe_content(&table, &files, batch.num_rows(), from, to)?;
-    if let Some(saved) = saved {
+    if let Some((saved, derived_sha256)) = saved {
         ensure!(
             saved.content == content,
             "existing bundle settings or file identities differ"
         );
-        for (name, expected) in &files {
-            ensure!(
-                read_bounded(&dir.join(name), MAX_FILE_BYTES)? == *expected,
-                "existing bundle data differs from its checksum"
-            );
-        }
-        if let Some(location) = &location {
-            crate::ephemeris_iceberg::verify(dir, location, &content_digest(&content)?, &batch)
-                .await?;
-        }
-        if let Some(tool) = &duckdb {
+        verify_existing_files(dir, &files)?;
+        let iceberg_sha256 = if let Some(location) = &location {
+            Some(crate::ephemeris_iceberg::verify(dir, location, &saved.snapshot_id, &batch).await?)
+        } else {
+            None
+        };
+        let duckdb_sha256 = if let Some(tool) = &duckdb {
             let manifest = serde_json::to_vec_pretty(&saved)?;
             let reference = crate::ephemeris_duckdb::Reference {
                 snapshot_id: &saved.snapshot_id,
@@ -541,9 +553,9 @@ pub(crate) async fn publish(
                 from,
                 to,
             };
-            if measure {
+            if matches!(operation, TableOperation::Measure(_)) {
                 let native_queries = tool.measure(dir, &reference).await?;
-                return Ok(Some(observation(
+                return Ok(TableResult::Measured(observation(
                     dir,
                     &saved,
                     &batch,
@@ -552,9 +564,23 @@ pub(crate) async fn publish(
                     native_queries,
                 )?));
             }
-            tool.verify(dir, &reference).await?;
-        }
-        return Ok(None);
+            Some(tool.verify(dir, &reference).await?)
+        } else {
+            None
+        };
+        return Ok(if matches!(operation, TableOperation::Verify(_)) {
+            TableResult::Verified(VerifiedBundle {
+                snapshot_id: saved.snapshot_id,
+                from,
+                to_exclusive: to,
+                derived_sha256,
+                source_sha256: content.source_manifest_sha256,
+                iceberg_sha256,
+                duckdb_sha256,
+            })
+        } else {
+            TableResult::Ready
+        });
     }
     publish_new(
         dir,
@@ -565,7 +591,36 @@ pub(crate) async fn publish(
         duckdb.as_ref(),
     )
     .await?;
-    Ok(None)
+    Ok(TableResult::Ready)
+}
+
+fn verify_existing_files(dir: &Path, files: &[(&str, Vec<u8>)]) -> Result<()> {
+    for (name, expected) in files {
+        ensure!(
+            read_bounded(&dir.join(name), MAX_FILE_BYTES)? == *expected,
+            "existing bundle data differs from its checksum"
+        );
+    }
+    Ok(())
+}
+
+fn calculate_table(
+    source_dir: &Path,
+    manifest: &EphemerisManifest,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> Result<EphemerisReferenceTable> {
+    verify_bundle(source_dir, manifest)?;
+    let pin = manifest
+        .files
+        .first()
+        .context("eligible source pin missing")?;
+    let store = PinnedSource {
+        file: Mutex::new(open_regular(&source_dir.join("de440.bsp"))?),
+        bytes: pin.bytes,
+    };
+    // The evaluator re-verifies the bytes read from this same descriptor, not a reopened path.
+    Ok(EphemerisReferenceTable::calculate(&store, from, to)?)
 }
 
 fn describe_content(
@@ -705,7 +760,7 @@ async fn publish_new(
         };
         tool.author(stage.path(), &reference).await?;
     }
-    let verified = existing_manifest(
+    let (verified, _) = existing_manifest(
         stage.path(),
         from,
         to,
@@ -1283,7 +1338,7 @@ mod artifact_tests {
             .await
             .unwrap();
         validate_readers(&dir, &batch).unwrap();
-        let receipt = existing_manifest(
+        let (receipt, _) = existing_manifest(
             &dir,
             content(&batch, &files).from,
             content(&batch, &files).to_exclusive,

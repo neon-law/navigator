@@ -134,7 +134,7 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
 fn ephemeris_help_keeps_download_nested_and_requires_an_explicit_bundle_directory() {
     assert_eq!(
         command_names(&help(&["ephemeris", "--help"])),
-        vec!["download", "tables", "help"]
+        vec!["download", "promote", "tables", "help"]
     );
     let isolated = tempfile::tempdir().unwrap();
     let missing_credentials = isolated.path().join("missing-session.json");
