@@ -85,6 +85,11 @@ pub enum FirmCapability {
     AttachBrand,
     /// Read a Firm's Brand call/SMS counts, billed tenths and receiving-number metadata.
     ViewCommunications,
+    /// Read a Firm's plan-work measurement: matter counts per plan and state,
+    /// SLA misses, minutes by stage, and matter margins. The economics are
+    /// Firm-sensitive, so like [`Self::ViewCommunications`] only the Firm's
+    /// Admin membership admits it.
+    ViewPlanMetrics,
 }
 
 impl FirmCapability {
@@ -104,6 +109,7 @@ impl FirmCapability {
             | Self::UseIntegrations
             | Self::ManageRecoveryArchives
             | Self::ViewCommunications
+            | Self::ViewPlanMetrics
             | Self::ManageBrand => membership == FirmMembership::Admin,
             Self::ManageBrandContent
             | Self::ManageSummaryApprovals
@@ -133,6 +139,7 @@ impl FirmCapability {
             Self::MoveBrand => "move_brand",
             Self::AttachBrand => "attach_brand",
             Self::ViewCommunications => "view_communications",
+            Self::ViewPlanMetrics => "view_plan_metrics",
         }
     }
 
@@ -277,6 +284,12 @@ async fn resolve_inner(
         return Ok((
             FirmCapabilityDecision::Forbidden,
             "communications_requires_admin",
+        ));
+    }
+    if capability == FirmCapability::ViewPlanMetrics && actor_role != Role::Admin {
+        return Ok((
+            FirmCapabilityDecision::Forbidden,
+            "plan_metrics_requires_admin",
         ));
     }
     if actor_role == Role::Client {
