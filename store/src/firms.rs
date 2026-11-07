@@ -3571,7 +3571,7 @@ mod tests {
     async fn people_directory_pages_walk_every_row_once_on_surreal() {
         let db = mem_surreal().await;
         let mut created = Vec::new();
-        for name in ["Ann", "Bea", "Bea", "Bea", "Cy", "Di", "Ed"] {
+        for name in ["Row 1", "Row 2", "Row 2", "Row 2", "Row 3", "Row 4", "Row 5"] {
             let email = format!("{}@page-walk.test", Uuid::now_v7());
             created.push(
                 crate::persons::create(&db, &NewPerson::new(name, email))
