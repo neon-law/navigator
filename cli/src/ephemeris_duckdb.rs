@@ -29,6 +29,132 @@ const STDOUT_CAP: usize = 4_194_304;
 const STDERR_CAP: usize = 65_536;
 const PROCESS_BUDGET: Duration = Duration::from_secs(60);
 
+const OBSERVATION_SAMPLES: usize = 5;
+const ENGINE_THREADS: u8 = 1;
+const ENGINE_MEMORY_LIMIT: &str = "128MB";
+
+#[derive(Serialize)]
+pub(super) struct QueryObservations {
+    engine_version: String,
+    engine_threads: u8,
+    engine_memory_limit: &'static str,
+    samples_per_phase: usize,
+    excluded_warmup_samples: usize,
+    time_predicate_days: i64,
+    cases: Vec<QueryObservation>,
+}
+
+#[derive(Serialize)]
+struct QueryObservation {
+    predicate: &'static str,
+    matching_rows: usize,
+    fresh_process_engine_seconds: SampleSummary,
+    fresh_process_driver_seconds: SampleSummary,
+    same_process_warm_engine_seconds: SampleSummary,
+    fresh_engine_reported_read_bytes: Vec<u64>,
+    warm_engine_reported_read_bytes: Vec<u64>,
+    #[cfg(test)]
+    #[serde(skip)]
+    fresh_process_ids: Vec<Option<u32>>,
+    #[cfg(test)]
+    #[serde(skip)]
+    warm_process_id: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct SampleSummary {
+    samples: usize,
+    nearest_rank_p50: f64,
+    nearest_rank_p95: f64,
+}
+
+// Profile structs deliberately retain only scalar observations, never query text, paths or plan payloads.
+#[derive(Deserialize)]
+struct EngineProfile {
+    query: QueryTiming,
+    io: ReadObservation,
+}
+
+#[derive(Deserialize)]
+struct QueryTiming {
+    total_time: f64,
+}
+
+#[derive(Deserialize)]
+struct ReadObservation {
+    total_bytes_read: u64,
+}
+
+struct ProfileRun {
+    profiles: Vec<EngineProfile>,
+    wall_seconds: f64,
+    #[cfg(test)]
+    process_id: Option<u32>,
+}
+
+fn summarize(samples: &[f64]) -> Result<SampleSummary> {
+    ensure!(
+        !samples.is_empty() && samples.iter().all(|v| v.is_finite() && *v >= 0.0),
+        "invalid query timing observations"
+    );
+    let mut ordered = samples.to_vec();
+    ordered.sort_unstable_by(f64::total_cmp);
+    let rank = |p: usize| (ordered.len() / 100) * p + ((ordered.len() % 100) * p).div_ceil(100);
+    Ok(SampleSummary {
+        samples: ordered.len(),
+        nearest_rank_p50: ordered[rank(50) - 1],
+        nearest_rank_p95: ordered[rank(95) - 1],
+    })
+}
+
+fn decode_profiles(bytes: &[u8], count: usize) -> Result<Vec<EngineProfile>> {
+    ensure!(
+        bytes.len() <= STDOUT_CAP && (1..=OBSERVATION_SAMPLES + 1).contains(&count),
+        "invalid bounded query profile"
+    );
+    let profiles = serde_json::Deserializer::from_slice(bytes)
+        .into_iter::<EngineProfile>()
+        .take(count + 1)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| anyhow::anyhow!("invalid bounded query profile"))?;
+    ensure!(
+        profiles.len() == count
+            && profiles
+                .iter()
+                .all(|p| p.query.total_time.is_finite() && p.query.total_time >= 0.0),
+        "invalid bounded query profile"
+    );
+    Ok(profiles)
+}
+
+fn without_warmup(profiles: Vec<EngineProfile>) -> Result<Vec<EngineProfile>> {
+    ensure!(
+        profiles.len() == OBSERVATION_SAMPLES + 1,
+        "invalid bounded query profile"
+    );
+    Ok(profiles.into_iter().skip(1).collect())
+}
+
+fn script(setup: &str, sql: &str) -> Result<String> {
+    let length = setup
+        .len()
+        .checked_add(sql.len())
+        .and_then(|n| n.checked_add(1))
+        .context("DuckDB SQL exceeds its bound")?;
+    ensure!(length <= STDIN_CAP, "DuckDB SQL exceeds its bound");
+    Ok(format!("{setup}\n{sql}"))
+}
+
+fn spawn(command: &mut tokio::process::Command) -> Result<tokio::process::Child> {
+    command
+        .kill_on_drop(true)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| anyhow::anyhow!("cannot start the verified DuckDB executable"))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Pins {
@@ -172,7 +298,7 @@ fn bootstrap(database: &Path, parquet: Option<&Path>, storage: &str) -> Result<S
     };
     // The CLI's -safe setting applies after opening a positional database. Open only clean memory,
     // configure the exact private file graph, and attach the verified copy after restrictions exist.
-    Ok(format!("SET autoinstall_known_extensions=false;SET autoload_known_extensions=false;SET threads=1;SET memory_limit='128MB';SET temp_directory='';SET allow_persistent_secrets=false;{load}SET allowed_paths=[{}];SET enable_external_access=false;SET lock_configuration=true;ATTACH {} AS reference ({mode});USE reference;", paths.join(","), path_literal(database)?))
+    Ok(format!("SET autoinstall_known_extensions=false;SET autoload_known_extensions=false;SET threads={ENGINE_THREADS};SET memory_limit='{ENGINE_MEMORY_LIMIT}';SET temp_directory='';SET allow_persistent_secrets=false;{load}SET allowed_paths=[{}];SET enable_external_access=false;SET lock_configuration=true;ATTACH {} AS reference ({mode});USE reference;", paths.join(","), path_literal(database)?))
 }
 
 async fn bounded_read(reader: impl tokio::io::AsyncRead + Unpin, cap: usize) -> Result<Vec<u8>> {
@@ -194,13 +320,7 @@ async fn capture(
     budget: Duration,
 ) -> Result<Vec<u8>> {
     ensure!(sql.len() <= STDIN_CAP, "DuckDB SQL exceeds its bound");
-    let child = command
-        .kill_on_drop(true)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|_| anyhow::anyhow!("cannot start the verified DuckDB executable"))?;
+    let child = spawn(command)?;
     capture_child(child, sql, budget).await
 }
 
@@ -311,13 +431,7 @@ impl Tool {
     }
 
     async fn process(&self, home: &Path, setup: &str, sql: &str) -> Result<Vec<u8>> {
-        let length = setup
-            .len()
-            .checked_add(sql.len())
-            .and_then(|n| n.checked_add(1))
-            .context("DuckDB SQL exceeds its bound")?;
-        ensure!(length <= STDIN_CAP, "DuckDB SQL exceeds its bound");
-        let script = format!("{setup}\n{sql}");
+        let script = script(setup, sql)?;
         let mut command = self.command(home);
         ensure!(
             self.directory.path().is_dir(),
@@ -390,6 +504,15 @@ impl Tool {
     }
 
     pub(super) async fn verify(&self, dir: &Path, reference: &Reference<'_>) -> Result<()> {
+        self.verified_database(dir, reference).await?;
+        Ok(())
+    }
+
+    async fn verified_database(
+        &self,
+        dir: &Path,
+        reference: &Reference<'_>,
+    ) -> Result<tempfile::TempDir> {
         let receipt: Receipt =
             serde_json::from_slice(&read_bounded(&dir.join(RECEIPT), MAX_MANIFEST_BYTES)?)?;
         let content = &receipt.content;
@@ -430,7 +553,171 @@ impl Tool {
         self.validate(work.path(), &setup, reference).await?;
         no_sidecars(&copy)?;
         no_sidecars(&dir.join(DATABASE))?;
-        Ok(())
+        Ok(work)
+    }
+
+    async fn profile_process(
+        &self,
+        home: &Path,
+        setup: &str,
+        sql: &str,
+        count: usize,
+    ) -> Result<ProfileRun> {
+        let input = script(setup, sql)?;
+        ensure!(
+            self.directory.path().is_dir(),
+            "DuckDB executable stage unavailable"
+        );
+        let mut command = self.command(home);
+        let started = std::time::Instant::now();
+        let child = spawn(&mut command)?;
+        #[cfg(test)]
+        let process_id = child.id();
+        let output = capture_child(child, &input, PROCESS_BUDGET).await?;
+        let wall_seconds = started.elapsed().as_secs_f64();
+        // Decode and validate after stopping the driver clock.
+        let profiles = decode_profiles(&output, count)?;
+        Ok(ProfileRun {
+            profiles,
+            wall_seconds,
+            #[cfg(test)]
+            process_id,
+        })
+    }
+
+    pub(super) async fn measure(
+        &self,
+        dir: &Path,
+        reference: &Reference<'_>,
+    ) -> Result<QueryObservations> {
+        let work = self.verified_database(dir, reference).await?;
+        let copy = work.path().join(DATABASE);
+        let setup = bootstrap(&copy, None, &self.pins.storage_version)?;
+        let days = reference
+            .to
+            .signed_duration_since(reference.from)
+            .num_days();
+        ensure!(
+            (1..=ephemeris::MAX_REFERENCE_BATCH_DAYS).contains(&days),
+            "invalid measurement coverage"
+        );
+        let window = days.min(31);
+        let end = reference
+            .from
+            .checked_add_signed(chrono::Duration::days(window))
+            .context("valid measurement window")?;
+        let bodies = reference
+            .batch
+            .column_by_name("body")
+            .context("reference body missing")?
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("reference body type")?;
+        let calendars = reference
+            .batch
+            .column_by_name("reference_calendar")
+            .context("reference calendar missing")?
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context("reference calendar type")?;
+        let mut seen = BTreeSet::new();
+        let order = (0..bodies.len())
+            .filter_map(|i| seen.insert(bodies.value(i)).then_some(bodies.value(i)))
+            .enumerate()
+            .map(|(i, b)| format!("WHEN {} THEN {i}", quote(b)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut cases = Vec::new();
+        for (predicate, moon, bounded_time) in [
+            ("all", false, false),
+            ("moon", true, false),
+            ("first_window", false, true),
+            ("moon_first_window", true, true),
+        ] {
+            let until = if bounded_time { end } else { reference.to };
+            let from_label = reference.from.to_string();
+            let until_label = until.to_string();
+            let filter = format!(
+                "reference_calendar>={} AND reference_calendar<{}{}",
+                quote(&reference.from.to_string()),
+                quote(&until.to_string()),
+                if moon { " AND body='moon'" } else { "" }
+            );
+            let query = format!("SELECT * FROM ephemeris_reference_table WHERE {filter} ORDER BY reference_calendar,CASE body {order} END;");
+            let selected = (0..bodies.len())
+                .filter(|i| {
+                    (!moon || bodies.value(*i) == "moon")
+                        && calendars.value(*i) >= from_label.as_str()
+                        && calendars.value(*i) < until_label.as_str()
+                })
+                .collect::<Vec<_>>();
+            let rows: Vec<NativeRow> = self.json(work.path(), &setup, &query).await?;
+            compare_rows(&rows, reference.batch, &selected)?;
+            cases.push(
+                self.observe_query(work.path(), &setup, predicate, &query, selected.len())
+                    .await?,
+            );
+        }
+        no_sidecars(&copy)?;
+        no_sidecars(&dir.join(DATABASE))?;
+        Ok(QueryObservations {
+            engine_version: self.pins.engine_version.clone(),
+            engine_threads: ENGINE_THREADS,
+            engine_memory_limit: ENGINE_MEMORY_LIMIT,
+            samples_per_phase: OBSERVATION_SAMPLES,
+            excluded_warmup_samples: 1,
+            time_predicate_days: window,
+            cases,
+        })
+    }
+
+    async fn observe_query(
+        &self,
+        home: &Path,
+        setup: &str,
+        predicate: &'static str,
+        query: &str,
+        matching_rows: usize,
+    ) -> Result<QueryObservation> {
+        let explain = format!("EXPLAIN (ANALYZE,FORMAT JSON) {query}");
+        let mut fresh = Vec::new();
+        let mut wall = Vec::new();
+        #[cfg(test)]
+        let mut fresh_process_ids = Vec::new();
+        for _ in 0..OBSERVATION_SAMPLES {
+            let run = self.profile_process(home, setup, &explain, 1).await?;
+            wall.push(run.wall_seconds);
+            #[cfg(test)]
+            fresh_process_ids.push(run.process_id);
+            fresh.extend(run.profiles);
+        }
+        let run = self
+            .profile_process(
+                home,
+                setup,
+                &explain.repeat(OBSERVATION_SAMPLES + 1),
+                OBSERVATION_SAMPLES + 1,
+            )
+            .await?;
+        // One independent prewarm is deliberately outside the warm observation set.
+        let warm = without_warmup(run.profiles)?;
+        Ok(QueryObservation {
+            predicate,
+            matching_rows,
+            fresh_process_engine_seconds: summarize(
+                &fresh.iter().map(|p| p.query.total_time).collect::<Vec<_>>(),
+            )?,
+            fresh_process_driver_seconds: summarize(&wall)?,
+            same_process_warm_engine_seconds: summarize(
+                &warm.iter().map(|p| p.query.total_time).collect::<Vec<_>>(),
+            )?,
+            fresh_engine_reported_read_bytes: fresh.iter().map(|p| p.io.total_bytes_read).collect(),
+            warm_engine_reported_read_bytes: warm.iter().map(|p| p.io.total_bytes_read).collect(),
+            #[cfg(test)]
+            fresh_process_ids,
+            #[cfg(test)]
+            warm_process_id: run.process_id,
+        })
     }
 
     async fn json<T: DeserializeOwned>(&self, home: &Path, setup: &str, query: &str) -> Result<T> {
@@ -1012,6 +1299,134 @@ mod tests {
                 .mode()
                 & 0o777,
             0o700
+        );
+    }
+
+    #[test]
+    fn profile_frames_reject_invalid_metrics_and_exclude_the_independent_warmup() {
+        let frame = |seconds: &str| {
+            format!(
+                r#"{{"query":{{"total_time":{seconds},"sql":"PRIVATE_SQL_PATH_SENTINEL"}},"io":{{"total_bytes_read":17}},"operator":{{"private":"omitted"}}}}"#
+            )
+        };
+        let profile = frame("0.25");
+        assert_eq!(
+            decode_profiles(profile.as_bytes(), 1).unwrap()[0]
+                .io
+                .total_bytes_read,
+            17
+        );
+        for (bytes, count) in [
+            (Vec::new(), 1),
+            (profile.as_bytes().to_vec(), 0),
+            (profile.as_bytes().to_vec(), 6),
+            (format!("{profile}{profile}").into_bytes(), 1),
+            (frame("-1").into_bytes(), 1),
+            (frame("NaN").into_bytes(), 1),
+            (profile.replace("17", "-17").into_bytes(), 1),
+            (vec![b' '; STDOUT_CAP + 1], 1),
+            (b"{PRIVATE_SQL_PATH_SENTINEL".to_vec(), 1),
+        ] {
+            assert_eq!(
+                decode_profiles(&bytes, count).err().unwrap().to_string(),
+                "invalid bounded query profile"
+            );
+        }
+        let mut frames = frame("999");
+        for sample in [5, 1, 4, 2, 3] {
+            frames.push_str(&frame(&sample.to_string()));
+        }
+        let warm = without_warmup(decode_profiles(frames.as_bytes(), 6).unwrap()).unwrap();
+        let summary =
+            summarize(&warm.iter().map(|p| p.query.total_time).collect::<Vec<_>>()).unwrap();
+        assert_eq!(summary.samples, 5);
+        assert_eq!(summary.nearest_rank_p50.to_bits(), 3.0_f64.to_bits());
+        assert_eq!(summary.nearest_rank_p95.to_bits(), 5.0_f64.to_bits());
+        for invalid in [vec![], vec![-1.0], vec![f64::NAN], vec![f64::INFINITY]] {
+            assert!(summarize(&invalid).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn actual_measurements_verify_predicates_processes_and_immutable_files() {
+        let Some(tool) = tool() else { return };
+        let base = batch();
+        let from = NaiveDate::from_ymd_opt(1900, 1, 1).unwrap();
+        let mut chunks = Vec::new();
+        for day in 0..34 {
+            let date = from + chrono::Duration::days(day);
+            let mut columns = base.columns().to_vec();
+            columns[0] = Arc::new(StringArray::from(vec![date.to_string(); 2]));
+            chunks.push(RecordBatch::try_new(base.schema(), columns).unwrap());
+        }
+        let batch = arrow::compute::concat_batches(&base.schema(), chunks.iter()).unwrap();
+        let mut reference = reference(&batch);
+        reference.to = from + chrono::Duration::days(34);
+        let dir = tempfile::tempdir().unwrap();
+        authored(&tool, dir.path(), &reference).await;
+        let capture = || {
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    let metadata = entry.metadata().unwrap();
+                    (
+                        entry.file_name(),
+                        (
+                            std::fs::read(entry.path()).unwrap(),
+                            metadata.permissions().mode(),
+                            metadata.modified().unwrap(),
+                        ),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let before = capture();
+        let observed = tool.measure(dir.path(), &reference).await.unwrap();
+        assert_eq!(observed.samples_per_phase, 5);
+        assert_eq!(observed.excluded_warmup_samples, 1);
+        assert_eq!(observed.time_predicate_days, 31);
+        assert_eq!(
+            observed
+                .cases
+                .iter()
+                .map(|c| (c.predicate, c.matching_rows))
+                .collect::<Vec<_>>(),
+            [
+                ("all", 68),
+                ("moon", 34),
+                ("first_window", 62),
+                ("moon_first_window", 31)
+            ]
+        );
+        for case in &observed.cases {
+            assert_eq!(case.fresh_process_engine_seconds.samples, 5);
+            assert_eq!(case.fresh_process_driver_seconds.samples, 5);
+            assert_eq!(case.same_process_warm_engine_seconds.samples, 5);
+            assert_eq!(case.fresh_engine_reported_read_bytes.len(), 5);
+            assert_eq!(case.warm_engine_reported_read_bytes.len(), 5);
+            assert!(case.fresh_process_ids.iter().all(Option::is_some));
+            assert_eq!(
+                case.fresh_process_ids.iter().collect::<BTreeSet<_>>().len(),
+                5
+            );
+            assert!(case.warm_process_id.is_some());
+            assert!(!case.fresh_process_ids.contains(&case.warm_process_id));
+        }
+        let report = serde_json::to_string(&observed).unwrap();
+        for forbidden in [
+            dir.path().to_str().unwrap(),
+            "sql",
+            "operator",
+            "process_id",
+            "PRIVATE_SQL_PATH_SENTINEL",
+        ] {
+            assert!(!report.contains(forbidden));
+        }
+        assert_eq!(
+            capture(),
+            before,
+            "measurement must preserve bytes, modes, modification times and file inventory"
         );
     }
 }

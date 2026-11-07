@@ -11,12 +11,16 @@ use ephemeris::{EphemerisFile, EphemerisManifest};
 use sha2::{Digest, Sha256};
 
 const MAX_CATALOGUE_BYTES: usize = 65_536;
+const MAX_REPORT_BYTES: usize = 65_536;
 const MANIFEST_NAME: &str = "source-manifest.json";
 
 #[derive(Subcommand)]
 pub(crate) enum EphemerisCmd {
     /// Generate local Parquet and CSV tables from verified DE440 sources.
     Tables {
+        /// Observe storage and queries of an existing bundle without changing it.
+        #[arg(long, requires = "duckdb_bin")]
+        measure: bool,
         /// Add a portable `DuckDB` snapshot using a verified executable.
         #[arg(long)]
         duckdb_bin: Option<PathBuf>,
@@ -55,13 +59,14 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
         EphemerisCmd::Download { host, dir } => {
             async {
                 let (base, token) = crate::remote::resolve(host.as_deref())?;
-                acquire(&base, &token, &dir).await
+                acquire(&base, &token, &dir).await.map(|()| None)
             }
             .await
         }
         EphemerisCmd::Tables {
             host,
             duckdb_bin,
+            measure,
             iceberg,
             source_dir,
             from,
@@ -71,6 +76,15 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
             async {
                 let (base, token) = crate::remote::resolve(host.as_deref())?;
                 let manifest = catalogue(&base, &token).await?;
+                let operation = if measure {
+                    crate::ephemeris_tables::TableOperation::Measure(
+                        duckdb_bin
+                            .as_deref()
+                            .context("measurement requires a verified executable")?,
+                    )
+                } else {
+                    crate::ephemeris_tables::TableOperation::Generate(duckdb_bin.as_deref())
+                };
                 crate::ephemeris_tables::publish(
                     &source_dir,
                     &manifest,
@@ -78,7 +92,7 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
                     to_exclusive,
                     &dir,
                     iceberg,
-                    duckdb_bin.as_deref(),
+                    operation,
                 )
                 .await
             }
@@ -86,7 +100,17 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
         }
     };
     match result {
-        Ok(()) => {
+        Ok(Some(report)) => match serde_json::to_string(&report) {
+            Ok(json) if json.len() <= MAX_REPORT_BYTES => {
+                println!("{json}");
+                ExitCode::SUCCESS
+            }
+            _ => {
+                eprintln!("Ephemeris measurement report exceeds its bounds.");
+                ExitCode::FAILURE
+            }
+        },
+        Ok(None) => {
             println!("Verified local ephemeris bundle ready.");
             ExitCode::SUCCESS
         }

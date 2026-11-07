@@ -27,6 +27,92 @@ const SOURCE: &str = "source-manifest.json";
 // The encoder's pinned major version is part of the artifact byte-format identity.
 const FORMAT: &str = "navigator-reference-parquet60-csv-v1";
 
+/// The operation keeps measurement incapable of publishing a missing bundle.
+pub(crate) enum TableOperation<'a> {
+    Generate(Option<&'a Path>),
+    Measure(&'a Path),
+}
+
+#[derive(Serialize)]
+pub(super) struct Observation {
+    reference_snapshot_id: String,
+    context: ObservationContext,
+    coverage_days: i64,
+    row_count: usize,
+    body_count: usize,
+    storage: StorageObservation,
+    native_queries: crate::ephemeris_duckdb::QueryObservations,
+}
+
+#[derive(Serialize)]
+struct ObservationContext {
+    navigator_release: &'static str,
+    os: &'static str,
+    architecture: &'static str,
+    debug_assertions: bool,
+    available_parallelism: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct StorageObservation {
+    files: usize,
+    parquet_bytes: u64,
+    csv_bytes: u64,
+    duckdb_bytes: u64,
+    auxiliary_bytes: u64,
+    parquet_row_groups: usize,
+}
+
+fn storage_observation(dir: &Path, parquet: &[u8], iceberg: bool) -> Result<StorageObservation> {
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::copy_from_slice(parquet))?;
+    let size = |path: &Path, cap: usize| -> Result<u64> {
+        let bytes = open_regular(path)?.metadata()?.len();
+        ensure!(
+            bytes <= u64::try_from(cap)?,
+            "measurement artifact exceeds its bound"
+        );
+        Ok(bytes)
+    };
+    let mut files = 7;
+    let mut auxiliary_bytes = 0;
+    for name in [
+        SOURCE,
+        MANIFEST,
+        crate::ephemeris_duckdb::RECEIPT,
+        crate::ephemeris_duckdb::QUERY,
+    ] {
+        auxiliary_bytes += size(&dir.join(name), MAX_MANIFEST_BYTES)?;
+    }
+    if iceberg {
+        auxiliary_bytes += size(
+            &dir.join(crate::ephemeris_iceberg::RECEIPT),
+            MAX_MANIFEST_BYTES,
+        )?;
+        let metadata = dir.join("metadata");
+        ensure!(
+            std::fs::symlink_metadata(&metadata)?.is_dir(),
+            "measurement metadata directory differs"
+        );
+        let entries = std::fs::read_dir(&metadata)?
+            .take(5)
+            .collect::<std::io::Result<Vec<_>>>()?;
+        ensure!(entries.len() == 4, "measurement metadata inventory differs");
+        for entry in entries {
+            auxiliary_bytes += size(&entry.path(), MAX_MANIFEST_BYTES)?;
+        }
+        files += 5;
+    }
+    Ok(StorageObservation {
+        files,
+        parquet_bytes: size(&dir.join(PARQUET), MAX_FILE_BYTES)?,
+        csv_bytes: size(&dir.join(CSV), MAX_FILE_BYTES)?,
+        duckdb_bytes: size(&dir.join(crate::ephemeris_duckdb::DATABASE), MAX_FILE_BYTES)?,
+        auxiliary_bytes,
+        parquet_row_groups: reader.metadata().num_row_groups(),
+    })
+}
+
 struct PinnedSource {
     file: Mutex<std::fs::File>,
     bytes: u64,
@@ -383,8 +469,12 @@ pub(crate) async fn publish(
     to: NaiveDate,
     dir: &Path,
     iceberg: bool,
-    duckdb_bin: Option<&Path>,
-) -> Result<()> {
+    operation: TableOperation<'_>,
+) -> Result<Option<Observation>> {
+    let (duckdb_bin, measure) = match operation {
+        TableOperation::Generate(path) => (path, false),
+        TableOperation::Measure(path) => (Some(path), true),
+    };
     ensure!(
         from.year() >= 1900
             && to <= NaiveDate::from_ymd_opt(2050, 1, 1).context("valid reference boundary")?
@@ -400,6 +490,10 @@ pub(crate) async fn publish(
     };
     let source = serde_json::to_vec_pretty(manifest)?;
     let saved = existing_manifest(dir, from, to, &source, iceberg, duckdb.is_some())?;
+    ensure!(
+        !measure || saved.is_some(),
+        "measurement requires an existing complete bundle"
+    );
     verify_bundle(source_dir, manifest)?;
     let pin = manifest
         .files
@@ -421,30 +515,7 @@ pub(crate) async fn publish(
         files.iter().all(|(_, bytes)| bytes.len() <= MAX_FILE_BYTES),
         "reference artifact exceeds byte bound"
     );
-    let mut metadata = serde_json::to_value(&table.metadata)?;
-    metadata
-        .as_object_mut()
-        .context("reference metadata object")?
-        .remove("source_manifest");
-    let content = Content {
-        format: FORMAT.into(),
-        row_schema_version: table.schema_version,
-        from,
-        to_exclusive: to,
-        row_count: batch.num_rows(),
-        metadata,
-        columns: schema_description(),
-        source_manifest_sha256: digest(&files[0].1),
-        csv_null: "empty field".into(),
-        files: files
-            .iter()
-            .map(|(name, bytes)| FileIdentity {
-                name: (*name).into(),
-                bytes: bytes.len(),
-                sha256: digest(bytes),
-            })
-            .collect(),
-    };
+    let content = describe_content(&table, &files, batch.num_rows(), from, to)?;
     if let Some(saved) = saved {
         ensure!(
             saved.content == content,
@@ -470,9 +541,20 @@ pub(crate) async fn publish(
                 from,
                 to,
             };
+            if measure {
+                let native_queries = tool.measure(dir, &reference).await?;
+                return Ok(Some(observation(
+                    dir,
+                    &saved,
+                    &batch,
+                    &files[1].1,
+                    iceberg,
+                    native_queries,
+                )?));
+            }
             tool.verify(dir, &reference).await?;
         }
-        return Ok(());
+        return Ok(None);
     }
     publish_new(
         dir,
@@ -482,7 +564,82 @@ pub(crate) async fn publish(
         location.as_deref(),
         duckdb.as_ref(),
     )
-    .await
+    .await?;
+    Ok(None)
+}
+
+fn describe_content(
+    table: &EphemerisReferenceTable,
+    files: &[(&str, Vec<u8>)],
+    row_count: usize,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> Result<Content> {
+    let mut metadata = serde_json::to_value(&table.metadata)?;
+    metadata
+        .as_object_mut()
+        .context("reference metadata object")?
+        .remove("source_manifest");
+    let content = Content {
+        format: FORMAT.into(),
+        row_schema_version: table.schema_version,
+        from,
+        to_exclusive: to,
+        row_count,
+        metadata,
+        columns: schema_description(),
+        source_manifest_sha256: digest(&files[0].1),
+        csv_null: "empty field".into(),
+        files: files
+            .iter()
+            .map(|(name, bytes)| FileIdentity {
+                name: (*name).into(),
+                bytes: bytes.len(),
+                sha256: digest(bytes),
+            })
+            .collect(),
+    };
+    Ok(content)
+}
+
+fn observation(
+    dir: &Path,
+    saved: &DerivedManifest,
+    batch: &RecordBatch,
+    parquet: &[u8],
+    iceberg: bool,
+    native_queries: crate::ephemeris_duckdb::QueryObservations,
+) -> Result<Observation> {
+    let bodies = batch
+        .column_by_name("body")
+        .context("reference body missing")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context("reference body type")?;
+    Ok(Observation {
+        reference_snapshot_id: saved.snapshot_id.clone(),
+        context: ObservationContext {
+            navigator_release: env!("CARGO_PKG_VERSION"),
+            os: std::env::consts::OS,
+            architecture: std::env::consts::ARCH,
+            debug_assertions: cfg!(debug_assertions),
+            available_parallelism: std::thread::available_parallelism()
+                .ok()
+                .map(std::num::NonZeroUsize::get),
+        },
+        coverage_days: saved
+            .content
+            .to_exclusive
+            .signed_duration_since(saved.content.from)
+            .num_days(),
+        row_count: batch.num_rows(),
+        body_count: (0..bodies.len())
+            .map(|i| bodies.value(i))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        storage: storage_observation(dir, parquet, iceberg)?,
+        native_queries,
+    })
 }
 
 async fn publish_new(
