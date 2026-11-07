@@ -69,32 +69,80 @@ fn event_body(get: impl Fn(&str) -> Option<String>, gate: Outcome) -> Result<Val
     }))
 }
 
+/// Tries per notify request before the notice gives up — the same budget the
+/// GitHub path's `--retry 3` curls carry.
+const NOTIFY_ATTEMPTS: u32 = 3;
+/// Wait before the nth retry of a notify request.
+const NOTIFY_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// One attempt of a notify request: the response body on success, classified
+/// for the shared gate retry otherwise — a connect error, a timeout, or a
+/// 500/502-504 status is transient; every 4xx is a deterministic refusal.
+async fn attempt_notify(
+    request: reqwest::RequestBuilder,
+    what: &str,
+) -> crate::remote::AttemptOutcome<Vec<u8>> {
+    use crate::remote::{transient_status, transient_transport, AttemptOutcome};
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) if transient_transport(&error) => {
+            return AttemptOutcome::Transient(anyhow::Error::new(error).context(what.to_owned()));
+        }
+        Err(error) => {
+            return AttemptOutcome::Terminal(anyhow::Error::new(error).context(what.to_owned()));
+        }
+    };
+    let status = response.status();
+    let body = match response.bytes().await {
+        Ok(body) => body,
+        Err(error) => {
+            return AttemptOutcome::Terminal(anyhow::Error::new(error).context(what.to_owned()));
+        }
+    };
+    if status.is_success() {
+        return AttemptOutcome::Done(body.to_vec());
+    }
+    let failure = anyhow!(
+        "{what} failed: {status}: {}",
+        String::from_utf8_lossy(&body)
+    );
+    if transient_status(status) {
+        AttemptOutcome::Transient(failure)
+    } else {
+        AttemptOutcome::Terminal(failure)
+    }
+}
+
 /// Post `body` as the main-push event of the one Project the CI session sees.
+/// Each request is retried before the notice gives up, so a one-off 503 or a
+/// dropped connection does not silently swallow the notice.
 async fn post(base: &str, token: &str, body: &Value) -> Result<()> {
+    use crate::remote::retry_gate_call;
     let client = reqwest::Client::new();
-    let projects: Value = client
-        .get(format!("{base}/app/api/projects"))
-        .bearer_auth(token)
-        .send()
-        .await?
-        .error_for_status()
-        .context("list the Project this run is bound to")?
-        .json()
-        .await?;
+    let list_what = "list the Project this run is bound to";
+    let projects_body: Vec<u8> = retry_gate_call(NOTIFY_ATTEMPTS, NOTIFY_RETRY_DELAY, |_| {
+        let request = client
+            .get(format!("{base}/app/api/projects"))
+            .bearer_auth(token);
+        async move { attempt_notify(request, list_what).await }
+    })
+    .await?;
+    let projects: Value = serde_json::from_slice(&projects_body)
+        .with_context(|| "parse the projects list response".to_string())?;
     let id = projects
         .as_array()
         .and_then(|projects| projects.first())
         .and_then(|project| project["id"].as_str())
         .context("the CI session sees no Project")?
         .to_owned();
-    client
-        .post(format!("{base}/app/api/projects/{id}/events/main-push"))
-        .bearer_auth(token)
-        .json(body)
-        .send()
-        .await?
-        .error_for_status()
-        .context("report the push to main")?;
+    retry_gate_call(NOTIFY_ATTEMPTS, NOTIFY_RETRY_DELAY, |_| {
+        let request = client
+            .post(format!("{base}/app/api/projects/{id}/events/main-push"))
+            .bearer_auth(token)
+            .json(body);
+        async move { attempt_notify(request, "report the push to main").await }
+    })
+    .await?;
     Ok(())
 }
 
@@ -104,13 +152,32 @@ pub async fn notify(dir: &Path, gate: Outcome) -> Result<()> {
     let host = super::manifest::non_empty(manifest.host.as_deref())
         .ok_or_else(|| anyhow!("navigator.yaml has no host"))?;
     let body = event_body(|name| std::env::var(name).ok(), gate)?;
-    let (base, token) = crate::remote::resolve_ci_document(&host).await?;
-    post(&base, &token, &body).await?;
+    if let Err(error) = send_notice(&host, &body).await {
+        return warn_notice_lost(gate, error);
+    }
     println!(
         "Reported this push to the Project channel ({})",
         gate.as_str()
     );
     Ok(())
+}
+
+/// The mint and the post, in order — the remote half of a notice.
+async fn send_notice(host: &str, body: &Value) -> Result<()> {
+    let (base, token) = crate::remote::resolve_ci_document(host).await?;
+    post(&base, &token, body).await
+}
+
+/// A notice that never went out is still visible: the same `::warning::`
+/// annotation the GitHub path prints when its curls give up, before the
+/// original error — the workflow, not this command, decides whether a lost
+/// notice blocks the deployment.
+fn warn_notice_lost(gate: Outcome, error: anyhow::Error) -> Result<()> {
+    eprintln!(
+        "::warning::could not report this push to the Project channel (gate: {}): {error:#}",
+        gate.as_str()
+    );
+    Err(error)
 }
 
 #[cfg(test)]
@@ -202,5 +269,97 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("no Project"), "{error}");
+    }
+
+    /// LAW-285: a one-off 503 on the projects lookup does not swallow the
+    /// notice — the second attempt lists the Project and the event posts.
+    #[tokio::test]
+    async fn a_transient_projects_lookup_recovers_before_the_notice_gives_up() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"id": "p-1"}])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/projects/p-1/events/main-push"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        post(&server.uri(), "ci-session", &json!({"gate": "pass"}))
+            .await
+            .unwrap();
+    }
+
+    /// A one-off 503 on the event post recovers the same way — the notice is
+    /// retried before it can be lost.
+    #[tokio::test]
+    async fn a_transient_event_post_recovers_before_the_notice_gives_up() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"id": "p-1"}])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/projects/p-1/events/main-push"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/projects/p-1/events/main-push"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        post(&server.uri(), "ci-session", &json!({"gate": "pass"}))
+            .await
+            .unwrap();
+    }
+
+    /// A refused notice is terminal with a visible warning naming what could
+    /// not be sent — never a silent drop, never a blocked deployment.
+    #[tokio::test]
+    async fn a_refused_notice_is_terminal() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"id": "p-1"}])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/projects/p-1/events/main-push"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = post(&server.uri(), "ci-session", &json!({"gate": "pass"}))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("401"), "{error}");
     }
 }
