@@ -288,6 +288,16 @@ async fn real_command_publishes_typed_exact_immutable_reference_files() {
         )
         .unwrap();
         assert_roundtrip(&destination, &table);
+        assert_duckdb_modes(
+            &server,
+            &credentials,
+            &source,
+            &destination,
+            from,
+            to,
+            &table,
+        )
+        .await;
         assert_iceberg_mode(
             &server,
             &credentials,
@@ -926,4 +936,228 @@ async fn authorized_iceberg_path_gate_refuses_escaping_before_source_reads() {
         assert!(!destination.exists());
     }
     assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn cached_owner_cannot_generate_duckdb_before_server_authorization() {
+    for status in [401, 403] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/ephemeris/sources"))
+            .and(header("authorization", "Bearer synthetic-denied-token"))
+            .respond_with(ResponseTemplate::new(status))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let parent = tempfile::tempdir().unwrap();
+        let credentials = parent.path().join("credentials.json");
+        std::fs::write(
+            &credentials,
+            serde_json::to_vec(&serde_json::json!({"hosts": {server.uri(): {
+                "token": "synthetic-denied-token", "role": "owner", "expires_at": i64::MAX
+            }}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_navigator"))
+            .args([
+                "ephemeris",
+                "tables",
+                "--host",
+                &server.uri(),
+                "--duckdb-bin",
+            ])
+            .arg(parent.path().join("missing-executable"))
+            .arg("--source-dir")
+            .arg(parent.path().join("missing-source"))
+            .args([
+                "--from",
+                "1900-01-01",
+                "--to-exclusive",
+                "1900-01-02",
+                "--dir",
+            ])
+            .arg(parent.path().join("output"))
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+            .output()
+            .await
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&format!("HTTP {status}")),
+            "authorization must precede executable/source/output access: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
+    }
+}
+
+async fn assert_duckdb_modes(
+    server: &MockServer,
+    credentials: &std::path::Path,
+    source: &std::path::Path,
+    plain: &std::path::Path,
+    from: &str,
+    to: &str,
+    expected: &ephemeris::EphemerisReferenceTable,
+) {
+    let Some(binary) = std::env::var_os("NAVIGATOR_TEST_DUCKDB_BIN") else {
+        assert_ne!(
+            std::env::var("NAVIGATOR_REQUIRE_DUCKDB").as_deref(),
+            Ok("1")
+        );
+        return;
+    };
+    for iceberg in [false, true] {
+        let dir = plain.with_file_name(format!("{from}-duckdb-{iceberg}"));
+        let call = || {
+            let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_navigator"));
+            command
+                .args([
+                    "ephemeris",
+                    "tables",
+                    "--host",
+                    &server.uri(),
+                    "--source-dir",
+                ])
+                .arg(source)
+                .args(["--from", from, "--to-exclusive", to, "--dir"])
+                .arg(&dir)
+                .arg("--duckdb-bin")
+                .arg(&binary)
+                .env("NAVIGATOR_CREDENTIALS_FILE", credentials);
+            if iceberg {
+                command.arg("--iceberg");
+            }
+            command
+        };
+        let output = call().output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_roundtrip(&dir, expected);
+        if iceberg {
+            assert_fresh_iceberg(&dir, expected).await;
+        }
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            if iceberg { 9 } else { 7 }
+        );
+        for name in ["reference.parquet", "reference.csv", "source-manifest.json"] {
+            assert_eq!(
+                std::fs::read(plain.join(name)).unwrap(),
+                std::fs::read(dir.join(name)).unwrap()
+            );
+        }
+        let names = [
+            "reference.duckdb",
+            "query.sql",
+            "duckdb-manifest.json",
+            "derived-manifest.json",
+        ];
+        let before = names.map(|name| {
+            (
+                name,
+                std::fs::read(dir.join(name)).unwrap(),
+                std::fs::metadata(dir.join(name))
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+            )
+        });
+        assert!(
+            std::fs::metadata(dir.join("reference.duckdb"))
+                .unwrap()
+                .len()
+                <= 4_194_304
+        );
+        assert!(call().output().await.unwrap().status.success());
+        for (name, bytes, modified) in &before {
+            assert_eq!(std::fs::read(dir.join(name)).unwrap(), *bytes);
+            assert_eq!(
+                std::fs::metadata(dir.join(name))
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+                *modified
+            );
+        }
+        // A matching native database cannot silently change the selected bundle inventory.
+        assert!(!invoke(server, credentials, source, &dir, from, to)
+            .await
+            .status
+            .success());
+        assert_duckdb_fresh_values(&binary, &dir, expected).await;
+    }
+}
+
+async fn assert_duckdb_fresh_values(
+    binary: &std::ffi::OsStr,
+    dir: &std::path::Path,
+    expected: &ephemeris::EphemerisReferenceTable,
+) {
+    type Row = std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>;
+    let temp = tempfile::tempdir().unwrap();
+    let database = temp.path().join("relocated.duckdb");
+    std::fs::copy(dir.join("reference.duckdb"), &database).unwrap();
+    let sql = "SELECT * FROM ephemeris_reference_table ORDER BY reference_calendar,body;";
+    let output = tokio::process::Command::new(binary)
+        .args([
+            "-no-init",
+            "-no-agent",
+            "-batch",
+            "-bail",
+            "-json",
+            "-readonly",
+        ])
+        .arg(&database)
+        .arg(sql)
+        .env_clear()
+        .env("HOME", temp.path())
+        .current_dir(temp.path())
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let actual: Vec<Row> = serde_json::from_slice(&output.stdout).unwrap();
+    let mut rows = expected
+        .rows
+        .iter()
+        .map(|row| serde_json::from_str::<Row>(&serde_json::to_string(row).unwrap()).unwrap())
+        .collect::<Vec<_>>();
+    rows.sort_by_key(|r| {
+        (
+            r["reference_calendar"].get().to_owned(),
+            r["body"].get().to_owned(),
+        )
+    });
+    assert_eq!(actual.len(), rows.len());
+    for (a, b) in actual.iter().zip(&rows) {
+        assert_eq!(a.keys().collect::<Vec<_>>(), b.keys().collect::<Vec<_>>());
+        for (name, expected) in b {
+            let value = a[name].get();
+            let expected = expected.get();
+            if name == "reference_calendar" {
+                let actual: String = serde_json::from_str(value).unwrap();
+                let expected: chrono::NaiveDateTime = serde_json::from_str(expected).unwrap();
+                assert_eq!(actual, expected.to_string());
+            } else if expected == "null" || expected.starts_with('"') {
+                assert_eq!(value, expected);
+            } else if name.contains("nanoseconds") {
+                assert_eq!(
+                    value.parse::<i64>().unwrap(),
+                    expected.parse::<i64>().unwrap()
+                );
+            } else {
+                assert_eq!(
+                    value.parse::<f64>().unwrap().to_bits(),
+                    expected.parse::<f64>().unwrap().to_bits(),
+                    "{name}"
+                );
+            }
+        }
+    }
+    assert!(!database.with_extension("duckdb.wal").exists());
 }

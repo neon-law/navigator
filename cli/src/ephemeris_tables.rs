@@ -1,5 +1,6 @@
 //! Immutable ordinary Parquet/CSV reference files, separate from recovery archives.
 
+use crate::ephemeris_duckdb::Tool;
 use std::io::{Read, Seek, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -168,7 +169,7 @@ fn batch(rows: &[ephemeris::EphemerisReferenceRow]) -> Result<RecordBatch> {
 }
 
 // Fixed field order/IDs belong to artifact schema v1; row JSON never infers physical types.
-fn schema() -> Arc<Schema> {
+pub(super) fn schema() -> Arc<Schema> {
     let fields = [
         ("reference_calendar", DataType::Utf8, false),
         ("reference_scale", DataType::Utf8, false),
@@ -317,6 +318,7 @@ fn existing_manifest(
     to: NaiveDate,
     source: &[u8],
     iceberg: bool,
+    duckdb: bool,
 ) -> Result<Option<DerivedManifest>> {
     match std::fs::symlink_metadata(dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -326,8 +328,9 @@ fn existing_manifest(
             "table bundle is not an ordinary directory"
         ),
     }
+    let entries = 4 + usize::from(iceberg) * 2 + usize::from(duckdb) * 3;
     let mut names = std::fs::read_dir(dir)?
-        .take(if iceberg { 7 } else { 5 })
+        .take(entries + 1)
         .map(|e| e.map(|e| e.file_name()))
         .collect::<std::io::Result<Vec<_>>>()?;
     names.sort();
@@ -339,6 +342,16 @@ fn existing_manifest(
             std::ffi::OsString::from("metadata"),
             std::ffi::OsString::from(crate::ephemeris_iceberg::RECEIPT),
         ]);
+    }
+    if duckdb {
+        expected.extend(
+            [
+                crate::ephemeris_duckdb::DATABASE,
+                crate::ephemeris_duckdb::RECEIPT,
+                crate::ephemeris_duckdb::QUERY,
+            ]
+            .map(std::ffi::OsString::from),
+        );
     }
     expected.sort();
     ensure!(
@@ -370,6 +383,7 @@ pub(crate) async fn publish(
     to: NaiveDate,
     dir: &Path,
     iceberg: bool,
+    duckdb_bin: Option<&Path>,
 ) -> Result<()> {
     ensure!(
         from.year() >= 1900
@@ -378,13 +392,14 @@ pub(crate) async fn publish(
                 .contains(&to.signed_duration_since(from).num_days()),
         "invalid bounded reference interval"
     );
+    let duckdb = duckdb_bin.map(Tool::verified).transpose()?;
     let location = if iceberg {
         Some(crate::ephemeris_iceberg::location(dir)?)
     } else {
         None
     };
     let source = serde_json::to_vec_pretty(manifest)?;
-    let saved = existing_manifest(dir, from, to, &source, iceberg)?;
+    let saved = existing_manifest(dir, from, to, &source, iceberg, duckdb.is_some())?;
     verify_bundle(source_dir, manifest)?;
     let pin = manifest
         .files
@@ -445,9 +460,29 @@ pub(crate) async fn publish(
             crate::ephemeris_iceberg::verify(dir, location, &content_digest(&content)?, &batch)
                 .await?;
         }
+        if let Some(tool) = &duckdb {
+            let manifest = serde_json::to_vec_pretty(&saved)?;
+            let reference = crate::ephemeris_duckdb::Reference {
+                snapshot_id: &saved.snapshot_id,
+                manifest: &manifest,
+                source: &files[0].1,
+                batch: &batch,
+                from,
+                to,
+            };
+            tool.verify(dir, &reference).await?;
+        }
         return Ok(());
     }
-    publish_new(dir, &files, content, &batch, location.as_deref()).await
+    publish_new(
+        dir,
+        &files,
+        content,
+        &batch,
+        location.as_deref(),
+        duckdb.as_ref(),
+    )
+    .await
 }
 
 async fn publish_new(
@@ -456,6 +491,7 @@ async fn publish_new(
     content: Content,
     batch: &RecordBatch,
     location: Option<&str>,
+    duckdb: Option<&crate::ephemeris_duckdb::Tool>,
 ) -> Result<()> {
     let from = content.from;
     let to = content.to_exclusive;
@@ -501,8 +537,26 @@ async fn publish_new(
         )
         .await?;
     }
-    let verified = existing_manifest(stage.path(), from, to, &files[0].1, location.is_some())?
-        .context("staged receipt missing")?;
+    if let Some(tool) = duckdb {
+        let reference = crate::ephemeris_duckdb::Reference {
+            snapshot_id: &receipt.snapshot_id,
+            manifest: &receipt_bytes,
+            source: &files[0].1,
+            batch,
+            from,
+            to,
+        };
+        tool.author(stage.path(), &reference).await?;
+    }
+    let verified = existing_manifest(
+        stage.path(),
+        from,
+        to,
+        &files[0].1,
+        location.is_some(),
+        duckdb.is_some(),
+    )?
+    .context("staged receipt missing")?;
     ensure!(
         verified.content == receipt.content && verified.snapshot_id == receipt.snapshot_id,
         "staged receipt differs"
@@ -517,6 +571,17 @@ async fn publish_new(
     if let Some(location) = location {
         crate::ephemeris_iceberg::verify(stage.path(), location, &receipt.snapshot_id, batch)
             .await?;
+    }
+    if let Some(tool) = duckdb {
+        let reference = crate::ephemeris_duckdb::Reference {
+            snapshot_id: &receipt.snapshot_id,
+            manifest: &receipt_bytes,
+            source: &files[0].1,
+            batch,
+            from,
+            to,
+        };
+        tool.verify(stage.path(), &reference).await?;
     }
     std::fs::File::open(stage.path())?.sync_all()?;
     crate::atomic_directory::publish_no_clobber(stage.path(), &destination)?;
@@ -720,6 +785,7 @@ mod artifact_tests {
             content(&batch, &files),
             &batch,
             Some(&location),
+            None,
         )
         .await;
         assert!(
@@ -761,7 +827,7 @@ mod artifact_tests {
         let files = files(&batch);
         let content = content(&batch, &files);
         let reference_id = content_digest(&content).unwrap();
-        publish_new(&dir, &files, content, &batch, Some(&location))
+        publish_new(&dir, &files, content, &batch, Some(&location), None)
             .await
             .unwrap();
         let metadata: serde_json::Value =
@@ -829,6 +895,7 @@ mod artifact_tests {
                 content(&batch, &files),
                 &batch,
                 Some(&location),
+                None,
             )
             .await
             .unwrap();
@@ -863,7 +930,8 @@ mod artifact_tests {
                 &files,
                 content(&batch, &files),
                 &batch,
-                Some(&location)
+                Some(&location),
+                None
             )
             .await
             .is_err());
@@ -909,6 +977,7 @@ mod artifact_tests {
             content(&batch, &files),
             &batch,
             Some(&location),
+            None,
         )
         .await
         .unwrap();
@@ -993,6 +1062,7 @@ mod artifact_tests {
             content(&batch, &files),
             &batch,
             Some(&location),
+            None,
         )
         .await
         .unwrap();
@@ -1052,7 +1122,7 @@ mod artifact_tests {
         let dir = parent.path().join("completed with spaces");
         let original_content = content(&batch, &files);
         let id = content_digest(&original_content).unwrap();
-        publish_new(&dir, &files, original_content, &batch, None)
+        publish_new(&dir, &files, original_content, &batch, None, None)
             .await
             .unwrap();
         validate_readers(&dir, &batch).unwrap();
@@ -1061,6 +1131,7 @@ mod artifact_tests {
             content(&batch, &files).from,
             content(&batch, &files).to_exclusive,
             &files[0].1,
+            false,
             false,
         )
         .unwrap()
@@ -1080,7 +1151,7 @@ mod artifact_tests {
             .modified()
             .unwrap();
         assert!(
-            publish_new(&dir, &files, content(&batch, &files), &batch, None)
+            publish_new(&dir, &files, content(&batch, &files), &batch, None, None)
                 .await
                 .is_err()
         );
@@ -1112,7 +1183,7 @@ mod artifact_tests {
             for mode in [None, Some(location.as_str())] {
                 // Matching hashes are insufficient: a fresh reader must reject invalid physical data.
                 assert!(
-                    publish_new(&dir, &files, content(&batch, &files), &batch, mode)
+                    publish_new(&dir, &files, content(&batch, &files), &batch, mode, None)
                         .await
                         .is_err()
                 );
