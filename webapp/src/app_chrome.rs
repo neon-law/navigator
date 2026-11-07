@@ -96,6 +96,37 @@ pub fn app_destinations(role: ViewerRole) -> Vec<AppNavLink> {
     destinations
 }
 
+/// The `/` palette's destinations for a viewer of `role`, in render order.
+///
+/// The navbar's own list, minus Sign out — leaving is an act, not a search
+/// result — plus the admin clause library, which the navbar row deliberately
+/// omits but an admin reaches from here. Nothing else is added: a client sees
+/// destinations their role's navbar already shows, so the palette never
+/// advertises a door that answers 403.
+///
+/// Pure, so the role→palette mapping is unit-tested directly rather than
+/// through rendered pages.
+#[must_use]
+pub fn palette_destinations(role: ViewerRole) -> Vec<AppNavLink> {
+    let mut destinations: Vec<AppNavLink> = app_destinations(role)
+        .into_iter()
+        .filter(|link| link.href != APP_SIGN_OUT_HREF)
+        .collect();
+    if role.is_admin_tier() {
+        // The tier-gated rows sit before the personal ones, as the navbar's
+        // own order does — Clauses joins Content, not the rows after Profile.
+        let at = destinations
+            .iter()
+            .position(|link| link.href == APP_PROFILE_HREF)
+            .unwrap_or(destinations.len());
+        destinations.insert(
+            at,
+            AppNavLink::new("Clauses", crate::clause_library::CLAUSES_PATH),
+        );
+    }
+    destinations
+}
+
 /// Request-extension carrier for the resolved brand identity: the navbar's mark
 /// and the name `/app` copy addresses the client under.
 ///
@@ -289,6 +320,23 @@ pub async fn app_tokens_href_from_context() -> String {
 #[server]
 pub async fn firm_name() -> Result<String, ServerFnError> {
     Ok(firm_name_from_context().await)
+}
+
+/// The `/` palette's destinations for the request's viewer — what
+/// [`crate::keyboard::ShortcutHost`] renders into the palette dialog's
+/// `data-nav-palette-destinations` attribute.
+///
+/// The injected tier defaults to the least-privileged one when the request did
+/// not carry it (a direct hit on the generated endpoint need not run behind the
+/// route's auth + embedded Rego policy gate), so the palette only ever narrows
+/// to what the viewer's own navbar already shows.
+#[server]
+pub async fn get_palette_destinations() -> Result<Vec<AppNavLink>, ServerFnError> {
+    let role = dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<ViewerRole>, _>()
+        .await
+        .map(|axum::Extension(role)| role)
+        .unwrap_or_default();
+    Ok(palette_destinations(role))
 }
 
 #[cfg(feature = "server")]

@@ -24,6 +24,8 @@
 //! it. A page with shortcuts of its own renders [`PageShortcuts`]; the
 //! questionnaire's [`crate::components::QuestionStage`] does.
 
+use crate::app_chrome::get_palette_destinations;
+use crate::components::AppNavLink;
 use dioxus::prelude::*;
 use serde::Serialize;
 
@@ -40,6 +42,25 @@ pub const DECLARATION_ATTRIBUTE: &str = "data-nav-shortcuts";
 
 /// The `id` of the help overlay's `<dialog>`.
 pub const HELP_DIALOG_ID: &str = "nav-shortcuts-dialog";
+
+/// The `id` of the `/` palette's `<dialog>`.
+pub const PALETTE_DIALOG_ID: &str = "nav-palette-dialog";
+
+/// The attribute that marks the palette's role-scoped destinations for the
+/// script to read.
+pub const PALETTE_DESTINATIONS_ATTRIBUTE: &str = "data-nav-palette-destinations";
+
+/// The palette's filter-field hook.
+pub const PALETTE_FILTER_ATTRIBUTE: &str = "data-nav-palette-filter";
+
+/// The palette's results-list hook.
+pub const PALETTE_RESULTS_ATTRIBUTE: &str = "data-nav-palette-results";
+
+/// The palette's close-control hook.
+pub const PALETTE_CLOSE_ATTRIBUTE: &str = "data-nav-palette-close";
+
+/// The attribute a palette row carries its destination on.
+pub const PALETTE_OPTION_HREF_ATTRIBUTE: &str = "data-href";
 
 /// `global` shortcuts work on every page; `page` shortcuts only while it is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -241,14 +262,26 @@ pub fn PageShortcuts(shortcuts: Vec<Shortcut>) -> Element {
     }
 }
 
-/// The global shortcuts and the `?` overlay's dialog, once per page.
+/// The global shortcuts, the `?` overlay's dialog, and the `/` palette's
+/// dialog, once per page.
 ///
-/// The dialog is a native modal `<dialog>`: the platform supplies the focus
-/// trap, the inert background and `Esc`. Its title labels it for assistive
-/// technology. The script fills the list from every declaration on the page.
+/// Each dialog is a native modal `<dialog>`: the platform supplies the focus
+/// trap, the inert background and `Esc`, and closed, its children are inert.
+/// Their titles label them for assistive technology. The script fills the help
+/// list from every declaration on the page, and filters the palette over the
+/// role-scoped destinations the server resolved for this request.
 #[component]
 pub fn ShortcutHost() -> Element {
     let json = declarations_json(&global_shortcuts(&app_pages()));
+    let resource = use_server_future(get_palette_destinations)?;
+    // Clone out of the read guard before rendering so the borrow does not
+    // outlive it (the `rsx!` output escapes this scope). Unresolved — a direct
+    // hit on the endpoint outside the auth gate, or a failed fetch — is an
+    // empty list: the palette degrades to no rows rather than a wider set.
+    let destinations = match &*resource.read() {
+        Some(Ok(destinations)) => destinations.clone(),
+        _ => Vec::new(),
+    };
     rsx! {
         document::Script { src: KEYBOARD_SCRIPT_HREF, defer: true }
         div {
@@ -274,12 +307,68 @@ pub fn ShortcutHost() -> Element {
             }
             div { class: "nav-shortcuts-dialog__body", "data-nav-shortcuts-list": "true" }
         }
+        PaletteDialog { destinations }
+    }
+}
+
+/// The `/` palette's dialog, beside the `?` overlay's: a filter field and the
+/// viewer's role-scoped destinations.
+///
+/// `destinations` arrives resolved — [`crate::app_chrome::get_palette_destinations`]
+/// during SSR, carried in the `data-nav-palette-destinations` attribute the
+/// same way the declarations ride their block. The browser half reads the
+/// attribute and filters what the server already scoped; nothing here
+/// recomputes or widens the set.
+#[component]
+fn PaletteDialog(destinations: Vec<AppNavLink>) -> Element {
+    let json = serde_json::to_string(&destinations).unwrap_or_else(|_| "[]".to_string());
+    rsx! {
+        dialog {
+            id: PALETTE_DIALOG_ID,
+            class: "nav-palette-dialog nav-card",
+            "aria-labelledby": "{PALETTE_DIALOG_ID}-title",
+            "data-nav-palette-destinations": "{json}",
+            div { class: "nav-palette-dialog__header",
+                h2 { id: "{PALETTE_DIALOG_ID}-title", class: "nav-palette-dialog__title",
+                    "Search"
+                }
+                button {
+                    class: "nav-palette-dialog__close",
+                    r#type: "button",
+                    "aria-label": "Close",
+                    "data-nav-palette-close": "true",
+                    span { "aria-hidden": "true", "×" }
+                }
+            }
+            input {
+                class: "nav-palette-dialog__filter",
+                r#type: "search",
+                "data-nav-palette-filter": "true",
+                placeholder: "Search destinations…",
+                "aria-label": "Filter destinations",
+            }
+            ul {
+                class: "nav-palette-dialog__results",
+                "data-nav-palette-results": "true",
+                role: "listbox",
+                "aria-label": "Destinations",
+                for destination in destinations.iter() {
+                    li {
+                        class: "nav-palette-dialog__option",
+                        role: "option",
+                        "data-href": "{destination.href}",
+                        "{destination.label}"
+                    }
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_chrome::palette_destinations;
 
     fn ssr(app: fn() -> Element) -> String {
         let mut dom = VirtualDom::new(app);
