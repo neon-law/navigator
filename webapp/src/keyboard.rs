@@ -24,6 +24,8 @@
 //! it. A page with shortcuts of its own renders [`PageShortcuts`]; the
 //! questionnaire's [`crate::components::QuestionStage`] does.
 
+use crate::app_chrome::get_palette_destinations;
+use crate::components::AppNavLink;
 use dioxus::prelude::*;
 use serde::Serialize;
 
@@ -40,6 +42,25 @@ pub const DECLARATION_ATTRIBUTE: &str = "data-nav-shortcuts";
 
 /// The `id` of the help overlay's `<dialog>`.
 pub const HELP_DIALOG_ID: &str = "nav-shortcuts-dialog";
+
+/// The `id` of the `/` palette's `<dialog>`.
+pub const PALETTE_DIALOG_ID: &str = "nav-palette-dialog";
+
+/// The attribute that marks the palette's role-scoped destinations for the
+/// script to read.
+pub const PALETTE_DESTINATIONS_ATTRIBUTE: &str = "data-nav-palette-destinations";
+
+/// The palette's filter-field hook.
+pub const PALETTE_FILTER_ATTRIBUTE: &str = "data-nav-palette-filter";
+
+/// The palette's results-list hook.
+pub const PALETTE_RESULTS_ATTRIBUTE: &str = "data-nav-palette-results";
+
+/// The palette's close-control hook.
+pub const PALETTE_CLOSE_ATTRIBUTE: &str = "data-nav-palette-close";
+
+/// The attribute a palette row carries its destination on.
+pub const PALETTE_OPTION_HREF_ATTRIBUTE: &str = "data-href";
 
 /// `global` shortcuts work on every page; `page` shortcuts only while it is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -241,14 +262,26 @@ pub fn PageShortcuts(shortcuts: Vec<Shortcut>) -> Element {
     }
 }
 
-/// The global shortcuts and the `?` overlay's dialog, once per page.
+/// The global shortcuts, the `?` overlay's dialog, and the `/` palette's
+/// dialog, once per page.
 ///
-/// The dialog is a native modal `<dialog>`: the platform supplies the focus
-/// trap, the inert background and `Esc`. Its title labels it for assistive
-/// technology. The script fills the list from every declaration on the page.
+/// Each dialog is a native modal `<dialog>`: the platform supplies the focus
+/// trap, the inert background and `Esc`, and closed, its children are inert.
+/// Their titles label them for assistive technology. The script fills the help
+/// list from every declaration on the page, and filters the palette over the
+/// role-scoped destinations the server resolved for this request.
 #[component]
 pub fn ShortcutHost() -> Element {
     let json = declarations_json(&global_shortcuts(&app_pages()));
+    let resource = use_server_future(get_palette_destinations)?;
+    // Clone out of the read guard before rendering so the borrow does not
+    // outlive it (the `rsx!` output escapes this scope). Unresolved — a direct
+    // hit on the endpoint outside the auth gate, or a failed fetch — is an
+    // empty list: the palette degrades to no rows rather than a wider set.
+    let destinations = match &*resource.read() {
+        Some(Ok(destinations)) => destinations.clone(),
+        _ => Vec::new(),
+    };
     rsx! {
         document::Script { src: KEYBOARD_SCRIPT_HREF, defer: true }
         div {
@@ -274,12 +307,68 @@ pub fn ShortcutHost() -> Element {
             }
             div { class: "nav-shortcuts-dialog__body", "data-nav-shortcuts-list": "true" }
         }
+        PaletteDialog { destinations }
+    }
+}
+
+/// The `/` palette's dialog, beside the `?` overlay's: a filter field and the
+/// viewer's role-scoped destinations.
+///
+/// `destinations` arrives resolved — [`crate::app_chrome::get_palette_destinations`]
+/// during SSR, carried in the `data-nav-palette-destinations` attribute the
+/// same way the declarations ride their block. The browser half reads the
+/// attribute and filters what the server already scoped; nothing here
+/// recomputes or widens the set.
+#[component]
+fn PaletteDialog(destinations: Vec<AppNavLink>) -> Element {
+    let json = serde_json::to_string(&destinations).unwrap_or_else(|_| "[]".to_string());
+    rsx! {
+        dialog {
+            id: PALETTE_DIALOG_ID,
+            class: "nav-palette-dialog nav-card",
+            "aria-labelledby": "{PALETTE_DIALOG_ID}-title",
+            "data-nav-palette-destinations": "{json}",
+            div { class: "nav-palette-dialog__header",
+                h2 { id: "{PALETTE_DIALOG_ID}-title", class: "nav-palette-dialog__title",
+                    "Search"
+                }
+                button {
+                    class: "nav-palette-dialog__close",
+                    r#type: "button",
+                    "aria-label": "Close",
+                    "data-nav-palette-close": "true",
+                    span { "aria-hidden": "true", "×" }
+                }
+            }
+            input {
+                class: "nav-palette-dialog__filter",
+                r#type: "search",
+                "data-nav-palette-filter": "true",
+                placeholder: "Search destinations…",
+                "aria-label": "Filter destinations",
+            }
+            ul {
+                class: "nav-palette-dialog__results",
+                "data-nav-palette-results": "true",
+                role: "listbox",
+                "aria-label": "Destinations",
+                for destination in destinations.iter() {
+                    li {
+                        class: "nav-palette-dialog__option",
+                        role: "option",
+                        "data-href": "{destination.href}",
+                        "{destination.label}"
+                    }
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_chrome::palette_destinations;
 
     fn ssr(app: fn() -> Element) -> String {
         let mut dom = VirtualDom::new(app);
@@ -483,6 +572,153 @@ mod tests {
         assert!(
             !html.contains("open=") && !html.contains(" open "),
             "closed until `?`: {html}"
+        );
+    }
+
+    /// The value of one attribute on the rendered HTML, with Dioxus's entity
+    /// escapes read back — what the script reads, but out of the markup.
+    fn attribute_value(html: &str, name: &str) -> Option<String> {
+        let marker = format!("{name}=\"");
+        let start = html.find(&marker)? + marker.len();
+        let rest = &html[start..];
+        let end = rest.find('"').expect("attribute closes");
+        Some(
+            rest[..end]
+                .replace("&#34;", "\"")
+                .replace("&quot;", "\"")
+                .replace("&amp;", "&")
+                .replace("&#x27;", "'"),
+        )
+    }
+
+    /// The palette dialog rendered with an explicit destination list — the
+    /// pure surface the host delegates to.
+    fn palette_ssr(destinations: Vec<AppNavLink>) -> String {
+        let mut dom =
+            VirtualDom::new_with_props(PaletteDialog, PaletteDialogProps { destinations });
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    /// A closed native modal with every hook the script will read: the
+    /// destinations attribute, the filter field, the listbox, the close
+    /// control. No `open` attribute — nothing opens without `showModal()`.
+    #[test]
+    fn the_palette_dialog_is_a_closed_dialog_with_the_script_hooks() {
+        let out = palette_ssr(palette_destinations(crate::people::ViewerRole::Owner));
+        assert!(out.contains("<dialog"), "{out}");
+        assert!(
+            out.contains(&format!("id=\"{PALETTE_DIALOG_ID}\"")),
+            "{out}"
+        );
+        assert!(
+            !out.contains("open=") && !out.contains(" open "),
+            "closed until the script opens it: {out}"
+        );
+        for hook in [
+            PALETTE_DESTINATIONS_ATTRIBUTE,
+            PALETTE_FILTER_ATTRIBUTE,
+            PALETTE_RESULTS_ATTRIBUTE,
+            PALETTE_CLOSE_ATTRIBUTE,
+            PALETTE_OPTION_HREF_ATTRIBUTE,
+        ] {
+            assert!(out.contains(hook), "the markup never emits `{hook}`: {out}");
+        }
+        assert!(out.contains("role=\"listbox\""), "{out}");
+        assert!(out.contains("role=\"option\""), "{out}");
+        assert!(
+            out.contains(r#"type="search""#),
+            "the filter field is a search input: {out}"
+        );
+    }
+
+    /// The destinations attribute is exactly the list the component was given,
+    /// serialized — the script filters over what the server already scoped.
+    #[test]
+    fn the_palette_dialog_carries_the_destinations_it_was_given() {
+        let destinations = vec![
+            AppNavLink::new("Projects", crate::app_chrome::APP_PROJECTS_HREF),
+            AppNavLink::new("Profile", crate::app_chrome::APP_PROFILE_HREF),
+        ];
+        let out = palette_ssr(destinations.clone());
+        let carried = attribute_value(&out, PALETTE_DESTINATIONS_ATTRIBUTE)
+            .expect("the destinations attribute renders");
+        assert_eq!(
+            carried,
+            serde_json::to_string(&destinations).expect("serializes")
+        );
+        assert_eq!(
+            out.matches(PALETTE_OPTION_HREF_ATTRIBUTE).count(),
+            destinations.len(),
+            "one row per destination: {out}"
+        );
+    }
+
+    /// A client's palette — what the server resolved for a client-role page —
+    /// advertises no firm home, no inbox, no admin door. The navbar's own
+    /// boundary, carried into the palette.
+    #[test]
+    fn a_client_palette_lists_no_firm_or_admin_destination() {
+        let out = palette_ssr(palette_destinations(crate::people::ViewerRole::Client));
+        assert!(out.contains(r#"data-href="/app/projects""#), "{out}");
+        assert!(out.contains(r#"data-href="/app/profile""#), "{out}");
+        for refused in ["/app/team", "/app/inbox", "/app/admin"] {
+            assert!(
+                !out.contains(refused),
+                "a client palette advertises {refused}: {out}"
+            );
+        }
+    }
+
+    /// An owner's palette carries the firm and admin destinations their
+    /// navbar already shows, plus the clause library the row omits.
+    #[test]
+    fn an_owner_palette_lists_the_firm_and_admin_destinations() {
+        let out = palette_ssr(palette_destinations(crate::people::ViewerRole::Owner));
+        for expected in [
+            crate::app_chrome::APP_PROJECTS_HREF,
+            crate::app_chrome::APP_TEAM_HREF,
+            crate::inbox::INBOX_PATH,
+            crate::app_chrome::APP_OWNER_HREF,
+            crate::clause_library::CLAUSES_PATH,
+            crate::app_chrome::APP_PROFILE_HREF,
+        ] {
+            assert!(
+                out.contains(&format!("{PALETTE_OPTION_HREF_ATTRIBUTE}=\"{expected}\"")),
+                "the owner palette misses {expected}: {out}"
+            );
+        }
+    }
+
+    /// The host renders both dialogs: the `?` overlay the registry has always
+    /// carried and the palette beside it. The host's own destinations are the
+    /// server's answer for this request.
+    #[test]
+    fn the_host_renders_the_palette_dialog_beside_the_help_one() {
+        fn app() -> Element {
+            rsx! { ShortcutHost {} }
+        }
+        let html = ssr(app);
+        assert!(
+            html.contains(&format!("id=\"{HELP_DIALOG_ID}\"")),
+            "the help overlay: {html}"
+        );
+        assert!(
+            html.contains(&format!("id=\"{PALETTE_DIALOG_ID}\"")),
+            "the palette beside it: {html}"
+        );
+        assert!(html.contains(PALETTE_FILTER_ATTRIBUTE), "{html}");
+        assert!(html.contains(PALETTE_RESULTS_ATTRIBUTE), "{html}");
+        // The destinations are the server's answer for this request — under
+        // `--features server` the function resolves right here, defaulting to
+        // the least-privileged tier. Whatever the tier, it is a JSON array.
+        let carried = attribute_value(&html, PALETTE_DESTINATIONS_ATTRIBUTE)
+            .expect("the destinations attribute renders");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&carried)
+                .expect("valid JSON")
+                .is_array(),
+            "{carried}"
         );
     }
 
