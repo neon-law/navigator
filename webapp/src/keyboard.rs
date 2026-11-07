@@ -575,6 +575,27 @@ mod tests {
         );
     }
 
+    /// The shipped script's source — what the browser actually runs.
+    fn shipped_script() -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../server/public/js/keyboard-shortcuts.js");
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+    }
+
+    /// One top-level function of the shipped script, up to its closing brace —
+    /// enough to assert what a single behavior does and in what order.
+    fn function_body(source: &str, name: &str) -> String {
+        let start = source
+            .find(&format!("function {name}("))
+            .unwrap_or_else(|| panic!("the script has no `{name}`"));
+        let rest = &source[start..];
+        let end = rest
+            .find("\n  }\n")
+            .unwrap_or_else(|| panic!("`{name}` never closes"));
+        rest[..end].to_string()
+    }
+
     /// The value of one attribute on the rendered HTML, with Dioxus's entity
     /// escapes read back — what the script reads, but out of the markup.
     fn attribute_value(html: &str, name: &str) -> Option<String> {
@@ -740,11 +761,8 @@ mod tests {
     /// behavior out of inline handlers and `eval`.
     #[test]
     fn the_script_handles_every_action_and_hook_the_registry_emits() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../server/public/js/keyboard-shortcuts.js");
-        let source = std::fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
-        for action in ["help", "navigate", "next", "choose"] {
+        let source = shipped_script();
+        for action in ["help", "open_palette", "navigate", "next", "choose"] {
             assert!(
                 source.contains(&format!("case \"{action}\"")),
                 "the script has no `{action}` action"
@@ -753,6 +771,10 @@ mod tests {
         for hook in [
             DECLARATION_ATTRIBUTE,
             HELP_DIALOG_ID,
+            PALETTE_DIALOG_ID,
+            PALETTE_FILTER_ATTRIBUTE,
+            PALETTE_RESULTS_ATTRIBUTE,
+            PALETTE_CLOSE_ATTRIBUTE,
             "data-nav-shortcuts-list",
             "data-nav-shortcuts-close",
             "data-nav-questionnaire",
@@ -766,5 +788,186 @@ mod tests {
             "the list is built from text nodes"
         );
         assert!(!source.contains("onclick"), "no inline handlers");
+    }
+
+    /// The palette opens the way the help overlay always has: the focus
+    /// snapshot is taken before the dialog opens, the filter is focused, and
+    /// a half-typed chord lapses. Closing — by Escape, the close control, or
+    /// the `close` event the platform fires — hands focus back.
+    #[test]
+    fn the_script_opens_the_palette_and_restores_focus() {
+        let source = shipped_script();
+        let open = function_body(&source, "openPalette");
+        assert!(
+            open.contains("paletteReturnFocus = document.activeElement"),
+            "the palette takes the focus snapshot: {open}"
+        );
+        let snapshot = open
+            .find("paletteReturnFocus = document.activeElement")
+            .expect("the snapshot");
+        let modal = open
+            .find("showModal")
+            .unwrap_or_else(|| panic!("the palette never opens: {open}"));
+        assert!(
+            snapshot < modal,
+            "the snapshot is taken before the dialog opens: {open}"
+        );
+        assert!(
+            open.contains("PALETTE_FILTER")
+                && source.contains(&format!(
+                    "var PALETTE_FILTER = \"{PALETTE_FILTER_ATTRIBUTE}\""
+                )),
+            "the palette focuses the filter: {open}"
+        );
+        assert!(
+            open.contains("reset()"),
+            "a half-typed chord lapses: {open}"
+        );
+        assert!(
+            open.contains("palette()"),
+            "the palette opens its own dialog: {open}"
+        );
+        let close = function_body(&source, "closePalette");
+        assert!(
+            close.contains("paletteIsOpen()"),
+            "closing a shut palette does nothing: {close}"
+        );
+        assert!(
+            source.contains("event.target.id === PALETTE_ID"),
+            "the platform's close event restores focus: {source}"
+        );
+    }
+
+    /// Typing narrows the palette with a client-side substring match, the
+    /// selection resets to the first match, and a filter that matches nothing
+    /// says so instead of leaving a silently empty list.
+    #[test]
+    fn the_script_filters_the_palette_and_names_the_empty_result() {
+        let source = shipped_script();
+        assert!(
+            source.contains("addEventListener(\"input\""),
+            "typing reaches the filter through a delegated listener: {source}"
+        );
+        let filter = function_body(&source, "filterPalette");
+        assert!(
+            filter.contains("toLowerCase()"),
+            "matching ignores case: {filter}"
+        );
+        assert!(
+            filter.contains("hidden"),
+            "rows hide; the server's set is never rebuilt: {filter}"
+        );
+        assert!(
+            filter.contains("No matching destinations"),
+            "an empty filter names itself: {filter}"
+        );
+        assert!(
+            filter.contains("selectPaletteRow"),
+            "the selection resets with the list: {filter}"
+        );
+        // The filter's own typing must never re-open or navigate: the input
+        // listener only ever narrows.
+        let listener_start = source
+            .find("addEventListener(\"input\"")
+            .expect("the input listener");
+        let listener = &source[listener_start..listener_start + 400];
+        assert!(
+            listener.contains("filterPalette(target.value)"),
+            "the filter listener narrows the list: {listener}"
+        );
+        assert!(
+            !listener.contains("location.assign") && !listener.contains("openPalette"),
+            "the filter listener never navigates or reopens: {listener}"
+        );
+    }
+
+    /// The arrows move the selection and announce it, and Enter closes the
+    /// palette before navigating to the selected destination — the same
+    /// `window.location.assign` idiom every navigation in the script uses.
+    #[test]
+    fn the_script_moves_the_selection_and_jumps_with_enter() {
+        let source = shipped_script();
+        let owner = source
+            .find("if (paletteIsOpen()) {")
+            .expect("the palette owns the keyboard");
+        let owner_body = &source[owner..];
+        for (key, handler) in [
+            ("ArrowDown", "movePaletteSelection(1)"),
+            ("ArrowUp", "movePaletteSelection(-1)"),
+        ] {
+            assert!(
+                owner_body.contains(&format!("event.key === \"{key}\""))
+                    && owner_body.contains(handler),
+                "the palette answers {key} by moving the selection: {owner_body}"
+            );
+        }
+        let select = function_body(&source, "selectPaletteRow");
+        assert!(
+            select.contains("aria-selected"),
+            "the selection is announced: {select}"
+        );
+        let choose = function_body(&source, "choosePaletteSelection");
+        let close = choose
+            .find("closePalette()")
+            .unwrap_or_else(|| panic!("Enter closes the palette: {choose}"));
+        let assign = choose
+            .find("window.location.assign")
+            .unwrap_or_else(|| panic!("Enter navigates: {choose}"));
+        assert!(
+            close < assign,
+            "the palette closes before the jump: {choose}"
+        );
+        assert!(
+            choose.contains("data-href"),
+            "Enter follows the selected row's destination"
+        );
+    }
+
+    /// Exactly one overlay owns the keyboard: the palette is asked first —
+    /// before the help overlay and before the chord machine — so `?` does
+    /// nothing while the palette is up, `/` nothing while help is up, and a
+    /// bare `/` never fires inside a text field.
+    #[test]
+    fn the_palette_owns_the_keyboard_before_anything_else_fires() {
+        let source = shipped_script();
+        let listener = source
+            .find("document.addEventListener(\"keydown\"")
+            .expect("the delegated keydown listener");
+        let within = &source[listener..];
+        let ownership = within
+            .find("if (paletteIsOpen()) {")
+            .expect("the listener asks the palette first");
+        let help = within
+            .find("if (isOpen()) {")
+            .expect("then the help overlay");
+        let chords = source
+            .find("advance(all, 0, event, editable)")
+            .expect("the chord machine");
+        assert!(
+            ownership < help,
+            "the palette is asked before the help overlay"
+        );
+        assert!(
+            source.find("if (paletteIsOpen()) {").expect("ownership") < chords,
+            "the palette is asked before the chord machine"
+        );
+        let owner_body = &within[ownership..ownership + 800];
+        for key in ["Escape", "ArrowDown", "ArrowUp", "Enter"] {
+            assert!(
+                owner_body.contains(&format!("event.key === \"{key}\"")),
+                "the ownership block answers {key}: {owner_body}"
+            );
+        }
+        assert!(
+            owner_body.contains("event.preventDefault()"),
+            "the arrows and Enter do not also scroll or submit: {owner_body}"
+        );
+        // The bare-key guard the registry relies on: `/` declares
+        // `in_fields: false`, and the dispatcher honors it — so typing `/`
+        // inside a text field never opens the palette.
+        assert!(
+            source.contains("if (editable && !shortcut.in_fields) {"),
+            "the dispatcher skips bare keys inside fields"
+        );
     }
 }
