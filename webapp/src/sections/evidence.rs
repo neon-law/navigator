@@ -279,6 +279,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             evidence,
+            folder: None,
             deleted_at: None,
             purge_after: None,
             deleted_by_person_id: None,
