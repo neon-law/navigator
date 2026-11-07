@@ -4,6 +4,8 @@
 //! blobs/<slug>.yaml               the committed pointer (a Blob)
 //! documents/                      Git-ignored, organised for a lawyer
 //!   Client Production/<slug>
+//!     Agreements/<slug>
+//!     Screenshots/<slug>
 //!   Correspondence (Served)/<slug>
 //!   Discovery (Served)/<slug>
 //!   Docket Filings/<slug>
@@ -50,23 +52,26 @@ pub(crate) fn is_sibling(relative: &Path) -> bool {
     first_component(relative).is_some_and(|first| SIBLING_FOLDERS.contains(&first))
 }
 
-/// Whether the path below `documents/` begins with a fixed `Work Product`
-/// subfolder's two-component name (LAW-215).
-fn begins_with_work_product_subfolder(relative: &Path) -> bool {
+/// Whether the path below `documents/` begins with a fixed nested
+/// subfolder's two-component name (LAW-215): a `Work Product` or `Client
+/// Production` subfolder.
+fn begins_with_nested_subfolder(relative: &Path) -> bool {
     MatterFolder::ALL
         .iter()
-        .filter(|folder| folder.is_work_product_subfolder())
+        .filter(|folder| folder.is_nested_subfolder())
         .any(|folder| relative.starts_with(folder.as_str()))
 }
 
 /// The matter folder a path below `documents/` sits in, if any. A fixed
-/// `Work Product` subfolder wins over its bare parent, so bytes under
-/// `Work Product/Research (Work Product)/` name the subfolder (LAW-215).
+/// subfolder wins over its bare parent, so bytes under `Work
+/// Product/Research (Work Product)/` or `Client Production/Agreements/`
+/// name the subfolder (LAW-215).
 pub(crate) fn matter_folder_of(relative: &Path) -> Option<MatterFolder> {
-    if begins_with_work_product_subfolder(relative) {
-        return MatterFolder::ALL.iter().copied().find(|folder| {
-            folder.is_work_product_subfolder() && relative.starts_with(folder.as_str())
-        });
+    if begins_with_nested_subfolder(relative) {
+        return MatterFolder::ALL
+            .iter()
+            .copied()
+            .find(|folder| folder.is_nested_subfolder() && relative.starts_with(folder.as_str()));
     }
     first_component(relative).and_then(MatterFolder::parse)
 }
@@ -535,13 +540,14 @@ mod tests {
         );
     }
 
-    /// LAW-215: a fixed `Work Product` subfolder's two-component name is
-    /// matched whole, so bytes under one name the subfolder, not the bare
-    /// parent, and its slug strips the whole nested prefix.
+    /// LAW-215: a fixed nested subfolder's two-component name is matched
+    /// whole, so bytes under one name the subfolder, not the bare parent,
+    /// and its slug strips the whole nested prefix — for a `Work Product`
+    /// subfolder and for a `Client Production` one alike.
     #[test]
     fn a_work_product_subfolder_is_matched_whole_and_strips_its_nested_prefix() {
         let slug = Path::new("motions/dismiss.pdf");
-        assert!(begins_with_work_product_subfolder(Path::new(
+        assert!(begins_with_nested_subfolder(Path::new(
             "Work Product/Motions (Work Product)/motions/dismiss.pdf"
         )));
         assert_eq!(
@@ -570,6 +576,62 @@ mod tests {
             bytes_relative(slug, MatterFolder::MotionsWorkProduct),
             PathBuf::from("Work Product/Motions (Work Product)/motions/dismiss.pdf")
         );
+        // The Client Production subfolders match the same way.
+        assert!(begins_with_nested_subfolder(Path::new(
+            "Client Production/Agreements/nda.pdf"
+        )));
+        assert_eq!(
+            matter_folder_of(Path::new("Client Production/Agreements/nda.pdf")),
+            Some(MatterFolder::ClientProductionAgreements)
+        );
+        assert_eq!(
+            matter_folder_of(Path::new("Client Production/exhibit.pdf")),
+            Some(MatterFolder::ClientProduction)
+        );
+        assert_eq!(
+            slug_of_bytes(Path::new("Client Production/Screenshots/img.png")),
+            (
+                PathBuf::from("img.png"),
+                Some(MatterFolder::ClientProductionScreenshots)
+            )
+        );
+    }
+
+    /// LAW-215: `ensure_tree` creates the nested second level fresh, and the
+    /// folder migration moves a pointer's bytes into the nested folder its
+    /// `folder:` names without renaming them.
+    #[test]
+    fn ensure_tree_creates_the_second_level_and_migration_files_pointers_one_level_down() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("navigator.yaml"), "project: synthetic\n").unwrap();
+        ensure_tree(root.path()).unwrap();
+        for nested in [
+            "Client Production/Agreements",
+            "Client Production/Screenshots",
+        ] {
+            assert!(
+                root.path().join("documents").join(nested).is_dir(),
+                "{nested}"
+            );
+        }
+
+        let documents = root.path().join("documents");
+        std::fs::create_dir_all(documents.join("Work Product")).unwrap();
+        let bytes = documents.join("Work Product/nda.pdf");
+        std::fs::write(&bytes, b"bytes").unwrap();
+        let yaml = format!(
+            "kind: agreement\nfolder: Client Production/Agreements\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 01990000-0000-7000-8000-000000000001\n  created_at: '2026-01-01T00:00:00Z'\n  sha256: '{}'\n  size_bytes: 5\n",
+            "a".repeat(64)
+        );
+        let pointer = root.path().join("blobs/nda.pdf.yaml");
+        std::fs::create_dir_all(root.path().join("blobs")).unwrap();
+        std::fs::write(&pointer, &yaml).unwrap();
+
+        migrate_folder_tree(root.path(), false).unwrap();
+        let destination = documents.join("Client Production/Agreements/nda.pdf");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"bytes");
+        assert!(!bytes.exists());
+        assert_eq!(std::fs::read_to_string(&pointer).unwrap(), yaml);
     }
     fn migration_pointer() -> String {
         format!("kind: exhibit\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 01990000-0000-7000-8000-000000000001\n  created_at: '2026-01-01T00:00:00Z'\n  sha256: '{}'\n  size_bytes: 5\n", "a".repeat(64))

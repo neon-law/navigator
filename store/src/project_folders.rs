@@ -46,8 +46,8 @@ impl ProjectFolderSlot {
         match self {
             Self::Root | Self::ClientSubmissions => Ok(None),
             Self::Matter(MatterFolder::Discovery) => Err(ProjectFolderError::InvalidSlot),
-            Self::Matter(folder) if folder.is_work_product_subfolder() => {
-                Ok(Some(Self::Matter(MatterFolder::WorkProduct)))
+            Self::Matter(folder) if folder.nested_parent().is_some() => {
+                Ok(folder.nested_parent().map(Self::Matter))
             }
             Self::Matter(_) => Ok(Some(Self::Root)),
         }
