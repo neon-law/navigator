@@ -117,7 +117,7 @@ fn namespace_uid(namespace: &str) -> String {
 
 async fn baseline_counts(surreal: &store::surreal::SurrealDb) -> Vec<usize> {
     vec![
-        store::persons::list_directory(surreal, "", "", &[])
+        store::persons::list_directory(surreal)
             .await
             .expect("count persons")
             .len(),

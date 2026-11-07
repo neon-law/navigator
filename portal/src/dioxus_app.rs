@@ -821,21 +821,17 @@ fn renders_astro_island(html: &str) -> bool {
     ))
 }
 
-/// Reject a `?sort=` that targets a field the people page does not advertise,
-/// returning `400` before the Dioxus render runs — preserving the JSON:API
-/// `SortSpec::validated` contract (the people page advertises `name` and
-/// `email`). Layered onto the `/app/admin/people` Dioxus route by
-/// [`admin_people_router`].
+/// Reject a people-page request the list contract refuses — an unadvertised
+/// `filter[...]` or `sort` field, an out-of-range `page[size]`, or a stale
+/// cursor — with `400` before the Dioxus render runs (JSON:API: a server
+/// MUST answer an unsupported sort with 400). The members are
+/// [`store::firms::PEOPLE_DIRECTORY`]'s. Layered onto the `/app/admin/people`
+/// Dioxus route by [`admin_people_router`].
 async fn reject_unadvertised_sort(request: Request, next: Next) -> Response {
-    use std::collections::{HashMap, HashSet};
-
-    let params = axum::extract::Query::<HashMap<String, String>>::try_from_uri(request.uri())
-        .map(|query| query.0)
-        .unwrap_or_default();
-    let allowed: HashSet<&str> = ["name", "email"].into_iter().collect();
-    match views::components::SortSpec::parse(params.get("sort").map(String::as_str))
-        .validated(&allowed)
-    {
+    match store::listing::ListParams::parse(
+        request.uri().query().unwrap_or(""),
+        &store::firms::PEOPLE_DIRECTORY,
+    ) {
         Ok(_) => next.run(request).await,
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }

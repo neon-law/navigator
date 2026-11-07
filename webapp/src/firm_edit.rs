@@ -215,7 +215,7 @@ async fn admin_dri_choices(
         .filter(|row| row.membership == store::firms::FirmMembership::Admin)
         .map(|row| row.person_id)
         .collect();
-    let candidates = store::persons::list_directory(surreal, "", "", &[])
+    let candidates = store::persons::list_directory(surreal)
         .await?
         .into_iter()
         .filter(|p| {

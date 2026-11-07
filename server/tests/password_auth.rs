@@ -215,9 +215,7 @@ async fn valid_password_mints_the_standard_session_cookie() {
         "a valid password mints the navigator_session cookie"
     );
     // The verified password response creates the first-sign-in Client.
-    let rows = store::persons::list_directory(&surreal, "", "", &[])
-        .await
-        .unwrap();
+    let rows = store::persons::list_directory(&surreal).await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].role, store::persons::Role::Client);
     assert_eq!(rows[0].oidc_subject.as_deref(), Some("fb-uid-1"));
@@ -256,7 +254,7 @@ async fn password_redirects_neither_forward_credentials_nor_mint_sessions() {
         );
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
         assert!(!has_session(&response));
-        assert!(store::persons::list_directory(&surreal, "", "", &[])
+        assert!(store::persons::list_directory(&surreal)
             .await
             .unwrap()
             .is_empty());
@@ -405,9 +403,7 @@ async fn an_unverified_address_opens_no_session_without_the_confirm_flow() {
         let (resp, surreal) = sign_in_with_claims(claims.clone(), None).await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{claims}");
         assert!(!has_session(&resp), "{claims} got a session");
-        let rows = store::persons::list_directory(&surreal, "", "", &[])
-            .await
-            .unwrap();
+        let rows = store::persons::list_directory(&surreal).await.unwrap();
         assert!(rows.is_empty(), "{claims} created a Person");
     }
 }
@@ -453,9 +449,7 @@ async fn a_verified_address_signs_in_with_the_existing_rows_role_only() {
     .await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     assert!(has_session(&resp));
-    let rows = store::persons::list_directory(&surreal, "", "", &[])
-        .await
-        .unwrap();
+    let rows = store::persons::list_directory(&surreal).await.unwrap();
     assert_eq!(rows.len(), 1, "no second Person");
     assert_eq!(rows[0].role, store::persons::Role::Lawyer);
 }

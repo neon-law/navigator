@@ -481,9 +481,7 @@ mod tests {
         assert_ne!(body["result"]["isError"].as_bool(), Some(true));
         assert_eq!(body["result"]["structuredContent"]["name"], "Libra");
 
-        let rows = store::persons::list_directory(&surreal, "", "", &[])
-            .await
-            .unwrap();
+        let rows = store::persons::list_directory(&surreal).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].email, "libra@example.com");
     }

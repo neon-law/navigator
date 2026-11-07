@@ -163,9 +163,12 @@ the affected package rather than the workspace sweep.
 
 - **Generated PDFs use Typst; transactional email uses server-rendered string templates.**
   See [`AGENTS.md`](../AGENTS.md).
-- **Table state stays in the URL.** Filtering, sorting, and pagination are server-validated query parameters: `?sort=`
-  follows the JSON:API 1.1 contract and an unadvertised key returns `400`; `?page=` is 1-indexed. The `/design` demo
-  table is the reference implementation, guarded by `reject_unadvertised_design_sort`.
+- **Table state stays in the URL.** Filtering, sorting, and pagination are server-validated JSON:API 1.1 query
+  parameters — `filter[...]`, `sort`, and the cursor pagination profile's `page[size]`, `page[after]`, `page[before]` —
+  parsed by `store::listing` against each collection's `ListSpec`; an unadvertised member returns `400`. Pages are
+  keyset reads that seek through a `(field, id)` index, never `OFFSET`, so every page costs the same. The People
+  directory (`GET /app/api/people`, `/app/admin/people`) is the reference implementation; a table still on 1-indexed
+  `?page=`, such as the `/design` demo, is on the older contract.
 - **No CDN, ever.** Every asset is same-origin. Swagger UI (`/app/api`) stays vendored rather than rewritten;
   `server/tests/no_cdn_assets.rs` is the build-time backstop.
 - **No rich-text editor.** Long-form input is a plain `<textarea>`.

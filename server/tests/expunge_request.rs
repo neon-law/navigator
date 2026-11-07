@@ -290,7 +290,7 @@ async fn non_admin_cannot_authorize() {
         &store::expunge_requests::NewExpungeRequest {
             project_id: f.project_id,
             asset_id: f.doc_id,
-            requested_by_person_id: store::persons::list_directory(&f.surreal, "", "", &[])
+            requested_by_person_id: store::persons::list_directory(&f.surreal)
                 .await
                 .unwrap()
                 .into_iter()

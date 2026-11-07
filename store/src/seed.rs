@@ -3659,7 +3659,7 @@ async fn seed_firm_memberships(surreal: &SurrealDb) -> anyhow::Result<()> {
     let Some(firm) = crate::firms::find_by_entity_id(surreal, entity.id).await? else {
         return Ok(());
     };
-    for person in crate::persons::list_directory(surreal, "", "", &[]).await? {
+    for person in crate::persons::list_directory(surreal).await? {
         let Some(membership) = crate::firms::FirmMembership::for_role(person.role) else {
             continue;
         };

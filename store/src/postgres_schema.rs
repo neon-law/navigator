@@ -1489,6 +1489,10 @@ mod tests {
                 "20261107030000_add_time_entry_stage.sql",
                 include_str!("../postgres/migrations/20261107030000_add_time_entry_stage.sql"),
             ),
+            (
+                "20261107120000_person_directory_list_indexes.sql",
+                include_str!("../postgres/migrations/20261107120000_person_directory_list_indexes.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
