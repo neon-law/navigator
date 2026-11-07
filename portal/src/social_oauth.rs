@@ -515,6 +515,18 @@ struct MetaPermission {
 struct MetaPages {
     #[serde(default)]
     data: Vec<MetaPage>,
+    paging: Option<MetaPaging>,
+}
+
+#[derive(Deserialize)]
+struct MetaPaging {
+    next: Option<String>,
+    cursors: Option<MetaCursors>,
+}
+
+#[derive(Deserialize)]
+struct MetaCursors {
+    after: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -673,7 +685,14 @@ async fn exchange_and_discover(
     code: &str,
     verifier: &str,
     back: &str,
+    meta_selection: Option<(&str, &str)>,
 ) -> Result<(TokenResponse, Vec<String>, Vec<ConnectedIdentity>), Response> {
+    if meta_selection.is_some() && provider != Provider::Facebook {
+        return Err(redirect_error(
+            back,
+            "Facebook and Instagram did not grant all required permissions. Reconnect Meta.",
+        ));
+    }
     let http = reqwest::Client::new();
     if provider == Provider::Tiktok {
         return tiktok::exchange(&http, config, &endpoints.tiktok, code)
@@ -725,6 +744,18 @@ async fn exchange_and_discover(
             ));
         }
     };
+    if let Some((page_id, instagram_id)) = meta_selection {
+        if !scopes_are_sufficient(Provider::Instagram, &scopes) {
+            return Err(redirect_error(
+                back,
+                "Facebook and Instagram did not grant all required permissions. Reconnect Meta.",
+            ));
+        }
+        let identities = discover_selected_meta(&http, endpoints, &token, page_id, instagram_id)
+            .await
+            .map_err(|message| redirect_error(back, message))?;
+        return Ok((token, scopes, identities));
+    }
     let identities = match discover_identities(&http, provider, endpoints, &token).await {
         Ok(identities) if !identities.is_empty() => identities,
         Ok(_) => {
@@ -869,33 +900,28 @@ async fn complete_authorization(
             "Social account connection is not configured",
         );
     };
-    let (token, scopes, identities) = match exchange_and_discover(
+    let meta_selection = authorized
+        .attempt
+        .instagram_account_id
+        .as_deref()
+        .map(|instagram| (target, instagram));
+    let (token, scopes, mut identities) = match exchange_and_discover(
         provider,
         &config,
         endpoints,
         code,
         &authorized.attempt.pkce_verifier,
         &authorized.back,
+        meta_selection,
     )
     .await
     {
         Ok(discovered) => discovered,
         Err(response) => return response,
     };
-    let identities = match selected_callback_identities(
-        provider,
-        authorized.attempt.instagram_account_id.as_deref(),
-        target,
-        &token,
-        &scopes,
-        endpoints,
-        identities,
-    )
-    .await
-    {
-        Ok(identities) => identities,
-        Err(message) => return redirect_error(&authorized.back, message),
-    };
+    if meta_selection.is_none() {
+        identities.retain(|identity| identity_matches(provider, identity, target));
+    }
     if identities.is_empty() {
         return redirect_error(
             &authorized.back,
@@ -931,29 +957,6 @@ fn authorization_expiry(provider: Provider, expires_in: Option<i64>) -> Option<D
     expires_in
         .filter(|seconds| *seconds > 0)
         .map(|seconds| Utc::now() + Duration::seconds(seconds))
-}
-
-async fn selected_callback_identities(
-    provider: Provider,
-    instagram: Option<&str>,
-    target: &str,
-    token: &TokenResponse,
-    scopes: &[String],
-    endpoints: &ProviderEndpoints,
-    identities: Vec<ConnectedIdentity>,
-) -> Result<Vec<ConnectedIdentity>, &'static str> {
-    let Some(instagram) = instagram else {
-        return Ok(identities
-            .into_iter()
-            .filter(|identity| identity_matches(provider, identity, target))
-            .collect());
-    };
-    if provider != Provider::Facebook || !scopes_are_sufficient(Provider::Instagram, scopes) {
-        return Err(
-            "Facebook and Instagram did not grant all required permissions. Reconnect Meta.",
-        );
-    }
-    discover_selected_meta(&reqwest::Client::new(), endpoints, token, target, instagram).await.map_err(|()| "The selected Instagram account is not linked to the selected Facebook Page. Check both saved identities and reconnect Meta.")
 }
 
 async fn exchange_code(
@@ -1199,33 +1202,50 @@ async fn discover_selected_meta(
     token: &TokenResponse,
     page_id: &str,
     instagram_id: &str,
-) -> Result<Vec<ConnectedIdentity>, ()> {
-    let pages: MetaPages = http
-        .get(format!("{}/me/accounts", endpoints.meta_graph))
-        .query(&[
-            (
-                "fields",
-                "id,name,access_token,instagram_business_account{id,username}",
-            ),
-            ("access_token", token.access_token.as_str()),
-        ])
-        .send()
-        .await
-        .map_err(|_| ())?
-        .error_for_status()
-        .map_err(|_| ())?
-        .json()
-        .await
-        .map_err(|_| ())?;
-    let page = pages
-        .data
-        .into_iter()
-        .find(|page| page.id == page_id)
-        .ok_or(())?;
+) -> Result<Vec<ConnectedIdentity>, &'static str> {
+    let mut seen_cursors = std::collections::HashSet::new();
+    let mut after = None;
+    let page = loop {
+        let mut request = http
+            .get(format!("{}/me/accounts", endpoints.meta_graph))
+            .query(&[
+                (
+                    "fields",
+                    "id,name,access_token,instagram_business_account{id,username}",
+                ),
+                ("access_token", token.access_token.as_str()),
+            ]);
+        if let Some(cursor) = &after {
+            request = request.query(&[("after", cursor)]);
+        }
+        let pages: MetaPages = request
+            .send()
+            .await
+            .map_err(|_| "Meta could not be reached for the Page lookup")?
+            .error_for_status()
+            .map_err(|_| "Meta rejected the Page lookup")?
+            .json()
+            .await
+            .map_err(|_| "Meta returned an invalid Page response")?;
+        if let Some(page) = pages.data.into_iter().find(|page| page.id == page_id) {
+            break page;
+        }
+        let Some(paging) = pages.paging.filter(|paging| paging.next.is_some()) else {
+            return Err("The selected Facebook Page was not returned by Meta");
+        };
+        // Only send a cursor back to the configured endpoint. A provider-supplied
+        // next URL may contain credentials and is never followed or logged.
+        let cursor = paging
+            .cursors
+            .and_then(|cursors| cursors.after)
+            .filter(|cursor| !cursor.is_empty() && seen_cursors.insert(cursor.clone()))
+            .ok_or("Meta returned invalid Page pagination")?;
+        after = Some(cursor);
+    };
     let instagram = page
         .instagram_business_account
         .filter(|account| account.id == instagram_id)
-        .ok_or(())?;
+        .ok_or("The selected Instagram account is not linked to the selected Facebook Page")?;
     Ok(vec![
         ConnectedIdentity {
             provider: Provider::Facebook,
@@ -1984,6 +2004,128 @@ mod tests {
             Some("https://navigator.example/cb".into())
         )
         .is_none());
+    }
+
+    #[tokio::test]
+    async fn grouped_meta_discovery_reports_safe_distinct_failures() {
+        let cases = [
+            (
+                ResponseTemplate::new(403).set_body_string("private-response"),
+                "Meta rejected the Page lookup",
+            ),
+            (
+                ResponseTemplate::new(200).set_body_string("private-response"),
+                "Meta returned an invalid Page response",
+            ),
+            (
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": []})),
+                "The selected Facebook Page was not returned by Meta",
+            ),
+            (
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "data": [{"id": "selected-page", "access_token": "private-page-token",
+                              "instagram_business_account": {"id": "other-instagram"}}]
+                })),
+                "The selected Instagram account is not linked to the selected Facebook Page",
+            ),
+        ];
+        let token = TokenResponse {
+            access_token: "synthetic-token".into(),
+            refresh_token: None,
+            expires_in: None,
+            scope: None,
+        };
+        let http = reqwest::Client::new();
+        for (response, expected) in cases {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/me/accounts"))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+            let result = super::discover_selected_meta(
+                &http,
+                &endpoints(&server),
+                &token,
+                "selected-page",
+                "selected-instagram",
+            )
+            .await;
+            assert!(matches!(result, Err(message) if message == expected));
+        }
+        let server = MockServer::start().await;
+        let mut bad_endpoint = endpoints(&server);
+        bad_endpoint.meta_graph = "invalid-url".into();
+        let result = super::discover_selected_meta(
+            &http,
+            &bad_endpoint,
+            &token,
+            "selected-page",
+            "selected-instagram",
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err("Meta could not be reached for the Page lookup")
+        ));
+    }
+
+    #[tokio::test]
+    async fn grouped_meta_discovery_verifies_the_selected_pair_after_pagination() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/accounts"))
+            .and(|request: &wiremock::Request| {
+                !request.url.query_pairs().any(|(key, _)| key == "after")
+            })
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [],
+                "paging": {
+                    "next": "https://other.example/unused",
+                    "cursors": {"after": "synthetic-cursor"}
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/accounts"))
+            .and(wiremock::matchers::query_param("after", "synthetic-cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "selected-page", "access_token": "synthetic-page-token",
+                          "instagram_business_account": {"id": "selected-instagram"}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let token = TokenResponse {
+            access_token: "synthetic-token".into(),
+            refresh_token: None,
+            expires_in: None,
+            scope: None,
+        };
+
+        let identities = super::discover_selected_meta(
+            &reqwest::Client::new(),
+            &endpoints(&server),
+            &token,
+            "selected-page",
+            "selected-instagram",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(identities.len(), 2);
+        assert!(identity_matches(
+            Provider::Facebook,
+            &identities[0],
+            "selected-page"
+        ));
+        assert!(identity_matches(
+            Provider::Instagram,
+            &identities[1],
+            "selected-instagram"
+        ));
     }
 
     #[tokio::test]
