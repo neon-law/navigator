@@ -96,6 +96,37 @@ pub fn app_destinations(role: ViewerRole) -> Vec<AppNavLink> {
     destinations
 }
 
+/// The `/` palette's destinations for a viewer of `role`, in render order.
+///
+/// The navbar's own list, minus Sign out — leaving is an act, not a search
+/// result — plus the admin clause library, which the navbar row deliberately
+/// omits but an admin reaches from here. Nothing else is added: a client sees
+/// destinations their role's navbar already shows, so the palette never
+/// advertises a door that answers 403.
+///
+/// Pure, so the role→palette mapping is unit-tested directly rather than
+/// through rendered pages.
+#[must_use]
+pub fn palette_destinations(role: ViewerRole) -> Vec<AppNavLink> {
+    let mut destinations: Vec<AppNavLink> = app_destinations(role)
+        .into_iter()
+        .filter(|link| link.href != APP_SIGN_OUT_HREF)
+        .collect();
+    if role.is_admin_tier() {
+        // The tier-gated rows sit before the personal ones, as the navbar's
+        // own order does — Clauses joins Content, not the rows after Profile.
+        let at = destinations
+            .iter()
+            .position(|link| link.href == APP_PROFILE_HREF)
+            .unwrap_or(destinations.len());
+        destinations.insert(
+            at,
+            AppNavLink::new("Clauses", crate::clause_library::CLAUSES_PATH),
+        );
+    }
+    destinations
+}
+
 /// Request-extension carrier for the resolved brand identity: the navbar's mark
 /// and the name `/app` copy addresses the client under.
 ///
@@ -291,6 +322,23 @@ pub async fn firm_name() -> Result<String, ServerFnError> {
     Ok(firm_name_from_context().await)
 }
 
+/// The `/` palette's destinations for the request's viewer — what
+/// [`crate::keyboard::ShortcutHost`] renders into the palette dialog's
+/// `data-nav-palette-destinations` attribute.
+///
+/// The injected tier defaults to the least-privileged one when the request did
+/// not carry it (a direct hit on the generated endpoint need not run behind the
+/// route's auth + embedded Rego policy gate), so the palette only ever narrows
+/// to what the viewer's own navbar already shows.
+#[server]
+pub async fn get_palette_destinations() -> Result<Vec<AppNavLink>, ServerFnError> {
+    let role = dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<ViewerRole>, _>()
+        .await
+        .map(|axum::Extension(role)| role)
+        .unwrap_or_default();
+    Ok(palette_destinations(role))
+}
+
 #[cfg(feature = "server")]
 pub async fn firm_name_from_context() -> String {
     if let Ok(axum::Extension(mark)) =
@@ -477,6 +525,105 @@ mod tests {
                 !out.contains(r#"href="/app/admin"#),
                 "rank {} sees an admin destination: {out}",
                 role.authority_rank()
+            );
+        }
+    }
+
+    /// The palette carries the navbar's destinations minus Sign out — leaving
+    /// is an act, not a search result — and, for the admin tier, the clause
+    /// library the row deliberately omits. Owner's list shows the full shape:
+    /// the row order preserved, Firm and Content from the navbar, Clauses last.
+    #[test]
+    fn the_palette_lists_the_navbar_minus_sign_out() {
+        let hrefs = |role: ViewerRole| -> Vec<String> {
+            palette_destinations(role)
+                .into_iter()
+                .map(|link| link.href)
+                .collect()
+        };
+        assert_eq!(
+            hrefs(ViewerRole::Owner),
+            [
+                APP_PROJECTS_HREF,
+                APP_TEAM_HREF,
+                crate::inbox::INBOX_PATH,
+                APP_OWNER_HREF,
+                crate::brand_blog_posts::APP_PATH,
+                crate::clause_library::CLAUSES_PATH,
+                APP_PROFILE_HREF,
+            ]
+        );
+        assert_eq!(
+            hrefs(ViewerRole::Admin),
+            [
+                APP_PROJECTS_HREF,
+                APP_TEAM_HREF,
+                crate::inbox::INBOX_PATH,
+                crate::brand_blog_posts::APP_PATH,
+                crate::clause_library::CLAUSES_PATH,
+                APP_PROFILE_HREF,
+            ]
+        );
+    }
+
+    /// A client's palette is what their own navbar already shows, minus Sign
+    /// out: the one destination every tier has and Profile. Never a firm home,
+    /// the inbox, or an admin door — the palette must not advertise a 403.
+    #[test]
+    fn a_client_palette_lists_no_firm_or_admin_destination() {
+        let hrefs: Vec<String> = palette_destinations(ViewerRole::Client)
+            .into_iter()
+            .map(|link| link.href)
+            .collect();
+        assert_eq!(hrefs, [APP_PROJECTS_HREF, APP_PROFILE_HREF]);
+    }
+
+    /// The clause library is an admin destination: no tier below admin is
+    /// offered it, because admission to `/app/admin` is one Owner/Admin route
+    /// bypass the navbar's absence of it reflects.
+    #[test]
+    fn the_clause_library_reaches_admin_tiers_only() {
+        for role in [ViewerRole::Client, ViewerRole::Clerk, ViewerRole::Lawyer] {
+            let hrefs: Vec<String> = palette_destinations(role)
+                .into_iter()
+                .map(|link| link.href)
+                .collect();
+            assert!(
+                !hrefs.iter().any(|href| href.starts_with("/app/admin")),
+                "rank {} palette carries an admin destination: {hrefs:?}",
+                role.authority_rank()
+            );
+        }
+        for role in [ViewerRole::Admin, ViewerRole::Owner] {
+            let hrefs: Vec<String> = palette_destinations(role)
+                .into_iter()
+                .map(|link| link.href)
+                .collect();
+            assert!(
+                hrefs.contains(&crate::clause_library::CLAUSES_PATH.to_string()),
+                "rank {} palette misses the clause library: {hrefs:?}",
+                role.authority_rank()
+            );
+        }
+    }
+
+    /// Sign out is never a palette destination at any tier.
+    #[test]
+    fn sign_out_is_never_a_palette_destination() {
+        for role in [
+            ViewerRole::Client,
+            ViewerRole::Clerk,
+            ViewerRole::Lawyer,
+            ViewerRole::Admin,
+            ViewerRole::Owner,
+        ] {
+            let hrefs: Vec<String> = palette_destinations(role)
+                .into_iter()
+                .map(|link| link.href)
+                .collect();
+            assert!(
+                !hrefs.contains(&APP_SIGN_OUT_HREF.to_string()),
+                "{role:?} palette offers Sign out: {hrefs:?}"
             );
         }
     }
