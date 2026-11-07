@@ -526,6 +526,7 @@ async fn ingest_one(
         signing: None,
         notarization: Vec::new(),
         evidence: None,
+        folder: Some(matter_folder.as_str()),
     };
     let ingest = IngestArgs {
         project_id,

@@ -270,6 +270,21 @@ impl MatterFolder {
         Self::ALL.into_iter().find(|folder| folder.as_str() == name)
     }
 
+    /// The folder `name` names, or [`UnknownFolderError`] — the fails-closed
+    /// check every persisted folder write runs (LAW-241). A value that is
+    /// not one of the Firm's matter folders, spelled exactly as
+    /// [`as_str`](MatterFolder::as_str) spells it, is an error, never a
+    /// silently-defaulted placement.
+    pub fn parse_checked(name: &str) -> Result<Self, UnknownFolderError> {
+        Self::parse(name).ok_or_else(|| UnknownFolderError(name.to_string()))
+    }
+
+    /// Validate an optional folder name, failing closed (LAW-241) — the
+    /// shape an ingest identity or an upload session carries.
+    pub fn parse_checked_folder(name: Option<&str>) -> Result<Option<Self>, UnknownFolderError> {
+        name.map(Self::parse_checked).transpose()
+    }
+
     /// The folder a document of `kind` lands in when its pointer names none.
     /// No kind means the bare `Discovery` folder or its served twin, so
     /// [`Self::Discovery`] survives only on pointers that name it and
@@ -384,6 +399,30 @@ pub enum PointerError {
     #[error(transparent)]
     Evidence(#[from] crate::documents::EvidenceError),
 }
+
+/// Why a persisted folder name was refused (LAW-241): it is not one of the
+/// Firm's matter folders, spelled exactly as [`MatterFolder::as_str`]
+/// spells it. Every folder write fails closed — an unknown value is an
+/// error, never a silent default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownFolderError(pub String);
+
+impl std::fmt::Display for UnknownFolderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "`{}` is not a matter folder. Accepted values are: {}.",
+            self.0,
+            MatterFolder::ALL
+                .iter()
+                .map(|folder| folder.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+impl std::error::Error for UnknownFolderError {}
 
 impl DocumentPointer {
     /// Parse YAML and enforce the document-pointer contract.

@@ -1726,6 +1726,12 @@ DEFINE FIELD OVERWRITE notarization ON asset TYPE any;
 -- before it read as unrecorded without a backfill;
 -- `store::documents::Evidence` is the shape, validated before the write.
 DEFINE FIELD OVERWRITE evidence ON asset TYPE any;
+-- The matter folder the document is filed in (LAW-241): a pointer's
+-- `folder:` key, spelled exactly — one of the Firm's matter folders
+-- (`store::document_pointers::MatterFolder`), validated fails-closed before
+-- any write. Optional, so rows written before it read as unrecorded (the
+-- kind's default placement) without a backfill.
+DEFINE FIELD OVERWRITE folder ON asset TYPE option<string>;
 -- Soft deletion (ENG-862). A lawyer-tier delete stamps `deleted_at` on every
 -- revision of the slug chain together, with `purge_after` 180 days later, the
 -- person who deleted it, and the source-repository commit that removed its
@@ -1776,6 +1782,10 @@ DEFINE FIELD IF NOT EXISTS metadata ON document_upload_session TYPE any;
 DEFINE FIELD IF NOT EXISTS derived_from ON document_upload_session TYPE any;
 DEFINE FIELD IF NOT EXISTS signing ON document_upload_session TYPE any;
 DEFINE FIELD IF NOT EXISTS notarization ON document_upload_session TYPE any;
+-- The matter folder the document files into at completion (LAW-241),
+-- validated when the session opens. Optional, so earlier sessions and
+-- folder-less uploads keep the kind's default placement.
+DEFINE FIELD IF NOT EXISTS folder ON document_upload_session TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS declared_size ON document_upload_session TYPE int;
 DEFINE FIELD IF NOT EXISTS declared_sha256 ON document_upload_session TYPE string;
 DEFINE FIELD IF NOT EXISTS chunk_size ON document_upload_session TYPE int;

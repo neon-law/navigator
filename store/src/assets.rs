@@ -117,6 +117,13 @@ pub struct Asset {
     /// unrecorded; a stored value this build cannot read reads back as
     /// unrecorded rather than failing the row.
     pub evidence: Option<crate::documents::Evidence>,
+    /// The matter folder the document is filed in (LAW-241) — the pointer's
+    /// `folder:` key, spelled exactly, persisted so the live matter files
+    /// the document where the pointer says. `None` is unrecorded: the
+    /// document sits where its kind's default placement puts it. A stored
+    /// value this build cannot read reads back as unrecorded rather than
+    /// failing the row.
+    pub folder: Option<String>,
     /// When a lawyer soft-deleted this revision's document. Every revision
     /// of the slug chain carries the same stamp. `None` is live.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,9 +159,9 @@ impl Asset {
 
     /// Where this document sits below a Project checkout's `documents/`, by
     /// the same rule `navigator project sync` lays it out with: the slug, or
-    /// the filename of a one-off, in the matter folder its kind maps to. A
-    /// pointer's `folder:` override lives only in the repository, so a
-    /// document moved by one reads here under its kind's folder.
+    /// the filename of a one-off, in the matter folder the row's persisted
+    /// `folder` names (LAW-241) — the pointer's `folder:` key — else the
+    /// one its kind maps to.
     #[must_use]
     pub fn documents_path(&self) -> String {
         let name = self
@@ -165,12 +172,16 @@ impl Asset {
         if let Some(path) = self.drive_checkout_path() {
             return path.to_owned();
         }
-        crate::document_pointers::documents_path(
-            name,
-            crate::document_pointers::MatterFolder::for_kind(
-                self.kind.as_deref().unwrap_or_default(),
-            ),
-        )
+        let folder = self
+            .folder
+            .as_deref()
+            .and_then(crate::document_pointers::MatterFolder::parse)
+            .unwrap_or_else(|| {
+                crate::document_pointers::MatterFolder::for_kind(
+                    self.kind.as_deref().unwrap_or_default(),
+                )
+            });
+        crate::document_pointers::documents_path(name, folder)
     }
 }
 
@@ -215,6 +226,7 @@ struct AssetRow {
     signing: Option<Json>,
     notarization: Option<Json>,
     evidence: Option<Json>,
+    folder: Option<String>,
     deleted_at: Option<surrealdb::types::Datetime>,
     purge_after: Option<surrealdb::types::Datetime>,
     deleted_by_person_id: Option<surrealdb::types::RecordId>,
@@ -270,6 +282,9 @@ impl AssetRow {
             evidence: self
                 .evidence
                 .and_then(|evidence| serde_json::from_value(evidence).ok()),
+            // A stored value this build cannot read reads back as unrecorded
+            // rather than failing the whole row.
+            folder: self.folder,
             deleted_at: self.deleted_at.map(Into::into),
             purge_after: self.purge_after.map(Into::into),
             deleted_by_person_id: self.deleted_by_person_id.as_ref().and_then(record_uuid),
@@ -287,7 +302,7 @@ impl AssetRow {
 pub(crate) const SELECT: &str = "id, storage_key, secondary_storage_key, content_type, byte_size, \
      sha256_hex, project_id, filename, kind, source, received_at, description, visibility, slug, \
      published_at, source_message_id, source_sender, source_received_at, source_subject, metadata, \
-     derived_from, transcript_quality, signing, notarization, evidence, deleted_at, purge_after, \
+     derived_from, transcript_quality, signing, notarization, evidence, folder, deleted_at, purge_after, \
      deleted_by_person_id, deleted_commit_sha, legal_hold_at, purged_at, \
      inserted_at, updated_at";
 
@@ -1207,6 +1222,67 @@ pub async fn set_visibility(
     Ok(Some(true))
 }
 
+/// Why [`set_folder`] was refused (LAW-241).
+#[derive(Debug, thiserror::Error)]
+pub enum SetFolderError {
+    /// The folder name is not one of the Firm's matter folders, spelled
+    /// exactly. Fails closed: an unknown value is an error, never a
+    /// silently-defaulted placement.
+    #[error(transparent)]
+    UnknownFolder(#[from] crate::document_pointers::UnknownFolderError),
+    #[error(transparent)]
+    Asset(#[from] AssetError),
+}
+
+/// Set (or clear) the matter folder on one asset that belongs to
+/// `project_id` (LAW-241): the pointer's `folder:` key, persisted so the
+/// live matter files the document where the pointer says. `None` is an
+/// explicit clear back to the kind's default placement, not an omission.
+///
+/// `Ok(None)` when the asset is absent or belongs to another Project;
+/// `Ok(Some(false))` when it already sits in `folder`; `Ok(Some(true))`
+/// after writing, mirroring the change to PostgreSQL.
+///
+/// # Errors
+/// [`SetFolderError`] — a rejected folder name or a database failure.
+pub async fn set_folder(
+    db: &SurrealDb,
+    project_id: Uuid,
+    asset_id: Uuid,
+    folder: Option<&str>,
+) -> Result<Option<bool>, SetFolderError> {
+    let folder = folder
+        .map(crate::document_pointers::MatterFolder::parse_checked)
+        .transpose()?;
+    let current = find_by_id(db, asset_id).await?;
+    let Some(asset) = current.filter(|asset| asset.project_id == Some(project_id)) else {
+        return Ok(None);
+    };
+    if asset.folder.as_deref() == folder.map(crate::document_pointers::MatterFolder::as_str) {
+        return Ok(Some(false));
+    }
+    let response = match folder {
+        Some(folder) => writing(|| {
+            db.query("UPDATE $id SET folder = $folder, updated_at = time::now()")
+                .bind(("id", record_id(TABLE, asset_id)))
+                .bind(("folder", folder.as_str()))
+        })
+        .await
+        .map_err(AssetError::from)?,
+        None => writing(|| {
+            db.query("UPDATE $id SET folder = NONE, updated_at = time::now()")
+                .bind(("id", record_id(TABLE, asset_id)))
+        })
+        .await
+        .map_err(AssetError::from)?,
+    };
+    if one(response)?.is_none() {
+        return Err(AssetError::WriteReturnedNothing.into());
+    }
+    mirror_writes(db, &[asset_id]).await;
+    Ok(Some(true))
+}
+
 /// Days a soft-deleted document stays recoverable before the purge may
 /// expunge it.
 pub const RETENTION_DAYS: i64 = 180;
@@ -1530,7 +1606,8 @@ pub async fn restore_archived(db: &SurrealDb, asset: &Asset) -> Result<RowRestor
              source_sender = $source_sender, source_received_at = $source_received_at, \
              source_subject = $source_subject, metadata = $metadata, \
              derived_from = $derived_from, transcript_quality = $transcript_quality, \
-             signing = $signing, notarization = $notarization, deleted_at = $deleted_at, \
+             signing = $signing, notarization = $notarization, evidence = $evidence, \
+             folder = $folder, deleted_at = $deleted_at, \
              purge_after = $purge_after, deleted_by_person_id = $deleted_by, \
              deleted_commit_sha = $deleted_commit_sha, legal_hold_at = $legal_hold_at, \
              purged_at = $purged_at, inserted_at = $inserted_at, updated_at = $updated_at \
@@ -1582,6 +1659,7 @@ pub async fn restore_archived(db: &SurrealDb, asset: &Asset) -> Result<RowRestor
                 .as_ref()
                 .and_then(|evidence| serde_json::to_value(evidence).ok()),
         ))
+        .bind(("folder", asset.folder.clone()))
         .bind(("deleted_at", datetime(asset.deleted_at)))
         .bind(("purge_after", datetime(asset.purge_after)))
         .bind((
@@ -2628,6 +2706,7 @@ mod tests {
                     signing: None,
                     notarization: Vec::new(),
                     evidence: None,
+                    folder: None,
                 },
                 format!("bytes for {shape}").as_bytes(),
             )
@@ -2831,6 +2910,7 @@ mod tests {
                         signing: None,
                         notarization: Vec::new(),
                         evidence: None,
+                        folder: None,
                     },
                     bytes,
                 )
@@ -2893,6 +2973,7 @@ mod tests {
                         signing: None,
                         notarization: Vec::new(),
                         evidence: None,
+                        folder: None,
                     },
                     bytes,
                 )
@@ -2962,6 +3043,7 @@ mod tests {
                         signing: None,
                         notarization: Vec::new(),
                         evidence: None,
+                        folder: None,
                     },
                     bytes,
                 )
@@ -3037,6 +3119,7 @@ mod tests {
                 signing: None,
                 notarization: Vec::new(),
                 evidence: None,
+                folder: None,
             },
             bytes,
         )
