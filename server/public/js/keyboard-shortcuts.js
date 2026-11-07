@@ -437,8 +437,14 @@
     }
     var href = selectedRow.getAttribute("data-href");
     closePalette();
-    if (href) {
-      window.location.assign(href);
+    if (!href) {
+      return;
+    }
+    // Same-origin only: a tampered data-href must never become a
+    // `javascript:` navigation. The shortcut jump applies the same guard.
+    var target = new URL(href, window.location.href);
+    if (target.origin === window.location.origin) {
+      window.location.assign(target.href);
     }
   }
 
