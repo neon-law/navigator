@@ -340,7 +340,16 @@ fn PaletteDialog(destinations: Vec<AppNavLink>) -> Element {
                     span { "aria-hidden": "true", "×" }
                 }
             }
+            // The structural a11y gate (server/tests/routes.rs) requires every
+            // visible input to carry an id and a matching `<label for>`; the
+            // visually-hidden label names it without altering the dialog's layout.
+            label {
+                r#for: "{PALETTE_DIALOG_ID}-filter",
+                class: "nav-visually-hidden",
+                "Filter destinations",
+            }
             input {
+                id: "{PALETTE_DIALOG_ID}-filter",
                 class: "nav-palette-dialog__filter",
                 r#type: "search",
                 "data-nav-palette-filter": "true",
