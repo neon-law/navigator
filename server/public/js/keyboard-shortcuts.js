@@ -11,6 +11,8 @@
 // keys separated by spaces (`g m`); `1-9` is one declaration for the digit row.
 // A bare key never fires while focus is in a text field; a declaration opts in
 // with `in_fields`. A half-typed chord lapses after `data-chord-timeout-ms`.
+// The `?` overlay and the `/` palette are both native dialogs; exactly one of
+// them owns the keyboard at a time, and closing either restores prior focus.
 //
 // With this script unavailable every page still works with the pointer.
 
@@ -24,6 +26,10 @@
 
   var DECLARATIONS = "[data-nav-shortcuts]";
   var DIALOG_ID = "nav-shortcuts-dialog";
+  var PALETTE_ID = "nav-palette-dialog";
+  var PALETTE_FILTER = "data-nav-palette-filter";
+  var PALETTE_RESULTS = "data-nav-palette-results";
+  var PALETTE_CLOSE = "data-nav-palette-close";
   var NON_TEXT_INPUTS = {
     button: true,
     checkbox: true,
@@ -59,6 +65,8 @@
   var pending = null;
   var timer = null;
   var returnFocus = null;
+  var paletteReturnFocus = null;
+  var selectedRow = null;
 
   function isApple() {
     return /Mac|iPhone|iPad|iPod/.test(navigator.platform || "");
@@ -194,6 +202,9 @@
     switch (shortcut.action) {
       case "help":
         openHelp();
+        break;
+      case "open_palette":
+        openPalette();
         break;
       case "navigate":
         if (shortcut.href) {
@@ -349,17 +360,216 @@
     }
   }
 
-  function restoreFocus() {
-    var target = returnFocus;
-    returnFocus = null;
+  function focusBack(target) {
     if (target && target.isConnected && typeof target.focus === "function") {
       target.focus();
     }
   }
 
+  function restoreFocus() {
+    var target = returnFocus;
+    returnFocus = null;
+    focusBack(target);
+  }
+
+  /* ----------------------------------------------------------- palette -- */
+
+  function palette() {
+    return document.getElementById(PALETTE_ID);
+  }
+
+  function paletteIsOpen() {
+    var el = palette();
+    return !!el && el.hasAttribute("open");
+  }
+
+  function paletteList(el) {
+    return el.querySelector("[" + PALETTE_RESULTS + "]");
+  }
+
+  // The rows a palette shows right now: every `option` the server rendered
+  // that the current filter has not hidden.
+  function paletteRows(el) {
+    var list = paletteList(el);
+    if (!list) {
+      return [];
+    }
+    var options = list.querySelectorAll("[role=option]");
+    var rows = [];
+    for (var i = 0; i < options.length; i += 1) {
+      if (!options[i].hasAttribute("hidden")) {
+        rows.push(options[i]);
+      }
+    }
+    return rows;
+  }
+
+  function selectPaletteRow(row) {
+    if (selectedRow) {
+      selectedRow.setAttribute("aria-selected", "false");
+    }
+    selectedRow = row && row.hasAttribute("data-href") ? row : null;
+    if (selectedRow) {
+      selectedRow.setAttribute("aria-selected", "true");
+      if (typeof selectedRow.scrollIntoView === "function") {
+        selectedRow.scrollIntoView({ block: "nearest" });
+      }
+    }
+  }
+
+  function movePaletteSelection(step) {
+    var el = palette();
+    if (!el) {
+      return;
+    }
+    var rows = paletteRows(el);
+    if (rows.length === 0) {
+      return;
+    }
+    var at = rows.indexOf(selectedRow);
+    var next = Math.min(Math.max(at + step, 0), rows.length - 1);
+    selectPaletteRow(rows[next]);
+  }
+
+  function choosePaletteSelection() {
+    if (!selectedRow) {
+      return;
+    }
+    var href = selectedRow.getAttribute("data-href");
+    closePalette();
+    if (href) {
+      window.location.assign(href);
+    }
+  }
+
+  // Narrow the rows to the ones matching the filter. The set the server
+  // scoped never changes — rows only hide; a filter that matches nothing
+  // says so instead of leaving a silently empty list.
+  function filterPalette(query) {
+    var el = palette();
+    if (!el) {
+      return;
+    }
+    var list = paletteList(el);
+    if (!list) {
+      return;
+    }
+    var needle = (query || "").toLowerCase();
+    var options = list.querySelectorAll("[role=option]");
+    var first = null;
+    var visible = 0;
+    for (var i = 0; i < options.length; i += 1) {
+      var row = options[i];
+      if (row.textContent.toLowerCase().indexOf(needle) !== -1) {
+        row.removeAttribute("hidden");
+        visible += 1;
+        if (!first) {
+          first = row;
+        }
+      } else {
+        row.setAttribute("hidden", "hidden");
+      }
+    }
+    var empty = list.querySelector("[data-nav-palette-empty]");
+    if (!empty) {
+      empty = document.createElement("li");
+      empty.className = "nav-palette-dialog__empty";
+      empty.setAttribute("data-nav-palette-empty", "true");
+      empty.setAttribute("aria-live", "polite");
+      empty.textContent = "No matching destinations";
+      list.appendChild(empty);
+    }
+    if (visible === 0) {
+      empty.removeAttribute("hidden");
+    } else {
+      empty.setAttribute("hidden", "hidden");
+    }
+    selectPaletteRow(visible > 0 ? first : null);
+  }
+
+  // A palette opens unfiltered: every destination for the page's role is
+  // visible, the first one is pre-selected, and the filter is focused.
+  function resetPalette(el) {
+    var field = el.querySelector("[" + PALETTE_FILTER + "]");
+    if (field) {
+      field.value = "";
+    }
+    var list = paletteList(el);
+    if (!list) {
+      return;
+    }
+    var options = list.querySelectorAll("[role=option]");
+    for (var i = 0; i < options.length; i += 1) {
+      options[i].removeAttribute("hidden");
+    }
+    var empty = list.querySelector("[data-nav-palette-empty]");
+    if (empty) {
+      empty.setAttribute("hidden", "hidden");
+    }
+    selectPaletteRow(options.length > 0 ? options[0] : null);
+  }
+
+  function openPalette() {
+    var el = palette();
+    if (!el || paletteIsOpen()) {
+      return;
+    }
+    // The same snapshot `openHelp()` takes: where focus goes when the
+    // palette closes. A half-typed chord lapses with the palette up.
+    reset();
+    paletteReturnFocus = document.activeElement;
+    resetPalette(el);
+    if (typeof el.showModal === "function") {
+      el.showModal();
+    } else {
+      el.setAttribute("open", "");
+    }
+    var field = el.querySelector("[" + PALETTE_FILTER + "]");
+    if (field && typeof field.focus === "function") {
+      field.focus();
+    }
+  }
+
+  function closePalette() {
+    var el = palette();
+    if (!el || !paletteIsOpen()) {
+      return;
+    }
+    if (typeof el.close === "function") {
+      el.close();
+    } else {
+      el.removeAttribute("open");
+      restorePaletteFocus();
+    }
+  }
+
+  function restorePaletteFocus() {
+    var target = paletteReturnFocus;
+    paletteReturnFocus = null;
+    focusBack(target);
+  }
+
   /* ----------------------------------------------------------- dispatch -- */
 
   document.addEventListener("keydown", function (event) {
+    if (paletteIsOpen()) {
+      // The palette owns the keyboard while it is up: Escape closes it,
+      // the arrows move the selection, Enter jumps, and every other key
+      // reaches only the filter field. The help overlay stays shut.
+      if (event.key === "Escape") {
+        closePalette();
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        movePaletteSelection(1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        movePaletteSelection(-1);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        choosePaletteSelection();
+      }
+      return;
+    }
     if (isOpen()) {
       // The dialog is modal: while it is up it owns the keyboard, and Esc
       // closes it even where the platform's own cancel event never arrives.
@@ -407,8 +617,13 @@
 
   document.addEventListener("click", function (event) {
     var target = event.target;
-    if (target && typeof target.closest === "function" && target.closest("[data-nav-shortcuts-close]")) {
-      closeHelp();
+    if (target && typeof target.closest === "function") {
+      if (target.closest("[data-nav-shortcuts-close]")) {
+        closeHelp();
+      }
+      if (target.closest("[" + PALETTE_CLOSE + "]")) {
+        closePalette();
+      }
     }
   });
 
@@ -418,9 +633,25 @@
       if (event.target && event.target.id === DIALOG_ID) {
         restoreFocus();
       }
+      if (event.target && event.target.id === PALETTE_ID) {
+        restorePaletteFocus();
+      }
     },
     true
   );
+
+  // Typing in the palette's filter narrows the list; the delegated listener
+  // keeps the CSP clean of inline handlers.
+  document.addEventListener("input", function (event) {
+    var target = event.target;
+    if (
+      target &&
+      typeof target.hasAttribute === "function" &&
+      target.hasAttribute(PALETTE_FILTER)
+    ) {
+      filterPalette(target.value);
+    }
+  });
 
   // A question that has just loaded puts the cursor in its first input, so the
   // next keystroke answers it.
