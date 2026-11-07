@@ -40,8 +40,9 @@ fn assumption_error(error: &FirmAssumptionError) -> Response {
         FirmAssumptionError::Invalid(_)
         | FirmAssumptionError::UnknownKey(_)
         | FirmAssumptionError::TypeMismatch => StatusCode::UNPROCESSABLE_ENTITY,
-        FirmAssumptionError::Catalog => StatusCode::INTERNAL_SERVER_ERROR,
-        FirmAssumptionError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        FirmAssumptionError::Catalog | FirmAssumptionError::Database(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     };
     (
         status,

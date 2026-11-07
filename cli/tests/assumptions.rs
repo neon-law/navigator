@@ -160,7 +160,7 @@ async fn assumptions_show_and_history_read_one_key() {
     server.verify().await;
 }
 
-/// A forbidden capability renders as NotFound on the API, so the command
+/// A forbidden capability renders as `NotFound` on the API, so the command
 /// refuses without ever distinguishing "wrong firm" from "wrong role".
 #[tokio::test]
 async fn assumptions_commands_refuse_when_the_capability_denies() {

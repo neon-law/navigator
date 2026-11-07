@@ -93,6 +93,7 @@ pub struct AssumptionKeySpec {
 /// error `the_catalog_parses_and_carries_only_known_shapes` catches in
 /// tests, so the parse failure panics instead of leaking a typed error
 /// through every later read.
+#[must_use]
 pub fn catalog() -> &'static BTreeMap<String, AssumptionKeySpec> {
     static CATALOG: LazyLock<BTreeMap<String, AssumptionKeySpec>> = LazyLock::new(|| {
         let raw: BTreeMap<String, YamlValue> =
