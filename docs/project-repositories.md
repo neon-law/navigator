@@ -135,6 +135,8 @@ folder even when it is empty:
 | Folder | Holds | `kind` that maps there |
 | --- | --- | --- |
 | `documents/Client Production/` | What the client supplied | `exhibit` |
+| `documents/Client Production/Agreements/` | The client's executed private agreements | `agreement` |
+| `documents/Client Production/Screenshots/` | Screenshots the client supplied | none |
 | `documents/Correspondence (Served)/` | Letters served or received | `letter` |
 | `documents/Discovery (Served)/` | Discovery served or received | none; a pointer names it with `folder:` |
 | `documents/Docket Filings/` | Court paper and docket ingest | `pleading`, `filing` |
@@ -146,7 +148,8 @@ folder even when it is empty:
 context and never collides with a served twin (LAW-215): `Client Calls (Work Product)/` (`transcript`), `Correspondence
 (Work Product)/` (letters drafted, not served), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work
 Product)/` (one folder per motion), `Pleadings (Work Product)/`, `Research (Work Product)/` (`memo`), and `Stipulations
-(Work Product)/`. A subfolder's name is its whole path below `documents/`, so a pointer's `folder:` can name it:
+(Work Product)/`. `Client Production/` holds two fixed subfolders the same way (LAW-215): `Agreements/` (`agreement`)
+and `Screenshots/`. A subfolder's name is its whole path below `documents/`, so a pointer's `folder:` can name it:
 `folder: "Work Product/Research (Work Product)"`.
 
 The slug is the path below the matter folder: `blobs/pleadings/motion.pdf.yaml` names `documents/Docket
