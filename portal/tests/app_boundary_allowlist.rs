@@ -257,3 +257,34 @@ async fn every_declared_app_api_operation_denies_an_anonymous_caller() {
         );
     }
 }
+
+/// The inbox reading panes' client-called endpoints sit behind the same
+/// boundary as their pages: an anonymous call reaches no handler.
+#[tokio::test]
+async fn inbox_reading_pane_endpoints_deny_an_anonymous_caller() {
+    let state = portal::test_support::app_state(mem_surreal().await).await;
+    let app = portal::router(state);
+
+    for path in [
+        webapp::inbox::INBOX_PANE_ENDPOINT,
+        webapp::inbox::PROJECT_INBOX_PANE_ENDPOINT,
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"conversation_id":"x"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::SEE_OTHER,
+            "{path} must send an anonymous caller to the login door"
+        );
+    }
+}

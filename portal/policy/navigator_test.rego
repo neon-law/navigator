@@ -3309,6 +3309,14 @@ test_call_queue_admits_lawyer_but_not_client if {
     not authz.allow with input as {"path": ["app", "inbox", "calls"], "method": "GET", "session": client_session}
 }
 
+# The firm reading pane's endpoint rides the firm Inbox admission.
+test_inbox_reading_pane_admits_firm_roles_but_not_client if {
+    authz.allow with input as {"path": ["app", "inbox", "pane"], "method": "POST", "session": lawyer_session}
+    authz.allow with input as {"path": ["app", "inbox", "pane"], "method": "POST", "session": clerk_session}
+    not authz.allow with input as {"path": ["app", "inbox", "pane"], "method": "POST", "session": client_session}
+    not authz.allow with input as {"path": ["app", "inbox", "pane"], "method": "POST", "session": null}
+}
+
 test_brand_communications_admits_admin_but_not_lawyer if {
     authz.allow with input as {"path": ["app", "admin", "communications"], "method": "GET", "session": admin_session}
     not authz.allow with input as {"path": ["app", "admin", "communications"], "method": "GET", "session": lawyer_session}
