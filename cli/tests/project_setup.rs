@@ -811,3 +811,169 @@ async fn setup_keeps_running_after_an_authorization_refusal() {
         "created"
     );
 }
+
+fn slack_checkout() -> TempDir {
+    let checkout = TempDir::new().unwrap();
+    fs::write(
+        checkout.path().join("navigator.yaml"),
+        concat!(
+            "version: \"26.9.26\"\nproject:\n  host: navigator.example\n  name: acme\n",
+            "  lawyer_dri: lawyer@example.com\n  client_dri: client@example.com\n",
+            "  private_slack_channel: not provisioned\n  private_notion_page: not provisioned\n",
+        ),
+    )
+    .unwrap();
+    checkout
+}
+
+async fn slack_project(server: &MockServer, project_id: Uuid) {
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "id": project_id, "code": "acme",
+                "internal_slack_channel_id": "C_SYNTHETIC",
+                "internal_slack_channel_url": null
+            }
+        ])))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn project_set_slack_repairs_the_live_url_without_replacing_the_channel_id() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let credentials_dir = TempDir::new().unwrap();
+    let credentials_path = credentials(&credentials_dir, &host);
+    let project_id = Uuid::now_v7();
+    let checkout = slack_checkout();
+    let url = "https://slack.example.com/archives/C_SYNTHETIC";
+    slack_project(&server, project_id).await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("/app/api/projects/{project_id}")))
+        .and(header("authorization", "Bearer test-token"))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "internal_slack_channel_url": url
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let mut previous = None;
+    for _ in 0..2 {
+        let output = command()
+            .current_dir(checkout.path())
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+            .args([
+                "project",
+                "set",
+                "--private-slack-channel",
+                url,
+                "--host",
+                &host,
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout)
+            .contains("live Project internal_slack_channel_url"));
+        let manifest = fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap();
+        assert!(manifest.contains(&format!("private_slack_channel: {url}")));
+        if let Some(previous) = previous {
+            assert_eq!(manifest, previous);
+        }
+        previous = Some(manifest);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn project_set_slack_dry_run_names_both_writes_and_patch_refusal_preserves_the_manifest() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let credentials_dir = TempDir::new().unwrap();
+    let credentials_path = credentials(&credentials_dir, &host);
+    let project_id = Uuid::now_v7();
+    let checkout = slack_checkout();
+    let manifest_path = checkout.path().join("navigator.yaml");
+    let original = fs::read_to_string(&manifest_path).unwrap();
+    let url = "https://slack.example.com/archives/C_SYNTHETIC";
+    slack_project(&server, project_id).await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("/app/api/projects/{project_id}")))
+        .respond_with(ResponseTemplate::new(403).set_body_string("Project scope refused"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    command()
+        .current_dir(checkout.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+        .args([
+            "project",
+            "set",
+            "--private-slack-channel",
+            url,
+            "--host",
+            &host,
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "would update: private_slack_channel, live Project internal_slack_channel_url",
+        ));
+    assert!(server.received_requests().await.unwrap().is_empty());
+    assert_eq!(fs::read_to_string(&manifest_path).unwrap(), original);
+    command()
+        .current_dir(checkout.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+        .args([
+            "project",
+            "set",
+            "--private-slack-channel",
+            url,
+            "--host",
+            &host,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("update live Project failed: 403"))
+        .stdout(predicates::str::is_empty());
+    assert_eq!(fs::read_to_string(&manifest_path).unwrap(), original);
+}
+
+#[test]
+fn project_set_slack_refuses_invalid_urls_and_keeps_not_provisioned_local() {
+    let checkout = slack_checkout();
+    let manifest_path = checkout.path().join("navigator.yaml");
+    let original = fs::read_to_string(&manifest_path).unwrap();
+    for url in [
+        "https://user:secret@slack.example.com/private",
+        "https://slack.example.com",
+    ] {
+        command()
+            .current_dir(checkout.path())
+            .args(["project", "set", "--private-slack-channel", url])
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("resource link"));
+        assert_eq!(fs::read_to_string(&manifest_path).unwrap(), original);
+    }
+    command()
+        .current_dir(checkout.path())
+        .args([
+            "project",
+            "set",
+            "--private-slack-channel",
+            "not provisioned",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("coordinates already current"));
+    assert_eq!(fs::read_to_string(&manifest_path).unwrap(), original);
+}
