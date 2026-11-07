@@ -832,6 +832,38 @@ jobs:
           done
           docker logs test-postgres
           exit 1
+      - name: acquire the pinned DuckDB reference fixture
+        timeout-minutes: 5
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib, io, json, os, pathlib, subprocess, tarfile, urllib.request
+          pins = json.loads(pathlib.Path('cli/src/ephemeris_duckdb_pins.json').read_text())
+          pin = next(p for p in pins['binaries'] if p['platform'] == 'linux-amd64-gnu')
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'navigator-duckdb-reference-fixture'
+          root.mkdir(mode=0o700)
+          with urllib.request.urlopen(pin['archive_url'], timeout=60) as response:
+              archive = response.read(pin['archive_bytes'] + 1)
+          if len(archive) != pin['archive_bytes'] or hashlib.sha256(archive).hexdigest() != pin['archive_sha256']:
+              raise SystemExit('DuckDB fixture archive differs from its pin')
+          with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as archive:
+              members = archive.getmembers()
+              if len(members) != 1 or members[0].name != 'duckdb' or not members[0].isfile() or members[0].size != pin['binary_bytes']:
+                  raise SystemExit('DuckDB fixture archive inventory differs')
+              binary = archive.extractfile(members[0]).read(pin['binary_bytes'] + 1)
+          if len(binary) != pin['binary_bytes'] or hashlib.sha256(binary).hexdigest() != pin['binary_sha256']:
+              raise SystemExit('DuckDB fixture executable differs from its pin')
+          executable = root / 'duckdb'
+          with executable.open('xb') as output:
+              output.write(binary)
+              output.flush()
+              os.fsync(output.fileno())
+          executable.chmod(0o555)
+          version = subprocess.run([str(executable), '-no-init', '-no-agent', '-version'], env={'HOME': str(root)}, capture_output=True, timeout=10, check=True)
+          if not version.stdout.decode().startswith(pins['engine_version'] + ' '):
+              raise SystemExit('DuckDB fixture engine version differs')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'NAVIGATOR_TEST_DUCKDB_BIN={executable}\nNAVIGATOR_REQUIRE_DUCKDB=1\n')
+          PYTHON
       - name: cargo test with coverage
         env:
           # The server-mode SurrealDB lane. `NAV_REQUIRE_SURREAL=1` makes

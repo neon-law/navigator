@@ -17,6 +17,9 @@ const MANIFEST_NAME: &str = "source-manifest.json";
 pub(crate) enum EphemerisCmd {
     /// Generate local Parquet and CSV tables from verified DE440 sources.
     Tables {
+        /// Add a portable `DuckDB` snapshot using a verified executable.
+        #[arg(long)]
+        duckdb_bin: Option<PathBuf>,
         /// Add fixed-location Iceberg v2 using URI-safe ASCII output paths.
         #[arg(long)]
         iceberg: bool,
@@ -58,6 +61,7 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
         }
         EphemerisCmd::Tables {
             host,
+            duckdb_bin,
             iceberg,
             source_dir,
             from,
@@ -74,6 +78,7 @@ pub(crate) async fn run(action: EphemerisCmd) -> ExitCode {
                     to_exclusive,
                     &dir,
                     iceberg,
+                    duckdb_bin.as_deref(),
                 )
                 .await
             }

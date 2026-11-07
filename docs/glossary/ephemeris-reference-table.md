@@ -129,9 +129,8 @@ exact settings and file bytes; existing files and generation time remain unchang
 differently configured or linked output is refused and preserved. Concurrent publication cannot replace a completed
 directory.
 
-No DuckDB database, latest-release pointer, public hosting, cloud resources or snapshot-expiry service is created. The
-command accepts universal reference dates and a pinned raw bundle only; it has no personal-chart import or export
-selector.
+No latest-release pointer, public hosting, cloud resources or snapshot-expiry service is created. The command accepts
+universal reference dates and a pinned raw bundle only; it has no personal-chart import or export selector.
 
 ## Fixed-location Iceberg layout
 
@@ -182,3 +181,46 @@ publication expose the completed directory. Fresh filesystem readers verify the 
 tests. Reruns reauthorize and recalculate the bounded expected reference data, verify the existing native layout and
 preserve its bytes and timestamps; they do not regenerate random metadata for equality. Plain and Iceberg modes refuse
 each other's existing directory shapes. There is no append, expiry, deletion or multi-snapshot maintenance command.
+
+## Portable DuckDB file
+
+`navigator ephemeris tables --duckdb-bin /path/to/duckdb` adds a materialized `reference.duckdb`, a typed
+`duckdb-manifest.json` receipt and tested `query.sql` Moon/date-range query. It combines with `--iceberg`; the ordinary
+four-file bundle and its stable reference-content snapshot ID retain the same format. The native receipt separately
+binds the actual database/query bytes, reference snapshot and creator executable. Native layout bytes need not match
+between independent creations. Reruns verify and preserve the existing files, generation time and timestamps.
+
+The operator supplies an executable expanded from the exact platform asset in the [official DuckDB 2.0.0
+release](https://github.com/duckdb/duckdb/releases/tag/v2.0.0), using the [checked-in
+pins](../../cli/src/ephemeris_duckdb_pins.json) for macOS arm64 or Linux amd64 GNU/musl. Expanded size and SHA-256 must
+match; the version string alone is insufficient. Match the GNU or musl engine to the available Linux runtime. Navigator
+does not install or download it. Linux engine runtime requirements remain separate from Navigator's static musl
+executable. Authorization through the protected source catalog precedes opening the tool, raw source or output.
+Navigator copies the executable through a regular-file descriptor into a private directory, verifies its exact size and
+SHA-256, and executes that copy with an empty environment and owned home. User startup files and agents are disabled.
+
+The file explicitly uses storage version `v0.10.0`. Readers tested with DuckDB 2.0.0 on macOS arm64 and Linux amd64
+GNU/musl, and 1.4.5 on macOS arm64, retain the full reference schema and values. These are specific tested consumers,
+not a promise about every engine version. The 1.4.5 reader is not an approved creator. DuckDB describes its storage
+compatibility in the [versioned storage documentation](https://duckdb.org/docs/2.0/internals/storage).
+
+The database contains only the 20-column materialized `ephemeris_reference_table` and three-column
+`reference_provenance` table. Provenance retains the reference snapshot ID and exact derived/source manifest JSON; there
+are no external views or relations. Integer nanoseconds stay native BIGINT, nullable source IDs stay INTEGER, angular
+and clock quantities stay DOUBLE, and calendar/model labels stay VARCHAR. Fresh processes compare all columns, integer
+values, floating-point bits and exact null masks; documented unavailable quantities remain null. The database can be
+copied without the Parquet source and read independently. An accompanying Iceberg layout retains its own fixed-location
+constraint.
+
+Each child starts with clean memory. Autoloading and extension installation are disabled before attaching any database;
+external access is disabled and locked after setting an exact private-file allowlist. Creation permits only its owned
+Parquet, database and two observed checkpoint/WAL paths. Read-only verification permits only a verified private database
+copy and its absent WAL path. Operator WAL files are never copied. No directory-wide access or spill directory is
+allowed. The process uses one thread and a 128 MB working-memory limit; SQL input, output and runtime are bounded. SQL
+travels through stdin, without shell execution or data in process arguments. Errors omit child output and SQL.
+
+Checkpointing and process termination precede validation. Sidecars must be absent, database/query checksums must match,
+and strict schema, object inventory, provenance and row checks must pass before the bundle's existing atomic NOREPLACE
+publication. Failure removes only owned stages; completed or unrelated operator artifacts are preserved. The native file
+shares the 4 MiB artifact cap. This is one immutable reference file, without append, expiry or analytical-server
+lifecycle services.
