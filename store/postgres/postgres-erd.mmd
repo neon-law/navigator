@@ -628,6 +628,16 @@ erDiagram
         string id
         string id_kind
     }
+    firm_assumption {
+        uuid firm_id
+        uuid id
+        string key
+        string reason
+        datetime set_at
+        uuid set_by
+        json value
+        int version
+    }
     firm_brand {
         string brand_key
         uuid firm_id
@@ -1961,6 +1971,8 @@ erDiagram
     entity }o--|| entity_role : references
     person }o--|| entity_role : references
     entity }o--|| firm : references
+    firm }o--|| firm_assumption : references
+    person }o--|| firm_assumption : references
     brand }o--|| firm_brand : references
     firm }o--|| firm_brand : references
     firm }o--|| firm_forgejo_organization : references

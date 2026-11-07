@@ -1500,8 +1500,8 @@ mod tests {
                 ),
             ),
             (
-                "20261107140000_add_asset_folder.sql",
-                include_str!("../postgres/migrations/20261107140000_add_asset_folder.sql"),
+                "20261107140000_create_firm_assumption.sql",
+                include_str!("../postgres/migrations/20261107140000_create_firm_assumption.sql"),
             ),
             (
                 "20261107150000_enable_postgis.sql",

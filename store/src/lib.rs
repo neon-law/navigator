@@ -129,6 +129,7 @@ pub mod external_identities;
 pub mod fiduciary_roles;
 pub mod filings;
 pub mod finance_aggregate;
+pub mod firm_assumptions;
 pub mod firm_capability;
 pub mod firm_journal;
 pub mod firm_library;
