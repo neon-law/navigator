@@ -599,6 +599,15 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    // Keep the row writer's provider/store futures off callers' stack frames.
+    Box::pin(mirror_inner(surreal, pg, key)).await
+}
+
+async fn mirror_inner(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    key: &MirrorKey,
+) -> Result<Mirrored, MirrorError> {
     match key {
         MirrorKey::Firm(id) => {
             let source = crate::firms::find_by_id(surreal, *id)
