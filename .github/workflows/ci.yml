@@ -820,7 +820,7 @@ jobs:
       # the largest-disk step above keep working untouched.
       - name: start PostgreSQL for covered journal tests
         run: |
-          docker run -d --name test-postgres -p 127.0.0.1:25432:5432 \
+          docker run -d --name test-postgres --shm-size=256m -p 127.0.0.1:25432:5432 \
             -e POSTGRES_PASSWORD=synthetic -e POSTGRES_DB=smoke \
             ghcr.io/neon-law/navigator/postgres@sha256:a3f6db0888d3d68c0ccadf936784768ecda4131b58fba30d631d69ff58337a8e
           for attempt in $(seq 1 30); do
