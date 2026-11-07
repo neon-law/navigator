@@ -279,7 +279,6 @@ impl MatterFolder {
     pub fn for_kind(kind: &str) -> Self {
         match kind {
             "exhibit" => Self::ClientProduction,
-            "agreement" => Self::ClientProductionAgreements,
             "letter" => Self::CorrespondenceServed,
             // A court's order is neither a pleading nor a filing, but it is
             // docket paper all the same (LAW-189).
@@ -298,7 +297,6 @@ impl MatterFolder {
     pub const fn default_kind(self) -> &'static str {
         match self {
             Self::ClientProduction => "exhibit",
-            Self::ClientProductionAgreements => "agreement",
             Self::CorrespondenceServed => "letter",
             Self::DocketFilings => "pleading",
             Self::ClientCallsWorkProduct => "transcript",
@@ -615,11 +613,10 @@ mod tests {
     fn folder_is_optional_round_trips_and_defaults_from_kind() {
         let mut plain = pointer();
         assert!(!plain.to_yaml().unwrap().contains("folder"));
-        // An agreement pointer defaults to Client Production/Agreements (LAW-215).
-        assert_eq!(
-            plain.matter_folder(),
-            MatterFolder::ClientProductionAgreements
-        );
+        // A pointer with no `folder:` defaults to Work Product (LAW-189);
+        // the Client Production subfolders exist only where a pointer or a
+        // migration names them.
+        assert_eq!(plain.matter_folder(), MatterFolder::WorkProduct);
 
         plain.folder = Some(MatterFolder::Discovery);
         let yaml = plain.to_yaml().unwrap();
@@ -638,7 +635,6 @@ mod tests {
             ("memo", MatterFolder::ResearchWorkProduct),
             ("transcript", MatterFolder::ClientCallsWorkProduct),
             ("onboarding", MatterFolder::Engagement),
-            ("agreement", MatterFolder::ClientProductionAgreements),
             ("unclassified", MatterFolder::WorkProduct),
         ] {
             assert_eq!(MatterFolder::for_kind(kind), folder, "{kind}");

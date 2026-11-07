@@ -21,9 +21,11 @@ separate placement described below.
 
 A document's [Pointer](pointer.md) lives at `blobs/<slug>.yaml`, never in a Matter Folder. Its optional `folder:` key
 names the Matter Folder — a `Work Product` subfolder's name is its whole path below `documents/`. Without one, the
-folder follows from `kind`: `exhibit` → Client Production, `agreement` → Client Production/Agreements, `letter` →
+folder follows from `kind`: `exhibit` → Client Production, `letter` →
 Correspondence (Served), `pleading`, `filing`, and `order` → [Docket Filings](docket-filings.md), `memo` → Research
 (Work Product), `transcript` → Client Calls (Work Product), `onboarding` → Engagement, everything else → Work Product.
+The `Client Production/Agreements` and `Client Production/Screenshots` subfolders (LAW-215) hold their documents only
+where a pointer's `folder:` names them or a migration filed them there; no `kind` maps to them by default.
 
 The Project page shows the same layout. A lawyer sees every Matter Folder, empty ones included, with each document at
 its path below `documents/`. A client sees only the documents shared with them, each once as its newest shared revision,

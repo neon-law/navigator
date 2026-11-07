@@ -598,8 +598,8 @@ mod tests {
     }
 
     /// LAW-215: `ensure_tree` creates the nested second level fresh, and the
-    /// folder migration moves an `agreement` pointer's bytes from the bare
-    /// parent into `Client Production/Agreements` without renaming them.
+    /// folder migration moves a pointer's bytes into the nested folder its
+    /// `folder:` names without renaming them.
     #[test]
     fn ensure_tree_creates_the_second_level_and_migration_files_pointers_one_level_down() {
         let root = tempfile::tempdir().unwrap();
@@ -620,7 +620,7 @@ mod tests {
         let bytes = documents.join("Work Product/nda.pdf");
         std::fs::write(&bytes, b"bytes").unwrap();
         let yaml = format!(
-            "kind: agreement\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 01990000-0000-7000-8000-000000000001\n  created_at: '2026-01-01T00:00:00Z'\n  sha256: '{}'\n  size_bytes: 5\n",
+            "kind: agreement\nfolder: Client Production/Agreements\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 01990000-0000-7000-8000-000000000001\n  created_at: '2026-01-01T00:00:00Z'\n  sha256: '{}'\n  size_bytes: 5\n",
             "a".repeat(64)
         );
         let pointer = root.path().join("blobs/nda.pdf.yaml");
