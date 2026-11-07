@@ -289,7 +289,7 @@ diagnostic-only.
 | `C001` | Error | Content page must declare a non-empty `title`. | No |
 | `C002` | Error | Content page must declare a non-empty `description`. | No |
 | `C003` | Error | Blog post filename must be `YYYYMMDD_slug.md`. | No |
-| `C004` | Error | A document filename is `YYYY.MM.DD_name.ext`; docket, invoice, and sidecar names keep theirs, Markdown work product is not a filed document, and a file in a date-named folder is dated by its folder. | No |
+| `C004` | Error | A document filename is `YYYY.MM.DD_name.ext`; shipped exemptions keep their own names. | No |
 
 ### D-family — matter pages
 
