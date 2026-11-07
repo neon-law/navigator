@@ -369,14 +369,23 @@ fn scan_dir(dir: &Path, since: Option<chrono::NaiveDate>) -> Result<Vec<Candidat
     Ok(candidates)
 }
 
-/// The conventional slug a candidate proposes under LAW-196, dated by its
-/// own modification date. Markdown work product is exempt from the
-/// convention (`rules::c004`), so no slug is proposed for it.
+/// The conventional filename a candidate proposes under LAW-196, dated by
+/// its own modification date — or by a dotted `YYYY.MM.DD` the filename
+/// already carries, which is the file's own date: the proposal keeps that
+/// prefix instead of slugifying it into the name and dating by
+/// modification time. The proposal carries the source extension — a
+/// document name must, to be representable as a Pointer. Markdown work
+/// product is exempt from the convention (`rules::c004`), so no slug is
+/// proposed for it.
 fn proposed_slug(filename: &str, modified_on: &str) -> Option<String> {
     if rules::c004::is_markdown_work_product(filename) {
         return None;
     }
-    rules::c004::proposed_filename(modified_on, filename)
+    let dotted = filename
+        .get(..10)
+        .and_then(|head| chrono::NaiveDate::parse_from_str(head, "%Y.%m.%d").ok())
+        .map(|date| format!("{}{}", date.format("%Y-%m-%d"), &filename[10..]));
+    rules::c004::proposed_filename(modified_on, dotted.as_deref().unwrap_or(filename))
 }
 
 /// True when `haystack` names `token` whole — delimited on both sides by
@@ -566,8 +575,24 @@ async fn run_inner(action: DownloadsCmd) -> Result<()> {
             }
             Ok(())
         }
-        DownloadsCmd::File { .. } | DownloadsCmd::Clean { .. } => {
-            unreachable!("file and clean dispatch in the second half of this module")
+        DownloadsCmd::File {
+            path,
+            project,
+            kind,
+            slug,
+            host,
+        } => file_file(&path, &project, &kind, slug.as_deref(), host.as_deref()).await,
+        DownloadsCmd::Clean {
+            already_filed,
+            dir,
+            project,
+            host,
+        } => {
+            anyhow::ensure!(
+                already_filed,
+                "pass --already-filed — the only mode `downloads clean` has today"
+            );
+            clean_already_filed(dir.as_deref(), project.as_deref(), host.as_deref()).await
         }
     }
 }
@@ -607,9 +632,266 @@ fn print_proposal(proposal: &Proposal) {
     println!();
 }
 
+// ─────────────── file and clean ───────────────
+
+/// What filing one candidate produced: the name it was filed under, the
+/// digest the filed pointer recorded, and where the original now sits.
+#[derive(Debug, PartialEq, Eq)]
+struct FileOutcome {
+    upload_name: String,
+    recorded_sha256: String,
+    original_now_at: PathBuf,
+}
+
+/// The offline half of `downloads file`: every refusal that needs no
+/// connection — an existing regular file, a non-credential verdict, a
+/// resolvable slug. Returns the conventional upload name (the LAW-196
+/// name the document files under), the document kind, and the pointer
+/// slug.
+fn file_preamble(
+    file: &Path,
+    kind: &str,
+    slug_argument: Option<&str>,
+) -> Result<(String, String, String)> {
+    let metadata = std::fs::metadata(file)
+        .with_context(|| format!("cannot file {}: no such file", file.display()))?;
+    anyhow::ensure!(
+        metadata.is_file(),
+        "cannot file {}: not a regular file",
+        file.display()
+    );
+    let filename = file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| anyhow!("cannot file {}: the path has no filename", file.display()))?;
+    let verdict = classify(filename);
+    if let Verdict::Credential { reason } = &verdict {
+        bail!(
+            "refusing to file `{filename}`: {reason}. A credential belongs in the keychain, never on a matter"
+        );
+    }
+    anyhow::ensure!(!kind.trim().is_empty(), "no document kind — pass --kind");
+    let modified_on = file_modified_on(file)?;
+    let slug = slug_argument
+        .map(str::to_owned)
+        .or_else(|| proposed_slug(filename, &modified_on))
+        .ok_or_else(|| anyhow!("no date names `{filename}` — pass --slug when filing"))?;
+    let upload_name = slug.clone();
+    Ok((upload_name, kind.to_owned(), slug))
+}
+
+/// The date half of the file's own modification time, `YYYY-MM-DD` — the
+/// same source the scan facts report, so `file` proposes from what `scan`
+/// showed.
+fn file_modified_on(file: &Path) -> Result<String> {
+    let modified: chrono::DateTime<chrono::Utc> = std::fs::metadata(file)
+        .with_context(|| format!("inspect {}", file.display()))?
+        .modified()
+        .context("read a file's modification time")?
+        .into();
+    Ok(modified.format("%Y-%m-%d").to_string())
+}
+
+/// The core of `downloads file`: the filed pointer's sha256 has to match
+/// the local file's before the original moves to the Trash — the upload
+/// says where the bytes landed, the digest says whether they landed whole.
+fn file_document(
+    original: &Path,
+    upload_name: &str,
+    local_sha256: &str,
+    recorded_sha256: &str,
+    trash_root: Option<&Path>,
+) -> Result<FileOutcome> {
+    anyhow::ensure!(
+        recorded_sha256 == local_sha256,
+        "the filed record's sha256 ({recorded_sha256}) does not match the local file's \
+         ({local_sha256}) — the original was NOT moved to the Trash"
+    );
+    let original_now_at = move_to_trash(original, trash_root)?;
+    Ok(FileOutcome {
+        upload_name: upload_name.to_owned(),
+        recorded_sha256: recorded_sha256.to_owned(),
+        original_now_at,
+    })
+}
+
+/// `downloads file`: the offline refusals, the upload through the same
+/// document door the browser uses, the pointer's receipt check, and only
+/// then the Trash move.
+async fn file_file(
+    path: &Path,
+    project: &str,
+    kind: &str,
+    slug: Option<&str>,
+    host: Option<&str>,
+) -> Result<()> {
+    let (upload_name, kind, slug) = file_preamble(path, kind, slug)?;
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let local_sha256 = store::documents::sha256_hex(&bytes);
+    let client = crate::remote::DocumentClient::connect(host, project).await?;
+    let description = where_froms(path)
+        .and_then(|urls| urls.last().cloned())
+        .map(|url| format!("filed from Downloads; downloaded from {url}"));
+    let content_type = content_type_of(&upload_name);
+    let pointer = client
+        .upload_bytes(
+            &upload_name,
+            &bytes,
+            &kind,
+            Some("internal"),
+            description.as_deref(),
+            Some(content_type),
+            Some(&slug),
+            None,
+        )
+        .await?;
+    crate::document_sync::validate_upload_receipt(&pointer, &bytes).context(
+        "the filed pointer failed its receipt check — the original was NOT moved to the Trash",
+    )?;
+    let outcome = file_document(
+        path,
+        &upload_name,
+        &local_sha256,
+        &pointer.current_version.sha256,
+        None,
+    )?;
+    println!(
+        "Filed `{}` onto {project} as kind `{kind}`, slug `{slug}`.\n\
+         sha256 verified: {}\n\
+         The original now sits in the Trash: {}",
+        path.display(),
+        outcome.recorded_sha256,
+        outcome.original_now_at.display()
+    );
+    Ok(())
+}
+
+/// One matter-side document record, as `clean` sees it: the digest is the
+/// join key between a local candidate and the filed bytes.
+#[derive(Debug, Clone)]
+struct FiledDocument {
+    project_code: String,
+    sha256: String,
+    filename: Option<String>,
+    kind: Option<String>,
+}
+
+/// One scanned candidate's already-filed verdict.
+#[derive(Debug, PartialEq, Eq)]
+struct CleanRow {
+    path: String,
+    sha256: String,
+    project_code: Option<String>,
+    recorded_filename: Option<String>,
+    kind: Option<String>,
+}
+
+/// Match each candidate's digest against the filed documents' digests —
+/// byte-identical is the only evidence `clean` reports on, the same
+/// standard the file verb's round-trip verification holds uploads to.
+fn already_filed_rows(candidates: &[Candidate], filed: &[FiledDocument]) -> Vec<CleanRow> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            let filed_on = filed
+                .iter()
+                .find(|document| document.sha256 == candidate.sha256);
+            CleanRow {
+                path: candidate.path.clone(),
+                sha256: candidate.sha256.clone(),
+                project_code: filed_on.map(|document| document.project_code.clone()),
+                recorded_filename: filed_on.and_then(|document| document.filename.clone()),
+                kind: filed_on.and_then(|document| document.kind.clone()),
+            }
+        })
+        .collect()
+}
+
+fn print_clean_row(row: &CleanRow) {
+    match (&row.project_code, &row.recorded_filename, &row.kind) {
+        (Some(code), Some(filename), Some(kind)) => println!(
+            "  `{}` — already filed on {code} as `{filename}` (kind `{kind}`)",
+            row.path
+        ),
+        (Some(code), Some(filename), None) => {
+            println!("  `{}` — already filed on {code} as `{filename}`", row.path);
+        }
+        (Some(code), None, kind) => println!(
+            "  `{}` — already filed on {code} (digest matches, kind {})",
+            row.path,
+            kind.as_deref().unwrap_or("unknown")
+        ),
+        _ => println!("  `{}` — not filed on any visible matter", row.path),
+    }
+}
+
+/// `downloads clean --already-filed`: every visible matter's documents,
+/// joined to the Downloads candidates by digest, so the lawyer sees which
+/// files are already confirmed on a matter and which still wait.
+async fn clean_already_filed(
+    dir: Option<&Path>,
+    project: Option<&str>,
+    host: Option<&str>,
+) -> Result<()> {
+    let dir = resolve_dir(dir)?;
+    let candidates = scan_dir(&dir, None)?;
+    let (base, token) = crate::remote::resolve(host)?;
+    let projects = crate::remote::visible_projects_on(&base, &token).await?;
+    let mut filed = Vec::new();
+    let mut failures: Vec<(String, String)> = Vec::new();
+    for (_, code) in projects {
+        if let Some(wanted) = project {
+            if code != wanted {
+                continue;
+            }
+        }
+        let documents = match crate::remote::DocumentClient::with_credential(
+            base.clone(),
+            token.clone(),
+            &code,
+        )
+        .await
+        {
+            Ok(client) => match client.list_documents().await {
+                Ok(documents) => documents,
+                Err(error) => {
+                    failures.push((code.clone(), error.to_string()));
+                    continue;
+                }
+            },
+            Err(error) => {
+                failures.push((code.clone(), error.to_string()));
+                continue;
+            }
+        };
+        for document in documents {
+            filed.push(FiledDocument {
+                project_code: code.clone(),
+                sha256: document.sha256_hex,
+                filename: document.filename,
+                kind: document.kind,
+            });
+        }
+    }
+    let rows = already_filed_rows(&candidates, &filed);
+    let filed_count = rows.iter().filter(|row| row.project_code.is_some()).count();
+    println!(
+        "Scanned {}: {} candidates, {filed_count} already filed on a visible matter.",
+        dir.display(),
+        rows.len()
+    );
+    for row in &rows {
+        print_clean_row(row);
+    }
+    for (code, error) in &failures {
+        eprintln!("could not read matter {code}: {error}");
+    }
+    Ok(())
+}
+
 /// Move one file into the Trash, without overwriting whatever may already
 /// sit there, and return the destination it landed at.
-#[allow(dead_code)] // consumed by `downloads file`, landing in the next commit
 fn move_to_trash(path: &Path, trash_root: Option<&Path>) -> Result<PathBuf> {
     let root = match trash_root {
         Some(root) => root.to_path_buf(),
@@ -634,10 +916,14 @@ fn move_to_trash(path: &Path, trash_root: Option<&Path>) -> Result<PathBuf> {
 
 /// The Trash directory: `~/.Trash` on macOS, the `FreeDesktop` trash `files`
 /// directory everywhere else the CLI ships.
-#[allow(dead_code)] // consumed by `downloads file`, landing in the next commit
 fn trash_root_from_env() -> Result<PathBuf> {
-    let home = std::env::var("HOME").ok().filter(|value| !value.is_empty());
-    let Some(home) = home else {
+    trash_root_for(std::env::var("HOME").ok().as_deref())
+}
+
+/// The same root for a given `$HOME` value — pure, so the tests never
+/// mutate process-global env (which races under parallel tests).
+fn trash_root_for(home: Option<&str>) -> Result<PathBuf> {
+    let Some(home) = home.filter(|value| !value.is_empty()) else {
         bail!("cannot resolve a home directory ($HOME is unset) to move the original to the Trash");
     };
     if cfg!(target_os = "macos") {
@@ -656,8 +942,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        classify, content_type_of, move_to_trash, names_token, parse_where_froms, proposed_slug,
-        trash_root_from_env, Verdict,
+        already_filed_rows, classify, content_type_of, file_document, file_preamble, move_to_trash,
+        names_token, parse_where_froms, proposed_slug, trash_root_for, Candidate, FiledDocument,
+        Verdict,
     };
 
     fn write_file(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
@@ -755,6 +1042,13 @@ mod tests {
             proposed_slug("Client Screenshot IMG-2645.png", "2026-10-12").as_deref(),
             Some("2026.10.12_client-screenshot-img-2645.png")
         );
+        // A dotted date the filename already carries is the file's own —
+        // it survives as the prefix instead of being slugified into the
+        // name and dated by modification time.
+        assert_eq!(
+            proposed_slug("2026.10.12_complaint-annulment_acme.pdf", "2026-11-07").as_deref(),
+            Some("2026.10.12_complaint-annulment-acme.pdf")
+        );
         // Markdown work product stays outside the convention.
         assert_eq!(proposed_slug("memo.md", "2026-10-12"), None);
         // A file no date names proposes nothing.
@@ -790,16 +1084,152 @@ mod tests {
 
     #[test]
     fn the_default_trash_root_sits_under_home() {
-        std::env::set_var("HOME", "/home/nick");
-        let root = trash_root_from_env().unwrap();
+        let root = trash_root_for(Some("/home/nick")).unwrap();
         let display = root.display().to_string();
         if cfg!(target_os = "macos") {
             assert_eq!(display, "/home/nick/.Trash");
         } else {
             assert!(display.starts_with("/home/nick/.local/share/Trash/files"));
         }
-        std::env::remove_var("HOME");
-        assert!(trash_root_from_env().is_err(), "no $HOME, no Trash move");
-        std::env::set_var("HOME", std::env::temp_dir().display().to_string());
+        assert!(trash_root_for(None).is_err(), "no $HOME, no Trash move");
+    }
+
+    #[test]
+    fn the_preamble_refuses_what_it_cannot_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // No such file.
+        let missing = dir.path().join("2026.10.12_complaint.pdf");
+        let missing = match file_preamble(&missing, "filing", None) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("a missing file must refuse"),
+        };
+        assert!(missing.contains("no such file"), "{missing}");
+        // A credential-shaped file refuses with the keychain message.
+        let credential = write_file(dir.path(), "firm-api.pem", b"secret");
+        let refused = match file_preamble(&credential, "filing", None) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("a credential must refuse"),
+        };
+        assert!(refused.contains("refusing to file"), "{refused}");
+        assert!(refused.contains("keychain"), "{refused}");
+        // An extensionless file with no --slug refuses rather than guessing
+        // — a proposed document name must carry the source extension.
+        let undated = write_file(dir.path(), "complaint", b"complaint bytes");
+        let refused = match file_preamble(&undated, "filing", None) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("an extensionless file without --slug must refuse"),
+        };
+        assert!(refused.contains("pass --slug when filing"), "{refused}");
+    }
+
+    #[test]
+    fn the_preamble_names_the_conventional_upload() {
+        let dir = tempfile::tempdir().unwrap();
+        let dated = write_file(dir.path(), "2026.10.12_complaint-annulment.pdf", b"pdf");
+        let (upload_name, kind, slug) = file_preamble(&dated, "pleading", None).unwrap();
+        assert_eq!(upload_name, "2026.10.12_complaint-annulment.pdf");
+        assert_eq!(kind, "pleading");
+        assert_eq!(slug, "2026.10.12_complaint-annulment.pdf");
+        // An explicit --slug replaces the derived one.
+        let (_, _, slug) = file_preamble(&dated, "pleading", Some("2026.10.12_motion")).unwrap();
+        assert_eq!(slug, "2026.10.12_motion");
+    }
+
+    #[test]
+    fn filing_moves_the_original_only_after_the_digest_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let trash = tempfile::tempdir().unwrap();
+        let original = write_file(
+            dir.path(),
+            "2026.10.12_complaint-annulment.pdf",
+            b"complaint",
+        );
+        let local_sha = store::documents::sha256_hex(b"complaint");
+        let outcome = file_document(
+            &original,
+            "2026.10.12_complaint-annulment.pdf",
+            &local_sha,
+            &local_sha,
+            Some(trash.path()),
+        )
+        .unwrap();
+        assert_eq!(outcome.recorded_sha256, local_sha);
+        assert!(
+            !original.exists(),
+            "a verified file's original moves to the Trash"
+        );
+        let in_trash =
+            std::fs::read(trash.path().join("2026.10.12_complaint-annulment.pdf")).unwrap();
+        assert_eq!(in_trash, b"complaint");
+    }
+
+    #[test]
+    fn a_digest_mismatch_leaves_the_original_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let trash = tempfile::tempdir().unwrap();
+        let original = write_file(
+            dir.path(),
+            "2026.10.12_complaint-annulment.pdf",
+            b"complaint",
+        );
+        let local_sha = store::documents::sha256_hex(b"complaint");
+        let refused = match file_document(
+            &original,
+            "2026.10.12_complaint-annulment.pdf",
+            &local_sha,
+            // The server recorded different bytes than the file carried.
+            &"f".repeat(64),
+            Some(trash.path()),
+        ) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("a digest mismatch must refuse"),
+        };
+        assert!(refused.contains("was NOT moved to the Trash"), "{refused}");
+        assert!(original.exists(), "the original stays put");
+        assert!(std::fs::read_dir(trash.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn clean_matches_candidates_by_digest_only() {
+        let filed_sha = store::documents::sha256_hex(b"complaint");
+        let loose_sha = store::documents::sha256_hex(b"notes");
+        let candidate = |path: &str, filename: &str, sha256: String| Candidate {
+            path: path.to_owned(),
+            filename: filename.to_owned(),
+            sha256,
+            content_type: "application/pdf",
+            size_bytes: 9,
+            modified_at: "2026-10-12T12:00:00+00:00".to_owned(),
+            age_days: 26,
+            where_froms: None,
+            class: "unfiled",
+        };
+        let candidates = vec![
+            candidate(
+                "/Downloads/2026.10.12_complaint-annulment.pdf",
+                "2026.10.12_complaint-annulment.pdf",
+                filed_sha.clone(),
+            ),
+            candidate("/Downloads/notes.txt", "notes.txt", loose_sha),
+        ];
+        let filed = vec![FiledDocument {
+            project_code: "acme".to_owned(),
+            sha256: filed_sha,
+            filename: Some("2026.10.12_complaint-annulment.pdf".to_owned()),
+            kind: Some("pleading".to_owned()),
+        }];
+        let rows = already_filed_rows(&candidates, &filed);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].project_code.as_deref(), Some("acme"));
+        assert_eq!(
+            rows[0].recorded_filename.as_deref(),
+            Some("2026.10.12_complaint-annulment.pdf")
+        );
+        assert_eq!(rows[0].kind.as_deref(), Some("pleading"));
+        assert!(
+            rows[1].project_code.is_none(),
+            "no digest match, no verdict"
+        );
+        assert!(rows[1].recorded_filename.is_none());
     }
 }
