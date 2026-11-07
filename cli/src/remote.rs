@@ -4987,6 +4987,23 @@ pub(crate) async fn fetch_project_list(
     .await
 }
 
+/// Every Project the stored login can see, as `(id, code)` pairs — the
+/// intake verbs' matter enumeration (`navigator downloads propose` and
+/// `clean`).
+pub(crate) async fn visible_projects(host: Option<&str>) -> Result<Vec<(Uuid, String)>> {
+    let (base, token) = resolve(host)?;
+    let client = authenticated_client_builder(&base)?
+        .build()
+        .context("build document transfer client")?;
+    let body = fetch_project_list(&client, &base, &token).await?;
+    let projects: Vec<VisibleProject> =
+        serde_json::from_str(&body).context("parse GET /app/api/projects")?;
+    Ok(projects
+        .into_iter()
+        .map(|project| (project.id, project.code))
+        .collect())
+}
+
 async fn fetch_project_list_with(
     client: &reqwest::Client,
     base: &str,
