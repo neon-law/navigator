@@ -922,7 +922,7 @@ mod tests {
             assignment,
             attempt,
             triage,
-        } = seed_inbox_image_fixture(&pg).await;
+        } = Box::pin(seed_inbox_image_fixture(&pg)).await;
         let links = source(&db, table("inbox_message_asset").unwrap())
             .await
             .unwrap();
@@ -948,7 +948,7 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{key}: {error}"));
         }
         assert_inbox_image_rows(&pg, &assets).await;
-        assert!(postgres_mirror::inbox::parity(&db, &pg)
+        assert!(Box::pin(postgres_mirror::inbox::parity(&db, &pg))
             .await
             .unwrap()
             .is_clean());
@@ -976,15 +976,15 @@ mod tests {
             .execute(&pg.0)
             .await
             .unwrap();
-        assert!(!postgres_mirror::inbox::parity(&db, &pg)
+        assert!(!Box::pin(postgres_mirror::inbox::parity(&db, &pg))
             .await
             .unwrap()
             .is_clean());
-        assert!(postgres_mirror::inbox::reconcile(&db, &pg)
+        assert!(Box::pin(postgres_mirror::inbox::reconcile(&db, &pg))
             .await
             .unwrap()
             .is_clean());
-        assert!(postgres_mirror::inbox::reconcile(&db, &pg)
+        assert!(Box::pin(postgres_mirror::inbox::reconcile(&db, &pg))
             .await
             .unwrap()
             .is_clean());

@@ -57,6 +57,20 @@ pub struct PersonFields {
     /// (`/app/admin/people/{id}/avatar`), which redirects public Person
     /// avatars to their asset URL. `None` until an avatar has been uploaded.
     pub avatar_url: Option<String>,
+    /// The Person's phone numbers, primary first (LAW-206). A legacy
+    /// free-text `person.phone` with no structured rows renders as the
+    /// stored text with no label — shown, never restyled into a fact.
+    #[serde(default)]
+    pub phones: Vec<PersonPhoneView>,
+}
+
+/// One phone number on the show page. The label arrives already spelled
+/// for display (the store's label token, or empty for the legacy column).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PersonPhoneView {
+    pub e164: String,
+    pub label: String,
+    pub is_primary: bool,
 }
 
 /// A flash notice floated on arrival — the welcome-email send outcome (mapped
@@ -158,6 +172,35 @@ fn flash_notice(query: &PersonShowQuery, email: &str) -> Option<PersonNotice> {
     }
 }
 
+/// The phone list the show page renders: the structured rows, primary
+/// first, falling back to the legacy free-text column shown as-is when
+/// the Person has no structured rows — reading it, not restyling it
+/// into a fact the store never verified.
+#[cfg(feature = "server")]
+fn phone_views(
+    phones: Vec<store::person_phones::PersonPhone>,
+    legacy: Option<&str>,
+) -> Vec<PersonPhoneView> {
+    let mut views = phones
+        .into_iter()
+        .map(|phone| PersonPhoneView {
+            e164: phone.e164,
+            label: phone.label.as_str().to_string(),
+            is_primary: phone.is_primary,
+        })
+        .collect::<Vec<_>>();
+    if views.is_empty() {
+        if let Some(legacy) = legacy.map(str::trim).filter(|raw| !raw.is_empty()) {
+            views.push(PersonPhoneView {
+                e164: legacy.to_string(),
+                label: String::new(),
+                is_primary: false,
+            });
+        }
+    }
+    views
+}
+
 #[cfg(feature = "server")]
 async fn load_person_show(role: ViewerRole) -> Result<PersonShowView, ServerFnError> {
     let axum::extract::Path(id) =
@@ -227,6 +270,13 @@ async fn load_person_show(role: ViewerRole) -> Result<PersonShowView, ServerFnEr
 
     let notice = flash_notice(&query, &p.email);
 
+    // The structured phone list, primary first (LAW-206); the legacy
+    // free-text column shows as-is when no structured rows exist.
+    let held = store::person_phones::list_phones(&surreal, id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let phones = phone_views(held, p.phone.as_deref());
+
     // The authority-rank lock takes priority: a caller viewing a
     // higher-ranked record can't touch it at all, even if that record also
     // happens to be the bootstrap Owner. Only when ranks are equal (an Owner
@@ -258,6 +308,7 @@ async fn load_person_show(role: ViewerRole) -> Result<PersonShowView, ServerFnEr
                 .profile_image_url
                 .is_some()
                 .then(|| format!("{DETAIL_PATH}/{id}/avatar")),
+            phones,
         }),
         edit_lock,
         xero_contact_id: p.xero_contact_id,
@@ -438,6 +489,35 @@ fn person_actions(view: &PersonShowView, welcome_recipient: &str) -> Element {
     }
 }
 
+/// The phone numbers section: what the directory holds, read-only — the
+/// edit form has no phone fields, because edits go through the phone
+/// commands (`navigator person phone …`), not this page's POST.
+fn person_phones_card(fields: &PersonFields) -> Element {
+    rsx! {
+        section { id: "person-phones", class: "person-phones",
+            h2 { "Phone numbers" }
+            if fields.phones.is_empty() {
+                p { class: "nav-muted", "No phone numbers on file." }
+            } else {
+                ul { class: "person-phones__list",
+                    for phone in &fields.phones {
+                        li { class: "person-phones__row",
+                            if phone.is_primary {
+                                span { class: "person-phones__primary", "{phone.e164}" }
+                            } else {
+                                span { "{phone.e164}" }
+                            }
+                            if !phone.label.is_empty() {
+                                span { class: "person-phones__label", "{phone.label}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The avatar preview and upload form, a sibling `FormCard` to the main edit
 /// form rather than folded into it — the two need different `enctype`s, and
 /// `FormCard` only supports one per `<form>`.
@@ -549,6 +629,7 @@ fn render_person_show(resource: &Resource<Result<PersonShowView, ServerFnError>>
                             fields: form_fields,
                         }
                         p { a { href: "{LIST_PATH}", "← Cancel" } }
+                        {person_phones_card(fields)}
                         if view.edit_lock != EditLock::HigherRank {
                             {avatar_upload_card(&view, fields)}
                         }
@@ -587,6 +668,7 @@ mod tests {
             notion_user_id: String::new(),
             linkedin_url: String::new(),
             avatar_url,
+            phones: Vec::new(),
         };
         let view = PersonShowView {
             id: "00000000-0000-7000-8000-000000000000".to_string(),
@@ -596,6 +678,28 @@ mod tests {
             ..PersonShowView::default()
         };
         (view, fields)
+    }
+
+    fn phone(e164: &str, label: &str, is_primary: bool) -> PersonPhoneView {
+        PersonPhoneView {
+            e164: e164.to_string(),
+            label: label.to_string(),
+            is_primary,
+        }
+    }
+
+    fn phones_app() -> Element {
+        let (_, mut fields) = sample_view(None);
+        fields.phones = vec![
+            phone("+17025550123", "mobile", true),
+            phone("+17025550142", "work", false),
+        ];
+        person_phones_card(&fields)
+    }
+
+    fn phones_app_empty() -> Element {
+        let (_, fields) = sample_view(None);
+        person_phones_card(&fields)
     }
 
     fn app_none() -> Element {
@@ -672,5 +776,45 @@ mod tests {
             out.contains(r#"value="https://www.linkedin.com/in/example/""#),
             "prefilled: {out}"
         );
+    }
+
+    #[test]
+    fn the_phones_section_lists_each_number_with_its_label_and_primary_mark() {
+        let out = ssr(phones_app);
+        assert!(out.contains("person-phones"), "{out}");
+        assert!(
+            out.contains("+17025550123"),
+            "the primary number renders: {out}"
+        );
+        assert!(
+            out.contains("+17025550142"),
+            "the second number renders: {out}"
+        );
+        assert!(
+            out.contains("mobile") && out.contains("work"),
+            "labels render: {out}"
+        );
+        let primary_pos = out.find("person-phones__primary").expect("primary mark");
+        let mobile_pos = out.find("+17025550123").expect("primary number");
+        assert!(
+            primary_pos < mobile_pos,
+            "the primary mark wraps the primary number: {out}"
+        );
+        // Read-only: no input carries a phone value, so a save cannot
+        // pretend to edit what this page does not write.
+        assert!(
+            !out.contains(r#"value="+1702"#),
+            "phones are not form fields: {out}"
+        );
+    }
+
+    #[test]
+    fn a_person_with_no_phones_says_so_instead_of_rendering_an_empty_list() {
+        let out = ssr(phones_app_empty);
+        assert!(
+            out.contains("No phone numbers on file."),
+            "the empty state is stated: {out}"
+        );
+        assert!(!out.contains("person-phones__list"), "no empty list: {out}");
     }
 }

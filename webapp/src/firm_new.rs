@@ -125,7 +125,7 @@ pub async fn get_firm_new_form() -> Result<FirmNewView, ServerFnError> {
         .collect();
     // The admin roster is filtered in Rust: `persons` is in the other
     // engine and the directory read has no role predicate.
-    let admins = store::persons::list_directory(&surreal, "", "", &[])
+    let admins = store::persons::list_directory(&surreal)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()

@@ -4026,12 +4026,10 @@ async fn project_participants_path(
 async fn participation_people(
     surreal: &store::surreal::SurrealDb,
 ) -> Result<Vec<store::persons::Person>, Response> {
-    store::persons::list_directory(surreal, "", "", &[])
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "project participation: people lookup failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response()
-        })
+    store::persons::list_directory(surreal).await.map_err(|e| {
+        tracing::error!(error = %e, "project participation: people lookup failed");
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response()
+    })
 }
 
 /// The participation form's path for one matter — the page a refused add or
@@ -4560,7 +4558,7 @@ async fn projects_delete_lawyer_only(
 async fn people_csv(State(surreal): State<store::surreal::SurrealDb>) -> crate::admin_csv::CsvBody {
     // Ordered by name, not id: the CSV is a human artifact and an id
     // ordering carries no meaning to its reader.
-    let rows_raw = store::persons::list_directory(&surreal, "", "", &[])
+    let rows_raw = store::persons::list_directory(&surreal)
         .await
         .unwrap_or_default();
     let rows: Vec<Vec<String>> = rows_raw

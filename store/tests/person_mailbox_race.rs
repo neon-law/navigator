@@ -53,7 +53,7 @@ async fn unguarded_find_or_create(db: &SurrealDb, email: &str) -> Result<(), sur
 }
 
 async fn rows_holding(db: &SurrealDb, email: &str) -> usize {
-    persons::list_directory(db, "", email, &[])
+    persons::search(db, None, Some(email), 10)
         .await
         .expect("read the directory back")
         .len()

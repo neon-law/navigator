@@ -147,7 +147,9 @@ pub mod iolta_withdrawals;
 pub mod journal_startup_migration;
 pub mod jurisdictions;
 pub mod leads;
+pub mod legal_plans;
 pub mod letters;
+pub mod listing;
 pub mod mail_signatures;
 pub mod mailrooms;
 pub mod matter_captions;
@@ -175,6 +177,7 @@ pub mod people_commands;
 pub mod person_merge;
 pub mod person_phones;
 pub mod persons;
+pub mod plan_seeds;
 pub mod playbooks;
 pub mod postgres;
 /// Resumable batches that copy rows the PostgreSQL mirror never saw.

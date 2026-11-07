@@ -79,6 +79,8 @@ ALTER ROLE navigator_app IN DATABASE navigator SET session_preload_libraries = '
 -- A Person's email is `citext` (case-insensitive equality and uniqueness).
 -- The extension is trusted, so the migration also creates it when absent.
 CREATE EXTENSION IF NOT EXISTS citext;
+-- The People directory's substring filters ride trigram indexes; also trusted.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- Objects created before these roles existed (by the bootstrap superuser)
 -- move to the migration login. Extension members stay with their extension,

@@ -2922,7 +2922,7 @@ fn pointer_path_for_source(root: &Path, path: &Path) -> Result<(PathBuf, bool)> 
     Ok((pointer_path_for_slug(root, slug), false))
 }
 
-fn validate_upload_receipt(
+pub(crate) fn validate_upload_receipt(
     pointer: &store::document_pointers::DocumentPointer,
     bytes: &[u8],
 ) -> Result<()> {

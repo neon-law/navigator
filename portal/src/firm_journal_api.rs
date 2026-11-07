@@ -521,7 +521,7 @@ pub(super) async fn mercury_import(
     };
     let mut outcomes = Vec::with_capacity(window.len());
     for transaction in &window {
-        outcomes.push(import_one(&context, transaction).await);
+        outcomes.push(Box::pin(import_one(&context, transaction)).await);
     }
     let imported = outcomes
         .iter()
@@ -684,13 +684,13 @@ async fn import_one(
         skip(&mut outcome, "cost_rejected");
         return outcome;
     };
-    match costs::create(
+    match Box::pin(costs::create(
         context.surreal,
         context.pg,
         project_id,
         context.actor_id,
         &cost_input,
-    )
+    ))
     .await
     {
         Ok(cost) => {
@@ -1496,7 +1496,7 @@ mod tests {
             ),
         ];
         for (patch, reason) in cases {
-            let outcome = import_one(&context, &mercury_tx(Uuid::now_v7(), &patch)).await;
+            let outcome = Box::pin(import_one(&context, &mercury_tx(Uuid::now_v7(), &patch))).await;
             assert_eq!(outcome.disposition, "skipped", "case {reason}");
             assert_eq!(outcome.reason.as_deref(), Some(reason), "case {reason}");
             assert_eq!(outcome.project_code, None, "case {reason}");
@@ -1519,7 +1519,7 @@ mod tests {
             Uuid::now_v7(),
             &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
         );
-        let outcome = import_one(&context, &transaction).await;
+        let outcome = Box::pin(import_one(&context, &transaction)).await;
         assert_eq!(outcome.disposition, "planned");
         assert_eq!(outcome.project_code.as_deref(), Some(code.as_str()));
         assert!(outcome.cost_id.is_none());
@@ -1541,11 +1541,11 @@ mod tests {
             Uuid::now_v7(),
             &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
         );
-        let first = import_one(&context, &transaction).await;
+        let first = Box::pin(import_one(&context, &transaction)).await;
         assert_eq!(first.disposition, "imported");
         assert_eq!(first.project_code.as_deref(), Some(code.as_str()));
         let cost_id = first.cost_id.expect("an imported cost carries its id");
-        let second = import_one(&context, &transaction).await;
+        let second = Box::pin(import_one(&context, &transaction)).await;
         assert_eq!(second.disposition, "skipped");
         assert_eq!(second.reason.as_deref(), Some("already_imported"));
         assert_eq!(second.cost_id, Some(cost_id));
@@ -1558,7 +1558,7 @@ mod tests {
                 "note": format!("Acme Supplies {code}")
             }),
         );
-        let outcome = import_one(&context, &refused).await;
+        let outcome = Box::pin(import_one(&context, &refused)).await;
         assert_eq!(outcome.disposition, "skipped");
         assert_eq!(outcome.reason.as_deref(), Some("cost_rejected"));
     }
@@ -1586,7 +1586,7 @@ mod tests {
                 }]
             }),
         );
-        let outcome = import_one(&context, &transaction).await;
+        let outcome = Box::pin(import_one(&context, &transaction)).await;
         assert_eq!(outcome.disposition, "skipped");
         assert_eq!(outcome.reason.as_deref(), Some("receipt_unavailable"));
     }

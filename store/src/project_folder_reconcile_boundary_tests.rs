@@ -298,7 +298,7 @@ async fn import_revalidation_is_read_only_and_known_client_file_drift_can_be_rep
     let Some(pg) = postgres().await else { return };
     let (db, id, drive, policy) = fixture(&pg).await;
     assert_eq!(
-        reconcile(&db, &pg, &drive, id, &policy)
+        Box::pin(reconcile(&db, &pg, &drive, id, &policy))
             .await
             .unwrap()
             .outcome,
@@ -337,7 +337,7 @@ async fn import_revalidation_is_read_only_and_known_client_file_drift_can_be_rep
         16
     );
     assert_eq!(
-        reconcile(&db, &pg, &drive, id, &policy)
+        Box::pin(reconcile(&db, &pg, &drive, id, &policy))
             .await
             .unwrap()
             .outcome,
@@ -355,7 +355,7 @@ async fn import_revalidation_is_read_only_and_known_client_file_drift_can_be_rep
         ))
     ));
     assert_eq!(
-        reconcile(&db, &pg, &drive, id, &policy)
+        Box::pin(reconcile(&db, &pg, &drive, id, &policy))
             .await
             .unwrap()
             .outcome,
@@ -367,7 +367,7 @@ async fn import_revalidation_is_read_only_and_known_client_file_drift_can_be_rep
 async fn import_revalidation_refuses_moved_parents_and_foreign_reserved_custom_folders() {
     let Some(pg) = postgres().await else { return };
     let (db, id, drive, policy) = fixture(&pg).await;
-    reconcile(&db, &pg, &drive, id, &policy).await.unwrap();
+    Box::pin(reconcile(&db, &pg, &drive, id, &policy)).await.unwrap();
     let root = project_folders::get_verified(&pg, id, ProjectFolderSlot::Root)
         .await
         .unwrap()
@@ -420,7 +420,7 @@ async fn import_revalidation_refuses_moved_parents_and_foreign_reserved_custom_f
     );
     let oversized = vec![id; 101];
     assert!(matches!(
-        converge_projects(&db, &pg, &drive, &oversized, &policy).await,
+        Box::pin(converge_projects(&db, &pg, &drive, &oversized, &policy)).await,
         Err(FolderReconcileError::Matter)
     ));
 }
@@ -444,7 +444,7 @@ async fn nightly_journal_transport_failure_stops_before_later_projects() {
 async fn missing_firm_roster_revokes_publication_without_rebuilding_provider_folders() {
     let Some(pg) = postgres().await else { return };
     let (db, id, drive, policy) = fixture(&pg).await;
-    reconcile(&db, &pg, &drive, id, &policy).await.unwrap();
+    Box::pin(reconcile(&db, &pg, &drive, id, &policy)).await.unwrap();
     let folders = drive.list_folders().await.unwrap();
     db.query("DELETE person_project_role WHERE project_id=$project")
         .bind(("project", crate::surreal::record_id("project", id)))
@@ -459,7 +459,7 @@ async fn missing_firm_roster_revokes_publication_without_rebuilding_provider_fol
         ))
     ));
     assert_eq!(
-        reconcile(&db, &pg, &drive, id, &policy)
+        Box::pin(reconcile(&db, &pg, &drive, id, &policy))
             .await
             .unwrap()
             .outcome,

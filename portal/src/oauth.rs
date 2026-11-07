@@ -5042,7 +5042,7 @@ mod tests {
             ids.iter().all(|id| *id == first),
             "all concurrent logins must converge on one client, got {ids:?}",
         );
-        let rows = store::persons::list_directory(&surreal, "", "stampede@example.com", &[])
+        let rows = store::persons::search(&surreal, None, Some("stampede@example.com"), 10)
             .await
             .unwrap();
         assert_eq!(

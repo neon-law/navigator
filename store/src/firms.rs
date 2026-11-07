@@ -1055,12 +1055,22 @@ pub struct DirectoryEntry {
     pub firm_names: Vec<String>,
 }
 
-/// The people directory (`/app/admin/people`) with each row's Firm names,
-/// filtered and sorted as [`crate::persons::list_directory`] is.
+/// What the people directory accepts: `filter[name]`, `filter[email]`, and
+/// `sort` on `name` / `email`, name order by default.
+pub const PEOPLE_DIRECTORY: crate::listing::ListSpec = crate::listing::ListSpec {
+    filters: &["name", "email"],
+    sorts: &["name", "email"],
+    default_sort: &[("name", false)],
+};
+
+/// One keyset page of the people directory (`/app/admin/people`,
+/// `GET /app/api/people`) with each row's Firm names. Filters, sort, and the
+/// page bound all run in the query; the Firm names are read for the page's
+/// rows.
 ///
 /// Under PostgreSQL People authority this is one query over the
-/// `person_directory` and `firm_visible_person` views. Otherwise it reads
-/// the people, the memberships, and the Firms once each and joins them here —
+/// `person_directory` and `firm_visible_person` views. Otherwise SurrealDB
+/// reads the page and this joins the memberships and Firms read once each —
 /// never a membership lookup per Person.
 ///
 /// # Errors
@@ -1068,11 +1078,9 @@ pub struct DirectoryEntry {
 /// [`FirmError`] when any of the reads fails.
 pub async fn people_directory(
     surreal: &SurrealDb,
-    filter_name: &str,
-    filter_email: &str,
-    sort: &[(String, bool)],
+    params: &crate::listing::ListParams,
     scope: DirectoryScope,
-) -> Result<Vec<DirectoryEntry>, FirmError> {
+) -> Result<crate::listing::Page<DirectoryEntry>, FirmError> {
     if let Some(pg) = crate::persons::postgres_authority().await? {
         let firm_ids = match scope {
             DirectoryScope::Everyone => None,
@@ -1086,35 +1094,29 @@ pub async fn people_directory(
                 .await?,
             ),
         };
-        let rows = Box::pin(crate::postgres::people::directory_entries(
+        let page = Box::pin(crate::postgres::people::directory_page(
             &pg,
-            filter_name,
-            filter_email,
-            sort,
+            params,
             firm_ids.as_deref(),
         ))
         .await?;
-        return Ok(rows
-            .into_iter()
-            .map(|(person, firm_names)| DirectoryEntry { person, firm_names })
-            .collect());
+        return Ok(page.map(|(person, firm_names)| DirectoryEntry { person, firm_names }));
     }
 
-    let mut people =
-        crate::persons::list_directory(surreal, filter_name, filter_email, sort).await?;
-    if let DirectoryScope::VisibleToAdmin(admin) = scope {
-        let visible: std::collections::HashSet<Uuid> = visible_person_ids(surreal, admin)
-            .await?
-            .into_iter()
-            .collect();
-        people.retain(|person| visible.contains(&person.id));
-    }
+    let visible = match scope {
+        DirectoryScope::Everyone => None,
+        DirectoryScope::VisibleToAdmin(admin) => Some(visible_person_ids(surreal, admin).await?),
+    };
+    let page = crate::persons::surreal_directory_page(surreal, params, visible.as_deref()).await?;
+    let on_page: std::collections::HashSet<Uuid> =
+        page.items.iter().map(|person| person.id).collect();
     let firm_names: HashMap<Uuid, String> = all(surreal)
         .await?
         .into_iter()
         .map(|firm| (firm.id, firm.name))
         .collect();
     let mut memberships = all_memberships(surreal).await?;
+    memberships.retain(|membership| on_page.contains(&membership.person_id));
     memberships.sort_by(|a, b| (&a.inserted_at, a.id).cmp(&(&b.inserted_at, b.id)));
     let mut names_by_person: HashMap<Uuid, Vec<String>> = HashMap::new();
     for membership in memberships {
@@ -1125,13 +1127,10 @@ pub async fn people_directory(
                 .push(name.clone());
         }
     }
-    Ok(people
-        .into_iter()
-        .map(|person| DirectoryEntry {
-            firm_names: names_by_person.remove(&person.id).unwrap_or_default(),
-            person,
-        })
-        .collect())
+    Ok(page.map(|person| DirectoryEntry {
+        firm_names: names_by_person.remove(&person.id).unwrap_or_default(),
+        person,
+    }))
 }
 
 /// Attach one of the deployment's closed house-brand keys to a Firm.
@@ -3563,6 +3562,78 @@ mod tests {
         let visible = visible_person_ids(&db, admin.id).await.unwrap();
         assert!(visible.contains(&admin.id));
         assert!(!visible.contains(&client.id));
+    }
+
+    /// The SurrealDB directory reads one keyset page at a time: a walk covers
+    /// every matching row once, forward and back, through tied names, and an
+    /// Admin's scope and Firm names apply to each page.
+    #[tokio::test]
+    async fn people_directory_pages_walk_every_row_once_on_surreal() {
+        let db = mem_surreal().await;
+        let mut created = Vec::new();
+        for name in [
+            "Row 1", "Row 2", "Row 2", "Row 2", "Row 3", "Row 4", "Row 5",
+        ] {
+            let email = format!("{}@page-walk.test", Uuid::now_v7());
+            created.push(
+                crate::persons::create(&db, &NewPerson::new(name, email))
+                    .await
+                    .unwrap(),
+            );
+        }
+        let parse =
+            |query: String| crate::listing::ListParams::parse(&query, &PEOPLE_DIRECTORY).unwrap();
+        for sort in ["name", "-name", "email", "name,-email"] {
+            let base = format!("filter[email]=page-walk&sort={sort}&page[size]=3");
+            let (mut seen, mut sizes, mut query) = (Vec::new(), Vec::new(), base.clone());
+            let last = loop {
+                let page = people_directory(&db, &parse(query.clone()), DirectoryScope::Everyone)
+                    .await
+                    .unwrap();
+                seen.extend(page.items.iter().map(|entry| entry.person.id));
+                sizes.push(page.items.len());
+                match page.next.clone() {
+                    Some(next) => query = format!("{base}&page[after]={next}"),
+                    None => break page,
+                }
+            };
+            assert_eq!(sizes, vec![3, 3, 1], "{sort}");
+            let mut unique = seen.clone();
+            unique.sort();
+            unique.dedup();
+            assert_eq!(unique.len(), created.len(), "{sort}");
+            let prev = last.prev.expect("the last page links back");
+            let back = people_directory(
+                &db,
+                &parse(format!("{base}&page[before]={prev}")),
+                DirectoryScope::Everyone,
+            )
+            .await
+            .unwrap();
+            let back: Vec<_> = back.items.iter().map(|entry| entry.person.id).collect();
+            assert_eq!(back, seen[3..6].to_vec(), "{sort}");
+        }
+
+        let admin = crate::persons::create(
+            &db,
+            &NewPerson::with_role("Page Admin", "admin@page-scope.test", Role::Admin),
+        )
+        .await
+        .unwrap();
+        let firm = practice_with_admin(&db, "Paging Practice", admin.id).await;
+        let page = people_directory(
+            &db,
+            &parse("filter[email]=page-".into()),
+            DirectoryScope::VisibleToAdmin(admin.id),
+        )
+        .await
+        .unwrap();
+        let rows: Vec<_> = page
+            .items
+            .iter()
+            .map(|entry| (entry.person.id, entry.firm_names.clone()))
+            .collect();
+        assert_eq!(rows, vec![(admin.id, vec![firm.name])]);
     }
 
     #[tokio::test]

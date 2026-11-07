@@ -4973,7 +4973,7 @@ Sign: {{client.signature}}";
         branding: &'static views::brand::Branding,
         client_email: &str,
     ) -> axum::response::Response {
-        views::brand::scope(
+        Box::pin(views::brand::scope(
             branding,
             start_post(
                 axum::extract::State(state),
@@ -4983,7 +4983,7 @@ Sign: {{client.signature}}";
                     retainer_template_code: "onboarding__letter".into(),
                 }),
             ),
-        )
+        ))
         .await
     }
 

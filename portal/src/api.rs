@@ -1216,11 +1216,21 @@ async fn openapi_json(headers: axum::http::HeaderMap) -> Json<serde_json::Value>
     Json(crate::openapi::document_with_base(&base))
 }
 
+/// `GET /app/api/people`: one keyset page of the directory, filtered and
+/// sorted per [`store::firms::PEOPLE_DIRECTORY`] ([`crate::list_api`]).
 async fn list_people(
     State(surreal): State<store::surreal::SurrealDb>,
-) -> Result<Json<Vec<store::persons::Person>>, ApiError> {
-    Ok(Json(
-        store::persons::list_directory(&surreal, "", "", &[]).await?,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let params = crate::list_api::parse(raw.as_deref(), &store::firms::PEOPLE_DIRECTORY)?;
+    let page =
+        store::firms::people_directory(&surreal, &params, store::firms::DirectoryScope::Everyone)
+            .await
+            .map_err(|e| ApiError::Db(e.to_string()))?;
+    Ok(crate::list_api::document(
+        "/app/api/people",
+        &params,
+        &page.map(|entry| entry.person),
     ))
 }
 
@@ -8131,6 +8141,9 @@ pub enum ApiError {
     /// expected outcome of a fleet-wide backfill sweep, reported per Project
     /// rather than a bare internal fault.
     ForgejoUnavailable(String),
+    /// A collection request the caller can correct: an unadvertised filter
+    /// or sort field, a `page[size]` out of range, or a stale cursor.
+    ListInvalid(store::listing::ListError),
 }
 
 impl From<store::persons::PersonError> for ApiError {
@@ -9173,6 +9186,14 @@ impl IntoResponse for ApiError {
                 )
                     .into_response()
             }
+            Self::ListInvalid(error) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "invalid_request",
+                    "message": error.to_string()
+                })),
+            )
+                .into_response(),
             Self::DeadlineInvalid(message)
             | Self::EfilingInvalid(message)
             | Self::DocketInvalid(message)
@@ -13352,7 +13373,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
         let (status, people) =
             call(&f.state, Some(&f.lawyer), "GET", "/app/api/people", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(people
+        assert!(people["data"]
             .as_array()
             .unwrap()
             .iter()

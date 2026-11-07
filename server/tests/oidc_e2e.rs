@@ -250,9 +250,7 @@ async fn full_oidc_flow_upserts_person_and_allows_lawyer() {
     // 2. The callback should have promoted the pre-seeded row by
     //    stamping the IdP subject. Email + name stay as seeded; the
     //    callback never overwrites them from the token.
-    let persons = store::persons::list_directory(&surreal, "", "", &[])
-        .await
-        .unwrap();
+    let persons = store::persons::list_directory(&surreal).await.unwrap();
     assert_eq!(persons.len(), 1, "expected exactly one persons row");
     assert_eq!(
         persons[0].oidc_subject.as_deref(),
@@ -304,9 +302,7 @@ async fn embedded_policy_denies_client_admin_route_with_403() {
 
     // Promotion happened — the row gained `oidc_subject` but kept
     // its Client tier.
-    let persons = store::persons::list_directory(&surreal, "", "", &[])
-        .await
-        .unwrap();
+    let persons = store::persons::list_directory(&surreal).await.unwrap();
     assert_eq!(persons.len(), 1);
     assert_eq!(
         persons[0].oidc_subject.as_deref(),
@@ -353,9 +349,7 @@ async fn second_login_with_same_subject_does_not_create_duplicate_person() {
     let _ = complete_oauth_flow(&app, &idp, "/app/lawyer").await;
     let _ = complete_oauth_flow(&app, &idp, "/app/lawyer").await;
 
-    let persons = store::persons::list_directory(&surreal, "", "", &[])
-        .await
-        .unwrap();
+    let persons = store::persons::list_directory(&surreal).await.unwrap();
     assert_eq!(
         persons.len(),
         1,
@@ -452,7 +446,7 @@ async fn user_with_db_lawyer_role_can_hit_every_admin_route() {
     let session_cookie = complete_oauth_flow(&app, &idp, "/app/lawyer").await;
 
     // The promoted row now has the OIDC subject linked.
-    let lawyer = store::persons::list_directory(&surreal, "", "", &[])
+    let lawyer = store::persons::list_directory(&surreal)
         .await
         .unwrap()
         .into_iter()
@@ -514,7 +508,7 @@ async fn user_with_client_role_is_denied_from_admin_routes() {
 
     let session_cookie = complete_oauth_flow(&app, &idp, "/app/lawyer").await;
 
-    let cancer = store::persons::list_directory(&surreal, "", "", &[])
+    let cancer = store::persons::list_directory(&surreal)
         .await
         .unwrap()
         .into_iter()
@@ -589,7 +583,7 @@ async fn db_role_revocation_takes_effect_on_next_login() {
     assert_eq!(first.status(), StatusCode::OK);
 
     // Revoke the role.
-    let lawyer = store::persons::list_directory(&surreal, "", "", &[])
+    let lawyer = store::persons::list_directory(&surreal)
         .await
         .unwrap()
         .into_iter()
@@ -678,9 +672,7 @@ async fn callback_creates_a_client_and_reaches_the_empty_portfolio() {
         "a first-sign-in client reaches the empty portfolio: {html}",
     );
 
-    let persons = store::persons::list_directory(&surreal, "", "", &[])
-        .await
-        .unwrap();
+    let persons = store::persons::list_directory(&surreal).await.unwrap();
     assert_eq!(persons.len(), 1, "first sign-in creates exactly one client");
     let person = &persons[0];
     assert_eq!(person.email, "scorpio@example.com");
@@ -767,9 +759,7 @@ async fn callback_jit_creates_bootstrap_owner_with_owner_role_when_absent() {
 
     let _ = complete_oauth_flow(&app, &idp, "/app/lawyer").await;
 
-    let persons = store::persons::list_directory(&surreal, "", "", &[])
-        .await
-        .unwrap();
+    let persons = store::persons::list_directory(&surreal).await.unwrap();
     assert_eq!(persons.len(), 1, "bootstrap Owner row was JIT-created");
     assert_eq!(persons[0].email, "nick@neonlaw.com");
     assert_eq!(persons[0].role, store::persons::Role::Owner);
@@ -802,7 +792,7 @@ async fn bootstrap_owner_role_heals_back_after_being_cleared() {
 
     let _ = complete_oauth_flow(&app, &idp, "/app/lawyer").await;
 
-    let row = store::persons::list_directory(&surreal, "", "", &[])
+    let row = store::persons::list_directory(&surreal)
         .await
         .unwrap()
         .into_iter()

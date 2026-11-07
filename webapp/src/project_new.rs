@@ -170,7 +170,7 @@ pub async fn get_project_new_form() -> Result<ProjectNewView, ServerFnError> {
         .collect();
     // The client roster is filtered in Rust: `persons` is in the other
     // engine and the directory read has no role predicate.
-    let clients = store::persons::list_directory(&surreal, "", "", &[])
+    let clients = store::persons::list_directory(&surreal)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()

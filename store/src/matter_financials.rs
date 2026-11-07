@@ -182,6 +182,7 @@ mod tests {
             rate_cents_per_hour: 25_000,
             source: TimeEntrySource::Manual,
             billing_status: status,
+            stage: None,
             inserted_at: Utc::now(),
             updated_at: Utc::now(),
         }

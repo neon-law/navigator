@@ -102,6 +102,11 @@ pub struct TimeEntry {
     pub rate_cents_per_hour: i32,
     pub source: TimeEntrySource,
     pub billing_status: BillingStatus,
+    /// Which step the minutes belong to, from the Firm's own Case Stage
+    /// vocabulary (ENG-1269). Optional: a captured entry keeps its minutes
+    /// while the nightly update nags for the missing stage, and a stage
+    /// change is an audited reclassification, never a silent edit.
+    pub stage: Option<Uuid>,
     pub inserted_at: chrono::DateTime<Utc>,
     pub updated_at: chrono::DateTime<Utc>,
 }
@@ -186,6 +191,7 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<TimeEntry, TimeEntryError> {
         rate_cents_per_hour: row.try_get("rate_cents_per_hour")?,
         source: parse_source(&row.try_get::<String, _>("source")?)?,
         billing_status: parse_billing_status(&status, xero_invoice_id, written_off_reason)?,
+        stage: row.try_get("stage")?,
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -314,7 +320,7 @@ pub async fn mark_invoiced(
     let mut tx = pg.0.begin().await?;
     let before = sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE id = ANY($1) \
          ORDER BY performed_on, id FOR UPDATE",
     )
@@ -438,7 +444,7 @@ pub(crate) async fn reserve_in_tx(
 ) -> Result<(), TimeEntryError> {
     let before = sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE id = ANY($1) \
          ORDER BY performed_on, id FOR UPDATE",
     )
@@ -508,7 +514,7 @@ pub async fn wip_billable(
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry \
          WHERE project_id=$1 AND billable AND billing_status IN ('unbilled','reserved') \
          ORDER BY performed_on, id",
@@ -527,7 +533,7 @@ pub async fn unbilled_billable(
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry \
          WHERE project_id=$1 AND billable AND billing_status='unbilled' \
          ORDER BY performed_on, id",
@@ -547,7 +553,7 @@ pub async fn list_for_project(
 ) -> Result<Vec<TimeEntry>, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE project_id=$1 \
          ORDER BY performed_on DESC, id",
     )
@@ -557,6 +563,56 @@ pub async fn list_for_project(
     .iter()
     .map(from_row)
     .collect()
+}
+
+/// Reclassify one entry's stage (ENG-1269). The stage must come from the
+/// matter Firm's own Case Stage vocabulary — checked here for a typed
+/// denial, and again by the database trigger for any writer that skips this
+/// accessor. The change journals a `stage_changed` audit event through the
+/// entry's existing audit path; replaying the same stage changes nothing
+/// and journals nothing.
+///
+/// # Errors
+///
+/// [`TimeEntryError::NotFound`] for an unknown entry,
+/// [`TimeEntryError::Invalid`] for a stage outside the Project Firm's
+/// vocabulary, and [`TimeEntryError::Database`] on a database failure.
+pub async fn set_stage(
+    pg: &PostgresDb,
+    entry_id: Uuid,
+    actor_id: Uuid,
+    stage: Option<Uuid>,
+) -> Result<TimeEntry, TimeEntryError> {
+    let mut tx = pg.0.begin().await?;
+    let entry = fetch_for_update(&mut tx, entry_id).await?;
+    if entry.stage == stage {
+        // Nothing changes, so the audit trigger would refuse the no-op
+        // event; return the entry as it stands.
+        return Ok(entry);
+    }
+    if let Some(stage_id) = stage {
+        let in_firm: Option<Uuid> = sqlx::query_scalar(
+            "SELECT s.id FROM stage_definition s \
+             JOIN project p ON p.id = $1 \
+             WHERE s.id = $2 AND s.firm_id = p.firm_id",
+        )
+        .bind(entry.project_id)
+        .bind(stage_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if in_firm.is_none() {
+            return Err(TimeEntryError::Invalid("stage"));
+        }
+    }
+    set_audit_context(&mut tx, actor_id, "stage_changed").await?;
+    sqlx::query("UPDATE time_entry SET stage=$2, updated_at=$3 WHERE id=$1")
+        .bind(entry_id)
+        .bind(stage)
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    fetch(pg, entry_id).await
 }
 
 pub async fn find_by_id(pg: &PostgresDb, id: Uuid) -> Result<TimeEntry, TimeEntryError> {
@@ -597,7 +653,7 @@ async fn fetch_for_update(
 ) -> Result<TimeEntry, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE id=$1 FOR UPDATE",
     )
     .bind(id)
@@ -612,7 +668,7 @@ async fn fetch_for_update(
 async fn fetch(pg: &PostgresDb, id: Uuid) -> Result<TimeEntry, TimeEntryError> {
     sqlx::query(
         "SELECT id,project_id,attorney_id,performed_on,minutes,description,billable,\
-         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,\
+         rate_cents_per_hour,source,billing_status,xero_invoice_id,written_off_reason,stage,\
          inserted_at,updated_at FROM time_entry WHERE id=$1",
     )
     .bind(id)
@@ -723,8 +779,8 @@ mod tests {
     // crate.
     mod database {
         use super::super::{
-            create, list_events, list_for_project, mark_invoiced, unbilled_billable, write_off,
-            BillingStatus, NewTimeEntry, TimeEntryError, TimeEntrySource,
+            create, list_events, list_for_project, mark_invoiced, set_stage, unbilled_billable,
+            write_off, BillingStatus, NewTimeEntry, TimeEntryError, TimeEntrySource,
         };
         use crate::postgres::PostgresDb;
         use crate::postgres_mirror::tests::{connect, fresh_schema};
@@ -1049,6 +1105,149 @@ mod tests {
             let listed = list_for_project(&pg, seed.project_id).await.unwrap();
             let ids: Vec<Uuid> = listed.iter().map(|entry| entry.id).collect();
             assert_eq!(ids, [second.id, first.id]);
+        }
+
+        /// Points the seeded matter at a Firm of its own and adds one stage
+        /// to that Firm's vocabulary. Returns the stage id.
+        async fn stage_for(pg: &PostgresDb, project_id: Uuid, label: &str) -> Uuid {
+            let firm: Uuid = sqlx::query(
+                "INSERT INTO firm (id,name,slug,status) VALUES ($1,'Synthetic Time Firm',$2,'active') RETURNING id",
+            )
+            .bind(Uuid::new_v4())
+            .bind(format!("st-{}", Uuid::new_v4().simple()))
+            .fetch_one(pg.pool())
+            .await
+            .unwrap()
+            .get(0);
+            sqlx::query("UPDATE project SET firm_id=$2 WHERE id=$1")
+                .bind(project_id)
+                .bind(firm)
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            let stage: Uuid = sqlx::query(
+                "INSERT INTO stage_definition (id,firm_id,label,position,inserted_at,updated_at) \
+                 VALUES ($1,$2,$3,0,now(),now()) RETURNING id",
+            )
+            .bind(Uuid::new_v4())
+            .bind(firm)
+            .bind(label)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap()
+            .get(0);
+            stage
+        }
+
+        #[tokio::test]
+        async fn a_stage_change_is_a_journaled_reclassification() {
+            let Some((options, database)) = fresh_schema().await else {
+                return;
+            };
+            let pg = connect(&options, &database).await;
+            let seed = seed(&pg).await;
+            let actor = person(&pg, "Actor").await;
+            let stage = stage_for(&pg, seed.project_id, "Draft").await;
+            let created = create(&pg, seed.project_id, actor, &entry(seed.attorney, 60, true))
+                .await
+                .unwrap();
+            assert_eq!(created.stage, None, "an entry starts unstaged");
+
+            let staged = set_stage(&pg, created.id, actor, Some(stage))
+                .await
+                .unwrap();
+            assert_eq!(staged.stage, Some(stage));
+
+            let events = list_events(&pg, created.id).await.unwrap();
+            let last = events.last().unwrap();
+            assert_eq!(last.event_kind, "stage_changed");
+            assert_eq!(
+                last.before_state.as_ref().unwrap()["stage"],
+                serde_json::Value::Null
+            );
+            assert_eq!(
+                last.after_state["stage"],
+                serde_json::json!(stage.to_string()),
+                "the journal records the new stage"
+            );
+
+            // Replaying the same reclassification changes nothing and
+            // journals nothing.
+            let events_before = list_events(&pg, created.id).await.unwrap().len();
+            let replay = set_stage(&pg, created.id, actor, Some(stage))
+                .await
+                .unwrap();
+            assert_eq!(replay.stage, Some(stage));
+            assert_eq!(
+                list_events(&pg, created.id).await.unwrap().len(),
+                events_before,
+                "a no-op reclassification journals nothing"
+            );
+
+            // Clearing the stage is a change again, and it is journaled.
+            let cleared = set_stage(&pg, created.id, actor, None).await.unwrap();
+            assert_eq!(cleared.stage, None);
+            let events = list_events(&pg, created.id).await.unwrap();
+            assert_eq!(events.last().unwrap().event_kind, "stage_changed");
+            assert_eq!(
+                events.last().unwrap().after_state["stage"],
+                serde_json::Value::Null
+            );
+        }
+
+        #[tokio::test]
+        async fn a_stage_must_come_from_the_matters_own_firm() {
+            let Some((options, database)) = fresh_schema().await else {
+                return;
+            };
+            let pg = connect(&options, &database).await;
+            let seed = seed(&pg).await;
+            let actor = person(&pg, "Actor").await;
+            let created = create(&pg, seed.project_id, actor, &entry(seed.attorney, 60, true))
+                .await
+                .unwrap();
+
+            // A stage from another Firm's vocabulary is refused with a typed
+            // denial by the accessor...
+            let other_firm: Uuid = sqlx::query(
+                "INSERT INTO firm (id,name,slug,status) VALUES ($1,'Synthetic Other Firm',$2,'active') RETURNING id",
+            )
+            .bind(Uuid::new_v4())
+            .bind(format!("so-{}", Uuid::new_v4().simple()))
+            .fetch_one(pg.pool())
+            .await
+            .unwrap()
+            .get(0);
+            let foreign_stage: Uuid = sqlx::query(
+                "INSERT INTO stage_definition (id,firm_id,label,position,inserted_at,updated_at) \
+                 VALUES ($1,$2,'Foreign Draft',0,now(),now()) RETURNING id",
+            )
+            .bind(Uuid::new_v4())
+            .bind(other_firm)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap()
+            .get(0);
+            assert!(matches!(
+                set_stage(&pg, created.id, actor, Some(foreign_stage)).await,
+                Err(TimeEntryError::Invalid("stage"))
+            ));
+
+            // ...and by the database trigger for a writer that skips the
+            // accessor.
+            let raw = sqlx::query("UPDATE time_entry SET stage=$2 WHERE id=$1")
+                .bind(created.id)
+                .bind(foreign_stage)
+                .execute(pg.pool())
+                .await;
+            assert!(raw.is_err(), "the trigger refuses a foreign stage");
+
+            // The same Firm's stage goes through both.
+            let stage = stage_for(&pg, seed.project_id, "Draft").await;
+            let staged = set_stage(&pg, created.id, actor, Some(stage))
+                .await
+                .unwrap();
+            assert_eq!(staged.stage, Some(stage));
         }
     }
 }

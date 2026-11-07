@@ -146,9 +146,7 @@ mod tests {
         assert!(text.contains("Libra"));
         assert!(text.contains("libra@example.com"));
 
-        let all = store::persons::list_directory(&surreal, "", "", &[])
-            .await
-            .unwrap();
+        let all = store::persons::list_directory(&surreal).await.unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].email, "libra@example.com");
         // The command defaults a role-less create to `client`.
@@ -227,9 +225,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let all = store::persons::list_directory(&surreal, "", "", &[])
-            .await
-            .unwrap();
+        let all = store::persons::list_directory(&surreal).await.unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].role, store::persons::Role::Client);
         assert!(all[0].given_name.is_none());
@@ -272,9 +268,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let all = store::persons::list_directory(&surreal, "", "", &[])
-            .await
-            .unwrap();
+        let all = store::persons::list_directory(&surreal).await.unwrap();
         assert_eq!(all.len(), 2);
     }
 
