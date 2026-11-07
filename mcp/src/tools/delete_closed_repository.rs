@@ -274,6 +274,7 @@ mod tests {
                 signing: None,
                 notarization: Vec::new(),
                 evidence: None,
+                folder: None,
             },
             b"a zip archive's bytes",
         )
