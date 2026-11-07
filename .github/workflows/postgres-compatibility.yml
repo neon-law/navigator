@@ -84,7 +84,7 @@ jobs:
           mkdir -p /tmp/postgres-anonymous-docker
           export DOCKER_CONFIG=/tmp/postgres-anonymous-docker
           docker pull "$POSTGRES_IMAGE"
-          bash tests/run.sh "$POSTGRES_IMAGE" 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/navigator-smoke.log"
+          bash tests/run.sh "$POSTGRES_IMAGE" --allow-pre-postgis 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/navigator-smoke.log"
       - name: Install pinned KIND
         run: |
           curl -fsSL https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind

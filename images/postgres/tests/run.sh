@@ -10,6 +10,7 @@ cleanup() {
   docker volume rm "$volume" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+spatial_sql() { docker exec "$name" psql -U postgres -d spatial -v ON_ERROR_STOP=1 -Atc "$1"; }
 sql() { docker exec "$name" psql -U postgres -d smoke -v ON_ERROR_STOP=1 -Atc "$1"; }
 ready() {
   for _ in $(seq 1 60); do
@@ -29,9 +30,32 @@ if [[ "$description" =~ ^PostgreSQL\ ([0-9]+)\.([0-9]+)\ with\ Apache\ AGE\ ([0-
 fi
 docker exec -i "$name" psql -U postgres -d smoke -v ON_ERROR_STOP=1 -v server_version_num="${declared[0]}" \
   -v age="${declared[1]}" -v vector="${declared[2]}" < tests/extensions.sql
+postgis_version=''
+if [[ "$description" =~ PostGIS\ ([0-9.]+)\+ ]]; then
+  postgis_version="${BASH_REMATCH[1]}"
+  docker exec "$name" sh -ec 'test -s /usr/share/source/postgis/postgis_*.dsc
+    test -s /usr/share/source/postgis/postgis_*.orig.tar.*
+    test -s /usr/share/source/postgis/postgis_*.debian.tar.*'
+  docker exec "$name" createdb -U postgres spatial
+  docker exec -i "$name" psql -U postgres -d spatial < tests/postgis.sql
+  [[ $(spatial_sql "SELECT extversion FROM pg_extension WHERE extname = 'postgis'") == "$postgis_version" ]]
+elif [[ ${2:-} != --allow-pre-postgis ]]; then
+  echo 'Expected a PostGIS image' >&2
+  exit 1
+fi
 docker restart "$name" >/dev/null
 ready
 docker exec -i "$name" psql -U postgres -d smoke < tests/persistence.sql
+if [[ -n "$postgis_version" ]]; then
+  [[ $(spatial_sql "SELECT extversion FROM pg_extension WHERE extname = 'postgis'") == "$postgis_version" ]]
+  [[ $(spatial_sql "SELECT count(*) FROM smoke_spatial WHERE ST_IsValid(trace) AND ST_SRID(location) = 4326") == 2 ]]
+  # Restore the spatial fixture and extension into a fresh database.
+  docker exec "$name" createdb -U postgres spatial_restore
+  docker exec "$name" pg_dump -U postgres -d spatial -Fc | \
+    docker exec -i "$name" pg_restore -U postgres -d spatial_restore --exit-on-error
+  [[ $(docker exec "$name" psql -U postgres -d spatial_restore -v ON_ERROR_STOP=1 -Atc \
+    "SELECT count(*) FROM smoke_spatial WHERE ST_IsValid(trace) AND ST_SRID(location) = 4326") == 2 ]]
+fi
 sql 'CREATE TABLE effects(key text PRIMARY KEY); CREATE TABLE attempts(key text NOT NULL);'
 port=$(docker port "$name" 5432/tcp | cut -d: -f2)
 export DBOS_DATABASE_URL="postgres://postgres:synthetic@127.0.0.1:${port}/smoke"
