@@ -94,6 +94,13 @@ each answer terse.
   `blobs/pleadings/motion.pdf.yaml`. A file dropped into a matter folder is uploaded on the next sync with that folder's
   kind, and a lawyer-made subfolder inside one is part of the slug. Never commit anything under `documents/`. Run
   `navigator project repository migrate-folders` to reconcile `Discovery/` with `Discovery (Served)/`.
+* Every document's filename follows the `YYYY.MM.DD_name.ext` convention (rule `C004`): a dotted calendar date, one
+  underscore, and a lowercase hyphenated name — `2026.10.12_complaint-annulment.pdf`. Name a file this way when you
+  stage or create one; an upload without an explicit `--slug` proposes the convention, dated by the `matter:` block's
+  `filed_on` (a date the file's own name already carries wins). The gate refuses any other name, except the shipped
+  docket-ingest names under `Docket Filings/`, the `INV-<digits>` invoices, an Authority sidecar, the `_signed` suffix
+  on a signed copy, Markdown work product (a memo or draft is editable source, not a filed document), and a file inside
+  a date-named folder such as `exhibits/2026-09-05/` — the folder already dates it.
 * `drafts/` holds Drafts, the notation blueprints, directly under it; `templates/` is an alias the gate warns about.
   Memo notations use `kind: memo`. Use placeholders for client data and matter facts; answers and work product stay in
   Navigator. A Notation is a database record, never a file here.
