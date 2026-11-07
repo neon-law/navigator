@@ -1,14 +1,20 @@
 # PostgreSQL image
 
-`ghcr.io/neon-law/navigator/postgres` is PostgreSQL 16.15 (Debian Bookworm) with Apache AGE 1.6.0 and pgvector 0.8.7.
-This directory is its source and its build context: the `Containerfile`, the Apache-2.0 `LICENSE` and `NOTICE` copied
-into the image, and the smoke tests under `tests/`. The directory has its own license; the repository root's must not
-replace it. It replaces `ghcr.io/neon-law/neon-law-postgres` and the `neon-law/neon-law-postgres` repository.
+`ghcr.io/neon-law/navigator/postgres` is PostgreSQL 16.15 (Debian Bookworm) with Apache AGE 1.6.0, pgvector 0.8.7, and
+PostGIS 3.6.4. This directory is its source and its build context: the `Containerfile`, the Apache-2.0 `LICENSE` and
+`NOTICE` copied into the image, and the smoke tests under `tests/`. The directory has its own license; the repository
+root's must not replace it. It replaces `ghcr.io/neon-law/neon-law-postgres` and the `neon-law/neon-law-postgres`
+repository.
 
 The recipe's `ARG` lines pin the PostgreSQL major and minor, the base image digest, and the AGE SHA-512 and pgvector
 SHA-256 source checksums. PostgreSQL supplies citext, pg_trgm and full-text search. DBOS is an application dependency
 and is absent from the image. AGE needs `LOAD 'age'` and `SET search_path = ag_catalog, public` on each connection; no
 preload is assumed.
+
+The recipe pins the matching PGDG Bookworm PostGIS binary and SQL script packages for PostgreSQL 16. Their package
+copyright files identify the upstream licenses and source. Applications that need spatial types require an ordered
+migration to enable `postgis` in the target database after the image digest has been updated. The image provides the
+extension files for both fresh and retained databases.
 
 ## Build and test locally
 
@@ -20,10 +26,10 @@ cd images/postgres && bash tests/run.sh navigator-postgres:local
 ```
 
 `tests/run.sh` needs Docker, Cargo with Rust 1.98, curl, and a free port 8080. It creates and removes only its randomly
-named container and volume. It proves extension loading and queries, GIN and HNSW index builds, persistence across a
-restart, and DBOS checkpoint replay and crash-window recovery in the `tests/dbos` application, which is a standalone
-Cargo project outside Navigator's workspace. Pass a published `ghcr.io/neon-law/navigator/postgres@sha256:<digest>` to
-test a released image instead.
+named container and volume. It verifies extension loading, GIN, HNSW, and spatial GiST indexes, and WGS84 geometry and
+GeoJSON round trips. It also checks restart persistence, a spatial database restore, and DBOS crash recovery. The
+`tests/dbos` application is a standalone Cargo project outside Navigator's workspace. Pass a published
+`ghcr.io/neon-law/navigator/postgres@sha256:<digest>` to test a released image instead.
 
 ## Weekly publication
 

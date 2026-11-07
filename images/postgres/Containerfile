@@ -7,6 +7,7 @@ ARG PG_DIGEST=sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa93
 ARG AGE_VERSION=1.6.0
 ARG AGE_SHA512=1e0a434d53d669e5d067721e1eba8c3c3c2ae072709d5f90783beeba6f5e88f592fa5d8808d621b720c22edfe8c698baa9b0adb9c7b4e3e2a83e7a753bd795c8
 ARG PGVECTOR_VERSION=0.8.7
+ARG POSTGIS_PACKAGE_VERSION=3.6.4+dfsg-2.pgdg12+1
 ARG PGVECTOR_SHA256=cac0b10c360f05b2d521200105ba3697e773d4cd3731f5a915a7e37ebe0bea85
 
 FROM postgres:${PG_VERSION}-bookworm@${PG_DIGEST} AS build
@@ -32,17 +33,23 @@ RUN curl -fLsS https://github.com/pgvector/pgvector/archive/refs/tags/v${PGVECTO
  && make -C vector PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config DESTDIR=/out install
 
 FROM postgres:${PG_VERSION}-bookworm@${PG_DIGEST}
+ARG PG_MAJOR
 ARG PG_VERSION
 ARG AGE_VERSION
 ARG PGVECTOR_VERSION
+ARG POSTGIS_PACKAGE_VERSION
 LABEL org.opencontainers.image.source="https://github.com/neon-law/navigator"
-LABEL org.opencontainers.image.description="PostgreSQL ${PG_VERSION} with Apache AGE ${AGE_VERSION} and pgvector ${PGVECTOR_VERSION}, rebuilt weekly with Debian security updates"
+LABEL org.opencontainers.image.description="PostgreSQL ${PG_VERSION} with Apache AGE ${AGE_VERSION} and pgvector ${PGVECTOR_VERSION}, PostGIS ${POSTGIS_PACKAGE_VERSION}, rebuilt weekly with Debian security updates"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 # The weekly rebuild exists for this layer: the base digest is pinned, so
 # only an upgrade here carries Debian security fixes into a new image. The
 # PostgreSQL packages are held so the server stays at the pinned minor.
 RUN apt-mark hold $(dpkg-query -W -f '${db:Status-Abbrev}${Package}\n' 'postgresql*' 'libpq*' | sed -n 's/^ii *//p') \
- && apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
+ && apt-get update && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends \
+      "postgresql-${PG_MAJOR}-postgis-3=${POSTGIS_PACKAGE_VERSION}" \
+      "postgresql-${PG_MAJOR}-postgis-3-scripts=${POSTGIS_PACKAGE_VERSION}" \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/ /
 COPY --from=build /src/age/LICENSE /src/age/NOTICE /usr/share/doc/apache-age/
 COPY --from=build /src/vector/LICENSE /usr/share/doc/pgvector/LICENSE
