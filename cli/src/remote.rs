@@ -5346,7 +5346,7 @@ mod tests {
         }
     }
 
-    /// LAW-241: `set_folder` PATCHes the document door with the folder
+    /// LAW-241: `set_folder` `PATCH`es the document door with the folder
     /// alone; a clear goes on the wire as an explicit `null`, not an absent
     /// field, because the door's tri-state folder needs the field present.
     #[tokio::test]
