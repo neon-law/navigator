@@ -2043,8 +2043,14 @@ async fn slash_opens_the_destination_palette_and_escape_restores_focus() {
 
     let state = palette_state(&c).await;
     assert_eq!(state["open"], true, "{state}");
-    assert_eq!(state["modal"], true, "the palette is a modal dialog: {state}");
-    assert_eq!(state["filterFocused"], true, "the filter is focused: {state}");
+    assert_eq!(
+        state["modal"], true,
+        "the palette is a modal dialog: {state}"
+    );
+    assert_eq!(
+        state["filterFocused"], true,
+        "the filter is focused: {state}"
+    );
     assert_eq!(
         state["rows"],
         serde_json::json!(["/app/projects", "/app/team", "/app/inbox", "/app/profile"]),
@@ -2210,7 +2216,11 @@ async fn slash_in_a_text_field_is_typing_not_a_palette() {
         )
         .await
         .unwrap();
-    assert_eq!(typed, serde_json::json!("/"), "the field did not receive the /");
+    assert_eq!(
+        typed,
+        serde_json::json!("/"),
+        "the field did not receive the /"
+    );
 
     c.execute(
         "document.querySelector('[data-nav-e2e-field]').remove(); \
