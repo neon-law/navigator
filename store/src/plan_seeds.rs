@@ -96,7 +96,8 @@ async fn seed_stage_definitions(pg: &PostgresDb, firm_id: Uuid) -> Result<(), Pl
         let Some(label) = text(&row, "label").map(str::to_owned) else {
             continue;
         };
-        let Some(position) = integer(&row, "position").map(|value| value as i32) else {
+        let Some(position) = integer(&row, "position").and_then(|value| i32::try_from(value).ok())
+        else {
             continue;
         };
         sqlx::query(
@@ -125,11 +126,13 @@ async fn seed_legal_plans(
         let Some(name) = text(&row, "name").map(str::to_owned) else {
             continue;
         };
-        let Some(acceptance_sla_hours) = integer(&row, "acceptance_sla_hours").map(|v| v as i32)
+        let Some(acceptance_sla_hours) =
+            integer(&row, "acceptance_sla_hours").and_then(|v| i32::try_from(v).ok())
         else {
             continue;
         };
-        let Some(turnaround_sla_days) = integer(&row, "turnaround_sla_days").map(|v| v as i32)
+        let Some(turnaround_sla_days) =
+            integer(&row, "turnaround_sla_days").and_then(|v| i32::try_from(v).ok())
         else {
             continue;
         };
@@ -181,11 +184,13 @@ async fn seed_fee_schedules(
         let Some(covered_benefit) = text(&row, "covered_benefit").map(str::to_owned) else {
             continue;
         };
-        let Some(plan_fee_cents) = integer(&row, "plan_fee_cents").map(|v| v as i32) else {
+        let Some(plan_fee_cents) =
+            integer(&row, "plan_fee_cents").and_then(|v| i32::try_from(v).ok())
+        else {
             continue;
         };
         let supplemental_hourly_cents =
-            integer(&row, "supplemental_hourly_cents").map(|v| v as i32);
+            integer(&row, "supplemental_hourly_cents").and_then(|v| i32::try_from(v).ok());
         let Some(effective_on) =
             text(&row, "effective_on").and_then(|text| NaiveDate::parse_from_str(text, "%F").ok())
         else {

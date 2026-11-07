@@ -2521,8 +2521,7 @@ const PLAN_FIRM_MISMATCH: &str = "legal_plan_id names a plan of another firm";
 /// value accepted here also mirrors.
 fn valid_plan_date(text: &str) -> bool {
     chrono::NaiveDate::parse_from_str(text, "%F")
-        .map(|date| date.format("%F").to_string() == text)
-        .unwrap_or(false)
+        .is_ok_and(|date| date.format("%F").to_string() == text)
 }
 
 /// Writes the legal-plan panel columns onto one Project in one patch
@@ -2554,15 +2553,16 @@ pub async fn set_plan_columns(
             return Err(ProjectCommandError::Invalid(PLAN_STATE_INVALID));
         }
     }
-    for date in [
+    for text in [
         &columns.plan_assigned_on,
         &columns.plan_accepted_on,
         &columns.plan_closed_on,
-    ] {
-        if let Some(text) = date {
-            if !valid_plan_date(text) {
-                return Err(ProjectCommandError::Invalid(PLAN_DATE_INVALID));
-            }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !valid_plan_date(text) {
+            return Err(ProjectCommandError::Invalid(PLAN_DATE_INVALID));
         }
     }
     let Some(project) = find_by_id(surreal, project_id)

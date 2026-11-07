@@ -750,15 +750,36 @@ async fn shadow_reads_compare_firm_project_and_entity_reads_through_the_mirror_i
     assert_eq!((entity_read.id, entity_read.equal), (Some(entity), true));
 }
 
-/// The plan panel rides the four-part recipe: one write through the
-/// SurrealDB-authored accessor, one mirror, and both lanes read back the
-/// same nine columns. A matter with the panel unset round-trips too —
+/// Same nine columns. A matter with the panel unset round-trips too —
 /// commercial litigation and pro bono work shares the table.
-#[tokio::test]
-async fn plan_columns_round_trip_through_both_lanes() {
-    let Some((options, database)) = fresh_schema().await else {
-        return;
-    };
+///
+/// Shared fixtures for the plan-panel tests: a mirrored Firm and Brand, one
+/// open matter, and a `legal_plan` row of the Firm's own, authored in
+/// PostgreSQL.
+struct PlanPanelFixture {
+    pg: PostgresDb,
+    surreal: SurrealDb,
+    entity: Uuid,
+    firm: crate::firms::Firm,
+    project: crate::projects::Project,
+    plan: Uuid,
+}
+
+/// The nine mirrored plan columns as this test reads them from PostgreSQL.
+type PlanMirrorRow = (
+    Option<Uuid>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+async fn plan_panel_fixture() -> Option<PlanPanelFixture> {
+    let (options, database) = fresh_schema().await?;
     let pg = connect(&options, &database).await;
     let surreal = tenancy_surreal().await;
     let entity = seed_entity(&surreal).await;
@@ -769,8 +790,6 @@ async fn plan_columns_round_trip_through_both_lanes() {
         mirrored(&surreal, &pg, &MirrorKey::Firm(firm.id)).await,
         Mirrored::Written
     );
-
-    // The Brand the matter is filed under.
     let brand = crate::brands::create(
         &surreal,
         Role::Admin,
@@ -788,7 +807,6 @@ async fn plan_columns_round_trip_through_both_lanes() {
         mirrored(&surreal, &pg, &MirrorKey::Brand(brand.id)).await,
         Mirrored::Written
     );
-
     let project = crate::projects::create(
         &surreal,
         &NewProject {
@@ -807,8 +825,6 @@ async fn plan_columns_round_trip_through_both_lanes() {
         mirrored(&surreal, &pg, &MirrorKey::Project(project.id)).await,
         Mirrored::Written
     );
-
-    // A Legal Plan of the Firm's own, authored in PostgreSQL.
     let plan: Uuid = sqlx::query_scalar(
         "INSERT INTO legal_plan (id,firm_id,name,acceptance_sla_hours,turnaround_sla_days) \
          VALUES ($1,$2,'ARAG',24,7) RETURNING id",
@@ -818,47 +834,27 @@ async fn plan_columns_round_trip_through_both_lanes() {
     .fetch_one(&pg.0)
     .await
     .unwrap();
+    Some(PlanPanelFixture {
+        pg,
+        surreal,
+        entity,
+        firm,
+        project,
+        plan,
+    })
+}
 
-    // A matter type outside the closed vocabulary is refused before any
-    // write lands.
-    assert!(matches!(
-        crate::projects::set_plan_columns(
-            &surreal,
-            &pg,
-            project.id,
-            &crate::projects::PlanColumns {
-                plan_matter_type: Some("eviction".into()),
-                ..crate::projects::PlanColumns::default()
-            }
-        )
-        .await,
-        Err(crate::projects::ProjectCommandError::Invalid(
-            "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance"
-        ))
-    ));
-    // An unknown plan id is refused as well.
-    assert!(matches!(
-        crate::projects::set_plan_columns(
-            &surreal,
-            &pg,
-            project.id,
-            &crate::projects::PlanColumns {
-                legal_plan_id: Some(Uuid::now_v7()),
-                ..crate::projects::PlanColumns::default()
-            }
-        )
-        .await,
-        Err(crate::projects::ProjectCommandError::Invalid(
-            "legal_plan_id does not name a legal plan"
-        ))
-    ));
-
+#[tokio::test]
+async fn plan_columns_round_trip_through_both_lanes() {
+    let Some(fixture) = plan_panel_fixture().await else {
+        return;
+    };
     let staged = crate::projects::set_plan_columns(
-        &surreal,
-        &pg,
-        project.id,
+        &fixture.surreal,
+        &fixture.pg,
+        fixture.project.id,
         &crate::projects::PlanColumns {
-            legal_plan_id: Some(plan),
+            legal_plan_id: Some(fixture.plan),
             plan_member_id: Some("ARAG-112233".into()),
             benefit_code: Some("DIV-NY".into()),
             plan_matter_type: Some("uncontested_divorce".into()),
@@ -872,7 +868,7 @@ async fn plan_columns_round_trip_through_both_lanes() {
     .await
     .unwrap()
     .expect("the staged matter reads back through the authored lane");
-    assert_eq!(staged.legal_plan_id, Some(plan));
+    assert_eq!(staged.legal_plan_id, Some(fixture.plan));
     assert_eq!(
         staged.plan_matter_type.as_deref(),
         Some("uncontested_divorce")
@@ -884,29 +880,24 @@ async fn plan_columns_round_trip_through_both_lanes() {
     // columns into PostgreSQL — the dates as DATE values, the rest as text
     // or UUID.
     assert_eq!(
-        mirrored(&surreal, &pg, &MirrorKey::Project(project.id)).await,
+        mirrored(
+            &fixture.surreal,
+            &fixture.pg,
+            &MirrorKey::Project(fixture.project.id)
+        )
+        .await,
         Mirrored::Written
     );
-    let mirrored_row: (
-        Option<Uuid>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    ) = sqlx::query_as(
+    let mirrored_row: PlanMirrorRow = sqlx::query_as(
         "SELECT legal_plan_id, plan_member_id, benefit_code, plan_matter_type, plan_state, \
              plan_assigned_on::text, plan_accepted_on::text, plan_closed_on::text, kit_version \
              FROM project WHERE id = $1",
     )
-    .bind(project.id)
-    .fetch_one(&pg.0)
+    .bind(fixture.project.id)
+    .fetch_one(&fixture.pg.0)
     .await
     .unwrap();
-    assert_eq!(mirrored_row.0, Some(plan));
+    assert_eq!(mirrored_row.0, Some(fixture.plan));
     assert_eq!(mirrored_row.1.as_deref(), Some("ARAG-112233"));
     assert_eq!(mirrored_row.2.as_deref(), Some("DIV-NY"));
     assert_eq!(mirrored_row.3.as_deref(), Some("uncontested_divorce"));
@@ -918,46 +909,89 @@ async fn plan_columns_round_trip_through_both_lanes() {
         mirrored_row.8.as_deref(),
         Some("ny/uncontested-divorce/1.0.0")
     );
-
     // The PostgreSQL-native reader returns the same matter.
-    let read_back = crate::postgres::projects::find_by_id_on(&pg, project.id)
+    let read_back = crate::postgres::projects::find_by_id_on(&fixture.pg, fixture.project.id)
         .await
         .unwrap()
         .expect("the mirrored matter reads back natively");
     assert_eq!(read_back.plan_member_id.as_deref(), Some("ARAG-112233"));
     assert_eq!(read_back.plan_accepted_on.as_deref(), Some("2026-11-02"));
+}
 
+#[tokio::test]
+async fn plan_columns_refuse_bad_input_and_allow_an_unset_panel() {
+    let Some(fixture) = plan_panel_fixture().await else {
+        return;
+    };
+    // A matter type outside the closed vocabulary is refused before any
+    // write lands.
+    assert!(matches!(
+        crate::projects::set_plan_columns(
+            &fixture.surreal,
+            &fixture.pg,
+            fixture.project.id,
+            &crate::projects::PlanColumns {
+                plan_matter_type: Some("eviction".into()),
+                ..crate::projects::PlanColumns::default()
+            }
+        )
+        .await,
+        Err(crate::projects::ProjectCommandError::Invalid(
+            "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance"
+        ))
+    ));
+    // An unknown plan id is refused as well.
+    assert!(matches!(
+        crate::projects::set_plan_columns(
+            &fixture.surreal,
+            &fixture.pg,
+            fixture.project.id,
+            &crate::projects::PlanColumns {
+                legal_plan_id: Some(Uuid::now_v7()),
+                ..crate::projects::PlanColumns::default()
+            }
+        )
+        .await,
+        Err(crate::projects::ProjectCommandError::Invalid(
+            "legal_plan_id does not name a legal plan"
+        ))
+    ));
     // A matter with the panel unset round-trips: commercial litigation and
     // pro bono work shares the table with plan matters.
-    let plain = crate::projects::create(
-        &surreal,
+    let litigation = crate::projects::create(
+        &fixture.surreal,
         &NewProject {
             code: crate::projects::code_from_name("Synthetic Plain Matter", Uuid::now_v7()),
             name: "Synthetic Plain Matter".into(),
             status: "open".into(),
             brand: BRAND.into(),
-            entity_id: entity,
-            firm_id: Some(firm.id),
+            entity_id: fixture.entity,
+            firm_id: Some(fixture.firm.id),
             ..NewProject::default()
         },
     )
     .await
     .unwrap();
     assert_eq!(
-        mirrored(&surreal, &pg, &MirrorKey::Project(plain.id)).await,
+        mirrored(
+            &fixture.surreal,
+            &fixture.pg,
+            &MirrorKey::Project(litigation.id)
+        )
+        .await,
         Mirrored::Written
     );
     let unset: (Option<Uuid>, Option<String>) =
         sqlx::query_as("SELECT legal_plan_id, plan_matter_type FROM project WHERE id = $1")
-            .bind(plain.id)
-            .fetch_one(&pg.0)
+            .bind(litigation.id)
+            .fetch_one(&fixture.pg.0)
             .await
             .unwrap();
     assert_eq!(unset, (None, None));
-    let plain_read = crate::postgres::projects::find_by_id_on(&pg, plain.id)
+    let litigation_read = crate::postgres::projects::find_by_id_on(&fixture.pg, litigation.id)
         .await
         .unwrap()
-        .expect("the plain matter reads back natively");
-    assert_eq!(plain_read.legal_plan_id, None);
-    assert_eq!(plain_read.plan_member_id, None);
+        .expect("the litigation matter reads back natively");
+    assert_eq!(litigation_read.legal_plan_id, None);
+    assert_eq!(litigation_read.plan_member_id, None);
 }

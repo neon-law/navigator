@@ -292,6 +292,7 @@ impl NewPlanFeeSchedule {
 }
 
 /// A jurisdiction code is lowercase ASCII letters — 'ny', not 'NY'.
+#[must_use]
 pub fn valid_state_code(state: &str) -> bool {
     (2..=16).contains(&state.len()) && state.bytes().all(|byte| byte.is_ascii_lowercase())
 }
