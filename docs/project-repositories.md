@@ -116,6 +116,10 @@ reason`, never lists; `allowed_links` keys are bare citation hosts linked with `
 Comments in YAML are refused because pull requests and repository contracts record reasons; quoted scalar values may
 contain `#` as content.
 
+With `project set`, an explicit `--private-slack-channel` URL updates the live Project before the manifest, preserving
+the channel ID. `--dry-run` names both writes without performing either. `not provisioned` changes only the manifest; it
+does not clear a live channel.
+
 ## Document staging and pointers
 
 Two root-level folders carry a Project's documents, alongside the chosen blueprint directory and never inside any
