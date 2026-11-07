@@ -141,6 +141,10 @@ pub struct FirmFields {
     /// (ENG-1250). Names no matter.
     #[serde(default)]
     pub projected_cash: crate::projected_cash::FirmProjectedCashView,
+    /// Resolved matters' Outcome Estimates against their Matter Outcomes
+    /// (ENG-1251). Names no matter.
+    #[serde(default)]
+    pub calibration: crate::outcome_calibration::OutcomeCalibrationView,
     /// The Firm's integration-secret metadata (ENG-491) — populated only when
     /// `FirmCapability::ViewIntegrationSecretMetadata` resolves `Allowed` for
     /// this caller (Owner, or the Firm's own Admin DRI). Empty for anyone
@@ -361,6 +365,8 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
             .into();
     let projected_cash =
         crate::projected_cash::derive::load_firm(&surreal, actor_person_id, firm.id).await;
+    let calibration =
+        crate::outcome_calibration::derive::load_firm(&surreal, actor_person_id, firm.id).await;
 
     // Integration-secret metadata (ENG-491): a separate, stricter capability
     // than `ViewDirectory` above. Owner holds it (governance without
@@ -532,6 +538,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
             can_edit,
             invoices,
             projected_cash,
+            calibration,
             secrets,
             can_view_secrets,
             can_manage_secrets,
@@ -832,6 +839,7 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
             }
             crate::firm_invoice_graphs::FirmInvoiceGraphs { view: fields.invoices.clone() }
             crate::projected_cash::FirmProjectedCash { view: fields.projected_cash.clone() }
+            crate::outcome_calibration::FirmOutcomeCalibration { view: fields.calibration.clone() }
             p { a { href: "{back_href}", "← Back" } }
         }
     }
@@ -996,6 +1004,12 @@ mod tests {
         let graphs = html.find(r#"id="firm-invoice-graphs""#).unwrap();
         assert!(
             html.find(r#"id="firm-projected-cash""#).unwrap() > graphs,
+            "{html}"
+        );
+        // ENG-1251: calibration follows projected cash.
+        assert!(
+            html.find(r#"id="firm-outcome-calibration""#).unwrap()
+                > html.find(r#"id="firm-projected-cash""#).unwrap(),
             "{html}"
         );
     }
