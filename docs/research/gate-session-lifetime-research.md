@@ -100,9 +100,9 @@ integrity rows. No remote calls happen after `resolve_live_slugs` returns.
 | Scenario | Phase 0 | Phase A (8 pages, seq.) | Phase B (400 reads, 8-wide ⇒ 50 waves) | Total |
 | --- | --- | --- | --- | --- |
 | Healthy deployment (~0.3 s/read, ~0.5 s/page) | ~2 s | ~4-8 s | 400 × 0.3 s ÷ 8 ≈ 15 s | **~20-30 s** |
-| PR #424-era latency (1.5 s/read), sequential then vs now | ~2 s | ~4-8 s | sequential was 600 s — *the documented failure*; today ÷ 8 ≈ 75 s | **~90 s** |
-| Retry storm: one extra attempt on every call | ~6 s | 8 × ~2 × latency | 50 waves × 2 × latency × … ≈ 300 s at 1.5 s/attempt | **~6 min** |
-| Degraded deployment: every call exhausts its 100 s timeouts | ~246 s | 8 × 300.75 s ≈ 40 min | 50 × 300.75 s ≈ **4.2 h** | hours — survivable in phase B only via repeated renewals |
+| PR #424-era (1.5 s/read) | ~2 s | ~5 s | 600 s sequential — the documented failure; ÷ 8 ≈ 75 s | **~90 s** |
+| Retry storm (one extra attempt per call) | ~6 s | ~8 s | 50 waves × ~3 s ≈ 300 s at 1.5 s/attempt | **~6 min** |
+| Degraded (all attempts exhaust) | ~246 s | ≈ 40 min | ≈ 4.2 h | hours; phase B survives only via renewals |
 
 The healthy-deployment numbers say the issue as titled — "*--check --ci* outlives the session at
 ~400 pointers" — does **not** reproduce on a fast deployment after PR #424: 400 reads at the
@@ -332,4 +332,4 @@ Splitting the job (6) and relaxing timeouts (7) are rejected for the reasons pri
 | PR #424 failure description and fix | commit `c3e5db99`, message quoted in §4 |
 | LAW-285 defers LAW-268 by name | pinned spec `art_p3DBGVuR`, scope boundary |
 | LAW-284 does not mention LAW-268 | pinned spec `art_EAJU6PPl` (out-of-scope list) |
-| GitHub OIDC JWT carries iat/exp, no documented lifetime | docs.github.com/en/actions/reference/security/oidc (fetched this session) |
+| GitHub OIDC JWT: iat/exp only, lifetime undocumented (fetched this session) | docs.github.com/en/actions/reference/security/oidc |
