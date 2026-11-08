@@ -23,6 +23,19 @@ pub struct ProjectNotationRow {
     pub template_stale: bool,
 }
 
+const CREATION_FAILED: &str = "creation_failed";
+
+impl ProjectNotationRow {
+    /// Display the reason this row has no Notation UUID.
+    pub fn unopened_label(&self) -> &'static str {
+        if self.current_state.as_deref() == Some(CREATION_FAILED) {
+            "creation failed"
+        } else {
+            "never started"
+        }
+    }
+}
+
 /// Assemble the private Project notation board from its current templates,
 /// runs, transition journal, respondents, and signature records.
 #[cfg(feature = "server")]
@@ -52,7 +65,7 @@ pub async fn project_notation_board(
             started_sources.insert((template.code.clone(), hash.clone()));
         }
         let workflow_states = match store::templates::body(surreal, storage, &template).await {
-            Ok(markdown) => workflow_state_order(&markdown),
+            Ok(markdown) => template_workflow_states(&markdown, &template.code),
             // Template registrations can exist before their source body is
             // attached. Keep the matter board readable while the workflow
             // definition is incomplete; other storage and integrity errors
@@ -105,7 +118,7 @@ pub async fn project_notation_board(
             continue;
         }
         let workflow_states = match store::templates::body(surreal, storage, &template).await {
-            Ok(markdown) => workflow_state_order(&markdown),
+            Ok(markdown) => template_workflow_states(&markdown, &template.code),
             Err(store::templates::TemplateBodyError::MissingBody(_)) => Vec::new(),
             Err(error) => return Err(error.to_string()),
         };
@@ -124,6 +137,31 @@ pub async fn project_notation_board(
             workflow_states: source.workflow_states,
             ..ProjectNotationRow::default()
         });
+    }
+    use store::postgres::notation_creation_attempts as attempts;
+    if let Some(db) = attempts::database()
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        for (code, failed_at) in attempts::unresolved(&db, project_id)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            if let Some(row) = rows
+                .iter_mut()
+                .find(|row| row.template_code == code && row.notation_id.is_none())
+            {
+                row.current_state = Some(CREATION_FAILED.into());
+                row.last_transition_at = Some(failed_at.to_rfc3339());
+            } else {
+                rows.push(ProjectNotationRow {
+                    template_code: code,
+                    current_state: Some(CREATION_FAILED.into()),
+                    last_transition_at: Some(failed_at.to_rfc3339()),
+                    ..ProjectNotationRow::default()
+                });
+            }
+        }
     }
     rows.sort_by(|a, b| {
         a.template_code
@@ -244,13 +282,26 @@ fn repository_templates_from_tree(
 }
 
 #[cfg(feature = "server")]
+fn template_workflow_states(markdown: &str, code: &str) -> Vec<String> {
+    let states = workflow_state_order(markdown);
+    if states.is_empty() {
+        workflows::catalog_spec_yaml(code)
+            .map(workflow_states_from_yaml)
+            .unwrap_or_default()
+    } else {
+        states
+    }
+}
+
+#[cfg(feature = "server")]
 fn workflow_state_order(markdown: &str) -> Vec<String> {
-    let Some(frontmatter) = markdown
-        .strip_prefix("---")
-        .and_then(|text| text.split_once("---").map(|(yaml, _)| yaml))
-    else {
-        return Vec::new();
-    };
+    rules::frontmatter::extract(markdown)
+        .map(workflow_states_from_yaml)
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "server")]
+fn workflow_states_from_yaml(frontmatter: &str) -> Vec<String> {
     let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) else {
         return Vec::new();
     };
@@ -336,7 +387,7 @@ pub fn ProjectNotationBoard(rows: Vec<ProjectNotationRow>) -> Element {
                                         td { "{notation_state_cell(row, state)}" }
                                     }
                                     th { scope: "row", "{row.template_code}" }
-                                    td { "{row.notation_id.as_deref().unwrap_or(\"never started\")}" }
+                                    td { "{row.notation_id.as_deref().unwrap_or(row.unopened_label())}" }
                                     td { "{row.respondent_email.as_deref().unwrap_or(\"—\")}" }
                                     td { "{row.signature_request_id.as_deref().unwrap_or(\"—\")}" }
                                     td { "{row.last_transition_at.as_deref().unwrap_or(\"—\")}" }

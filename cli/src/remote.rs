@@ -5082,12 +5082,13 @@ fn print_notation_board(rows: &[webapp::lawyer_project_notations::ProjectNotatio
             "STALE".to_string(),
         ]));
     for row in rows {
+        let unopened = row.unopened_label();
         let mut cells = Vec::with_capacity(states.len() + 6);
         for state in &states {
             if !row.workflow_states.contains(state) {
                 cells.push("—".to_string());
             } else if row.notation_id.is_none() {
-                cells.push("never started".to_string());
+                cells.push(unopened.to_string());
             } else if row.current_state.as_deref() == Some(state) {
                 cells.push(format!(
                     "● {}",
@@ -5103,7 +5104,7 @@ fn print_notation_board(rows: &[webapp::lawyer_project_notations::ProjectNotatio
         cells.push(
             row.notation_id
                 .clone()
-                .unwrap_or_else(|| "never started".to_string()),
+                .unwrap_or_else(|| unopened.to_string()),
         );
         cells.push(
             row.respondent_email

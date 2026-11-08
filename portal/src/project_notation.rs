@@ -94,25 +94,53 @@ pub async fn create_project_notation(
 
     let person_id = find_or_create_client(surreal, email, project_id).await?;
 
-    // The repo layer is env-selected, exactly like the documents export path
-    // (`project_export.rs`); a process with no repo root cannot read a repo.
-    let repo = repos::RepoStore::from_env().map_err(|e| {
-        tracing::error!(error = %e, "create_project_notation: git repo storage not configured");
-        CreateProjectNotationError::RepoUnconfigured
-    })?;
+    use store::postgres::notation_creation_attempts as attempts;
+    let database = attempts::database()
+        .await
+        .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
+    let started_at = chrono::Utc::now();
+    let outcome = async {
+        // The repo layer is env-selected, exactly like the documents export path
+        // (`project_export.rs`); a process with no repo root cannot read a repo.
+        let repo = repos::RepoStore::from_env().map_err(|e| {
+            tracing::error!(error = %e, "create_project_notation: git repo storage not configured");
+            CreateProjectNotationError::RepoUnconfigured
+        })?;
 
-    workflows::create_notation_from_repo(
-        surreal,
-        runtime,
-        storage,
-        &repo,
-        code,
-        person_id,
-        project_id,
-        Some(project.entity_id),
-    )
-    .await
-    .map_err(CreateProjectNotationError::Session)
+        workflows::create_notation_from_repo(
+            surreal,
+            runtime,
+            storage,
+            &repo,
+            code,
+            person_id,
+            project_id,
+            Some(project.entity_id),
+        )
+        .await
+        .map_err(CreateProjectNotationError::Session)
+    }
+    .await;
+    if let Some(db) = database.as_ref() {
+        let recorded = match &outcome {
+            Ok(opened) => {
+                attempts::link_retry(
+                    db,
+                    project_id,
+                    code,
+                    person_id,
+                    opened.notation_id,
+                    started_at,
+                )
+                .await
+            }
+            Err(_) => attempts::record_failure(db, project_id, code, person_id).await,
+        };
+        if let Err(error) = recorded {
+            tracing::error!(%project_id, %error, "could not record notation creation outcome");
+        }
+    }
+    outcome
 }
 
 /// Typed failure of [`create_project_notation`]. Each door renders it its own
