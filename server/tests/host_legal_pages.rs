@@ -193,16 +193,14 @@ async fn the_terms_keep_the_trademark_ownership_attribution() {
     );
 }
 
-/// Both surfaces that cite the registration point a reader at the register.
+/// The Terms are the one place the mark is noticed, and they link the register.
 ///
 /// A notice a reader cannot check is the site's own word for who owns the name
-/// on its door. The registration number is the claim and the USPTO record is
-/// where it resolves, so the footer that carries the mark on every page and the
-/// Terms section that explains it both link out — and the whole route is what
-/// proves it, since the footer's notice is resolved from the brand per request
-/// rather than written into the page.
+/// on its door, so the Terms section links the USPTO record. The footer carries
+/// no mark notice: it repeats on every page, and ownership of the mark is a
+/// term of using the site rather than a fact about the firm behind each page.
 #[tokio::test]
-async fn the_registration_links_to_the_uspto_record_on_the_page_and_in_the_terms() {
+async fn only_the_terms_notice_the_mark_and_link_the_uspto_record() {
     const RECORD: &str = "https://tmsearch.uspto.gov/search/search-results/90039224";
 
     let app = app().await;
@@ -210,25 +208,22 @@ async fn the_registration_links_to_the_uspto_record_on_the_page_and_in_the_terms
     let flat = terms.split_whitespace().collect::<Vec<_>>().join(" ");
 
     let footer = terms.split("<footer ").nth(1).expect("shared footer");
-    assert!(
-        footer.contains("Neon Law is a trademark of Neon Law IP LLC."),
-        "{footer}"
-    );
+    assert!(!footer.contains("trademark"), "{footer}");
+    assert!(!footer.contains(RECORD), "{footer}");
     assert!(!footer.contains("Legal services prepared by"), "{footer}");
     assert!(!footer.contains("https://www.lextecnica.com/"), "{footer}");
-    // Check the Terms body and footer independently.
     assert!(
         flat.contains("is a registered trademark of Neon Law IP LLC, "),
-        "the footer notices the mark and names the registrant: {flat}"
+        "the Terms notice the mark and name the registrant: {flat}"
     );
     assert!(
         flat.contains("U.S. Reg. No. 6,325,650"),
-        "and cites the registration: {flat}"
+        "and cite the registration: {flat}"
     );
     assert_eq!(
         terms.matches(RECORD).count(),
-        2,
-        "the footer notice and the Terms section each link the record: {terms}"
+        1,
+        "the Terms section links the record once: {terms}"
     );
 }
 

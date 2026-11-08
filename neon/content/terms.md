@@ -57,8 +57,9 @@ are in the [Text Messaging section of our Privacy Policy](/privacy#text-messagin
 NEON LAW® is a registered trademark of Neon Law IP LLC, [U.S. Reg. No.
 6,325,650](https://tmsearch.uspto.gov/search/search-results/90039224), registered on the Principal Register of the
 United States Patent and Trademark Office in Class 45 for legal services. That link is the register's own record, so you
-can verify the registration and its owner without taking our word for it. The Neon Law name, logo, and related marks
-remain the exclusive property of Guieb & Shook PC, and any other use without prior written permission is unauthorized.
+can verify the registration and its owner without taking our word for it. Guieb & Shook PC uses the Neon Law name, logo,
+and related marks with Neon Law IP LLC's permission. Any other use without Neon Law IP LLC's prior written permission is
+unauthorized.
 
 ## Privacy and Third Parties
 

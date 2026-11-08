@@ -1918,10 +1918,9 @@ mod tests {
             "lead.phone_helper".to_string(),
             "lead.sms_label".to_string(),
         ]);
-        // Footer and account copy is read directly by the shared SSR components.
+        // Account copy is read directly by the shared SSR components.
         referenced.extend(
             [
-                "footer.ownership",
                 "signup.title",
                 "signup.body",
                 "signup.action",
