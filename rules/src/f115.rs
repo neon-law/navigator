@@ -360,6 +360,21 @@ fn handle_path(
     if head == "project" && tail == "onboarding_jurisdiction" {
         return;
     }
+    // The client DRI resolves from the Project's bound Person row:
+    // `project.client_dri` renders the Person's name and
+    // `project.client_dri.<field>` reaches the Person's fields — through the
+    // Clause input expansion (`client.name` bound to `project.client_dri`
+    // compiles to `project.client_dri.name`) or the template body's
+    // `client_dri.<field>` alias. Unknown Person fields stay violations.
+    if head == "project" && (tail == "client_dri" || tail.starts_with("client_dri.")) {
+        let person_field = tail.strip_prefix("client_dri.").unwrap_or("name");
+        check_field(shape_for("person"), person_field, head, file, violations);
+        return;
+    }
+    if head == "client_dri" {
+        check_field(shape_for("person"), field, head, file, violations);
+        return;
+    }
     // The Firm's legal name is filled from the Project's Brand at render.
     if head == "firm" && tail == "legal_name" {
         return;
@@ -500,6 +515,41 @@ mod tests {
         );
         let findings = F115PathResolution.lint(&file(&unknown));
         assert!(findings.iter().any(|finding| finding.code == "N115"),);
+    }
+
+    /// The client DRI resolves from the Project's bound Person row, both
+    /// through the Clause input expansion (`project.client_dri` and
+    /// `project.client_dri.<field>`) and the template body's
+    /// `client_dri.<field>` alias. Unknown Person fields stay violations.
+    #[test]
+    fn a_client_dri_path_resolves_from_the_bound_person() {
+        let questionnaire =
+            "  BEGIN:\n    _: person__trustor\n  person__trustor:\n    _: END\n  END: {}\n";
+        let grounded = [
+            "Address all correspondence to {{client_dri.name}} ({{client_dri.email}}).",
+            "The client DRI is {{project.client_dri}}.",
+            "Representative: {{project.client_dri.name}} <{{project.client_dri.email}}>.",
+        ];
+        for body in grounded {
+            let template = tmpl(questionnaire, body);
+            assert!(
+                F115PathResolution.lint(&file(&template)).is_empty(),
+                "grounded: {body}"
+            );
+        }
+        // A field the Person does not carry stays a violation — fail closed.
+        for body in [
+            "Mail to {{client_dri.not_a_field}}.",
+            "Mail to {{project.client_dri.not_a_field}}.",
+            "Brand: {{project.client_dri_other}}.",
+        ] {
+            let template = tmpl(questionnaire, body);
+            let findings = F115PathResolution.lint(&file(&template));
+            assert!(
+                findings.iter().any(|finding| finding.code == "N115"),
+                "violates: {body}"
+            );
+        }
     }
 
     #[test]
