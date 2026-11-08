@@ -51,6 +51,7 @@ async fn references(surreal: &SurrealDb) -> (Uuid, Uuid, Uuid) {
     store::firms::attach_brand(surreal, store::persons::Role::Owner, None, firm.id, "neon")
         .await
         .expect("firm wears neon");
+    store::test_support::approve_test_brand_domain(surreal, "neon").await;
     (client.id, attester.id, entity_id)
 }
 
@@ -347,4 +348,68 @@ async fn a_brand_move_after_firm_authorization_cannot_open_under_another_firm() 
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn opening_refuses_a_lawyer_dri_from_an_unapproved_domain_before_writing() {
+    let db = mem_surreal().await;
+    let (client_id, acting_person_id, entity_id) = references(&db).await;
+    let brand = store::brands::find_by_key(&db, "neon")
+        .await
+        .unwrap()
+        .unwrap();
+    store::brands::set_website_url(&db, Role::Owner, brand.id, Some("https://example.net"))
+        .await
+        .unwrap();
+    let other_brand = store::brands::find_by_key(&db, "delete-your-data")
+        .await
+        .unwrap()
+        .unwrap();
+    store::brands::set_website_url(
+        &db,
+        Role::Owner,
+        other_brand.id,
+        Some("https://www.example.com"),
+    )
+    .await
+    .unwrap();
+    let input = OpenMatterCommand {
+        firm_id: None,
+        name: "Domain Admission".into(),
+        code: "domain-admission".into(),
+        client_id,
+        entity_id,
+        jurisdiction_id: None,
+        description: None,
+        brand: "neon".into(),
+        attestation: true,
+        acting_person_id,
+        closed_at: None,
+    };
+    let error = projects::open_matter(&db, &input).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("approved Firm or Brand email domain"),
+        "{error}"
+    );
+    assert!(projects::find_by_code(&db, &input.code)
+        .await
+        .unwrap()
+        .is_none());
+
+    let firm = store::firms::firm_id_for_brand_key(&db, "neon")
+        .await
+        .unwrap()
+        .unwrap();
+    store::firms::attach_brand(&db, Role::Owner, None, firm, "delete-your-data")
+        .await
+        .unwrap();
+    let project = projects::open_matter(&db, &input).await.unwrap();
+    let rows = projects::participations_for_project(&db, project.id)
+        .await
+        .unwrap();
+    assert!(rows
+        .iter()
+        .any(|row| row.person_id == acting_person_id && row.is_lawyer_dri));
 }

@@ -6861,6 +6861,8 @@ mod tests {
         store::projects::Project,
     ) {
         store::test_support::seed_firm_with_brand(db, views::brand::brand_key().as_str()).await;
+        store::test_support::approve_test_brand_domain(db, views::brand::brand_key().as_str())
+            .await;
         let lawyer = person_with_role(db, "matter-lawyer", Role::Lawyer).await;
         let client = person_with_role(db, "matter-client", Role::Client).await;
         let project = store::projects::open_matter(
@@ -6889,6 +6891,8 @@ mod tests {
         let db = store::test_support::mem_surreal().await;
         let state = blog_admin_state(db.clone()).await;
         store::test_support::seed_firm_with_brand(&db, views::brand::brand_key().as_str()).await;
+        store::test_support::approve_test_brand_domain(&db, views::brand::brand_key().as_str())
+            .await;
         let lawyer = person_with_role(&db, "open-lawyer", Role::Lawyer).await;
         let client = person_with_role(&db, "open-client", Role::Client).await;
         let entity_id = store::test_support::seed_entity(&db).await;

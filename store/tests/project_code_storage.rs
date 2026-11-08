@@ -21,6 +21,7 @@ use uuid::Uuid;
 /// attesting attorney, and the entity.
 async fn references(surreal: &SurrealDb) -> (Uuid, Uuid, Uuid) {
     seed_firm_with_brand(surreal, "neon").await;
+    store::test_support::approve_test_brand_domain(surreal, "neon").await;
     let client = persons::create(
         surreal,
         &NewPerson::with_role("Libra Client", "libra@example.com", Role::Client),

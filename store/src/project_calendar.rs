@@ -253,6 +253,7 @@ mod tests {
 
     async fn open_matter(surreal: &crate::surreal::SurrealDb) -> projects::Project {
         seed_firm_with_brand(surreal, "neon").await;
+        crate::test_support::approve_test_brand_domain(surreal, "neon").await;
         let entity_id = seed_entity(surreal).await;
         let lawyer = persons::create(
             surreal,

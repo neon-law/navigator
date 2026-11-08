@@ -8,6 +8,10 @@ Has a `status` (`open`, `closed`, `archived`) and is **always opened against an 
 organization, or a `Human` entity for a solo natural person. The `entity_id` FK is `NOT NULL`: a matter without an
 entity is a bug.
 
+Opening a Project requires an attesting attorney eligible to serve as its lawyer DRI. Their email domain must match an
+approved domain on a [Brand](brand.md) the owning Firm wears. The shared opening command checks this before it writes
+the Project or its participation rows.
+
 Lifecycle status changes move through the shared transition command (`store::projects::transition_project_with_reason`):
 the REST door is `POST /app/api/projects/{id}/lifecycle`, which the CLI's `projects close` calls, and the
 `close_project` MCP tool calls the command directly. The descriptive `PATCH /app/api/projects/{id}` never touches
