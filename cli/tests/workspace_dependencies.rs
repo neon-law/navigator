@@ -83,6 +83,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "mcp",
     "md-5",
     "neon",
+    "nix",
     "opentelemetry",
     "opentelemetry-appender-tracing",
     "opentelemetry-otlp",

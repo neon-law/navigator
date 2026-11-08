@@ -4,15 +4,17 @@
 //! rather than mutating the test process's environment.
 
 use std::fs;
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command as StdCommand, Output, Stdio};
+use std::process::{Command as StdCommand, Output};
 
 use assert_cmd::Command;
 use tempfile::TempDir;
 use uuid::Uuid;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+#[path = "support/terminal.rs"]
+mod terminal;
 
 const CODE: &str = "sample-import";
 
@@ -566,18 +568,13 @@ fn scaffold_at_terminal(
     extra: &[&str],
     answers: &str,
 ) -> Run {
-    let terminal = nix::pty::openpty(None, None).unwrap();
-    let mut input = fs::File::from(terminal.master);
-    input.write_all(answers.as_bytes()).unwrap();
-    run_result(
-        &navigator_command(credentials)
+    run_result(&terminal::output(
+        navigator_command(credentials)
             .args(["project", "scaffold", "--host", host, "--dir"])
             .arg(dir)
-            .args(extra)
-            .stdin(Stdio::from(terminal.slave))
-            .output()
-            .unwrap(),
-    )
+            .args(extra),
+        answers,
+    ))
 }
 
 #[tokio::test(flavor = "multi_thread")]

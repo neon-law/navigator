@@ -4,13 +4,17 @@
 //! exit-code behavior.
 
 use std::fs;
+use std::process::Command as StdCommand;
 
-use assert_cmd::Command;
+use assert_cmd::{assert::OutputAssertExt, Command};
 use serde_json::Value;
 use tempfile::TempDir;
 use uuid::Uuid;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[path = "support/terminal.rs"]
+mod terminal;
 
 fn credentials(dir: &TempDir, host: &str) -> std::path::PathBuf {
     let path = dir.path().join("navigator.json");
@@ -73,7 +77,11 @@ async fn mount_setup_doors(
 }
 
 fn command() -> Command {
-    let mut command = Command::cargo_bin("navigator").unwrap();
+    Command::from_std(navigator_command())
+}
+
+fn navigator_command() -> StdCommand {
+    let mut command = StdCommand::new(env!("CARGO_BIN_EXE_navigator"));
     command.env_remove("GITHUB_REPOSITORY");
     command.env_remove("GITHUB_TOKEN");
     command.env_remove("NAVIGATOR_GITHUB_TOKEN");
@@ -644,16 +652,19 @@ async fn project_commands_refuse_a_firm_uuid_instead_of_a_name() {
             .stderr(predicates::str::contains("no Firm with that name"));
     }
     let destination = checkout.path().join("scaffold");
-    command()
-        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
-        .args([
-            "project", "scaffold", "--host", &host, "--firm", firm, "--brand", "sample", "--dir",
-        ])
-        .arg(&destination)
-        .write_stdin("Sample Matter\nacme\nSample Client\nclient@example.com\nSample LLC\nyes\n")
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains("no Firm with that name"));
+    terminal::output(
+        navigator_command()
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+            .args([
+                "project", "scaffold", "--host", &host, "--firm", firm, "--brand", "sample",
+                "--dir",
+            ])
+            .arg(&destination),
+        "Sample Matter\nacme\nSample Client\nclient@example.com\nSample LLC\nyes\n",
+    )
+    .assert()
+    .failure()
+    .stderr(predicates::str::contains("no Firm with that name"));
     assert_eq!(
         fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap(),
         original
