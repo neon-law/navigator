@@ -2675,9 +2675,9 @@ fn entity_suffix(rest: &str) -> Option<String> {
 
 /// `Y027` — contract prose names the Firm by role. A compiled Brand's legal
 /// name in a skill, `README.md`, `AGENTS.md`, or a Draft is a warning, and a
-/// local gate rewrites it. A signature or From line becomes
+/// local gate rewrites it. A signature block or From line uses
 /// `{{firm.legal_name}}`, which render fills from the Brand declared in
-/// `navigator.yaml`. A sentence that states a fact about a named entity is
+/// `navigator.yaml`. A definition or fact that identifies a named entity is
 /// left as written.
 pub const FIRM_ROLE_NAME_CODE: &str = "Y027";
 
@@ -2714,6 +2714,24 @@ fn states_named_entity_fact(line: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
+fn defines_the_firm(paragraph: &[&str]) -> bool {
+    let normalized = paragraph
+        .iter()
+        .flat_map(|line| line.split_whitespace())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+        .replace(['“', '”', '‘', '’', '\''], "\"");
+    [
+        "called \"the firm\"",
+        "referred to as \"the firm\"",
+        "hereinafter \"the firm\"",
+        "(\"the firm\")",
+    ]
+    .iter()
+    .any(|definition| normalized.contains(definition))
+}
+
 fn line_prints_only_the_name(line: &str, name: &str) -> bool {
     let stripped = line
         .trim()
@@ -2728,8 +2746,8 @@ fn from_line(line: &str) -> bool {
 }
 
 /// One flag per line of `contents`: whether the line sits in a paragraph
-/// that states a fact about a named entity. A fact can wrap, so the whole
-/// paragraph is protected, not only the line carrying the fact's verb.
+/// that defines the Firm or states a fact about a named entity. Protect the
+/// paragraph so wrapping can separate the name from the definition or fact.
 fn named_entity_fact_lines(contents: &str) -> Vec<bool> {
     let lines: Vec<&str> = contents.lines().collect();
     let mut flags = vec![false; lines.len()];
@@ -2739,9 +2757,9 @@ fn named_entity_fact_lines(contents: &str) -> Vec<bool> {
             .iter()
             .position(|line| line.trim().is_empty())
             .map_or(lines.len(), |offset| start + offset);
-        if lines[start..end]
-            .iter()
-            .any(|line| states_named_entity_fact(line))
+        let paragraph = &lines[start..end];
+        if paragraph.iter().any(|line| states_named_entity_fact(line))
+            || defines_the_firm(paragraph)
         {
             flags[start..end].fill(true);
         }
@@ -2750,7 +2768,36 @@ fn named_entity_fact_lines(contents: &str) -> Vec<bool> {
     flags
 }
 
-fn rewrite_firm_role_line(line: &str, names: &[&str], in_fact: bool) -> String {
+fn signature_line(line: &str, section: &mut Option<usize>) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    let heading = lower.trim_start_matches('#');
+    let level = lower.len() - heading.len();
+    if level > 0 && heading.starts_with(' ') {
+        if section.is_some_and(|previous| level <= previous) {
+            *section = None;
+        }
+        if ["signature", "acceptance", "execution"]
+            .iter()
+            .any(|label| heading.contains(label))
+        {
+            *section = Some(level);
+        }
+    }
+    let label = lower.trim_matches(['*', '_']);
+    if matches!(
+        label,
+        "sincerely," | "respectfully," | "agreed and accepted:"
+    ) || label.starts_with("in witness whereof")
+    {
+        *section = Some(usize::MAX);
+    }
+    section.is_some()
+        || ["by:", "signed by:", "signature:"]
+            .iter()
+            .any(|prefix| label.starts_with(prefix))
+}
+
+fn rewrite_firm_role_line(line: &str, names: &[&str], in_fact: bool, in_signature: bool) -> String {
     if in_fact {
         return line.to_string();
     }
@@ -2759,28 +2806,37 @@ fn rewrite_firm_role_line(line: &str, names: &[&str], in_fact: bool) -> String {
         if !rewritten.contains(name) {
             continue;
         }
-        let replacement = if line_prints_only_the_name(line, name) || from_line(line) {
-            "{{firm.legal_name}}"
-        } else {
-            "the Firm"
-        };
+        let replacement =
+            if in_signature || line_prints_only_the_name(line, name) || from_line(line) {
+                "{{firm.legal_name}}"
+            } else {
+                "the Firm"
+            };
         rewritten = rewritten.replace(name, replacement);
     }
     rewritten
 }
 
 /// Rewritten prose when a compiled Firm name appears as a role, or `None`
-/// when every such line is already by role or is a named-entity fact.
+/// when all occurrences identify named entities.
 fn rewrite_firm_role_prose(contents: &str, names: &[&str]) -> Option<String> {
+    if !names.iter().any(|name| contents.contains(name)) {
+        return None;
+    }
+    let draft = rules::frontmatter::extract(contents)
+        .and_then(|frontmatter| rules::frontmatter::field(frontmatter, "kind"))
+        .is_some();
     let facts = named_entity_fact_lines(contents);
     let mut changed = false;
     let mut out = String::with_capacity(contents.len());
+    let mut signature_section = None;
     for (index, line) in contents.split_inclusive('\n').enumerate() {
         let (body, newline) = line
             .strip_suffix('\n')
             .map_or((line, ""), |body| (body, "\n"));
         let in_fact = facts.get(index).copied().unwrap_or(false);
-        let rewritten = rewrite_firm_role_line(body, names, in_fact);
+        let in_signature = draft && signature_line(body, &mut signature_section);
+        let rewritten = rewrite_firm_role_line(body, names, in_fact, in_signature);
         if rewritten != body {
             changed = true;
         }
@@ -2790,11 +2846,10 @@ fn rewrite_firm_role_prose(contents: &str, names: &[&str]) -> Option<String> {
     changed.then_some(out)
 }
 
-fn firm_role_findings(path: &Path, contents: &str, names: &[&str]) -> Vec<Finding> {
-    let facts = named_entity_fact_lines(contents);
+fn firm_role_findings(path: &Path, contents: &str, rewritten: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
-    for (index, line) in contents.lines().enumerate() {
-        if rewrite_firm_role_line(line, names, facts[index]) != line {
+    for (index, (original, revised)) in contents.lines().zip(rewritten.lines()).enumerate() {
+        if original != revised {
             findings.push(Finding::at(
                 path,
                 format!(
@@ -2830,7 +2885,7 @@ fn apply_firm_role_prose(
         }
         return;
     }
-    warnings.extend(firm_role_findings(path, contents, &names));
+    warnings.extend(firm_role_findings(path, contents, &rewritten));
 }
 
 fn validate_firm_role_prose(root: &Path, write_fixes: bool, warnings: &mut Vec<Finding>) {
