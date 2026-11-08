@@ -2885,7 +2885,9 @@ fn canonical_document(base: &str) -> Value {
                 }
               } } } },
               "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
-              "404": { "description": "No such matter, or the caller is not a firm-side participant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+              "404": { "description": "No such matter, or the caller is not a firm-side participant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "409": { "description": "A linked Person or Entity record is missing", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "422": { "description": "Stored Entity identifier data is invalid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
             }
           }
         },

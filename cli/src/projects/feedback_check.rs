@@ -83,6 +83,10 @@ pub(crate) async fn private_terms(
                     "the Project is unavailable to this firm-side session"
                 }
                 reqwest::StatusCode::UNAUTHORIZED => "the site login is unavailable or expired",
+                reqwest::StatusCode::CONFLICT => "a linked Project record is missing",
+                reqwest::StatusCode::UNPROCESSABLE_ENTITY => {
+                    "stored Entity identifier data is invalid"
+                }
                 _ if status.is_server_error() => "the server could not resolve private terms",
                 _ => "the server refused the private-terms read",
             };
