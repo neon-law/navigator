@@ -200,7 +200,7 @@ async fn a_designation_on_another_matter_does_not_carry_over() {
 async fn clearing_the_pin_is_allowed() {
     let surreal = mem_surreal().await;
     let row = project(&surreal, "client-dri-clear").await;
-    let person = client_person(&surreal, "Clearable Client").await;
+    let person = client_person(&surreal, "Fixture Client").await;
     add_client_dri_participation(&surreal, row.id, person.id).await;
     set_client_dri_person_id(&surreal, row.id, Some(person.id))
         .await
