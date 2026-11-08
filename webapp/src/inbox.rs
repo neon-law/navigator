@@ -1295,7 +1295,7 @@ fn compose_dialog(page: &InboxPage) -> Element {
             div { class: "inbox-compose__header",
                 h2 { id: "{COMPOSE_DIALOG_ID}-title", class: "inbox-compose__title", "New text" }
                 button {
-                    class: "inbox-compose__close",
+                    class: "nav-btn nav-btn--secondary inbox-compose__close",
                     r#type: "button",
                     "aria-label": "Close",
                     onclick: move |_| {

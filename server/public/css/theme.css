@@ -2938,12 +2938,10 @@ a.nav-link:hover {
 }
 
 .inbox-compose__close {
-  border: 0;
-  background: transparent;
-  color: var(--nav-color-text-muted);
-  font-size: 1.5rem;
+  min-width: 2.25rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 1.25rem;
   line-height: 1;
-  cursor: pointer;
 }
 
 .inbox-compose .nav-form-card {
