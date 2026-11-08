@@ -31,6 +31,10 @@ use super::sendgrid_openapi;
 /// Matches the address the inbound webhook expects (`support@neonlaw.com`)
 /// so a reply lands back in the mailroom.
 ///
+/// The backend default is the fallback only: mail sent for a request to a
+/// Brand's host sends as `support@` that host's naked domain
+/// (`views::brand::sender_email_for_host`).
+///
 /// Deliberately `support@` where the site publishes `contact@`
 /// (`views::brand::firm_email`). Moving what the site advertises must not
 /// re-point the mail pipeline: this is the address threading keys on.
@@ -55,9 +59,9 @@ pub struct OutboundEmail {
     /// query. `None` for ad-hoc messages.
     pub template_slug: Option<String>,
     /// Envelope `From:` address override. `None` falls back to the
-    /// configured `SENDGRID_FROM_EMAIL`. Most callers leave this
-    /// `None`; the audit decorator reads the effective value off the
-    /// backend it wraps and records that.
+    /// configured `SENDGRID_FROM_EMAIL`. A send made for a request sets
+    /// it to `views::brand::request_sender_email`; the audit decorator
+    /// reads the effective value off the backend it wraps and records that.
     pub from: Option<String>,
     /// `Reply-To:` address override. When `Some`, the SendGrid backend
     /// adds a `reply_to` so replies route somewhere other than the

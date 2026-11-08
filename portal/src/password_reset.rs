@@ -300,6 +300,7 @@ async fn send_reset_email(s: &AuthState, person: &store::persons::Person, plaint
     );
     msg.html_body = Some(html);
     msg.template_slug = Some(PURPOSE_PASSWORD_RESET.to_string());
+    msg.from = views::brand::request_sender_email();
     msg.person_id = Some(person.id.to_string());
     if let Err(e) = s.email.send(msg).await {
         tracing::warn!(error = %e, person_id = %person.id, "password-reset: email send failed");
@@ -330,6 +331,7 @@ async fn send_google_sign_in_email(s: &AuthState, person: &store::persons::Perso
     );
     msg.html_body = Some(html);
     msg.template_slug = Some("google_sign_in".to_string());
+    msg.from = views::brand::request_sender_email();
     msg.person_id = Some(person.id.to_string());
     if let Err(e) = s.email.send(msg).await {
         tracing::warn!(error = %e, person_id = %person.id, "password-reset: google-notice send failed");

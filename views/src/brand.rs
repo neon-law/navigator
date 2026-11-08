@@ -476,10 +476,10 @@ pub static DEFAULT_BRANDING: Branding = Branding {
     // dial `firm_support_email` documents — the firm invites new matters to a
     // mailbox named for what a visitor is doing, not for a help desk.
     //
-    // This is the *published* address only. Navigator's outbound `From` and the
-    // inbound threading address are `workflows::email::DEFAULT_FROM_EMAIL`, a
-    // separate constant that stays `support@`: moving what the site advertises
-    // must not re-point the mail pipeline.
+    // This is the *published* address only. Navigator's outbound `From` is
+    // `support@` the serving host's naked domain (`sender_email_for_host`),
+    // and the inbound threading address is `workflows::email::DEFAULT_FROM_EMAIL`:
+    // moving what the site advertises must not re-point the mail pipeline.
     firm_email: "contact@neonlaw.com",
     support_domain: "neonlaw.com",
     firm_phone: "+1 510 800 2090",
@@ -1622,8 +1622,46 @@ pub fn held_out_host(host: &str) -> bool {
         || brand_key_for_apex(host).is_some_and(|key| !key.is_live())
 }
 
+/// The `From:` address for mail sent on behalf of a request to `host`:
+/// `support@` the host's naked (registrable) domain, when the host is one a
+/// Brand serves or that Brand's apex. `None` for any other host, which leaves
+/// the send on the deployment's configured sender.
+///
+/// The host decides, not the Brand's [`Branding::support_domain`]: Lex
+/// Tecnica's brands are served on `neonlaw.com` subdomains, and `neonlaw.com`
+/// is the domain the mail provider authenticates for them. Every Brand host
+/// sits one label under its naked domain, so the naked domain is the host's
+/// last two labels.
+#[must_use]
+pub fn sender_email_for_host(host: &str) -> Option<String> {
+    let host = host.split_once(':').map_or(host, |(name, _port)| name);
+    if registered_brand_key(host).is_none() && brand_key_for_apex(host).is_none() {
+        return None;
+    }
+    let naked = host
+        .rmatch_indices('.')
+        .nth(1)
+        .map_or(host, |(dot, _)| &host[dot + 1..]);
+    Some(format!("support@{}", naked.to_ascii_lowercase()))
+}
+
 tokio::task_local! {
     static ACTIVE_BRANDING: &'static Branding;
+    static REQUEST_SENDER: Option<String>;
+}
+
+/// Scope the request's [`sender_email_for_host`] to one request future, so a
+/// handler that sends mail reads it with [`request_sender_email`].
+pub async fn scope_sender<R>(sender: Option<String>, future: impl Future<Output = R>) -> R {
+    REQUEST_SENDER.scope(sender, future).await
+}
+
+/// The `From:` address scoped by [`scope_sender`] for the current request.
+/// `None` outside a request or for a host no Brand serves; the email backend
+/// then sends from the deployment's configured sender.
+#[must_use]
+pub fn request_sender_email() -> Option<String> {
+    REQUEST_SENDER.try_with(Clone::clone).ok().flatten()
 }
 
 static PROCESS_BRANDING: OnceLock<&'static Branding> = OnceLock::new();
@@ -3494,5 +3532,42 @@ mod tests {
             assert_eq!(super::brand_key(), BrandKey::Neon);
         })
         .await;
+    }
+
+    /// Mail sends as `support@` the naked domain of the host serving the
+    /// request. Lex Tecnica's brands ride `neonlaw.com` subdomains, so they
+    /// send from `neonlaw.com` and never from the unauthenticated
+    /// `lextecnica.com`; a host no Brand serves keeps the deployment default.
+    #[tokio::test]
+    async fn outbound_mail_sends_from_the_serving_hosts_naked_domain() {
+        use super::{request_sender_email, scope_sender, sender_email_for_host};
+        for (host, sender) in [
+            (
+                "www.vestaestateplanning.com",
+                Some("support@vestaestateplanning.com"),
+            ),
+            (
+                "staging.summonsdefense.nyc",
+                Some("support@summonsdefense.nyc"),
+            ),
+            ("WWW.NEONLAW.COM:443", Some("support@neonlaw.com")),
+            ("deleteyourdebt.com", Some("support@deleteyourdebt.com")),
+            ("lex-tecnica.neonlaw.com", Some("support@neonlaw.com")),
+            ("staging-iep.neonlaw.com", Some("support@neonlaw.com")),
+            ("localhost:3000", None),
+            ("www.example.com", None),
+        ] {
+            assert_eq!(sender_email_for_host(host).as_deref(), sender, "{host}");
+        }
+        for (key, host) in super::release_brand_hosts() {
+            let sender = sender_email_for_host(host).expect("every Brand host has a sender");
+            assert_ne!(sender, "support@lextecnica.com", "{key:?} on {host}");
+        }
+        assert_eq!(request_sender_email(), None);
+        let scoped = scope_sender(sender_email_for_host("iep.neonlaw.com"), async {
+            request_sender_email()
+        })
+        .await;
+        assert_eq!(scoped.as_deref(), Some("support@neonlaw.com"));
     }
 }
