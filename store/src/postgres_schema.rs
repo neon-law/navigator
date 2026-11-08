@@ -1503,6 +1503,10 @@ mod tests {
                 "20261107140000_add_asset_folder.sql",
                 include_str!("../postgres/migrations/20261107140000_add_asset_folder.sql"),
             ),
+            (
+                "20261107150000_enable_postgis.sql",
+                include_str!("../postgres/migrations/20261107150000_enable_postgis.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
