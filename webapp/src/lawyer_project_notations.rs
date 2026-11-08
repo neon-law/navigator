@@ -5,6 +5,8 @@
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "server")]
+use store::postgres::notation_creation_attempts as attempts;
 
 /// One run or never-started template in a Project's workflow board.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -27,6 +29,7 @@ const CREATION_FAILED: &str = "creation_failed";
 
 impl ProjectNotationRow {
     /// Display the reason this row has no Notation UUID.
+    #[must_use]
     pub fn unopened_label(&self) -> &'static str {
         if self.current_state.as_deref() == Some(CREATION_FAILED) {
             "creation failed"
@@ -138,7 +141,20 @@ pub async fn project_notation_board(
             ..ProjectNotationRow::default()
         });
     }
-    use store::postgres::notation_creation_attempts as attempts;
+    add_creation_failures(&mut rows, project_id).await?;
+    rows.sort_by(|a, b| {
+        a.template_code
+            .cmp(&b.template_code)
+            .then(a.notation_id.cmp(&b.notation_id))
+    });
+    Ok(rows)
+}
+
+#[cfg(feature = "server")]
+async fn add_creation_failures(
+    rows: &mut Vec<ProjectNotationRow>,
+    project_id: uuid::Uuid,
+) -> Result<(), String> {
     if let Some(db) = attempts::database()
         .await
         .map_err(|error| error.to_string())?
@@ -163,12 +179,7 @@ pub async fn project_notation_board(
             }
         }
     }
-    rows.sort_by(|a, b| {
-        a.template_code
-            .cmp(&b.template_code)
-            .then(a.notation_id.cmp(&b.notation_id))
-    });
-    Ok(rows)
+    Ok(())
 }
 
 #[cfg(feature = "server")]

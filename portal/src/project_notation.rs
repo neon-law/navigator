@@ -29,6 +29,7 @@ use uuid::Uuid;
 use crate::admin::AdminState;
 use crate::session::SessionData;
 use store::persons::Role;
+use store::postgres::notation_creation_attempts as attempts;
 use store::template_source::TemplateSourceError;
 use workflows::{NotationSessionError, StartOutcome, StateMachineRuntime};
 
@@ -94,7 +95,6 @@ pub async fn create_project_notation(
 
     let person_id = find_or_create_client(surreal, email, project_id).await?;
 
-    use store::postgres::notation_creation_attempts as attempts;
     let database = attempts::database()
         .await
         .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
