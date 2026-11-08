@@ -3999,6 +3999,62 @@ async fn public_marketing_pages_have_no_horizontal_overflow_on_mobile() {
     c.close().await.unwrap();
 }
 
+/// Find a public form by its court code, then inspect its template frontmatter.
+#[tokio::test]
+async fn public_template_search_combines_with_kind_and_opens_the_preview() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    c.goto(&format!("{}/notations", base_url())).await.unwrap();
+    let search = c
+        .wait()
+        .for_element(Locator::Css(".template-search:not([hidden]) input"))
+        .await
+        .expect("catalog search is available");
+    search.send_keys("CIV-SC-50").await.unwrap();
+    wait_for_text(&c, "1 template", Duration::from_secs(5)).await;
+
+    c.find(Locator::Css("label[for='kind-filter-onboarding']"))
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    wait_for_text(&c, "No matching templates.", Duration::from_secs(5)).await;
+    c.find(Locator::Css("label[for='kind-filter-filing']"))
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    c.find(Locator::Css(
+        "#template-results li:not([hidden]) a[href='/notations/ny-civ-sc50-statement-of-claim']",
+    ))
+    .await
+    .expect("matching filing")
+    .click()
+    .await
+    .unwrap();
+
+    let frontmatter = c
+        .wait()
+        .for_element(Locator::XPath(
+            "//details[summary[normalize-space()='Template frontmatter']]",
+        ))
+        .await
+        .expect("frontmatter disclosure");
+    assert!(frontmatter.attr("open").await.unwrap().is_none());
+    frontmatter
+        .find(Locator::Css("summary"))
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    assert!(frontmatter.attr("open").await.unwrap().is_some());
+    c.close().await.unwrap();
+}
+
 /// The shared `QuestionStage` chrome (ENG-503) at every width the ENG-853
 /// acceptance criteria name — 320, 375, 768, and 1280px. Both walkers
 /// (`webapp::client_intake` and `webapp::walker_step`, plus the portal's

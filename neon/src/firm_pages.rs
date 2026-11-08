@@ -901,7 +901,7 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
         "New York",
         "Statement of Claim (Small Claims)",
         "ny-civ-sc50-statement-of-claim",
-        "Bundled court-form notation.",
+        "New York City Civil Court small claims form CIV-SC-50.",
         FORM_NY_CIV_SC50_STATEMENT_OF_CLAIM,
     ));
     content.materials.push(notation_card(
