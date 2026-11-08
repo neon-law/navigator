@@ -1881,7 +1881,7 @@
 {"file":"store/src/firm_digest.rs","line":873,"function":"open_matters_split_on_the_plan_columns","operation":"query","sql_operations":["INSERT"],"tables":["firm"],"transaction":false}
 {"file":"store/src/firm_digest.rs","line":940,"function":"deadlines_scan_the_mirror_and_flag_missed_and_due_soon","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/firm_digest.rs","line":940,"function":"deadlines_scan_the_mirror_and_flag_missed_and_due_soon","operation":"query","sql_operations":["INSERT"],"tables":["project_deadlines"],"transaction":false}
-{"file":"store/src/firm_digest.rs","line":1071,"function":"last_activity_takes_the_max_of_the_three_sources","operation":"query","sql_operations":["INSERT"],"tables":[],"transaction":false}
+{"file":"store/src/firm_digest.rs","line":1072,"function":"last_activity_takes_the_max_of_the_three_sources","operation":"query","sql_operations":["INSERT"],"tables":[],"transaction":false}
 {"file":"store/src/firm_journal.rs","line":84,"function":"post","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/firm_journal.rs","line":95,"function":"preview","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/firm_journal.rs","line":130,"function":"entries","operation":"query","sql_operations":["SELECT"],"tables":["journal_entry"],"transaction":false}
