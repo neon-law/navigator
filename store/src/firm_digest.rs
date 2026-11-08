@@ -660,9 +660,7 @@ mod database {
     }
 
     async fn world() -> Option<World> {
-        let Some((options, database)) = fresh_schema().await else {
-            return None;
-        };
+        let (options, database) = fresh_schema().await?;
         let pg = connect(&options, &database).await;
         let firm_id = Uuid::new_v4();
         let slug = format!("digest-{}", Uuid::new_v4().simple());
