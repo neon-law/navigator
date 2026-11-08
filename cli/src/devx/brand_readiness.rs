@@ -160,7 +160,7 @@ fn parse_header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
 /// marker and both attribute-order spellings `features/tests/brand_routing.rs`
 /// and `server/tests/routes.rs` already assert against.
 /// An SSR renderer escapes `&` in attribute values (Dioxus writes `&#38;`),
-/// so "Death & Divorce" is matched in every spelling a page may carry.
+/// so "Guieb & Shook" is matched in every spelling a page may carry.
 fn declares_brand(body: &str, site_name: &str) -> bool {
     ["&", "&amp;", "&#38;"]
         .iter()
@@ -619,16 +619,16 @@ mod tests {
     #[test]
     fn a_site_name_with_an_ampersand_matches_its_html_escaped_spellings() {
         for body in [
-            r#"<meta content="Death &#38; Divorce" property="og:site_name"/>"#,
-            r#"<meta property="og:site_name" content="Death &amp; Divorce">"#,
-            r#"<meta property="og:site_name" content="Death & Divorce">"#,
+            r#"<meta content="Guieb &#38; Shook" property="og:site_name"/>"#,
+            r#"<meta property="og:site_name" content="Guieb &amp; Shook">"#,
+            r#"<meta property="og:site_name" content="Guieb & Shook">"#,
         ] {
             let mut runner = ScriptedRunner::new(vec![ok_headers_and_body(200, body)]);
             let report = check_host(
                 &mut runner,
-                BrandKey::DeathAndDivorce,
-                "staging.deathanddivorcelaw.com",
-                "Death & Divorce",
+                BrandKey::GuiebShook,
+                "staging.guiebshook.com",
+                "Guieb & Shook",
                 10,
             );
             assert_eq!(report.verdict, Verdict::Ready, "{body}");

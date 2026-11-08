@@ -10347,7 +10347,7 @@ async fn canonical_host_passes_through_when_disabled() {
 /// Whether `body` declares `brand` as its `og:site_name`. HTML attributes may
 /// arrive in either order, matching `features/tests/brand_routing.rs`'s own
 /// matcher for the same tag. Dioxus renders an attribute's `&` as `&#38;`
-/// (Death & Divorce is the one live brand name that carries one), so the
+/// (Guieb & Shook carries one), so the
 /// comparison escapes `brand` the same deterministic way rather than
 /// speculatively matching more than one entity spelling.
 fn page_declares_og_site_name(body: &str, brand: &str) -> bool {
@@ -10417,13 +10417,6 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         LiveHomeContract {
             title: "<title>Daybridge Divorce Law | Home</title>",
             copy: "A brighter way through divorce.",
-        },
-    ),
-    (
-        views::brand::BrandKey::DeathAndDivorce,
-        LiveHomeContract {
-            title: "<title>Death & Divorce | Home</title>",
-            copy: "Divorce and probate. A steady hand through what comes next.",
         },
     ),
     (

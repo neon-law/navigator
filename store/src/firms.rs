@@ -53,7 +53,6 @@ pub const CLOSED_BRAND_KEYS: &[&str] = &[
     "abhaya",
     "summons",
     "daybridge",
-    "death-and-divorce",
     "cyber-injury-law",
     "aegis",
     "groundwork",

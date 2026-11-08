@@ -73,7 +73,7 @@ async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
         for expected in [
             "Daybridge Divorce Law",
             "A brighter way through divorce.",
-            "$5,000",
+            "$333",
             "one-time fee",
             "mutual split",
             "represents the couple",
@@ -118,7 +118,7 @@ async fn daybridge_services_explain_scope_timing_and_costs() {
             "Joint representation starts with clarity",
             "separate counsel",
             "One fee for a mutual split",
-            "A one-time $5,000 fee.",
+            "A one-time $333 fee.",
             "not a particular result",
         ] {
             assert!(html.contains(expected), "{host} missing {expected:?}");
@@ -163,7 +163,7 @@ async fn daybridge_llms_txt_indexes_its_own_pages() {
             "{host} llms.txt must name Daybridge as its own site: {body}"
         );
         assert!(
-            body.contains("one-time $5,000 fee"),
+            body.contains("one-time $333 fee"),
             "{host} llms.txt summary must explain the mutual-split fee: {body}"
         );
         assert!(

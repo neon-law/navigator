@@ -19,8 +19,6 @@ mod cyber_injury;
 pub use cyber_injury::CyberInjuryContent;
 mod daybridge;
 pub use daybridge::DaybridgeContent;
-mod death_and_divorce;
-pub use death_and_divorce::DeathAndDivorceContent;
 mod estate;
 pub use estate::EstateContent;
 mod privacy;
@@ -187,9 +185,6 @@ pub struct HomeContent {
     /// The Daybridge one-time mutual-split divorce offer.
     #[serde(default)]
     pub daybridge: Option<DaybridgeContent>,
-    /// Death & Divorce's black-and-white practice surface.
-    #[serde(default)]
-    pub death_and_divorce: Option<DeathAndDivorceContent>,
     /// `CyberInjuryLaw` campaign.
     #[serde(default)]
     pub cyber_injury: Option<CyberInjuryContent>,
@@ -638,9 +633,6 @@ fn HomePageBody(
         if content.daybridge.is_some() {
             document::Stylesheet { href: "/public/css/daybridge.css" }
         }
-        if content.death_and_divorce.is_some() {
-            document::Stylesheet { href: "/public/css/death-and-divorce.css" }
-        }
         PublicShell { header, footer,
             if let Some(company) = content.company.as_ref() {
                 company::CompanyHome {
@@ -669,16 +661,6 @@ fn HomePageBody(
             } else if let Some(daybridge) = content.daybridge.as_ref() {
                 daybridge::DaybridgeHome { content: content.clone(), daybridge: daybridge.clone() }
                 if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
-                TestimonialSection {
-                    heading: "Testimonials".to_string(),
-                    lead: String::new(),
-                    cards: testimonials,
-                }
-            } else if let Some(death_and_divorce) = content.death_and_divorce.as_ref() {
-                death_and_divorce::DeathAndDivorceHome {
-                    content: content.clone(),
-                    death_and_divorce: death_and_divorce.clone(),
-                }
                 TestimonialSection {
                     heading: "Testimonials".to_string(),
                     lead: String::new(),
@@ -1252,7 +1234,6 @@ mod tests {
                         company: None,
                         bare: None,
                         estate: None,
-                        death_and_divorce: None,
                         cyber_injury: None,
                         summons: None,
                     },

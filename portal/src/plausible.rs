@@ -47,7 +47,6 @@ pub const BROWSER_GOALS: [&str; 4] = [
     "Outbound Link: Click",
     "Form: Submission",
 ];
-const UNCONFIGURED_DEATH_AND_DIVORCE_ID: &str = "pa-unconfigured-death-and-divorce";
 const UNCONFIGURED_AEGIS_ID: &str = "pa-unconfigured-aegis";
 const UNCONFIGURED_GROUNDWORK_ID: &str = "pa-unconfigured-groundwork";
 const UNCONFIGURED_LEX_TECNICA_ID: &str = "pa-unconfigured-lex-tecnica";
@@ -73,7 +72,6 @@ pub const fn script_id(key: BrandKey) -> Option<&'static str> {
         BrandKey::DeleteYourDebt => Some("pa-S3SbSActjysFwN64GUe6D"),
         BrandKey::Daybridge => Some("pa-j2JWmqoBTNJPRb64xIZ2o"),
         BrandKey::Summons => Some("pa-WUB2cKHxULoouY7ALHjwH"),
-        BrandKey::DeathAndDivorce => Some(UNCONFIGURED_DEATH_AND_DIVORCE_ID),
         // No analytics site is configured for the practice yet; the
         // unconfigured stub id keeps the public brand excluded until it is.
         BrandKey::IepDefenders => Some(UNCONFIGURED_IEP_DEFENDERS_ID),
@@ -129,7 +127,6 @@ impl PlausibleSite {
             return String::new();
         };
         if [
-            UNCONFIGURED_DEATH_AND_DIVORCE_ID,
             UNCONFIGURED_AEGIS_ID,
             UNCONFIGURED_GROUNDWORK_ID,
             UNCONFIGURED_LEX_TECNICA_ID,
@@ -351,7 +348,7 @@ mod tests {
 
     #[test]
     fn an_unconfigured_campaign_has_no_analytics() {
-        assert!(PlausibleSite::for_brand(BrandKey::DeathAndDivorce)
+        assert!(PlausibleSite::for_brand(BrandKey::Aegis)
             .script_tags()
             .is_empty());
         assert!(BrandKey::LIVE.iter().all(|key| script_id(*key).is_some()));
@@ -517,7 +514,7 @@ mod tests {
         let reporter = ConversionReporter::new(server.uri(), true);
         reporter
             .record(
-                BrandKey::DeathAndDivorce,
+                BrandKey::Aegis,
                 ConversionGoal::ContactSubmitted,
                 "/contact",
                 "203.0.113.9".parse().unwrap(),

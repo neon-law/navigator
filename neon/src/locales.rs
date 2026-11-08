@@ -33,7 +33,6 @@ const NEON_FRACTIONAL_GC_YAML: &str = include_str!("../locales/en/neon/fractiona
 const NEON_NOTATIONS_YAML: &str = include_str!("../locales/en/neon/notations.yaml");
 const NEON_LEGAL_AID_YAML: &str = include_str!("../locales/en/neon/legal-aid.yaml");
 const NEON_NAVIGATOR_YAML: &str = include_str!("../locales/en/neon/navigator.yaml");
-const NEON_SERVICES_YAML: &str = include_str!("../locales/en/neon/services.yaml");
 const NEON_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/neon/free-resources.yaml");
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
 /// practice. The first of a family of Neon-only practice gateways; see
@@ -113,10 +112,6 @@ const GROUNDWORK_HOME_YAML: &str = include_str!("../locales/en/groundwork/home.y
 const GROUNDWORK_SERVICES_YAML: &str = include_str!("../locales/en/groundwork/services.yaml");
 const DAYBRIDGE_HOME_YAML: &str = include_str!("../locales/en/daybridge/home.yaml");
 const DAYBRIDGE_SERVICES_YAML: &str = include_str!("../locales/en/daybridge/services.yaml");
-// Death & Divorce keeps its home title to the brand name alone.
-const DEATH_AND_DIVORCE_HOME_YAML: &str = include_str!("../locales/en/death-and-divorce/home.yaml");
-const DEATH_AND_DIVORCE_SERVICES_YAML: &str =
-    include_str!("../locales/en/death-and-divorce/services.yaml");
 const DELETE_YOUR_DATA_SERVICES_YAML: &str =
     include_str!("../locales/en/delete-your-data/services.yaml");
 
@@ -195,8 +190,6 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Groundwork, "services") => Some(GROUNDWORK_SERVICES_YAML),
         (BrandKey::Daybridge, "home") => Some(DAYBRIDGE_HOME_YAML),
         (BrandKey::Daybridge, "services") => Some(DAYBRIDGE_SERVICES_YAML),
-        (BrandKey::DeathAndDivorce, "home") => Some(DEATH_AND_DIVORCE_HOME_YAML),
-        (BrandKey::DeathAndDivorce, "services") => Some(DEATH_AND_DIVORCE_SERVICES_YAML),
         (BrandKey::IepDefenders, "home") => Some(IEP_DEFENDERS_HOME_YAML),
         (BrandKey::IepDefenders, "services") => Some(IEP_DEFENDERS_SERVICES_YAML),
         (BrandKey::Neon, "litigation") => Some(NEON_LITIGATION_YAML),
@@ -205,7 +198,6 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "navigator") => Some(NEON_NAVIGATOR_YAML),
         (BrandKey::Neon, "legal-aid") => Some(NEON_LEGAL_AID_YAML),
         (BrandKey::Neon, "nautilus") => Some(NEON_NAUTILUS_YAML),
-        (BrandKey::Neon, "services") => Some(NEON_SERVICES_YAML),
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
         (BrandKey::Neon, "gateway-delete-your-data") => Some(NEON_GATEWAY_DELETE_YOUR_DATA_YAML),
         (BrandKey::Neon, "gateway-immigration") => Some(NEON_GATEWAY_IMMIGRATION_YAML),
@@ -1183,25 +1175,6 @@ fn daybridge_content(copy: views::locales::DaybridgeCopy) -> webapp::home::Daybr
     }
 }
 
-fn death_and_divorce_content(
-    copy: views::locales::DeathAndDivorceCopy,
-) -> webapp::home::DeathAndDivorceContent {
-    webapp::home::DeathAndDivorceContent {
-        eyebrow: copy.eyebrow,
-        statement_heading: copy.statement_heading,
-        statement_body: copy.statement_body,
-        practices: copy.practices,
-        video_label: copy.video_label,
-        video_body: copy.video_body,
-        process_label: copy.process_label,
-        process_heading: copy.process_heading,
-        steps: copy.steps,
-        closing_heading: copy.closing_heading,
-        closing_body: copy.closing_body,
-        hero_src: views::assets::asset_url(views::assets::DEATH_AND_DIVORCE_HERO_KEY),
-    }
-}
-
 fn practice_link(copy: PracticeLinkCopy) -> webapp::home::PracticeLink {
     webapp::home::PracticeLink {
         mark: practice_mark(copy.mark),
@@ -1339,7 +1312,6 @@ pub fn home_for_host(
             .privacy
             .map(|privacy| privacy_content(privacy, deployment_host)),
         daybridge: copy.daybridge.map(daybridge_content),
-        death_and_divorce: copy.death_and_divorce.map(death_and_divorce_content),
         cyber_injury: copy
             .cyber_injury
             .map(|cyber| cyber_injury_content(cyber, deployment_host)),
@@ -1845,38 +1817,6 @@ mod tests {
     }
 
     #[test]
-    fn service_directory_includes_every_registered_brand_with_its_logo() {
-        let page = legal_services(&views::brand::DEFAULT_BRANDING);
-        let cards = page
-            .bands
-            .iter()
-            .find_map(|band| match band {
-                RenderedBand::Cards { anchor, items, .. } if anchor == "brands" => Some(items),
-                _ => None,
-            })
-            .expect("brand directory");
-        // Neon Law's own site needs no Neon Law card, and the Guieb & Shook
-        // holding page is a firm mark, not a service, so neither is listed.
-        let brands: Vec<BrandKey> = BrandKey::GUIEB_SHOOK_FAMILY
-            .iter()
-            .copied()
-            .filter(|key| !matches!(key, BrandKey::Neon | BrandKey::GuiebShook))
-            .collect();
-        assert_eq!(cards.len(), brands.len());
-        for key in brands {
-            let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
-            let expected = branding.firm.logo_href;
-            assert!(
-                cards
-                    .iter()
-                    .any(|card| card.logo_href.as_deref() == Some(expected)),
-                "{} logo missing",
-                key.as_str()
-            );
-        }
-    }
-
-    #[test]
     fn home_company_contract_publishes_setup_and_daily_prices() {
         let copy: serde_yaml::Value = serde_yaml::from_str(NEON_HOME_YAML).unwrap();
         let company = &copy["company"];
@@ -2083,90 +2023,6 @@ mod tests {
         assert!(service("ead-renewal").matches("work permit"));
     }
 
-    #[test]
-    fn the_services_page_renders_the_whole_catalog() {
-        let catalog =
-            services_catalog(&views::brand::DEFAULT_BRANDING).expect("Neon ships a catalog");
-        let content = legal_services(&views::brand::DEFAULT_BRANDING);
-        let band = content
-            .bands
-            .iter()
-            .find_map(RenderedBand::services)
-            .expect("the page renders its services band");
-        assert_eq!(band.services.len(), catalog.services.len());
-        assert_eq!(band.services.len(), 18);
-
-        // The fee is resolved: a flat-fee service reads the catalog's one
-        // figure rather than shipping an empty price.
-        let llc = band
-            .services
-            .iter()
-            .find(|service| service.id == "llc-file")
-            .expect("llc-file renders");
-        assert_eq!(llc.fee, catalog.flat_fee);
-        assert_eq!(llc.category, "Start a business");
-        // The estate audience words ride along, searched and never printed.
-        let will = band
-            .services
-            .iter()
-            .find(|service| service.id == "will")
-            .expect("will renders");
-        assert_eq!(will.audience, "personal family legacy");
-        assert!(
-            will.matches("family"),
-            "estate work is findable by `family`"
-        );
-        assert_eq!(will.fee.as_deref(), Some("$3,000"));
-        let family_plan = band
-            .services
-            .iter()
-            .find(|service| service.id == "estate-package")
-            .expect("estate-package renders");
-        let quote = family_plan
-            .package
-            .as_ref()
-            .expect("estate-package is a Notation package");
-        assert_eq!(quote.members.len(), 3);
-        assert_eq!(family_plan.fee.as_deref(), Some("$5,000"));
-        // The retired consumer plan's discount is gone with the plan.
-        assert_eq!(family_plan.plan_price, None);
-    }
-
-    /// The search finds services by the words a reader would actually type,
-    /// through the shipped catalog rather than a fixture.
-    #[test]
-    fn the_shipped_catalog_answers_a_readers_words() {
-        let content = legal_services(&views::brand::DEFAULT_BRANDING);
-        let band = content
-            .bands
-            .iter()
-            .find_map(RenderedBand::services)
-            .expect("the page renders its services band");
-        for (needle, expected) in [
-            ("help with my LLC", "llc-file"),
-            ("trademark", "trademark"),
-            ("eviction", "eviction"),
-            ("I need a will", "will"),
-            ("1504", "msa"),
-        ] {
-            let found = band.matching(needle);
-            assert!(
-                found.iter().any(|service| service.id == expected),
-                "`{needle}` must find `{expected}`; found {:?}",
-                found.iter().map(|s| &s.id).collect::<Vec<_>>()
-            );
-        }
-        // Every example chip the band offers finds something. A chip that
-        // lands on the empty state is a chip advertising a dead end.
-        for example in &band.examples {
-            assert!(
-                !band.matching(&example.query).is_empty(),
-                "the `{}` chip finds nothing",
-                example.label
-            );
-        }
-    }
-
     /// Brand placeholders become the mounted site name and inbox.
     #[test]
     fn home_catalog_names_the_mounted_brand() {
@@ -2200,7 +2056,6 @@ mod tests {
             BrandKey::Vesta,
             BrandKey::Abhaya,
             BrandKey::Daybridge,
-            BrandKey::DeathAndDivorce,
         ] {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             let content = home(branding);
@@ -2218,28 +2073,20 @@ mod tests {
             );
         }
 
-        for key in [BrandKey::Neon, BrandKey::Abhaya] {
-            let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
-            let services = legal_services(branding);
-            let closing = services
-                .bands
-                .iter()
-                .find_map(|band| match band {
-                    Band::Cta { action, .. } => action.as_ref(),
-                    _ => None,
-                })
-                .expect("closing booking action");
-            assert_eq!(closing.href, branding.consultation_url, "{key:?}");
-            assert_eq!(closing.label, "Book Consultation", "{key:?}");
-        }
+        let branding = BrandKey::Abhaya.resolve_branding(&views::brand::DEFAULT_BRANDING);
+        let services = legal_services(branding);
+        let closing = services
+            .bands
+            .iter()
+            .find_map(|band| match band {
+                Band::Cta { action, .. } => action.as_ref(),
+                _ => None,
+            })
+            .expect("closing booking action");
+        assert_eq!(closing.href, branding.consultation_url);
+        assert_eq!(closing.label, "Book Consultation");
 
-        for key in [
-            BrandKey::Neon,
-            BrandKey::Vesta,
-            BrandKey::Abhaya,
-            BrandKey::Daybridge,
-            BrandKey::DeathAndDivorce,
-        ] {
+        for key in [BrandKey::Vesta, BrandKey::Abhaya, BrandKey::Daybridge] {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             let services = legal_services(branding);
             let cta = services.hero_cta.expect("services hero CTA");
@@ -3350,7 +3197,7 @@ mod tests {
         );
         let text = content.hero_lead.to_lowercase();
         assert!(text.contains("daybridge divorce law"), "{text}");
-        assert!(text.contains("one-time $5,000 fee"), "{text}");
+        assert!(text.contains("one-time $333 fee"), "{text}");
         assert!(text.contains("mutual split"), "{text}");
         for stale_fee in ["$500 setup", "$10 a day", "$50 each", "$5,000 per day"] {
             assert!(!text.contains(stale_fee), "{text}");

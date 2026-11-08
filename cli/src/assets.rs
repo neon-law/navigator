@@ -168,14 +168,6 @@ pub const DM_SANS: FontFamily = FontFamily {
     extra_weights: &[],
 };
 
-/// Death & Divorce's gothic display face.
-pub const PIRATA_ONE: FontFamily = FontFamily {
-    label: "Pirata One",
-    dir: "pirata-one",
-    stem: "PirataOne",
-    extra_weights: &[],
-};
-
 /// Every family this binary publishes and verifies — the one list both halves
 /// of the font lane read.
 ///
@@ -194,7 +186,6 @@ pub const BUCKET_FONT_FAMILIES: &[&FontFamily] = &[
     &MUKTA,
     &PUBLIC_SANS,
     &LIBRE_FRANKLIN,
-    &PIRATA_ONE,
     &BARLOW_CONDENSED,
     &DM_SANS,
 ];
@@ -754,7 +745,6 @@ fn reachable_image_keys(content_root: &Path) -> anyhow::Result<BTreeSet<String>>
     keys.insert(views::assets::ASTER_BOARD_KEY.to_owned());
     keys.insert(views::assets::CYBER_INJURY_HERO_KEY.to_owned());
     keys.insert(views::assets::CYBER_INJURY_AD_KEY.to_owned());
-    keys.insert(views::assets::DEATH_AND_DIVORCE_HERO_KEY.to_owned());
     keys.insert(views::assets::ABHAYA_COMMUNITY_PHOTO_KEY.to_owned());
     keys.insert(views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY.to_owned());
     keys.insert(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY.to_owned());
@@ -1246,7 +1236,6 @@ pub(crate) fn embedded_asset_refs() -> BTreeSet<String> {
     refs.insert(views::assets::ASTER_BOARD_KEY.to_owned());
     refs.insert(views::assets::CYBER_INJURY_HERO_KEY.to_owned());
     refs.insert(views::assets::CYBER_INJURY_AD_KEY.to_owned());
-    refs.insert(views::assets::DEATH_AND_DIVORCE_HERO_KEY.to_owned());
     refs.insert(views::assets::ABHAYA_COMMUNITY_PHOTO_KEY.to_owned());
     refs.insert(views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY.to_owned());
     refs.insert(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY.to_owned());
@@ -2362,7 +2351,6 @@ Inline raw-HTML tile: <div>![Team](img/thanks-apple/team-lunch.jpg)</div>\n";
             views::assets::ASTER_BOARD_KEY,
             views::assets::CYBER_INJURY_HERO_KEY,
             views::assets::CYBER_INJURY_AD_KEY,
-            views::assets::DEATH_AND_DIVORCE_HERO_KEY,
             views::assets::ABHAYA_COMMUNITY_PHOTO_KEY,
             views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY,
             views::assets::GUIEB_SHOOK_GVC_BADGE_KEY,
