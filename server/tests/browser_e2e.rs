@@ -1524,9 +1524,15 @@ async fn dispatch_keydown_from_script(
     eprintln!("browser_e2e: input to the page was dropped; sending {key} from script");
     c.execute(
         "const target = document.activeElement || document.body; \
-         target.dispatchEvent(new KeyboardEvent('keydown', { \
+         const ev = new KeyboardEvent('keydown', { \
            key: arguments[0], code: arguments[1], bubbles: true, cancelable: true, \
-           ctrlKey: (arguments[2] & 2) !== 0, shiftKey: (arguments[2] & 8) !== 0 })); \
+           ctrlKey: (arguments[2] & 2) !== 0, shiftKey: (arguments[2] & 8) !== 0 }); \
+         const cancelled = !target.dispatchEvent(ev); \
+         const printable = arguments[0].length === 1 && (arguments[2] & 2) === 0; \
+         if (!cancelled && printable && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) { \
+           target.value += arguments[0]; \
+           target.dispatchEvent(new Event('input', {bubbles: true})); \
+         } \
          return true;",
         vec![
             serde_json::Value::String(key.to_string()),
@@ -1725,7 +1731,9 @@ async fn press_arrow(c: &fantoccini::Client, key: &str) {
 /// assertion has an element to name.
 async fn focus_nav_link(c: &fantoccini::Client) -> bool {
     c.execute(
-        "const link = document.querySelector('a[href^=\"/app\"]'); \
+        "const menu = document.querySelector('details.lawyer-nav__profile'); \
+         if (menu) { menu.open = true; } \
+         const link = document.querySelector('a[href^=\"/app\"]'); \
          if (!link) { return false; } link.focus(); \
          return link.isSameNode(document.activeElement);",
         vec![],
@@ -1958,6 +1966,7 @@ async fn lawyer_walks_the_whole_questionnaire_with_the_keyboard_alone() {
         &c,
         &[
             "Show keyboard shortcuts",
+            "Open search",
             "Go to matters",
             "Next question, or submit on the last",
         ],
@@ -2056,7 +2065,11 @@ async fn question_mark_opens_the_shortcut_overlay_from_a_signed_in_page() {
         .unwrap();
     // This application has no documents or notations list, so only matters has
     // a chord and the overlay lists nothing for the others.
-    assert_overlay_lists(&c, &["Show keyboard shortcuts", "Go to matters"]).await;
+    assert_overlay_lists(
+        &c,
+        &["Show keyboard shortcuts", "Open search", "Go to matters"],
+    )
+    .await;
     c.close().await.unwrap();
 }
 
