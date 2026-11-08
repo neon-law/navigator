@@ -21,7 +21,7 @@ jobs:
           version: v1.37.0
       - name: Install pinned KIND
         run: |
-          curl -fsSL https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind
+          curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 30 https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind
           echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /tmp/kind' | sha256sum -c -
           chmod +x /tmp/kind
           sudo mv /tmp/kind /usr/local/bin/kind

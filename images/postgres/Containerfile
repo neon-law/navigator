@@ -26,7 +26,10 @@ RUN curl -fLsS https://downloads.apache.org/age/PG${PG_MAJOR}/${AGE_VERSION}/apa
  && mkdir age && tar xzf age.tar.gz -C age --strip-components=1 \
  && make -C age PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config -j2 \
  && make -C age PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config DESTDIR=/out install
-RUN curl -fLsS https://github.com/pgvector/pgvector/archive/refs/tags/v${PGVECTOR_VERSION}.tar.gz -o vector.tar.gz \
+# codeload serves the tag tarball directly; the github.com archive URL
+# redirects to objects.githubusercontent, whose runner-egress 504s have
+# repeatedly broken CI fetches. The sha256 pin still verifies the content.
+RUN curl -fLsS --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 30 https://codeload.github.com/pgvector/pgvector/tar.gz/refs/tags/v${PGVECTOR_VERSION} -o vector.tar.gz \
  && echo "${PGVECTOR_SHA256}  vector.tar.gz" | sha256sum -c - \
  && mkdir vector && tar xzf vector.tar.gz -C vector --strip-components=1 \
  && make -C vector PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config OPTFLAGS='' -j2 \
