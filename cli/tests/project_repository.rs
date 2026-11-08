@@ -1612,3 +1612,42 @@ fn sync_skills_restores_an_old_agents_contract_and_keeps_a_custom_skill() {
 
     gate(dir.path()).stderr(str::contains("canonical contract embedded").not());
 }
+
+#[test]
+fn gate_autofix_preserves_the_firm_identity_in_a_definition_and_signature() {
+    let dir = TempDir::new().unwrap();
+    scaffold(dir.path(), "example-project");
+    let draft = dir.path().join("drafts/onboarding__letter.md");
+    let name = views::brand::BrandKey::ALL
+        .iter()
+        .map(|key| {
+            key.resolve_branding(&views::brand::DEFAULT_BRANDING)
+                .firm
+                .legal_entity
+        })
+        .find(|name| name.contains('&'))
+        .unwrap();
+    let definition = format!("Thank you for choosing {name}, called “the Firm” in this letter.");
+    let wrapped = format!("{name}\n(‘the Firm’) accepts this engagement.");
+    let signature = format!("For {name}:");
+    let original = fs::read_to_string(&draft).unwrap();
+    fs::write(
+        &draft,
+        format!(
+            "{original}\n{definition}\n\n{wrapped}\n\nContact {name} with questions.\n\n\
+             ## Signatures\n\n### Firm\n\n{signature}\n\n## Questions\n\nAsk {name} for a copy.\n"
+        ),
+    )
+    .unwrap();
+
+    offline_gate_is_clean(gate(dir.path()));
+    let revised = fs::read_to_string(draft).unwrap();
+    assert!(revised.contains(&definition), "{revised}");
+    assert!(revised.contains(&wrapped.replace('\n', " ")), "{revised}");
+    assert!(
+        revised.contains("Contact the Firm with questions."),
+        "{revised}"
+    );
+    assert!(revised.contains("For {{firm.legal_name}}:"), "{revised}");
+    assert!(revised.contains("Ask the Firm for a copy."), "{revised}");
+}
