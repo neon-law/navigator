@@ -856,6 +856,7 @@ async fn plan_columns_round_trip_through_both_lanes() {
         &crate::projects::PlanColumns {
             legal_plan_id: Some(fixture.plan),
             plan_member_id: Some("ARAG-112233".into()),
+            plan_case_number: Some("4900000-001".into()),
             benefit_code: Some("DIV-NY".into()),
             plan_matter_type: Some("uncontested_divorce".into()),
             plan_state: Some("ny".into()),
@@ -915,6 +916,7 @@ async fn plan_columns_round_trip_through_both_lanes() {
         .unwrap()
         .expect("the mirrored matter reads back natively");
     assert_eq!(read_back.plan_member_id.as_deref(), Some("ARAG-112233"));
+    assert_eq!(read_back.plan_case_number.as_deref(), Some("4900000-001"));
     assert_eq!(read_back.plan_accepted_on.as_deref(), Some("2026-11-02"));
 }
 
@@ -938,6 +940,23 @@ async fn plan_columns_refuse_bad_input_and_allow_an_unset_panel() {
         .await,
         Err(crate::projects::ProjectCommandError::Invalid(
             "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance"
+        ))
+    ));
+    // A Plan Case Number is one printable token, so an inbox rule can match
+    // it whole.
+    assert!(matches!(
+        crate::projects::set_plan_columns(
+            &fixture.surreal,
+            &fixture.pg,
+            fixture.project.id,
+            &crate::projects::PlanColumns {
+                plan_case_number: Some("4900000 001".into()),
+                ..crate::projects::PlanColumns::default()
+            }
+        )
+        .await,
+        Err(crate::projects::ProjectCommandError::Invalid(
+            "plan_case_number must be 1 to 64 visible characters with no spaces"
         ))
     ));
     // An unknown plan id is refused as well.

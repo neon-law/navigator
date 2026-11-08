@@ -37,6 +37,8 @@ pub enum LegalPlanError {
     PlanNotInFirm,
     #[error("Legal Plan or fee schedule was not found")]
     NotFound,
+    #[error("the Firm already has a Legal Plan of that name")]
+    Exists,
     #[error("database operation failed")]
     Database(#[from] sqlx::Error),
 }
@@ -152,7 +154,17 @@ pub async fn create(
     .bind(input.turnaround_sla_days)
     .bind(input.reporting_requirements.as_deref().map(str::trim))
     .fetch_one(&pg.0)
-    .await?;
+    .await
+    .map_err(|error| {
+        if error
+            .as_database_error()
+            .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
+        {
+            LegalPlanError::Exists
+        } else {
+            error.into()
+        }
+    })?;
     find(pg, firm_id, id).await?.ok_or(LegalPlanError::NotFound)
 }
 
@@ -191,6 +203,30 @@ pub async fn find(
     )
     .bind(firm_id)
     .bind(plan_id)
+    .fetch_optional(&pg.0)
+    .await?
+    .map(|row| plan_from_row(&row))
+    .transpose()
+}
+
+/// One of the Firm's plans by name, ignoring case — how a person names a
+/// plan (`arag`, `LegalEASE`) when linking a Project to it.
+///
+/// # Errors
+///
+/// [`LegalPlanError::Database`] on a database failure.
+pub async fn find_by_name(
+    pg: &PostgresDb,
+    firm_id: Uuid,
+    name: &str,
+) -> Result<Option<LegalPlan>, LegalPlanError> {
+    sqlx::query(
+        "SELECT id,firm_id,name,contact,portal,acceptance_sla_hours,turnaround_sla_days, \
+         reporting_requirements,inserted_at FROM legal_plan \
+         WHERE firm_id=$1 AND lower(name)=lower($2)",
+    )
+    .bind(firm_id)
+    .bind(name.trim())
     .fetch_optional(&pg.0)
     .await?
     .map(|row| plan_from_row(&row))
@@ -621,7 +657,7 @@ mod tests {
             // The same program name is one row per Firm.
             assert!(matches!(
                 create(&pg, first, &plan()).await,
-                Err(LegalPlanError::Database(_))
+                Err(LegalPlanError::Exists)
             ));
             let same_name_elsewhere = create(&pg, second, &plan()).await.unwrap();
             assert_eq!(same_name_elsewhere.name, created.name);
