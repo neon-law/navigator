@@ -3188,33 +3188,11 @@ async fn validate_firm_brand_update(
     }
 }
 
-/// Update a matter's descriptive fields — name, entity, scope narrative, its
-/// Slack channels, and its source repository URL. Behind both the JSON
-/// `PATCH /app/api/projects/{id}` command and the `/app/projects/{id}` edit
-/// form, so neither door re-implements the write. Name is required; a submitted
-/// `entity_id` or `description` is applied and an omitted one is left
-/// untouched, with a blank description clearing the column.
-///
-/// `repository_url` is the one Project field that is validated rather than
-/// merely trimmed ([`is_valid_repository_url`]): it is handed to `git clone`
-/// and rendered as a link, so a bad scheme or an embedded credential is
-/// refused here rather than stored.
-///
-/// Scope is deliberately narrow. It is not the matter-open path (no conflict
-/// check), it does not move the agreed price (the append-only price-events
-/// command), and it does not change `status`/`closed_at` — a lifecycle
-/// transition whose retention semantics are a firm-policy determination owned
-/// by [`transition_project`].
-///
-/// Because every written value comes wholly from the request (never from a
-/// read of the row), there is no read-modify-write to serialize: the sparse
-/// `Unchanged(id)` update leaves `status`, `closed_at`, and every other
-/// column a concurrent lifecycle write may be changing entirely untouched.
-pub async fn update_project(
-    surreal: &SurrealDb,
-    id: Uuid,
-    input: &UpdateProjectCommand,
-) -> Result<Project, ProjectCommandError> {
+/// Validate the request-only update invariants: required name, the
+/// repository URL's clone-and-render safety, resource links, and the Kit
+/// version's three-segment shape. Every check is a pure function of
+/// `input`, so the command can fail before any read or write.
+fn validate_update_command(input: &UpdateProjectCommand) -> Result<(), ProjectCommandError> {
     if let Some(name) = &input.name {
         if name.trim().is_empty() {
             return Err(ProjectCommandError::Invalid("Name is required."));
@@ -3238,7 +3216,17 @@ pub async fn update_project(
             ));
         }
     }
-    let firm_brand = validate_firm_brand_update(surreal, input).await?;
+    Ok(())
+}
+
+/// Validate the row-dependent update references: the matter exists, a
+/// repointed entity exists, and a named Drive ingest folder is not recorded
+/// on another matter.
+async fn validate_update_references(
+    surreal: &SurrealDb,
+    id: Uuid,
+    input: &UpdateProjectCommand,
+) -> Result<(), ProjectCommandError> {
     if find_by_id(surreal, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
@@ -3272,6 +3260,39 @@ pub async fn update_project(
             ));
         }
     }
+    Ok(())
+}
+
+/// Update a matter's descriptive fields — name, entity, scope narrative, its
+/// Slack channels, and its source repository URL. Behind both the JSON
+/// `PATCH /app/api/projects/{id}` command and the `/app/projects/{id}` edit
+/// form, so neither door re-implements the write. Name is required; a submitted
+/// `entity_id` or `description` is applied and an omitted one is left
+/// untouched, with a blank description clearing the column.
+///
+/// `repository_url` is the one Project field that is validated rather than
+/// merely trimmed ([`is_valid_repository_url`]): it is handed to `git clone`
+/// and rendered as a link, so a bad scheme or an embedded credential is
+/// refused here rather than stored.
+///
+/// Scope is deliberately narrow. It is not the matter-open path (no conflict
+/// check), it does not move the agreed price (the append-only price-events
+/// command), and it does not change `status`/`closed_at` — a lifecycle
+/// transition whose retention semantics are a firm-policy determination owned
+/// by [`transition_project`].
+///
+/// Because every written value comes wholly from the request (never from a
+/// read of the row), there is no read-modify-write to serialize: the sparse
+/// `Unchanged(id)` update leaves `status`, `closed_at`, and every other
+/// column a concurrent lifecycle write may be changing entirely untouched.
+pub async fn update_project(
+    surreal: &SurrealDb,
+    id: Uuid,
+    input: &UpdateProjectCommand,
+) -> Result<Project, ProjectCommandError> {
+    validate_update_command(input)?;
+    let firm_brand = validate_firm_brand_update(surreal, input).await?;
+    validate_update_references(surreal, id, input).await?;
     // The optional text columns are handled from one table, so a column is set
     // and bound from the same row rather than from two `if` blocks a hundred
     // lines apart that have to be kept in step.

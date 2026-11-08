@@ -49,11 +49,9 @@ fn select_pin<'m>(
         .iter()
         .filter(|pin| {
             jurisdiction
-                .map(|j| pin.jurisdiction.eq_ignore_ascii_case(j))
-                .unwrap_or(true)
+                .map_or(true, |j| pin.jurisdiction.eq_ignore_ascii_case(j))
                 && practice_area
-                    .map(|a| pin.practice_area.eq_ignore_ascii_case(a))
-                    .unwrap_or(true)
+                    .map_or(true, |a| pin.practice_area.eq_ignore_ascii_case(a))
         })
         .collect();
     match matched.as_slice() {
