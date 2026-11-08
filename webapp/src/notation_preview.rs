@@ -12,7 +12,7 @@
 //! A form additionally gets a link to the government's own blank form (the
 //! template's `origin_url`) when one is declared — `None` for a letter. The
 //! fields the questionnaire fills in are not repeated here: the YAML
-//! frontmatter rendered below already names them (`questionnaire:`,
+//! frontmatter already names them (`questionnaire:`,
 //! `prompts:` / `choices:`), so a separate table would only duplicate it.
 //!
 //! Every notation gets its own path, the same shape as
@@ -24,9 +24,8 @@
 //! on GitHub" sits on the title's own line rather than the `/notations`
 //! catalog card — the card's own link now opens this page directly.
 //!
-//! The questionnaire appears first, followed by its own live Body section.
-//! Frontmatter and Workflow remain native disclosures below the body. Preview
-//! answers are saved per notation in the browser; they create no real records.
+//! Template frontmatter precedes the questionnaire and its live Body section. The Workflow disclosure
+//! follows them. Preview answers are saved per notation in the browser; they create no real records.
 
 //! The slug also drives the browser tab title for free: every
 //! server-rendered route's `<title>` is replaced by `stamp_document_title`
@@ -225,6 +224,11 @@ pub fn NotationPreviewPage(
                 } else {
                     p { class: "nav-muted", "This is a synthetic preview; nothing you type below is saved." }
                 }
+                if !content.frontmatter.is_empty() {
+                    Accordion { title: "Template frontmatter".to_string(),
+                        CodeBlock { code: content.frontmatter.clone(), lang: "yaml".to_string() }
+                    }
+                }
                 if let Some(error) = &content.questionnaire_error {
                     {questionnaire_error_panel(error)}
                 }
@@ -238,11 +242,6 @@ pub fn NotationPreviewPage(
                         div {
                             dangerous_inner_html: "{render_live_template(&content.stage_html, &content.demo_questions, &std::collections::BTreeMap::new())}"
                         }
-                    }
-                }
-                if !content.frontmatter.is_empty() {
-                    Accordion { title: "Frontmatter".to_string(),
-                        CodeBlock { code: content.frontmatter.clone(), lang: "yaml".to_string() }
                     }
                 }
                 if !content.demo_workflow.is_empty() {
@@ -581,10 +580,10 @@ mod tests {
         assert!(out.contains("Question 1 of 1"), "{out}");
         assert!(out.contains(r#"type="radio""#), "{out}");
         let question_at = out.find("Try answering this").expect("question");
-        let frontmatter_at = out.find(">Frontmatter<").expect("frontmatter");
+        let frontmatter_at = out.find(">Template frontmatter<").expect("frontmatter");
         assert!(
-            question_at < frontmatter_at,
-            "metadata sits below the question: {out}"
+            frontmatter_at < question_at,
+            "frontmatter precedes the question: {out}"
         );
         assert!(
             out.contains(">Body<"),
