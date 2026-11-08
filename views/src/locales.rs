@@ -609,6 +609,53 @@ pub enum BandCopy {
         #[serde(default)]
         action: Option<HeroCtaCopy>,
     },
+    /// A titled run of statistics: the value, what it measures, and the
+    /// qualifier that keeps the claim honest.
+    Stats {
+        #[serde(default)]
+        anchor: String,
+        overline: String,
+        heading: String,
+        #[serde(default)]
+        description: Option<String>,
+        items: Vec<StatEntryCopy>,
+    },
+    /// A titled run of client testimonials, rendered by the shared
+    /// `TestimonialSection` component.
+    Testimonials {
+        #[serde(default)]
+        anchor: String,
+        overline: String,
+        heading: String,
+        #[serde(default)]
+        description: Option<String>,
+        items: Vec<TestimonialEntryCopy>,
+    },
+}
+
+/// One statistic in a [`BandCopy::Stats`] band.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatEntryCopy {
+    /// The headline figure, typeset large: `99%`, `7 weeks`, `No upfront`.
+    pub value: String,
+    /// What the figure measures.
+    pub label: String,
+    /// The qualifier the figure travels with (`for many qualifying due
+    /// process matters`, `*`). A stat without its qualifier is a bare
+    /// advertising claim, so the field is required rather than defaulted.
+    pub note: String,
+}
+
+/// One attributed client review in a [`BandCopy::Testimonials`] band.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestimonialEntryCopy {
+    /// Who said it, as published.
+    pub author: String,
+    /// When the review is from — the engagement it came out of, or the date
+    /// it was left.
+    pub when: String,
+    /// The review itself.
+    pub body: String,
 }
 
 /// A marketing page (`/navigator`, `/services`).
@@ -693,7 +740,10 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         | "immigration-free-support"
         | "immigration-humanitarian-relief"
         | "immigration-removal-defense"
-        | "immigration-uscis-notices" => Some(LocalePageKind::Marketing),
+        | "immigration-uscis-notices"
+        // The IEP Defenders home, composed as a marketing-page band
+        // sequence rather than the legacy home schema.
+        | "home-marketing" => Some(LocalePageKind::Marketing),
         shared::SHARED_CATALOG_STEM => Some(LocalePageKind::Shared),
         services::SERVICES_CATALOG_STEM => Some(LocalePageKind::ServicesCatalog),
         _ => None,

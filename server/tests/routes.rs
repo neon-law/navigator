@@ -10458,7 +10458,9 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::IepDefenders,
         LiveHomeContract {
             title: "<title>IEP Defenders | Home</title>",
-            copy: "Special education lawyers defending your child",
+            // A fragment that stops before the tagline's apostrophe, so the
+            // contract cannot break on HTML escaping of "child's".
+            copy: "defending your child",
         },
     ),
 ];
@@ -10503,6 +10505,82 @@ fn assert_live_practice_home(key: views::brand::BrandKey, host: &str, body: &str
         body.contains(&format!("/public/css/brand-{}-tokens.css", key.as_str())),
         "{host} must load its scoped brand tokens: {body}"
     );
+}
+
+/// The IEP Defenders home is a marketing-page band sequence, so its rendered
+/// HTML carries every band's anchor, the hero CTA, exactly one `<h1>`, and a
+/// qualifier beside each stat — a stat without its qualifier is a bare
+/// advertising claim.
+#[tokio::test]
+async fn the_iep_defenders_home_renders_its_band_sequence_with_qualifiers() {
+    let state = empty_state_with_canonical_host(CanonicalHost::new(None)).await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+
+    let resp = get_on_host(&app, "/", "iep.neonlaw.com").await;
+    assert_eq!(resp.status(), StatusCode::OK, "iep.neonlaw.com /");
+    let body = body_string(resp).await;
+
+    // Every band's anchor survives the full SSR pass. Statement bands carry
+    // no anchor attribute in the shared renderer, so they are asserted by
+    // heading below.
+    for anchor in ["results", "problems", "process", "fees", "reviews"] {
+        assert!(
+            body.contains(&format!(r#"id="{anchor}""#)),
+            "the `{anchor}` band anchor is missing: {body}"
+        );
+    }
+    for statement_heading in [
+        "Children are people, not numbers.",
+        "This work was personal from the beginning.",
+    ] {
+        assert!(
+            body.contains(statement_heading),
+            "the `{statement_heading}` statement band is missing: {body}"
+        );
+    }
+
+    // Exactly one h1: the practice skin's hero tagline.
+    let h1_count = body.matches("<h1").count();
+    assert_eq!(
+        h1_count, 1,
+        "the IEP home must render exactly one h1, saw {h1_count}: {body}"
+    );
+    assert!(
+        body.contains("special education lawyers defending your child"),
+        "the hero tagline is missing: {body}"
+    );
+
+    // Stats and fees travel with their qualifiers.
+    for qualifier in [
+        "Past results do not guarantee future outcomes.",
+        "For many qualifying due process matters.",
+        "How attorney&#39;s fees are handled",
+    ] {
+        assert!(
+            body.contains(qualifier),
+            "the qualifier `{qualifier}` is missing: {body}"
+        );
+    }
+
+    // The hero CTA names its destination.
+    assert!(
+        body.contains("Start with what your child is missing."),
+        "the hero CTA label is missing: {body}"
+    );
+    assert!(body.contains(r#"href="/contact""#), "{body}");
+
+    // The review wall renders attributed testimonials.
+    for attribution in [
+        "Alysa Brown",
+        "Sierra Zamorano",
+        "Danyel Sheely",
+        "Wendy Aumick",
+    ] {
+        assert!(
+            body.contains(attribution),
+            "the `{attribution}` testimonial attribution is missing: {body}"
+        );
+    }
 }
 
 async fn get_with_role_and_host(

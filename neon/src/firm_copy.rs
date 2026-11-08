@@ -392,6 +392,38 @@ mod firm_copy_tests {
             Band::AppPreview { .. } => app_preview_text(band),
             Band::Downloads { .. } => downloads_text(band),
             Band::Services(services) => services_text(services),
+            Band::Stats {
+                overline,
+                heading,
+                description,
+                items,
+                ..
+            } => {
+                // The qualifier is the part of a stat a regulator reads, so
+                // it belongs in the flattened text the guards scan.
+                let stats = items
+                    .iter()
+                    .map(|s| format!("{} {} {}", s.value, s.label, s.note))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let description = description.clone().unwrap_or_default();
+                format!("{overline} {heading} {description} {stats}")
+            }
+            Band::Testimonials {
+                overline,
+                heading,
+                description,
+                items,
+                ..
+            } => {
+                let reviews = items
+                    .iter()
+                    .map(|t| format!("{} {} {}", t.author, t.when, t.body))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let description = description.clone().unwrap_or_default();
+                format!("{overline} {heading} {description} {reviews}")
+            }
             Band::Cta { heading, body, .. } => {
                 format!("{heading} {}", body.clone().unwrap_or_default())
             }
