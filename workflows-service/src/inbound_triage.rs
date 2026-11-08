@@ -489,7 +489,7 @@ async fn record_triage_step(
 }
 
 async fn firm_menu(surreal: &SurrealDb, firm_id: Uuid) -> Result<Vec<ProjectOption>, HandlerError> {
-    let choices = store::inbox::projects_in_firm(&surreal, firm_id).await?;
+    let choices = store::inbox::projects_in_firm(surreal, firm_id).await?;
     Ok(choices
         .into_iter()
         .map(|choice| ProjectOption {
@@ -546,7 +546,7 @@ async fn record_triage(
     attempt: ClassifierAttempt,
 ) -> Result<InboundTriageReport, HandlerError> {
     let validated = validate_suggestion(
-        &surreal,
+        surreal,
         context.firm_id,
         attempt
             .output
@@ -563,7 +563,7 @@ async fn record_triage(
         attempt.output.as_ref(),
         validated,
     );
-    let recorded = store::inbox_triage::record(&surreal, &row).await?;
+    let recorded = store::inbox_triage::record(surreal, &row).await?;
     Ok(triage_report(message_id, &recorded))
 }
 

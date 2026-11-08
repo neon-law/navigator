@@ -192,7 +192,7 @@ async fn start_youtube_comments(
 fn youtube_poll_workflow_id(tick: &str) -> Result<String, StatusCode> {
     let slot = chrono::NaiveDateTime::parse_from_str(tick, "%Y-%m-%d-%H-%M")
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    if chrono::Timelike::minute(&slot) % 15 != 0
+    if !chrono::Timelike::minute(&slot).is_multiple_of(15)
         || slot.format("%Y-%m-%d-%H-%M").to_string() != tick
     {
         return Err(StatusCode::BAD_REQUEST);
