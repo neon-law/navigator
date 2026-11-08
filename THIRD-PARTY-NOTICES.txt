@@ -35780,8 +35780,10 @@ geo 0.32.0  —  MIT OR Apache-2.0
 geo-types 0.7.19  —  MIT OR Apache-2.0
 glidesort 0.1.2  —  MIT OR Apache-2.0
 gloo-net 0.6.0  —  MIT OR Apache-2.0
+gloo-net 0.7.0  —  MIT OR Apache-2.0
 gloo-timers 0.3.0  —  MIT OR Apache-2.0
 gloo-utils 0.2.0  —  MIT OR Apache-2.0
+gloo-utils 0.3.0  —  MIT OR Apache-2.0
 hashify 0.3.1  —  Apache-2.0 OR MIT
 i_overlay 4.0.7  —  MIT
 include_dir 0.7.4  —  MIT
