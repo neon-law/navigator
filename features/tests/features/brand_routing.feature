@@ -85,11 +85,9 @@ Feature: Public routing on the firm's own host
       | /notations |
       | /contact   |
       | /services  |
-      | /business  |
 
   Scenario Outline: A retired practice path answers 404 rather than redirecting
     # `/disputes` has no public page and returns 404 without a Location.
-    # `/business` and `/services` are published anonymous pages.
     When a visitor opens <path>
     Then the response status is 404
     And the response carries no redirect
@@ -98,12 +96,10 @@ Feature: Public routing on the firm's own host
       | path      |
       | /disputes |
 
-  Scenario: Business counsel is separate from the subscription home
+  Scenario: The retired business page moves to Nautilus
     When a visitor opens /business
-    Then the response status is 200
-    And the page is branded "Neon Law"
-    And the response body contains "company-simulator"
-    And the response body does not contain "data-nautilus-intake"
+    Then the response status is 301
+    And the response redirects to "/"
 
   Scenario Outline: A path with no firm page answers 404
     When a visitor opens <path>
@@ -120,12 +116,11 @@ Feature: Public routing on the firm's own host
       | /education               |
       | /does-not-exist          |
 
-  # The brand's live firm identity changes without removing shared public notices.
+  # The brand's live firm identity changes without removing the advertising notice.
   Scenario: A moved brand's footer follows its new firm
     Given the brand "neon" is moved to a firm whose entity is "Mobility Test Holdings PC"
     When a visitor opens / on host "staging.neonlaw.com"
     Then the response status is 200
     And the footer copyright names "Mobility Test Holdings PC"
-    And the footer renders the trademark notice: yes
-    And the footer trademark owner remains "Neon Law IP LLC" and is not "Mobility Test Holdings PC"
+    And the footer renders no trademark notice
     And the footer renders the attorney-advertising disclaimer

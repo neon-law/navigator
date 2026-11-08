@@ -1611,10 +1611,6 @@ fn SiteFooterShowcase(chrome: PublicChrome) -> Element {
                     href: link.href.clone(),
                 })
                 .collect(),
-                // Brand-specific ownership metadata comes from the request.
-                trademark: chrome.trademark.clone(),
-                trademark_registration: chrome.trademark_registration.clone(),
-                trademark_record_url: chrome.trademark_record_url.clone(),
                 // The request's affiliations let the gallery audit the same
                 // links the page publishes.
                 memberships: demo_memberships(&chrome),

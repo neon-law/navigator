@@ -3213,15 +3213,15 @@ async fn llms_txt_indexes_the_markdown_corpus_with_absolute_urls() {
     assert!(body.contains("estate plans tailored to each person"));
     assert!(body.contains("Nevada asset protection planning"));
     assert!(body.contains("fee for a mutual split"));
-    assert!(body.contains("Nautilus is one subscription of privacy and paperwork checks"));
-    assert!(body.contains("from $50/day"));
+    assert!(body.contains("Nautilus is one subscription for your privacy and your paperwork"));
+    assert!(!body.contains("from $50/day") && !body.contains("example.com/business"));
     assert!(!body.contains("$500 setup fee") && !body.contains("$5,000 per trial day"));
     // The firm's own marketing surface. The workshops catalog is public
     // root-level material and is advertised in its own section below; the
     // presentations catalog is not curated into the index at all.
     for page in [
         "https://www.example.com/)",
-        "https://www.example.com/business)",
+        "https://www.example.com/nautilus)",
         "https://www.example.com/navigator)",
         "https://www.example.com/notations)",
     ] {

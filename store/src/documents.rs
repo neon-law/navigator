@@ -786,6 +786,13 @@ pub async fn append_upload_chunk(
 /// until the row is gone, after which it reports
 /// [`UploadSessionError::NoSuchSession`].
 ///
+/// `expected_head` turns the filing append conditional (LAW-284): a chain
+/// that moved past that head is
+/// [`UploadSessionError::Revision`] holding
+/// [`crate::assets::RevisionError::HeadConflict`] — the session row and its
+/// staged parts stay intact, so the caller can restart the same completion
+/// against the head the conflict names.
+///
 /// # Errors
 /// [`UploadSessionError`] when the session is missing, expired, or
 /// incomplete; [`UploadSessionError::ShaMismatch`] when the staged bytes do
@@ -797,6 +804,7 @@ pub async fn complete_upload(
     storage: &Arc<dyn StorageService>,
     project_id: Uuid,
     session_id: Uuid,
+    expected_head: Option<&crate::assets::ExpectedHead>,
 ) -> Result<crate::assets::Filed, UploadSessionError> {
     let session = find_upload_session(db, project_id, session_id)
         .await?
@@ -831,11 +839,12 @@ pub async fn complete_upload(
         });
     }
 
-    let filed = crate::assets::file_revision(
+    let filed = crate::assets::file_revision_with_expected_head(
         db,
         storage,
         &upload_ingest_args(&session),
         &upload_identity(&session)?,
+        expected_head,
         &bytes,
     )
     .await?;
@@ -2654,7 +2663,7 @@ mod tests {
 
         // Completing files the document: the stored bytes hash to the
         // declared digest — the original bytes, not a re-encoding.
-        let filed = complete_upload(&db, &storage, project_id, session.id)
+        let filed = complete_upload(&db, &storage, project_id, session.id, None)
             .await
             .unwrap();
         let asset_id = match filed {
@@ -2759,7 +2768,7 @@ mod tests {
             .await
             .unwrap();
 
-        let error = complete_upload(&db, &storage, project_id, session.id)
+        let error = complete_upload(&db, &storage, project_id, session.id, None)
             .await
             .unwrap_err();
         assert!(

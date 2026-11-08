@@ -1087,14 +1087,6 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         "/disputes",
         resolve_litigation_content(branding),
     ));
-    routers.push(dioxus_app::home_router(
-        "/business",
-        resolve_business_content(branding, deployment_host),
-        state.surreal.clone(),
-        Some(home_lead_capture(branding)),
-        state.sessions.clone(),
-        portal::secure_cookies(state),
-    ));
     // The free court-form catalog: the registry's public surface. One
     // branded index, one branded page per jurisdiction the registry
     // covers, and the unbranded JSON twin of the same rows. Brands with
@@ -1149,18 +1141,14 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     // no need to make, and that the older crawlers and link checkers reading
     // this URL understand least well. 301 is what a moved marketing page has
     // always answered.
-    routers.push(Router::new().route(
+    routers.push(moved_permanently(
         dioxus_app::FIRM_RETIRED_PERSONAL_PATH,
-        axum::routing::get(|| async {
-            (
-                StatusCode::MOVED_PERMANENTLY,
-                [(
-                    axum::http::header::LOCATION,
-                    dioxus_app::FIRM_RETIRED_PERSONAL_TARGET,
-                )],
-            )
-        }),
+        dioxus_app::FIRM_RETIRED_PERSONAL_TARGET,
     ));
+    // The retired business-counsel page. Company formation and contract
+    // templates are part of the Nautilus subscription, so its published links
+    // land on Nautilus at `/`.
+    routers.push(moved_permanently(FIRM_RETIRED_BUSINESS_PATH, "/"));
     routers.push(dioxus_app::marketing_page_router(
         dioxus_app::FIRM_NAVIGATOR_PATH,
         firm_copy::navigator(branding),
@@ -1706,6 +1694,7 @@ mod guieb_shook_home_tests {
         // closed on the firm's own site.
         assert!(content.signup.is_none());
         assert_eq!(content.heading, "Guieb & Shook PC");
+        assert_eq!(content.tagline, "East Coast rigor, West Coast Vibes.");
         assert!(!content.practices.is_empty());
     }
 }
@@ -1786,20 +1775,20 @@ pub(crate) fn resolve_litigation_content(
     locales::litigation(branding)
 }
 
-/// Resolve the firm `/business` page — the company counsel practice from
-/// Neon's `home.yaml`: the one-time contract fee, the daily rate, and the
-/// retainer simulator that shows earned fees leaving trust.
-///
-/// Brand-safe like [`resolve_firm_home_content`]; `/business` is a Neon-only
-/// path, so other brands never serve it.
-pub(crate) fn resolve_business_content(
-    branding: &views::brand::Branding,
-    deployment_host: Option<&str>,
-) -> webapp::home::HomeContent {
-    let mut content = locales::home_for_host(branding, deployment_host);
-    content.head_title = content.head_title.replace("| Home", "| Business");
-    content.path = "/business".to_string();
-    content
+/// The retired business-counsel path; it answers a 301 to Nautilus at `/`.
+const FIRM_RETIRED_BUSINESS_PATH: &str = "/business";
+
+/// A permanent `301` from a retired marketing path to where its readers go now.
+fn moved_permanently(path: &'static str, target: &'static str) -> Router {
+    Router::new().route(
+        path,
+        axum::routing::get(move || async move {
+            (
+                StatusCode::MOVED_PERMANENTLY,
+                [(axum::http::header::LOCATION, target)],
+            )
+        }),
+    )
 }
 
 #[cfg(test)]

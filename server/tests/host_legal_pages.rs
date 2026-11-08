@@ -193,16 +193,14 @@ async fn the_terms_keep_the_trademark_ownership_attribution() {
     );
 }
 
-/// Both surfaces that cite the registration point a reader at the register.
+/// The Terms are the one place the mark is noticed, and they link the register.
 ///
 /// A notice a reader cannot check is the site's own word for who owns the name
-/// on its door. The registration number is the claim and the USPTO record is
-/// where it resolves, so the footer that carries the mark on every page and the
-/// Terms section that explains it both link out — and the whole route is what
-/// proves it, since the footer's notice is resolved from the brand per request
-/// rather than written into the page.
+/// on its door, so the Terms section links the USPTO record. The footer carries
+/// no mark notice: it repeats on every page, and ownership of the mark is a
+/// term of using the site rather than a fact about the firm behind each page.
 #[tokio::test]
-async fn the_registration_links_to_the_uspto_record_on_the_page_and_in_the_terms() {
+async fn only_the_terms_notice_the_mark_and_link_the_uspto_record() {
     const RECORD: &str = "https://tmsearch.uspto.gov/search/search-results/90039224";
 
     let app = app().await;
@@ -210,25 +208,22 @@ async fn the_registration_links_to_the_uspto_record_on_the_page_and_in_the_terms
     let flat = terms.split_whitespace().collect::<Vec<_>>().join(" ");
 
     let footer = terms.split("<footer ").nth(1).expect("shared footer");
-    assert!(
-        footer.contains("Neon Law is a trademark of Neon Law IP LLC."),
-        "{footer}"
-    );
+    assert!(!footer.contains("trademark"), "{footer}");
+    assert!(!footer.contains(RECORD), "{footer}");
     assert!(!footer.contains("Legal services prepared by"), "{footer}");
     assert!(!footer.contains("https://www.lextecnica.com/"), "{footer}");
-    // Check the Terms body and footer independently.
     assert!(
         flat.contains("is a registered trademark of Neon Law IP LLC, "),
-        "the footer notices the mark and names the registrant: {flat}"
+        "the Terms notice the mark and name the registrant: {flat}"
     );
     assert!(
         flat.contains("U.S. Reg. No. 6,325,650"),
-        "and cites the registration: {flat}"
+        "and cite the registration: {flat}"
     );
     assert_eq!(
         terms.matches(RECORD).count(),
-        2,
-        "the footer notice and the Terms section each link the record: {terms}"
+        1,
+        "the Terms section links the record once: {terms}"
     );
 }
 
@@ -303,4 +298,59 @@ async fn the_documents_render_their_markdown_as_html() {
     let (_, html) = get(&app, "/privacy").await;
     assert!(html.contains("<h2"), "no rendered heading: {html}");
     assert!(!html.contains("&lt;h2"), "the body was escaped: {html}");
+}
+
+/// Neon Law is the trade name of one brand. Every other Guieb & Shook PC brand
+/// publishes the same Privacy Policy and Terms under the firm's own name, so
+/// nothing on those pages, footer included, says "Neon Law".
+#[tokio::test]
+async fn guieb_shook_brand_legal_pages_never_name_neon_law() {
+    use views::brand::BrandKey;
+    let state = state().await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    for key in BrandKey::ALL.iter().copied().filter(|key| {
+        *key != BrandKey::Neon
+            && key
+                .resolve_branding(&views::brand::DEFAULT_BRANDING)
+                .firm
+                .legal_entity
+                == "Guieb & Shook PC"
+    }) {
+        for path in ["/privacy", "/terms"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("host", key.canonical_host())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{} {path}", key.as_str());
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let html = String::from_utf8(bytes.to_vec()).unwrap();
+            let flat = html
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .replace("&amp;", "&")
+                .replace("&#38;", "&");
+            assert!(
+                flat.contains("Guieb & Shook PC"),
+                "{} {path} names the firm: {flat}",
+                key.as_str()
+            );
+            for retired in ["Neon Law", "Every reference to"] {
+                assert!(
+                    !flat.contains(retired),
+                    "{} {path} still says {retired:?}: {flat}",
+                    key.as_str()
+                );
+            }
+        }
+    }
 }

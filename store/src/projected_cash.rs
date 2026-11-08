@@ -292,6 +292,9 @@ pub struct FirmProjectedCash {
     pub concentration_bps: Option<i64>,
     /// Open contingent matters whose odds carry no recoveries yet.
     pub unestimated_matters: usize,
+    /// Σ of every open contingent matter's costs advanced that a loss would
+    /// not recover, estimated or not.
+    pub costs_at_risk_cents: i64,
 }
 
 /// One pending matter as the Firm rollup reads it.
@@ -334,6 +337,7 @@ fn fold_firm(
     let (mut by_brand, mut by_lead_lawyer) = (BTreeMap::new(), BTreeMap::new());
     let mut largest = 0;
     for matter in matters {
+        rollup.costs_at_risk_cents += matter.projection.costs_at_risk_cents;
         let (Some(cash), Some((low, high))) = (
             matter.projection.expected_cash_cents(),
             matter.projection.cash_range_cents(),
@@ -617,6 +621,7 @@ mod tests {
         assert_eq!(rollup.expected_cash_cents, 2 * 6_297_000);
         assert_eq!(rollup.cash_range_cents, (0, 2 * 17_200_000));
         assert_eq!(rollup.unestimated_matters, 1);
+        assert_eq!(rollup.costs_at_risk_cents, 3 * COSTS, "estimated or not");
         let brands: Vec<_> = rollup
             .by_brand
             .iter()

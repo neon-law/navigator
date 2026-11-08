@@ -134,6 +134,9 @@ pub struct HomeCopy {
     #[serde(default)]
     pub og_description: Option<String>,
     pub heading: String,
+    /// A short line under the heading; absent renders none.
+    #[serde(default)]
+    pub tagline: String,
     pub lead: String,
     pub contact_label: String,
     #[serde(default)]
@@ -574,8 +577,9 @@ pub enum BandCopy {
         #[serde(default)]
         package: Option<PackageInstallCopy>,
     },
-    /// A subscription's phone app, drawn as one iPhone listing the checks it
-    /// runs, beside the two store badges.
+    /// A subscription's phone app, drawn as an iPhone listing the checks it
+    /// runs and, when `android_items` is authored, a Pixel showing a second
+    /// screen, beside the two store badges.
     AppPreview {
         #[serde(default)]
         anchor: String,
@@ -592,6 +596,12 @@ pub enum BandCopy {
         install_label: String,
         checks_heading: String,
         checks: Vec<AppCheckCopy>,
+        /// The Pixel screen's heading. Unused when `android_items` is empty.
+        #[serde(default)]
+        android_heading: String,
+        /// The Pixel's screen. Empty draws the iPhone alone.
+        #[serde(default)]
+        android_items: Vec<AppCheckCopy>,
         app_store_label: String,
         play_store_label: String,
         /// Shown on both badges while the apps are not yet published.

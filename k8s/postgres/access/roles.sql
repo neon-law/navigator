@@ -81,6 +81,8 @@ ALTER ROLE navigator_app IN DATABASE navigator SET session_preload_libraries = '
 CREATE EXTENSION IF NOT EXISTS citext;
 -- The People directory's substring filters ride trigram indexes; also trusted.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- PostGIS requires the bootstrap superuser, like AGE.
+CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA public;
 
 -- Objects created before these roles existed (by the bootstrap superuser)
 -- move to the migration login. Extension members stay with their extension,
@@ -115,6 +117,8 @@ WHERE n.nspname = 'public'
 -- Runtime rows: read and write, never DDL, TRUNCATE, or REFERENCES. Append-only
 -- tables keep their own refusal triggers.
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO navigator_app;
+-- Coordinate-system definitions are extension data, not application rows.
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.spatial_ref_sys FROM navigator_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO navigator_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE navigator_owner IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO navigator_app;

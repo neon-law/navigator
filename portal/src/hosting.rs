@@ -1082,6 +1082,7 @@ async fn dbos_schedules(
     } else {
         None
     };
+    let profit_digest = profit_digest_context(rt, host_dbos, lookup).await?;
     Ok(dbos_engine::Schedules {
         general_nag,
         dri_digest,
@@ -1093,6 +1094,7 @@ async fn dbos_schedules(
         billing_canary,
         billing_digest,
         notation_reset,
+        profit_digest,
     })
 }
 
@@ -1131,6 +1133,46 @@ fn should_host_notation_reset(
     }
     workflows::dbos_engine::notation_reset::enabled(lookup)
         .context("read NAVIGATOR_DBOS_NOTATION_RESET_ENABLED")
+}
+
+/// Resolve the independent ProfitDigest gate before constructing its
+/// context, so an unused schedule never requires Slack or PostgreSQL.
+fn should_host_profit_digest(
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<bool> {
+    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
+        return Ok(false);
+    }
+    workflows::dbos_engine::profit_digest::enabled(lookup)
+        .context("read NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED")
+}
+
+/// The ProfitDigest context when its gate is on, else `None`.
+async fn profit_digest_context(
+    rt: &HostRuntime,
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<Option<workflows::dbos_engine::profit_digest::Context>> {
+    use workflows::dbos_engine::profit_digest;
+    if !should_host_profit_digest(host_dbos, lookup)? {
+        return Ok(None);
+    }
+    let simulated = store::sample_matters(rt.config.environment)
+        .context("resolve simulated-matters deployment")?;
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .context("connect PostgreSQL for the profit digest")?;
+    profit_digest::Context::from_lookup(
+        Arc::new(profit_digest::StoreProfitSource::new(
+            rt.state.surreal.clone(),
+            pg,
+        )),
+        simulated,
+        lookup,
+    )
+    .map(Some)
+    .context("configure DBOS ProfitDigest")
 }
 
 fn notation_reset_context(
@@ -1371,8 +1413,9 @@ mod tests {
     use super::{
         bind_ports, sent_email_export_source, should_host_billing_canary,
         should_host_billing_digest, should_host_deadline_mirror, should_host_dri_digest,
-        should_host_general_nag, should_host_notation_reset, should_host_project_recovery,
-        should_host_purchase_activation, should_host_retention_purge, should_host_source_imports,
+        should_host_general_nag, should_host_notation_reset, should_host_profit_digest,
+        should_host_project_recovery, should_host_purchase_activation, should_host_retention_purge,
+        should_host_source_imports,
     };
 
     /// The export opens PostgreSQL and the archive bucket only when the
@@ -1403,7 +1446,7 @@ mod tests {
     type Gate = fn(bool, &dyn Fn(&str) -> Option<String>) -> anyhow::Result<bool>;
 
     /// The schedules gated only by DBOS and their own flag.
-    fn recovery_gates() -> [(Gate, &'static str); 7] {
+    fn recovery_gates() -> [(Gate, &'static str); 8] {
         [
             (
                 |host, lookup| should_host_billing_digest(host, lookup),
@@ -1432,6 +1475,10 @@ mod tests {
             (
                 |host, lookup| should_host_notation_reset(host, lookup),
                 workflows::dbos_engine::notation_reset::ENABLED_ENV,
+            ),
+            (
+                |host, lookup| should_host_profit_digest(host, lookup),
+                workflows::dbos_engine::profit_digest::ENABLED_ENV,
             ),
         ]
     }

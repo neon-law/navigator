@@ -1201,8 +1201,8 @@
 .fm-page--nautilus a:not(.nav-btn) { color: #8be9df; }
 .fm-page--nautilus .fm-band--enrollment a:not(.nav-btn) { color: #1b6670; }
 
-/* The app band: one iPhone, listing the subscription's checks beside the two
-   store badges. */
+/* The app band: an iPhone listing the subscription's checks and, when a second
+   screen is authored, a Pixel showing it, beside the two store badges. */
 .fm-app {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
@@ -1285,8 +1285,39 @@
 .fm-phone[data-phone="ios"] .fm-phone__tick { color: #34c759; }
 .fm-phone[data-phone="ios"] .fm-phone__heading { font-size: 1.3rem; letter-spacing: -.01em; }
 
+/* Pixel 10 Pro: a 72.0 by 152.8 mm body, flat-edged slab, centred punch-hole
+   camera, Roboto type, and Material tonal cards. Beside the iPhone, the two
+   share the column and the Pixel sits lower, so the pair reads as a set. */
+.fm-app__phones:has([data-phone="android"]) { gap: clamp(.75rem, 2vw, 1.5rem); align-items: flex-start; }
+.fm-app__phones:has([data-phone="android"]) .fm-phone { width: min(50%, 320px); }
+.fm-phone[data-phone="android"] { aspect-ratio: 72 / 152.8; margin-top: 3rem; border-radius: 2.2rem; }
+.fm-phone[data-phone="android"] .fm-phone__screen {
+  border-radius: 1.7rem;
+  background: #f4fbf9;
+  color: #161d1c;
+  font-family: Roboto, "Google Sans", "Helvetica Neue", sans-serif;
+}
+.fm-phone[data-phone="android"] .fm-phone__status { justify-content: flex-start; padding-left: .5rem; }
+.fm-phone[data-phone="android"] .fm-phone__camera {
+  position: absolute; left: 50%; top: .35rem; width: .85rem; height: .85rem;
+  transform: translateX(-50%); border-radius: 50%; background: #000;
+}
+.fm-phone__appbar { display: flex; align-items: center; gap: .6rem; margin-top: .75rem; }
+.fm-phone__appbar .fm-phone__icon { width: 2.5rem; height: 2.5rem; padding: .2rem; border-radius: 50%; }
+.fm-phone__appbar p { margin: 0; }
+.fm-phone[data-phone="android"] .fm-phone__heading { font-size: 1.45rem; font-weight: 400; }
+.fm-phone[data-phone="android"] .fm-phone__checks { gap: .5rem; }
+.fm-phone[data-phone="android"] .fm-phone__check { border-radius: 1rem; background: #cce8e3; }
+.fm-phone[data-phone="android"] .fm-phone__tick { color: #006a60; }
+
 @media (max-width: 900px) {
   .fm-app { grid-template-columns: minmax(0, 1fr); }
+}
+/* A phone column cannot hold two legible screens; the pair stacks. */
+@media (max-width: 640px) {
+  .fm-app__phones:has([data-phone="android"]) { flex-direction: column; align-items: center; }
+  .fm-app__phones:has([data-phone="android"]) .fm-phone { width: min(100%, 402px); }
+  .fm-phone[data-phone="android"] { margin-top: 0; }
 }
 /* Narrower than a real Pro, the list tightens so all eight checks stay on screen. */
 @media (max-width: 420px) {
