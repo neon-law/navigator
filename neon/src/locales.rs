@@ -1256,6 +1256,7 @@ pub fn home_for_host(
         meta_description: copy.meta_description,
         og_description: copy.og_description,
         heading: copy.heading,
+        tagline: copy.tagline,
         lead: copy.lead,
         contact_href: match branding.brand_key {
             BrandKey::Misericordia => "tel:+15108002090".to_string(),

@@ -1706,6 +1706,7 @@ mod guieb_shook_home_tests {
         // closed on the firm's own site.
         assert!(content.signup.is_none());
         assert_eq!(content.heading, "Guieb & Shook PC");
+        assert_eq!(content.tagline, "East Coast rigor, West Coast Vibes.");
         assert!(!content.practices.is_empty());
     }
 }
