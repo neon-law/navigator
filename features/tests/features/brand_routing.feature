@@ -84,7 +84,6 @@ Feature: Public routing on the firm's own host
       | path       |
       | /notations |
       | /contact   |
-      | /services  |
 
   Scenario Outline: A retired practice path answers 404 rather than redirecting
     # `/disputes` has no public page and returns 404 without a Location.
@@ -96,10 +95,15 @@ Feature: Public routing on the firm's own host
       | path      |
       | /disputes |
 
-  Scenario: The retired business page moves to Nautilus
-    When a visitor opens /business
+  Scenario Outline: A retired Neon page moves home
+    When a visitor opens <path>
     Then the response status is 301
     And the response redirects to "/"
+
+    Examples:
+      | path      |
+      | /business |
+      | /services |
 
   Scenario Outline: A path with no firm page answers 404
     When a visitor opens <path>
