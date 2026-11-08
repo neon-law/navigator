@@ -27,7 +27,7 @@ Neon Law (`neon/`):
 | --- | --- |
 | `neon/locales/en/neon/home.yaml` | `/` |
 | `neon/locales/en/neon/litigation.yaml` | `/disputes` |
-| `neon/locales/en/neon/fractional-gc.yaml` | `/business` |
+| `neon/locales/en/neon/fractional-gc.yaml` | unpublished; `/business` answers a 301 to `/` |
 | `neon/locales/en/neon/personal-plan.yaml` | `/personal` |
 | `neon/locales/en/neon/navigator.yaml` | `/navigator` and the shared hosted legal-aid offer |
 | `neon/locales/en/neon/legal-aid.yaml` | `/legal-aid` workshop and self-hosting paths |
@@ -273,20 +273,22 @@ Pricing uses the shared `PricingSection` with the brand palette and typeface. Th
 decorative; reduced-motion preferences disable animation. The Solana section carries the approved request-record and
 litigation copy. The page uses the same footer treatment as Neon and Vesta. The subscription is also called [Neon Law
 Nautilus](glossary/neon-law-nautilus.md). Neon publishes Nautilus at `/` and `/nautilus` from
-`neon/locales/en/neon/nautilus.yaml`. An `app_preview` band draws one iPhone in its body proportions, listing every
-check as an equal peer: data removal, privacy protection, credit monitoring, dark web monitoring, identity theft
-insurance, unclaimed property, estate planning, and basic form filings. Its listing price, like the $29/mo and $290/year
-pricing cards, resolves from DeleteYourData's home catalog. The store badges read "Coming soon" and link nowhere until
-the apps are published. A lawyer review starts at $20 and is prepaid; the private legal sandbox includes $5 of model
-usage a month, then is priced à la carte by Lex Tecnica. Monitoring and insurance coverage are confirmed before
-activation. Its CTA opens a three-step public contact intake before sign-in; the signed-in page exposes the configured
-enrollment booking link. DocuSign paperwork follows the enrollment review. The page expressly distinguishes privacy from
-attorney-client privilege. Every other brand host answers `/nautilus` with a 404.
+`neon/locales/en/neon/nautilus.yaml`. An `app_preview` band draws an iPhone in its body proportions, listing every check
+as an equal peer: data removal, privacy protection, credit monitoring, dark web monitoring, identity theft insurance,
+unclaimed property, estate planning, and basic form filings. Its `android_items` draw a Pixel beside it with a second
+screen, the paperwork view; screens are labelled illustrative. The page sells the subscription as cancel-anytime, billed
+through the App Store or Google Play, with LLC formation and the contract-template library included. Its listing price,
+like the $29/mo and $290/year pricing cards, resolves from DeleteYourData's home catalog. The store badges read "Coming
+soon" and link nowhere until the apps are published. A lawyer review starts at $20 and is prepaid; the private legal
+sandbox includes $5 of model usage a month, then is priced à la carte by Lex Tecnica. Monitoring and insurance coverage
+are confirmed before activation. Its CTA opens a three-step public contact intake before sign-in; the signed-in page
+exposes the configured enrollment booking link. DocuSign paperwork follows the enrollment review. The page expressly
+distinguishes privacy from attorney-client privilege. Every other brand host answers `/nautilus` with a 404.
 
-Neon publishes Nautilus on `/`, business counsel on `/business`, and its fee schedule on `/services`. The Business plan
-uses `neon/locales/en/neon/fractional-gc.yaml`: contract-library access and a scoped counsel relationship from $50/day,
-with a $10,000 minimum retainer and separately agreed Notation fees. The `/disputes` route returns a 404. Other brands
-retain their own home layouts. The business template inventory is documented in [business
+Neon's header names its three products: Nautilus at `/`, Navigator at `/navigator`, and Notations at `/notations`. Its
+fee schedule stays at `/services`. Business counsel is not sold separately: `/business` answers a 301 to `/`, because
+formation and the contract templates are part of the Nautilus subscription. The `/disputes` route returns a 404. Other
+brands retain their own home layouts. The business template inventory is documented in [business
 notations](business-notations.md).
 
 ## A copy-only pull request

@@ -61,6 +61,9 @@ pub const PUBLIC_PATHS: &[&str] = &[
     "/purchases",
     "/purchases/{offering}",
     "/disputes",
+    // Answers a 301 to Nautilus at `/`, like `/personal` above: the business
+    // counsel page is retired and its formation and template work is part of
+    // the Nautilus subscription.
     "/business",
     "/navigator",
     "/legal-aid",
@@ -195,7 +198,6 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
         BrandKey::Neon => {
             let mut paths: std::collections::BTreeSet<String> = [
                 "/",
-                "/business",
                 "/navigator",
                 "/legal-aid",
                 "/delete-your-debt",
@@ -376,11 +378,6 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             &locales::nautilus(&views::brand::DEFAULT_BRANDING, None).meta_description,
         ),
         indexed_page(
-            "Business counsel",
-            "/business",
-            &locales::home(&views::brand::DEFAULT_BRANDING).meta_description,
-        ),
-        indexed_page(
             "Debt relief with PandA Law",
             "/delete-your-debt",
             "Neon's gateway page naming DeleteYourDebt.com as \
@@ -399,11 +396,11 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "Nautilus",
             "/nautilus",
             "Nautilus, one subscription of privacy and paperwork checks for $29/mo or \
-             $290/year prepaid: data removal, privacy protection, credit monitoring, dark web \
-             monitoring, identity theft insurance, unclaimed property, estate planning, and basic \
-             form filings such as forming an LLC. Government fees are separate. Legal fees are \
-             excluded and must be prepaid; a lawyer review starts at $20. Coming to iPhone and \
-             Android.",
+             $290/year prepaid, cancel anytime: data removal, privacy protection, credit \
+             monitoring, dark web monitoring, identity theft insurance, unclaimed property, estate \
+             planning, contract templates, and basic form filings such as forming an LLC. \
+             Government fees are separate. Legal fees are excluded and must be prepaid; a lawyer \
+             review starts at $20. Coming to iPhone and Android.",
         ),
     ];
     pages.extend(immigration_indexed_pages());

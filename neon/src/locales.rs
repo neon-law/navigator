@@ -791,12 +791,23 @@ fn app_preview_band(copy: BandCopy) -> Band {
         install_label,
         checks_heading,
         checks,
+        android_heading,
+        android_items,
         app_store_label,
         play_store_label,
         availability,
     } = copy
     else {
         unreachable!("app preview helper receives only app preview copy")
+    };
+    let app_checks = |items: Vec<views::locales::AppCheckCopy>| {
+        items
+            .into_iter()
+            .map(|check| webapp::marketing_page::AppCheck {
+                title: check.title,
+                detail: check.detail,
+            })
+            .collect()
     };
     Band::AppPreview {
         anchor,
@@ -808,13 +819,9 @@ fn app_preview_band(copy: BandCopy) -> Band {
         price,
         install_label,
         checks_heading,
-        checks: checks
-            .into_iter()
-            .map(|check| webapp::marketing_page::AppCheck {
-                title: check.title,
-                detail: check.detail,
-            })
-            .collect(),
+        checks: app_checks(checks),
+        android_heading,
+        android_items: app_checks(android_items),
         app_store_label,
         play_store_label,
         availability,

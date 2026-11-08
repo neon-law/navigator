@@ -2290,6 +2290,15 @@ pub enum RevisionError {
         existing: String,
         attempted: String,
     },
+    /// A conditional append's expected head no longer matches the live
+    /// chain (LAW-284). Carries the live head's triple — `None` when the
+    /// chain has no live head at all — so the caller can restart against
+    /// the current head without a second read.
+    #[error("document `{slug}` moved past the expected head")]
+    HeadConflict {
+        slug: String,
+        current: Option<ExpectedHead>,
+    },
     #[error(transparent)]
     Ingest(#[from] crate::documents::IngestError),
     #[error("database: {0}")]
@@ -2307,6 +2316,42 @@ pub enum Filed {
     /// nothing was written. Carries that row's id so a caller can link to
     /// the document it already has.
     Unchanged { asset_id: Uuid },
+}
+
+/// The chain head a caller read before uploading — the compare-and-swap
+/// token of a conditional append (LAW-284). The same asset id / version /
+/// digest triple the transcript door's `derived_from` validation already
+/// checks, carried on the upload request and re-validated at the insert.
+///
+/// The version is the head's one-based position in its chain — the same
+/// numbering the revisions door reports, so a client can copy it straight
+/// off the read it already did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExpectedHead {
+    pub asset_id: Uuid,
+    pub version: u32,
+    pub sha256: String,
+}
+
+impl std::fmt::Display for ExpectedHead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "asset {} version {} sha256 {}",
+            self.asset_id, self.version, self.sha256
+        )
+    }
+}
+
+/// The expected-head triple of a chain read: the live head's id, its
+/// one-based version (the chain's length — the same numbering the
+/// revisions door reports), and its byte digest.
+fn head_triple(head: &Asset, chain_len: usize) -> ExpectedHead {
+    ExpectedHead {
+        asset_id: head.id,
+        version: u32::try_from(chain_len).unwrap_or(u32::MAX),
+        sha256: head.sha256_hex.clone(),
+    }
 }
 
 /// File `bytes` as the next revision of the document `(project_id,
@@ -2342,7 +2387,32 @@ pub async fn file_revision(
     identity: &crate::documents::DocumentIdentity<'_>,
     bytes: &[u8],
 ) -> Result<Filed, RevisionError> {
-    file_revision_inner(db, storage, args, identity, None, bytes).await
+    file_revision_inner(db, storage, args, identity, None, None, bytes).await
+}
+
+/// [`file_revision`] with a compare-and-swap (LAW-284): when
+/// `expected_head` is `Some`, the chain's live head is re-read inside the
+/// insert path and validated against the caller's triple before anything
+/// is written — a head that moved is [`RevisionError::HeadConflict`]
+/// carrying the live triple, never a silently forked chain. Uploads whose
+/// bytes the live head already holds resolve to
+/// [`Filed::Unchanged`] regardless of the triple — the cross-run
+/// idempotency a retried upload after an ambiguous timeout relies on.
+/// `None` files exactly as [`file_revision`] always has (the old-CLI and
+/// internal-lane path: no CAS, no late dedupe re-check).
+///
+/// # Errors
+/// [`RevisionError`] when a rule rejects the write, the expected head no
+/// longer matches, or on a storage or database failure.
+pub async fn file_revision_with_expected_head(
+    db: &SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    args: &crate::documents::IngestArgs<'_>,
+    identity: &crate::documents::DocumentIdentity<'_>,
+    expected_head: Option<&ExpectedHead>,
+    bytes: &[u8],
+) -> Result<Filed, RevisionError> {
+    file_revision_inner(db, storage, args, identity, None, expected_head, bytes).await
 }
 
 /// [`file_revision`], additionally stamping [`crate::documents::MailProvenance`]
@@ -2360,7 +2430,7 @@ pub async fn file_revision_with_provenance(
     provenance: &crate::documents::MailProvenance<'_>,
     bytes: &[u8],
 ) -> Result<Filed, RevisionError> {
-    file_revision_inner(db, storage, args, identity, Some(provenance), bytes).await
+    file_revision_inner(db, storage, args, identity, Some(provenance), None, bytes).await
 }
 
 async fn file_revision_inner(
@@ -2369,6 +2439,7 @@ async fn file_revision_inner(
     args: &crate::documents::IngestArgs<'_>,
     identity: &crate::documents::DocumentIdentity<'_>,
     provenance: Option<&crate::documents::MailProvenance<'_>>,
+    expected_head: Option<&ExpectedHead>,
     bytes: &[u8],
 ) -> Result<Filed, RevisionError> {
     // Rule 1 — the lane is closed. An unrecognized string is rejected by
@@ -2425,6 +2496,53 @@ async fn file_revision_inner(
         if head.sha256_hex == sha256_hex(bytes) {
             return Ok(Filed::Unchanged { asset_id: head.id });
         }
+    }
+
+    // LAW-284 conditional append. A caller that read the chain before
+    // uploading sends the head it saw; the triple is validated here, as
+    // late as the engine allows, against a fresh read of the live chain —
+    // the lose-then-re-read-and-validate shape the mail lane's
+    // `stable_asset_id` election uses, applied to ordinary appends.
+    if let Some(expected) = expected_head {
+        let chain = revisions(db, args.project_id, slug).await?;
+        match chain.first() {
+            // The live head already holds these exact bytes — the second of
+            // two concurrent identical uploads, or a retry after an
+            // ambiguous timeout. The chain holding the caller's bytes is
+            // the one outcome no conflict could improve on, so Rule 3 wins
+            // over the triple compare and nothing is inserted. A
+            // soft-deleted head does not qualify: Rule 3's no-CAS read is
+            // the deleted-filtered `current`, which would file a fresh
+            // revision over it, and the two paths must agree.
+            Some(head) if head.deleted_at.is_none() && head.sha256_hex == sha256_hex(bytes) => {
+                return Ok(Filed::Unchanged { asset_id: head.id });
+            }
+            Some(head) => {
+                let live = head_triple(head, chain.len());
+                if *expected != live {
+                    return Err(RevisionError::HeadConflict {
+                        slug: slug.to_string(),
+                        current: Some(live),
+                    });
+                }
+            }
+            // The caller named a head; the live chain has none — every
+            // revision was soft-deleted after the caller read it. There is
+            // no head to validate against, so the precondition is gone.
+            None => {
+                return Err(RevisionError::HeadConflict {
+                    slug: slug.to_string(),
+                    current: None,
+                });
+            }
+        }
+        // Residual race, documented rather than hidden: between the read
+        // above and the `CREATE` inside the ingest, another append can
+        // still land — SurrealDB runs the two as separate statements, not
+        // one transaction (module doc). The window is one statement wide,
+        // and the ABA shape (the head replaced by a byte-identical head
+        // with a new id) is caught, because the triple compares ids, not
+        // only digests.
     }
 
     let doc =
@@ -3086,6 +3204,306 @@ mod tests {
             .map(|a| a.id)
             .collect();
         assert_eq!(shared_ids, vec![v4], "only the newest revision is shared");
+    }
+
+    /// A conditional [`super::file_revision_with_expected_head`] call with
+    /// an ordinary uploaded-document identity, for the LAW-284 tests.
+    async fn file_conditional(
+        db: &SurrealDb,
+        storage: &Arc<dyn StorageService>,
+        project: Uuid,
+        slug: &str,
+        bytes: &[u8],
+        expected: Option<&super::ExpectedHead>,
+    ) -> Result<super::Filed, super::RevisionError> {
+        super::file_revision_with_expected_head(
+            db,
+            storage,
+            &crate::documents::IngestArgs {
+                project_id: project,
+                source: "upload",
+                filename: "pitch.pdf",
+                kind: "memo",
+                content_type: "application/pdf",
+                description: None,
+                secondary_storage_key: None,
+                visibility: crate::documents::visibility::INTERNAL,
+            },
+            &crate::documents::DocumentIdentity {
+                slug: Some(slug),
+                published_at: None,
+                metadata: None,
+                derived_from: None,
+                transcript_quality: None,
+                signing: None,
+                notarization: Vec::new(),
+                evidence: None,
+                folder: None,
+            },
+            expected,
+            bytes,
+        )
+        .await
+    }
+
+    /// LAW-284: a conditional append whose expected head the live chain no
+    /// longer names is refused before inserting, carrying the live head's
+    /// triple — the silent UUIDv7 tie-break fork becomes an explicit,
+    /// recoverable conflict.
+    #[tokio::test]
+    async fn a_conditional_append_refuses_a_stale_head_and_names_the_live_one() {
+        let (db, storage, _tmp) = fixtures().await;
+        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
+
+        let first = file_conditional(&db, &storage, project, "pitch", b"v1", None)
+            .await
+            .unwrap();
+        let first_id = match first {
+            super::Filed::Revision(doc) => doc.asset_id,
+            super::Filed::Unchanged { .. } => panic!("a first filing is a revision"),
+        };
+        let expected = super::ExpectedHead {
+            asset_id: first_id,
+            version: 1,
+            sha256: sha256_hex(b"v1"),
+        };
+
+        // A writer holding the live head appends cleanly.
+        let second = match file_conditional(&db, &storage, project, "pitch", b"v2", Some(&expected))
+            .await
+            .unwrap()
+        {
+            super::Filed::Revision(doc) => doc,
+            super::Filed::Unchanged { .. } => panic!("different bytes are a new revision"),
+        };
+
+        // A writer that read the same first head — before the second landed
+        // — must now be refused, and refused with the live head's triple so
+        // it can restart without a second read.
+        let refused = file_conditional(&db, &storage, project, "pitch", b"v3", Some(&expected))
+            .await
+            .unwrap_err();
+        match refused {
+            super::RevisionError::HeadConflict { current, .. } => {
+                let current = current.expect("the live chain has a head to name");
+                assert_eq!(current.asset_id, second.asset_id);
+                assert_eq!(current.version, 2);
+                assert_eq!(current.sha256, sha256_hex(b"v2"));
+            }
+            other => panic!("expected a head conflict, got {other:?}"),
+        }
+
+        // Exactly the two appended revisions: the refusal inserted nothing.
+        let chain = revisions(&db, project, "pitch").await.unwrap();
+        assert_eq!(
+            chain.iter().map(|a| a.id).collect::<Vec<_>>(),
+            vec![second.asset_id, first_id]
+        );
+    }
+
+    /// LAW-284: a conditional append whose named head no longer exists on
+    /// the chain — the purge emptied it, so the precondition names an asset
+    /// the live chain cannot validate — conflicts with no current head to
+    /// name. (A soft-deleted head is different: the revisions door still
+    /// reports it operative, so a matching precondition holds and the
+    /// append files a fresh revision over it, exactly as the no-CAS path
+    /// would.)
+    #[tokio::test]
+    async fn a_conditional_append_on_a_chain_that_lost_its_head_conflicts_with_no_current() {
+        let (db, storage, _tmp) = fixtures().await;
+        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
+
+        // A precondition on a slug with no rows at all — the shape a purge
+        // leaves behind once the retention window has passed.
+        let expected = super::ExpectedHead {
+            asset_id: uuid::Uuid::now_v7(),
+            version: 1,
+            sha256: sha256_hex(b"v1"),
+        };
+
+        let refused = file_conditional(&db, &storage, project, "pitch", b"v2", Some(&expected))
+            .await
+            .unwrap_err();
+        match refused {
+            super::RevisionError::HeadConflict { current: None, .. } => {}
+            other => panic!("expected a head conflict with no live head, got {other:?}"),
+        }
+        assert!(
+            revisions(&db, project, "pitch").await.unwrap().is_empty(),
+            "the refusal inserted nothing"
+        );
+    }
+
+    /// LAW-284 §5d: a conditional append whose bytes the live head already
+    /// holds resolves to `Filed::Unchanged` — the stale-precondition retry
+    /// of an ambiguous upload deduplicates instead of forking a second row
+    /// with the same digest.
+    #[tokio::test]
+    async fn a_conditional_append_of_bytes_the_live_head_holds_is_unchanged() {
+        let (db, storage, _tmp) = fixtures().await;
+        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
+
+        let first = file_conditional(&db, &storage, project, "pitch", b"v1", None)
+            .await
+            .unwrap();
+        let first_id = match first {
+            super::Filed::Revision(doc) => doc.asset_id,
+            super::Filed::Unchanged { .. } => panic!("a first filing is a revision"),
+        };
+        let stale = super::ExpectedHead {
+            asset_id: first_id,
+            version: 1,
+            sha256: sha256_hex(b"v1"),
+        };
+
+        let second = match file_conditional(&db, &storage, project, "pitch", b"v2", Some(&stale))
+            .await
+            .unwrap()
+        {
+            super::Filed::Revision(doc) => doc,
+            super::Filed::Unchanged { .. } => panic!("different bytes are a new revision"),
+        };
+
+        // The retry that lost the race: same bytes as the live head, stale
+        // precondition. The late digest check on the CAS read resolves it
+        // without inserting.
+        let filed = file_conditional(&db, &storage, project, "pitch", b"v2", Some(&stale))
+            .await
+            .unwrap();
+        match filed {
+            super::Filed::Unchanged { asset_id } => assert_eq!(asset_id, second.asset_id),
+            super::Filed::Revision(doc) => panic!("expected an unchanged filing, got {doc:?}"),
+        }
+
+        let chain = revisions(&db, project, "pitch").await.unwrap();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(
+            chain
+                .iter()
+                .filter(|a| a.sha256_hex == sha256_hex(b"v2"))
+                .count(),
+            1,
+            "no duplicate row for the same digest"
+        );
+    }
+
+    /// LAW-284: two conditional appends racing on one slug cannot fork the
+    /// chain. Both racers hold the same precondition; `tokio::join!` drives
+    /// both, and a oneshot pins the interleave the precondition covers — the
+    /// loser's validation runs only after the winner's `CREATE` has landed.
+    /// (Both racers validating before either inserts is the residual window
+    /// documented on `file_revision_inner`; no non-transactional CAS can
+    /// refuse it deterministically.) The loser is refused with the winner's
+    /// head named, inserts nothing, and the chain keeps exactly one
+    /// operative head.
+    #[tokio::test]
+    async fn two_conditional_appends_race_without_forking_the_chain() {
+        let (db, storage, _tmp) = fixtures().await;
+        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
+
+        let first = file_conditional(&db, &storage, project, "pitch", b"v1", None)
+            .await
+            .unwrap();
+        let first_id = match first {
+            super::Filed::Revision(doc) => doc.asset_id,
+            super::Filed::Unchanged { .. } => panic!("a first filing is a revision"),
+        };
+        let head = super::ExpectedHead {
+            asset_id: first_id,
+            version: 1,
+            sha256: sha256_hex(b"v1"),
+        };
+
+        let (release, wait) = tokio::sync::oneshot::channel::<()>();
+        let winner = async {
+            let landed = file_conditional(&db, &storage, project, "pitch", b"race-a", Some(&head))
+                .await
+                .unwrap();
+            let _ = release.send(());
+            landed
+        };
+        let loser = async {
+            wait.await.expect("the winner releases the loser");
+            file_conditional(&db, &storage, project, "pitch", b"race-b", Some(&head)).await
+        };
+        let (a, b) = tokio::join!(winner, loser);
+        let winner_doc = match (a, b) {
+            // The winner's block already unwrapped its filing; only the
+            // loser's result is still wrapped.
+            (super::Filed::Revision(doc), Err(super::RevisionError::HeadConflict { .. })) => doc,
+            (a, b) => panic!("expected one revision and one conflict, got {a:?} / {b:?}"),
+        };
+
+        let chain = revisions(&db, project, "pitch").await.unwrap();
+        assert_eq!(chain.len(), 2, "the loser's refusal inserted nothing");
+        assert_eq!(
+            chain[0].id, winner_doc.asset_id,
+            "one operative head: the winner's row"
+        );
+        assert_eq!(chain[0].sha256_hex, sha256_hex(b"race-a"));
+        assert!(chain[0].deleted_at.is_none(), "the operative head is live");
+        assert_eq!(chain[1].id, first_id);
+    }
+
+    /// LAW-284 §5d: two racers uploading the same bytes — the same-sha256
+    /// race today's behavior answers with two rows — resolve to one revision
+    /// and one `Filed::Unchanged`. The oneshot pins the interleave the
+    /// precondition covers: the loser's CAS read runs after the winner's
+    /// `CREATE`, its late digest check finds the winner's row holding its
+    /// exact bytes, and nothing is inserted.
+    #[tokio::test]
+    async fn two_conditional_appends_of_identical_bytes_file_one_revision() {
+        let (db, storage, _tmp) = fixtures().await;
+        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
+
+        let first = file_conditional(&db, &storage, project, "pitch", b"v1", None)
+            .await
+            .unwrap();
+        let first_id = match first {
+            super::Filed::Revision(doc) => doc.asset_id,
+            super::Filed::Unchanged { .. } => panic!("a first filing is a revision"),
+        };
+        let head = super::ExpectedHead {
+            asset_id: first_id,
+            version: 1,
+            sha256: sha256_hex(b"v1"),
+        };
+
+        let (release, wait) = tokio::sync::oneshot::channel::<()>();
+        let winner = async {
+            let landed = file_conditional(&db, &storage, project, "pitch", b"twin", Some(&head))
+                .await
+                .unwrap();
+            let _ = release.send(());
+            landed
+        };
+        let loser = async {
+            wait.await.expect("the winner releases the loser");
+            file_conditional(&db, &storage, project, "pitch", b"twin", Some(&head)).await
+        };
+        let (a, b) = tokio::join!(winner, loser);
+        let (revision, unchanged) = match (a, b) {
+            (super::Filed::Revision(doc), Ok(super::Filed::Unchanged { asset_id })) => {
+                (doc, asset_id)
+            }
+            (a, b) => panic!("expected a revision and an unchanged, got {a:?} / {b:?}"),
+        };
+        assert_eq!(
+            unchanged, revision.asset_id,
+            "the loser's upload ends on the winner's row"
+        );
+
+        let chain = revisions(&db, project, "pitch").await.unwrap();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(
+            chain
+                .iter()
+                .filter(|a| a.sha256_hex == sha256_hex(b"twin"))
+                .count(),
+            1,
+            "no duplicate digest row from the race"
+        );
+        assert_eq!(chain[0].id, unchanged);
     }
 
     async fn ingest_named(

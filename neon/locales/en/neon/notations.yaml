@@ -5,7 +5,10 @@ meta_description: >-
 title: Notations
 tagline: Clear words. Working documents.
 hero_lead_runs:
-  - text: "Start with a contract, an offer letter, or a privacy notice. Our business library pairs clear legal writing with fillable questions and a lawyer’s review. Twelve new business templates join our letters and government forms. "
+  - text: "Start with a contract, an offer letter, or a privacy notice. Our library pairs clear legal writing with fillable questions, beside our letters and government forms. Every template is included with "
+  - text: Nautilus
+    href: /
+  - text: ", and a lawyer can review your work. "
   - text: Navigator
     href: /navigator
   - text: " connects each answer to the document it belongs in."

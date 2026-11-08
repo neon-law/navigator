@@ -14362,6 +14362,7 @@
       "mcp/src/tools/spawn_legal_council.rs",
       "mcp/src/tools/validate_notation.rs",
       "neon/src/firm_pages.rs",
+      "neon/src/lib.rs",
       "neon/src/locales.rs",
       "pdf/src/certificate.rs",
       "pdf/src/format.rs",

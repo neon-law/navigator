@@ -408,6 +408,8 @@ mod firm_copy_tests {
             price,
             checks_heading,
             checks,
+            android_heading,
+            android_items,
             app_store_label,
             play_store_label,
             availability,
@@ -418,13 +420,15 @@ mod firm_copy_tests {
         };
         let checks = checks
             .iter()
+            .chain(android_items)
             .map(|check| format!("{} {}", check.title, check.detail))
             .collect::<Vec<_>>()
             .join(" ");
         let description = description.clone().unwrap_or_default();
         format!(
             "{overline} {heading} {description} {app_name} {app_subtitle} {price} \
-             {checks_heading} {checks} {app_store_label} {play_store_label} {availability}"
+             {checks_heading} {android_heading} {checks} {app_store_label} {play_store_label} \
+             {availability}"
         )
     }
 
