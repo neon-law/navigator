@@ -281,9 +281,10 @@ pub enum Band {
     /// carries the whole schedule, which would otherwise make every `Band` —
     /// and so every `Vec<Band>` — as large as the largest one.
     Services(Box<ServicesBand>),
-    /// A subscription's phone app: one iPhone, at an iPhone Pro's screen
-    /// proportions, showing its store listing and the checks it runs, beside
-    /// the two store badges.
+    /// A subscription's phone app: an iPhone, at an iPhone Pro's screen
+    /// proportions, showing its store listing and the checks it runs, and —
+    /// when `android_items` is authored — a Pixel showing a second screen,
+    /// beside the two store badges.
     AppPreview {
         anchor: String,
         overline: String,
@@ -295,6 +296,8 @@ pub enum Band {
         install_label: String,
         checks_heading: String,
         checks: Vec<AppCheck>,
+        android_heading: String,
+        android_items: Vec<AppCheck>,
         app_store_label: String,
         play_store_label: String,
         availability: String,
@@ -1089,6 +1092,8 @@ pub(crate) fn Bands(
                     install_label,
                     checks_heading,
                     checks,
+                    android_heading,
+                    android_items,
                     app_store_label,
                     play_store_label,
                     availability,
@@ -1137,6 +1142,34 @@ pub(crate) fn Bands(
                                                         strong { "{check.title}" }
                                                         if !check.detail.is_empty() {
                                                             span { "{check.detail}" }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if !android_items.is_empty() {
+                                    div { class: "fm-phone", "data-phone": "android",
+                                        div { class: "fm-phone__screen",
+                                            div { class: "fm-phone__status",
+                                                span { "9:41" }
+                                                span { class: "fm-phone__camera" }
+                                            }
+                                            div { class: "fm-phone__appbar",
+                                                img { class: "fm-phone__icon", src: "/public/images/nautilus-shell.svg", alt: "", width: "40", height: "40" }
+                                                p { class: "fm-phone__app", "{app_name}" }
+                                            }
+                                            h3 { class: "fm-phone__heading", "{android_heading}" }
+                                            ul { class: "fm-phone__checks",
+                                                for item in android_items.iter() {
+                                                    li { class: "fm-phone__check",
+                                                        span { class: "fm-phone__tick" }
+                                                        span { class: "fm-phone__check-text",
+                                                            strong { "{item.title}" }
+                                                            if !item.detail.is_empty() {
+                                                                span { "{item.detail}" }
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -1329,10 +1362,8 @@ mod tests {
         assert!(signed_in.contains("Confirm before signing"));
     }
 
-    /// One iPhone lists every check; there is no second phone to repeat it.
-    #[test]
-    fn app_preview_draws_one_iphone_listing_the_checks() {
-        let band = Band::AppPreview {
+    fn app_band(android_items: Vec<AppCheck>) -> Band {
+        Band::AppPreview {
             anchor: "app".into(),
             overline: "Coming soon".into(),
             heading: "In your pocket".into(),
@@ -1346,11 +1377,18 @@ mod tests {
                 title: "Data removal".into(),
                 detail: "Requests".into(),
             }],
+            android_heading: "This month".into(),
+            android_items,
             app_store_label: "App Store".into(),
             play_store_label: "Google Play".into(),
             availability: "Coming soon to".into(),
-        };
-        let html = dioxus_ssr::render_element(rsx! { Bands { items: vec![band] } });
+        }
+    }
+
+    /// Without a second screen authored, one iPhone lists every check.
+    #[test]
+    fn app_preview_draws_one_iphone_listing_the_checks() {
+        let html = dioxus_ssr::render_element(rsx! { Bands { items: vec![app_band(Vec::new())] } });
         assert_eq!(html.matches("Data removal").count(), 1, "{html}");
         assert_eq!(html.matches("<h3").count(), 1, "{html}");
         assert_eq!(html.matches(r#"class="fm-phone""#).count(), 1, "{html}");
@@ -1361,6 +1399,25 @@ mod tests {
             !html.contains("<a "),
             "unpublished apps link nowhere: {html}"
         );
+    }
+
+    /// An authored second screen draws a Pixel beside the iPhone, showing
+    /// that screen rather than repeating the checks.
+    #[test]
+    fn app_preview_draws_a_pixel_with_its_own_screen() {
+        let html = dioxus_ssr::render_element(rsx! {
+            Bands {
+                items: vec![app_band(vec![AppCheck {
+                    title: "LLC formation".into(),
+                    detail: "Articles ready".into(),
+                }])],
+            }
+        });
+        assert_eq!(html.matches(r#"class="fm-phone""#).count(), 2, "{html}");
+        assert!(html.contains(r#"data-phone="android""#), "{html}");
+        assert_eq!(html.matches("Data removal").count(), 1, "{html}");
+        assert_eq!(html.matches("LLC formation").count(), 1, "{html}");
+        assert!(html.contains("This month"), "{html}");
     }
 
     /// Each box is one anchor at the version's real GitHub Release asset, in

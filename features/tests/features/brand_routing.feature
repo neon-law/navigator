@@ -85,11 +85,9 @@ Feature: Public routing on the firm's own host
       | /notations |
       | /contact   |
       | /services  |
-      | /business  |
 
   Scenario Outline: A retired practice path answers 404 rather than redirecting
     # `/disputes` has no public page and returns 404 without a Location.
-    # `/business` and `/services` are published anonymous pages.
     When a visitor opens <path>
     Then the response status is 404
     And the response carries no redirect
@@ -98,12 +96,10 @@ Feature: Public routing on the firm's own host
       | path      |
       | /disputes |
 
-  Scenario: Business counsel is separate from the subscription home
+  Scenario: The retired business page moves to Nautilus
     When a visitor opens /business
-    Then the response status is 200
-    And the page is branded "Neon Law"
-    And the response body contains "company-simulator"
-    And the response body does not contain "data-nautilus-intake"
+    Then the response status is 301
+    And the response redirects to "/"
 
   Scenario Outline: A path with no firm page answers 404
     When a visitor opens <path>
