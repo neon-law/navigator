@@ -1231,6 +1231,66 @@ pub(crate) fn authenticated_client_builder(base: &str) -> Result<reqwest::Client
         .redirect(reqwest::redirect::Policy::none()))
 }
 
+/// The chain-head triple a conditional append expects (LAW-284): the
+/// asset id, one-based version, and digest of the head the caller read
+/// before uploading. The doors answer a stale triple with
+/// `409 head_conflict` naming the live one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ExpectedHead {
+    pub(crate) asset_id: Uuid,
+    pub(crate) version: u32,
+    pub(crate) sha256: String,
+}
+
+/// The body of a `409 head_conflict` answer.
+#[derive(Debug, Deserialize)]
+struct HeadConflictBody {
+    error: String,
+    current: Option<ExpectedHead>,
+}
+
+/// A conditional append lost the race (LAW-284): the live head no longer
+/// matches the one the upload expected. `current` is the server-named
+/// live head the restart adopts.
+#[derive(Debug, thiserror::Error)]
+#[error("expected-head conflict on `{slug}`")]
+struct HeadConflict {
+    slug: String,
+    expected: Option<ExpectedHead>,
+    current: Option<ExpectedHead>,
+}
+
+/// How many times one upload may restart its conditional append on a
+/// `409 head_conflict` (LAW-284): adopt the server-named current head
+/// and re-send once. A persistent conflict is a terminal error, never a
+/// livelock.
+const UPLOAD_RESTART_ATTEMPTS: u32 = 1;
+
+/// Parse a `409` body into a head-conflict restart error. Any other
+/// `409` — a deleted document, an incomplete session — is not a head
+/// conflict and keeps its ordinary failure.
+fn head_conflict_of(
+    slug: &str,
+    expected: Option<&ExpectedHead>,
+    body: &str,
+) -> Option<HeadConflict> {
+    let parsed: HeadConflictBody = serde_json::from_str(body).ok()?;
+    (parsed.error == "head_conflict").then(|| HeadConflict {
+        slug: slug.to_string(),
+        expected: expected.cloned(),
+        current: parsed.current,
+    })
+}
+
+/// The `asset v<version> sha256:<digest>` rendering used in the terminal
+/// conflict message, naming both triples so the operator can reconcile.
+fn head_triple_display(head: Option<&ExpectedHead>) -> String {
+    match head {
+        Some(head) => format!("{} v{} sha256:{}", head.asset_id, head.version, head.sha256),
+        None => "no head".to_string(),
+    }
+}
+
 impl DocumentClient {
     /// The deployment this client is logged in to.
     pub(crate) fn base(&self) -> &str {
@@ -1697,46 +1757,131 @@ impl DocumentClient {
         transcript_quality: Option<&str>,
         execution: &DocumentExecution,
     ) -> Result<store::document_pointers::DocumentPointer> {
-        match upload_lane_for(bytes.len(), kind) {
-            UploadLane::Buffered => {
-                self.upload_bytes_buffered(
-                    filename,
-                    bytes,
-                    kind,
-                    visibility,
-                    description,
-                    content_type,
-                    slug,
-                    metadata,
-                    derived_from,
-                    transcript_quality,
-                    execution,
-                )
-                .await
-            }
-            UploadLane::Streaming => {
-                if bytes.len() > store::documents::MAX_STREAMING_UPLOAD_BYTES {
-                    return Err(anyhow!(
-                        "{}",
-                        store::documents::streaming_upload_size_message(bytes.len())
-                    ));
+        if matches!(upload_lane_for(bytes.len(), kind), UploadLane::Streaming)
+            && bytes.len() > store::documents::MAX_STREAMING_UPLOAD_BYTES
+        {
+            return Err(anyhow!(
+                "{}",
+                store::documents::streaming_upload_size_message(bytes.len())
+            ));
+        }
+        // The conditional append's precondition (LAW-284): the chain head as
+        // this upload starts. Restartable on the server's `409
+        // head_conflict` below.
+        let effective_slug = slug
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(filename);
+        let mut expected = self.read_expected_head(effective_slug).await;
+        let lane = upload_lane_for(bytes.len(), kind);
+        let mut restarts = 0_u32;
+        loop {
+            let result = match lane {
+                UploadLane::Buffered => {
+                    self.upload_bytes_buffered(
+                        filename,
+                        bytes,
+                        kind,
+                        visibility,
+                        description,
+                        content_type,
+                        slug,
+                        metadata.clone(),
+                        derived_from.clone(),
+                        transcript_quality,
+                        execution,
+                        expected.as_ref(),
+                    )
+                    .await
                 }
-                self.upload_bytes_streaming(
-                    filename,
-                    bytes,
-                    kind,
-                    visibility,
-                    description,
-                    content_type,
-                    slug,
-                    metadata,
-                    derived_from,
-                    transcript_quality,
-                    execution,
-                )
-                .await
+                UploadLane::Streaming => {
+                    self.upload_bytes_streaming(
+                        filename,
+                        bytes,
+                        kind,
+                        visibility,
+                        description,
+                        content_type,
+                        slug,
+                        metadata.clone(),
+                        derived_from.clone(),
+                        transcript_quality,
+                        execution,
+                        expected.as_ref(),
+                    )
+                    .await
+                }
+            };
+            match result {
+                Ok(pointer) => return Ok(pointer),
+                Err(error) => {
+                    let Some(conflict) = error.downcast_ref::<HeadConflict>() else {
+                        return Err(error);
+                    };
+                    // The loser of the append race (LAW-284): adopt the
+                    // server-named current head — no second read — and
+                    // re-send once. The re-send carries the same bytes, so
+                    // the server's own dedupe answers an upload whose bytes
+                    // the live head already holds with the unchanged
+                    // pointer; a second conflict is a terminal error, never
+                    // a livelock.
+                    if restarts >= UPLOAD_RESTART_ATTEMPTS {
+                        return Err(anyhow!(
+                            "upload of `{slug}` lost the expected-head race and its restart \
+                             conflicted again: expected {expected_triple}, the server's current \
+                             head is {current_triple} — reconcile with \
+                             `navigator project gate --check` before retrying",
+                            slug = conflict.slug,
+                            expected_triple = head_triple_display(conflict.expected.as_ref()),
+                            current_triple = head_triple_display(conflict.current.as_ref()),
+                        ));
+                    }
+                    restarts += 1;
+                    eprintln!(
+                        "note: `{slug}` moved while this upload ran ({moved}); restarting \
+                         once against the head the server named",
+                        slug = conflict.slug,
+                        moved = conflict.current.as_ref().map_or_else(
+                            || "the chain no longer has a live head".to_string(),
+                            |current| format!(
+                                "its head is now {}",
+                                head_triple_display(Some(current))
+                            ),
+                        ),
+                    );
+                    expected.clone_from(&conflict.current);
+                }
             }
         }
+    }
+
+    /// The head of `slug`'s live chain, as a conditional append expects it
+    /// (LAW-284). `None` when the chain has no live revision yet (a first
+    /// upload has nothing to protect), when the newest row the caller sees
+    /// is not operative (a deleted or lensed chain — the doors' own guards
+    /// are the right surface there), or when the pre-read itself failed:
+    /// without a head the append is exactly the unconditional one today's
+    /// behavior defines, and the gate still audits the chain afterward.
+    async fn read_expected_head(&self, slug: &str) -> Option<ExpectedHead> {
+        let response = match self.list_revisions(slug).await {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!(
+                    "note: pre-read of `{slug}` failed ({error:#}); \
+                     uploading without the expected-head guard"
+                );
+                return None;
+            }
+        };
+        let head = response.revisions.first()?;
+        if !head.operative {
+            return None;
+        }
+        Some(ExpectedHead {
+            asset_id: head.asset_id,
+            version: u32::try_from(head.version).ok()?,
+            sha256: head.sha256.clone(),
+        })
     }
 
     /// The buffered upload: one base64 JSON request — the lane every upload
@@ -1755,6 +1900,7 @@ impl DocumentClient {
         derived_from: Option<serde_json::Value>,
         transcript_quality: Option<&str>,
         execution: &DocumentExecution,
+        expected: Option<&ExpectedHead>,
     ) -> Result<store::document_pointers::DocumentPointer> {
         validate_document_upload_size_in_bytes(kind, bytes.len())?;
         let effective_slug = slug
@@ -1785,6 +1931,10 @@ impl DocumentClient {
         if let Some(transcript_quality) = transcript_quality {
             body["transcript_quality"] = serde_json::Value::String(transcript_quality.to_string());
         }
+        if let Some(expected_head) = expected {
+            body["expected_head"] =
+                serde_json::to_value(expected_head).context("serialize expected head")?;
+        }
         execution.add_to(&mut body)?;
         let url = format!(
             "{}/app/api/projects/{}/documents",
@@ -1804,6 +1954,11 @@ impl DocumentClient {
             return Err(UploadSessionExpired(self.base.clone()).into());
         }
         if !matches!(status.as_u16(), 200 | 201) {
+            if status == reqwest::StatusCode::CONFLICT {
+                if let Some(conflict) = head_conflict_of(effective_slug, expected, &text) {
+                    return Err(conflict.into());
+                }
+            }
             return Err(anyhow!(
                 "document upload failed: {status}: {}",
                 first_line(&text)
@@ -1834,7 +1989,12 @@ impl DocumentClient {
         derived_from: Option<serde_json::Value>,
         transcript_quality: Option<&str>,
         execution: &DocumentExecution,
+        expected: Option<&ExpectedHead>,
     ) -> Result<store::document_pointers::DocumentPointer> {
+        let effective_slug = slug
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(filename);
         let mut body = serde_json::json!({
             "filename": filename,
             "content_type": content_type.unwrap_or("application/octet-stream"),
@@ -1891,11 +2051,19 @@ impl DocumentClient {
             "{}/app/api/projects/{}/documents/upload-session/complete",
             self.base, self.project_id
         );
+        // The conditional append rides the completion — the moment the bytes
+        // are actually filed (LAW-284); the session's open and chunk calls
+        // are resumable and stage nothing on the chain.
+        let mut complete_body = serde_json::json!({ "session_id": session_id });
+        if let Some(expected_head) = expected {
+            complete_body["expected_head"] =
+                serde_json::to_value(expected_head).context("serialize expected head")?;
+        }
         let response = self
             .client
             .post(&complete_url)
             .bearer_auth(&self.token)
-            .json(&serde_json::json!({ "session_id": session_id }))
+            .json(&complete_body)
             .send()
             .await
             .with_context(|| {
@@ -1910,6 +2078,11 @@ impl DocumentClient {
             return Err(UploadSessionExpired(self.base.clone()).into());
         }
         if !matches!(status.as_u16(), 200 | 201) {
+            if status == reqwest::StatusCode::CONFLICT {
+                if let Some(conflict) = head_conflict_of(effective_slug, expected, &text) {
+                    return Err(conflict.into());
+                }
+            }
             return Err(anyhow!(
                 "streaming upload completion failed: {status}: {} — the session \
                  kept its progress; re-run the command to retry",
@@ -10211,6 +10384,7 @@ mod tests {
                 None,
                 Some("machine"),
                 &DocumentExecution::default(),
+                None,
             )
             .await
             .expect("the streaming upload completes");
@@ -10864,6 +11038,7 @@ mod tests {
                 Some(serde_json::json!({ "asset_id": "x" })),
                 Some("machine"),
                 &DocumentExecution::default(),
+                None,
             )
             .await
             .map(|_| ())
