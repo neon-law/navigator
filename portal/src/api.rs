@@ -14084,6 +14084,69 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
     }
 
     #[tokio::test]
+    async fn private_terms_recover_after_an_orphaned_lawyer_dri_is_removed() {
+        let f = door_fixture().await;
+        let lawyer_id = f.lawyer.person_id.unwrap();
+        let missing = store::persons::create(
+            &f.db,
+            &store::persons::NewPerson::with_role(
+                "Former Lawyer",
+                "former-lawyer@example.com",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        let mut orphaned_role = None;
+        for person_id in [lawyer_id, missing.id] {
+            let role = store::participation::add_participant(
+                &f.db,
+                &store::participation::AddParticipantCommand {
+                    project_id: f.project,
+                    person_id,
+                    dri: store::participation::DriRequest::Designate(
+                        store::projects::DriSide::Lawyer,
+                    ),
+                    actor: store::participation::DriActor::System,
+                },
+            )
+            .await
+            .unwrap();
+            if person_id == missing.id {
+                orphaned_role = Some(role.id);
+            }
+        }
+        f.db.query("DELETE $person")
+            .bind(("person", store::surreal::record_id("person", missing.id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        let path = format!("/app/api/projects/{}/private-terms", f.project);
+        let (status, body) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(body.get("identifiers").is_none());
+
+        store::participation::remove_participant(
+            &f.db,
+            f.project,
+            orphaned_role.unwrap(),
+            store::participation::DriActor::Person(lawyer_id),
+        )
+        .await
+        .unwrap();
+
+        let (status, body) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|person| { person["email"] == "outside-lawyer@example.com" }));
+    }
+
+    #[tokio::test]
     async fn private_terms_refuse_a_missing_attached_entity() {
         let f = door_fixture().await;
         store::participation::add_participant(
