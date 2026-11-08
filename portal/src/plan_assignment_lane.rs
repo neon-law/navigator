@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(provider, "legal_shield");
         let archived = storage.get(&archive_key).await.expect("archive readable");
         let record: serde_json::Value = serde_json::from_slice(&archived.bytes).unwrap();
-        assert_eq!(record["assignment"]["member_name"], "Riley Example");
+        assert_eq!(record["assignment"]["member_name"], "Harper Sample");
     }
 
     #[tokio::test]
