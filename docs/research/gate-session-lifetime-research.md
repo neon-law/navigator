@@ -332,4 +332,4 @@ Splitting the job (6) and relaxing timeouts (7) are rejected for the reasons pri
 | PR #424 failure description and fix | commit `c3e5db99`, message quoted in §4 |
 | LAW-285 defers LAW-268 by name | pinned spec `art_p3DBGVuR`, scope boundary |
 | LAW-284 does not mention LAW-268 | pinned spec `art_EAJU6PPl` (out-of-scope list) |
-| GitHub OIDC JWT: iat/exp only, lifetime undocumented (fetched this session) | docs.github.com/en/actions/reference/security/oidc |
+| GitHub OIDC JWT: iat/exp only, lifetime undocumented | docs.github.com/en/actions/reference/security/oidc (fetched this session) |
