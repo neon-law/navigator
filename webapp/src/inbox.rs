@@ -57,6 +57,10 @@ pub struct InboxRowView {
     /// what the `?attachments=true` filter matches rows on.
     #[serde(default)]
     pub has_attachments: bool,
+    /// Whether a firm-side Person sent a message on the conversation — what
+    /// the Sent folder lists.
+    #[serde(default)]
+    pub sent: bool,
     /// Opening snippet of the conversation's most recent message, whitespace
     /// collapsed and ellipsized — None when it has no messages.
     #[serde(default)]
@@ -83,6 +87,13 @@ pub struct InboxMessageView {
     pub internal: bool,
     #[serde(default)]
     pub occurred_at: String,
+    /// `occurred_at` short and human ("Nov 6, 2026, 22:29 UTC"), else the
+    /// raw value when it does not parse.
+    #[serde(default)]
+    pub occurred_label: String,
+    /// An outbound message no Person wrote — an automatic acknowledgement.
+    #[serde(default)]
+    pub automated: bool,
     #[serde(default)]
     pub provider_message_id: Option<String>,
     #[serde(default)]
@@ -101,6 +112,9 @@ pub struct InboxAttachmentView {
     pub filename: Option<String>,
     #[serde(default)]
     pub kind: Option<String>,
+    /// The stored MIME type; an `image/*` attachment renders inline.
+    #[serde(default)]
+    pub content_type: Option<String>,
     pub href: String,
 }
 
@@ -127,6 +141,9 @@ pub struct InboxPage {
     /// attachment only (LAW-238 D3).
     #[serde(default)]
     pub attachments_only: bool,
+    /// Whether the Sent folder (`?sent=true`) is selected.
+    #[serde(default)]
+    pub sent_only: bool,
     #[serde(default)]
     pub brands: Vec<String>,
     #[serde(default)]
@@ -136,8 +153,8 @@ pub struct InboxPage {
     #[serde(default)]
     pub project_code: Option<String>,
     pub error: Option<String>,
-    /// Where the "New text" composer posts; absent unless this viewer may text a
-    /// new number and the deployment has an SMS number.
+    /// Where the compose dialog posts a new text; absent unless this viewer
+    /// may text a new number and the deployment's number is registered.
     #[serde(default)]
     pub compose_action: Option<String>,
     #[serde(default)]
@@ -328,6 +345,56 @@ async fn attachments_only() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(feature = "server")]
+async fn sent_only() -> bool {
+    #[derive(serde::Deserialize, Default)]
+    struct Filter {
+        sent: Option<bool>,
+    }
+    dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<Filter>, _>()
+        .await
+        .ok()
+        .and_then(|axum::extract::Query(filter)| filter.sent)
+        .unwrap_or(false)
+}
+
+/// The filters in effect on one inbox list — what every rail link carries
+/// forward except the one it changes.
+#[derive(Clone, Copy, Default)]
+struct Filters<'a> {
+    channel: Option<&'a str>,
+    brand: Option<&'a str>,
+    unread: bool,
+    direction: Option<&'a str>,
+    attachments: bool,
+    sent: bool,
+}
+
+impl<'a> Filters<'a> {
+    fn of(page: &'a InboxPage) -> Self {
+        Self {
+            channel: page.channel_filter.as_deref(),
+            brand: page.brand_filter.as_deref(),
+            unread: page.unread_only,
+            direction: page.direction_filter.as_deref(),
+            attachments: page.attachments_only,
+            sent: page.sent_only,
+        }
+    }
+
+    fn href(self, base: &str) -> String {
+        filter_href(
+            base,
+            self.channel,
+            self.brand,
+            self.unread,
+            self.direction,
+            self.attachments,
+            self.sent,
+        )
+    }
+}
+
 fn filter_href(
     base: &str,
     channel: Option<&str>,
@@ -335,6 +402,7 @@ fn filter_href(
     unread: bool,
     direction: Option<&str>,
     attachments: bool,
+    sent: bool,
 ) -> String {
     let mut parameters = Vec::new();
     for (key, value) in [
@@ -353,6 +421,9 @@ fn filter_href(
     }
     if attachments {
         parameters.push("attachments=true".into());
+    }
+    if sent {
+        parameters.push("sent=true".into());
     }
     if parameters.is_empty() {
         base.to_string()
@@ -415,12 +486,14 @@ fn row_matches(
     unread_only: bool,
     direction_filter: Option<&str>,
     attachments_only: bool,
+    sent_only: bool,
 ) -> bool {
     channel_matches(&row.channel, channel_filter)
         && brand_matches(row.brand_key.as_deref(), brand_filter)
         && (!unread_only || row.unread)
         && direction_matches(&row.direction, direction_filter)
         && (!attachments_only || row.has_attachments)
+        && (!sent_only || row.sent)
 }
 
 #[cfg(feature = "server")]
@@ -478,6 +551,7 @@ fn row_view(row: &store::inbox::IntakeRow, href: String) -> InboxRowView {
         updated_iso: row.updated_at.to_rfc3339(),
         direction: row.direction.clone(),
         has_attachments: row.has_attachments,
+        sent: row.sent,
         preview: row.preview.clone(),
         person: row.person.as_ref().map(|person| InboxPersonView {
             name: person.name.clone(),
@@ -500,6 +574,9 @@ fn message_view(message: &store::inbox::Message) -> InboxMessageView {
         delivery: message.delivery_state.clone(),
         internal: message.direction == store::inbox::direction::INTERNAL,
         visibility: message.visibility.clone(),
+        occurred_label: occurred_label(&message.occurred_at),
+        automated: message.direction == store::inbox::direction::OUTBOUND
+            && message.author_person_id.is_none(),
         occurred_at: message.occurred_at.clone(),
         provider_message_id: message
             .provider_message_id
@@ -507,6 +584,19 @@ fn message_view(message: &store::inbox::Message) -> InboxMessageView {
             .or_else(|| message.provider_ref.clone()),
         attachments: Vec::new(),
     }
+}
+
+/// A stored RFC 3339 instant as the transcript shows it, in UTC.
+#[cfg(any(feature = "server", test))]
+fn occurred_label(occurred_at: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(occurred_at).map_or_else(
+        |_| occurred_at.to_string(),
+        |at| {
+            at.with_timezone(&chrono::Utc)
+                .format("%b %-d, %Y, %H:%M UTC")
+                .to_string()
+        },
+    )
 }
 
 /// The attachments one transcript Message renders, as the thread page
@@ -524,16 +614,27 @@ fn thread_attachment_views(
     filed: Vec<store::assets::Asset>,
     linked: Vec<store::inbox::MessageAttachment>,
 ) -> Vec<InboxAttachmentView> {
-    let mut attachments = Vec::new();
-    let mut seen = Vec::new();
-    let assets = primary.into_iter().chain(filed).collect::<Vec<_>>();
-    let href = |id, asset: Option<&store::assets::Asset>| {
+    attachment_views(primary, filed, linked, |id, asset| {
         if asset.is_some_and(|asset| asset.project_id == Some(project_id)) {
             format!("/app/projects/{code}/documents/{id}")
         } else {
             format!("/app/api/projects/{project_id}/inbox/{conversation_id}/messages/{message_id}/attachments/{id}")
         }
-    };
+    })
+}
+
+/// Linked attachments first, in provider order, then any primary or filed
+/// slot not already listed — each href built by `href`.
+#[cfg(feature = "server")]
+fn attachment_views(
+    primary: Option<store::assets::Asset>,
+    filed: Vec<store::assets::Asset>,
+    linked: Vec<store::inbox::MessageAttachment>,
+    href: impl Fn(uuid::Uuid, Option<&store::assets::Asset>) -> String,
+) -> Vec<InboxAttachmentView> {
+    let mut attachments = Vec::new();
+    let mut seen = Vec::new();
+    let assets = primary.into_iter().chain(filed).collect::<Vec<_>>();
     for link in linked {
         if seen.contains(&link.asset_id) {
             continue;
@@ -543,10 +644,11 @@ fn thread_attachment_views(
         attachments.push(InboxAttachmentView {
             filename: Some(link.filename),
             kind: asset.and_then(|asset| asset.kind.clone()),
+            content_type: asset.map(|asset| asset.content_type.clone()),
             href: href(link.asset_id, asset),
         });
     }
-    for asset in assets {
+    for asset in &assets {
         if seen.contains(&asset.id) {
             continue;
         }
@@ -554,10 +656,42 @@ fn thread_attachment_views(
         attachments.push(InboxAttachmentView {
             filename: asset.filename.clone(),
             kind: asset.kind.clone(),
-            href: href(asset.id, Some(&asset)),
+            content_type: Some(asset.content_type.clone()),
+            href: href(asset.id, Some(asset)),
         });
     }
     attachments
+}
+
+/// A firm-inbox thread's attachments, through the firm-authorized download
+/// (`/app/inbox/{conversation}/messages/{message}/attachments/{asset}`). A
+/// failed lookup keeps the readable transcript.
+#[cfg(feature = "server")]
+async fn firm_messages_with_attachments(
+    surreal: &store::surreal::SurrealDb,
+    firm_id: uuid::Uuid,
+    conversation_id: uuid::Uuid,
+    messages: &[store::inbox::Message],
+) -> Vec<InboxMessageView> {
+    let mut views = Vec::with_capacity(messages.len());
+    for message in messages {
+        let mut view = message_view(message);
+        let primary = match message.attachment_asset_id {
+            Some(asset_id) => store::assets::find_by_id(surreal, asset_id)
+                .await
+                .unwrap_or_default(),
+            None => None,
+        };
+        let linked = store::inbox::message_assets(surreal, firm_id, message.id)
+            .await
+            .unwrap_or_default();
+        let message_id = message.id;
+        view.attachments = attachment_views(primary, Vec::new(), linked, |id, _| {
+            format!("/app/inbox/{conversation_id}/messages/{message_id}/attachments/{id}")
+        });
+        views.push(view);
+    }
+    views
 }
 
 /// Resolve a Project thread's ordered Message attachments and older primary
@@ -617,14 +751,47 @@ fn attachment_label(attachment: &InboxAttachmentView) -> String {
     }
 }
 
-/// Starting a text needs an SMS number on the deployment and a viewer whose
-/// role may send one; the server re-checks authority on submit.
+/// Whether an attachment renders inline as an image: an `image/*` MIME type,
+/// else a common browser image extension on its filename. HEIC and TIFF stay
+/// links — most browsers cannot draw them.
+#[must_use]
+fn is_inline_image(attachment: &InboxAttachmentView) -> bool {
+    const RENDERABLE: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "avif"];
+    if let Some(content_type) = attachment.content_type.as_deref() {
+        let content_type = content_type.to_ascii_lowercase();
+        return content_type.starts_with("image/")
+            && RENDERABLE
+                .iter()
+                .any(|kind| content_type.ends_with(kind));
+    }
+    attachment
+        .filename
+        .as_deref()
+        .and_then(|name| name.rsplit_once('.'))
+        .is_some_and(|(_, extension)| {
+            RENDERABLE.contains(&extension.to_ascii_lowercase().as_str())
+        })
+}
+
+/// Starting a text needs a viewer whose role may send one and a deployment
+/// whose SMS number is in the Brand phone-number registry — the same three
+/// facts `POST /app/inbox/texts` checks, so the dialog is offered only when a
+/// send could succeed. The server re-checks authority on submit.
 #[cfg(feature = "server")]
-fn compose_action(role: ViewerRole) -> Option<String> {
-    let has_number =
-        std::env::var("NAVIGATOR_SMS_NUMBER").is_ok_and(|number| !number.trim().is_empty());
-    (has_number && matches!(role, ViewerRole::Owner | ViewerRole::Admin))
-        .then(|| format!("{INBOX_PATH}/texts"))
+async fn compose_action(role: ViewerRole) -> Option<String> {
+    if !matches!(role, ViewerRole::Owner | ViewerRole::Admin) {
+        return None;
+    }
+    let number = std::env::var("NAVIGATOR_SMS_NUMBER")
+        .ok()
+        .map(|number| number.trim().to_string())
+        .filter(|number| !number.is_empty())?;
+    let registry = store::postgres::PostgresDb::from_env().await.ok()?;
+    store::brand_phone_numbers::find_by_number(&registry, &number)
+        .await
+        .ok()
+        .flatten()
+        .map(|_| format!("{INBOX_PATH}/texts"))
 }
 
 /// Owner list.
@@ -640,6 +807,7 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let brand_filter = selected_brand().await;
     let direction_filter = selected_direction().await;
     let attachments_only = attachments_only().await;
+    let sent_only = sent_only().await;
     let brands = store::inbox::intake_brands(&surreal, actor)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -659,6 +827,7 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
                 unread_only,
                 direction_filter.as_deref(),
                 attachments_only,
+                sent_only,
             )
         })
         .collect::<Vec<_>>();
@@ -672,6 +841,7 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
         brand_filter,
         direction_filter,
         attachments_only,
+        sent_only,
         brands,
         channels: inbox_channels(),
         project_code: None,
@@ -680,7 +850,7 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
             .map(|row| row_view(row, format!("/app/inbox/{}", row.id)))
             .collect(),
         error: query_error().await,
-        compose_action: compose_action(role),
+        compose_action: compose_action(role).await,
         csrf_token: csrf_token().await,
         logo,
         tokens_href,
@@ -765,7 +935,13 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
             ),
         next_action: detail.next_action,
         bodies_visible: detail.bodies_visible,
-        messages: detail.messages.iter().map(message_view).collect(),
+        messages: firm_messages_with_attachments(
+            &surreal,
+            detail.conversation.firm_id,
+            conversation_id,
+            &detail.messages,
+        )
+        .await,
         projects: detail
             .projects
             .iter()
@@ -819,6 +995,7 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let brand_filter = selected_brand().await;
     let direction_filter = selected_direction().await;
     let attachments_only = attachments_only().await;
+    let sent_only = sent_only().await;
     let all_rows = store::inbox::list_project(&surreal, actor, project.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -834,6 +1011,7 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
                 unread_only,
                 direction_filter.as_deref(),
                 attachments_only,
+                sent_only,
             )
         })
         .collect::<Vec<_>>();
@@ -847,6 +1025,7 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
         brand_filter,
         direction_filter,
         attachments_only,
+        sent_only,
         brands,
         channels: inbox_channels(),
         project_code: Some(project_code.clone()),
@@ -1019,9 +1198,11 @@ pub fn ProjectInboxThread() -> Element {
     inbox_thread_body(&page)
 }
 
-/// The three-pane workspace: folder rail, conversation list, and reading
-/// pane. Selection is a client signal — the deep-link thread route stays
-/// for mobile and for clients without hydration.
+/// The inbox workspace, laid out like a mail client: the folder rail on the
+/// left, and to its right the conversation list with the reading pane
+/// beneath it at the list's full width. Selection is a client signal — the
+/// deep-link thread route stays for mobile and for clients without
+/// hydration.
 #[component]
 fn InboxWorkspace(page: InboxPage) -> Element {
     let selected = use_signal(|| None::<String>);
@@ -1036,15 +1217,82 @@ fn InboxWorkspace(page: InboxPage) -> Element {
         }
         main { id: "inbox", class: "nav-theme",
             { inbox_rail(&page) }
-            { inbox_list(&page, selected) }
-            InboxPane { selected, project_code: page.project_code.clone() }
+            div { class: "inbox-main",
+                { inbox_list(&page, selected) }
+                InboxPane {
+                    selected,
+                    project_code: page.project_code.clone(),
+                    csrf_token: page.csrf_token.clone(),
+                }
+            }
+            { compose_dialog(&page) }
+        }
+    }
+}
+
+/// The compose dialog's element id; the rail's Compose button opens it.
+const COMPOSE_DIALOG_ID: &str = "inbox-compose";
+
+/// The new-text form as a modal `<dialog>`, rendered only when the server
+/// offers a compose action. Opening it is `showModal()`, so the browser
+/// traps focus and closes it on Escape.
+fn compose_dialog(page: &InboxPage) -> Element {
+    let Some(action) = page.compose_action.clone() else {
+        return rsx! {};
+    };
+    rsx! {
+        dialog {
+            id: COMPOSE_DIALOG_ID,
+            class: "inbox-compose nav-card",
+            "aria-labelledby": "{COMPOSE_DIALOG_ID}-title",
+            div { class: "inbox-compose__header",
+                h2 { id: "{COMPOSE_DIALOG_ID}-title", class: "inbox-compose__title", "New text" }
+                button {
+                    class: "inbox-compose__close",
+                    r#type: "button",
+                    "aria-label": "Close",
+                    onclick: move |_| {
+                        document::eval(&format!(
+                            "document.getElementById('{COMPOSE_DIALOG_ID}')?.close();"
+                        ));
+                    },
+                    span { "aria-hidden": "true", "×" }
+                }
+            }
+            FormCard {
+                title: "New text".to_string(),
+                action,
+                submit_label: "Send text".to_string(),
+                heading: Heading::Hidden,
+                csrf_token: Some(page.csrf_token.clone()),
+                fields: vec![
+                    Field::text("To (E.164, e.g. +15555550123)", "to", "").required(),
+                    Field::textarea("Message", "body", "", 6).required(),
+                    Field::checkbox(
+                        "This person agreed to receive texts from the firm",
+                        "consent",
+                        "yes",
+                        false,
+                    )
+                    .required(),
+                ],
+            }
         }
     }
 }
 
 #[allow(clippy::too_many_lines)]
 fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
-    let title = page.title.clone();
+    let title = if page.sent_only {
+        "Sent".to_string()
+    } else {
+        page.title.clone()
+    };
+    let subtitle = if page.sent_only {
+        "Conversations someone at the firm wrote in, newest first."
+    } else {
+        "Every email, text, and message to the firm, newest first."
+    };
     let rows = page.rows.iter().map(|row| {
         let unread = if row.unread { "Unread" } else { "Read" };
         let brand = row.brand_key.as_deref().unwrap_or("unbranded");
@@ -1081,7 +1329,9 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
                             event.prevent_default();
                             selected.set(Some(row_id.clone()));
                             document::eval(
-                                "document.getElementById('inbox-pane-title')?.focus();",
+                                "const t = document.getElementById('inbox-pane-title'); \
+                                 t?.focus({preventScroll: true}); \
+                                 t?.scrollIntoView({behavior: 'smooth', block: 'start'});",
                             );
                         },
                         "{row.subject}"
@@ -1093,51 +1343,22 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
                 td { class: "inbox-table__tag", "{brand}" }
                 td { class: "inbox-table__tag", "{row.channel}" }
                 td { class: "inbox-table__assignee", "{row.assignee}" }
-                td { class: "inbox-table__next",
-                    span { "{row.next_action}" }
-                    span { class: "inbox-table__delivery", " · {row.delivery}" }
-                }
                 td { class: "inbox-table__date",
                     time { datetime: "{row.updated_iso}", "{row.updated}" }
                 }
             }
         }
     });
-    let compose = page.compose_action.clone().map(|action| {
-        rsx! {
-            FormCard {
-                title: "New text".to_string(),
-                action,
-                submit_label: "Send text".to_string(),
-                heading: Heading::H2,
-                csrf_token: Some(page.csrf_token.clone()),
-                fields: vec![
-                    Field::text("Phone number (E.164, e.g. +15555550123)", "to", "").required(),
-                    Field::textarea("Message", "body", "", 4).required(),
-                    Field::checkbox(
-                        "This person agreed to receive texts from the firm",
-                        "consent",
-                        "yes",
-                        false,
-                    )
-                    .required(),
-                ],
-            }
-        }
-    });
     rsx! {
         div { class: "inbox-list",
-            header { class: "page-header",
+            header { class: "page-header inbox-list__header",
                 h1 { "{title}" }
                 a { href: crate::communication_dashboard::PARKED_CALLS_PATH, "Parked calls" }
-                p { class: "page-subtitle",
-                    "Every email, text, and message to the firm, newest first."
-                }
+                p { class: "page-subtitle", "{subtitle}" }
             }
             if let Some(error) = page.error.clone() {
-                p { class: "page-subtitle", "{error}" }
+                p { class: "page-subtitle", role: "alert", "{error}" }
             }
-            {compose}
             if page.rows.is_empty() {
                 p { class: "page-subtitle", "No conversations yet." }
             } else {
@@ -1152,8 +1373,7 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
                                 th { scope: "col", "Subject" }
                                 th { scope: "col", "Brand" }
                                 th { scope: "col", "Channel" }
-                                th { scope: "col", "Assignee" }
-                                th { scope: "col", "Next · Delivery" }
+                                th { scope: "col", "Project" }
                                 th { scope: "col", "Date" }
                             }
                         }
@@ -1165,114 +1385,101 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
     }
 }
 
-/// Folder-rail link sets: one option per value of each filter, with the
-/// filter in effect marked active. Hrefs keep the URL-query semantics.
-#[allow(clippy::too_many_lines)]
+/// Folder-rail link sets: the Inbox and Sent mailboxes, then one option per
+/// value of each filter, with the filter in effect marked active. Hrefs keep
+/// the URL-query semantics, so every view is a shareable link.
 fn inbox_rail(page: &InboxPage) -> Element {
-    let channel_href = |channel: Option<&str>| {
-        filter_href(
-            &page.base_href,
-            channel,
-            page.brand_filter.as_deref(),
-            page.unread_only,
-            page.direction_filter.as_deref(),
-            page.attachments_only,
-        )
-    };
-    let brand_href = |brand: Option<&str>| {
-        filter_href(
-            &page.base_href,
-            page.channel_filter.as_deref(),
-            brand,
-            page.unread_only,
-            page.direction_filter.as_deref(),
-            page.attachments_only,
-        )
-    };
-    let unread_href = |unread: bool| {
-        filter_href(
-            &page.base_href,
-            page.channel_filter.as_deref(),
-            page.brand_filter.as_deref(),
-            unread,
-            page.direction_filter.as_deref(),
-            page.attachments_only,
-        )
-    };
-    let direction_href = |direction: Option<&str>| {
-        filter_href(
-            &page.base_href,
-            page.channel_filter.as_deref(),
-            page.brand_filter.as_deref(),
-            page.unread_only,
-            direction,
-            page.attachments_only,
-        )
-    };
-    let attachment_href = |attachments: bool| {
-        filter_href(
-            &page.base_href,
-            page.channel_filter.as_deref(),
-            page.brand_filter.as_deref(),
-            page.unread_only,
-            page.direction_filter.as_deref(),
-            attachments,
-        )
-    };
+    let base = page.base_href.as_str();
+    let current = Filters::of(page);
+    let mailbox_options = vec![
+        rail_option(
+            "Inbox",
+            Filters { sent: false, ..current }.href(base),
+            !page.sent_only,
+        ),
+        rail_option(
+            "Sent",
+            Filters { sent: true, ..current }.href(base),
+            page.sent_only,
+        ),
+    ];
     let mut channel_options = vec![rail_option(
         "All channels",
-        channel_href(None),
+        Filters { channel: None, ..current }.href(base),
         page.channel_filter.is_none(),
     )];
     for channel in &page.channels {
         channel_options.push(rail_option(
             channel,
-            channel_href(Some(channel.as_str())),
+            Filters { channel: Some(channel.as_str()), ..current }.href(base),
             page.channel_filter.as_deref() == Some(channel.as_str()),
         ));
     }
     let mut brand_options = vec![rail_option(
         "All Brands",
-        brand_href(None),
+        Filters { brand: None, ..current }.href(base),
         page.brand_filter.is_none(),
     )];
     for brand in &page.brands {
         brand_options.push(rail_option(
             brand,
-            brand_href(Some(brand.as_str())),
+            Filters { brand: Some(brand.as_str()), ..current }.href(base),
             page.brand_filter.as_deref() == Some(brand.as_str()),
         ));
     }
     let unread_options = vec![
-        rail_option("All messages", unread_href(false), !page.unread_only),
-        rail_option("Unread only", unread_href(true), page.unread_only),
+        rail_option(
+            "All messages",
+            Filters { unread: false, ..current }.href(base),
+            !page.unread_only,
+        ),
+        rail_option(
+            "Unread only",
+            Filters { unread: true, ..current }.href(base),
+            page.unread_only,
+        ),
     ];
     let mut direction_options = vec![rail_option(
         "Any direction",
-        direction_href(None),
+        Filters { direction: None, ..current }.href(base),
         page.direction_filter.is_none(),
     )];
     for direction in ["inbound", "outbound", "internal"] {
         direction_options.push(rail_option(
             direction,
-            direction_href(Some(direction)),
+            Filters { direction: Some(direction), ..current }.href(base),
             page.direction_filter.as_deref() == Some(direction),
         ));
     }
     let attachment_options = vec![
         rail_option(
             "Any attachment state",
-            attachment_href(false),
+            Filters { attachments: false, ..current }.href(base),
             !page.attachments_only,
         ),
         rail_option(
             "With attachments",
-            attachment_href(true),
+            Filters { attachments: true, ..current }.href(base),
             page.attachments_only,
         ),
     ];
     rsx! {
         aside { class: "inbox-rail", "aria-label": "Inbox folders",
+            if page.compose_action.is_some() {
+                button {
+                    class: "nav-btn nav-btn--primary inbox-rail__compose",
+                    r#type: "button",
+                    "aria-haspopup": "dialog",
+                    "aria-controls": COMPOSE_DIALOG_ID,
+                    onclick: move |_| {
+                        document::eval(&format!(
+                            "document.getElementById('{COMPOSE_DIALOG_ID}')?.showModal();"
+                        ));
+                    },
+                    "Compose"
+                }
+            }
+            { inbox_rail_group("Mailboxes", "Mail", &mailbox_options) }
             { inbox_rail_group("Filter inbox by channel", "Channel", &channel_options) }
             { inbox_rail_group("Filter inbox by Brand", "Brand", &brand_options) }
             { inbox_rail_group("Inbox unread filter", "Unread", &unread_options) }
@@ -1282,10 +1489,14 @@ fn inbox_rail(page: &InboxPage) -> Element {
     }
 }
 
-/// The reading pane: always present, so the grid keeps its three columns
-/// and focus has a stable target. Its content fetches per selection.
+/// The reading pane: always present beneath the list, so focus has a stable
+/// target. Its content fetches per selection.
 #[component]
-fn InboxPane(selected: ReadSignal<Option<String>>, project_code: Option<String>) -> Element {
+fn InboxPane(
+    selected: ReadSignal<Option<String>>,
+    project_code: Option<String>,
+    csrf_token: String,
+) -> Element {
     rsx! {
         section { id: "inbox-pane", class: "inbox-pane",
             "aria-label": "Conversation reading pane",
@@ -1345,60 +1556,168 @@ async fn pane_conversation(
     }
 }
 
-/// The reading pane's transcript: the conversation's header facts and
-/// messages, sharing the thread body's message article. Actions stay on
-/// the full-width thread route the pane links to.
+/// The reading pane's transcript: the subject, the conversation's facts as
+/// chips, an assign-to-project control, and the messages. Replies, notes,
+/// and number linking stay on the full thread the pane links to.
 pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
-    let unread = if page.unread { "Unread" } else { "Read" };
-    let messages = page.messages.iter().map(inbox_message_article);
+    let brand = page.brand_key.as_deref().unwrap_or("unbranded");
+    let messages = page
+        .messages
+        .iter()
+        .map(|message| inbox_message_article(message, page));
     rsx! {
         div { class: "inbox-pane__thread",
-            h3 { "{page.title}" }
-            p { class: "inbox-pane__meta",
-                "{page.sender} · {page.channel} · {unread}. Delivery: {page.delivery}."
+            div { class: "inbox-pane__heading",
+                h3 { "{page.title}" }
+                a { class: "nav-link", href: "{href}", "Open full thread" }
             }
-            if !page.provider_account.is_empty() {
-                p { class: "inbox-pane__meta", "Source account: {page.provider_account}." }
+            ul { class: "inbox-chips", "aria-label": "Conversation facts",
+                li { class: "inbox-chip", "{page.channel}" }
+                li { class: "inbox-chip", "{brand}" }
+                li { class: "inbox-chip", "Project: {page.assignee}" }
             }
-            p { class: "inbox-pane__meta", "Assignee: {page.assignee} · {page.next_action}" }
-            { messages }
-            a { class: "nav-link", href: "{href}", "Open full thread" }
+            { pane_assign(page) }
+            if page.bodies_visible {
+                { messages }
+            } else {
+                p { class: "inbox-pane__empty",
+                    "Message bodies stay on the project. Assign or reassign from here."
+                }
+            }
         }
     }
 }
 
-/// One transcript message — the article shared by the full-width thread
-/// body and the reading pane.
-fn inbox_message_article(message: &InboxMessageView) -> Element {
-    let label = if message.internal {
-        "Internal note"
-    } else {
-        message.direction.as_str()
+/// The pane's one-line assign control: a Project picker posting to the
+/// conversation's assign action and returning to the inbox. Absent without an
+/// action or a Project to choose.
+fn pane_assign(page: &InboxThreadPage) -> Element {
+    let Some(action) = page.assign_action.clone() else {
+        return rsx! {};
     };
+    if page.projects.is_empty() {
+        return rsx! {};
+    }
+    let label = if page.assignee == "Unassigned" {
+        "Assign to project"
+    } else {
+        "Move to project"
+    };
+    rsx! {
+        form { class: "inbox-assign", method: "post", action: "{action}",
+            if !page.csrf_token.is_empty() {
+                input { r#type: "hidden", name: "_csrf", value: "{page.csrf_token}" }
+            }
+            input { r#type: "hidden", name: "next", value: "inbox" }
+            label { r#for: "inbox-assign-project", class: "inbox-assign__label", "{label}" }
+            select { id: "inbox-assign-project", name: "project_id", class: "nav-input", required: true,
+                option { value: "", "Choose a project…" }
+                for project in page.projects.iter() {
+                    option { key: "{project.id}", value: "{project.id}", "{project.label}" }
+                }
+            }
+            button { class: "nav-btn nav-btn--primary", r#type: "submit", "Assign" }
+        }
+    }
+}
+
+/// Who a message is from and to, as a mail header shows it: an inbound
+/// message comes from the counterparty to the firm's receiving account; a
+/// firm message goes the other way; an internal note stays inside.
+fn message_parties(message: &InboxMessageView, page: &InboxThreadPage) -> (String, String) {
+    let account = if page.provider_account.is_empty() {
+        page.source_page.clone().unwrap_or_default()
+    } else {
+        page.provider_account.clone()
+    };
+    let firm = if page.firm_name.is_empty() {
+        "The firm".to_string()
+    } else {
+        page.firm_name.clone()
+    };
+    if message.internal {
+        ("Internal note".into(), "Visible to the firm only".into())
+    } else if message.direction == "outbound" {
+        let from = if message.automated {
+            format!("{firm} (automatic)")
+        } else {
+            firm
+        };
+        (from, page.sender.clone())
+    } else {
+        (page.sender.clone(), account)
+    }
+}
+
+/// One transcript message as a mail card: a From / To header with the time,
+/// the body, then attachments — images drawn at the card's full width, every
+/// other file a download link. Shared by the reading pane and the thread page.
+fn inbox_message_article(message: &InboxMessageView, page: &InboxThreadPage) -> Element {
+    let (from, to) = message_parties(message, page);
     let audience = message.visibility.as_deref().map_or("", |visibility| {
         if visibility == "public" {
-            " · Public"
+            "Public"
         } else if visibility == "private" {
-            " · Private"
+            "Private"
         } else {
             ""
         }
     });
+    let when = if message.occurred_label.is_empty() {
+        message.occurred_at.clone()
+    } else {
+        message.occurred_label.clone()
+    };
+    let card = if message.internal {
+        "inbox-message inbox-message--internal"
+    } else if message.direction == "outbound" {
+        "inbox-message inbox-message--outbound"
+    } else {
+        "inbox-message"
+    };
+    let (images, files): (Vec<_>, Vec<_>) =
+        message.attachments.iter().partition(|attachment| is_inline_image(attachment));
     rsx! {
         article {
             key: "{message.id}",
             id: "inbox-message-{message.id}",
-            p { "{label}{audience}. Delivery: {message.delivery}." }
+            class: "{card}",
+            header { class: "inbox-message__header",
+                div { class: "inbox-message__parties",
+                    p { class: "inbox-message__from", "{from}" }
+                    if !to.is_empty() {
+                        p { class: "inbox-message__to", "to {to}" }
+                    }
+                }
+                div { class: "inbox-message__meta",
+                    time { datetime: "{message.occurred_at}", "{when}" }
+                    span { class: "inbox-message__delivery",
+                        "{page.channel} · {message.delivery}"
+                        if !audience.is_empty() { " · {audience}" }
+                    }
+                }
+            }
             if message.delivery == "unknown" {
                 p { class: "nav-muted", "Delivery has not been confirmed. Check the provider before sending another reply." }
             } else if message.delivery == "failed" {
                 p { class: "nav-muted", "The provider rejected this reply. Check the receiving account and channel configuration." }
             }
-            time { datetime: "{message.occurred_at}", "{message.occurred_at}" }
-            p { "{message.body}" }
-            if !message.attachments.is_empty() {
+            div { class: "inbox-message__body", "{message.body}" }
+            for image in images.iter() {
+                figure { class: "inbox-message__image",
+                    a { href: "{image.href}",
+                        img {
+                            src: "{image.href}",
+                            alt: "{attachment_label(image)}",
+                            loading: "lazy",
+                        }
+                    }
+                    figcaption { class: "nav-muted", "{attachment_label(image)}" }
+                }
+            }
+            if !files.is_empty() {
                 ul { class: "inbox-message-attachments",
-                    for attachment in &message.attachments {
+                    for attachment in files.iter() {
                         li {
                             a { class: "nav-link", href: "{attachment.href}",
                                 "{attachment_label(attachment)}"
@@ -1408,7 +1727,7 @@ fn inbox_message_article(message: &InboxMessageView) -> Element {
                 }
             }
             if let Some(reference) = message.provider_message_id.as_ref() {
-                p { class: "nav-muted", "Provider message: {reference}" }
+                p { class: "inbox-message__reference nav-muted", "Provider message: {reference}" }
             }
         }
     }
@@ -1429,7 +1748,10 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
     } else {
         page.next_action.as_str()
     };
-    let messages = page.messages.iter().map(inbox_message_article);
+    let messages = page
+        .messages
+        .iter()
+        .map(|message| inbox_message_article(message, page));
     let assign = page.assign_action.clone().map(|action| {
         let choices = page
             .projects
@@ -1438,9 +1760,9 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
             .collect();
         rsx! {
             FormCard {
-                title: "Attribute message to a project".to_string(),
+                title: "Assign to a project".to_string(),
                 action,
-                submit_label: "Attribute".to_string(),
+                submit_label: "Assign".to_string(),
                 heading: Heading::H2,
                 csrf_token: Some(page.csrf_token.clone()),
                 fields: vec![Field::select("Project", "project_id", choices, None).required()],
@@ -1600,6 +1922,7 @@ mod tests {
                     updated_iso: "2026-10-11T04:06:15+00:00".into(),
                     direction: store::inbox::direction::INBOUND.into(),
                     has_attachments: true,
+                    sent: false,
                     preview: None,
                     person: None,
                 },
@@ -1618,6 +1941,7 @@ mod tests {
                     updated_iso: "2026-10-12T04:06:15+00:00".into(),
                     direction: store::inbox::direction::OUTBOUND.into(),
                     has_attachments: false,
+                    sent: false,
                     preview: None,
                     person: None,
                 },
@@ -1668,6 +1992,7 @@ mod tests {
             subject: Some("Notice".into()),
             direction: store::inbox::direction::INBOUND.into(),
             has_attachments: true,
+            sent: false,
             preview: None,
             person: None,
             updated_at: chrono::Utc::now(),
@@ -1680,7 +2005,7 @@ mod tests {
             true,
         );
         assert!(row_matches(
-            &row, selected.0, selected.1, selected.2, selected.3, selected.4
+            &row, selected.0, selected.1, selected.2, selected.3, selected.4, false
         ));
         // Each filter is load-bearing: drop the match on any one of the
         // five and the row is excluded.
@@ -1697,20 +2022,20 @@ mod tests {
                 (selected.0, miss)
             };
             assert!(
-                !row_matches(&row, channel, brand, selected.2, selected.3, selected.4),
+                !row_matches(&row, channel, brand, selected.2, selected.3, selected.4, false),
                 "filter {index} is load-bearing"
             );
         }
         assert!(row_matches(
             &row, selected.0, selected.1,
             false, // unread_only off: the unread row still matches
-            selected.3, selected.4
+            selected.3, selected.4, false
         ));
         // unread_only on excludes a read row.
         let mut read_row = row.clone();
         read_row.unread = false;
         assert!(!row_matches(
-            &read_row, selected.0, selected.1, true, selected.3, selected.4
+            &read_row, selected.0, selected.1, true, selected.3, selected.4, false
         ));
         assert!(!row_matches(
             &row,
@@ -1718,16 +2043,16 @@ mod tests {
             selected.1,
             true,
             Some(store::inbox::direction::OUTBOUND),
-            selected.4
+            selected.4, false
         ));
         // attachments_only on excludes a row with nothing filed.
         let mut bare_row = row.clone();
         bare_row.has_attachments = false;
         assert!(row_matches(
-            &bare_row, selected.0, selected.1, true, selected.3, false
+            &bare_row, selected.0, selected.1, true, selected.3, false, false
         ));
         assert!(!row_matches(
-            &bare_row, selected.0, selected.1, true, selected.3, true
+            &bare_row, selected.0, selected.1, true, selected.3, true, false
         ));
     }
 
@@ -1819,6 +2144,7 @@ mod tests {
             brand_filter: None,
             direction_filter: None,
             attachments_only: false,
+            sent_only: false,
             brands,
             compose_action: None,
             csrf_token: String::new(),
@@ -1876,6 +2202,8 @@ mod tests {
                 delivery: "received".into(),
                 internal: false,
                 occurred_at: "2026-10-10T12:00:00Z".into(),
+                occurred_label: String::new(),
+                automated: false,
                 provider_message_id: Some("source-message-1".into()),
                 visibility: None,
                 attachments: Vec::new(),
@@ -1898,19 +2226,128 @@ mod tests {
     }
 
     #[test]
-    fn list_offers_a_new_text_composer_only_when_the_server_allows_it() {
+    fn compose_is_a_modal_dialog_offered_only_when_the_server_allows_it() {
         let plain = list_html(&page(ViewerRole::Owner, vec![]));
-        assert!(!plain.contains("New text"), "{plain}");
+        assert!(!plain.contains("id=\"inbox-compose\""), "{plain}");
+        assert!(!plain.contains(">Compose<"), "{plain}");
 
         let mut composing = page(ViewerRole::Owner, vec![]);
         composing.compose_action = Some("/app/inbox/texts".into());
         composing.csrf_token = "token".into();
         let html = list_html(&composing);
-        assert!(html.contains("New text"), "{html}");
-        assert!(html.contains("action=\"/app/inbox/texts\""), "{html}");
+        assert!(html.contains("aria-controls=\"inbox-compose\""), "{html}");
+        assert!(html.contains(">Compose<"), "{html}");
+        // The form lives inside the closed dialog, never as a box on the page.
+        let dialog = &html[html
+            .find("<dialog id=\"inbox-compose\"")
+            .expect("a compose dialog")..];
+        assert!(!dialog[..dialog.find('>').unwrap()].contains(" open"), "{dialog}");
+        assert!(dialog.contains("action=\"/app/inbox/texts\""), "{dialog}");
         for name in ["name=\"to\"", "name=\"body\"", "name=\"consent\""] {
-            assert!(html.contains(name), "{name}: {html}");
+            assert!(dialog.contains(name), "{name}: {dialog}");
         }
+        assert_eq!(html.matches("action=\"/app/inbox/texts\"").count(), 1, "{html}");
+    }
+
+    #[test]
+    fn the_sent_folder_is_a_mailbox_that_keeps_the_other_filters() {
+        let mut view = page(ViewerRole::Owner, Vec::new());
+        view.channel_filter = Some("sms".into());
+        let html = list_html(&view);
+        assert!(html.contains(r#"href="/app/inbox?channel=sms&#38;sent=true""#), "{html}");
+        assert!(html.contains("<h1>Inbox</h1>"), "{html}");
+
+        view.sent_only = true;
+        let html = list_html(&view);
+        assert!(html.contains("<h1>Sent</h1>"), "{html}");
+        assert!(
+            html.contains(
+                r#"inbox-rail__link--active" href="/app/inbox?channel=sms&#38;sent=true" aria-current="true">Sent</a>"#
+            ),
+            "{html}"
+        );
+        // Inbox drops only the Sent filter.
+        assert!(html.contains(r#"href="/app/inbox?channel=sms">Inbox</a>"#), "{html}");
+    }
+
+    #[test]
+    fn the_reading_pane_assigns_to_a_project_and_returns_to_the_inbox() {
+        let page = base_thread();
+        let html = dioxus_ssr::render_element(inbox_pane_body(&page, "/app/inbox/c1"));
+        assert!(html.contains(r#"action="/app/owner/inbox/c1/assign""#), "{html}");
+        assert!(html.contains(r#"name="next" value="inbox""#), "{html}");
+        assert!(html.contains(r#"<label for="inbox-assign-project""#), "{html}");
+        assert!(html.contains(r#"<option value="project-1">Alpha (alpha)</option>"#), "{html}");
+        assert!(html.contains("Assign to project"), "{html}");
+
+        let mut assigned = base_thread();
+        assigned.assignee = "Alpha".into();
+        let html = dioxus_ssr::render_element(inbox_pane_body(&assigned, "/app/inbox/c1"));
+        assert!(html.contains("Move to project"), "{html}");
+
+        let mut no_projects = base_thread();
+        no_projects.projects.clear();
+        let html = dioxus_ssr::render_element(inbox_pane_body(&no_projects, "/app/inbox/c1"));
+        assert!(!html.contains("inbox-assign"), "{html}");
+    }
+
+    #[test]
+    fn a_message_card_names_its_parties_and_draws_images_full_width() {
+        let mut page = base_thread();
+        page.messages[0].occurred_label = occurred_label("2026-11-06T22:29:11.5+00:00");
+        page.messages[0].attachments = vec![
+            InboxAttachmentView {
+                filename: Some("photo.jpg".into()),
+                kind: None,
+                content_type: Some("image/jpeg".into()),
+                href: "/app/inbox/c1/messages/m1/attachments/a1".into(),
+            },
+            InboxAttachmentView {
+                filename: Some("retainer.pdf".into()),
+                kind: None,
+                content_type: Some("application/pdf".into()),
+                href: "/app/inbox/c1/messages/m1/attachments/a2".into(),
+            },
+        ];
+        page.messages.push(InboxMessageView {
+            id: "m2".into(),
+            direction: "outbound".into(),
+            body: "Thanks, received.".into(),
+            delivery: "submitted".into(),
+            internal: false,
+            occurred_at: String::new(),
+            occurred_label: String::new(),
+            automated: true,
+            provider_message_id: None,
+            visibility: None,
+            attachments: Vec::new(),
+        });
+        let html = thread(&page);
+        assert!(html.contains("Nov 6, 2026, 22:29 UTC"), "{html}");
+        // Inbound: from the counterparty, to the receiving account.
+        assert!(html.contains(r#"<p class="inbox-message__from">sender@example.com</p>"#), "{html}");
+        assert!(html.contains("to support@example.com"), "{html}");
+        // An automatic acknowledgement is labelled as one.
+        assert!(html.contains("Practice (automatic)"), "{html}");
+        assert!(html.contains(r#"<img src="/app/inbox/c1/messages/m1/attachments/a1""#), "{html}");
+        assert!(!html.contains(r#"<img src="/app/inbox/c1/messages/m1/attachments/a2""#), "{html}");
+        assert!(html.contains("retainer.pdf"), "{html}");
+    }
+
+    #[test]
+    fn only_browser_drawable_images_render_inline() {
+        let attachment = |filename: &str, content_type: Option<&str>| InboxAttachmentView {
+            filename: Some(filename.into()),
+            kind: None,
+            content_type: content_type.map(str::to_string),
+            href: String::new(),
+        };
+        assert!(is_inline_image(&attachment("a.bin", Some("image/png"))));
+        assert!(is_inline_image(&attachment("IMG.JPG", None)));
+        assert!(!is_inline_image(&attachment("a.svg", Some("image/svg+xml"))));
+        assert!(!is_inline_image(&attachment("a.heic", Some("image/heic"))));
+        assert!(!is_inline_image(&attachment("a.png", Some("application/pdf"))));
+        assert_eq!(occurred_label("not a time"), "not a time");
     }
 
     #[test]
@@ -1934,11 +2371,13 @@ mod tests {
             InboxAttachmentView {
                 filename: Some("exhibit-a.pdf".into()),
                 kind: Some("pdf".into()),
+                content_type: None,
                 href: "/app/projects/24-1043/documents/9f2c".into(),
             },
             InboxAttachmentView {
                 filename: None,
                 kind: None,
+                content_type: None,
                 href: "/app/projects/24-1043/documents/aaa1".into(),
             },
         ];
@@ -2061,6 +2500,7 @@ mod tests {
             subject: None,
             direction: store::inbox::direction::INBOUND.into(),
             has_attachments: false,
+            sent: false,
             preview: None,
             person: None,
             updated_at: chrono::Utc::now(),
@@ -2097,6 +2537,7 @@ mod tests {
                 updated_iso: "2026-10-11T04:06:15+00:00".into(),
                 direction: store::inbox::direction::INBOUND.into(),
                 has_attachments: false,
+                sent: false,
                 preview: None,
                 person: None,
             }],
@@ -2109,8 +2550,6 @@ mod tests {
             "sms",
             "neon",
             "Unassigned",
-            "Assign to a project",
-            "received",
             "Oct 11, 04:06 UTC",
             "Unread",
         ] {
@@ -2161,6 +2600,8 @@ mod tests {
             delivery: "received".into(),
             internal: true,
             occurred_at: "2026-10-10T12:00:00Z".into(),
+            occurred_label: String::new(),
+            automated: false,
             provider_message_id: None,
             visibility: None,
             attachments: Vec::new(),
@@ -2192,19 +2633,22 @@ mod tests {
             delivery: "unknown".into(),
             internal: false,
             occurred_at: "2026-10-10T12:00:00Z".into(),
+            occurred_label: String::new(),
+            automated: false,
             provider_message_id: None,
             visibility: Some("private".into()),
             attachments: Vec::new(),
         });
         let html = thread(&page);
         assert!(html.contains("Reconcile delivery"), "{html}");
-        assert!(html.contains("Delivery: unknown"), "{html}");
+        assert!(html.contains("email · unknown"), "{html}");
         assert!(
             html.contains(r#"action="/app/projects/alpha/inbox/c1/replies""#),
             "{html}"
         );
         assert!(html.contains("We received your message."), "{html}");
-        assert!(html.contains("outbound · Private"), "{html}");
+        assert!(html.contains("inbox-message--outbound"), "{html}");
+        assert!(html.contains("unknown · Private"), "{html}");
     }
 
     #[test]
@@ -2213,7 +2657,7 @@ mod tests {
         page.channel = "instagram".into();
         page.messages[0].visibility = Some("public".into());
         let html = thread(&page);
-        assert!(html.contains("inbound · Public"), "{html}");
+        assert!(html.contains("instagram · received · Public"), "{html}");
     }
 
     #[test]
@@ -2248,7 +2692,7 @@ mod tests {
             if channel == "facebook" {
                 assert!(!html.contains("Public reply"), "{html}");
                 assert!(html.contains("Private reply"), "{html}");
-                assert!(html.contains("inbound · Private"), "{html}");
+                assert!(html.contains("facebook · received · Private"), "{html}");
             } else {
                 assert!(html.contains("Public reply"), "{html}");
                 assert!(!html.contains("Private reply"), "{html}");
@@ -2282,7 +2726,8 @@ mod tests {
             html.contains("<aside class=\"inbox-rail\" aria-label=\"Inbox folders\">"),
             "{html}"
         );
-        assert_eq!(html.matches("aria-current=\"true\"").count(), 5, "{html}");
+        // Five filter groups plus the Inbox mailbox.
+        assert_eq!(html.matches("aria-current=\"true\"").count(), 6, "{html}");
         assert!(
             html.contains(
                 "inbox-rail__link--active\" href=\"/app/inbox?channel=instagram&#38;brand=neon\" aria-current=\"true\">instagram</a>"
@@ -2752,6 +3197,7 @@ mod tests {
                 subject: Some("  ".into()),
                 direction: store::inbox::direction::INBOUND.into(),
                 has_attachments: false,
+                sent: false,
                 preview: None,
                 person: None,
                 updated_at: chrono::Utc::now(),

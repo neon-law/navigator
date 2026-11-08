@@ -318,11 +318,16 @@ pub struct IntakeRow {
     /// Whether any message on the conversation carries a filed attachment.
     /// What the `?attachments=true` filter matches rows on.
     pub has_attachments: bool,
-    /// Opening snippet of the conversation's most recent message (same
-    /// `occurred_at, id` order as [`IntakeRow::direction`]), whitespace
+    /// Whether a Person on the firm side sent a message on the conversation —
+    /// an outbound message with an author. What the inbox's Sent folder
+    /// lists; an automated acknowledgement has no author and never counts.
+    pub sent: bool,
+    /// Opening snippet of the conversation's most recent written message
+    /// (same `occurred_at, id` order as [`IntakeRow::direction`]), whitespace
     /// collapsed and ellipsized — what a list row renders beneath the
-    /// subject. None when the conversation has no messages or the body is
-    /// blank.
+    /// subject. An automated acknowledgement (outbound, no author) is skipped
+    /// so the row previews what the counterparty or the firm actually wrote.
+    /// None when no such message exists or its body is blank.
     pub preview: Option<String>,
     /// The Person the inbound sender resolved to at ingest, when one was
     /// persisted — display only, as [`IntakeRow::contact`] is.
@@ -2600,6 +2605,7 @@ async fn intake_rows(
             preview: latest_preview(&messages),
             person,
             has_attachments: has_attachments(&messages),
+            sent: has_sent(&messages),
             updated_at: conversation.updated_at,
         });
     }
@@ -3094,6 +3100,7 @@ pub async fn list_project(
             preview: latest_preview(&messages),
             person,
             has_attachments: has_attachments(&messages),
+            sent: has_sent(&messages),
             updated_at: conversation.updated_at,
         });
     }
@@ -4040,13 +4047,28 @@ fn has_attachments(messages: &[Message]) -> bool {
         .any(|message| message.attachment_asset_id.is_some())
 }
 
+/// Whether a firm-side Person sent any message on the conversation — what
+/// the Sent folder lists. Automated acknowledgements carry no author.
+fn has_sent(messages: &[Message]) -> bool {
+    messages.iter().any(is_sent)
+}
+
+fn is_sent(message: &Message) -> bool {
+    message.direction == direction::OUTBOUND && message.author_person_id.is_some()
+}
+
 /// How much of a message body a list row previews.
 pub(crate) const PREVIEW_CHAR_LIMIT: usize = 120;
 
-/// The preview snippet for a conversation's most recent message, under the
-/// same `occurred_at, id` convention as [`latest_direction`].
+/// The preview snippet for a conversation's most recent written message,
+/// under the same `occurred_at, id` convention as [`latest_direction`]. An
+/// automated outbound message (no author) is skipped.
 pub(crate) fn latest_preview(messages: &[Message]) -> Option<String> {
-    preview_snippet(&messages.last()?.body)
+    let message = messages
+        .iter()
+        .rev()
+        .find(|message| message.direction != direction::OUTBOUND || is_sent(message))?;
+    preview_snippet(&message.body)
 }
 
 /// One message body's row-preview text: whitespace collapsed to single
@@ -5843,6 +5865,53 @@ mod tests {
             .unwrap();
         assert_eq!(row.person, None);
         assert_eq!(row.preview.as_deref(), Some("Hello from outside."));
+    }
+
+    #[tokio::test]
+    async fn an_acknowledgment_neither_previews_nor_counts_as_sent() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let ingested = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::SMS,
+                "fixture-account",
+                "sms-ack-1",
+                "sms:fixture-sender",
+            ),
+        )
+        .await
+        .unwrap();
+        let conversation_id = ingested.conversation_id;
+        assign(&db, world.owner, conversation_id, world.project)
+            .await
+            .unwrap();
+        reserve_acknowledgment(&db, &ingested, "We received your message.")
+            .await
+            .unwrap()
+            .expect("the acknowledgment is reserved");
+        let row = |rows: Vec<IntakeRow>| {
+            rows.into_iter()
+                .find(|row| row.id == conversation_id)
+                .unwrap()
+        };
+        let listed = row(list_intake(&db, world.owner).await.unwrap());
+        assert_eq!(listed.preview.as_deref(), Some("Hello from outside."));
+        assert!(!listed.sent);
+
+        queue_reply(
+            &db,
+            world.lawyer,
+            conversation_id,
+            "A lawyer wrote this.",
+            purpose::MATTER,
+        )
+        .await
+        .unwrap();
+        let listed = row(list_intake(&db, world.owner).await.unwrap());
+        assert_eq!(listed.preview.as_deref(), Some("A lawyer wrote this."));
+        assert!(listed.sent);
     }
 
     #[tokio::test]

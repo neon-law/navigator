@@ -22,6 +22,7 @@ const SMS_SIGNATURE: &str = "x-navigator-signature";
 
 /// Every triage action redirects back to the review queue.
 const TRIAGE_QUEUE: &str = "/app/inbox/triage";
+const INBOX: &str = "/app/inbox";
 
 /// Start a message-keyed durable alert after the inbound Message has been
 /// persisted. Repeated provider deliveries attach to the same Slack alert.
@@ -374,6 +375,10 @@ pub struct AssignForm {
     #[serde(rename = "_csrf")]
     _csrf: Option<String>,
     project_id: Uuid,
+    /// `inbox` returns to the firm inbox after assigning — the reading pane's
+    /// control — instead of opening the Project thread.
+    #[serde(default)]
+    next: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -424,6 +429,7 @@ pub async fn assign_post(
     let back = format!("/app/inbox/{conversation_id}");
     match store::inbox::attribute_to_project(&db, actor_id, conversation_id, form.project_id).await
     {
+        Ok(_) if form.next.as_deref() == Some("inbox") => Redirect::to(INBOX).into_response(),
         Ok(assignment) => {
             let project = store::projects::find_by_id(&db, assignment.to_project_id)
                 .await
@@ -594,6 +600,69 @@ pub async fn note_post(
     match store::inbox::post_note(&db, actor_id, conversation_id, &form.body).await {
         Ok(_) => Redirect::to(&back).into_response(),
         Err(error) => redirect_error(&back, &error.to_string()),
+    }
+}
+
+/// `GET /app/inbox/{conversation_id}/messages/{message_id}/attachments/{asset_id}`
+///
+/// One Message attachment from the firm inbox, under the same firm-person
+/// authorization as the conversation itself: the bytes stream only while the
+/// viewer may read the bodies, and only for an asset linked to that Message.
+pub async fn attachment_get(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path((conversation_id, message_id, asset_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Response {
+    let Some(actor_id) = actor_id(session) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Ok(detail) = store::inbox::intake_detail(&state.surreal, actor_id, conversation_id).await
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(message) = detail
+        .messages
+        .iter()
+        .find(|message| message.id == message_id)
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let linked = store::inbox::message_assets(
+        &state.surreal,
+        detail.conversation.firm_id,
+        message_id,
+    )
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .find(|link| link.asset_id == asset_id);
+    if linked.is_none() && message.attachment_asset_id != Some(asset_id) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Ok(Some(asset)) = store::assets::find_by_id(&state.surreal, asset_id).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if asset
+        .project_id
+        .is_some_and(|id| Some(id) != detail.conversation.project_id)
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let filename = linked
+        .map(|link| link.filename)
+        .or_else(|| asset.filename.clone())
+        .unwrap_or_else(|| "attachment".into());
+    match state.storage.get(&asset.storage_key).await {
+        Ok(object) => crate::project_documents::attachment_bytes_response(
+            object.bytes,
+            &asset.content_type,
+            &filename,
+        ),
+        Err(cloud::StorageError::NotFound(_)) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::warn!(%error, "inbox attachment read failed");
+            StatusCode::BAD_GATEWAY.into_response()
+        }
     }
 }
 
@@ -1024,6 +1093,7 @@ mod tests {
             axum::Form(AssignForm {
                 _csrf: None,
                 project_id: Uuid::nil(),
+                next: None,
             }),
         )
         .await;
@@ -1325,6 +1395,7 @@ mod tests {
             axum::Form(AssignForm {
                 _csrf: None,
                 project_id: Uuid::nil(),
+                next: None,
             }),
         )
         .await;
@@ -1489,6 +1560,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_reading_pane_assign_returns_to_the_inbox() {
+        let db = store::test_support::mem_surreal().await;
+        let (owner, _admin, firm, project) = inbox_matter(&db).await;
+        let ingested = store::inbox::ingest_inbound(
+            &db,
+            &inbound(
+                firm.id,
+                store::inbox::channel::EMAIL,
+                "support",
+                "email-pane-assign",
+                "reader@example.com",
+            ),
+        )
+        .await
+        .unwrap();
+        let assigned = assign_post(
+            State(db.clone()),
+            Some(axum::Extension(session(
+                &owner.email,
+                store::persons::Role::Owner,
+                owner.id,
+            ))),
+            Path(ingested.conversation_id),
+            axum::Form(AssignForm {
+                _csrf: None,
+                project_id: project.id,
+                next: Some("inbox".into()),
+            }),
+        )
+        .await;
+        assert_eq!(assigned.status(), StatusCode::SEE_OTHER);
+        assert_eq!(assigned.headers()[axum::http::header::LOCATION], "/app/inbox");
+    }
+
+    #[tokio::test]
+    async fn a_firm_inbox_attachment_streams_only_for_its_own_message() {
+        let db = store::test_support::mem_surreal().await;
+        let (owner, _admin, firm, _project) = inbox_matter(&db).await;
+        let app = crate::test_support::app_state(db.clone()).await;
+        let attachment = store::inbox::ingest_attachment(
+            &db,
+            &app.storage,
+            firm.id,
+            None,
+            "photo.png",
+            "image/png",
+            b"synthetic png bytes",
+        )
+        .await
+        .unwrap();
+        let mut with_photo = inbound(
+            firm.id,
+            store::inbox::channel::SMS,
+            "sms:+15555550100",
+            "mms-1",
+            "+15555550123",
+        );
+        with_photo.attachments = vec![attachment.clone()];
+        let ingested = store::inbox::ingest_inbound(&db, &with_photo).await.unwrap();
+        let state = crate::admin::AdminState {
+            surreal: app.surreal,
+            workflow_runtime: app.workflow_runtime,
+            signature_provider: app.signature_provider,
+            retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
+            questionnaire_runtime: app.questionnaire_runtime,
+            storage: app.storage,
+            assets_storage: app.assets_storage,
+            forms_registry: app.forms_registry,
+            email: app.email,
+            billing_provider: app.billing_provider,
+            contract_reviewer: app.contract_reviewer,
+            bootstrap_owner_email: app.bootstrap_owner_email,
+            on_call_lawyer_email: app.on_call_lawyer_email,
+            bootstrap_company: crate::admin::bootstrap_company_from_env(),
+            sessions: app.sessions,
+            secure_cookies: false,
+            attachment_scanner: app.attachment_scanner,
+            runtime_kms: app.runtime_kms,
+            twilio_registry: None,
+        };
+        let owner_session = || {
+            Some(axum::Extension(session(
+                &owner.email,
+                store::persons::Role::Owner,
+                owner.id,
+            )))
+        };
+        let get = |session, ids: (Uuid, Uuid, Uuid)| {
+            attachment_get(State(state.clone()), session, Path(ids))
+        };
+        let ids = (
+            ingested.conversation_id,
+            ingested.message_id,
+            attachment.asset_id,
+        );
+        let ok = get(owner_session(), ids).await;
+        assert_eq!(ok.status(), StatusCode::OK);
+        assert_eq!(ok.headers()[axum::http::header::CONTENT_TYPE], "image/png");
+        assert_eq!(
+            axum::body::to_bytes(ok.into_body(), usize::MAX).await.unwrap(),
+            b"synthetic png bytes".as_slice()
+        );
+        assert_eq!(get(None, ids).await.status(), StatusCode::NOT_FOUND);
+        for denied in [
+            (Uuid::now_v7(), ids.1, ids.2),
+            (ids.0, Uuid::now_v7(), ids.2),
+            (ids.0, ids.1, Uuid::now_v7()),
+        ] {
+            assert_eq!(
+                get(owner_session(), denied).await.status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn signed_in_owner_assigns_and_a_lawyer_leaves_a_note() {
         let db = store::test_support::mem_surreal().await;
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
@@ -1515,6 +1702,7 @@ mod tests {
             axum::Form(AssignForm {
                 _csrf: None,
                 project_id: project.id,
+                next: None,
             }),
         )
         .await;
