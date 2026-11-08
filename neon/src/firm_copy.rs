@@ -324,21 +324,7 @@ mod firm_copy_tests {
                 lead,
                 body,
             } => format!("{heading} {lead} {}", paragraphs(body)),
-            Band::Cards {
-                overline,
-                heading,
-                description,
-                items,
-                ..
-            } => {
-                let cards = items
-                    .iter()
-                    .map(|c| format!("{} {} {}", c.title, c.chips.join(" "), paragraphs(&c.body)))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let description = description.clone().unwrap_or_default();
-                format!("{overline} {heading} {description} {cards}")
-            }
+            Band::Cards { .. } => cards_text(band),
             Band::Video {
                 overline,
                 heading,
@@ -349,21 +335,7 @@ mod firm_copy_tests {
                 "{overline} {heading} {} {label}",
                 description.clone().unwrap_or_default()
             ),
-            Band::Steps {
-                overline,
-                heading,
-                description,
-                items,
-                ..
-            } => {
-                let steps = items
-                    .iter()
-                    .map(|s| format!("{} {}", s.title, paragraphs(&s.body)))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let description = description.clone().unwrap_or_default();
-                format!("{overline} {heading} {description} {steps}")
-            }
+            Band::Steps { .. } => steps_text(band),
             Band::ProjectNetwork {
                 overline,
                 heading,
@@ -392,42 +364,98 @@ mod firm_copy_tests {
             Band::AppPreview { .. } => app_preview_text(band),
             Band::Downloads { .. } => downloads_text(band),
             Band::Services(services) => services_text(services),
-            Band::Stats {
-                overline,
-                heading,
-                description,
-                items,
-                ..
-            } => {
-                // The qualifier is the part of a stat a regulator reads, so
-                // it belongs in the flattened text the guards scan.
-                let stats = items
-                    .iter()
-                    .map(|s| format!("{} {} {}", s.value, s.label, s.note))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let description = description.clone().unwrap_or_default();
-                format!("{overline} {heading} {description} {stats}")
-            }
-            Band::Testimonials {
-                overline,
-                heading,
-                description,
-                items,
-                ..
-            } => {
-                let reviews = items
-                    .iter()
-                    .map(|t| format!("{} {} {}", t.author, t.when, t.body))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let description = description.clone().unwrap_or_default();
-                format!("{overline} {heading} {description} {reviews}")
-            }
+            Band::Stats { .. } => stats_text(band),
+            Band::Testimonials { .. } => testimonials_text(band),
             Band::Cta { heading, body, .. } => {
                 format!("{heading} {}", body.clone().unwrap_or_default())
             }
         }
+    }
+
+    /// Every word of prose a Cards band renders, flattened.
+    fn cards_text(band: &Band) -> String {
+        let Band::Cards {
+            overline,
+            heading,
+            description,
+            items,
+            ..
+        } = band
+        else {
+            unreachable!("cards_text is only called on Band::Cards")
+        };
+        let cards = items
+            .iter()
+            .map(|c| format!("{} {} {}", c.title, c.chips.join(" "), paragraphs(&c.body)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let description = description.clone().unwrap_or_default();
+        format!("{overline} {heading} {description} {cards}")
+    }
+
+    /// Every word of prose a Steps band renders, flattened.
+    fn steps_text(band: &Band) -> String {
+        let Band::Steps {
+            overline,
+            heading,
+            description,
+            items,
+            ..
+        } = band
+        else {
+            unreachable!("steps_text is only called on Band::Steps")
+        };
+        let steps = items
+            .iter()
+            .map(|s| format!("{} {}", s.title, paragraphs(&s.body)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let description = description.clone().unwrap_or_default();
+        format!("{overline} {heading} {description} {steps}")
+    }
+
+    /// Every word of prose a Stats band renders, flattened. The qualifier is
+    /// the part of a stat a regulator reads, so it belongs in the flattened
+    /// text the guards scan.
+    fn stats_text(band: &Band) -> String {
+        let Band::Stats {
+            overline,
+            heading,
+            description,
+            items,
+            ..
+        } = band
+        else {
+            unreachable!("stats_text is only called on Band::Stats")
+        };
+        let stats = items
+            .iter()
+            .map(|s| format!("{} {} {}", s.value, s.label, s.note))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let description = description.clone().unwrap_or_default();
+        format!("{overline} {heading} {description} {stats}")
+    }
+
+    /// Every word of prose a Testimonials band renders, flattened.
+    fn testimonials_text(band: &Band) -> String {
+        let Band::Testimonials {
+            overline,
+            heading,
+            description,
+            items,
+            ..
+        } = band
+        else {
+            unreachable!("testimonials_text is only called on Band::Testimonials")
+        };
+        let reviews = items
+            .iter()
+            .map(|t| format!("{} {} {}", t.author, t.when, t.body))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let description = description.clone().unwrap_or_default();
+        format!("{overline} {heading} {description} {reviews}")
     }
 
     fn app_preview_text(band: &Band) -> String {

@@ -1173,11 +1173,11 @@ impl BrandKey {
                 "data-theft",
                 "theft",
             ],
-            // IEP Defenders serves its home as a marketing-page band
-            // sequence (`home-marketing`), not the legacy home schema.
-            Self::IepDefenders => &["home-marketing", "services"],
+            // Lex Tecnica and IEP Defenders serve their homes as
+            // marketing-page band sequences (`home-marketing`), not the
+            // legacy home schema.
+            Self::IepDefenders | Self::LexTecnica => &["home-marketing", "services"],
             Self::GuiebShook
-            | Self::LexTecnica
             | Self::DeleteYourData
             | Self::Misericordia
             | Self::Abhaya
