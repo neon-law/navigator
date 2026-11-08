@@ -2126,7 +2126,8 @@ mod tests {
                 continue;
             };
             let dial = webapp::components::site_footer::tel_href(
-                key.resolve_branding(&views::brand::DEFAULT_BRANDING).firm_phone,
+                key.resolve_branding(&views::brand::DEFAULT_BRANDING)
+                    .firm_phone,
             );
             for path in entries.map(|entry| entry.expect("locale entry").path()) {
                 let yaml = std::fs::read_to_string(&path).expect("locale file");
