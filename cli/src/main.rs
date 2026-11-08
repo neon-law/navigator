@@ -2445,6 +2445,29 @@ enum ProjectSkillCmd {
     /// (ENG-879), so the two report the same verdict for the same
     /// `navigator.yaml`. Run from the Project repository root.
     Status,
+    /// Prepare a Kit template defect report for the Lawyers team's issue
+    /// tracker, from inside the matter.
+    ///
+    /// Reads the draft (a file, or stdin when `--file` is omitted), resolves
+    /// this matter's private terms through the site session, and scans the
+    /// draft locally with the same scanner `navigator project feedback-check`
+    /// runs. A clean draft prints the prepared issue — Kit provenance from
+    /// `navigator.yaml` on top, the draft under it — ready to file. A draft
+    /// carrying an identifier exits non-zero naming each placeholder to use.
+    /// Nothing is sent anywhere. Run from the Project repository root.
+    Feedback {
+        /// Draft title and body; reads stdin when omitted.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Which pinned Kit to report against. Required only when several
+        /// Kits are pinned.
+        #[arg(long)]
+        jurisdiction: Option<String>,
+        /// Which pinned Kit to report against. Required only when several
+        /// Kits are pinned.
+        #[arg(long)]
+        practice_area: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -6455,7 +6478,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             json,
             host,
         } => projects::setup::run(host.host.as_deref(), project_code.as_deref(), all, json).await,
-        ProjectsCmd::Skill { action } => run_project_skill(action),
+        ProjectsCmd::Skill { action } => run_project_skill(action).await,
         ProjectsCmd::Repository { action } => match action {
             ProjectRepositoryCmd::SyncSkills { dir } => {
                 match projects::repository::repair_skills(&dir) {
@@ -6600,8 +6623,10 @@ fn parse_stale_duration(input: &str) -> Option<chrono::Duration> {
 /// `list` and `show` read only the compiled-in catalog; `use` and `status`
 /// additionally read (and `use` writes) `./navigator.yaml`, so all four run
 /// from the current directory rather than taking a `--dir` flag — the same
-/// current-directory convention `navigator project gate` uses.
-fn run_project_skill(action: ProjectSkillCmd) -> ExitCode {
+/// current-directory convention `navigator project gate` uses. `use` then
+/// writes the pinned Kit version through to the live matter when the
+/// manifest names a deployment.
+async fn run_project_skill(action: ProjectSkillCmd) -> ExitCode {
     match action {
         ProjectSkillCmd::List => projects::skill::run_list(),
         ProjectSkillCmd::Show {
@@ -6611,8 +6636,20 @@ fn run_project_skill(action: ProjectSkillCmd) -> ExitCode {
         ProjectSkillCmd::Use {
             jurisdiction,
             practice_area,
-        } => projects::skill::run_use(Path::new("."), &jurisdiction, &practice_area),
+        } => {
+            let code = projects::skill::run_use(Path::new("."), &jurisdiction, &practice_area);
+            if code == ExitCode::SUCCESS {
+                projects::skill::record_kit_version(Path::new("."), &jurisdiction, &practice_area)
+                    .await;
+            }
+            code
+        }
         ProjectSkillCmd::Status => projects::skill::run_status(Path::new(".")),
+        ProjectSkillCmd::Feedback {
+            file,
+            jurisdiction,
+            practice_area,
+        } => projects::skill_feedback::run(file, jurisdiction, practice_area).await,
     }
 }
 

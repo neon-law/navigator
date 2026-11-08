@@ -9,6 +9,7 @@ use std::process::ExitCode;
 pub use rules::project_skill_catalog::{catalog, find, CatalogEntry};
 
 use super::manifest;
+use crate::remote;
 
 /// The message `show`/`use` report when a `(jurisdiction, practice_area)`
 /// pair does not resolve: the catalog entries closest to it by edit
@@ -167,6 +168,85 @@ pub fn run_use(dir: &Path, jurisdiction: &str, practice_area: &str) -> ExitCode 
     ExitCode::SUCCESS
 }
 
+/// The `{jurisdiction}/{practice_area}/{version}` value a matter's live
+/// `kit_version` column records for the pin matching `(jurisdiction,
+/// practice_area)` case-insensitively, read back from the manifest's pin
+/// resolutions. `None` when the pair is not pinned.
+#[must_use]
+pub fn kit_version_for(
+    resolutions: &[PinResolution],
+    jurisdiction: &str,
+    practice_area: &str,
+) -> Option<String> {
+    resolutions
+        .iter()
+        .find(|resolution| {
+            resolution.jurisdiction.eq_ignore_ascii_case(jurisdiction)
+                && resolution.practice_area.eq_ignore_ascii_case(practice_area)
+        })
+        .map(|resolution| {
+            format!(
+                "{}/{}/{}",
+                resolution.jurisdiction, resolution.practice_area, resolution.pinned_version
+            )
+        })
+}
+
+/// Record the Kit version a matter used on the live Project row — the
+/// write-through half of `navigator project skill use`. The manifest pin in
+/// `navigator.yaml` is the offline record; this copies the same
+/// `{jurisdiction}/{practice_area}/{version}` onto the matter's
+/// `kit_version` column through `PATCH /app/api/projects/{id}`, so matter
+/// pages and reports state which Kit produced the work without reading a
+/// repository.
+///
+/// Best effort by design: `skill use` must keep working against a plain
+/// repository with no live deployment, and the manifest pin remains the
+/// record `navigator project skill status` reads. A failed write-through is
+/// therefore a loud warning on stderr, not a failed command — never silent.
+///
+/// Reads the pinned version back from `<dir>/navigator.yaml` so the caller
+/// passes only the pair it pinned.
+pub async fn record_kit_version(dir: &Path, jurisdiction: &str, practice_area: &str) {
+    let pinned = match resolve_pins(dir) {
+        Ok(resolutions) => kit_version_for(&resolutions, jurisdiction, practice_area),
+        Err(error) => {
+            eprintln!("navigator: warning: kit version not recorded on the live matter: {error}");
+            return;
+        }
+    };
+    let Some(kit_version) = pinned else {
+        return;
+    };
+    let manifest_path = dir.join(manifest::FILE);
+    let (host, project) = match std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("read {}: {error}", manifest_path.display()))
+        .and_then(|contents| manifest::parse(&contents))
+    {
+        Ok(parsed) => (parsed.host, parsed.project),
+        Err(error) => {
+            eprintln!("navigator: warning: kit version not recorded on the live matter: {error}");
+            return;
+        }
+    };
+    let (Some(host), Some(project)) = (host.as_deref(), project.as_deref()) else {
+        eprintln!(
+            "navigator: warning: kit version not recorded on the live matter: navigator.yaml \
+             names no host and project, so the live record is unreachable"
+        );
+        return;
+    };
+    let mut patch = serde_json::Map::new();
+    patch.insert("kit_version".to_string(), kit_version.clone().into());
+    match remote::patch_project_fields(host, project, &patch).await {
+        Ok(_) => println!("recorded kit version {kit_version} on matter {project}"),
+        Err(error) => eprintln!(
+            "navigator: warning: kit version not recorded on the live matter: {error}; the \
+             navigator.yaml pin remains the record"
+        ),
+    }
+}
+
 /// Materialize one bundled Notation `code` into this Project's
 /// `drafts/<code>.md` (or its `templates/` alias), the flat layout `N110`
 /// requires of a Project repository. A no-op when the file already exists —
@@ -281,7 +361,8 @@ pub fn resolve_pins(dir: &Path) -> Result<Vec<PinResolution>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        catalog, find, resolve_pins, run_status, run_use, scaffold_notation, unresolved_message,
+        catalog, find, kit_version_for, resolve_pins, run_status, run_use, scaffold_notation,
+        unresolved_message, PinResolution,
     };
 
     #[test]
@@ -322,6 +403,22 @@ mod tests {
 
     fn scaffold(dir: &std::path::Path, yaml: &str) {
         std::fs::write(dir.join("navigator.yaml"), yaml).unwrap();
+    }
+
+    #[test]
+    fn kit_version_for_builds_the_recorded_triple_case_insensitively() {
+        let resolutions = vec![PinResolution {
+            jurisdiction: "NV".to_string(),
+            practice_area: "estates".to_string(),
+            pinned_version: "1".to_string(),
+            resolved: true,
+            catalog_version: Some("1".to_string()),
+        }];
+        assert_eq!(
+            kit_version_for(&resolutions, "nv", "estates").as_deref(),
+            Some("NV/estates/1")
+        );
+        assert_eq!(kit_version_for(&resolutions, "tx", "probate"), None);
     }
 
     #[test]

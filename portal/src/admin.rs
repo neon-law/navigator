@@ -4476,10 +4476,12 @@ async fn projects_update_lawyer_only(
         }),
         // Set with `navigator project set --calendar` / `--booking-url` /
         // `--jurisdiction`; the form carries none of the three, so it leaves
-        // them all alone.
+        // them all alone. `kit_version` is written through by
+        // `navigator project skill use`, so the form leaves it alone too.
         calendar_id: None,
         booking_url: None,
         onboarding_jurisdiction: None,
+        kit_version: None,
         drive_folder_id,
     };
     match store::projects::update_project(&surreal, project_id, &command).await {

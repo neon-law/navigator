@@ -1930,6 +1930,20 @@ pub fn is_valid_calendar_id(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@'))
 }
 
+/// Whether a value has the shape of a recorded Kit version:
+/// `{jurisdiction}/{practice_area}/{version}` — three non-empty path segments
+/// with no whitespace. The value is displayed as recorded and matched against
+/// the Project Skill catalog's `version` field, so anything beyond the
+/// segment shape is accepted verbatim rather than second-guessed here.
+#[must_use]
+pub fn is_valid_kit_version(value: &str) -> bool {
+    let segments: Vec<&str> = value.split('/').collect();
+    segments.len() == 3
+        && segments
+            .iter()
+            .all(|segment| !segment.is_empty() && !segment.chars().any(char::is_whitespace))
+}
+
 /// The notation id of the person's **sole open matter**, for auto-routing an
 /// inbound message to a matter without manual triage. Returns `Some` only
 /// when the person is the client (`notations.person_id`) on exactly one
@@ -2901,6 +2915,14 @@ pub struct UpdateProjectCommand {
     /// an omitted one leaves it untouched.
     #[serde(default)]
     pub onboarding_jurisdiction: Option<String>,
+    /// The Kit version this matter used, `{jurisdiction}/{practice_area}/
+    /// {version}` — written through by `navigator project skill use` when it
+    /// pins the same pair into the Project's `navigator.yaml`, so every
+    /// matter reports which Kit produced its work. A blank submission clears
+    /// it; an omitted one leaves it untouched. Checked by
+    /// [`is_valid_kit_version`].
+    #[serde(default)]
+    pub kit_version: Option<String>,
 }
 
 /// Set or clear the Project's source repository URL.
@@ -3064,7 +3086,7 @@ pub enum ProjectCommandError {
 /// `SET` clause carries and which parameters are bound — so a new optional
 /// column is one row here instead of two `if` blocks that must agree. `None`
 /// means "leave this column alone"; `Some("")` means "clear it".
-fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 10] {
+fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 11] {
     [
         ("description", input.description.as_ref()),
         (
@@ -3091,6 +3113,7 @@ fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option
             "onboarding_jurisdiction",
             input.onboarding_jurisdiction.as_ref(),
         ),
+        ("kit_version", input.kit_version.as_ref()),
     ]
 }
 
@@ -3205,6 +3228,16 @@ pub async fn update_project(
         }
     }
     validate_resource_links(input)?;
+    // A Kit version is displayed as recorded and reported per matter, so a
+    // value that is not three path segments is refused rather than normalized.
+    if let Some(kit_version) = &input.kit_version {
+        if !kit_version.trim().is_empty() && !is_valid_kit_version(kit_version.trim()) {
+            return Err(ProjectCommandError::Invalid(
+                "kit_version must be {jurisdiction}/{practice_area}/{version}, three non-empty \
+                 segments with no whitespace.",
+            ));
+        }
+    }
     let firm_brand = validate_firm_brand_update(surreal, input).await?;
     if find_by_id(surreal, id)
         .await
@@ -5486,6 +5519,38 @@ mod drive_folder_input_tests {
             "javascript:alert(1)",
         ] {
             assert_eq!(drive_folder_id_from_input(input), None, "{input}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod kit_version_tests {
+    use super::is_valid_kit_version;
+
+    /// A recorded Kit version is `{jurisdiction}/{practice_area}/{version}` —
+    /// the shape `navigator project skill use` writes through.
+    #[test]
+    fn a_three_segment_kit_version_is_valid() {
+        for value in ["NV/estates/1", "ny/uncontested-divorce/1.0.0", "TX/probate/2026.01"] {
+            assert!(is_valid_kit_version(value), "{value}");
+        }
+    }
+
+    /// Anything that is not three non-empty, whitespace-free segments is
+    /// refused rather than normalized — a mis-shaped value on the matter row
+    /// would defeat the report it exists for.
+    #[test]
+    fn anything_else_is_refused() {
+        for value in [
+            "",
+            "NV/estates",
+            "NV/estates/1/two",
+            "NV/estates/",
+            "/estates/1",
+            "NV/uncontested divorce/1",
+            " NV/estates/1",
+        ] {
+            assert!(!is_valid_kit_version(value), "{value}");
         }
     }
 }
