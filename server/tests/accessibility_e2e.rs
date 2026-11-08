@@ -1046,7 +1046,7 @@ async fn public_navigation_images_and_collage_dialog_are_accessible() {
 
     assert_public_shell(&c).await;
     let cta = c
-        .find(Locator::Css(".fm-hero__cta"))
+        .find(Locator::Css(".commitment-hero__cta"))
         .await
         .expect("the subscription home has its enrollment call to action");
     let href = cta
