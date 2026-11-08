@@ -1612,3 +1612,27 @@ fn sync_skills_restores_an_old_agents_contract_and_keeps_a_custom_skill() {
 
     gate(dir.path()).stderr(str::contains("canonical contract embedded").not());
 }
+
+#[test]
+fn the_gate_accepts_the_generated_onboarding_stub_and_requires_jurisdiction_after_drafting() {
+    let dir = TempDir::new().unwrap();
+    scaffold(dir.path(), "example-project");
+    let (relative, stub) = project_scaffold::scaffold_draft(project_scaffold::ONBOARDING);
+    let draft = dir.path().join(relative);
+    fs::create_dir_all(draft.parent().unwrap()).unwrap();
+    fs::write(&draft, &stub).unwrap();
+
+    offline_gate_is_clean(gate(dir.path()));
+
+    let authored = stub.replace(
+        &project_scaffold::template_placeholder(project_scaffold::ONBOARDING),
+        "This letter sets out the terms of our engagement.",
+    );
+    fs::write(&draft, authored).unwrap();
+
+    gate(dir.path())
+        .failure()
+        .code(1)
+        .stdout(str::contains("N110"))
+        .stdout(str::contains("missing required `jurisdiction:` field"));
+}

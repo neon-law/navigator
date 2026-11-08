@@ -7754,12 +7754,28 @@ async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
     // raw document bytes.
     let markdown_filter = ProjectGateMarkdownFilter::new(dir);
 
+    let project = is_project_repository(dir);
+    let onboarding_stub = project.then(|| {
+        let (relative, stub) = project_scaffold::scaffold_draft(project_scaffold::ONBOARDING);
+        (dir.join(relative), stub)
+    });
+
     // The markdown pass and the autofix are one walk: every safe-by-construction
     // edit lands first, and what it reports is what survived them.
     let mut report = match fix_directory(
         dir,
         &markdown_filter,
-        |file| rules::navigator_classified_rules_with_codes(file, &question_codes),
+        |file| {
+            let mut checks = rules::navigator_classified_rules_with_codes(file, &question_codes);
+            // The generated placeholder has no engagement terms to assign to a jurisdiction.
+            if onboarding_stub
+                .as_ref()
+                .is_some_and(|(path, stub)| &file.path == path && &file.contents == stub)
+            {
+                checks.retain(|rule| rule.code() != rules::F110JurisdictionPath::CODE);
+            }
+            checks
+        },
         !ci,
     ) {
         Ok(report) => report,
@@ -7830,7 +7846,6 @@ async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
     // something to be found by scrolling.
     print_error_recap(&gate_errors);
 
-    let project = is_project_repository(dir);
     if project {
         eprintln!("navigator project gate: repository layout");
     }
