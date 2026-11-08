@@ -1512,6 +1512,12 @@ mod tests {
                 include_str!("../postgres/migrations/20261107160000_create_firm_assumption.sql"),
             ),
             (
+                "20261107170000_create_astrocartography_reference_geometry.sql",
+                include_str!(
+                    "../postgres/migrations/20261107170000_create_astrocartography_reference_geometry.sql"
+                ),
+            ),
+            (
                 "20261108000000_add_project_client_dri.sql",
                 include_str!("../postgres/migrations/20261108000000_add_project_client_dri.sql"),
             ),
