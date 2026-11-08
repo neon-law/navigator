@@ -869,7 +869,7 @@ mod database {
         assert_eq!(counts.get(&MatterLine::Other), Some(&1));
         // A second Firm's matters never appear.
         let other_firm = Uuid::new_v4();
-        let other_slug = format!("digest-other-{}", Uuid::new_v4().simple());
+        let other_slug = format!("digest-{}", &Uuid::new_v4().simple().to_string()[..8]);
         sqlx::query(
             "INSERT INTO firm (id, name, slug, status) \
              VALUES ($1, 'Synthetic Other Firm', $2, 'active')",
@@ -938,9 +938,10 @@ mod database {
             ("2027-01-01T12:00:00Z", "far off"),
         ] {
             sqlx::query(
-                "INSERT INTO project_deadlines (id, project_id, due_at, authority_kind, authority, \
-                 source, status, calendar_role, inserted_at, updated_at) \
-                 VALUES ($1, $2, $3, 'statute', 'Synthetic statute', 'test', 'open', 'firm', now(), now())",
+                "INSERT INTO project_deadlines (id, project_id, due_at, title, authority_kind, \
+                 authority, source, status, calendar_role, inserted_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, 'statute', 'Synthetic statute', 'test', 'open', 'firm', \
+                 now(), now())",
             )
             .bind(Uuid::new_v4())
             .bind(matter_id)
