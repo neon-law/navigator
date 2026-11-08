@@ -208,10 +208,26 @@ fn request_body_with_slug(bytes: &[u8], slug: Option<&str>) -> Vec<u8> {
 }
 
 fn request_body_of_kind(bytes: &[u8], slug: Option<&str>, kind: &str) -> Vec<u8> {
+    // The door requires the slug to carry the source filename's extension
+    // (its Pointer representation), so the synthetic filename follows the
+    // slug's basename; a slugless body keeps the original shape.
+    let filename = match slug {
+        Some(s) => s.rsplit('/').next().unwrap_or(s).to_string(),
+        None => "synthetic-document.bin".to_string(),
+    };
+    request_body_named(bytes, slug, kind, &filename)
+}
+
+fn request_body_named(bytes: &[u8], slug: Option<&str>, kind: &str, filename: &str) -> Vec<u8> {
+    let content_type = if filename.to_ascii_lowercase().ends_with(".pdf") {
+        "application/pdf"
+    } else {
+        "application/octet-stream"
+    };
     let mut body = serde_json::json!({
-        "filename": "synthetic-document.bin",
+        "filename": filename,
         "content_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
-        "content_type": "application/octet-stream",
+        "content_type": content_type,
         "kind": kind,
         "visibility": "internal"
     });
@@ -221,7 +237,24 @@ fn request_body_of_kind(bytes: &[u8], slug: Option<&str>, kind: &str) -> Vec<u8>
     serde_json::to_vec(&body).expect("serialize synthetic upload")
 }
 
-async fn upload_with_slug(fixture: &Fixture, bytes: &[u8], slug: &str) -> Value {
+/// The buffered door with the conditional append's `expected_head` field
+/// (LAW-284); `None` posts exactly the pre-LAW-284 body.
+async fn upload_with_expected(
+    fixture: &Fixture,
+    bytes: &[u8],
+    slug: &str,
+    expected_head: Option<Value>,
+) -> Value {
+    let mut body: Value =
+        serde_json::from_slice(&request_body_with_slug(bytes, Some(slug))).unwrap();
+    if let Some(expected_head) = expected_head {
+        body["expected_head"] = expected_head;
+    }
+    post_upload(fixture, serde_json::to_vec(&body).unwrap()).await
+}
+
+/// One buffered POST of pre-serialized request bytes through the router.
+async fn post_upload(fixture: &Fixture, request_bytes: Vec<u8>) -> Value {
     let response = fixture
         .app
         .clone()
@@ -234,7 +267,7 @@ async fn upload_with_slug(fixture: &Fixture, bytes: &[u8], slug: &str) -> Value 
                 ))
                 .header(header::CONTENT_TYPE, "application/json")
                 .extension(fixture.session.clone())
-                .body(Body::from(request_body_with_slug(bytes, Some(slug))))
+                .body(Body::from(request_bytes))
                 .expect("build upload"),
         )
         .await
@@ -245,6 +278,20 @@ async fn upload_with_slug(fixture: &Fixture, bytes: &[u8], slug: &str) -> Value 
         .expect("read upload response");
     let json: Value = serde_json::from_slice(&body).expect("upload response is JSON");
     json!({ "status": status.as_u16(), "body": json })
+}
+
+/// The live head's `(asset_id, version, sha256)` triple as the wire sees
+/// it: newest first, the head's one-based version is the chain's length.
+async fn expected_head_of(fixture: &Fixture, slug: &str) -> Value {
+    let chain = store::assets::revisions(&fixture.surreal, fixture.project_id, slug)
+        .await
+        .expect("read the live chain");
+    let head = chain.first().cloned().expect("the chain has a head");
+    json!({
+        "asset_id": head.id,
+        "version": chain.len(),
+        "sha256": head.sha256_hex,
+    })
 }
 
 async fn upload(fixture: &Fixture, bytes: &[u8], content_length: Option<&str>) -> Value {
@@ -335,7 +382,13 @@ async fn refuses_a_document_over_the_limit_with_both_sizes_for_lied_and_missing_
 #[tokio::test]
 async fn refuses_a_slug_that_cannot_be_represented_by_a_pointer_path() {
     let fixture = fixture("slug-pointer-shape").await;
-    let result = upload_with_slug(&fixture, b"synthetic document", "dkt-001-complaint").await;
+    let request = request_body_named(
+        b"synthetic document",
+        Some("dkt-001-complaint"),
+        "unclassified",
+        "synthetic-document.bin",
+    );
+    let result = post_upload(&fixture, request).await;
 
     assert_eq!(result["status"], 400);
     assert_eq!(result["body"]["error"], "invalid_slug");
@@ -343,4 +396,286 @@ async fn refuses_a_slug_that_cannot_be_represented_by_a_pointer_path() {
         .as_str()
         .expect("slug message")
         .contains("synthetic-document.bin"));
+}
+
+/// One POST of pre-serialized JSON to a Project documents path, through the
+/// session extension. The caller owns the status assertions.
+async fn post_documents_json(
+    fixture: &Fixture,
+    path_suffix: &str,
+    request_bytes: Vec<u8>,
+) -> (axum::http::StatusCode, Value) {
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/app/api/projects/{}/{}",
+                    fixture.project_id, path_suffix
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .extension(fixture.session.clone())
+                .body(Body::from(request_bytes))
+                .expect("build request"),
+        )
+        .await
+        .expect("issue the request");
+    let status = response.status();
+    let body: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read response"),
+    )
+    .expect("response is JSON");
+    (status, body)
+}
+
+/// One streaming upload end to end through the router: open, one chunk,
+/// complete. The complete call carries `expected_head` when given (LAW-284).
+async fn stream_bytes(
+    fixture: &Fixture,
+    slug: &str,
+    bytes: &[u8],
+    expected_head: Option<Value>,
+) -> Value {
+    // The door requires the slug to carry the source filename's extension,
+    // so the streaming open names the slug's basename.
+    let filename = slug.rsplit('/').next().unwrap_or(slug).to_string();
+    let content_type = if filename.to_ascii_lowercase().ends_with(".pdf") {
+        "application/pdf"
+    } else {
+        "application/octet-stream"
+    };
+    let open_body = json!({
+        "filename": filename,
+        "content_type": content_type,
+        "kind": "unclassified",
+        "visibility": "internal",
+        "slug": slug,
+        "declared_size": bytes.len(),
+        "declared_sha256": store::documents::sha256_hex(bytes),
+    });
+    let (status, session) = post_documents_json(
+        fixture,
+        "documents/upload-session",
+        serde_json::to_vec(&open_body).unwrap(),
+    )
+    .await;
+    assert!(status.is_success(), "the session opened: {status}");
+    let session_id = session["id"].as_str().expect("session id").to_string();
+    assert!(
+        session["chunk_size"].as_i64().unwrap() > i64::try_from(bytes.len()).unwrap(),
+        "the fixture fits one server chunk"
+    );
+
+    let chunk_body = json!({
+        "session_id": session_id,
+        "offset": 0,
+        "content_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+    });
+    let (status, _) = post_documents_json(
+        fixture,
+        "documents/upload-session/chunk",
+        serde_json::to_vec(&chunk_body).unwrap(),
+    )
+    .await;
+    assert!(status.is_success(), "the chunk stuck");
+
+    let mut complete_body = json!({ "session_id": session_id });
+    if let Some(expected_head) = expected_head {
+        complete_body["expected_head"] = expected_head;
+    }
+    let (status, body) = post_documents_json(
+        fixture,
+        "documents/upload-session/complete",
+        serde_json::to_vec(&complete_body).unwrap(),
+    )
+    .await;
+    json!({ "status": status.as_u16(), "body": body })
+}
+
+/// LAW-284 back-compat: a buffered door call with no `expected_head` field
+/// behaves exactly as before — `201` for a new revision, `200` for an
+/// identical retry, and no conditional refusal of any kind.
+#[tokio::test]
+async fn a_buffered_upload_without_an_expected_head_behaves_as_before() {
+    let fixture = fixture("cas-backcompat-buffered").await;
+    let first = upload_with_expected(&fixture, b"plain bytes", "plain.pdf", None).await;
+    assert_eq!(first["status"], 201, "{first}");
+    let retry = upload_with_expected(&fixture, b"plain bytes", "plain.pdf", None).await;
+    assert_eq!(
+        retry["status"], 200,
+        "the identical retry is unchanged: {retry}"
+    );
+    let next = upload_with_expected(&fixture, b"other bytes", "plain.pdf", None).await;
+    assert_eq!(next["status"], 201, "different bytes still append: {next}");
+
+    let chain = store::assets::revisions(&fixture.surreal, fixture.project_id, "plain.pdf")
+        .await
+        .expect("read the chain");
+    assert_eq!(chain.len(), 2, "exactly the two appended revisions");
+}
+
+/// LAW-284: a buffered conditional append whose expected head the live
+/// chain no longer names is refused with `409 head_conflict` naming the
+/// live head's triple — and inserts nothing.
+#[tokio::test]
+async fn a_conditional_buffered_upload_refuses_a_stale_head_and_names_the_live_one() {
+    let fixture = fixture("cas-buffered-stale").await;
+    let first = upload_with_expected(&fixture, b"v1", "brief.pdf", None).await;
+    assert_eq!(first["status"], 201, "{first}");
+    let stale = expected_head_of(&fixture, "brief.pdf").await;
+
+    // The concurrent writer this PR races against: a different upload
+    // extends the chain between my read and my conditional append.
+    let concurrent = upload_with_expected(&fixture, b"v2", "brief.pdf", None).await;
+    assert_eq!(concurrent["status"], 201, "{concurrent}");
+
+    let refused = upload_with_expected(&fixture, b"v3", "brief.pdf", Some(stale)).await;
+    assert_eq!(refused["status"], 409, "{refused}");
+    assert_eq!(refused["body"]["error"], "head_conflict");
+    let current = &refused["body"]["current"];
+    let chain = store::assets::revisions(&fixture.surreal, fixture.project_id, "brief.pdf")
+        .await
+        .expect("read the chain");
+    assert_eq!(current["asset_id"], chain[0].id.to_string(), "{refused}");
+    assert_eq!(current["version"], 2, "{refused}");
+    assert_eq!(current["sha256"], chain[0].sha256_hex, "{refused}");
+    assert_eq!(chain.len(), 2, "the refusal inserted nothing");
+}
+
+/// LAW-284: a buffered conditional append whose expected head still names
+/// the live head files normally (`201`), and one whose bytes the live head
+/// already holds — the stale-precondition retry of an ambiguous upload —
+/// resolves to the unchanged pointer without a second row.
+#[tokio::test]
+async fn a_conditional_buffered_upload_against_the_live_head_files_and_dedupes() {
+    let fixture = fixture("cas-buffered-live").await;
+    let first = upload_with_expected(&fixture, b"v1", "brief.pdf", None).await;
+    assert_eq!(first["status"], 201, "{first}");
+    let expected = expected_head_of(&fixture, "brief.pdf").await;
+
+    let second = upload_with_expected(&fixture, b"v2", "brief.pdf", Some(expected.clone())).await;
+    assert_eq!(second["status"], 201, "{second}");
+
+    // The retry that lost the race: v2's bytes, v1's stale precondition.
+    let stale = json!({
+        "asset_id": first["body"]["current_version"]["asset_id"],
+        "version": 1,
+        "sha256": store::assets::sha256_hex(b"v1"),
+    });
+    let retry = upload_with_expected(&fixture, b"v2", "brief.pdf", Some(stale)).await;
+    assert_eq!(
+        retry["status"], 200,
+        "same bytes resolve unchanged: {retry}"
+    );
+
+    let chain = store::assets::revisions(&fixture.surreal, fixture.project_id, "brief.pdf")
+        .await
+        .expect("read the chain");
+    assert_eq!(chain.len(), 2);
+    assert_eq!(
+        chain
+            .iter()
+            .filter(|asset| asset.sha256_hex == store::assets::sha256_hex(b"v2"))
+            .count(),
+        1,
+        "no duplicate digest row"
+    );
+}
+
+/// LAW-284: a malformed expected head — a version that names no revision,
+/// or a digest that cannot match — is the caller's mistake, refused `400`
+/// before any read or insert.
+#[tokio::test]
+async fn a_malformed_expected_head_is_a_bad_request() {
+    let fixture = fixture("cas-buffered-malformed").await;
+    for expected in [
+        json!({
+            "asset_id": uuid::Uuid::now_v7(),
+            "version": 0,
+            "sha256": store::assets::sha256_hex(b"v1"),
+        }),
+        json!({
+            "asset_id": uuid::Uuid::now_v7(),
+            "version": 1,
+            "sha256": "not-a-sha",
+        }),
+    ] {
+        let refused =
+            upload_with_expected(&fixture, b"v1", "brief.pdf", Some(expected.clone())).await;
+        assert_eq!(refused["status"], 400, "{expected}");
+        assert_eq!(
+            refused["body"]["error"], "invalid_expected_head",
+            "{expected}"
+        );
+    }
+    let chain = store::assets::revisions(&fixture.surreal, fixture.project_id, "brief.pdf")
+        .await
+        .expect("read the chain");
+    assert!(chain.is_empty(), "nothing was inserted");
+}
+
+/// LAW-284 back-compat: a streaming completion with no `expected_head`
+/// field behaves exactly as before — `201`, one filed revision.
+#[tokio::test]
+async fn a_streaming_completion_without_an_expected_head_behaves_as_before() {
+    let fixture = fixture("cas-backcompat-streaming").await;
+    let filed = stream_bytes(&fixture, "hearing.mp3", b"streamed bytes", None).await;
+    assert_eq!(filed["status"], 201, "{filed}");
+    let chain = store::assets::revisions(&fixture.surreal, fixture.project_id, "hearing.mp3")
+        .await
+        .expect("read the chain");
+    assert_eq!(chain.len(), 1);
+}
+
+/// LAW-284: the streaming completion is the filing moment. A stale
+/// expected head is refused `409 head_conflict` naming the live head with
+/// the session kept — so re-completing against the adopted triple, the
+/// restart a client performs, files normally.
+#[tokio::test]
+async fn a_streaming_completion_refuses_a_stale_head_and_the_restart_files() {
+    let fixture = fixture("cas-streaming-stale").await;
+    // A first revision on the slug, then the head the streamer read.
+    let first = upload_with_expected(&fixture, b"v1", "hearing.mp3", None).await;
+    assert_eq!(first["status"], 201, "{first}");
+    let stale = expected_head_of(&fixture, "hearing.mp3").await;
+
+    // The concurrent writer extends the chain while the stream runs.
+    let concurrent = upload_with_expected(&fixture, b"v2", "hearing.mp3", None).await;
+    assert_eq!(concurrent["status"], 201, "{concurrent}");
+
+    let refused = stream_bytes(&fixture, "hearing.mp3", b"v3 streamed", Some(stale.clone())).await;
+    assert_eq!(refused["status"], 409, "{refused}");
+    assert_eq!(refused["body"]["error"], "head_conflict");
+    let chain = store::assets::revisions(&fixture.surreal, fixture.project_id, "hearing.mp3")
+        .await
+        .expect("read the chain");
+    assert_eq!(
+        refused["body"]["current"]["asset_id"],
+        chain[0].id.to_string()
+    );
+    assert_eq!(refused["body"]["current"]["version"], 2);
+    assert_eq!(chain.len(), 2, "the refusal filed nothing");
+
+    // The restart: the same session re-completes against the head the
+    // conflict named — the session row and its staged bytes survived.
+    let restarted = stream_bytes(
+        &fixture,
+        "hearing.mp3",
+        b"v3 streamed",
+        Some(refused["body"]["current"].clone()),
+    )
+    .await;
+    assert_eq!(restarted["status"], 201, "the restart files: {restarted}");
+    let chain = store::assets::revisions(&fixture.surreal, fixture.project_id, "hearing.mp3")
+        .await
+        .expect("read the chain");
+    assert_eq!(chain.len(), 3);
+    assert_eq!(
+        chain[0].sha256_hex,
+        store::assets::sha256_hex(b"v3 streamed")
+    );
 }

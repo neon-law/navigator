@@ -5210,6 +5210,12 @@ struct UploadDocumentRequest {
     /// invalid_folder` and writes nothing — never a silent default.
     #[serde(default)]
     folder: Option<String>,
+    /// The chain head the caller read before uploading (LAW-284). Present
+    /// turns the append conditional: a chain that moved past that head is a
+    /// `409 head_conflict` naming the live head, never a silently forked
+    /// chain. Absent — an old CLI — files exactly as before, no CAS.
+    #[serde(default)]
+    expected_head: Option<store::assets::ExpectedHead>,
 }
 
 fn invalid_document_slug_response(filename: &str, slug: &str) -> Option<Response> {
@@ -5426,6 +5432,13 @@ async fn upload_document_door(
             "A source revision may be attached only to a transcript.",
         ));
     }
+    if let Some(response) = input
+        .expected_head
+        .as_ref()
+        .and_then(invalid_expected_head_response)
+    {
+        return Ok(response);
+    }
     if let Some(source) = input.derived_from.as_ref() {
         if source.version == 0
             || source.sha256.len() != 64
@@ -5556,7 +5569,7 @@ async fn upload_document_door(
         secondary_storage_key: None,
         visibility,
     };
-    let filed = store::assets::file_revision(
+    let filed = match store::assets::file_revision_with_expected_head(
         &state.surreal,
         &state.storage,
         &args,
@@ -5575,10 +5588,17 @@ async fn upload_document_door(
             evidence: input.evidence.clone(),
             folder: folder.map(store::document_pointers::MatterFolder::as_str),
         },
+        input.expected_head.as_ref(),
         &bytes,
     )
     .await
-    .map_err(ApiError::Revision)?;
+    {
+        Ok(filed) => filed,
+        Err(store::assets::RevisionError::HeadConflict { current, .. }) => {
+            return Ok(head_conflict_response(current.as_ref()));
+        }
+        Err(error) => return Err(ApiError::Revision(error)),
+    };
     let status = match filed {
         store::assets::Filed::Revision(_) => StatusCode::CREATED,
         store::assets::Filed::Unchanged { .. } => StatusCode::OK,
@@ -5632,6 +5652,12 @@ struct UploadChunkRequest {
 #[derive(Deserialize)]
 struct UploadSessionRefRequest {
     session_id: Uuid,
+    /// The chain head the caller read before uploading (LAW-284), honored
+    /// by the complete door — the moment the bytes are actually filed.
+    /// `409 head_conflict` names the live head when the chain moved; absent
+    /// files exactly as before.
+    #[serde(default)]
+    expected_head: Option<store::assets::ExpectedHead>,
 }
 
 /// The wire shape of an upload session: where the upload stands and what the
@@ -6069,7 +6095,9 @@ async fn append_upload_chunk_door(
 /// rides in the body, never the path. The response is
 /// the same source-safe pointer the buffered door returns. `201` for a new
 /// revision and `200` for an identical one; `409` until every byte has
-/// arrived; `422` when the staged bytes hash to something other than the
+/// arrived; `409 head_conflict` when the caller sent an `expected_head` the
+/// live chain no longer matches (LAW-284), naming the live head; `422`
+/// when the staged bytes hash to something other than the
 /// declared digest (the session is removed, so a retry starts clean); `404`
 /// for a foreign, finished, or never-opened session.
 async fn complete_upload_session_door(
@@ -6079,6 +6107,13 @@ async fn complete_upload_session_door(
     JsonOrForm(input): JsonOrForm<UploadSessionRefRequest>,
 ) -> Result<Response, ApiError> {
     let session_id = input.session_id;
+    if let Some(response) = input
+        .expected_head
+        .as_ref()
+        .and_then(invalid_expected_head_response)
+    {
+        return Ok(response);
+    }
     let in_scope = store::access::can_see_project_as_lawyer(
         &state.surreal,
         lawyer.0.person_id,
@@ -6101,7 +6136,15 @@ async fn complete_upload_session_door(
         .clone()
         .unwrap_or_else(|| session.filename.clone());
     let kind = session.kind.clone();
-    match store::documents::complete_upload(&state.surreal, &state.storage, id, session_id).await {
+    match store::documents::complete_upload(
+        &state.surreal,
+        &state.storage,
+        id,
+        session_id,
+        input.expected_head.as_ref(),
+    )
+    .await
+    {
         Ok(filed) => {
             let status = match filed {
                 store::assets::Filed::Revision(_) => StatusCode::CREATED,
@@ -6111,6 +6154,9 @@ async fn complete_upload_session_door(
             Ok((status, Json(pointer)).into_response())
         }
         Err(store::documents::UploadSessionError::NoSuchSession(_)) => Err(ApiError::NotFound),
+        Err(store::documents::UploadSessionError::Revision(
+            store::assets::RevisionError::HeadConflict { current, .. },
+        )) => Ok(head_conflict_response(current.as_ref())),
         Err(store::documents::UploadSessionError::Expired(at)) => Ok(upload_session_expired(&at)),
         Err(store::documents::UploadSessionError::Incomplete { received, declared }) => {
             Ok(conflict(
@@ -7166,6 +7212,41 @@ fn conflict(error: &str, message: &str) -> Response {
         Json(serde_json::json!({ "error": error, "message": message })),
     )
         .into_response()
+}
+
+/// The `409` a conditional append answers when the chain moved past the
+/// caller's expected head (LAW-284). The body names the live head's triple
+/// so the client restarts against it without a second read; `current` is
+/// `null` when the chain has no live head at all.
+fn head_conflict_response(current: Option<&store::assets::ExpectedHead>) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": "head_conflict",
+            "current": current,
+        })),
+    )
+        .into_response()
+}
+
+/// The one malformed shape an expected head can arrive in: version 0 names
+/// no revision (a chain's head is one-based) and a digest that is not 64
+/// lowercase hex characters can never match a stored one — both are the
+/// caller's mistake, rejected before any read, mirroring the
+/// `derived_from` validation.
+fn invalid_expected_head_response(expected: &store::assets::ExpectedHead) -> Option<Response> {
+    let well_formed = expected.version > 0
+        && expected.sha256.len() == 64
+        && expected
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    (!well_formed).then(|| {
+        bad_request(
+            "invalid_expected_head",
+            "The expected head needs a positive version and a lowercase SHA-256 digest.",
+        )
+    })
 }
 
 fn assign_slug_response(error: store::assets::AssignSlugError) -> Result<Response, ApiError> {
@@ -10623,7 +10704,10 @@ mod tests {
             State(state.clone()),
             LawyerSession(session_data.clone()),
             Path(project_id),
-            JsonOrForm(UploadSessionRefRequest { session_id }),
+            JsonOrForm(UploadSessionRefRequest {
+                session_id,
+                expected_head: None,
+            }),
         )
         .await
         .unwrap();
@@ -10635,7 +10719,10 @@ mod tests {
             State(state.clone()),
             LawyerSession(session_data.clone()),
             Path(project_id),
-            JsonOrForm(UploadSessionRefRequest { session_id }),
+            JsonOrForm(UploadSessionRefRequest {
+                session_id,
+                expected_head: None,
+            }),
         )
         .await
         .unwrap();
@@ -10684,6 +10771,7 @@ mod tests {
             Path(project_id),
             JsonOrForm(UploadSessionRefRequest {
                 session_id: empty_id,
+                expected_head: None,
             }),
         )
         .await
