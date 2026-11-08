@@ -2218,7 +2218,16 @@ async fn reconcile(
     workflow_home: &str,
 ) -> Result<()> {
     eprintln!("==> reconciling {}", client.repository);
-    let repository: Repository = client.get_json(&client.repo_path("")).await?;
+    let url = client.url(&client.repo_path(""));
+    let response = client.http.get(&url).send().await?;
+    // App and fine-grained credentials may not advertise OAuth scopes.
+    let lacks_workflow_scope = response
+        .headers()
+        .get("x-oauth-scopes")
+        .and_then(|value| value.to_str().ok())
+        .filter(|scopes| !scopes.trim().is_empty())
+        .is_some_and(|scopes| !scopes.split(',').any(|scope| scope.trim() == "workflow"));
+    let repository: Repository = parse_json(response, &url).await?;
     report_visibility_finding(dry_run, policy, &repository);
     let settings_policy = settings_posture(policy, &repository, client).await?;
 
@@ -2300,6 +2309,17 @@ async fn reconcile(
     if actions.is_empty() {
         eprintln!("==> GitHub settings already match the desired state");
         return Ok(());
+    }
+    if !dry_run
+        && lacks_workflow_scope
+        && workflow_paths
+            .iter()
+            .any(|update| update.path.starts_with(".github/workflows/"))
+    {
+        bail!(
+            "the GitHub token lacks the `workflow` scope required to update workflow files. \
+             Rerun with a token that can write workflows"
+        );
     }
     for action in &actions {
         eprintln!(
@@ -5811,6 +5831,15 @@ mod tests {
     async fn reconcile_opens_a_pull_request_when_ci_yml_is_pinned_to_a_stale_version() {
         let server = MockServer::start().await;
         let client = test_client(&server);
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/navigator"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("x-oauth-scopes", "repo, workflow")
+                    .set_body_json(live_repository_json("enabled")),
+            )
+            .mount(&server)
+            .await;
         let live_ci_yml = project_repository::workflow("26.7.1");
         // Also a thin reusable-workflow caller (at a stale pin), so the live
         // ruleset requires "ci / ci" — see the matching comment above.
@@ -6044,12 +6073,19 @@ mod tests {
         .unwrap();
     }
 
-    /// `dry_run` never opens a branch, commits a file, or opens a pull
-    /// request, even when the plan includes an `UpdateWorkflow` action.
     #[tokio::test]
-    async fn reconcile_dry_run_never_touches_a_drifted_workflow() {
+    async fn a_token_without_workflow_scope_can_preview_but_cannot_write() {
         let server = MockServer::start().await;
         let client = test_client(&server);
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/navigator"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("x-oauth-scopes", "repo, read:org")
+                    .set_body_json(live_repository_json("disabled")),
+            )
+            .mount(&server)
+            .await;
         mount_reads(
             &server,
             &desired_branch_ruleset(TEST_ACTIONS_APP_ID, REQUIRED_CHECK, &[]),
@@ -6086,12 +6122,27 @@ mod tests {
         .await
         .unwrap();
 
+        let error = reconcile(
+            COMMON_POLICY,
+            &client,
+            false,
+            FIXTURE_ACTION_VERSION,
+            project_repository::DEFAULT_WORKFLOW_HOME,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("lacks the `workflow` scope"),
+            "{error}"
+        );
+
         let requests = server.received_requests().await.unwrap();
         assert!(
             requests
                 .iter()
-                .all(|request| request.method == wiremock::http::Method::GET),
-            "dry run must never write, including opening a branch or a pull request"
+                .all(|request| request.method == wiremock::http::Method::GET
+                    && !request.url.path().contains("/git/ref")),
+            "preflight must refuse before preparing a branch or writing settings"
         );
     }
 
