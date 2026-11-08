@@ -6,7 +6,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Choice, Field, FormCard, Heading};
+use crate::components::{Choice, Field, FormCard, Heading, Icon, IconName, SocialMarkGlyph};
 use crate::people::ViewerRole;
 
 /// Owner firm-wide list.
@@ -432,11 +432,57 @@ fn filter_href(
     }
 }
 
-/// One `(label, href, active)` triple for [`inbox_rail_group`].
-type RailOption = (String, String, bool);
+/// One `(label, href, active, channel)` rail link for [`inbox_rail_group`];
+/// a channel link carries its channel so the rail draws that channel's icon.
+type RailOption = (String, String, bool, Option<String>);
 
 fn rail_option(label: &str, href: String, active: bool) -> RailOption {
-    (label.to_string(), href, active)
+    (label.to_string(), href, active, None)
+}
+
+/// A rail link to one channel, drawn with that channel's icon.
+fn channel_option(channel: &str, href: String, active: bool) -> RailOption {
+    (channel.to_string(), href, active, Some(channel.to_string()))
+}
+
+/// A channel's display name: the provider's own spelling, else the stored
+/// lowercase value.
+fn channel_name(channel: &str) -> &str {
+    match channel {
+        "email" => "Email",
+        "sms" => "Text",
+        "voice" => "Voice",
+        "facebook" => "Facebook",
+        "instagram" => "Instagram",
+        "threads" => "Threads",
+        "youtube" => "YouTube",
+        "tiktok" => "TikTok",
+        "x" => "X",
+        other => other,
+    }
+}
+
+/// A channel's icon, decorative — the surrounding text or a visually hidden
+/// label names the channel. Social channels draw the provider's own mark;
+/// email, text, and voice draw the shared envelope, bubble, and handset.
+fn channel_icon(channel: &str) -> Element {
+    let icon = match channel {
+        "email" => Some(IconName::EnvelopeFill),
+        "sms" => Some(IconName::ChatDotsFill),
+        "voice" => Some(IconName::TelephoneFill),
+        "youtube" => Some(IconName::YouTube),
+        "x" => Some(IconName::X),
+        _ => None,
+    };
+    rsx! {
+        span { class: "inbox-channel-icon", "data-channel": "{channel}", "aria-hidden": "true",
+            if let Some(name) = icon {
+                Icon { name }
+            } else {
+                SocialMarkGlyph { label: channel_name(channel).to_string() }
+            }
+        }
+    }
 }
 
 /// One folder-rail group: a titled nav of stacked filter links, each carrying
@@ -448,13 +494,18 @@ fn inbox_rail_group(aria_label: &str, title: &str, options: &[RailOption]) -> El
         nav { class: "inbox-rail__group", "aria-label": "{aria_label}",
             h2 { class: "inbox-rail__title", "{title}" }
             ul {
-                for (label, href, active) in options.iter() {
+                for (label, href, active, channel) in options.iter() {
                     li {
                         a {
                             class: if *active { "inbox-rail__link inbox-rail__link--active" } else { "inbox-rail__link" },
                             href: "{href}",
                             "aria-current": active.then_some("true"),
-                            "{label}"
+                            if let Some(channel) = channel.as_deref() {
+                                {channel_icon(channel)}
+                                "{channel_name(channel)}"
+                            } else {
+                                "{label}"
+                            }
                         }
                     }
                 }
@@ -760,17 +811,13 @@ fn is_inline_image(attachment: &InboxAttachmentView) -> bool {
     if let Some(content_type) = attachment.content_type.as_deref() {
         let content_type = content_type.to_ascii_lowercase();
         return content_type.starts_with("image/")
-            && RENDERABLE
-                .iter()
-                .any(|kind| content_type.ends_with(kind));
+            && RENDERABLE.iter().any(|kind| content_type.ends_with(kind));
     }
     attachment
         .filename
         .as_deref()
         .and_then(|name| name.rsplit_once('.'))
-        .is_some_and(|(_, extension)| {
-            RENDERABLE.contains(&extension.to_ascii_lowercase().as_str())
-        })
+        .is_some_and(|(_, extension)| RENDERABLE.contains(&extension.to_ascii_lowercase().as_str()))
 }
 
 /// Starting a text needs a viewer whose role may send one and a deployment
@@ -1340,8 +1387,11 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
                         span { class: "inbox-table__preview", "{preview}" }
                     }
                 }
-                td { class: "inbox-table__tag", "{brand}" }
-                td { class: "inbox-table__tag", "{row.channel}" }
+                td { class: "inbox-table__tag inbox-table__brand", "{brand}" }
+                td { class: "inbox-table__tag inbox-table__channel",
+                    {channel_icon(&row.channel)}
+                    span { class: "nav-visually-hidden", "{channel_name(&row.channel)}" }
+                }
                 td { class: "inbox-table__assignee", "{row.assignee}" }
                 td { class: "inbox-table__date",
                     time { datetime: "{row.updated_iso}", "{row.updated}" }
@@ -1388,78 +1438,127 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
 /// Folder-rail link sets: the Inbox and Sent mailboxes, then one option per
 /// value of each filter, with the filter in effect marked active. Hrefs keep
 /// the URL-query semantics, so every view is a shareable link.
+#[allow(clippy::too_many_lines)]
 fn inbox_rail(page: &InboxPage) -> Element {
     let base = page.base_href.as_str();
     let current = Filters::of(page);
     let mailbox_options = vec![
         rail_option(
             "Inbox",
-            Filters { sent: false, ..current }.href(base),
+            Filters {
+                sent: false,
+                ..current
+            }
+            .href(base),
             !page.sent_only,
         ),
         rail_option(
             "Sent",
-            Filters { sent: true, ..current }.href(base),
+            Filters {
+                sent: true,
+                ..current
+            }
+            .href(base),
             page.sent_only,
         ),
     ];
     let mut channel_options = vec![rail_option(
         "All channels",
-        Filters { channel: None, ..current }.href(base),
+        Filters {
+            channel: None,
+            ..current
+        }
+        .href(base),
         page.channel_filter.is_none(),
     )];
     for channel in &page.channels {
-        channel_options.push(rail_option(
+        channel_options.push(channel_option(
             channel,
-            Filters { channel: Some(channel.as_str()), ..current }.href(base),
+            Filters {
+                channel: Some(channel.as_str()),
+                ..current
+            }
+            .href(base),
             page.channel_filter.as_deref() == Some(channel.as_str()),
         ));
     }
     let mut brand_options = vec![rail_option(
         "All Brands",
-        Filters { brand: None, ..current }.href(base),
+        Filters {
+            brand: None,
+            ..current
+        }
+        .href(base),
         page.brand_filter.is_none(),
     )];
     for brand in &page.brands {
         brand_options.push(rail_option(
             brand,
-            Filters { brand: Some(brand.as_str()), ..current }.href(base),
+            Filters {
+                brand: Some(brand.as_str()),
+                ..current
+            }
+            .href(base),
             page.brand_filter.as_deref() == Some(brand.as_str()),
         ));
     }
     let unread_options = vec![
         rail_option(
             "All messages",
-            Filters { unread: false, ..current }.href(base),
+            Filters {
+                unread: false,
+                ..current
+            }
+            .href(base),
             !page.unread_only,
         ),
         rail_option(
             "Unread only",
-            Filters { unread: true, ..current }.href(base),
+            Filters {
+                unread: true,
+                ..current
+            }
+            .href(base),
             page.unread_only,
         ),
     ];
     let mut direction_options = vec![rail_option(
         "Any direction",
-        Filters { direction: None, ..current }.href(base),
+        Filters {
+            direction: None,
+            ..current
+        }
+        .href(base),
         page.direction_filter.is_none(),
     )];
     for direction in ["inbound", "outbound", "internal"] {
         direction_options.push(rail_option(
             direction,
-            Filters { direction: Some(direction), ..current }.href(base),
+            Filters {
+                direction: Some(direction),
+                ..current
+            }
+            .href(base),
             page.direction_filter.as_deref() == Some(direction),
         ));
     }
     let attachment_options = vec![
         rail_option(
             "Any attachment state",
-            Filters { attachments: false, ..current }.href(base),
+            Filters {
+                attachments: false,
+                ..current
+            }
+            .href(base),
             !page.attachments_only,
         ),
         rail_option(
             "With attachments",
-            Filters { attachments: true, ..current }.href(base),
+            Filters {
+                attachments: true,
+                ..current
+            }
+            .href(base),
             page.attachments_only,
         ),
     ];
@@ -1572,7 +1671,10 @@ pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
                 a { class: "nav-link", href: "{href}", "Open full thread" }
             }
             ul { class: "inbox-chips", "aria-label": "Conversation facts",
-                li { class: "inbox-chip", "{page.channel}" }
+                li { class: "inbox-chip",
+                    {channel_icon(&page.channel)}
+                    "{channel_name(&page.channel)}"
+                }
                 li { class: "inbox-chip", "{brand}" }
                 li { class: "inbox-chip", "Project: {page.assignee}" }
             }
@@ -1675,8 +1777,10 @@ fn inbox_message_article(message: &InboxMessageView, page: &InboxThreadPage) -> 
     } else {
         "inbox-message"
     };
-    let (images, files): (Vec<_>, Vec<_>) =
-        message.attachments.iter().partition(|attachment| is_inline_image(attachment));
+    let (images, files): (Vec<_>, Vec<_>) = message
+        .attachments
+        .iter()
+        .partition(|attachment| is_inline_image(attachment));
     rsx! {
         article {
             key: "{message.id}",
@@ -2043,7 +2147,8 @@ mod tests {
             selected.1,
             true,
             Some(store::inbox::direction::OUTBOUND),
-            selected.4, false
+            selected.4,
+            false
         ));
         // attachments_only on excludes a row with nothing filed.
         let mut bare_row = row.clone();
@@ -2241,12 +2346,19 @@ mod tests {
         let dialog = &html[html
             .find("<dialog id=\"inbox-compose\"")
             .expect("a compose dialog")..];
-        assert!(!dialog[..dialog.find('>').unwrap()].contains(" open"), "{dialog}");
+        assert!(
+            !dialog[..dialog.find('>').unwrap()].contains(" open"),
+            "{dialog}"
+        );
         assert!(dialog.contains("action=\"/app/inbox/texts\""), "{dialog}");
         for name in ["name=\"to\"", "name=\"body\"", "name=\"consent\""] {
             assert!(dialog.contains(name), "{name}: {dialog}");
         }
-        assert_eq!(html.matches("action=\"/app/inbox/texts\"").count(), 1, "{html}");
+        assert_eq!(
+            html.matches("action=\"/app/inbox/texts\"").count(),
+            1,
+            "{html}"
+        );
     }
 
     #[test]
@@ -2254,7 +2366,10 @@ mod tests {
         let mut view = page(ViewerRole::Owner, Vec::new());
         view.channel_filter = Some("sms".into());
         let html = list_html(&view);
-        assert!(html.contains(r#"href="/app/inbox?channel=sms&#38;sent=true""#), "{html}");
+        assert!(
+            html.contains(r#"href="/app/inbox?channel=sms&#38;sent=true""#),
+            "{html}"
+        );
         assert!(html.contains("<h1>Inbox</h1>"), "{html}");
 
         view.sent_only = true;
@@ -2267,17 +2382,29 @@ mod tests {
             "{html}"
         );
         // Inbox drops only the Sent filter.
-        assert!(html.contains(r#"href="/app/inbox?channel=sms">Inbox</a>"#), "{html}");
+        assert!(
+            html.contains(r#"href="/app/inbox?channel=sms">Inbox</a>"#),
+            "{html}"
+        );
     }
 
     #[test]
     fn the_reading_pane_assigns_to_a_project_and_returns_to_the_inbox() {
         let page = base_thread();
         let html = dioxus_ssr::render_element(inbox_pane_body(&page, "/app/inbox/c1"));
-        assert!(html.contains(r#"action="/app/owner/inbox/c1/assign""#), "{html}");
+        assert!(
+            html.contains(r#"action="/app/owner/inbox/c1/assign""#),
+            "{html}"
+        );
         assert!(html.contains(r#"name="next" value="inbox""#), "{html}");
-        assert!(html.contains(r#"<label for="inbox-assign-project""#), "{html}");
-        assert!(html.contains(r#"<option value="project-1">Alpha (alpha)</option>"#), "{html}");
+        assert!(
+            html.contains(r#"<label for="inbox-assign-project""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<option value="project-1">Alpha (alpha)</option>"#),
+            "{html}"
+        );
         assert!(html.contains("Assign to project"), "{html}");
 
         let mut assigned = base_thread();
@@ -2325,13 +2452,43 @@ mod tests {
         let html = thread(&page);
         assert!(html.contains("Nov 6, 2026, 22:29 UTC"), "{html}");
         // Inbound: from the counterparty, to the receiving account.
-        assert!(html.contains(r#"<p class="inbox-message__from">sender@example.com</p>"#), "{html}");
+        assert!(
+            html.contains(r#"<p class="inbox-message__from">sender@example.com</p>"#),
+            "{html}"
+        );
         assert!(html.contains("to support@example.com"), "{html}");
         // An automatic acknowledgement is labelled as one.
         assert!(html.contains("Practice (automatic)"), "{html}");
-        assert!(html.contains(r#"<img src="/app/inbox/c1/messages/m1/attachments/a1""#), "{html}");
-        assert!(!html.contains(r#"<img src="/app/inbox/c1/messages/m1/attachments/a2""#), "{html}");
+        assert!(
+            html.contains(r#"<img src="/app/inbox/c1/messages/m1/attachments/a1""#),
+            "{html}"
+        );
+        assert!(
+            !html.contains(r#"<img src="/app/inbox/c1/messages/m1/attachments/a2""#),
+            "{html}"
+        );
         assert!(html.contains("retainer.pdf"), "{html}");
+    }
+
+    #[test]
+    fn every_inbox_channel_draws_an_icon_and_a_name() {
+        for channel in [
+            "email",
+            "sms",
+            "voice",
+            "facebook",
+            "instagram",
+            "threads",
+            "youtube",
+            "tiktok",
+            "x",
+        ] {
+            let html = dioxus_ssr::render_element(channel_icon(channel));
+            assert!(html.contains("<svg"), "{channel}: {html}");
+            assert!(html.contains("<path"), "{channel}: {html}");
+            assert!(html.contains(r#"aria-hidden="true""#), "{channel}: {html}");
+            assert_ne!(channel_name(channel), channel, "{channel}");
+        }
     }
 
     #[test]
@@ -2344,9 +2501,15 @@ mod tests {
         };
         assert!(is_inline_image(&attachment("a.bin", Some("image/png"))));
         assert!(is_inline_image(&attachment("IMG.JPG", None)));
-        assert!(!is_inline_image(&attachment("a.svg", Some("image/svg+xml"))));
+        assert!(!is_inline_image(&attachment(
+            "a.svg",
+            Some("image/svg+xml")
+        )));
         assert!(!is_inline_image(&attachment("a.heic", Some("image/heic"))));
-        assert!(!is_inline_image(&attachment("a.png", Some("application/pdf"))));
+        assert!(!is_inline_image(&attachment(
+            "a.png",
+            Some("application/pdf")
+        )));
         assert_eq!(occurred_label("not a time"), "not a time");
     }
 
@@ -2730,10 +2893,12 @@ mod tests {
         assert_eq!(html.matches("aria-current=\"true\"").count(), 6, "{html}");
         assert!(
             html.contains(
-                "inbox-rail__link--active\" href=\"/app/inbox?channel=instagram&#38;brand=neon\" aria-current=\"true\">instagram</a>"
+                "inbox-rail__link--active\" href=\"/app/inbox?channel=instagram&#38;brand=neon\" aria-current=\"true\"><span class=\"inbox-channel-icon\" data-channel=\"instagram\""
             ),
             "{html}"
         );
+        // The channel link names the provider beside its mark.
+        assert!(html.contains("</span>Instagram</a>"), "{html}");
         assert!(
             html.contains(
                 "inbox-rail__link--active\" href=\"/app/inbox?channel=instagram&#38;brand=neon\" aria-current=\"true\">neon</a>"

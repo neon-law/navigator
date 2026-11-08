@@ -627,15 +627,12 @@ pub async fn attachment_get(
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let linked = store::inbox::message_assets(
-        &state.surreal,
-        detail.conversation.firm_id,
-        message_id,
-    )
-    .await
-    .unwrap_or_default()
-    .into_iter()
-    .find(|link| link.asset_id == asset_id);
+    let linked =
+        store::inbox::message_assets(&state.surreal, detail.conversation.firm_id, message_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|link| link.asset_id == asset_id);
     if linked.is_none() && message.attachment_asset_id != Some(asset_id) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -1591,7 +1588,10 @@ mod tests {
         )
         .await;
         assert_eq!(assigned.status(), StatusCode::SEE_OTHER);
-        assert_eq!(assigned.headers()[axum::http::header::LOCATION], "/app/inbox");
+        assert_eq!(
+            assigned.headers()[axum::http::header::LOCATION],
+            "/app/inbox"
+        );
     }
 
     #[tokio::test]
@@ -1618,7 +1618,9 @@ mod tests {
             "+15555550123",
         );
         with_photo.attachments = vec![attachment.clone()];
-        let ingested = store::inbox::ingest_inbound(&db, &with_photo).await.unwrap();
+        let ingested = store::inbox::ingest_inbound(&db, &with_photo)
+            .await
+            .unwrap();
         let state = crate::admin::AdminState {
             surreal: app.surreal,
             workflow_runtime: app.workflow_runtime,
@@ -1659,7 +1661,9 @@ mod tests {
         assert_eq!(ok.status(), StatusCode::OK);
         assert_eq!(ok.headers()[axum::http::header::CONTENT_TYPE], "image/png");
         assert_eq!(
-            axum::body::to_bytes(ok.into_body(), usize::MAX).await.unwrap(),
+            axum::body::to_bytes(ok.into_body(), usize::MAX)
+                .await
+                .unwrap(),
             b"synthetic png bytes".as_slice()
         );
         assert_eq!(get(None, ids).await.status(), StatusCode::NOT_FOUND);
