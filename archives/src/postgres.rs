@@ -1020,11 +1020,13 @@ mod tests {
     }
 
     #[test]
-    fn every_canonical_table_is_exported() {
+    fn every_recovery_table_is_exported() {
         let declared =
             store::postgres_schema::parse_schema(store::postgres_schema::canonical_schema())
                 .expect("canonical schema parses")
                 .into_keys()
+                // The migration recreates this fixed specimen on every fresh database.
+                .filter(|name| name != "astrocartography_reference_geometry")
                 .collect::<Vec<_>>();
         let mut exported = POSTGRES_TABLES
             .iter()

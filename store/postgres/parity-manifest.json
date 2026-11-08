@@ -184,6 +184,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "astrocartography_reference_geometry",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "attorney_rate",
       "missing_column": null,
       "missing_table": null,
@@ -1961,7 +1968,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 162,
+    "table_count": 163,
     "tables": {
       "address": {
         "columns": {
@@ -2117,6 +2124,18 @@
         "references": [
           "person"
         ]
+      },
+      "astrocartography_reference_geometry": {
+        "columns": {
+          "angle": "TEXT",
+          "body": "TEXT",
+          "instant_utc": "TIMESTAMPTZ",
+          "segments": "geometry(MultiLineString,4326)",
+          "specimen_sha256": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "astrocartography_reference_geometry",
+        "references": []
       },
       "attestation": {
         "columns": {

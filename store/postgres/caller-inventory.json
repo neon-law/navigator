@@ -7172,6 +7172,7 @@
       "views/src/harvard_outline.rs",
       "views/src/locales.rs",
       "webapp/src/admin_landing.rs",
+      "webapp/src/catalog_index.rs",
       "webapp/src/components/disclaimer.rs",
       "webapp/src/components/form.rs",
       "webapp/src/components/site_footer.rs",

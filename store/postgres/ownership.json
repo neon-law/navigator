@@ -30,6 +30,13 @@
     "scope": "identity",
     "through": "person_id — owner-scoped sandbox transcript with no firm or project anchor"
   },
+  "astrocartography_reference_geometry": {
+    "migration_slice": "reference-storage",
+    "parity_scenario": "fixed specimen longitude/latitude, ordered vertices and GeoJSON round trip",
+    "scope": "platform",
+    "target_only": true,
+    "through": "fixed synthetic specimen checksum; no Project or Person scope"
+  },
   "attestation": {
     "migration_slice": "workflow-storage",
     "parity_scenario": "pending, recorded, and failed attestations; source identity and Notation retention",

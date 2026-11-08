@@ -68,3 +68,5 @@ Geographic intersections follow coordinate-linear edges, not geodesics. A projec
 canonical geographic horizon-condition certificate. This adapter defines clipping and coordinate conversion, without a
 new astronomical accuracy, screen-space approximation or viewport-cropping guarantee. Projection roundoff at the square
 boundary is checked within sixteen machine epsilons before its final 0–1 normalization.
+
+The fixed Sun meridian is stored as [Astrocartography Reference Geometry](astrocartography-reference-geometry.md).

@@ -117,6 +117,8 @@ jobs:
           kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
             < store/postgres/schema.sql | tee "$RUNNER_TEMP/postgres-smoke/kind-schema.log"
           kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
+            < store/postgres/tests/astrocartography_reference.sql
+          kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
             < store/postgres/tests/synthetic_core_seed.sql | tee "$RUNNER_TEMP/postgres-smoke/kind-synthetic-seed.log"
           before=$(kubectl -n navigator get pod postgres-spike-0 -o jsonpath='{.metadata.uid}')
           kubectl -n navigator rollout restart statefulset/postgres-spike
