@@ -297,7 +297,7 @@ async fn full_reset_flow_sets_a_new_password_and_signs_in() {
     assert_eq!(email.captured()[0].from, None);
 }
 
-/// The reset mail sends as `support@` the naked domain of the host the
+/// The reset mail sends as `support@` (`staging@` on a staging host) the naked domain of the host the
 /// visitor asked from — `neonlaw.com` for Lex Tecnica's `neonlaw.com`
 /// subdomain, never its unauthenticated `lextecnica.com`.
 #[tokio::test]
@@ -310,7 +310,7 @@ async fn reset_mail_sends_from_the_requesting_hosts_naked_domain() {
         (
             "staging-lex-tecnica.neonlaw.com",
             "libra@example.com",
-            "support@neonlaw.com",
+            "staging@neonlaw.com",
         ),
         (
             "www.vestaestateplanning.com",

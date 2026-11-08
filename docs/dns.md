@@ -331,8 +331,10 @@ dnsimple records create "$ZONE" -a "$ACCT" --type MX --name parse --content mx.s
 Every Brand's naked domain needs this Domain Authentication, because Navigator sends each email as `support@` the naked
 domain of the host the request came in on (`views::brand::sender_email_for_host`): a password reset asked for on
 `www.vestaestateplanning.com` sends from `support@vestaestateplanning.com`, and one on `lex-tecnica.neonlaw.com` sends
-from `support@neonlaw.com`. DKIM on the naked domain aligns a `www.` or `staging.` host under relaxed DMARC alignment.
-Mail with no Brand host behind it — a workflow, an unknown host — sends from `SENDGRID_FROM_EMAIL`.
+from `support@neonlaw.com`. A staging host sends from `staging@` the same naked domain, so
+`staging-lex-tecnica.neonlaw.com` sends from `staging@neonlaw.com`. DKIM on the naked domain aligns a `www.` or
+`staging.` host under relaxed DMARC alignment. Mail with no Brand host behind it — a workflow, an unknown host — sends
+from `SENDGRID_FROM_EMAIL`.
 
 Then, in SendGrid → **Inbound Parse**, register the host `parse.your-domain.example` and point it at Navigator's inbound
 webhook. The application side — the webhook route and the event pipeline — is
