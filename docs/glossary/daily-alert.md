@@ -1,8 +1,8 @@
 ---
 title: Daily Alert
 description: >-
-  The weekday notice a Firm's Owner receives when something needs them today,
-  posted only when the needs-you list is not empty.
+  The weekday notice a Firm's Owner receives when something needs them today, posted only when the needs-you list is not
+  empty.
 ---
 
 The **Daily Alert** is the [CEO Digest](ceo-digest.md)'s weekday companion. It posts to a [Firm](firm.md)'s Owner on

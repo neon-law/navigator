@@ -1,8 +1,8 @@
 ---
 title: CEO Digest
 description: >-
-  The weekly brief a Firm's Owner receives, written from journaled queries and
-  checked against the Firm's stated assumptions.
+  The weekly brief a Firm's Owner receives, written from journaled queries and checked against the Firm's stated
+  assumptions.
 ---
 
 A **CEO Digest** is the weekly brief each [Firm](firm.md)'s Owner receives: open matters per line, work in progress and
