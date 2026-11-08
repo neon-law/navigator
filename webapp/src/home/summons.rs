@@ -44,6 +44,7 @@ pub(super) fn SummonsHome(
     lead_capture: Option<LeadCaptureCopy>,
     lead_context: LeadCaptureContext,
 ) -> Element {
+    let tel = crate::components::site_footer::tel_href(&chrome.firm_phone);
     rsx! {
         document::Title { "{content.head_title}" }
         document::Meta { name: "viewport", content: "width=device-width, initial-scale=1" }
@@ -66,6 +67,9 @@ pub(super) fn SummonsHome(
                 nav { "aria-label": "Main navigation",
                     for link in &copy.nav { a { href: "{link[1]}", "{link[0]}" } }
                 }
+                if !chrome.firm_phone.is_empty() {
+                    a { class: "summons-button summons-button--small summons-header-call", href: "{tel}", "Call {chrome.firm_phone}" }
+                }
                 a { class: "summons-button summons-button--small", href: "#intake", "{content.contact_label}" span { "aria-hidden": "true", "↗" } }
             }
             main { id: "summons-main",
@@ -74,6 +78,9 @@ pub(super) fn SummonsHome(
                         p { class: "summons-eyebrow", span { class: "summons-dot", "aria-hidden": "true" } "{copy.eyebrow}" }
                         h1 { id: "summons-title", "{content.heading}" }
                         p { class: "summons-lead", "{content.lead}" }
+                        if !chrome.firm_phone.is_empty() {
+                            a { class: "summons-button home-call", href: "{tel}", "Call {chrome.firm_phone}" }
+                        }
                         a { class: "summons-button", href: "#intake", "{content.contact_label}" span { "aria-hidden": "true", "↗" } }
                         p { class: "summons-small", "{copy.hero_note}" }
                     }

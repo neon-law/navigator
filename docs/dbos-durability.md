@@ -183,18 +183,15 @@ DBOS-hosted schedules' CronJobs, and the offline plan lists that deletion.
 
 ## GeneralNag rollout
 
-DBOS adds `GeneralNag` to the shared web executor. Opt in with both `NAVIGATOR_DBOS_ENABLED=true` and
-`NAVIGATOR_DBOS_GENERAL_NAG_ENABLED=true`. The specific flag defaults off, so enabling Heartbeat does not start a second
-daily post while the Restate CronJob remains active.
+On a deployment with `NAVIGATOR_DBOS_ENABLED=true`, ship defaults `GeneralNag` to the shared web executor. Set
+`NAVIGATOR_DBOS_GENERAL_NAG_ENABLED=false` to keep the Restate schedule during handover.
 
 When enabled, the schedule uses `GeneralNag-<UTC date>` and starts at 01:11 UTC; a same-date start on another replica
 joins the existing run. Before enabling it, configure `SLACK_BOT_TOKEN` and `SLACK_GENERAL_CHANNEL_ID`.
 
-Switch engines in one roll: set `NAVIGATOR_DBOS_GENERAL_NAG_ENABLED = "true"` in the deployment's `config.toml` and run
-`ops ship`. Ship renders the switch and `SLACK_GENERAL_CHANNEL_ID` into `web`, drops the `general-nag` Restate CronJob
-from the render, and deletes the live one, because `kubectl apply` does not prune. Setting the switch back to `"false"`
-and shipping restores the CronJob, which is the rollback path. Ship refuses the switch without `NAVIGATOR_DBOS_ENABLED =
-"true"`.
+When GeneralNag selects DBOS, `ops ship` renders the switch and `SLACK_GENERAL_CHANNEL_ID` into `web`. It omits the
+`general-nag` Restate CronJob from the render and deletes the live one, since `kubectl apply` does not prune. Set the
+switch to `"false"` and ship again to restore the CronJob. Selecting DBOS requires `NAVIGATOR_DBOS_ENABLED=true`.
 
 Each notification step uses its DBOS Effect Key as Slack's `client_msg_id` and searches channel history from the
 original workflow date's UTC midnight, inclusively. Recovery reuses a retained receipt before sending. It follows cursor
@@ -249,19 +246,21 @@ CronJob.
 
 ## ProfitDigest
 
-`ProfitDigest` is born on DBOS; it has no Restate twin. Opt in with both `NAVIGATOR_DBOS_ENABLED=true` and
-`NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED=true`. The daily run `ProfitDigest-<UTC date>` starts at 14:00 UTC and catches up
-when the executor starts later that day. It posts the [Profit Digest](glossary/profit-digest.md) to the messages
-channel: `SLACK_STAGING_MESSAGES_CHANNEL_ID` on a simulated-matters deployment, `SLACK_MESSAGES_CHANNEL_ID` otherwise.
-An enabled host needs `SLACK_BOT_TOKEN`, the channel, `NAV_BASE_URL`, and the application's PostgreSQL login, and fails
-the boot without them.
+`ProfitDigest` is born on DBOS; it has no Restate twin. The process runs it when both `NAVIGATOR_DBOS_ENABLED=true` and
+`NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED=true` are set, and a deployed `web` gets both by default. The daily run
+`ProfitDigest-<UTC date>` starts at 14:00 UTC and catches up when the executor starts later that day. It posts the
+[Profit Digest](glossary/profit-digest.md) to the messages channel: `SLACK_STAGING_MESSAGES_CHANNEL_ID` on a
+simulated-matters deployment, `SLACK_MESSAGES_CHANNEL_ID` otherwise. An enabled host needs `SLACK_BOT_TOKEN`, the
+channel, `NAV_BASE_URL`, and the application's PostgreSQL login, and fails the boot without them.
 
 Its steps read yesterday's `expected_cash` event, read and render the Firm rollups in `read`, publish today's
 `expected_cash` event, and `post`. The post uses its Effect Key as Slack's `client_msg_id` and reuses a retained
 receipt, the `GeneralNag` rule. A day with no open contingent matter posts nothing.
 
-Set `NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED = "true"` in the row's `config.toml` and `ops ship`. Ship renders the switch
-and both messages channels into `web`, refuses the switch without them, and retires no CronJob.
+Ship turns it on wherever the row's `config.toml` sets `NAVIGATOR_DBOS_ENABLED = "true"`, unless the row sets
+`NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED = "false"`. It renders the switch and both messages channels into `web`, refuses
+the render when either channel is missing, and retires no CronJob. Local development and the workflows service keep the
+literal-`true` opt-in, so they need no Slack credentials.
 
 ## ProjectRecovery
 
@@ -378,7 +377,7 @@ Lowest risk first. Each port keeps its Restate twin until a deployment switches 
 | # | Service | Why here |
 | --- | --- | --- |
 | 1 | `Heartbeat` | No database, one Slack call. Ported; its Restate service and trigger are gone. |
-| 2 | `GeneralNag` | One read and Slack posts; DBOS path is opt-in and Restate remains active pending cutover. |
+| 2 | `GeneralNag` | One read and Slack posts. Ship defaults to DBOS on deployments with the web executor. |
 | 3 | `DriDigest` | Read-only digest and Slack posts; DBOS path is opt-in and Restate remains active pending cutover. |
 | 4 | `BillingCanary` | Find-or-create on a fixed key, then one notice |
 | 5 | `BillingDigest` | Cost read and one notice |

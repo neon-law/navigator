@@ -901,7 +901,7 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
         "New York",
         "Statement of Claim (Small Claims)",
         "ny-civ-sc50-statement-of-claim",
-        "Bundled court-form notation.",
+        "New York City Civil Court small claims form CIV-SC-50.",
         FORM_NY_CIV_SC50_STATEMENT_OF_CLAIM,
     ));
     content.materials.push(notation_card(
@@ -1588,30 +1588,6 @@ pub(crate) fn resolve_firm_home_content(
             content.signup = None;
             content
         }
-        // IEP Defenders' home is a marketing-page band sequence (the
-        // `home-marketing` catalog), not the legacy home schema.
-        BrandKey::IepDefenders => {
-            let page = locales::iep_home(branding, deployment_host);
-            webapp::home::HomeContent {
-                head_title: page.head_title.clone(),
-                meta_description: page.meta_description.clone(),
-                heading: page.tagline.clone(),
-                marketing_page: Some(page),
-                ..Default::default()
-            }
-        }
-        // Lex Tecnica's home is a marketing-page band sequence (the
-        // `home-marketing` catalog), not the legacy home schema.
-        BrandKey::LexTecnica => {
-            let page = locales::lex_tecnica_home(branding, deployment_host);
-            webapp::home::HomeContent {
-                head_title: page.head_title.clone(),
-                meta_description: page.meta_description.clone(),
-                heading: page.tagline.clone(),
-                marketing_page: Some(page),
-                ..Default::default()
-            }
-        }
         BrandKey::DeleteYourData
         | BrandKey::Vesta
         | BrandKey::Misericordia
@@ -1621,7 +1597,9 @@ pub(crate) fn resolve_firm_home_content(
         | BrandKey::CyberInjuryLaw
         | BrandKey::Summons
         | BrandKey::Aegis
-        | BrandKey::Groundwork => locales::home_for_host(branding, deployment_host),
+        | BrandKey::Groundwork
+        | BrandKey::LexTecnica
+        | BrandKey::IepDefenders => locales::home_for_host(branding, deployment_host),
     }
 }
 
@@ -1648,15 +1626,7 @@ mod home_page_tests {
         );
         assert!(home.company.is_none());
         assert!(home.signup.is_none());
-        // Neon, IEP Defenders, and Lex Tecnica are the band-built homes:
-        // their `marketing_page` content is asserted above and by their own
-        // page tests.
-        for key in BrandKey::ALL.iter().filter(|key| {
-            !matches!(
-                key,
-                BrandKey::Neon | BrandKey::IepDefenders | BrandKey::LexTecnica
-            )
-        }) {
+        for key in BrandKey::ALL.iter().filter(|key| **key != BrandKey::Neon) {
             let content = resolve_firm_home_content(
                 key.resolve_branding(&views::brand::DEFAULT_BRANDING),
                 None,

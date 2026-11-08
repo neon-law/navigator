@@ -90,6 +90,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "contingency_term_tier",
     "legal_plan",
     "plan_fee_schedule",
+    "firm_assumption",
     "outcome_estimate",
     "matter_outcome",
     "time_entry",
@@ -1019,11 +1020,13 @@ mod tests {
     }
 
     #[test]
-    fn every_canonical_table_is_exported() {
+    fn every_recovery_table_is_exported() {
         let declared =
             store::postgres_schema::parse_schema(store::postgres_schema::canonical_schema())
                 .expect("canonical schema parses")
                 .into_keys()
+                // The migration recreates this fixed specimen on every fresh database.
+                .filter(|name| name != "astrocartography_reference_geometry")
                 .collect::<Vec<_>>();
         let mut exported = POSTGRES_TABLES
             .iter()
@@ -1569,7 +1572,7 @@ mod tests {
                 .strip_prefix(&format!("{reader_location}/"))
                 .unwrap();
             let actual_bytes = object(&storage, path).await;
-            assert_eq!(task.file_size_in_bytes, actual_bytes.len() as u64);
+            assert_eq!(task.file_size_in_bytes(), actual_bytes.len() as u64);
             let batches: Vec<_> = table
                 .reader_builder()
                 .build()

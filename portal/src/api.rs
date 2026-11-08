@@ -1,5 +1,7 @@
 //! JSON API commands and reads over the canonical store.
 
+#[path = "firm_assumptions_api.rs"]
+mod firm_assumptions_api;
 #[path = "firm_journal_api.rs"]
 mod firm_journal_api;
 
@@ -221,6 +223,31 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "GET",
             "/app/api/firms/{id}/journal",
             get(firm_journal_api::list),
+        ),
+        (
+            "GET",
+            "/app/api/firms/{id}/assumptions",
+            get(firm_assumptions_api::list),
+        ),
+        (
+            "GET",
+            "/app/api/firms/{id}/assumptions/{key}/history",
+            get(firm_assumptions_api::history),
+        ),
+        (
+            "GET",
+            "/app/api/firms/{id}/assumptions/{key}",
+            get(firm_assumptions_api::current),
+        ),
+        (
+            "POST",
+            "/app/api/firms/{id}/assumptions/{key}",
+            post(firm_assumptions_api::set),
+        ),
+        (
+            "GET",
+            "/app/api/assumptions",
+            get(firm_assumptions_api::catalog),
         ),
         (
             "POST",
@@ -2084,9 +2111,14 @@ async fn private_terms_for_project(
     let entities = store::entities::find_by_ids(db, &entity_ids)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
-    if people.len() != person_ids.len() || entities.len() != entity_ids.len() {
-        return Err(ApiError::Db(
-            "private identifier coverage is incomplete".into(),
+    if people.len() != person_ids.len() {
+        return Err(ApiError::PrivateTermsConflict(
+            "private terms: missing Person record",
+        ));
+    }
+    if entities.len() != entity_ids.len() {
+        return Err(ApiError::PrivateTermsConflict(
+            "private terms: missing Entity record",
         ));
     }
     let mut identifiers = vec![project.id.to_string()];
@@ -2110,9 +2142,9 @@ async fn private_terms_for_project(
     }
     for entity in entities {
         if let Some(metadata) = entity.metadata.as_ref() {
-            let object = metadata
-                .as_object()
-                .ok_or_else(|| ApiError::Db("private identifier coverage is incomplete".into()))?;
+            let object = metadata.as_object().ok_or_else(|| {
+                ApiError::PrivateTermsInvalid("private terms: invalid Entity metadata")
+            })?;
             if let Some(value) = object.get("ein") {
                 let ein = value
                     .as_str()
@@ -2127,7 +2159,7 @@ async fn private_terms_for_project(
                             })
                     })
                     .ok_or_else(|| {
-                        ApiError::Db("private identifier coverage is incomplete".into())
+                        ApiError::PrivateTermsInvalid("private terms: invalid Entity EIN")
                     })?;
                 identifiers.push(ein.to_owned());
             }
@@ -8274,6 +8306,8 @@ pub enum ApiError {
     RequestDeletion(crate::expunge_request_route::RequestDeletionError),
     ContractReview(crate::contract_review_walk::ContractReviewError),
     Db(String),
+    PrivateTermsConflict(&'static str),
+    PrivateTermsInvalid(&'static str),
     /// A read or write against the Surreal-backed `notations` store failed.
     Notation(store::notations::NotationError),
     /// Filing a document into a matter failed. Carried as the store's own
@@ -9338,6 +9372,15 @@ impl IntoResponse for ApiError {
                     Json(serde_json::json!({ "error": "internal" })),
                 )
                     .into_response()
+            }
+            Self::PrivateTermsConflict(message) | Self::PrivateTermsInvalid(message) => {
+                let status = if matches!(self, Self::PrivateTermsConflict(_)) {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                };
+                tracing::warn!(reason = message, "private terms incomplete");
+                (status, Json(serde_json::json!({"error": "private_terms_incomplete"}))).into_response()
             }
             Self::Db(e) => {
                 tracing::error!(error = %e, "api: db error");
@@ -13998,10 +14041,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             None,
         )
         .await;
-        assert!(
-            !status.is_success(),
-            "a malformed stored identifier cannot be omitted"
-        );
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]
@@ -14049,12 +14089,72 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 None,
             )
             .await;
-            assert!(
-                !status.is_success(),
-                "a dangling {table} must refuse coverage"
-            );
+            assert_eq!(status, StatusCode::CONFLICT, "a dangling {table}");
             assert!(json.get("identifiers").is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn private_terms_recover_after_an_orphaned_lawyer_dri_is_removed() {
+        let f = door_fixture().await;
+        let lawyer_id = f.lawyer.person_id.unwrap();
+        let missing = store::persons::create(
+            &f.db,
+            &store::persons::NewPerson::with_role(
+                "Former Lawyer",
+                "former-lawyer@example.com",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        let mut orphaned_role = None;
+        for person_id in [lawyer_id, missing.id] {
+            let role = store::participation::add_participant(
+                &f.db,
+                &store::participation::AddParticipantCommand {
+                    project_id: f.project,
+                    person_id,
+                    dri: store::participation::DriRequest::Designate(
+                        store::projects::DriSide::Lawyer,
+                    ),
+                    actor: store::participation::DriActor::System,
+                },
+            )
+            .await
+            .unwrap();
+            if person_id == missing.id {
+                orphaned_role = Some(role.id);
+            }
+        }
+        f.db.query("DELETE $person")
+            .bind(("person", store::surreal::record_id("person", missing.id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        let path = format!("/app/api/projects/{}/private-terms", f.project);
+        let (status, body) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(body.get("identifiers").is_none());
+
+        store::participation::remove_participant(
+            &f.db,
+            f.project,
+            orphaned_role.unwrap(),
+            store::participation::DriActor::Person(lawyer_id),
+        )
+        .await
+        .unwrap();
+
+        let (status, body) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|person| { person["email"] == "outside-lawyer@example.com" }));
     }
 
     #[tokio::test]
@@ -14084,6 +14184,12 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             .unwrap()
             .check()
             .unwrap();
+        assert!(matches!(
+            super::private_terms_for_project(&f.db, project).await,
+            Err(ApiError::PrivateTermsConflict(
+                "private terms: missing Entity record"
+            ))
+        ));
         let (status, json) = call(
             &f.state,
             Some(&f.lawyer),

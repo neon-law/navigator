@@ -77,6 +77,13 @@ erDiagram
         string tool_name
         datetime updated_at
     }
+    astrocartography_reference_geometry {
+        string angle
+        string body
+        datetime instant_utc
+        string segments
+        string specimen_sha256
+    }
     attestation {
         string chain
         string client_wallet
@@ -627,6 +634,16 @@ erDiagram
         json entity_id
         string id
         string id_kind
+    }
+    firm_assumption {
+        uuid firm_id
+        uuid id
+        string key
+        string reason
+        datetime set_at
+        uuid set_by
+        json value
+        int version
     }
     firm_brand {
         string brand_key
@@ -1362,6 +1379,7 @@ erDiagram
         string booking_url
         string brand
         string calendar_id
+        uuid client_dri_person_id
         string closed_at
         string closure_reason
         string code
@@ -1961,6 +1979,8 @@ erDiagram
     entity }o--|| entity_role : references
     person }o--|| entity_role : references
     entity }o--|| firm : references
+    firm }o--|| firm_assumption : references
+    person }o--|| firm_assumption : references
     brand }o--|| firm_brand : references
     firm }o--|| firm_brand : references
     firm }o--|| firm_forgejo_organization : references
@@ -2051,6 +2071,7 @@ erDiagram
     firm }o--|| project : references
     jurisdiction }o--|| project : references
     legal_plan }o--|| project : references
+    person }o--|| project : references
     project_archive_generation }o--|| project_archive_item : references
     person }o--|| project_cost_events : references
     project_costs }o--|| project_cost_events : references

@@ -14,4 +14,5 @@ layers share the name:
   [Restate](restate.md) adapter that drives it durably in production.
 
 The same YAML is the contract between the two: a lawyer reads it as a flowchart; the engine reads it as a state-machine
-spec. **The Template declares; Restate runs.**
+spec. A [Workflow Run](workflow-run.md) is one execution in the runtime. A Workflow diagram shows the declared states
+and transitions. Use DAG only for a directed graph whose transitions cannot form a cycle.

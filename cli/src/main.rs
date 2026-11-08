@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 mod answers_file;
 mod assets;
+mod assumptions;
 mod atomic_directory;
 mod authorities;
 mod blog;
@@ -873,6 +874,15 @@ enum Command {
         #[command(subcommand)]
         action: journal::JournalCmd,
     },
+    /// A Firm's stated premises the CEO Digest checks actuals against.
+    Assumptions {
+        #[arg(long)]
+        firm: uuid::Uuid,
+        #[arg(long)]
+        host: Option<String>,
+        #[command(subcommand)]
+        action: assumptions::AssumptionsCmd,
+    },
     /// Search, read, draft, and file Gmail correspondence without sending it.
     Mail {
         #[command(subcommand)]
@@ -1359,7 +1369,7 @@ enum ProjectsCmd {
         no_repository: bool,
         /// Client contact email for the manifest's client DRI. Required when
         /// `--resume` rebuilds the tree in an empty directory.
-        #[arg(long, value_name = "EMAIL", requires = "resume")]
+        #[arg(long, value_name = "EMAIL")]
         client_email: Option<String>,
         /// Owning Firm name. Requires --brand.
         #[arg(long, requires = "brand", conflicts_with = "resume")]
@@ -5208,6 +5218,9 @@ fn run() -> ExitCode {
         Command::Journal { firm, host, action } => {
             runtime().block_on(journal::run(firm, host, action))
         }
+        Command::Assumptions { firm, host, action } => {
+            runtime().block_on(assumptions::run(firm, host, action))
+        }
         Command::Mail { action } => runtime().block_on(mail::run(action)),
         Command::Inbox { action } => runtime().block_on(inbox::run(action)),
         Command::Downloads { action } => runtime().block_on(downloads::run(action)),
@@ -7733,7 +7746,7 @@ async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
     }
 
     eprintln!("navigator project gate: markdown content");
-    let question_codes = rules::canonical_question_codes();
+    let project = is_project_repository(dir);
     // The Project's documents directory holds committed YAML pointers and
     // Git-ignored local document bodies. Keep it out of Markdown lint/fix
     // walks; `document_pointer_pass` below validates the committed pointers
@@ -7741,14 +7754,7 @@ async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
     // raw document bytes.
     let markdown_filter = ProjectGateMarkdownFilter::new(dir);
 
-    // The markdown pass and the autofix are one walk: every safe-by-construction
-    // edit lands first, and what it reports is what survived them.
-    let mut report = match fix_directory(
-        dir,
-        &markdown_filter,
-        |file| rules::navigator_classified_rules_with_codes(file, &question_codes),
-        !ci,
-    ) {
+    let mut report = match fix_gate_markdown(dir, &markdown_filter, project, !ci) {
         Ok(report) => report,
         Err(error) => {
             eprintln!("navigator: {error}");
@@ -7817,7 +7823,6 @@ async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
     // something to be found by scrolling.
     print_error_recap(&gate_errors);
 
-    let project = is_project_repository(dir);
     if project {
         eprintln!("navigator project gate: repository layout");
     }
@@ -7851,6 +7856,38 @@ async fn run_gate(ci: bool, check: bool, deep: bool) -> ExitCode {
     // The live Project coordinates are read under the operator's stored
     // login locally, or a scoped OIDC document session in CI.
     projects::gate::live_status(dir, ci).await
+}
+
+fn fix_gate_markdown(
+    dir: &std::path::Path,
+    markdown_filter: &ProjectGateMarkdownFilter<'_>,
+    project: bool,
+    write_fixes: bool,
+) -> std::io::Result<FixReport> {
+    let question_codes = rules::canonical_question_codes();
+    let onboarding_stub = project.then(|| {
+        let (relative, stub) = project_scaffold::scaffold_draft(project_scaffold::ONBOARDING);
+        (dir.join(relative), stub)
+    });
+
+    // The markdown pass and the autofix are one walk: every safe-by-construction
+    // edit lands first, and what it reports is what survived them.
+    fix_directory(
+        dir,
+        markdown_filter,
+        |file| {
+            let mut checks = rules::navigator_classified_rules_with_codes(file, &question_codes);
+            // The generated placeholder has no engagement terms to assign to a jurisdiction.
+            if onboarding_stub
+                .as_ref()
+                .is_some_and(|(path, stub)| &file.path == path && &file.contents == stub)
+            {
+                checks.retain(|rule| rule.code() != rules::F110JurisdictionPath::CODE);
+            }
+            checks
+        },
+        write_fixes,
+    )
 }
 
 /// The Project gate validates authored Markdown throughout the repository,

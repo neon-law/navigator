@@ -1043,6 +1043,107 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/assumptions": {
+          "get": {
+            "summary": "The assumption key catalog",
+            "description": "Every Firm assumption key Navigator knows (ENG-1264), with its value type, null default, and description. This is the public vocabulary only — no Firm values, so the endpoint reads the embedded catalog and never the database. Firm values live behind `/app/api/firms/{id}/assumptions`.",
+            "responses": {
+              "200": { "description": "The catalog, ordered by key", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "type": "object", "required": ["key", "type", "default", "description"], "properties": {
+                  "key": { "type": "string" },
+                  "type": { "type": "string" },
+                  "default": { "description": "The null default the key resolves to before the Firm has ever set it." },
+                  "description": { "type": "string" }
+                } } }
+              } } }
+            }
+          }
+        },
+        "/app/api/firms/{id}/assumptions": {
+          "get": {
+            "summary": "List a Firm's current assumptions",
+            "description": "One row per key, the newest version of each, ordered by key. Another Firm's rows never appear. Authorization: the `manage_firm_assumptions` capability — Owner, or an Admin whose membership admits it on the Firm; anyone else gets 404, indistinguishable from a Firm that does not exist.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": {
+              "200": { "description": "The Firm's current assumptions", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/FirmAssumption" } }
+              } } },
+              "401": { "description": "No authenticated session" },
+              "404": { "description": "No such Firm, or the caller does not hold the capability" },
+              "503": { "description": "PostgreSQL is unavailable", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
+        "/app/api/firms/{id}/assumptions/{key}": {
+          "get": {
+            "summary": "Read a Firm's current value for one key",
+            "description": "The newest version of one key, or 404 when the Firm has never set it — the blank a fresh deployment renders. Authorization: the `manage_firm_assumptions` capability; otherwise 404.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+              { "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "200": { "description": "The current version of the key", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/FirmAssumption" }
+              } } },
+              "401": { "description": "No authenticated session" },
+              "404": { "description": "No such Firm, the caller does not hold the capability, or the Firm has never set the key" },
+              "503": { "description": "PostgreSQL is unavailable", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          },
+          "post": {
+            "summary": "Set a Firm's value for one key",
+            "description": "Records a new version of one key. Append-only: no request ever updates or deletes an existing version, so the history is complete. The value must be one JSON value of the key's declared type and the key must be in the catalog; both are refused with 422 before any write. The acting person is the session's. Authorization: the `manage_firm_assumptions` capability; otherwise 404.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+              { "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }
+            ],
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "type": "object", "required": ["value"], "properties": {
+                "value": { "description": "One JSON value of the key's declared type." },
+                "reason": { "type": "string", "description": "Why the value changed, recorded with the version." }
+              } }
+            } } },
+            "responses": {
+              "200": { "description": "The newly recorded version", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/FirmAssumption" }
+              } } },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "The session is not tied to a Person" },
+              "404": { "description": "No such Firm, or the caller does not hold the capability" },
+              "422": { "description": "The key is not in the catalog, or the value is not one JSON value of the key's type", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "503": { "description": "PostgreSQL is unavailable", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
+        "/app/api/firms/{id}/assumptions/{key}/history": {
+          "get": {
+            "summary": "Read a Firm's version history for one key",
+            "description": "Every version of one key, newest first — the append-only history, complete from the first set. Authorization: the `manage_firm_assumptions` capability; otherwise 404.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+              { "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "200": { "description": "The key's versions, newest first", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/FirmAssumption" } }
+              } } },
+              "401": { "description": "No authenticated session" },
+              "404": { "description": "No such Firm, or the caller does not hold the capability" },
+              "503": { "description": "PostgreSQL is unavailable", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/seed": {
           "post": {
             "summary": "Reconcile a seed document",
@@ -2784,7 +2885,9 @@ fn canonical_document(base: &str) -> Value {
                 }
               } } } },
               "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
-              "404": { "description": "No such matter, or the caller is not a firm-side participant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+              "404": { "description": "No such matter, or the caller is not a firm-side participant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "409": { "description": "A linked Person or Entity record is missing", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "422": { "description": "Stored Entity identifier data is invalid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
             }
           }
         },
@@ -5179,6 +5282,20 @@ fn canonical_document(base: &str) -> Value {
             "properties": {
               "error":   { "type": "string" },
               "message": { "type": "string" }
+            }
+          },
+          "FirmAssumption": {
+            "type": "object",
+            "required": ["id", "firm_id", "key", "value", "version", "set_by", "set_at"],
+            "properties": {
+              "id":       { "type": "string", "format": "uuid" },
+              "firm_id":  { "type": "string", "format": "uuid" },
+              "key":      { "type": "string", "description": "The assumption key from the `/app/api/assumptions` catalog." },
+              "value":    { "description": "One JSON value of the key's declared type." },
+              "version":  { "type": "integer", "description": "One-based, per Firm and key; versions are never rewritten or deleted." },
+              "set_by":   { "type": "string", "format": "uuid", "description": "The Person who recorded the version." },
+              "set_at":   { "type": "string", "description": "When the version was recorded." },
+              "reason":   { "type": ["string", "null"], "description": "Why the value changed, if the setter gave one." }
             }
           },
           "Entity": {

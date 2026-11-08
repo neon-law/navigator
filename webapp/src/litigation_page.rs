@@ -57,11 +57,10 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    tel_href, Icon, IconName, PracticeMark, PracticeMarkGlyph, PublicShell, SiteHeader,
-    SiteNavLink, SocialMeta,
+    tel_href, Icon, IconName, PracticeMark, PracticeMarkGlyph, PublicShell, SocialMeta,
 };
 use crate::home::CopyRun;
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// The self-contained litigation stylesheet, hoisted after the brand layer.
 pub const LITIGATION_STYLESHEET_HREF: &str = "/public/css/litigation.css";
@@ -145,21 +144,7 @@ pub fn LitigationPageEntry() -> Element {
 #[component]
 pub fn LitigationPage(chrome: PublicChrome, content: LitigationContent) -> Element {
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }

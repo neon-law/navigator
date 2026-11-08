@@ -297,12 +297,12 @@ pub(super) async fn verify(
     ensure!(
         tasks.len() == 1
             && tasks.iter().all(|task| task.data_file_path() == data_uri
-                && task.file_size_in_bytes == size
-                && task.start == 0
-                && task.length == size
-                && task.record_count == Some(expected_rows)
-                && task.data_file_format == DataFileFormat::Parquet
-                && task.deletes.is_empty()),
+                && task.file_size_in_bytes() == size
+                && task.start() == 0
+                && task.length() == size
+                && task.record_count() == Some(expected_rows)
+                && task.data_file_format() == DataFileFormat::Parquet
+                && task.deletes().is_empty()),
         "Iceberg scan plan leaves the exact reference data file or snapshot"
     );
     let batches: Vec<_> = table

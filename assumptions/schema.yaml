@@ -1,0 +1,23 @@
+# The Firm assumptions the CEO digest checks and a Kit resolves at run time
+# (ENG-1264). This catalog carries keys only: the dotted path, the value's
+# type, its null default, and one sentence of meaning. A Firm's values are
+# database data — rows of the `firm_assumption` table — and never live in
+# this repository (docs/glossary/firm-assumption.md). A fresh deployment
+# holds no assumption rows, so every lookup renders blank until the Firm
+# sets its own value under its own key.
+plan.target_minutes.document_review:
+    type: integer
+    default: null
+    description: The minutes per document review the Firm plans its plan-work capacity around.
+plan.target_minutes.letter:
+    type: integer
+    default: null
+    description: The minutes per plan letter the Firm plans its plan-work capacity around.
+plan.target_minutes.uncontested_divorce:
+    type: integer
+    default: null
+    description: The minutes per uncontested divorce the Firm plans its plan-work capacity around.
+plan.target_minutes.court_appearance:
+    type: integer
+    default: null
+    description: The minutes per court appearance the Firm plans its plan-work capacity around.

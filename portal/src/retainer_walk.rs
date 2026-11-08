@@ -828,13 +828,14 @@ pub(crate) async fn send_intake(
          Nothing is sent for signature until an attorney has reviewed it."
     );
     let html = workflows::email::render_email_html(&body, &base_url);
-    let msg = crate::email::OutboundEmail::new(
+    let mut msg = crate::email::OutboundEmail::new(
         client.email.clone(),
         "Finish your Neon Law Navigator intake",
         body,
     )
     .with_html(html)
     .with_person(client.id.to_string());
+    msg.from = views::brand::request_sender_email();
     // `person_id`, never the address: an email identifies a client, and
     // telemetry leaves the firm's trust boundary (`telemetry/src/lib.rs`).
     // The id answers "which intake failed" just as well.
@@ -3446,6 +3447,15 @@ async fn build_answer_context(
     let firm = project
         .as_ref()
         .and_then(|project| firm_legal_name_for_brand(&project.brand));
+    // The Project's bound client-DRI Person, if any. Refusal to infer is the
+    // store setter's contract; a row with no pin renders nothing here.
+    let client_dri = match project
+        .as_ref()
+        .and_then(|project| project.client_dri_person_id)
+    {
+        Some(client_dri_id) => store::persons::find_by_id(surreal, client_dri_id).await?,
+        None => None,
+    };
     for (ctx, rendering) in [
         (&mut keys, ChoiceRendering::Keys),
         (&mut labels, ChoiceRendering::Labels),
@@ -3462,6 +3472,23 @@ async fn build_answer_context(
         {
             ctx.entry("project.onboarding_jurisdiction".to_string())
                 .or_insert_with(|| jurisdiction.clone());
+        }
+        // The client DRI renders from the Project's bound Person row —
+        // `project.client_dri` (the display name), its `.name`/`.email`
+        // fields behind the Clause input expansion, and the template
+        // body's `client_dri.*` alias. Entries only fill gaps: a stored
+        // answer keeps its value.
+        if let Some(client_dri) = &client_dri {
+            ctx.entry("project.client_dri".to_string())
+                .or_insert_with(|| client_dri.name.clone());
+            ctx.entry("project.client_dri.name".to_string())
+                .or_insert_with(|| client_dri.name.clone());
+            ctx.entry("project.client_dri.email".to_string())
+                .or_insert_with(|| client_dri.email.clone());
+            ctx.entry("client_dri.name".to_string())
+                .or_insert_with(|| client_dri.name.clone());
+            ctx.entry("client_dri.email".to_string())
+                .or_insert_with(|| client_dri.email.clone());
         }
         if let Some(name) = &firm {
             ctx.entry("firm.legal_name".to_string())
@@ -3727,6 +3754,146 @@ mod tests {
     use std::collections::BTreeMap;
     use uuid::Uuid;
     use workflows::{retainer_intake_questionnaire, StateName};
+
+    /// The client DRI renders from the Project's bound Person row without a
+    /// question being asked: `client_dri.name`/`client_dri.email` (the
+    /// template body's alias) and `project.client_dri` (the Clause input
+    /// expansion's display name) fill from the pinned Person in both the
+    /// keys and labels contexts. A Project with no pin renders nothing.
+    #[tokio::test]
+    async fn the_bound_client_dri_fills_its_render_context_without_a_question() {
+        const TEMPLATE: &str =
+            include_str!("../../workflows/tests/fixtures/onboarding_implicit_end.txt");
+        let surreal = store::test_support::mem_surreal().await;
+        let dir = tempfile::tempdir().unwrap();
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
+        let project = store::test_support::seed_project(&surreal, "DRI project").await;
+        store::template_source::persist_contents(
+            &surreal,
+            &storage,
+            project.id,
+            "onboarding",
+            TEMPLATE.into(),
+            "synthetic-commit".into(),
+        )
+        .await
+        .unwrap();
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::new("Designated Client", "dri@example.com"),
+        )
+        .await
+        .unwrap();
+        let role = store::projects::add_participation(&surreal, project.id, person.id, "client")
+            .await
+            .unwrap();
+        surreal
+            .query("UPDATE $id SET is_client_dri = true, updated_at = $now")
+            .bind((
+                "id",
+                store::surreal::record_id("person_project_role", role.id),
+            ))
+            .bind(("now", chrono::Utc::now().to_rfc3339()))
+            .await
+            .unwrap();
+        let pinned =
+            store::projects::set_client_dri_person_id(&surreal, project.id, Some(person.id))
+                .await
+                .unwrap();
+        assert!(pinned.is_some(), "the seeded project exists");
+
+        let runtime = workflows::InMemoryRuntime::new();
+        let notation = workflows::start_notation(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            "onboarding",
+            person.id,
+            project.id,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (keys, labels) =
+            super::build_answer_context(&surreal, Some(&storage), notation.notation_id)
+                .await
+                .unwrap();
+        for ctx in [&keys, &labels] {
+            assert_eq!(
+                ctx.get("client_dri.name").map(String::as_str),
+                Some("Designated Client")
+            );
+            assert_eq!(
+                ctx.get("client_dri.email").map(String::as_str),
+                Some("dri@example.com")
+            );
+            assert_eq!(
+                ctx.get("project.client_dri").map(String::as_str),
+                Some("Designated Client")
+            );
+            assert_eq!(
+                ctx.get("project.client_dri.name").map(String::as_str),
+                Some("Designated Client")
+            );
+            assert_eq!(
+                ctx.get("project.client_dri.email").map(String::as_str),
+                Some("dri@example.com")
+            );
+        }
+    }
+
+    /// The absence of a pin is not filled with an empty string: a matter
+    /// with no client DRI renders nothing for the alias.
+    #[tokio::test]
+    async fn an_unpinned_project_fills_nothing_for_the_client_dri() {
+        const TEMPLATE: &str =
+            include_str!("../../workflows/tests/fixtures/onboarding_implicit_end.txt");
+        let surreal = store::test_support::mem_surreal().await;
+        let dir = tempfile::tempdir().unwrap();
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
+        let unpinned = store::test_support::seed_project(&surreal, "No DRI project").await;
+        store::template_source::persist_contents(
+            &surreal,
+            &storage,
+            unpinned.id,
+            "onboarding",
+            TEMPLATE.into(),
+            "synthetic-commit".into(),
+        )
+        .await
+        .unwrap();
+        let other = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::new("Uninvolved", "other@example.com"),
+        )
+        .await
+        .unwrap();
+        let runtime = workflows::InMemoryRuntime::new();
+        let notation = workflows::start_notation(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            "onboarding",
+            other.id,
+            unpinned.id,
+            None,
+        )
+        .await
+        .unwrap();
+        let (keys, labels) =
+            super::build_answer_context(&surreal, Some(&storage), notation.notation_id)
+                .await
+                .unwrap();
+        for ctx in [&keys, &labels] {
+            assert!(
+                !ctx.contains_key("client_dri.name"),
+                "no pin fills nothing: {ctx:?}"
+            );
+        }
+    }
 
     #[test]
     fn a_declared_brand_supplies_its_firm_legal_name() {

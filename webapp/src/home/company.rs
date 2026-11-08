@@ -123,8 +123,9 @@ pub(super) fn CompanyHome(
                 h1 { "{content.heading}" }
                 p { class: "company-hero__lead", "{content.lead}" }
                 div { class: "company-actions",
+                    super::HeroCall { content: content.clone() }
                     a {
-                        class: "nav-btn nav-btn--primary",
+                        class: "{content.cta_class()}",
                         href: "{company.booking_href}",
                         target: if booking_external { Some("_blank") } else { None },
                         rel: if booking_external { Some("noopener noreferrer") } else { None },

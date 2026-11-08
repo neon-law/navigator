@@ -15,6 +15,7 @@ mod executors;
 mod finance_aggregate;
 mod general_nag;
 mod heartbeat;
+mod inbound_triage;
 mod nightly_project_update;
 mod notation;
 mod notation_reset;

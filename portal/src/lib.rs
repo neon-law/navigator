@@ -2869,7 +2869,9 @@ mod probe_context_tests {
 /// names and stashes it as a request extension. A request that reaches this
 /// layer with no such extension — a router built without `host_layer`, as
 /// most direct view/unit tests are — scopes the default key's branding, which
-/// is `state` itself.
+/// is `state` itself. It also scopes the request's mail sender,
+/// [`views::brand::sender_email_for_host`] of the `Host:` header, which every
+/// email a handler sends reads through [`views::brand::request_sender_email`].
 async fn scope_branding(
     State(default_branding): State<&'static views::brand::Branding>,
     request: Request<axum::body::Body>,
@@ -2881,7 +2883,16 @@ async fn scope_branding(
         .copied()
         .unwrap_or_default()
         .resolve_branding(default_branding);
-    views::brand::scope(branding, next.run(request)).await
+    let sender = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|host| host.to_str().ok())
+        .and_then(views::brand::sender_email_for_host);
+    views::brand::scope(
+        branding,
+        views::brand::scope_sender(sender, next.run(request)),
+    )
+    .await
 }
 
 /// Build the kebab-case redirect target for a file-backed asset route
@@ -3644,15 +3655,10 @@ async fn catalog_certificate_submit(
     // workflow invocation.
     let key = uuid::Uuid::new_v4();
     let runtime = app.workflow_runtime.clone();
-    if let Err(e) = workflows::email::certificate::trigger_certificate(
-        runtime.as_ref(),
-        key,
-        name,
-        email,
-        &m.title,
-        &issued,
-    )
-    .await
+    let payload = workflows::email::EmailPayload::certificate(name, email, &m.title, issued)
+        .with_from(views::brand::request_sender_email());
+    if let Err(e) =
+        workflows::email::certificate::trigger_certificate(runtime.as_ref(), key, &payload).await
     {
         // Logged, never surfaced — the reply is the same neutral page so
         // the endpoint isn't an address-enumeration oracle. Instrument the

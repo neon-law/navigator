@@ -89,15 +89,20 @@ pub async fn send(state: &AppState, lead_id: Uuid, email: &str) {
         &base_url,
     ));
     message.template_slug = Some(TEMPLATE_SLUG.to_string());
+    message.from = views::brand::request_sender_email();
     if let Err(error) = state.email.send(message).await {
         tracing::warn!(error = %error, %lead_id, "lead confirmation email failed");
     }
 }
 
 /// Answer an accepted lead with its confirmation link, off the request path
-/// so the visitor's redirect never waits on mail.
+/// so the visitor's redirect never waits on mail. The spawned send keeps the
+/// request's mail sender, which a new task would otherwise lose.
 pub fn spawn_send(state: AppState, lead_id: Uuid, email: String) {
-    tokio::spawn(async move { send(&state, lead_id, &email).await });
+    let sender = views::brand::request_sender_email();
+    tokio::spawn(views::brand::scope_sender(sender, async move {
+        send(&state, lead_id, &email).await;
+    }));
 }
 
 /// The public confirmation route. It sits outside the session boundary: the

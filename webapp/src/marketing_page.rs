@@ -19,12 +19,12 @@ use serde::{Deserialize, Serialize};
 use crate::components::pricing::{DayRateBadge, PricingCard, PricingSection};
 use crate::components::{
     BillMarkGlyph, PlainCodeBlock, PlatformMark, PlatformMarkGlyph, PracticeMark,
-    PracticeMarkGlyph, PublicShell, SiteHeader, SiteNavLink, SocialMeta, StatEntry, StatGrid,
-    TestimonialCard, TestimonialSection,
+    PracticeMarkGlyph, PublicShell, SocialMeta, StatEntry, StatGrid, TestimonialCard,
+    TestimonialSection,
 };
 use crate::lead_capture::{LeadCaptureContext, LeadCaptureCopy, LeadCaptureForm};
 use crate::litigation_page::HeroWord;
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 use crate::services_search::{ServicesBand, ServicesSearch};
 
 /// The marketing-page stylesheet, hoisted alongside `theme.css` and the shared
@@ -574,21 +574,7 @@ fn MarketingShell(
     children: Element,
 ) -> Element {
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }
@@ -638,7 +624,18 @@ pub fn MarketingPage(
     /// publish no canonical URL.
     #[props(default)]
     path: String,
+    /// The brand's voice line when this page is a brand's home: the hero
+    /// leads with a click-to-call action unless its own call to action
+    /// already dials. Empty on every other marketing page.
+    #[props(default)]
+    hero_phone: String,
 ) -> Element {
+    let hero_calls = !hero_phone.is_empty()
+        && !content
+            .hero_cta
+            .as_ref()
+            .is_some_and(|cta| cta.href.starts_with("tel:"));
+    let hero_tel = crate::components::site_footer::tel_href(&hero_phone);
     let hero_day_rate = content.bands.iter().find_map(|band| match band {
         Band::Cards {
             items,
@@ -705,9 +702,16 @@ pub fn MarketingPage(
                             } else if !content.hero_lead.is_empty() {
                                 p { class: "fm-hero__lead commitment-hero__lead", "{content.hero_lead}" }
                             }
+                            if hero_calls {
+                                a { class: "nav-btn nav-btn--primary fm-hero__cta home-call", href: "{hero_tel}", "Call {hero_phone}" }
+                            }
                             if let Some(cta) = content.hero_cta.as_ref() {
                                 a {
-                                    class: "nav-btn nav-btn--primary fm-hero__cta commitment-hero__cta",
+                                    class: if hero_calls {
+                                        "nav-btn nav-btn--secondary fm-hero__cta commitment-hero__cta"
+                                    } else {
+                                        "nav-btn nav-btn--primary fm-hero__cta commitment-hero__cta"
+                                    },
                                     href: "{cta.href}",
                                     "{cta.label}"
                                 }
@@ -732,6 +736,9 @@ pub fn MarketingPage(
                             }
                             h1 { class: "fm-hero__title", "{content.title}" }
                             p { class: "fm-hero__tagline", "{content.tagline}" }
+                            if hero_calls {
+                                a { class: "nav-btn nav-btn--primary fm-hero__cta home-call", href: "{hero_tel}", "Call {hero_phone}" }
+                            }
                         }
                     }
                 }
@@ -2237,6 +2244,7 @@ mod tests {
                     lead_capture: LeadCaptureContext::default(),
                     query: String::new(),
                     path: String::new(),
+                    hero_phone: String::new(),
                 },
             );
             dom.rebuild_in_place();

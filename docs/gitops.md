@@ -181,6 +181,9 @@ changed files. Re-running before the PR merges is idempotent: the branch is name
 finds the same deterministic template output and repairs any partial update before making sure the pull request is still
 open, rather than stacking a duplicate.
 
+When GitHub reports OAuth scopes, a plan that updates a workflow file requires the `workflow` scope before the command
+makes any writes. A dry run can still show the plan.
+
 Run a dry run before applying drift, then rerun without it:
 
 ```bash

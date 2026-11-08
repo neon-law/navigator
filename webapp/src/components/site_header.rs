@@ -103,6 +103,7 @@ pub fn SiteHeader(
     destinations: Vec<SiteNavLink>,
     #[props(default)] utility: Vec<SiteNavLink>,
     #[props(default = "site-menu".to_string())] menu_id: String,
+    #[props(default)] phone: String,
 ) -> Element {
     rsx! {
         // The browser-tab icon is the same mark the header paints two lines
@@ -146,6 +147,27 @@ pub fn SiteHeader(
                         }
                     }
                     strong { "{brand_name}" }
+                }
+                // The brand's own voice line is the page's first call to
+                // action. It sits before the disclosure, so a phone shows it
+                // with the menu closed; each brand dials its own number, which
+                // is how an inbound call reaches that brand's call script.
+                if !phone.is_empty() {
+                    a {
+                        class: "site-header__call nav-btn nav-btn--primary",
+                        href: "{super::site_footer::tel_href(&phone)}",
+                        svg {
+                            class: "site-header__call-icon",
+                            xmlns: "http://www.w3.org/2000/svg",
+                            "viewBox": "0 0 16 16",
+                            width: "16",
+                            height: "16",
+                            "aria-hidden": "true",
+                            path { fill: "currentColor", d: "M3.65 1.33a1 1 0 0 1 1.48.1l1.7 2.18c.32.4.43.93.3 1.42l-.52 2.08a.5.5 0 0 0 .13.48l2.32 2.32a.5.5 0 0 0 .48.13l2.08-.52a1.6 1.6 0 0 1 1.42.3l2.18 1.7c.5.38.55 1.12.1 1.57l-.98.98c-.7.7-1.75 1.01-2.73.66a17.6 17.6 0 0 1-6.62-4.17A17.6 17.6 0 0 1 .82 4.04c-.35-.98-.04-2.03.66-2.73z" }
+                        }
+                        span { class: "site-header__call-verb", "Call " }
+                        span { class: "site-header__call-number", "{phone}" }
+                    }
                 }
                 // The narrow-viewport disclosure. The input holds the state and
                 // the accessible name; the label is the visual burger and is
@@ -431,6 +453,43 @@ mod tests {
             "the active modifier still applies: {out}"
         );
         assert!(out.contains(r#"target="_blank""#), "{out}");
+    }
+
+    /// The brand's voice line is the header's call to action: a `tel:` link
+    /// that dials digits, placed before the burger so a phone shows it with
+    /// the menu closed, and named by its visible text.
+    #[test]
+    fn the_brand_phone_is_a_click_to_call_link_outside_the_menu() {
+        fn app() -> Element {
+            rsx! {
+                SiteHeader {
+                    brand_name: "Summons Defense".to_string(),
+                    home_href: "/".to_string(),
+                    logo_href: String::new(),
+                    destinations: vec![SiteNavLink::new("Blog", "/blog")],
+                    phone: "+1 510 800 2090".to_string(),
+                }
+            }
+        }
+        let out = ssr(app);
+        let call = out
+            .find(r#"class="site-header__call nav-btn nav-btn--primary" href="tel:+15108002090""#)
+            .unwrap_or_else(|| panic!("the call link dials digits: {out}"));
+        let burger = out.find("site-header__toggle").expect("burger renders");
+        assert!(call < burger, "the call link sits outside the menu: {out}");
+        assert!(
+            out.contains("+1 510 800 2090"),
+            "the number is visible: {out}"
+        );
+        assert!(
+            !out.contains("aria-label=\"Call"),
+            "named by its text: {out}"
+        );
+    }
+
+    #[test]
+    fn no_phone_renders_no_call_link() {
+        assert!(!anonymous_html().contains("site-header__call"));
     }
 
     /// Two headers on one page carry two distinct menu ids.

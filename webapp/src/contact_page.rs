@@ -9,9 +9,9 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{PublicShell, SiteHeader, SiteNavLink, SocialMeta};
+use crate::components::{PublicShell, SocialMeta};
 use crate::lead_capture::{LeadCaptureContext, LeadCaptureCopy, LeadCaptureForm};
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// The resolved contact content — the portal router builds it from the brand
 /// addresses and injects it; the wasm-safe carrier across the server-function
@@ -96,34 +96,12 @@ pub fn ContactPage(
     lead_capture: LeadCaptureContext,
 ) -> Element {
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }
     };
-    // `tel:` dials digits, not the human spacing the number is written with.
-    let firm_tel = format!(
-        "tel:{}",
-        content
-            .firm_phone
-            .chars()
-            .filter(|c| c.is_ascii_digit() || *c == '+')
-            .collect::<String>()
-    );
+    let firm_tel = crate::components::site_footer::tel_href(&content.firm_phone);
     rsx! {
         document::Title { "{content.head_title}" }
         document::Meta { name: "description", content: "{content.meta_description}" }
@@ -200,29 +178,9 @@ pub fn ContactSentPageEntry() -> Element {
 /// submission was accepted or silently rejected.
 #[component]
 pub fn ContactSentPage(chrome: PublicChrome, firm_phone: String) -> Element {
-    let firm_tel = format!(
-        "tel:{}",
-        firm_phone
-            .chars()
-            .filter(|c| c.is_ascii_digit() || *c == '+')
-            .collect::<String>()
-    );
+    let firm_tel = crate::components::site_footer::tel_href(&firm_phone);
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! { PublicFooter { chrome: chrome.clone() } };
     rsx! {

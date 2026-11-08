@@ -2226,7 +2226,8 @@ developed by Flavien Raynaud (https://github.com/flavray/avro-rs)
 and donated to the Apache Avro project in 2020.
 
 ----------------------------------------------------------------------------------------
-iceberg 0.10.1
+iceberg 0.11.0
+iceberg-property-macro 0.11.0
 
 Apache Iceberg Rust
 Copyright 2023-2026 The Apache Software Foundation
@@ -5915,7 +5916,8 @@ ctutils 0.4.2
 encode_unicode 1.0.0
 encoding_rs 0.8.44
 flume 0.12.0
-iceberg 0.10.1
+iceberg 0.11.0
+iceberg-property-macro 0.11.0
 imgref 1.12.2
 k8s-openapi 0.29.0
 kurbo 0.13.1
@@ -29070,7 +29072,7 @@ SOFTWARE.
 
 ----------------------------------------------------------------------------------------
 lopdf 0.42.0
-lopdf 0.46.0
+lopdf 0.47.0
 pom 1.1.0
 
 MIT License

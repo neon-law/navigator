@@ -116,6 +116,7 @@ async fn try_send_confirm(
     );
     msg.html_body = Some(html);
     msg.template_slug = Some(PURPOSE_EMAIL_CONFIRM.to_string());
+    msg.from = views::brand::request_sender_email();
     msg.person_id = Some(person_id.to_string());
     if let Err(e) = s.email.send(msg).await {
         tracing::warn!(error = %e, person_id = %person_id, "email-confirm: email send failed");

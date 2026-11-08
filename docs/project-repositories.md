@@ -1092,8 +1092,9 @@ before it opens the Project. It reuses existing contacts and Entities, creates a
 Human Entity only after validating the jurisdiction. A duplicate immutable code is refused. The CLI release emits the
 canonical manifest, agent contract, workflows, license, CODEOWNERS, synced skills, the root `.gitignore` that ignores
 `/documents/` and `notes/`, and `drafts/onboarding__letter.md` as an unedited stub, initializes Git, and validates the
-generated repository. `navigator project onboard` refuses to open a notation from that stub until the letter is drafted.
-Add any other Project-specific Draft or application content deliberately afterward.
+generated repository. The gate accepts the exact generated stub without a jurisdiction. Once drafted, the letter
+requires an explicit jurisdiction, and `navigator project onboard` can open a notation from it. Add any other
+Project-specific Draft or application content deliberately afterward.
 
 Unless `--no-repository` keeps the Project repository-less, the scaffold then asks the server to create or adopt the
 Project's source repository and prints each resource's outcome. If any step fails after the Project opened, rerun with

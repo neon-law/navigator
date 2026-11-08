@@ -18,12 +18,9 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::pricing::{DayRateBadge, PricingCard, PricingSection};
-use crate::components::{
-    BillMarkGlyph, PracticeMark, PracticeMarkGlyph, PublicShell, SiteHeader, SiteNavLink,
-    SocialMeta,
-};
+use crate::components::{BillMarkGlyph, PracticeMark, PracticeMarkGlyph, PublicShell, SocialMeta};
 use crate::litigation_page::HeroWord;
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// The self-contained transactional stylesheet, hoisted after the brand layer.
 pub const TRANSACTIONAL_STYLESHEET_HREF: &str = "/public/css/transactional.css";
@@ -117,21 +114,7 @@ pub fn TransactionalPageEntry() -> Element {
 #[component]
 pub fn TransactionalPage(chrome: PublicChrome, content: TransactionalContent) -> Element {
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }

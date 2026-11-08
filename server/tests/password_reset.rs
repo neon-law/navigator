@@ -293,6 +293,64 @@ async fn full_reset_flow_sets_a_new_password_and_signs_in() {
     assert!(&body_string(replay)
         .await
         .contains("This link is no longer valid"));
+    // No Brand host on the request: the backend's configured sender.
+    assert_eq!(email.captured()[0].from, None);
+}
+
+/// The reset mail sends as `support@` (`staging@` on a staging host) the naked domain of the host the
+/// visitor asked from — `neonlaw.com` for Lex Tecnica's `neonlaw.com`
+/// subdomain, never its unauthenticated `lextecnica.com`.
+#[tokio::test]
+async fn reset_mail_sends_from_the_requesting_hosts_naked_domain() {
+    let meta = mount_metadata().await;
+    let idp = mount_idp(password_user("libra@example.com"), None).await;
+    let (state, surreal, email) = state_with_reset(&idp, &meta, true).await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    for (host, person, sender) in [
+        (
+            "staging-lex-tecnica.neonlaw.com",
+            "libra@example.com",
+            "staging@neonlaw.com",
+        ),
+        (
+            "www.vestaestateplanning.com",
+            "leo@example.com",
+            "support@vestaestateplanning.com",
+        ),
+    ] {
+        seed_person(&surreal, person).await;
+        let request = |method| {
+            Request::builder()
+                .method(method)
+                .uri("/auth/password/reset")
+                .header("host", host)
+        };
+        let form = app
+            .clone()
+            .oneshot(request("GET").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let cookie = account_csrf_cookie(&form);
+        let (_, token) = csrf_pair(&cookie, &body_string(form).await);
+        let submit = app
+            .clone()
+            .oneshot(
+                request("POST")
+                    .header("cookie", &cookie)
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "email={}&csrf_token={token}",
+                        person.replace('@', "%40")
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(submit.status(), StatusCode::OK, "{host}");
+        let sent = email.captured();
+        assert_eq!(sent.last().unwrap().to, person, "{host}");
+        assert_eq!(sent.last().unwrap().from.as_deref(), Some(sender), "{host}");
+    }
 }
 
 #[tokio::test]

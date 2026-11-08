@@ -4377,3 +4377,89 @@ BEGIN
     END IF;
 END
 $$;
+
+-- Migration: 20261107160000_create_firm_assumption.sql
+-- A Firm assumption: the stated premise the CEO digest checks actuals
+-- against and a Kit resolves at run time (ENG-1264). `key` is a dotted path
+-- from the repository's public `assumptions/schema.yaml` catalog, which
+-- carries keys, types, and null defaults — never a Firm's values. The
+-- values are Firm data, versioned and only ever added to: an assumption
+-- change is a new version, so the history is the table
+-- (docs/glossary/firm-assumption.md).
+CREATE TABLE firm_assumption (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    firm_id UUID NOT NULL REFERENCES firm(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value JSONB NOT NULL,
+    version INTEGER NOT NULL CHECK (version > 0),
+    set_by UUID NOT NULL REFERENCES person(id),
+    set_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reason TEXT,
+    UNIQUE (firm_id, key, version)
+);
+CREATE INDEX firm_assumption_current ON firm_assumption (firm_id, key, version DESC);
+
+-- History: an assumption change is a new version, never an edit or a removal.
+CREATE FUNCTION reject_firm_assumption_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Firm Assumption rows are versioned history; record a new version instead';
+END;
+$$;
+CREATE TRIGGER firm_assumption_immutable
+    BEFORE UPDATE OR DELETE ON firm_assumption
+    FOR EACH ROW EXECUTE FUNCTION reject_firm_assumption_mutation();
+CREATE TRIGGER firm_assumption_no_truncate
+    BEFORE TRUNCATE ON firm_assumption
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_firm_assumption_mutation();
+
+-- Migration: 20261107170000_create_astrocartography_reference_geometry.sql
+CREATE TABLE astrocartography_reference_geometry (
+    specimen_sha256 TEXT NOT NULL CHECK (specimen_sha256 ~ '^[0-9a-f]{64}$'),
+    instant_utc TIMESTAMPTZ NOT NULL,
+    body TEXT NOT NULL,
+    angle TEXT NOT NULL,
+    segments geometry(MultiLineString,4326) NOT NULL,
+    PRIMARY KEY (specimen_sha256, body, angle),
+    CHECK (NOT ST_IsEmpty(segments) AND ST_IsValid(segments))
+);
+
+CREATE INDEX astrocartography_reference_geometry_segments
+    ON astrocartography_reference_geometry USING gist (segments);
+
+-- Fixed Sun MC from webapp/src/assets/world-specimen-lines.json. Its 181
+-- ordered vertices lie on one meridian, sampled at integer latitudes.
+DO $$
+BEGIN
+    INSERT INTO astrocartography_reference_geometry (specimen_sha256, instant_utc, body, angle, segments)
+    SELECT 'ab699abf3265459b1a9a25d46ab20211e4adf35610898fc7f165e9a28e6f496d',
+           TIMESTAMPTZ '2000-01-01 12:00:00+00', 'sun', 'mc',
+           ST_Multi(ST_SetSRID(ST_MakeLine(ST_MakePoint(0.8198348255188534, latitude) ORDER BY latitude), 4326))
+    FROM generate_series(-90, 90) AS latitude;
+
+    -- The migrator owns this immutable reference.
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'navigator_app') THEN
+        GRANT SELECT ON astrocartography_reference_geometry TO navigator_app;
+        REVOKE INSERT, UPDATE, DELETE ON astrocartography_reference_geometry FROM navigator_app;
+    END IF;
+END
+$$;
+
+-- Migration: 20261108000000_add_project_client_dri.sql
+-- The Project's client DRI Person — the client a CLIENT_DRI special question
+-- and a `project.client_dri` Clause binding resolve to. NULL until recorded;
+-- the write seam (`store::projects::set_client_dri_person_id`) validates the
+-- value fails-closed against the matter's own participation rows.
+ALTER TABLE project ADD COLUMN client_dri_person_id UUID REFERENCES person(id);
+
+-- Migration: 20261108120000_seed_sun_lower_meridian.sql
+-- Fixed Sun IC from webapp/src/assets/world-specimen-lines.json.
+-- Subtract 360 from the source longitude to store signed WGS84 coordinates.
+DO $$
+BEGIN
+    INSERT INTO astrocartography_reference_geometry (specimen_sha256, instant_utc, body, angle, segments)
+    SELECT 'ab699abf3265459b1a9a25d46ab20211e4adf35610898fc7f165e9a28e6f496d',
+           TIMESTAMPTZ '2000-01-01 12:00:00+00', 'sun', 'ic',
+           ST_Multi(ST_SetSRID(ST_MakeLine(ST_MakePoint(-179.18016517448115, latitude) ORDER BY latitude), 4326))
+    FROM generate_series(-90, 90) AS latitude;
+END
+$$;

@@ -148,7 +148,7 @@ impl SandboxCreditResetService {
 /// Grading who is "active" on Purchases in any state would grant credit to
 /// cancelled and never-paid subscriptions; `active` is the state the
 /// portal's own gate requires before a composer renders.
-async fn grant_active_subscribers(
+pub async fn grant_active_subscribers(
     pg: &PostgresDb,
     surreal: &SurrealDb,
     new_period: &str,
@@ -219,58 +219,126 @@ async fn invoice_closed_overage(
 
     for row in rows {
         let overage_cents = row.spent_cents - row.granted_cents;
-        if overage_cents <= 0 {
-            // A row flagged overage with the balance at or above zero —
-            // already settled by an earlier run's invoice. Counted and
-            // skipped rather than re-billed.
-            report.overage_already_billed += 1;
-            continue;
+        match invoice_one(
+            billing,
+            surreal,
+            &purchases,
+            row.person_id,
+            closed_period,
+            overage_cents,
+        )
+        .await?
+        {
+            OverageOutcome::Invoiced(_) => report.overage_invoiced += 1,
+            OverageOutcome::Skipped => report.overage_skipped += 1,
+            OverageOutcome::AlreadyBilled => report.overage_already_billed += 1,
         }
-
-        let Some(purchase) = latest_purchase(&purchases, row.person_id) else {
-            report.overage_skipped += 1;
-            continue;
-        };
-        let person = store::persons::find_by_id(surreal, row.person_id).await?;
-        let Some(person) = person else {
-            report.overage_skipped += 1;
-            continue;
-        };
-
-        let contact = match &purchase.xero_contact_id {
-            Some(id) => billing::ContactId(id.clone()),
-            None => {
-                billing
-                    .ensure_contact(&billing::ContactRequest {
-                        name: person.name.clone(),
-                        email: person.email.clone(),
-                    })
-                    .await?
-            }
-        };
-        let key = overage_invoice_key(row.person_id, closed_period);
-        let request = InvoiceRequest {
-            contact_id: Some(contact),
-            contact_name: person.name.clone(),
-            contact_email: person.email.clone(),
-            reference: format!("Nautilus sandbox usage {closed_period}"),
-            line_items: vec![InvoiceLine {
-                description: format!(
-                    "Legal Sandbox model usage beyond the included $5.00, {closed_period}"
-                ),
-                quantity: 1,
-                unit_amount_cents: overage_cents,
-                account_code: purchase.account_code.clone(),
-            }],
-            issued_date: None,
-            due_date: None,
-        };
-        // Keep the deterministic request key. Recovery after provider-key
-        // expiry still needs durable per-overage invoice state.
-        billing.create_invoice(key, &request).await?;
-        report.overage_invoiced += 1;
     }
     Ok(report)
+}
+
+/// Outcome of one subscriber's closed billing period.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum OverageOutcome {
+    Invoiced(String),
+    Skipped,
+    AlreadyBilled,
+}
+
+/// Stable input retained by the DBOS billing roster checkpoint.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Overage {
+    pub person_id: uuid::Uuid,
+    pub cents: i64,
+}
+
+pub async fn closed_overage_roster(
+    surreal: &SurrealDb,
+    period: &str,
+) -> anyhow::Result<Vec<Overage>> {
+    Ok(sandbox_usage::overage_rows(surreal, period)
+        .await?
+        .into_iter()
+        .map(|row| Overage {
+            person_id: row.person_id,
+            cents: -row.remaining_cents(),
+        })
+        .collect())
+}
+
+/// Invoice one overage using the shared provider contract. The caller owns
+/// its timeout and replay admission before making the provider call.
+pub async fn invoice_one_from_env(
+    pg: &PostgresDb,
+    surreal: &SurrealDb,
+    period: &str,
+    overage: Overage,
+) -> anyhow::Result<OverageOutcome> {
+    let mut billing =
+        XeroBillingProvider::from_env().ok_or_else(|| anyhow::anyhow!("Xero is not configured"))?;
+    let purchases = purchases::for_offerings(pg, &purchases::NAUTILUS_OFFERINGS).await?;
+    invoice_one(
+        &mut billing,
+        surreal,
+        &purchases,
+        overage.person_id,
+        period,
+        overage.cents,
+    )
+    .await
+}
+
+async fn invoice_one(
+    billing: &mut dyn BillingProvider,
+    surreal: &SurrealDb,
+    purchases: &[store::purchases::Purchase],
+    person_id: uuid::Uuid,
+    closed_period: &str,
+    overage_cents: i64,
+) -> anyhow::Result<OverageOutcome> {
+    if overage_cents <= 0 {
+        return Ok(OverageOutcome::AlreadyBilled);
+    }
+    let Some(purchase) = latest_purchase(purchases, person_id) else {
+        return Ok(OverageOutcome::Skipped);
+    };
+    let person = store::persons::find_by_id(surreal, person_id).await?;
+    let Some(person) = person else {
+        return Ok(OverageOutcome::Skipped);
+    };
+
+    let contact = match &purchase.xero_contact_id {
+        Some(id) => billing::ContactId(id.clone()),
+        None => {
+            billing
+                .ensure_contact(&billing::ContactRequest {
+                    name: person.name.clone(),
+                    email: person.email.clone(),
+                })
+                .await?
+        }
+    };
+    let key = overage_invoice_key(person_id, closed_period);
+    let request = InvoiceRequest {
+        contact_id: Some(contact),
+        contact_name: person.name.clone(),
+        contact_email: person.email.clone(),
+        reference: format!("Nautilus sandbox usage {closed_period}"),
+        line_items: vec![InvoiceLine {
+            description: format!(
+                "Legal Sandbox model usage beyond the included $5.00, {closed_period}"
+            ),
+            quantity: 1,
+            unit_amount_cents: overage_cents,
+            account_code: purchase.account_code.clone(),
+        }],
+        issued_date: None,
+        due_date: None,
+    };
+    // Keep the deterministic request key. Recovery after provider-key
+    // expiry still needs durable per-overage invoice state.
+    let receipt = billing.create_invoice(key, &request).await?;
+    Ok(OverageOutcome::Invoiced(receipt.0))
 }
 
 /// The deterministic overage-invoice key for one subscriber-month. `v5`

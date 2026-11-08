@@ -189,6 +189,35 @@ pub struct PublicChrome {
     pub social: Vec<ChromeSocial>,
 }
 
+/// The public header, mapped from an already-resolved [`PublicChrome`]: the
+/// request brand's mark, nav, auth-aware utility links, and that brand's own
+/// voice line as the click-to-call action. Pages call
+/// `rsx! { PublicHeader { chrome } }` and pass the result to
+/// [`crate::components::PublicShell`].
+#[component]
+pub fn PublicHeader(
+    chrome: PublicChrome,
+    #[props(default = "site-menu".to_string())] menu_id: String,
+) -> Element {
+    let links = |links: &[ChromeNavLink]| -> Vec<crate::components::SiteNavLink> {
+        links
+            .iter()
+            .map(|link| crate::components::SiteNavLink::new(link.label.clone(), link.href.clone()))
+            .collect()
+    };
+    rsx! {
+        crate::components::SiteHeader {
+            brand_name: chrome.brand_name.clone(),
+            home_href: chrome.home_href.clone(),
+            logo_href: chrome.logo_href.clone(),
+            destinations: links(&chrome.destinations),
+            utility: links(&chrome.utility),
+            menu_id,
+            phone: chrome.firm_phone.clone(),
+        }
+    }
+}
+
 /// The public footer, mapped from an already-resolved [`PublicChrome`].
 ///
 /// ONE footer, byte-identical on every public page: this mapping reads no

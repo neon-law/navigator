@@ -1038,6 +1038,45 @@ pub(crate) struct RevisionSummary {
 const INTEGRITY_PAGE: usize = 50;
 /// Rows per request when the server re-hashes each object.
 const INTEGRITY_DEEP_PAGE: usize = 10;
+
+/// The page size for an integrity fetch, deep or shallow.
+pub(crate) fn integrity_page_limit(deep: bool) -> usize {
+    if deep {
+        INTEGRITY_DEEP_PAGE
+    } else {
+        INTEGRITY_PAGE
+    }
+}
+
+/// An integrity report with no rows yet, ready to fold pages into.
+fn empty_integrity_response() -> IntegrityResponse {
+    IntegrityResponse {
+        assets: Vec::new(),
+        total: None,
+        next_offset: None,
+        integrations: Vec::new(),
+    }
+}
+
+/// Fold one fetched integrity page into `merged`, reporting the offset of
+/// the next page — `None` when the fetch is complete.
+pub(crate) fn integrity_advance(
+    merged: &mut IntegrityResponse,
+    page: IntegrityResponse,
+    offset: usize,
+) -> Result<Option<usize>> {
+    merged.total = page.total;
+    merged.assets.extend(page.assets);
+    merged.integrations.extend(page.integrations);
+    match page.next_offset {
+        None => Ok(None),
+        Some(next) if next > offset => Ok(Some(next)),
+        Some(next) => Err(anyhow!(
+            "document integrity paging did not advance: the server answered \
+             next_offset {next} for offset {offset}"
+        )),
+    }
+}
 /// Tries per page or per revision read before the check fails. The reads
 /// share one budget: both are bounded idempotent GETs, and both retry a
 /// plain 500 alongside the gateway errors.
@@ -1459,39 +1498,27 @@ impl DocumentClient {
     /// The server answers in bounded pages, so a matter with hundreds of
     /// pointers never waits on one gateway-length request. A page that fails
     /// at the gateway or times out is retried; the rest of the pages are
-    /// never skipped, so every row is still checked.
+    /// never skipped, so every row is still checked. A `401` on any page is
+    /// a [`SessionRefused`] — renewal above this layer (`LiveSession`)
+    /// answers it; here it is never retried.
     pub(crate) async fn integrity(&self, deep: bool) -> Result<IntegrityResponse> {
-        let limit = if deep {
-            INTEGRITY_DEEP_PAGE
-        } else {
-            INTEGRITY_PAGE
-        };
-        let mut merged = IntegrityResponse {
-            assets: Vec::new(),
-            total: None,
-            next_offset: None,
-            integrations: Vec::new(),
-        };
+        let limit = integrity_page_limit(deep);
+        let mut merged = empty_integrity_response();
         let mut offset = 0;
         loop {
             let page = self.integrity_page(deep, offset, limit).await?;
-            merged.total = page.total;
-            merged.assets.extend(page.assets);
-            merged.integrations.extend(page.integrations);
-            match page.next_offset {
+            match integrity_advance(&mut merged, page, offset)? {
                 None => return Ok(merged),
-                Some(next) if next > offset => offset = next,
-                Some(next) => {
-                    return Err(anyhow!(
-                        "document integrity paging did not advance: the server answered \
-                         next_offset {next} for offset {offset}"
-                    ));
-                }
+                Some(next) => offset = next,
             }
         }
     }
 
-    async fn integrity_page(
+    /// One bounded page of the integrity report. A page that fails at the
+    /// gateway or times out is retried; a `401` is a [`SessionRefused`] —
+    /// it says nothing about the documents, only the session, and renewal
+    /// above this layer (`LiveSession`) stays the one path that answers it.
+    pub(crate) async fn integrity_page(
         &self,
         deep: bool,
         offset: usize,
@@ -1521,6 +1548,11 @@ impl DocumentClient {
                         return serde_json::from_str(&text).with_context(|| {
                             format!("parse document integrity response at offset {offset}")
                         });
+                    }
+                    if status == reqwest::StatusCode::UNAUTHORIZED {
+                        return Err(anyhow::Error::new(SessionRefused {
+                            detail: first_line(&text),
+                        }));
                     }
                     failure = integrity_failure(Ok((status, &text)), INTEGRITY_REQUEST_TIMEOUT);
                     transient_status(status)
@@ -3850,6 +3882,65 @@ struct VisiblePerson {
     role: String,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PeopleResponse {
+    Page {
+        data: Vec<VisiblePerson>,
+        links: PeopleLinks,
+    },
+    Array(Vec<VisiblePerson>),
+}
+
+#[derive(Deserialize)]
+struct PeopleLinks {
+    next: Option<String>,
+}
+
+async fn find_visible_person(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    email: &str,
+) -> Result<Option<VisiblePerson>> {
+    const PEOPLE_PATH: &str = "/app/api/people";
+    let endpoint = format!("{base}{PEOPLE_PATH}");
+    let mut request = client.get(&endpoint).query(&[("filter[email]", email)]);
+    loop {
+        let response = request
+            .bearer_auth(token)
+            .send()
+            .await
+            .context("GET /app/api/people")?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!(
+                "list people failed: {status}: {}",
+                first_line(&body)
+            ));
+        }
+        let (people, next) =
+            match serde_json::from_str(&body).context("parse GET /app/api/people")? {
+                PeopleResponse::Page { data, links } => (data, links.next),
+                PeopleResponse::Array(people) => (people, None),
+            };
+        let person = people
+            .into_iter()
+            .find(|person| person.email.eq_ignore_ascii_case(email));
+        if person.is_some() {
+            return Ok(person);
+        }
+        let Some(next) = next else {
+            return Ok(None);
+        };
+        let query = next
+            .strip_prefix("/app/api/people?")
+            .context("invalid next link from GET /app/api/people")?;
+        request = client.get(format!("{endpoint}?{query}"));
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct VisibleEntity {
     id: Uuid,
@@ -4100,9 +4191,8 @@ async fn resolve_entity_selection(
 /// operator has a login for, with no database connection required.
 ///
 /// Resolves `--client-email` to the client-of-record Person over
-/// `GET /app/api/people` (the deployment carries no filtered lookup, so this
-/// reads the whole visible directory and matches case-insensitively, the
-/// same shape `projects_close` already uses for a matter code). With
+/// `GET /app/api/people`, following the filtered directory pages until it
+/// finds an exact, case-insensitive email match. With
 /// `--entity-name`, resolves an **existing** Entity by that name over
 /// `GET /app/api/entities` — this door never creates one. Without it,
 /// creates a `Human` entity named for the client, in `--jurisdiction`
@@ -4188,22 +4278,7 @@ pub async fn projects_create_named(
             _ => anyhow::bail!("--firm and --brand must be supplied together"),
         };
 
-        let people_resp = client
-            .get(format!("{base}/app/api/people"))
-            .bearer_auth(&token)
-            .send()
-            .await
-            .context("GET /app/api/people")?;
-        let people_status = people_resp.status();
-        let people_body = people_resp.text().await.unwrap_or_default();
-        if !people_status.is_success() {
-            return Err(anyhow!(
-                "list people failed: {people_status}: {}",
-                first_line(&people_body)
-            ));
-        }
-        let people: Vec<VisiblePerson> =
-            serde_json::from_str(&people_body).context("parse GET /app/api/people")?;
+        let existing_person = find_visible_person(&client, &base, &token, client_email).await?;
         // Resolve caller-supplied identity coordinates before any create:
         // duplicate entities and unknown jurisdictions must not leave a new
         // contact without a Project.
@@ -4215,10 +4290,7 @@ pub async fn projects_create_named(
                 validate_human_entity_selection(&client, &base, &token, jurisdiction_name).await?;
             }
         }
-        let person = match people
-            .into_iter()
-            .find(|p| p.email.eq_ignore_ascii_case(client_email))
-        {
+        let person = match existing_person {
             Some(person) => person,
             None if !client_name.trim().is_empty() => {
                 let response = client
@@ -8171,9 +8243,36 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/app/api/people"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {"id": client_id, "email": "client@example.com", "name": "Acme Client", "role": "client"}
-            ])))
+            .and(query_param("filter[email]", "client@example.com"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": Uuid::now_v7(), "email": "other-client@example.com", "name": "Other Client", "role": "client"}],
+                "links": {"next": "/app/api/people?filter%5Bemail%5D=client%40example.com&page%5Bafter%5D=second"},
+                "meta": {"page": {"size": 50}}
+            })))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/people"))
+            .and(query_param("filter[email]", "client@example.com"))
+            .and(query_param("page[after]", "second"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": client_id, "email": "Client@example.com", "name": "Acme Client", "role": "client"}],
+                "links": {},
+                "meta": {"page": {"size": 50}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/people"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [],
+                "links": {},
+                "meta": {"page": {"size": 50}}
+            })))
+            .expect(0)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -8217,6 +8316,51 @@ mod tests {
             .await,
             ExitCode::SUCCESS
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn projects_create_refuses_a_people_link_to_another_host() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let other = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::new(&server_uri);
+
+        Mock::given(method("GET"))
+            .and(path("/app/api/people"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [],
+                "links": {"next": format!("{}/app/api/people?page%5Bafter%5D=second", other.uri())},
+                "meta": {"page": {"size": 50}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            projects_create_named(
+                Some(&server_uri),
+                "Acme Formation",
+                "acme-formation",
+                "Acme Client",
+                "client@example.com",
+                Some("Acme LLC"),
+                None,
+                true,
+                None,
+                None,
+                None,
+            )
+            .await,
+            ExitCode::from(2)
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        assert!(other.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -27,9 +27,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog_slide_body::CatalogSlideBody;
 use crate::catalog_slides::WORKSHOP_PROGRESS_SCRIPT_HREF;
-use crate::components::{PublicShell, SiteHeader, SiteNavLink, CATALOG_STYLESHEET_HREF};
+use crate::components::{PublicShell, CATALOG_STYLESHEET_HREF};
 use crate::home::PracticeLink;
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// The first-party script that turns ArrowLeft/ArrowRight into deck moves.
 pub const CATALOG_DISPLAY_SCRIPT_HREF: &str = "/public/js/catalog-display.js";
@@ -148,21 +148,7 @@ pub fn CatalogStepPage(
     #[props(default)] practices: Vec<PracticeLink>,
 ) -> Element {
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }

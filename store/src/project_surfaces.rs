@@ -1544,6 +1544,7 @@ mod tests {
             entity_id: uuid::Uuid::now_v7(),
             firm_id: None,
             jurisdiction_id: None,
+            client_dri_person_id: None,
             description: None,
             drive_folder_id: None,
             repository_url: repository_url.map(str::to_string),

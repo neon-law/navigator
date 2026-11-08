@@ -7,8 +7,8 @@
 use axum::response::Html;
 use dioxus::prelude::*;
 
-use crate::components::{Field, PublicShell, SiteHeader, SiteNavLink};
-use crate::public_chrome::{firm_public_chrome, PublicChrome, PublicFooter};
+use crate::components::{Field, PublicShell};
+use crate::public_chrome::{firm_public_chrome, PublicChrome, PublicFooter, PublicHeader};
 
 /// One sign-in button on the chooser: where it goes and what it says.
 ///
@@ -471,7 +471,7 @@ fn apple_mark() -> Element {
 }
 
 fn header(chrome: &PublicChrome) -> Element {
-    rsx! { SiteHeader { brand_name: chrome.brand_name.clone(), home_href: chrome.home_href.clone(), logo_href: chrome.logo_href.clone(), destinations: chrome.destinations.iter().map(|link| SiteNavLink::new(link.label.clone(), link.href.clone())).collect(), utility: chrome.utility.iter().map(|link| SiteNavLink::new(link.label.clone(), link.href.clone())).collect() } }
+    rsx! { PublicHeader { chrome: chrome.clone() } }
 }
 fn footer(chrome: &PublicChrome) -> Element {
     rsx! { PublicFooter { chrome: chrome.clone() } }

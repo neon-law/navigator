@@ -553,9 +553,11 @@ const DBOS_WEB_PATCH: WebPatch = WebPatch {
 /// A daily workflow the DBOS executor in `web` hosts: its `config.toml`
 /// switch, the Restate trigger `CronJob` it retires (none for a workflow born
 /// on DBOS), the `config.toml` coordinates rendered into `web` beside the
-/// switch, and the row secret `web` refuses to boot without.
+/// switch, the row secret `web` refuses to boot without, and whether an
+/// absent switch means on wherever the executor runs.
 struct DbosSchedule {
     env: &'static str,
+    default_on: bool,
     retires: Option<RetiredCronJob>,
     coordinates: &'static [&'static str],
     secret: Option<&'static str>,
@@ -577,12 +579,14 @@ const fn retired(cronjob: &'static str, resource: &'static str) -> RetiredCronJo
 const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
+        default_on: true,
         retires: Some(retired("general-nag", "  - cron-general-nag.yaml\n")),
         coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
-        secret: None,
+        secret: Some("SLACK_BOT_TOKEN"),
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
+        default_on: false,
         retires: Some(retired(
             "dri-digest-trigger",
             "  - cron-dri-digest-trigger.yaml\n",
@@ -592,6 +596,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
+        default_on: false,
         retires: Some(retired(
             "billing-digest-trigger",
             "  - cron-billing-digest-trigger.yaml\n",
@@ -601,6 +606,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED",
+        default_on: false,
         retires: Some(retired(
             "notation-reset-trigger",
             "  - cron-notation-reset-trigger.yaml\n",
@@ -613,6 +619,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED",
+        default_on: true,
         retires: None,
         coordinates: &[
             "SLACK_MESSAGES_CHANNEL_ID",
@@ -629,18 +636,22 @@ const DBOS_SCHEDULE_ENV_TOKEN: &str = "            # NAVIGATOR_DBOS_SCHEDULE_ENV
 /// The incoming webhook `DriDigest` on DBOS refuses to boot without.
 const SLACK_WEBHOOK_URL: &str = "SLACK_WEBHOOK_URL";
 
-/// Each schedule's switch, read as `"true"` or `"false"` (absent is off), in
-/// [`DBOS_SCHEDULES`] order. A schedule on DBOS needs the executor, so a
-/// switch without `NAVIGATOR_DBOS_ENABLED = "true"` is refused rather than
-/// left inert while its Restate `CronJob` is gone.
+/// Each schedule's switch, read as `"true"` or `"false"`, in
+/// [`DBOS_SCHEDULES`] order. An absent switch is off, except that a
+/// `default_on` schedule is on wherever `NAVIGATOR_DBOS_ENABLED = "true"`. A
+/// schedule on DBOS needs the executor, so an explicit `"true"` without
+/// `NAVIGATOR_DBOS_ENABLED = "true"` is refused rather than left inert while
+/// its Restate `CronJob` is gone.
 fn dbos_schedule_flags<F>(deployment: &str, get: &F) -> Result<Vec<bool>>
 where
     F: Fn(&str) -> Option<String>,
 {
+    let dbos_on = non_empty_env(NAVIGATOR_DBOS_ENABLED, get).as_deref() == Some("true");
     let mut flags = Vec::with_capacity(DBOS_SCHEDULES.len());
     for schedule in &DBOS_SCHEDULES {
         let flag = match non_empty_env(schedule.env, get).as_deref() {
-            None | Some("false") => false,
+            None => schedule.default_on && dbos_on,
+            Some("false") => false,
             Some("true") => true,
             Some(_) => bail!(
                 "{} in deployments/{deployment}/config.toml must be \"true\" or \"false\"",
@@ -648,7 +659,7 @@ where
             ),
         };
         ensure!(
-            !flag || non_empty_env(NAVIGATOR_DBOS_ENABLED, get).as_deref() == Some("true"),
+            !flag || dbos_on,
             "{} requires {NAVIGATOR_DBOS_ENABLED} = \"true\" in deployments/{deployment}/config.toml",
             schedule.env
         );
@@ -7626,22 +7637,19 @@ mod tests {
     }
 
     #[test]
-    fn dbos_schedules_stay_on_restate_until_switched_on() {
-        for value in [None, Some("false")] {
-            let get = with_schedules(Some("true"), value, value);
-            let manifests = rendered_manifests(&get);
+    fn general_nag_defaults_to_dbos_and_respects_an_explicit_override() {
+        for (flag, expected) in [(None, "true"), (Some("false"), "false")] {
+            let manifests = rendered_manifests(with_schedules(Some("true"), flag, None));
             let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
-            for schedule in &DBOS_SCHEDULES {
-                assert_eq!(web_env_value(&web, schedule.env).as_deref(), Some("false"));
-                if let Some(retired) = schedule.retires {
-                    assert!(
-                        renders_cronjob(&manifests, retired.cronjob),
-                        "{value:?} keeps the {} Restate CronJob",
-                        retired.cronjob
-                    );
-                }
-            }
-            assert_eq!(web_env_value(&web, "SLACK_GENERAL_CHANNEL_ID"), None);
+            assert_eq!(
+                web_env_value(&web, "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED").as_deref(),
+                Some(expected)
+            );
+            assert_eq!(
+                renders_cronjob(&manifests, "general-nag"),
+                expected == "false"
+            );
+            assert!(renders_cronjob(&manifests, "dri-digest-trigger"));
         }
     }
 
@@ -7661,7 +7669,8 @@ mod tests {
         assert!(!renders_cronjob(&manifests, "general-nag"));
         assert!(renders_cronjob(&manifests, "dri-digest-trigger"));
 
-        let manifests = rendered_manifests(with_schedules(Some("true"), None, Some("true")));
+        let manifests =
+            rendered_manifests(with_schedules(Some("true"), Some("false"), Some("true")));
         assert!(renders_cronjob(&manifests, "general-nag"));
         assert!(!renders_cronjob(&manifests, "dri-digest-trigger"));
     }
@@ -7752,7 +7761,7 @@ mod tests {
             Some("C012STAGING")
         );
         assert!(!renders_cronjob(&manifests, "notation-reset-trigger"));
-        assert!(renders_cronjob(&manifests, "general-nag"));
+        assert!(!renders_cronjob(&manifests, "general-nag"));
 
         let without_channel = |key: &str| match key {
             "SLACK_STAGING_MESSAGES_CHANNEL_ID" => None,
@@ -7773,11 +7782,51 @@ mod tests {
     }
 
     #[test]
+    fn profit_digest_is_on_by_default_wherever_dbos_runs() {
+        let dbos_on = |key: &str| match key {
+            NAVIGATOR_DBOS_ENABLED => Some("true".to_owned()),
+            "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => None,
+            _ => env_getter(FULL_ENV)(key),
+        };
+        let web = manifest_doc(&rendered_manifests(dbos_on), "Deployment", WEB_DEPLOYMENT);
+        for (name, value) in [
+            ("NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED", "true"),
+            ("SLACK_MESSAGES_CHANNEL_ID", "C012MESSAGES"),
+            ("SLACK_STAGING_MESSAGES_CHANNEL_ID", "C012STAGING"),
+        ] {
+            assert_eq!(web_env_value(&web, name).as_deref(), Some(value), "{name}");
+        }
+    }
+
+    #[test]
+    fn profit_digest_stays_off_when_a_deployment_opts_out_or_runs_no_dbos() {
+        let opted_out = |key: &str| match key {
+            NAVIGATOR_DBOS_ENABLED => Some("true".to_owned()),
+            "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => Some("false".to_owned()),
+            _ => env_getter(FULL_ENV)(key),
+        };
+        let web = manifest_doc(&rendered_manifests(opted_out), "Deployment", WEB_DEPLOYMENT);
+        assert_eq!(
+            web_env_value(&web, "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED").as_deref(),
+            Some("false")
+        );
+        let no_dbos = |key: &str| match key {
+            NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => None,
+            _ => env_getter(FULL_ENV)(key),
+        };
+        assert_eq!(
+            dbos_schedule_flags("synthetic-deployment", &no_dbos).unwrap(),
+            vec![false; DBOS_SCHEDULES.len()]
+        );
+    }
+
+    #[test]
     fn profit_digest_reaches_web_with_both_messages_channels_and_retires_nothing() {
         let switched = |key: &str| match key {
             NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => {
                 Some("true".to_owned())
             }
+            "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED" => Some("false".to_owned()),
             _ => env_getter(FULL_ENV)(key),
         };
         let manifests = rendered_manifests(switched);
@@ -7857,13 +7906,13 @@ mod tests {
         deployment
             .coordinates
             .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
-        deployment
-            .coordinates
-            .insert("NAVIGATOR_DBOS_GENERAL_NAG_ENABLED".into(), "true".into());
         assert_eq!(
             retired_cronjobs(&deployment).unwrap(),
             ["general-nag", "heartbeat-trigger"]
         );
+        deployment.encrypted_keys.remove("SLACK_BOT_TOKEN");
+        let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
+        assert!(error.to_string().contains("SLACK_BOT_TOKEN"), "{error}");
         deployment.coordinates.insert(
             "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED".into(),
             "true".into(),

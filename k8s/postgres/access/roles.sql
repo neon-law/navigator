@@ -119,6 +119,13 @@ WHERE n.nspname = 'public'
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO navigator_app;
 -- Coordinate-system definitions are extension data, not application rows.
 REVOKE INSERT, UPDATE, DELETE ON TABLE public.spatial_ref_sys FROM navigator_app;
+DO $$
+BEGIN
+    IF to_regclass('public.astrocartography_reference_geometry') IS NOT NULL THEN
+        REVOKE INSERT, UPDATE, DELETE ON TABLE public.astrocartography_reference_geometry FROM navigator_app;
+    END IF;
+END
+$$;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO navigator_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE navigator_owner IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO navigator_app;

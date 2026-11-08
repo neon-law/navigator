@@ -73,7 +73,8 @@ pub fn brand_name() -> &'static str {
 /// The inbound address every email's footer invites a reply to, from the
 /// mounted bundle.
 ///
-/// Deliberately not the envelope `From`, which is
+/// Deliberately not the envelope `From`, which is `support@` the serving
+/// host's naked domain (`views::brand::sender_email_for_host`) or
 /// [`crate::email::DEFAULT_FROM_EMAIL`]: what the site publishes and what the
 /// pipeline sends from are allowed to differ.
 #[must_use]

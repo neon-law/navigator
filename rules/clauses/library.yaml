@@ -304,3 +304,13 @@ california_employment@1:
     Any confidentiality and invention-assignment agreement will preserve California employee-invention exclusions,
     protected disclosures, wage discussions, and other nonwaivable rights. No term of this letter limits a right that
     California law does not allow to be waived.
+client_dri_contact@1:
+  kind: letter
+  inputs:
+    client:
+      types:
+      - person
+      prompt: Who is the client's designated representative (client DRI)?
+  body: |-
+    Address all correspondence concerning this matter to {{client.name}}, the client's designated
+    representative, at {{client.email}}.

@@ -23,6 +23,7 @@ pub mod dbos_nightly_project_update;
 pub mod dbos_notation;
 pub mod dbos_project_slack;
 pub mod dbos_reconcile;
+pub mod dbos_sandbox_reset;
 pub mod dbos_social_publisher;
 pub mod dri_digest;
 pub mod email_config;

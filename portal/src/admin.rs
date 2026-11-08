@@ -298,6 +298,10 @@ pub fn routes(
         )
         .route("/app/inbox/texts", post(crate::inbox::new_text_post))
         .route(
+            "/app/inbox/{conversation_id}/messages/{message_id}/attachments/{asset_id}",
+            get(crate::inbox::attachment_get),
+        )
+        .route(
             "/app/inbox/{conversation_id}/contact",
             post(crate::inbox::link_contact_post),
         )

@@ -185,9 +185,18 @@ async fn main() -> anyhow::Result<()> {
     // panics the first real Restate-signed request.
     install_crypto_provider();
     let lookup = |key: &str| std::env::var(key).ok();
-    let dbos_hosting = if Engine::from_lookup(lookup).context("select the durable engine")?
-        == Engine::Dbos
-    {
+    let enabled = |flag| dbos_engine::flag_enabled(flag, lookup(flag).as_deref());
+    let triage_dbos_enabled = enabled(workflows::trigger::INBOUND_TRIAGE_DBOS_ENABLED_ENV)?;
+    let youtube_dbos_enabled = enabled(workflows::trigger::YOUTUBE_COMMENTS_DBOS_ENABLED_ENV)?;
+    let sandbox_credit_reset_enabled =
+        enabled(workflows::trigger::SANDBOX_CREDIT_RESET_DBOS_ENABLED_ENV)?;
+    let engine = Engine::from_lookup(lookup).context("select the durable engine")?;
+    anyhow::ensure!(
+        engine == Engine::Dbos
+            || !(youtube_dbos_enabled || triage_dbos_enabled || sandbox_credit_reset_enabled),
+        "The enabled DBOS workflow routes require the DBOS executor"
+    );
+    let dbos_hosting = if engine == Engine::Dbos {
         let settings = dbos_engine::Settings::from_lookup(lookup).context("configure DBOS")?;
         let general_nag_enabled = workflows::dbos_engine::general_nag::enabled(lookup)
             .context("read NAVIGATOR_DBOS_GENERAL_NAG_ENABLED")?;
@@ -260,6 +269,9 @@ async fn main() -> anyhow::Result<()> {
             || notation_enabled
             || social_publisher_enabled
             || social_reconciler_enabled
+            || youtube_dbos_enabled
+            || triage_dbos_enabled
+            || sandbox_credit_reset_enabled
         {
             let token = lookup("NAVIGATOR_DBOS_INGRESS_TOKEN")
                 .filter(|token| !token.trim().is_empty())
@@ -574,6 +586,8 @@ async fn main() -> anyhow::Result<()> {
         .context("configure public assets storage")?;
     let kms = social_runtime_kms_from_env().await;
     let dbos_social_kms = kms.clone();
+    let youtube_dbos = youtube_dbos_enabled
+        .then(|| YoutubeCommentsPollerService::new(surreal.clone(), kms.clone()));
     let dbos_social_assets_storage = assets_storage.clone();
     // The nightly `repository` tag: on Forgejo each Project's own Firm
     // client, which also governs the repository and proposes the version
@@ -587,6 +601,16 @@ async fn main() -> anyhow::Result<()> {
         cloud::ForgeBackend::GitHub => forge
             .clone()
             .map_or(RepositoryForge::None, RepositoryForge::GitHub),
+    };
+    let sandbox_credit_reset_stores = if sandbox_credit_reset_enabled {
+        Some((
+            store::postgres::PostgresDb::from_env()
+                .await
+                .context("connect PostgreSQL for DBOS SandboxCreditReset")?,
+            surreal.clone(),
+        ))
+    } else {
+        None
     };
     let dbos_nightly_surreal = surreal.clone();
     let dbos_notation_surreal = surreal.clone();
@@ -619,6 +643,7 @@ async fn main() -> anyhow::Result<()> {
     // registered and every message still gets a triage row, from rules alone.
     let triage_providers = TriageProviders::from_env().context("configure triage providers")?;
     let inbound_triage = InboundTriageService::new(surreal.clone(), triage_providers);
+    let triage_dbos = triage_dbos_enabled.then(|| inbound_triage.clone());
 
     let listen: SocketAddr = std::env::var("WORKFLOWS_SERVICE_LISTEN")
         .unwrap_or_else(|_| "0.0.0.0:9080".into())
@@ -954,6 +979,24 @@ async fn main() -> anyhow::Result<()> {
                                 })
                             }));
                         }
+                    }
+                    if let (Some(service), Some(token)) = (youtube_dbos.clone(), dbos_ingress_token.as_ref()) {
+                        registered_ingress.youtube_comments = Some(workflows_service::dbos_ingress::YoutubeIngress {
+                            token: token.as_str().into(),
+                            workflow: workflows_service::youtube_comments::register_dbos(dbos, service)?,
+                        });
+                    }
+                    if let (Some(service), Some(token)) = (triage_dbos.clone(), dbos_ingress_token.as_ref()) {
+                        registered_ingress.inbound_triage = Some(workflows_service::dbos_ingress::TriageIngress {
+                            token: token.as_str().into(),
+                            workflow: workflows_service::inbound_triage::register_dbos(dbos, service)?,
+                        });
+                    }
+                    if let (Some((postgres, surreal)), Some(token)) = (sandbox_credit_reset_stores.clone(), dbos_ingress_token.as_ref()) {
+                        registered_ingress.sandbox_credit_reset = Some(workflows_service::dbos_ingress::SandboxResetIngress {
+                            token: token.as_str().into(),
+                            workflow: workflows_service::dbos_sandbox_reset::register(dbos, postgres, surreal)?,
+                        });
                     }
                     *dbos_ingress_for_registration
                         .write()

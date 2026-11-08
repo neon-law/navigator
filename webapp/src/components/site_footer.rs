@@ -213,9 +213,10 @@ fn address_lines(address: &str) -> Vec<&str> {
     lines
 }
 
-/// `tel:` dials digits, not the human spacing a number is written with.
-/// `pub(crate)` so the litigation page uses the same dialable format.
-pub(crate) fn tel_href(phone: &str) -> String {
+/// `tel:` dials digits, not the human spacing a number is written with. Every
+/// click-to-call link — header, hero, footer, contact page — dials through it.
+#[must_use]
+pub fn tel_href(phone: &str) -> String {
     format!(
         "tel:{}",
         phone

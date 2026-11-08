@@ -1919,7 +1919,7 @@ async fn blog_kebab_slug_is_served_without_redirect() {
 // ---- Notations format introduction and template catalog ----
 
 #[tokio::test]
-async fn notations_page_renders_format_structure_and_template_links() {
+async fn notations_page_opens_with_search_and_keeps_format_details_optional() {
     let app = site_app().await;
     let resp = anon_get(&app, "/notations").await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -1937,6 +1937,15 @@ async fn notations_page_renders_format_structure_and_template_links() {
     assert!(body.contains("/public/notation-pen.svg"));
     assert!(!body.contains("/public/navigator-wheel.svg"));
     assert!(body.contains("/public/css/notations.css"));
+    assert!(body.contains("/public/js/template-search.js"));
+    assert!(
+        body.find("Search templates").expect("template search")
+            < body
+                .find("About the Notation format")
+                .expect("format disclosure")
+    );
+    assert!(body.contains("data-template-search="));
+
     let navigator = body_string(anon_get(&app, "/navigator").await).await;
     assert!(!navigator.contains("id=\"notation-flow\""));
     // Every card's default link opens the notation's own show page now — the

@@ -29,6 +29,10 @@ use super::{certificate, welcome};
 /// completion certificate (`email_send__certificate`); they
 /// `skip_serializing_if` so every other send (welcome, …) keeps its
 /// previous byte-identical JSON shape.
+///
+/// `from` is the `From:` of the request that started the workflow
+/// (`views::brand::request_sender_email`), carried so the worker sends as the
+/// Brand the recipient used; `None` sends from the backend default.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmailPayload {
     pub name: String,
@@ -37,6 +41,8 @@ pub struct EmailPayload {
     pub workshop_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issued_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 impl EmailPayload {
@@ -47,6 +53,7 @@ impl EmailPayload {
             email: email.into(),
             workshop_title: None,
             issued_date: None,
+            from: None,
         }
     }
 
@@ -67,7 +74,15 @@ impl EmailPayload {
             email: email.into(),
             workshop_title: Some(workshop_title.into()),
             issued_date: Some(issued_date.into()),
+            from: None,
         }
+    }
+
+    /// Builder-style: send as `from` instead of the backend default.
+    #[must_use]
+    pub fn with_from(mut self, from: Option<String>) -> Self {
+        self.from = from;
+        self
     }
 }
 
@@ -114,7 +129,7 @@ pub async fn dispatch_state(
         body,
         html_body: Some(html),
         template_slug: Some(slug.to_string()),
-        from: None,
+        from: payload.from.clone(),
         reply_to: None,
         // `EmailPayload` carries no `persons.id` yet, so workflow-driven
         // sends can't stamp `person_id` for the delivery-side join.
@@ -127,10 +142,8 @@ pub async fn dispatch_state(
         auto_submitted: false,
         attachments: Vec::new(),
     };
-    // The workshop completion certificate rides a generated PDF and sends
-    // from the brand's own support address (`layout::support_email`, via
-    // `certificate::cert_from_email`) rather than the backend default. Every
-    // other slug keeps the previous shape.
+    // The workshop completion certificate rides a generated PDF. Every other
+    // slug keeps the previous shape.
     if slug == "certificate" {
         // `render_for_slug` above already validated `workshop_title` for the
         // certificate slug and returned `Err` if it was missing, so this can
@@ -152,7 +165,6 @@ pub async fn dispatch_state(
             })?;
         let attachment = certificate::certificate_attachment(&payload.name, workshop, issued)
             .map_err(|e| DispatchError::Pdf(e.to_string()))?;
-        email.from = Some(certificate::cert_from_email());
         email.attachments.push(attachment);
     }
     svc.send(email.clone()).await?;
@@ -248,6 +260,23 @@ mod tests {
         assert_eq!(captured[0].to, "aries@example.com");
         assert_eq!(captured[0].subject, "Welcome to Neon Law");
         assert_eq!(captured[0].template_slug.as_deref(), Some("welcome"));
+        assert_eq!(captured[0].from, None, "no request sender: backend default");
+    }
+
+    /// The certificate sends as the request's sender the trigger carried, so a
+    /// student on a Brand's host hears back from that Brand's naked domain.
+    #[tokio::test]
+    async fn dispatch_state_sends_the_certificate_from_the_payload_sender() {
+        let svc = CapturingEmail::new();
+        let payload = EmailPayload::certificate("Aries", "aries@example.com", "Deploy", "June 24")
+            .with_from(Some("support@vestaestateplanning.com".into()));
+        dispatch_state(&svc, "email_send__certificate", &payload)
+            .await
+            .expect("certificate dispatch must succeed");
+        assert_eq!(
+            svc.captured()[0].from.as_deref(),
+            Some("support@vestaestateplanning.com")
+        );
     }
 
     #[tokio::test]

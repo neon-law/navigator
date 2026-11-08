@@ -31,3 +31,21 @@ spec:
                       name: navigator-web-secrets
                       key: RESTATE_AUTH_TOKEN
                       optional: true
+                - name: NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED
+                      optional: true
+                - name: NAVIGATOR_DBOS_INGRESS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_DBOS_INGRESS_URL
+                      optional: true
+                - name: NAVIGATOR_DBOS_INGRESS_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_DBOS_INGRESS_TOKEN
+                      optional: true

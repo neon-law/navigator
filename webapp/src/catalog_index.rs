@@ -1,17 +1,16 @@
 //! `/workshops`, `/presentations`, and `/notations` — the firm's material indexes.
 //!
 //! Categories share the public shell and material list. The portal pre-layer
-//! injects each category's content; Notations also carries a format introduction
-//! above its templates.
+//! injects each category's content. Notations opens with its searchable template catalog.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    CatalogHero, PlainCodeBlock, PublicShell, SiteHeader, SiteNavLink, SocialMeta, TestimonialCard,
+    Accordion, CatalogHero, PlainCodeBlock, PublicShell, SocialMeta, TestimonialCard,
     TestimonialSection, CATALOG_STYLESHEET_HREF,
 };
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// One material in an index — a workshop or a presentation. `eyebrow` is the
 /// small uppercase line above the title, naming the audience the material is
@@ -169,21 +168,7 @@ pub fn CatalogIndexPage(
     #[props(default)] testimonials: Vec<TestimonialCard>,
 ) -> Element {
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }
@@ -209,8 +194,8 @@ pub fn CatalogIndexPage(
         }
         document::Stylesheet { href: CATALOG_STYLESHEET_HREF }
         PublicShell { header, footer,
-            if let Some(introduction) = content.introduction.clone() {
-                NotationsIntroduction { content: introduction }
+            if content.introduction.is_some() {
+                document::Stylesheet { href: "/public/css/notations.css" }
             } else {
                 CatalogHero {
                     eyebrow: chrome.brand_name.clone(),
@@ -218,12 +203,10 @@ pub fn CatalogIndexPage(
                     lede: content.lede.clone(),
                 }
             }
-            if !content.kinds.is_empty() {
-                KindCatalogSection { kinds: content.kinds.clone() }
-            }
             section { id: "templates", class: "catalog-library",
+                class: if content.introduction.is_some() { "catalog-library--notations" },
             if content.introduction.is_some() {
-                h2 { "Explore the templates" }
+                h1 { "{content.title}" }
             }
             if content.materials.is_empty() {
                 p { class: "catalog-empty",
@@ -242,6 +225,14 @@ pub fn CatalogIndexPage(
                 }
             }
             }
+            if let Some(introduction) = content.introduction.clone() {
+                Accordion { title: "About the Notation format".to_string(),
+                    NotationsIntroduction { content: introduction }
+                }
+            }
+            if !content.kinds.is_empty() {
+                KindCatalogSection { kinds: content.kinds.clone() }
+            }
             if content.include_testimonials {
                 TestimonialSection {
                     heading: "Testimonials".to_string(),
@@ -259,11 +250,10 @@ fn NotationsIntroduction(content: crate::marketing_page::PageContent) -> Element
     let specimen = "---\nkind: agreement\ntitle: Sample agreement\nprompts:\n  delivery: How should notices arrive?\nchoices:\n  delivery:\n    email: By email\n    post: By post\nquestionnaire:\n  BEGIN: { _: custom_single_choice__delivery }\n  custom_single_choice__delivery: { _: END }\n  END: {}\n# … workflow and other metadata\n---\n\n## I. Notices\n\nDelivery method: {{custom_single_choice__delivery}}.";
     rsx! {
         document::Stylesheet { href: crate::marketing_page::MARKETING_STYLESHEET_HREF }
-        document::Stylesheet { href: "/public/css/notations.css" }
         div { class: "notations-page",
             section { class: "notations-hero",
                 div { class: "notations-hero__copy",
-                    h1 { "{content.tagline}" }
+                    h2 { "{content.tagline}" }
                     div { class: "notations-lead",
                         crate::marketing_page::Prose { runs: content.hero_lead_runs.clone() }
                     }
@@ -385,6 +375,18 @@ fn TemplateGallery(materials: Vec<CatalogMaterial>) -> Element {
     let total = materials.len();
     let style = kind_filter_style(&kinds);
     rsx! {
+        document::Script { src: "/public/js/template-search.js", defer: true }
+        div { class: "template-search", hidden: true,
+            label { r#for: "template-search", "Search templates" }
+            input {
+                id: "template-search",
+                class: "nav-template-search__input",
+                r#type: "search",
+                placeholder: "Title, form code, jurisdiction, or description",
+                "aria-controls": "template-results",
+            }
+            p { id: "template-search-status", role: "status" }
+        }
         style { "{style}" }
         div {
             class: "template-gallery-wrapper",
@@ -411,23 +413,21 @@ fn TemplateGallery(materials: Vec<CatalogMaterial>) -> Element {
                     "{label} ({count})"
                 }
             }
-            div { class: "template-gallery",
+            div { class: "template-gallery", id: "template-results",
                 for (slug, label, group_materials) in groups.iter() {
                     section {
                         class: "template-gallery__group",
                         key: "{slug}",
                         "data-category": "{slug}",
-                        h3 { "{label}" }
+                        h2 { "{label}" }
                         ul { class: "template-gallery__cards",
                             for material in group_materials.iter() {
                                 li {
                                     class: "template-card",
                                     key: "{material.href}",
                                     "data-kind": "{material.kind}",
+                                    "data-template-search": "{material.title} {material.eyebrow} {material.summary} {material.href} {material.kind_label}",
                                     a { class: "template-card__link", href: "{material.href}",
-                                        div { class: "template-card__face", "aria-hidden": "true",
-                                            span { class: "template-card__face-kind", "{material.kind_label}" }
-                                        }
                                         div { class: "template-card__body",
                                             p { class: "catalog-eyebrow", "{material.eyebrow}" }
                                             h3 { "{material.title}" }

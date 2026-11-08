@@ -5,8 +5,9 @@
 //! dispatches the `workshop__certificate` workflow against the shared
 //! [`StateMachineRuntime`], which lands on `email_send__certificate`;
 //! the dispatcher then renders this email, generates the certificate PDF
-//! ([`pdf::render_certificate`]), attaches it, and sends from the firm's
-//! published address (`contact@neonlaw.com` by default).
+//! ([`pdf::render_certificate`]), attaches it, and sends as the payload's
+//! `from` — `support@` the naked domain of the Brand host the student asked
+//! from (`views::brand::request_sender_email`).
 //!
 //! Progress is tracked entirely client-side (browser `localStorage`, no
 //! telemetry); this module never learns *which* slides were seen, only
@@ -43,14 +44,6 @@ pub fn certificate_subject() -> String {
         "Your {} certificate of completion",
         super::layout::brand_name()
     )
-}
-
-/// The envelope `From:` for the certificate — the firm's published address
-/// (default `contact@neonlaw.com`). The domain must be authenticated with the
-/// mail provider (see `docs/deployment-secrets.md`) or the send is rejected.
-#[must_use]
-pub fn cert_from_email() -> String {
-    super::layout::support_email().to_string()
 }
 
 /// Render the certificate email body: strip the frontmatter, substitute the
@@ -103,18 +96,14 @@ pub fn certificate_attachment(
 pub async fn trigger_certificate(
     runtime: &dyn StateMachineRuntime,
     key: Uuid,
-    name: &str,
-    email: &str,
-    workshop_title: &str,
-    issued_date: &str,
+    payload: &EmailPayload,
 ) -> Result<(), WorkflowRuntimeError> {
     let spec = workshop_certificate_spec();
     runtime
         .start_ephemeral(MachineKind::Workflow, key, &spec)
         .await?;
 
-    let payload = EmailPayload::certificate(name, email, workshop_title, issued_date);
-    let payload_json = serde_json::to_string(&payload)
+    let payload_json = serde_json::to_string(payload)
         .map_err(|e| WorkflowRuntimeError::Transport(format!("payload encode: {e}")))?;
 
     runtime
@@ -132,6 +121,7 @@ mod tests {
         certificate_attachment, render_certificate_body, render_certificate_html,
         trigger_certificate,
     };
+    use crate::email::dispatch::EmailPayload;
     use crate::runtime::{InMemoryRuntime, StateMachineRuntime};
     use crate::spec::{MachineKind, StateName};
     use uuid::Uuid;
@@ -174,16 +164,15 @@ mod tests {
     async fn trigger_drives_inmemory_runtime_through_to_end() {
         let rt = InMemoryRuntime::new();
         let key = Uuid::from_u128(11);
-        trigger_certificate(
-            &rt,
-            key,
+        let payload = EmailPayload::certificate(
             "Aries",
             "aries@example.com",
             "Deploy the Neon Law Navigator",
             "June 24, 2026",
-        )
-        .await
-        .expect("certificate trigger drives in-memory runtime to END");
+        );
+        trigger_certificate(&rt, key, &payload)
+            .await
+            .expect("certificate trigger drives in-memory runtime to END");
         let final_state = rt.current_state(MachineKind::Workflow, key).await;
         assert_eq!(final_state, Some(StateName::end()));
     }

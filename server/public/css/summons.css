@@ -124,3 +124,9 @@ body:has(.summons-page) { margin: 0; }
 .summons-intake-form .nav-label { font-size: 13px; }
 .summons-intake-form .nav-field__help { font-size: 11px; line-height: 1.7; }
 .summons-intake-form .nav-checkbox { margin-top: 4px; }
+
+/* On a phone the voice line takes the wordmark's row and the intake button
+   follows it rather than splitting the space with it. */
+@media (max-width: 680px) {
+  .summons-header > .summons-header-call + .summons-button { margin-left: 0; }
+}

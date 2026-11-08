@@ -184,6 +184,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "astrocartography_reference_geometry",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "attorney_rate",
       "missing_column": null,
       "missing_table": null,
@@ -248,6 +255,13 @@
     {
       "extra_column": null,
       "extra_table": "document_chain_archive_item",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "firm_assumption",
       "missing_column": null,
       "missing_table": null,
       "table": null
@@ -1618,6 +1632,7 @@
         "booking_url": "option<string>",
         "brand": "option<string>",
         "calendar_id": "option<string>",
+        "client_dri_person_id": "option<record<person>>",
         "closed_at": "option<string>",
         "closure_reason": "option<string>",
         "code": "string",
@@ -1953,7 +1968,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 161,
+    "table_count": 163,
     "tables": {
       "address": {
         "columns": {
@@ -2109,6 +2124,18 @@
         "references": [
           "person"
         ]
+      },
+      "astrocartography_reference_geometry": {
+        "columns": {
+          "angle": "TEXT",
+          "body": "TEXT",
+          "instant_utc": "TIMESTAMPTZ",
+          "segments": "geometry(MultiLineString,4326)",
+          "specimen_sha256": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "astrocartography_reference_geometry",
+        "references": []
       },
       "attestation": {
         "columns": {
@@ -3095,6 +3122,33 @@
         "foreign_keys": [],
         "name": "firm_anchor",
         "references": []
+      },
+      "firm_assumption": {
+        "columns": {
+          "firm_id": "UUID",
+          "id": "UUID",
+          "key": "TEXT",
+          "reason": "TEXT",
+          "set_at": "TIMESTAMPTZ",
+          "set_by": "UUID",
+          "value": "JSONB",
+          "version": "INTEGER"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "set_by",
+            "person"
+          ]
+        ],
+        "name": "firm_assumption",
+        "references": [
+          "firm",
+          "person"
+        ]
       },
       "firm_brand": {
         "columns": {
@@ -4685,6 +4739,7 @@
           "booking_url": "TEXT",
           "brand": "TEXT",
           "calendar_id": "TEXT",
+          "client_dri_person_id": "UUID",
           "closed_at": "TEXT",
           "closure_reason": "TEXT",
           "code": "TEXT",
@@ -4718,6 +4773,10 @@
         },
         "foreign_keys": [
           [
+            "client_dri_person_id",
+            "person"
+          ],
+          [
             "entity_id",
             "entity"
           ],
@@ -4739,7 +4798,8 @@
           "entity",
           "firm",
           "jurisdiction",
-          "legal_plan"
+          "legal_plan",
+          "person"
         ]
       },
       "project_archive_generation": {
