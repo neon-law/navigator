@@ -4869,80 +4869,12 @@ pub(crate) async fn pdf_project_answers(
         Err(error) => return Err(error),
     };
     let project_path = format!("/app/api/projects/{}", remote.project_id);
-    let project = remote
-        .pdf_answer_json::<serde_json::Value>(&project_path)
-        .await?;
-    let mut fields = BTreeMap::new();
     let template_text =
         std::fs::read_to_string(file).context("read Draft for PDF Answer defaults")?;
     let placeholders = crate::answers_file::pdf_placeholders(&template_text);
-    for prefix in placeholders
-        .iter()
-        .map(|field| field.split('.').next().unwrap_or(field))
-        .filter(|field| field.starts_with("project__"))
-    {
-        for key in ["id", "name", "code"] {
-            if let Some(value) = project[key].as_str() {
-                fields.insert(format!("{prefix}.{key}"), value.to_owned());
-            }
-        }
-        if let Some(name) = project["name"].as_str() {
-            fields.insert(prefix.to_owned(), name.to_owned());
-        }
-    }
-    if let Some(entity) = project["entity_id"].as_str() {
-        let entity: serde_json::Value = remote
-            .pdf_answer_json(&format!("/app/api/entities/{entity}"))
-            .await?;
-        for key in ["id", "name"] {
-            if let Some(value) = entity[key].as_str() {
-                fields.insert(format!("entity__client.{key}"), value.to_owned());
-            }
-        }
-        if let Some(name) = entity["name"].as_str() {
-            fields.insert("entity__client".into(), name.to_owned());
-        }
-    }
-    let participants: Vec<serde_json::Value> = remote
-        .pdf_answer_json(&format!("{project_path}/participants"))
+    let mut fields = remote
+        .pdf_store_defaults(&project_path, &manifest, &placeholders)
         .await?;
-    for (prefix, marker, expected) in [
-        (
-            "person__client_dri",
-            "is_client_dri",
-            manifest.client_dri.as_deref(),
-        ),
-        (
-            "person__firm_attorney",
-            "is_lawyer_dri",
-            manifest.lawyer_dri.as_deref(),
-        ),
-    ] {
-        if let Some(id) = participants
-            .iter()
-            .find(|row| row[marker] == true)
-            .and_then(|row| row["person_id"].as_str())
-        {
-            let person: serde_json::Value = remote
-                .pdf_answer_json(&format!("/app/api/people/{id}"))
-                .await?;
-            if expected.is_some_and(|email| {
-                !person["email"]
-                    .as_str()
-                    .is_some_and(|actual| actual.eq_ignore_ascii_case(email))
-            }) {
-                continue;
-            }
-            for key in ["id", "name", "email"] {
-                if let Some(value) = person[key].as_str() {
-                    fields.insert(format!("{prefix}.{key}"), value.to_owned());
-                }
-            }
-            if let Some(name) = person["name"].as_str() {
-                fields.insert(prefix.into(), name.to_owned());
-            }
-        }
-    }
     let mut sources: BTreeMap<_, _> = fields
         .keys()
         .map(|field| (field.clone(), "Project store"))
@@ -4958,14 +4890,122 @@ pub(crate) async fn pdf_project_answers(
         }
     }
     if let Some(from) = from {
+        let previous = remote.pdf_prior_answers(&project_path, file, from).await?;
+        sources.extend(
+            previous
+                .keys()
+                .map(|field| (field.clone(), "previous Notation")),
+        );
+        fields.extend(previous);
+    }
+    for (field, value) in overrides {
+        let source = if fields.insert(field.clone(), value).is_some() {
+            "--answer override"
+        } else {
+            "--answer"
+        };
+        sources.insert(field, source);
+    }
+    crate::answers_file::report_pdf_sources(placeholders, &sources);
+    Ok(fields.into_iter().collect())
+}
+
+impl DocumentClient {
+    async fn pdf_store_defaults(
+        &self,
+        project_path: &str,
+        manifest: &crate::projects::manifest::Manifest,
+        placeholders: &std::collections::BTreeSet<&str>,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        use std::collections::BTreeMap;
+        let project = self
+            .pdf_answer_json::<serde_json::Value>(project_path)
+            .await?;
+        let mut fields = BTreeMap::new();
+        for prefix in placeholders
+            .iter()
+            .map(|field| field.split('.').next().unwrap_or(field))
+            .filter(|field| field.starts_with("project__"))
+        {
+            for key in ["id", "name", "code"] {
+                if let Some(value) = project[key].as_str() {
+                    fields.insert(format!("{prefix}.{key}"), value.to_owned());
+                }
+            }
+            if let Some(name) = project["name"].as_str() {
+                fields.insert(prefix.to_owned(), name.to_owned());
+            }
+        }
+        if let Some(entity) = project["entity_id"].as_str() {
+            let entity: serde_json::Value = self
+                .pdf_answer_json(&format!("/app/api/entities/{entity}"))
+                .await?;
+            for key in ["id", "name"] {
+                if let Some(value) = entity[key].as_str() {
+                    fields.insert(format!("entity__client.{key}"), value.to_owned());
+                }
+            }
+            if let Some(name) = entity["name"].as_str() {
+                fields.insert("entity__client".into(), name.to_owned());
+            }
+        }
+        let participants: Vec<serde_json::Value> = self
+            .pdf_answer_json(&format!("{project_path}/participants"))
+            .await?;
+        for (prefix, marker, expected) in [
+            (
+                "person__client_dri",
+                "is_client_dri",
+                manifest.client_dri.as_deref(),
+            ),
+            (
+                "person__firm_attorney",
+                "is_lawyer_dri",
+                manifest.lawyer_dri.as_deref(),
+            ),
+        ] {
+            if let Some(id) = participants
+                .iter()
+                .find(|row| row[marker] == true)
+                .and_then(|row| row["person_id"].as_str())
+            {
+                let person: serde_json::Value = self
+                    .pdf_answer_json(&format!("/app/api/people/{id}"))
+                    .await?;
+                if expected.is_some_and(|email| {
+                    !person["email"]
+                        .as_str()
+                        .is_some_and(|actual| actual.eq_ignore_ascii_case(email))
+                }) {
+                    continue;
+                }
+                for key in ["id", "name", "email"] {
+                    if let Some(value) = person[key].as_str() {
+                        fields.insert(format!("{prefix}.{key}"), value.to_owned());
+                    }
+                }
+                if let Some(name) = person["name"].as_str() {
+                    fields.insert(prefix.into(), name.to_owned());
+                }
+            }
+        }
+        Ok(fields)
+    }
+
+    async fn pdf_prior_answers(
+        &self,
+        project_path: &str,
+        file: &Path,
+        from: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
         let template = file
             .file_stem()
             .and_then(|stem| stem.to_str())
             .context("Draft has no template code")?;
-        let board: Vec<webapp::lawyer_project_notations::ProjectNotationRow> = remote
+        let board: Vec<webapp::lawyer_project_notations::ProjectNotationRow> = self
             .pdf_answer_json(&format!("{project_path}/notation-inventory"))
             .await?;
-        let runs: Vec<serde_json::Value> = remote
+        let runs: Vec<serde_json::Value> = self
             .pdf_answer_json(&format!("{project_path}/notations"))
             .await?;
         let requested = if from == "latest" {
@@ -4988,7 +5028,7 @@ pub(crate) async fn pdf_project_answers(
             .max()
             .map(|(_, id)| id)
             .context("no matching Notation for this Project and Draft")?;
-        let answers: Vec<NotationAnswer> = remote
+        let answers: Vec<NotationAnswer> = self
             .pdf_answer_json(&format!("/app/api/notations/{id}/answers"))
             .await?;
         let saved = answers
@@ -4996,27 +5036,9 @@ pub(crate) async fn pdf_project_answers(
             .filter_map(|answer| Some((answer.state_name?, answer.value)))
             .map(|(state, value)| Ok((state, serde_yaml::to_value(value)?)))
             .collect::<Result<_>>()?;
-        let previous = crate::answers_file::pdf_fields(saved)?;
-        sources.extend(
-            previous
-                .keys()
-                .map(|field| (field.clone(), "previous Notation")),
-        );
-        fields.extend(previous);
+        crate::answers_file::pdf_fields(saved)
     }
-    for (field, value) in overrides {
-        let source = if fields.insert(field.clone(), value).is_some() {
-            "--answer override"
-        } else {
-            "--answer"
-        };
-        sources.insert(field, source);
-    }
-    crate::answers_file::report_pdf_sources(placeholders, &sources);
-    Ok(fields.into_iter().collect())
-}
 
-impl DocumentClient {
     async fn pdf_answer_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
         self.client
             .get(format!("{}{path}", self.base))
