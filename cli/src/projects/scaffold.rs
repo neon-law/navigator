@@ -9,7 +9,7 @@
 //! `--no-repository` keeps the Project repository-less. No client fact enters
 //! the tree beyond the manifest's DRI handles, and nothing is copied from a
 //! sibling matter.
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -156,12 +156,11 @@ pub async fn run(
     }
 }
 
-async fn run_inner(
-    host: Option<&str>,
+fn validate_scaffold_start(
     directory: &Path,
     resume: Option<&str>,
-    options: ScaffoldOptions,
-) -> Result<ExitCode> {
+    options: &ScaffoldOptions,
+) -> Result<bool> {
     let empty = is_empty_dir(directory)?;
     if let Some(code) = resume {
         if !store::projects::is_valid_code(code) {
@@ -192,6 +191,29 @@ async fn run_inner(
             directory.display()
         );
     }
+    if resume.is_none() {
+        if !io::stdin().is_terminal() {
+            bail!(
+                "interactive Project scaffold requires a terminal. For non-interactive use, run \
+                 `navigator project create`, then `navigator project scaffold --resume <code>`."
+            );
+        }
+        if options.client_email.is_some() {
+            bail!(
+                "--client-email requires --resume; the interactive form asks for the client email"
+            );
+        }
+    }
+    Ok(empty)
+}
+
+async fn run_inner(
+    host: Option<&str>,
+    directory: &Path,
+    resume: Option<&str>,
+    options: ScaffoldOptions,
+) -> Result<ExitCode> {
+    let empty = validate_scaffold_start(directory, resume, &options)?;
     let (base, _) = crate::remote::resolve(host)?;
     let code = if let Some(code) = resume {
         if !crate::remote::project_code_exists(host, code).await? {

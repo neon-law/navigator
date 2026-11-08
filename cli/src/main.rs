@@ -1369,7 +1369,7 @@ enum ProjectsCmd {
         no_repository: bool,
         /// Client contact email for the manifest's client DRI. Required when
         /// `--resume` rebuilds the tree in an empty directory.
-        #[arg(long, value_name = "EMAIL", requires = "resume")]
+        #[arg(long, value_name = "EMAIL")]
         client_email: Option<String>,
         /// Owning Firm name. Requires --brand.
         #[arg(long, requires = "brand", conflicts_with = "resume")]
