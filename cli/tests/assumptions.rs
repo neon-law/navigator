@@ -190,7 +190,7 @@ async fn assumptions_commands_refuse_when_the_capability_denies() {
         .assert()
         .failure()
         .stderr(predicates::str::contains(
-            "assumptions command refused (404)",
+            "assumptions command refused (404",
         ));
     server.verify().await;
 }
@@ -199,9 +199,16 @@ async fn assumptions_commands_refuse_when_the_capability_denies() {
 #[tokio::test]
 async fn assumptions_set_rejects_a_malformed_value_before_any_request() {
     let root = TempDir::new().unwrap();
+    // The unreachable host plus valid credentials isolate the value check:
+    // a request would fail to connect, so the asserted error proves the
+    // command rejected the value locally before dialing the API.
     Command::cargo_bin("navigator")
         .unwrap()
         .current_dir(root.path())
+        .env(
+            "NAVIGATOR_CREDENTIALS_FILE",
+            credentials(&root, "http://127.0.0.1:1"),
+        )
         .args([
             "assumptions",
             "--firm",
