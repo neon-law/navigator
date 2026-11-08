@@ -2070,7 +2070,7 @@ async fn intake_rows(
     for conversation in conversations {
         let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
         let assignee_name = inbox::assignee_label(db, conversation.project_id).await?;
-        let (direction, has_attachments, preview) =
+        let (direction, has_attachments, sent, preview) =
             latest_row_facts_on(pg, conversation.id).await?;
         let person = conversation
             .person_id
@@ -2099,28 +2099,34 @@ async fn intake_rows(
             preview,
             person,
             has_attachments,
+            sent,
             updated_at: conversation.updated_at,
         });
     }
     Ok(listed)
 }
 
-/// The three per-conversation aggregates the list view matches rows on
-/// (LAW-238 D3): the direction of the conversation's most recent message
+/// The per-conversation aggregates the list view matches rows on (LAW-238
+/// D3): the direction of the conversation's most recent message
 /// (`occurred_at, id` order; empty when it has none), whether any message
-/// carries a filed attachment, and that same message's preview snippet. One
-/// round trip per conversation, the same fan-out shape
+/// carries a filed attachment, whether a firm-side Person sent a message
+/// (outbound with an author — the Sent folder), and the preview snippet of
+/// the latest written message, skipping author-less outbound
+/// acknowledgements. One round trip per conversation, the same fan-out shape
 /// `latest_outbound_state_on` already follows.
 async fn latest_row_facts_on(
     pg: &PostgresDb,
     conversation_id: Uuid,
-) -> Result<(String, bool, Option<String>), InboxError> {
-    let row = sqlx::query_as::<_, (Option<String>, bool, Option<String>)>(
+) -> Result<(String, bool, bool, Option<String>), InboxError> {
+    let row = sqlx::query_as::<_, (Option<String>, bool, bool, Option<String>)>(
         "SELECT (SELECT direction FROM message WHERE conversation_id = $1 \
          ORDER BY occurred_at DESC, id DESC LIMIT 1), \
          EXISTS(SELECT 1 FROM message WHERE conversation_id = $1 \
          AND attachment_asset_id IS NOT NULL), \
+         EXISTS(SELECT 1 FROM message WHERE conversation_id = $1 \
+         AND direction = 'outbound' AND author_person_id IS NOT NULL), \
          (SELECT left(body, 400) FROM message WHERE conversation_id = $1 \
+         AND (direction <> 'outbound' OR author_person_id IS NOT NULL) \
          ORDER BY occurred_at DESC, id DESC LIMIT 1)",
     )
     .bind(conversation_id)
@@ -2130,7 +2136,8 @@ async fn latest_row_facts_on(
     Ok((
         row.0.unwrap_or_default(),
         row.1,
-        row.2.as_deref().and_then(inbox::preview_snippet),
+        row.2,
+        row.3.as_deref().and_then(inbox::preview_snippet),
     ))
 }
 

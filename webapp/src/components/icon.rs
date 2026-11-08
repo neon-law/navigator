@@ -48,6 +48,8 @@ pub enum IconName {
     EnvelopeFill,
     /// A handset, for a phone contact channel.
     TelephoneFill,
+    /// A speech bubble, for a text-message channel.
+    ChatDotsFill,
     /// The X mark, for the firm's profile on X.
     X,
     /// The `LinkedIn` mark.
@@ -91,6 +93,7 @@ impl IconName {
             Self::LibraScales => LIBRA_SCALES,
             Self::EnvelopeFill => "envelope-fill",
             Self::TelephoneFill => "telephone-fill",
+            Self::ChatDotsFill => "chat-dots-fill",
             Self::X => "x",
             Self::LinkedIn => "linkedin",
             Self::YouTube => "youtube",
@@ -125,6 +128,7 @@ impl IconName {
             LIBRA_SCALES => Some(Self::LibraScales),
             "envelope-fill" => Some(Self::EnvelopeFill),
             "telephone-fill" => Some(Self::TelephoneFill),
+            "chat-dots-fill" => Some(Self::ChatDotsFill),
             "x" => Some(Self::X),
             "linkedin" => Some(Self::LinkedIn),
             "youtube" => Some(Self::YouTube),
@@ -252,13 +256,26 @@ fn icon_body(name: IconName) -> Element {
             path { d: "M0.6 7.3a1.9 1.9 0 0 0 3.8 0z" }
             path { d: "M11.6 7.3a1.9 1.9 0 0 0 3.8 0z" }
         },
+        IconName::EnvelopeFill | IconName::TelephoneFill | IconName::ChatDotsFill => {
+            contact_mark(name)
+        }
+        IconName::X | IconName::LinkedIn | IconName::YouTube => social_mark(name),
+    }
+}
+
+/// The contact-channel glyphs: envelope, handset, and speech bubble.
+fn contact_mark(name: IconName) -> Element {
+    match name {
         IconName::EnvelopeFill => rsx! {
             path { d: "M.05 3.555A2 2 0 0 1 2 2h12a2 2 0 0 1 1.95 1.555L8 8.414zm.05 1.143v7.104l5.803-3.558zM6.761 8.83l-6.57 4.027A2 2 0 0 0 2 14h12a2 2 0 0 0 1.808-1.144l-6.57-4.027L8 9.586zm3.436-.586L16 11.801V4.697z" }
         },
         IconName::TelephoneFill => rsx! {
             path { d: "M1.885.511a1.745 1.745 0 0 1 2.61.163L6.29 2.98c.329.423.445.974.315 1.494l-.547 2.19a.68.68 0 0 0 .178.643l2.457 2.457a.68.68 0 0 0 .644.178l2.189-.547a1.75 1.75 0 0 1 1.494.315l2.306 1.795c.834.65.905 1.87.163 2.611l-1.034 1.034c-.74.74-1.846 1.065-2.877.702a18.6 18.6 0 0 1-7.01-4.42 18.6 18.6 0 0 1-4.42-7.009c-.362-1.03-.037-2.137.703-2.877z" }
         },
-        IconName::X | IconName::LinkedIn | IconName::YouTube => social_mark(name),
+        IconName::ChatDotsFill => rsx! {
+            path { d: "M16 8c0 3.866-3.582 7-8 7a9 9 0 0 1-2.347-.306c-.584.296-1.925.864-4.181 1.234-.2.032-.352-.176-.273-.362.354-.836.674-1.95.77-2.966C.744 11.37 0 9.76 0 8c0-3.866 3.582-7 8-7s8 3.134 8 7M5 8a1 1 0 1 0-2 0 1 1 0 0 0 2 0m4 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0m3 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2" }
+        },
+        _ => rsx! {},
     }
 }
 
@@ -321,6 +338,7 @@ mod tests {
         IconName::LibraScales,
         IconName::EnvelopeFill,
         IconName::TelephoneFill,
+        IconName::ChatDotsFill,
         IconName::X,
         IconName::LinkedIn,
         IconName::YouTube,

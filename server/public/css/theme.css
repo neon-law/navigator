@@ -2870,23 +2870,22 @@ a.nav-link:hover {
   box-sizing: border-box;
 }
 
-/* Three-pane inbox grid (desktop): the folder rail, the conversation list,
- * and the in-place reading pane. The pane is always rendered — before a row
- * is selected it explains itself — so the grid keeps one shape and the pane
- * heading is a stable focus target. Modeled on the glossary sticky-sidebar
- * grid. Below 60rem the grid collapses: the rail stacks above the list and
- * the pane stacks under it, while the thread remains its own navigable page
- * for deep links. */
+/* Inbox grid (desktop): the folder rail, then one column holding the
+ * conversation list with the reading pane beneath it at the list's full
+ * width — a mail client's horizontal split. The pane is always rendered —
+ * before a row is selected it explains itself — so the heading is a stable
+ * focus target. Below 60rem the rail stacks above the list, and the thread
+ * remains its own navigable page for deep links. */
 @media (min-width: 60rem) {
   #inbox {
     display: grid;
-    grid-template-columns: 14rem minmax(0, 1fr) minmax(0, 1.5fr);
+    grid-template-columns: 13rem minmax(0, 1fr);
     gap: 1.5rem;
     align-items: start;
   }
 
   /* Loading and error early-returns render a lone paragraph in main; give it
-   * the full row instead of dropping it into the 14rem rail track. */
+   * the full row instead of dropping it into the rail track. */
   #inbox > p {
     grid-column: 1 / -1;
   }
@@ -2897,16 +2896,53 @@ a.nav-link:hover {
     max-height: calc(100vh - 3rem);
     overflow-y: auto;
   }
+}
 
-  #inbox .inbox-list {
-    grid-column: 2;
-    min-width: 0;
-  }
+.inbox-main {
+  min-width: 0;
+}
 
-  #inbox .inbox-pane {
-    grid-column: 3;
-    min-width: 0;
-  }
+.inbox-rail__compose {
+  width: 100%;
+  margin-bottom: 1.25rem;
+}
+
+/* The compose dialog: a centred modal over a dimmed page. */
+.inbox-compose {
+  width: min(36rem, calc(100vw - 2rem));
+  padding: 0;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 0.75rem;
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+}
+
+.inbox-compose::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+.inbox-compose__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem 0;
+}
+
+.inbox-compose__title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.inbox-compose__close {
+  min-width: 2.25rem;
+  padding: 0.25rem 0.6rem;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.inbox-compose .nav-form-card {
+  border: 0;
+  box-shadow: none;
 }
 
 .inbox-rail__group {
@@ -3085,20 +3121,42 @@ a.nav-link:hover {
   vertical-align: baseline;
 }
 
-/* The reading pane card: bordered like the table shell, its transcript
- * scrolling inside the card instead of stretching the page. On narrow
- * screens it stacks under the list with a plain top margin. */
+/* Channel icons: one 1em glyph in the channel's text colour. Social marks
+ * arrive as bare 24-unit SVGs, so the wrapper sizes both kinds alike. */
+.inbox-channel-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  margin-right: 0.4em;
+  vertical-align: -0.125em;
+}
+
+.inbox-channel-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.inbox-table__channel .inbox-channel-icon {
+  margin-right: 0;
+  font-size: 1.1rem;
+}
+
+.inbox-rail__link {
+  display: flex;
+  align-items: center;
+}
+
+/* The reading pane card sits under the list at its full width. */
 #inbox .inbox-pane {
+  margin-top: 1rem;
   border: 1px solid var(--nav-color-border);
   border-radius: 0.5rem;
   background: var(--nav-color-surface);
   padding: 0.75rem 1rem;
-}
-
-@media (max-width: 59.999rem) {
-  #inbox .inbox-pane {
-    margin-top: 1rem;
-  }
+  scroll-margin-top: 1rem;
 }
 
 .inbox-pane__title {
@@ -3117,37 +3175,315 @@ a.nav-link:hover {
   outline-offset: 2px;
 }
 
-.inbox-pane__empty,
-.inbox-pane__meta {
+.inbox-pane__empty {
   color: var(--nav-color-text-muted);
   margin: 0.25rem 0;
 }
 
-.inbox-pane__thread h3 {
+.inbox-pane__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.inbox-pane__heading h3 {
   margin: 0.25rem 0;
   color: var(--nav-color-text);
+  font-size: 1.35rem;
 }
 
-.inbox-pane__thread article {
-  border-top: 1px solid var(--nav-color-border);
-  padding: 0.75rem 0;
+.inbox-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.5rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inbox-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 999px;
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-text-muted);
+  font-size: 0.8rem;
+}
+
+/* Assign to a project: label, picker, and button on one line. */
+.inbox-assign {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--nav-color-surface-subtle);
+}
+
+.inbox-assign__label {
+  font-weight: 600;
+}
+
+.inbox-assign select {
+  flex: 1 1 16rem;
+  max-width: 28rem;
+}
+
+/* One message as a mail card: From / To on the left, time and channel on
+ * the right, then the body and full-width images. Firm messages carry a
+ * left rule; internal notes a dashed one. */
+.inbox-message {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 0.5rem;
   color: var(--nav-color-text);
 }
 
-.inbox-pane__thread article p {
-  margin: 0.35rem 0;
+.inbox-message--outbound {
+  border-left: 0.25rem solid var(--nav-color-primary);
+}
+
+.inbox-message--internal {
+  border-style: dashed;
+}
+
+.inbox-message__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.inbox-message__parties p,
+.inbox-message__meta {
+  margin: 0;
+}
+
+.inbox-message__from {
+  font-weight: 700;
+}
+
+.inbox-message__to,
+.inbox-message__meta {
+  color: var(--nav-color-text-muted);
+  font-size: 0.8rem;
+}
+
+.inbox-message__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+}
+
+.inbox-message__body {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.inbox-pane__thread article time {
+.inbox-message__image {
+  margin: 0.75rem 0 0;
+}
+
+.inbox-message__image img {
   display: block;
-  color: var(--nav-color-text-muted);
+  width: 100%;
+  height: auto;
+  border-radius: 0.375rem;
+}
+
+.inbox-message__image figcaption {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+}
+
+.inbox-message__reference {
+  margin: 0.5rem 0 0;
   font-size: 0.75rem;
 }
 
-.inbox-pane__thread {
-  max-height: calc(100vh - 12rem);
-  overflow-y: auto;
+/* Phones and narrow tablets: a mail app's one-column shape. Filters become
+ * horizontally scrolling chip rows, each conversation a two-line card (who
+ * and when, then the subject and preview), and Compose a floating button. */
+@media (max-width: 59.999rem) {
+  #inbox {
+    padding-inline: 0.75rem;
+  }
+
+  /* Positioned, so the visually hidden group titles stay inside the
+   * scrolling rail instead of widening the page. */
+  #inbox .inbox-rail {
+    position: relative;
+    display: flex;
+    gap: 0.5rem;
+    margin: 0 -0.75rem 0.75rem;
+    padding: 0 0.75rem 0.25rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #inbox .inbox-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .inbox-rail__group {
+    flex: none;
+    margin-bottom: 0;
+  }
+
+  .inbox-rail__title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .inbox-rail__group ul {
+    display: flex;
+    gap: 0.35rem;
+  }
+
+  .inbox-rail__link {
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--nav-color-border);
+    border-radius: 999px;
+    white-space: nowrap;
+    min-height: 2.25rem;
+    box-sizing: border-box;
+  }
+
+  .inbox-rail__link--active {
+    border-left-width: 1px;
+    border-color: var(--nav-color-primary);
+    box-shadow: inset 0 0 0 1px var(--nav-color-primary);
+  }
+
+  .inbox-rail__compose {
+    position: fixed;
+    right: 1rem;
+    bottom: calc(1rem + env(safe-area-inset-bottom));
+    z-index: 20;
+    width: auto;
+    margin: 0;
+    padding: 0.85rem 1.4rem;
+    border-radius: 999px;
+    box-shadow: 0 0.35rem 1rem rgb(0 0 0 / 0.25);
+  }
+
+  .inbox-list__header h1 {
+    font-size: 1.5rem;
+  }
+
+  /* The table reads as a list of cards: no header row, no horizontal
+   * scroll, and each row a small grid. */
+  .inbox-table__scroll {
+    overflow-x: visible;
+    border-inline: 0;
+    border-radius: 0;
+    margin-inline: -0.75rem;
+  }
+
+  /* Each card labels itself, so the column header row is dropped. */
+  .inbox-table thead {
+    display: none;
+  }
+
+  .inbox-table,
+  .inbox-table tbody {
+    display: block;
+  }
+
+  .inbox-table__row {
+    display: grid;
+    grid-template-columns: 1.25rem minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "dot sender channel date"
+      "dot subject subject subject";
+    align-items: baseline;
+    column-gap: 0.5rem;
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--nav-color-border);
+  }
+
+  .inbox-table td {
+    display: block;
+    padding: 0;
+    border: 0;
+    max-width: none;
+    width: auto;
+    min-width: 0;
+  }
+
+  .inbox-table__state {
+    grid-area: dot;
+    align-self: center;
+  }
+
+  .inbox-table__sender {
+    grid-area: sender;
+    font-size: 1rem;
+  }
+
+  .inbox-table__channel {
+    grid-area: channel;
+  }
+
+  .inbox-table__date {
+    grid-area: date;
+    font-size: 0.8rem;
+  }
+
+  .inbox-table__subject {
+    grid-area: subject;
+    white-space: normal;
+  }
+
+  .inbox-table__brand,
+  .inbox-table__assignee {
+    display: none !important;
+  }
+
+  #inbox .inbox-pane {
+    margin-inline: -0.75rem;
+    border-inline: 0;
+    border-radius: 0;
+    padding-inline: 0.75rem;
+  }
+
+  .inbox-message {
+    padding: 0.75rem;
+  }
+
+  .inbox-message__meta {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .inbox-assign select,
+  .inbox-assign button {
+    flex: 1 1 100%;
+    max-width: none;
+    min-height: 2.75rem;
+  }
+
+  .inbox-compose {
+    width: 100vw;
+    max-width: 100vw;
+    max-height: 100dvh;
+    margin: auto 0 0;
+    border-radius: 1rem 1rem 0 0;
+  }
 }
 
 /* Matter-lifecycle warning badge on the lawyer projects list (no retainer / no
