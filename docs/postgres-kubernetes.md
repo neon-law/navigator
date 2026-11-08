@@ -238,6 +238,11 @@ Verify recent WAL objects and a completed base backup, then run the scratch rest
 Only a verified staging result supports a later production rollout. Preserve the StatefulSet's retained claim; never
 delete a PVC or namespace to update the image. PostgreSQL major-version changes need their own upgrade plan.
 
+For PostGIS, roll the server to the pinned image before running the privileged roles Job and the ordinary migration Job.
+The roles Job enables PostGIS in the Navigator database. The migration can also enable it during a fresh superuser
+schema install. The app role can read the spatial reference system table and use spatial functions. Update any
+configured Iceberg coverage manifest for the new extension relation before the next archive generation.
+
 Physical recovery evidence and archive export evidence are separate. An archive trigger Job completing proves only
 trigger submission. Verify runtime source configuration, completed generation manifests, table outcomes, and independent
 rehydration before calling PostgreSQL or Forgejo Iceberg exports recoverable.

@@ -42,7 +42,7 @@ jobs:
             capacity=100Gi
           fi
           grep -q "namespace: $namespace" "/tmp/$lane.yaml"
-          grep -q 'image: ghcr.io/neon-law-source-code/neon-law-postgres@sha256:4cc70fee3aa9e53455bd1612d0a5be1f06962f5bcdcda4c6bff47e2b46db969e' "/tmp/$lane.yaml"
+          grep -q 'image: ghcr.io/neon-law/navigator/postgres@sha256:a3f6db0888d3d68c0ccadf936784768ecda4131b58fba30d631d69ff58337a8e' "/tmp/$lane.yaml"
           grep -q "storage: $capacity" "/tmp/$lane.yaml"
           grep -q 'reclaimPolicy: Retain' "/tmp/$lane.yaml"
           grep -q 'whenDeleted: Retain' "/tmp/$lane.yaml"
@@ -103,6 +103,10 @@ jobs:
             exit 1
           fi
         }
+        as migrator owner "$(cat store/postgres/migrations/20261107150000_enable_postgis.sql)"
+        test "$(as app app 'SELECT ST_SRID(ST_SetSRID(ST_MakePoint(179, 10), 4326))')" = 4326
+        test "$(as app app 'SELECT srid FROM public.spatial_ref_sys WHERE srid = 4326')" = 4326
+        refuse app app 'UPDATE public.spatial_ref_sys SET srtext = srtext WHERE false'
         as migrator owner 'CREATE TABLE least_privilege_proof (id int PRIMARY KEY, note text)'
         as app app "INSERT INTO least_privilege_proof VALUES (1, 'runtime write')"
         test "$(as app app 'SELECT count(*) FROM least_privilege_proof')" = 1

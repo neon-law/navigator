@@ -630,6 +630,7 @@ mod tests {
             filename: "notice.pdf".to_string(),
             visibility: "internal".to_string(),
             operative,
+            deleted_at: None,
             signing: None,
             notarization: Vec::new(),
         }

@@ -8170,6 +8170,20 @@ fn append_document_check(
             failure.message.clone(),
         ));
     }
+    // LAW-284: a chain extension the pointer's own revision survives is
+    // advice, not drift — it never lands in `gate_errors`, so it cannot
+    // fail the run.
+    for warning in &outcome.warnings {
+        println!(
+            "{}",
+            diagnostic_line(
+                rules::Severity::Warning,
+                &warning.location,
+                None,
+                &warning.message,
+            )
+        );
+    }
     for fix in &outcome.fixes {
         if ci {
             let message = format!(
@@ -8192,8 +8206,9 @@ fn append_document_check(
     println!(
         "{}",
         palette::dim(format!(
-            "documents: found {} error(s), {verb} {} file(s)",
+            "documents: found {} error(s), {} warning(s), {verb} {} file(s)",
             outcome.errors.len(),
+            outcome.warnings.len(),
             outcome.fixes.len(),
         ))
     );

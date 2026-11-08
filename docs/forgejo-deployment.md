@@ -1,7 +1,7 @@
 # Forgejo beside Navigator
 
 The opt-in `k8s/forgejo/` StatefulSet runs Forgejo 15.0.9 LTS, rootless, pinned to the published multi-platform image
-digest. It connects to the existing `navigator-postgres` service: the PostgreSQL 16.15 / AGE 1.6.0 / pgvector 0.8.2
+digest. It connects to the existing `navigator-postgres` service: the PostgreSQL 16.15 / AGE 1.6.0 / pgvector 0.8.7
 image documented in [PostgreSQL Kubernetes](postgres-kubernetes.md). Forgejo owns a separate `forgejo` database and
 login. It never uses Navigator's database or bootstrap superuser. Limit its connection pool to ten. Forgejo manages its
 own schema migrations; Navigator's future Rails-style migrations must not own those tables.

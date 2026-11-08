@@ -593,6 +593,11 @@ pub fn SiteFooterLegal(
                                             height: "1050",
                                             loading: "lazy",
                                         }
+                                        ExternalLink {
+                                            class: "site-footer__membership-link".to_string(),
+                                            href: "https://www.vancouverusa.com".to_string(),
+                                            "GVC"
+                                        }
                                     }
                                 }
                             }

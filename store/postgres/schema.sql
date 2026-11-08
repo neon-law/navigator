@@ -4366,3 +4366,14 @@ ALTER TABLE project_folder ADD CONSTRAINT project_folder_slot_check CHECK (slot 
 -- existed and for rows whose placement is the kind's default; the write
 -- seam (`store::assets::set_folder`) validates the value fails-closed.
 ALTER TABLE asset ADD COLUMN folder TEXT;
+
+-- Migration: 20261107150000_enable_postgis.sql
+-- The privileged PostgreSQL roles Job provisions PostGIS for the ordinary migrator.
+-- A fresh schema installed by the bootstrap superuser can create it directly.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'postgis') THEN
+        CREATE EXTENSION postgis WITH SCHEMA public;
+    END IF;
+END
+$$;

@@ -77,6 +77,10 @@ pub(crate) struct CheckFix {
 pub(crate) struct Outcome {
     pub(crate) errors: Vec<CheckFailure>,
     pub(crate) fixes: Vec<CheckFix>,
+    /// Findings reported in the output that never fail the run — a chain a
+    /// later writer extended while the pointer's own revision is intact
+    /// (LAW-284). Real drift never lands here.
+    pub(crate) warnings: Vec<CheckFailure>,
 }
 
 impl Outcome {
@@ -307,6 +311,7 @@ pub(crate) async fn check_with(
 ) -> Result<Outcome> {
     let session = LiveSession::new(client, remint);
     let mut fixes = Vec::new();
+    let mut warnings = Vec::new();
     if let Some(outcome) = reconcile_legacy_layout(dir, write, &mut fixes)? {
         return Ok(outcome);
     }
@@ -359,6 +364,7 @@ pub(crate) async fn check_with(
             deep,
             &mut errors,
             &mut fixes,
+            &mut warnings,
             &mut claimed,
             &removed,
         )?;
@@ -389,7 +395,11 @@ pub(crate) async fn check_with(
             message,
         });
     }
-    Ok(Outcome { errors, fixes })
+    Ok(Outcome {
+        errors,
+        fixes,
+        warnings,
+    })
 }
 
 fn transcript_source_problem(asset: &IntegrityAsset, assets: &[IntegrityAsset]) -> Option<String> {
@@ -642,6 +652,7 @@ fn reconcile_slug(
     deep: bool,
     errors: &mut Vec<CheckFailure>,
     fixes: &mut Vec<CheckFix>,
+    warnings: &mut Vec<CheckFailure>,
     claimed: &mut BTreeSet<String>,
     removed: &RemovedPointers,
 ) -> Result<()> {
@@ -683,6 +694,19 @@ fn reconcile_slug(
                 claimed.insert(key);
                 return Ok(());
             }
+            // LAW-284: a chain a later writer extended while the pointer's
+            // own revision is intact is not drift this run can fix — the
+            // remedy is adopting the extension, not rewriting the pointer
+            // over it.
+            if let Some(message) = chain_extension_warning(pointer, live) {
+                let relative = relative.clone();
+                warnings.push(CheckFailure {
+                    location: relative,
+                    message,
+                });
+                claimed.insert(key);
+                return Ok(());
+            }
             let relative = relative.clone();
             let absolute = absolute.clone();
             apply_fix(write, &absolute, &relative, REWRITE, &desired, fixes)?;
@@ -709,6 +733,47 @@ fn reconcile_slug(
         Some(Local::Unusable { .. }) | None => {}
     }
     Ok(())
+}
+
+/// Whether a pointer that disagrees with the live chain names a revision a
+/// later writer extended rather than bytes the chain no longer holds
+/// (LAW-284): the named revision is still a live member of the chain
+/// (present, never soft-deleted) and byte-identical to what the pointer
+/// recorded, while the chain's head was created after the pointer's. The
+/// revisions door marks only the head `operative` — the caller's lens's
+/// newest row — so a superseded member always reads back `operative:
+/// false` exactly when this tolerance applies; "still operative" here
+/// means a live chain member, not the flag. Any other miss — a revision
+/// the chain no longer holds, a soft-deleted one, changed bytes or size,
+/// or a head no newer than the pointer — keeps the blocking verdict, so
+/// real drift can never pass as an extension.
+fn chain_extension_warning(pointer: &DocumentPointer, live: &RevisionsResponse) -> Option<String> {
+    let named = live
+        .revisions
+        .iter()
+        .find(|revision| revision.asset_id == pointer.current_version.asset_id)?;
+    if named.deleted_at.is_some() {
+        return None;
+    }
+    if named.sha256 != pointer.current_version.sha256
+        || named.size_bytes != pointer.current_version.size_bytes
+    {
+        return None;
+    }
+    let head = live.revisions.first()?;
+    if head.asset_id == named.asset_id || head.deleted_at.is_some() {
+        return None;
+    }
+    let pointer_created =
+        chrono::DateTime::parse_from_rfc3339(&pointer.current_version.created_at).ok()?;
+    let head_created = chrono::DateTime::parse_from_rfc3339(&head.created_at).ok()?;
+    if head_created <= pointer_created {
+        return None;
+    }
+    Some(format!(
+        "a later upload extended this slug (revision {}); run `navigator project sync` to adopt it",
+        head.version
+    ))
 }
 
 fn local_pointer(local: Option<&Local>) -> Option<&DocumentPointer> {
@@ -880,6 +945,7 @@ fn reconcile_legacy_layout(
                 ),
             }],
             fixes: Vec::new(),
+            warnings: Vec::new(),
         }));
     }
     crate::document_sync::migrate_legacy_layout(dir)?;
@@ -1439,6 +1505,7 @@ mod tests {
             filename: "letter_signed.pdf".into(),
             visibility: "internal".into(),
             operative: true,
+            deleted_at: None,
             signing: None,
             notarization: Vec::new(),
         }
@@ -1797,6 +1864,258 @@ mod tests {
             std::fs::read_to_string(dir.path().join(relative)).unwrap(),
             original
         );
+    }
+
+    /// One row of a revisions chain the way the door reports it: newest
+    /// first, `operative` on the caller's lens's newest row only, and
+    /// `deleted_at` set once the chain has been soft-deleted.
+    fn revision_json(
+        asset_id: Uuid,
+        version: usize,
+        created_at: &str,
+        sha: &str,
+        operative: bool,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "version": version,
+            "asset_id": asset_id,
+            "created_at": created_at,
+            "sha256": sha,
+            "size_bytes": 18,
+            "filename": "summons.pdf",
+            "visibility": "internal",
+            "operative": operative
+        })
+    }
+
+    async fn mount_revisions_chain(
+        server: &MockServer,
+        project_id: Uuid,
+        slug: &str,
+        revisions: Vec<serde_json::Value>,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/revisions"
+            )))
+            .and(query_param("slug", slug))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "kind": "filing",
+                "revisions": revisions
+            })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    /// LAW-284: a pointer whose own revision is intact but superseded by a
+    /// later writer's upload is advice, not drift — reported as a warning,
+    /// never blocking cd, and the pointer is left exactly as committed.
+    #[tokio::test]
+    async fn a_chain_extension_warns_and_does_not_block_ci() {
+        let (server, project_id, asset_id) = server().await;
+        let head_id = Uuid::now_v7();
+        let dir = tempfile::tempdir().unwrap();
+        let relative = "blobs/pleadings/summons.pdf.yaml";
+        let committed = pointer_yaml(asset_id, SHA);
+        write_tree(dir.path(), relative, &committed);
+        gitignore(dir.path());
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({ "assets": [
+                asset(asset_id, Some("pleadings/summons.pdf"), true, None),
+                asset(head_id, Some("pleadings/summons.pdf"), true, None),
+            ]}),
+        )
+        .await;
+        mount_revisions_chain(
+            &server,
+            project_id,
+            "pleadings/summons.pdf",
+            vec![
+                revision_json(head_id, 2, "2026-09-06T12:00:00Z", OTHER_SHA, true),
+                revision_json(asset_id, 1, "2026-09-05T12:00:00Z", SHA, false),
+            ],
+        )
+        .await;
+
+        let outcome = check(dir.path(), &client(&server, project_id), false, false)
+            .await
+            .unwrap();
+
+        assert!(!outcome.rejects(true), "{outcome:?}");
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        assert!(outcome.fixes.is_empty(), "{:?}", outcome.fixes);
+        assert_eq!(outcome.warnings.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.warnings[0].location, relative);
+        assert!(
+            outcome.warnings[0]
+                .message
+                .contains("a later upload extended this slug"),
+            "{:?}",
+            outcome.warnings
+        );
+        assert!(
+            outcome.warnings[0]
+                .message
+                .contains("navigator project sync"),
+            "{:?}",
+            outcome.warnings
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(relative)).unwrap(),
+            committed,
+            "the check never rewrites an extended chain's pointer"
+        );
+    }
+
+    /// LAW-284: a pointer naming a revision the live chain no longer holds
+    /// is real drift — the tolerance never rescues it.
+    #[tokio::test]
+    async fn a_pointer_whose_revision_the_chain_no_longer_holds_still_rejects() {
+        let (server, project_id, asset_id) = server().await;
+        let ghost_id = Uuid::now_v7();
+        let dir = tempfile::tempdir().unwrap();
+        let relative = "blobs/pleadings/summons.pdf.yaml";
+        write_tree(dir.path(), relative, &pointer_yaml(ghost_id, SHA));
+        gitignore(dir.path());
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({ "assets": [asset(asset_id, Some("pleadings/summons.pdf"), true, None)] }),
+        )
+        .await;
+        mount_revisions(&server, project_id, "pleadings/summons.pdf", asset_id, SHA).await;
+
+        let outcome = check(dir.path(), &client(&server, project_id), false, false)
+            .await
+            .unwrap();
+
+        assert!(outcome.rejects(true), "{outcome:?}");
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+        assert!(outcome.fixes.iter().any(|fix| fix.action == REWRITE));
+    }
+
+    /// LAW-284: a superseded pointer whose bytes no longer match the named
+    /// revision is real drift — digest mismatch keeps failing cd.
+    #[tokio::test]
+    async fn a_superseded_pointer_with_mismatched_digest_still_rejects() {
+        let (server, project_id, asset_id) = server().await;
+        let head_id = Uuid::now_v7();
+        let dir = tempfile::tempdir().unwrap();
+        let relative = "blobs/pleadings/summons.pdf.yaml";
+        write_tree(dir.path(), relative, &pointer_yaml(asset_id, OTHER_SHA));
+        gitignore(dir.path());
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({ "assets": [
+                asset(asset_id, Some("pleadings/summons.pdf"), true, None),
+                asset(head_id, Some("pleadings/summons.pdf"), true, None),
+            ]}),
+        )
+        .await;
+        mount_revisions_chain(
+            &server,
+            project_id,
+            "pleadings/summons.pdf",
+            vec![
+                revision_json(head_id, 2, "2026-09-06T12:00:00Z", SHA, true),
+                revision_json(asset_id, 1, "2026-09-05T12:00:00Z", SHA, false),
+            ],
+        )
+        .await;
+
+        let outcome = check(dir.path(), &client(&server, project_id), false, false)
+            .await
+            .unwrap();
+
+        assert!(outcome.rejects(true), "{outcome:?}");
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+        assert!(outcome.fixes.iter().any(|fix| fix.action == REWRITE));
+    }
+
+    /// LAW-284: a pointer whose named revision the chain has soft-deleted
+    /// is real drift — soft-deletion keeps failing cd.
+    #[tokio::test]
+    async fn a_pointer_to_a_soft_deleted_revision_still_rejects() {
+        let (server, project_id, asset_id) = server().await;
+        let head_id = Uuid::now_v7();
+        let dir = tempfile::tempdir().unwrap();
+        let relative = "blobs/pleadings/summons.pdf.yaml";
+        write_tree(dir.path(), relative, &pointer_yaml(asset_id, SHA));
+        gitignore(dir.path());
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({ "assets": [
+                asset(asset_id, Some("pleadings/summons.pdf"), true, None),
+                asset(head_id, Some("pleadings/summons.pdf"), true, None),
+            ]}),
+        )
+        .await;
+        let mut named = revision_json(asset_id, 1, "2026-09-05T12:00:00Z", SHA, false);
+        named["deleted_at"] = serde_json::json!("2026-09-07T00:00:00Z");
+        mount_revisions_chain(
+            &server,
+            project_id,
+            "pleadings/summons.pdf",
+            vec![
+                revision_json(head_id, 2, "2026-09-06T12:00:00Z", OTHER_SHA, true),
+                named,
+            ],
+        )
+        .await;
+
+        let outcome = check(dir.path(), &client(&server, project_id), false, false)
+            .await
+            .unwrap();
+
+        assert!(outcome.rejects(true), "{outcome:?}");
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+        assert!(outcome.fixes.iter().any(|fix| fix.action == REWRITE));
+    }
+
+    /// LAW-284: the extension definition needs a head created after the
+    /// pointer's revision — a head dated before it is a stale chain, not an
+    /// extension, and keeps failing cd.
+    #[tokio::test]
+    async fn a_head_dated_before_the_pointer_keeps_the_blocking_verdict() {
+        let (server, project_id, asset_id) = server().await;
+        let head_id = Uuid::now_v7();
+        let dir = tempfile::tempdir().unwrap();
+        let relative = "blobs/pleadings/summons.pdf.yaml";
+        write_tree(dir.path(), relative, &pointer_yaml(asset_id, SHA));
+        gitignore(dir.path());
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({ "assets": [
+                asset(asset_id, Some("pleadings/summons.pdf"), true, None),
+                asset(head_id, Some("pleadings/summons.pdf"), true, None),
+            ]}),
+        )
+        .await;
+        mount_revisions_chain(
+            &server,
+            project_id,
+            "pleadings/summons.pdf",
+            vec![
+                revision_json(head_id, 2, "2026-09-01T12:00:00Z", OTHER_SHA, true),
+                revision_json(asset_id, 1, "2026-09-05T12:00:00Z", SHA, false),
+            ],
+        )
+        .await;
+
+        let outcome = check(dir.path(), &client(&server, project_id), false, false)
+            .await
+            .unwrap();
+
+        assert!(outcome.rejects(true), "{outcome:?}");
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+        assert!(outcome.fixes.iter().any(|fix| fix.action == REWRITE));
     }
 
     #[tokio::test]
