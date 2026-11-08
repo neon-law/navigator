@@ -1531,6 +1531,7 @@ mod tests {
                     "../postgres/migrations/20261108140000_add_project_plan_case_number.sql"
                 ),
             ),
+            ("20261108130000_add_notation_creation_attempt.sql", include_str!("../postgres/migrations/20261108130000_add_notation_creation_attempt.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

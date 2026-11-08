@@ -380,6 +380,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "notation_creation_attempt",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "notation_machine_state",
       "missing_column": null,
       "missing_table": null,
@@ -1969,7 +1976,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 163,
+    "table_count": 164,
     "tables": {
       "address": {
         "columns": {
@@ -4204,6 +4211,19 @@
           "notation",
           "person"
         ]
+      },
+      "notation_creation_attempt": {
+        "columns": {
+          "failed_at": "timestamptz",
+          "id": "uuid",
+          "notation_id": "uuid",
+          "project_id": "uuid",
+          "respondent_id": "uuid",
+          "template_code": "text"
+        },
+        "foreign_keys": [],
+        "name": "notation_creation_attempt",
+        "references": []
       },
       "notation_document": {
         "columns": {
