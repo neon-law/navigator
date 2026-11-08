@@ -9,7 +9,7 @@
 //! `--no-repository` keeps the Project repository-less. No client fact enters
 //! the tree beyond the manifest's DRI handles, and nothing is copied from a
 //! sibling matter.
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -191,6 +191,19 @@ async fn run_inner(
              interrupted scaffold",
             directory.display()
         );
+    }
+    if resume.is_none() {
+        if !io::stdin().is_terminal() {
+            bail!(
+                "interactive Project scaffold requires a terminal. For non-interactive use, run \
+                 `navigator project create`, then `navigator project scaffold --resume <code>`."
+            );
+        }
+        if options.client_email.is_some() {
+            bail!(
+                "--client-email requires --resume; the interactive form asks for the client email"
+            );
+        }
     }
     let (base, _) = crate::remote::resolve(host)?;
     let code = if let Some(code) = resume {

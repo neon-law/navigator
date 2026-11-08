@@ -4,7 +4,9 @@
 //! rather than mutating the test process's environment.
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command as StdCommand, Output, Stdio};
 
 use assert_cmd::Command;
 use tempfile::TempDir;
@@ -35,7 +37,11 @@ fn credentials(dir: &TempDir, host: &str, person_email: Option<&str>) -> std::pa
 }
 
 fn command(credentials: &Path) -> Command {
-    let mut command = Command::cargo_bin("navigator").unwrap();
+    Command::from_std(navigator_command(credentials))
+}
+
+fn navigator_command(credentials: &Path) -> StdCommand {
+    let mut command = StdCommand::new(env!("CARGO_BIN_EXE_navigator"));
     command.env_remove("GITHUB_REPOSITORY");
     command.env_remove("GITHUB_TOKEN");
     command.env_remove("NAVIGATOR_GITHUB_TOKEN");
@@ -91,7 +97,10 @@ struct Run {
 }
 
 fn run(command: &mut Command) -> Run {
-    let output = command.output().unwrap();
+    run_result(command.output().unwrap())
+}
+
+fn run_result(output: Output) -> Run {
     Run {
         success: output.status.success(),
         code: output.status.code(),
@@ -550,6 +559,27 @@ async fn resume_needs_a_login_that_names_the_lawyer() {
     );
 }
 
+fn scaffold_at_terminal(
+    credentials: &Path,
+    host: &str,
+    dir: &Path,
+    extra: &[&str],
+    answers: &str,
+) -> Run {
+    let terminal = nix::pty::openpty(None, None).unwrap();
+    let mut input = fs::File::from(terminal.master);
+    input.write_all(answers.as_bytes()).unwrap();
+    run_result(
+        navigator_command(credentials)
+            .args(["project", "scaffold", "--host", host, "--dir"])
+            .arg(dir)
+            .args(extra)
+            .stdin(Stdio::from(terminal.slave))
+            .output()
+            .unwrap(),
+    )
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_fresh_scaffold_cancels_without_attestation_and_refuses_a_taken_code() {
     let server = MockServer::start().await;
@@ -560,12 +590,24 @@ async fn a_fresh_scaffold_cancels_without_attestation_and_refuses_a_taken_code()
     let parent = TempDir::new().unwrap();
     let dir = parent.path().join("fresh");
 
-    let cancelled = run(command(&credentials)
-        .args(["project", "scaffold", "--host", &host, "--dir"])
-        .arg(&dir)
-        .write_stdin(
-            "Synthetic Matter\nfresh-matter\nPat Example\npat@example.com\n\nNevada\nno\n",
-        ));
+    let refused = scaffold_at_terminal(
+        &credentials,
+        &host,
+        &dir,
+        &["--client-email", "pat@example.com"],
+        "Synthetic Matter\nfresh-matter\nPat Example\npat@example.com\n\nNevada\nno\n",
+    );
+    assert_eq!(refused.code, Some(2));
+    assert!(refused.stderr.contains("--client-email requires --resume"));
+    assert!(!dir.exists());
+
+    let cancelled = scaffold_at_terminal(
+        &credentials,
+        &host,
+        &dir,
+        &[],
+        "Synthetic Matter\nfresh-matter\nPat Example\npat@example.com\n\nNevada\nno\n",
+    );
     assert!(cancelled.success, "{}", cancelled.stderr);
     assert!(
         cancelled.stderr.contains("cancelled before writes"),
@@ -574,12 +616,13 @@ async fn a_fresh_scaffold_cancels_without_attestation_and_refuses_a_taken_code()
     );
     assert!(!dir.exists());
 
-    let taken = run(command(&credentials)
-        .args(["project", "scaffold", "--host", &host, "--dir"])
-        .arg(&dir)
-        .write_stdin(format!(
-            "Synthetic Matter\n{CODE}\nPat Example\npat@example.com\nExample LLC\nyes\n"
-        )));
+    let taken = scaffold_at_terminal(
+        &credentials,
+        &host,
+        &dir,
+        &[],
+        &format!("Synthetic Matter\n{CODE}\nPat Example\npat@example.com\nExample LLC\nyes\n"),
+    );
     assert_eq!(taken.code, Some(2));
     assert!(
         taken.stderr.contains(&format!("use --resume {CODE}")),
@@ -587,4 +630,33 @@ async fn a_fresh_scaffold_cancels_without_attestation_and_refuses_a_taken_code()
         taken.stderr
     );
     assert!(!dir.exists());
+}
+
+#[test]
+fn a_fresh_scaffold_without_a_terminal_explains_the_headless_path() {
+    let parent = TempDir::new().unwrap();
+    let dir = parent.path().join("fresh");
+    let credentials = parent.path().join("missing-credentials.json");
+    let host = "http://127.0.0.1:9";
+
+    for extra in [&[][..], &["--client-email", "client@example.com"][..]] {
+        let refused = scaffold(&credentials, host, &dir, extra);
+        assert_eq!(refused.code, Some(2));
+        assert!(
+            refused.stderr.contains("requires a terminal"),
+            "{}",
+            refused.stderr
+        );
+        assert!(
+            refused.stderr.contains("project create"),
+            "{}",
+            refused.stderr
+        );
+        assert!(
+            refused.stderr.contains("project scaffold --resume <code>"),
+            "{}",
+            refused.stderr
+        );
+        assert!(!dir.exists());
+    }
 }

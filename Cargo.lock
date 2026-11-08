@@ -2156,6 +2156,7 @@ dependencies = [
  "mail-parser",
  "mcp",
  "neon",
+ "nix",
  "owo-colors",
  "p256 0.14.0",
  "parquet 60.1.0",
