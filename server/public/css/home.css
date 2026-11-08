@@ -115,6 +115,7 @@
 }
 
 .home-statement__heading,
+.home-statement__tagline,
 .home-statement__lead,
 .home-statement__cta {
   position: relative;
@@ -129,6 +130,15 @@
   line-height: 1.05;
   letter-spacing: -0.01em;
   text-wrap: balance;
+}
+
+/* Pulled up under the heading so the two read as one title. */
+.home-statement__tagline {
+  margin: -0.75rem 0 0;
+  font-family: var(--firm-serif);
+  font-size: clamp(1.25rem, 3vw, 1.75rem);
+  font-style: italic;
+  color: var(--nav-color-primary);
 }
 
 .home-statement__lead {

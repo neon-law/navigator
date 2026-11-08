@@ -147,6 +147,9 @@ pub struct HomeContent {
     /// The question the page opens on. It is the page's one `<h1>` and the
     /// first thing a reader sees under the header: nothing sits above it.
     pub heading: String,
+    /// A short line under the heading. Empty renders nothing.
+    #[serde(default)]
+    pub tagline: String,
     pub lead: String,
     pub contact_href: String,
     pub contact_label: String,
@@ -679,6 +682,9 @@ fn HomePageBody(
                     "home-statement"
                 },
                 h1 { class: "home-statement__heading", "{content.heading}" }
+                if !content.tagline.is_empty() {
+                    p { class: "home-statement__tagline", "{content.tagline}" }
+                }
                 p { class: "home-statement__lead", "{content.lead}" }
                 div { class: "home-statement__actions",
                     a {
@@ -1180,6 +1186,7 @@ mod tests {
                         head_title: "Home".to_string(),
                         meta_description: "AI enablement for law firms.".to_string(),
                         og_description: None,
+                        tagline: String::new(),
                         heading: "AI enablement for law firms".to_string(),
                         lead: "Our clients are law firms.".to_string(),
                         contact_href: "mailto:contact@neonlaw.com".to_string(),
@@ -1565,6 +1572,32 @@ mod tests {
         assert!(logo < heading);
         assert!(out.contains(r#"src="/assets/brand/guieb-shook/logo.svg""#));
         assert!(!out.contains("<header"));
+    }
+
+    #[test]
+    fn a_tagline_sits_between_the_heading_and_the_lead() {
+        fn app() -> Element {
+            rsx! {
+                HomePage {
+                    chrome: PublicChrome::default(),
+                    content: HomeContent {
+                        heading: "Guieb & Shook PC".to_string(),
+                        tagline: "East Coast rigor, West Coast Vibes.".to_string(),
+                        lead: "An American law firm.".to_string(),
+                        ..HomeContent::default()
+                    },
+                }
+            }
+        }
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        let out = dioxus_ssr::render(&dom);
+        let heading = out.find("home-statement__heading").expect("heading");
+        let tagline = out
+            .find(r#"<p class="home-statement__tagline">East Coast rigor, West Coast Vibes.</p>"#)
+            .expect("tagline");
+        let lead = out.find("home-statement__lead").expect("lead");
+        assert!(heading < tagline && tagline < lead, "{out}");
     }
 
     #[test]

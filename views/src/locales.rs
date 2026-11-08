@@ -131,6 +131,9 @@ pub struct HomeCopy {
     #[serde(default)]
     pub og_description: Option<String>,
     pub heading: String,
+    /// A short line under the heading; absent renders none.
+    #[serde(default)]
+    pub tagline: String,
     pub lead: String,
     pub contact_label: String,
     #[serde(default)]
