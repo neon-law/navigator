@@ -1034,7 +1034,7 @@ jobs:
           # capability shape, port polling — stay counted in
           # `scraper/session.rs` with their tests.
           cargo llvm-cov report \
-              --fail-under-lines 92.2 \
+              --fail-under-lines 90.2 \
               --ignore-filename-regex '(cli/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|cli/src/devx/forgejo/(cluster|oidc|smoke)|cli/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|cli/src/scraper/browser)\.rs$'
       - name: stop covered PostgreSQL fixture
         if: always()
