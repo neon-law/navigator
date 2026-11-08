@@ -11576,6 +11576,7 @@
       "booking_url": "option<string>",
       "brand": "option<string>",
       "calendar_id": "option<string>",
+      "client_dri_person_id": "option<record<person>>",
       "closed_at": "option<string>",
       "closure_reason": "option<string>",
       "code": "string",
