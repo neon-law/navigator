@@ -1021,6 +1021,12 @@ pub(crate) struct RevisionSummary {
     #[serde(default)]
     pub(crate) visibility: String,
     pub(crate) operative: bool,
+    /// When this revision was soft-deleted. Only a lawyer-lens caller reads
+    /// a soft-deleted chain at all, and the door omits the field on every
+    /// live row; the gate uses it to keep a soft-deleted revision out of
+    /// the chain-extension tolerance (LAW-284).
+    #[serde(default)]
+    pub(crate) deleted_at: Option<String>,
     #[serde(default)]
     pub(crate) signing: Option<store::documents::Signing>,
     #[serde(default)]
@@ -7822,6 +7828,7 @@ mod tests {
             filename: "order.pdf".into(),
             visibility: "internal".into(),
             operative: true,
+            deleted_at: None,
             signing: None,
             notarization: Vec::new(),
         };
