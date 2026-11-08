@@ -1,12 +1,8 @@
 //! `sandbox-credit-reset trigger` — the thin monthly `CronJob` entrypoint.
 //!
-//! Fires one `SandboxCreditReset` invocation against the Restate ingress,
-//! then exits. The UTC billing month names the run: a same-month re-fire
-//! joins the same keyed run instead of granting or invoicing twice, and
-//! next month's fire is a new run. Restate owns the retry schedule.
-//!
-//! Auth + env handling are identical to the reconcile trigger
-//! (`src/bin/reconcile_trigger.rs`).
+//! Submits one `SandboxCreditReset` run to the selected durable engine.
+//! The UTC billing month names the run. A same-month re-fire joins that run,
+//! and the next month's fire starts a new one.
 
 use anyhow::{Context, Result};
 use chrono::Datelike;
@@ -22,22 +18,16 @@ async fn main() -> Result<()> {
 
     let now = chrono::Utc::now();
     let run_id = store::sandbox_usage::billing_period(now.year(), now.month());
-    let target =
-        workflows::trigger::trigger_target("NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED", |name| {
-            std::env::var(name).ok()
-        })
-        .context("selecting the SandboxCreditReset trigger ingress")?;
+    let target = workflows::trigger::trigger_target(
+        workflows::trigger::SANDBOX_CREDIT_RESET_DBOS_ENABLED_ENV,
+        |name| std::env::var(name).ok(),
+    )
+    .context("selecting the SandboxCreditReset trigger ingress")?;
     match target {
         workflows::trigger::TriggerTarget::Dbos { ingress, token } => {
-            workflows::trigger::start_dbos_reconcile(
-                &ingress,
-                &token,
-                &serde_json::json!({
-                    "workflow_id": format!("SandboxCreditReset:{run_id}")
-                }),
-            )
-            .await
-            .context("triggering SandboxCreditReset through DBOS ingress")?;
+            workflows::trigger::start_dbos_sandbox_credit_reset(&ingress, &token, &run_id)
+                .await
+                .context("triggering SandboxCreditReset through DBOS ingress")?;
         }
         workflows::trigger::TriggerTarget::Restate {
             ingress,

@@ -575,6 +575,75 @@ async fn start_dbos_at<B: Serialize + ?Sized>(
     Ok(())
 }
 
+pub const SANDBOX_CREDIT_RESET_DBOS_ENABLED_ENV: &str =
+    "NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED";
+
+pub async fn start_dbos_sandbox_credit_reset(
+    ingress: &str,
+    token: &str,
+    period: &str,
+) -> Result<(), TriggerError> {
+    start_dbos_at(
+        ingress,
+        token,
+        "/internal/dbos/sandbox-credit-reset",
+        &serde_json::json!({ "period": period }),
+    )
+    .await
+}
+
+pub const INBOUND_TRIAGE_DBOS_ENABLED_ENV: &str = "NAVIGATOR_DBOS_INBOUND_TRIAGE_ENABLED";
+
+/// Select one durable engine for a persisted inbound Message.
+pub async fn start_inbound_triage(message_id: uuid::Uuid) -> Result<(), String> {
+    let request = crate::InboundTriageRequest { message_id };
+    let target = service_target(
+        INBOUND_TRIAGE_DBOS_ENABLED_ENV,
+        std::env::var(INBOUND_TRIAGE_DBOS_ENABLED_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(DBOS_INGRESS_TOKEN_ENV).ok(),
+    )
+    .map_err(|error| error.to_string())?;
+    match target {
+        ServiceTarget::Dbos { ingress, token } => {
+            start_dbos_at(&ingress, &token, "/internal/dbos/inbound-triage", &request).await
+        }
+        ServiceTarget::Restate => {
+            let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+            else {
+                return Ok(());
+            };
+            start_workflow(
+                &ingress,
+                std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
+                "InboundTriage",
+                &message_id.to_string(),
+                "run",
+                &request,
+                true,
+            )
+            .await
+            .map(|_| ())
+        }
+    }
+    .map_err(|error| error.to_string())
+}
+
+pub const YOUTUBE_COMMENTS_DBOS_ENABLED_ENV: &str =
+    "NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED";
+
+pub async fn start_dbos_youtube_comments<B: Serialize + ?Sized>(
+    ingress: &str,
+    token: &str,
+    body: &B,
+) -> Result<(), TriggerError> {
+    start_dbos_at(ingress, token, "/internal/dbos/youtube-comments-poll", body).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -633,6 +702,22 @@ mod tests {
         assert!(start_dbos_finance_aggregate(&server.uri(), "", &json!({}))
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn dbos_sandbox_handoff_targets_its_own_monthly_route() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/internal/dbos/sandbox-credit-reset"))
+            .and(header("authorization", "Bearer worker-secret"))
+            .and(body_partial_json(json!({"period": "2026-11"})))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+        super::start_dbos_sandbox_credit_reset(&server.uri(), "worker-secret", "2026-11")
+            .await
+            .expect("sandbox rollover handoff");
     }
 
     #[tokio::test]

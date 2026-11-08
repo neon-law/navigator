@@ -43,13 +43,26 @@ gate below passes. Source and integration-test coverage do not establish which e
   KMS/provider receipts, cancellation, deployed selection and retained runs.
 - **SocialPublishReconciler** — DBOS schedule, authenticated ingress and trigger selection. Remaining: Provider
   receipt recovery, deployed selection and retained runs.
-- **SandboxCreditReset** — Restate registration. Remaining: DBOS port, callers, data parity and recovery.
-- **InboundTriage** — Restate registration. Remaining: DBOS port, callers, data parity and recovery.
-- **YoutubeCommentsPoller** — Restate registration. Remaining: DBOS port, callers, data parity and recovery.
+- **SandboxCreditReset** — DBOS month-keyed adapter and authenticated trigger selection. Each overage has a separate
+  attempt anchor and invoice receipt checkpoint. Automatic retry stops before Xero's request-key window expires.
+  Remaining: PostgreSQL ledger parity, expired-attempt reconciliation, deployed selection and retained runs.
+- **InboundTriage** — DBOS adapter and authenticated Message-keyed ingress shared by the Portal and YouTube poller.
+  Remaining: PostgreSQL triage storage authority, deployed selection and retained runs.
+- **YoutubeCommentsPoller** — DBOS adapter with one checkpoint per video and one run per 15-minute UTC slot.
+  Remaining: PostgreSQL publication and credential parity, deployed selection and retained runs.
 
 The implementations and bindings are in `workflows-service/src/main.rs`, `dbos_*.rs`, and `registry.rs`. Shared caller
 selection lives in `workflows/src/trigger.rs`; callers include the Portal, trigger binaries, CLI, and webapp. Verify the
 configured switch at every entry point before removing a trigger or binding.
+
+For InboundTriage, set `NAVIGATOR_DBOS_INBOUND_TRIAGE_ENABLED=true` on the DBOS worker and the Portal. For the YouTube
+poller, set `NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED=true` on the worker and the poll trigger. Configure the
+worker's ingress token and give both callers the matching token and ingress URL. The poller submits triage through the
+same selector as the Portal, so its worker also needs the ingress URL when triage uses DBOS.
+
+For SandboxCreditReset, enable `NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED=true` on the worker and monthly trigger
+before a new, unprocessed billing month. Reconcile any Restate attempt before transferring ownership of a month. An
+expired DBOS attempt without a receipt requires operator reconciliation with Xero before an invoice can be retried.
 
 ## Virtual objects
 

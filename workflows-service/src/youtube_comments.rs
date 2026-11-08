@@ -10,10 +10,9 @@
 //! starts the same alert and triage workflows every other inbound channel
 //! starts after PR #220's seams.
 //!
-//! The Restate workflow journals one step per video, so a provider outage on
-//! one video never re-reads another. Like the social publisher, the workflow
-//! body calls the same plain methods a test calls directly, and only a
-//! `production` deployment reaches the provider.
+//! Both workflow engines checkpoint one step per video. The polling core
+//! shares the same methods with provider tests, and only a production
+//! deployment reaches the provider.
 
 use std::sync::Arc;
 
@@ -27,6 +26,61 @@ use uuid::Uuid;
 
 use workflows::social_publish::{self, TokenRefreshConfig};
 use workflows::trigger::ServiceTarget;
+
+pub type PollWorkflow = dbos::WorkflowRef<PollRequest, PollReport, PollError>;
+
+#[derive(Debug, thiserror::Error, Serialize, Deserialize)]
+pub enum PollError {
+    #[error("the YouTube poll targets could not be loaded")]
+    Targets,
+}
+
+pub fn register_dbos(
+    dbos: &dbos::DBOS,
+    service: YoutubeCommentsPollerService,
+) -> dbos::Result<PollWorkflow> {
+    dbos.register_workflow("YoutubeCommentsPoller", move |_: PollRequest| {
+        let service = service.clone();
+        async move {
+            let targets = dbos::step("load-youtube-poll-targets", || {
+                let service = service.clone();
+                async move {
+                    service
+                        .poll_targets()
+                        .await
+                        .map_err(|_| dbos::Error::Application(PollError::Targets))
+                }
+            })
+            .await?;
+            let mut report = PollReport {
+                videos: targets.len(),
+                ..PollReport::default()
+            };
+            for (index, target) in targets.into_iter().enumerate() {
+                let name = format!("poll-youtube-comments-{index}");
+                let outcome = dbos::step(&name, || {
+                    let (service, target) = (service.clone(), target.clone());
+                    async move {
+                        let outcome = service.poll_video(&target).await;
+                        if outcome.is_err() {
+                            tracing::warn!(video_index = index, "YouTube comment poll failed");
+                        }
+                        Ok::<_, dbos::Error<PollError>>(outcome.ok())
+                    }
+                })
+                .await?;
+                if let Some(outcome) = outcome {
+                    report.ingested += outcome.ingested;
+                    report.deduped += outcome.deduped;
+                    report.skipped += outcome.skipped;
+                } else {
+                    report.failed += 1;
+                }
+            }
+            Ok(report)
+        }
+    })
+}
 
 const YOUTUBE_API: &str = "https://www.googleapis.com/youtube/v3";
 /// Page size for commentThreads reads.
@@ -376,9 +430,6 @@ impl YoutubeCommentsPollerService {
 /// A failed durable submission — the caller's journaled step retries it while
 /// ingest itself stays untouched.
 async fn start_inbound_hooks(message_id: Uuid) -> anyhow::Result<()> {
-    // The alert's rollout switch chooses the worker's DBOS ingress for the
-    // alert; triage has no DBOS twin yet and keeps its Restate submission,
-    // which stays a no-op on a deployment without a broker configured.
     let alert_target = workflows::trigger::service_target(
         workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV,
         std::env::var(workflows::trigger::INBOUND_MESSAGE_ALERT_ENABLED_ENV)
@@ -405,7 +456,9 @@ async fn start_inbound_hooks(message_id: Uuid) -> anyhow::Result<()> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
             else {
-                return Ok(());
+                return workflows::trigger::start_inbound_triage(message_id)
+                    .await
+                    .map_err(anyhow::Error::msg);
             };
             let auth = std::env::var("RESTATE_AUTH_TOKEN").ok();
             workflows::start_workflow(
@@ -420,23 +473,9 @@ async fn start_inbound_hooks(message_id: Uuid) -> anyhow::Result<()> {
             .await?;
         }
     }
-    let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(());
-    };
-    let auth = std::env::var("RESTATE_AUTH_TOKEN").ok();
-    workflows::start_workflow(
-        &ingress,
-        auth.as_deref(),
-        "InboundTriage",
-        &message_id.to_string(),
-        "run",
-        &workflows::InboundTriageRequest { message_id },
-        true,
-    )
-    .await?;
+    workflows::trigger::start_inbound_triage(message_id)
+        .await
+        .map_err(anyhow::Error::msg)?;
     Ok(())
 }
 

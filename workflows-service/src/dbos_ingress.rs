@@ -43,6 +43,9 @@ pub struct WorkerIngress {
     pub social_publisher: Option<SocialPublisherIngress>,
     pub social_reconciler: Option<SocialReconcilerIngress>,
     pub notation: Option<NotationIngress>,
+    pub youtube_comments: Option<YoutubeIngress>,
+    pub inbound_triage: Option<TriageIngress>,
+    pub sandbox_credit_reset: Option<SandboxResetIngress>,
 }
 
 #[derive(Clone)]
@@ -79,6 +82,122 @@ pub struct SocialPublisherIngress {
 pub struct SocialReconcilerIngress {
     token: Arc<str>,
     workflow: ReconcilerWorkflow,
+}
+
+#[derive(Clone)]
+pub struct SandboxResetIngress {
+    pub token: Arc<str>,
+    pub workflow: crate::dbos_sandbox_reset::SandboxResetWorkflow,
+}
+
+async fn start_sandbox_credit_reset(
+    State(ingress): State<SandboxResetIngress>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Accepted>), StatusCode> {
+    if !authorized(&headers, &ingress.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let request: crate::dbos_sandbox_reset::SandboxResetStart =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if request.period != chrono::Utc::now().format("%Y-%m").to_string() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let workflow_id = format!("SandboxCreditReset:{}", request.period);
+    ingress
+        .workflow
+        .start_with(
+            request,
+            dbos::StartOptions {
+                workflow_id: Some(&workflow_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((StatusCode::ACCEPTED, Json(Accepted { workflow_id })))
+}
+
+#[derive(Clone)]
+pub struct TriageIngress {
+    pub token: Arc<str>,
+    pub workflow: crate::inbound_triage::TriageWorkflow,
+}
+
+async fn start_inbound_triage(
+    State(ingress): State<TriageIngress>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Accepted>), StatusCode> {
+    if !authorized(&headers, &ingress.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let request: workflows::InboundTriageRequest =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let workflow_id = format!("InboundTriage:{}", request.message_id);
+    ingress
+        .workflow
+        .start_with(
+            request,
+            dbos::StartOptions {
+                workflow_id: Some(&workflow_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((StatusCode::ACCEPTED, Json(Accepted { workflow_id })))
+}
+
+#[derive(Clone)]
+pub struct YoutubeIngress {
+    pub token: Arc<str>,
+    pub workflow: crate::youtube_comments::PollWorkflow,
+}
+
+async fn start_youtube_comments(
+    State(ingress): State<YoutubeIngress>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Accepted>), StatusCode> {
+    if !authorized(&headers, &ingress.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let request: crate::youtube_comments::PollRequest =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let workflow_id = youtube_poll_workflow_id(&request.tick)?;
+    ingress
+        .workflow
+        .start_with(
+            request,
+            dbos::StartOptions {
+                workflow_id: Some(&workflow_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((StatusCode::ACCEPTED, Json(Accepted { workflow_id })))
+}
+
+fn youtube_poll_workflow_id(tick: &str) -> Result<String, StatusCode> {
+    let slot = chrono::NaiveDateTime::parse_from_str(tick, "%Y-%m-%d-%H-%M")
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if chrono::Timelike::minute(&slot) % 15 != 0
+        || slot.format("%Y-%m-%d-%H-%M").to_string() != tick
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(format!("YoutubeCommentsPoller:{tick}"))
 }
 
 #[async_trait::async_trait]
@@ -413,6 +532,30 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
         router.route(
             "/internal/dbos/inbound-message-alert",
             post(start_inbound_message_alert).with_state(alert),
+        )
+    } else {
+        router
+    };
+    let router = if let Some(sandbox_reset) = ingress.sandbox_credit_reset {
+        router.route(
+            "/internal/dbos/sandbox-credit-reset",
+            post(start_sandbox_credit_reset).with_state(sandbox_reset),
+        )
+    } else {
+        router
+    };
+    let router = if let Some(triage) = ingress.inbound_triage {
+        router.route(
+            "/internal/dbos/inbound-triage",
+            post(start_inbound_triage).with_state(triage),
+        )
+    } else {
+        router
+    };
+    let router = if let Some(youtube) = ingress.youtube_comments {
+        router.route(
+            "/internal/dbos/youtube-comments-poll",
+            post(start_youtube_comments).with_state(youtube),
         )
     } else {
         router
@@ -1420,6 +1563,25 @@ mod tests {
                 }),
                 Err(StatusCode::BAD_REQUEST),
                 "unexpectedly accepted {workflow_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn youtube_poll_keys_one_run_to_a_canonical_tick() {
+        assert_eq!(
+            super::youtube_poll_workflow_id("2026-11-08-10-15").as_deref(),
+            Ok("YoutubeCommentsPoller:2026-11-08-10-15")
+        );
+        for tick in [
+            "2026-02-30-10-15",
+            "2026-11-8-10-15",
+            "2026-11-08-24-15",
+            "",
+        ] {
+            assert_eq!(
+                super::youtube_poll_workflow_id(tick),
+                Err(StatusCode::BAD_REQUEST)
             );
         }
     }
