@@ -579,10 +579,10 @@ const fn retired(cronjob: &'static str, resource: &'static str) -> RetiredCronJo
 const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
-        default_on: false,
+        default_on: true,
         retires: Some(retired("general-nag", "  - cron-general-nag.yaml\n")),
         coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
-        secret: None,
+        secret: Some("SLACK_BOT_TOKEN"),
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
@@ -7637,30 +7637,19 @@ mod tests {
     }
 
     #[test]
-    fn dbos_schedules_stay_on_restate_until_switched_on() {
-        for value in [None, Some("false")] {
-            let get = with_schedules(Some("true"), value, value);
-            let manifests = rendered_manifests(&get);
+    fn general_nag_defaults_to_dbos_and_respects_an_explicit_override() {
+        for (flag, expected) in [(None, "true"), (Some("false"), "false")] {
+            let manifests = rendered_manifests(with_schedules(Some("true"), flag, None));
             let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
-            for schedule in &DBOS_SCHEDULES {
-                // Only GeneralNag and DriDigest take `value`; the rest stay
-                // absent, so a default-on schedule renders on.
-                let expected = if schedule.default_on { "true" } else { "false" };
-                assert_eq!(
-                    web_env_value(&web, schedule.env).as_deref(),
-                    Some(expected),
-                    "{}",
-                    schedule.env
-                );
-                if let Some(retired) = schedule.retires {
-                    assert!(
-                        renders_cronjob(&manifests, retired.cronjob),
-                        "{value:?} keeps the {} Restate CronJob",
-                        retired.cronjob
-                    );
-                }
-            }
-            assert_eq!(web_env_value(&web, "SLACK_GENERAL_CHANNEL_ID"), None);
+            assert_eq!(
+                web_env_value(&web, "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED").as_deref(),
+                Some(expected)
+            );
+            assert_eq!(
+                renders_cronjob(&manifests, "general-nag"),
+                expected == "false"
+            );
+            assert!(renders_cronjob(&manifests, "dri-digest-trigger"));
         }
     }
 
@@ -7680,7 +7669,8 @@ mod tests {
         assert!(!renders_cronjob(&manifests, "general-nag"));
         assert!(renders_cronjob(&manifests, "dri-digest-trigger"));
 
-        let manifests = rendered_manifests(with_schedules(Some("true"), None, Some("true")));
+        let manifests =
+            rendered_manifests(with_schedules(Some("true"), Some("false"), Some("true")));
         assert!(renders_cronjob(&manifests, "general-nag"));
         assert!(!renders_cronjob(&manifests, "dri-digest-trigger"));
     }
@@ -7771,7 +7761,7 @@ mod tests {
             Some("C012STAGING")
         );
         assert!(!renders_cronjob(&manifests, "notation-reset-trigger"));
-        assert!(renders_cronjob(&manifests, "general-nag"));
+        assert!(!renders_cronjob(&manifests, "general-nag"));
 
         let without_channel = |key: &str| match key {
             "SLACK_STAGING_MESSAGES_CHANNEL_ID" => None,
@@ -7836,6 +7826,7 @@ mod tests {
             NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => {
                 Some("true".to_owned())
             }
+            "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED" => Some("false".to_owned()),
             _ => env_getter(FULL_ENV)(key),
         };
         let manifests = rendered_manifests(switched);
@@ -7915,13 +7906,13 @@ mod tests {
         deployment
             .coordinates
             .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
-        deployment
-            .coordinates
-            .insert("NAVIGATOR_DBOS_GENERAL_NAG_ENABLED".into(), "true".into());
         assert_eq!(
             retired_cronjobs(&deployment).unwrap(),
             ["general-nag", "heartbeat-trigger"]
         );
+        deployment.encrypted_keys.remove("SLACK_BOT_TOKEN");
+        let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
+        assert!(error.to_string().contains("SLACK_BOT_TOKEN"), "{error}");
         deployment.coordinates.insert(
             "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED".into(),
             "true".into(),
