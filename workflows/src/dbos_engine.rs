@@ -31,6 +31,7 @@ pub mod dri_digest;
 pub mod general_nag;
 pub mod heartbeat;
 pub mod notation_reset;
+pub mod profit_digest;
 pub mod project_recovery;
 pub mod purchase_activation;
 pub mod retention_purge;
@@ -210,6 +211,7 @@ pub struct Schedules {
     pub billing_canary: Option<billing_canary::Context>,
     pub billing_digest: Option<billing_digest::Context>,
     pub notation_reset: Option<notation_reset::Context>,
+    pub profit_digest: Option<profit_digest::Context>,
 }
 
 /// A schedule loop registered by a crate outside `workflows`.
@@ -411,6 +413,10 @@ impl Executor {
             .billing_digest
             .map(|context| billing_digest::register(&dbos, context))
             .transpose()?;
+        let profit_digest = schedules
+            .profit_digest
+            .map(|context| profit_digest::register(&dbos, context))
+            .transpose()?;
         let external_schedules = register_external(&dbos)?;
         dbos.launch().await?;
         tracing::info!(app_name = APP_NAME, "DBOS launched");
@@ -420,6 +426,13 @@ impl Executor {
             loops.push(tokio::spawn(billing_digest::schedule(
                 billing_digest,
                 billing_digest::system_clock(),
+                stop.clone(),
+            )));
+        }
+        if let Some(profit_digest) = profit_digest {
+            loops.push(tokio::spawn(profit_digest::schedule(
+                profit_digest,
+                profit_digest::system_clock(),
                 stop.clone(),
             )));
         }
@@ -631,6 +644,38 @@ pub fn effect_key() -> Option<String> {
     let workflow_id = dbos::workflow_id()?;
     let step_id = dbos::step_id()?;
     Some(format!("{workflow_id}/{step_id}"))
+}
+
+/// Post `text` to `channel` at most once per [`effect_key`]: reuse a receipt
+/// already in the channel's history since `oldest`, or post with the key as
+/// Slack's correlation. `false` when the step has no key, Slack refuses, or
+/// the receipt does not name this channel, key, and a timestamp.
+pub(crate) async fn post_once(
+    slack: &dyn crate::SlackBot,
+    channel: &str,
+    text: &str,
+    oldest: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let Some(key) = effect_key() else {
+        return false;
+    };
+    let receipt = match slack
+        .message_receipt_by_correlation_since(channel, &key, oldest)
+        .await
+    {
+        Ok(Some(receipt)) => receipt,
+        Ok(None) => match slack
+            .post_message_with_receipt(channel, text, Some(&key))
+            .await
+        {
+            Ok(receipt) => receipt,
+            Err(_) => return false,
+        },
+        Err(_) => return false,
+    };
+    receipt.channel_id == channel
+        && receipt.correlation_id.as_deref() == Some(key.as_str())
+        && !receipt.timestamp.is_empty()
 }
 
 #[cfg(test)]

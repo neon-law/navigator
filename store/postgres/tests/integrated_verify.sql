@@ -4,7 +4,9 @@ DO $$
 BEGIN
     IF current_setting('server_version_num') <> '160015'
        OR NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='age' AND extversion='1.6.0')
-       OR NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='vector' AND extversion='0.8.2') THEN
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_available_extensions WHERE name = 'vector' AND installed_version = default_version
+       ) THEN
         RAISE EXCEPTION 'compatibility version matrix differs from its pin';
     END IF;
     IF (SELECT count(*) FROM public.project WHERE code = 'synthetic-test-project') <> 1 THEN
