@@ -1236,12 +1236,239 @@ pub async fn schedule_alert(workflow: AlertWorkflow, clock: Clock, stop: Cancell
 #[cfg(test)]
 mod tests {
     use super::{
-        alert_workflow_id, assumption_checks, brief_prompt, enabled, is_weekday, render_alert,
-        render_brief_email, render_version_line, slot, verdict, workflow_id, AssumptionState,
-        AssumptionVerdict, DigestBrief, ENABLED_ENV,
+        alert_slot_time, alert_workflow_id, assumption_checks, brief_prompt, enabled,
+        firm_child_id, input_digest, is_weekday, post_once, render_alert, render_brief_email,
+        render_version_line, run_day, slot, slot_time, verdict, workflow_id, AssumptionState,
+        AssumptionVerdict, Context, DigestBrief, DigestError, DigestSource, FirmRef, OwnerContact,
+        ProseProvider, ALERT_WORKFLOW, ENABLED_ENV, WORKFLOW,
     };
     use crate::dbos_engine::SettingsError;
-    use chrono::{TimeZone, Utc};
+    use crate::CapturingSlackBot;
+    use chrono::{NaiveDate, NaiveTime, TimeZone, Utc};
+    use std::sync::Arc;
+
+    /// Fakes for `Context` construction: `from_lookup` resolves the Slack
+    /// configuration without ever touching the injected dependencies.
+    struct UnreachableSource;
+    #[async_trait::async_trait]
+    impl DigestSource for UnreachableSource {
+        async fn firms(&self) -> Result<Vec<FirmRef>, DigestError> {
+            unimplemented!("from_lookup never reads the source")
+        }
+        async fn firm_brief(&self, _firm_id: Uuid) -> Result<DigestBrief, DigestError> {
+            unimplemented!("from_lookup never reads the source")
+        }
+        async fn needs_you(&self, _firm_id: Uuid) -> Result<Vec<NeedsYouItem>, DigestError> {
+            unimplemented!("from_lookup never reads the source")
+        }
+        async fn owners(&self, _firm_id: Uuid) -> Result<Vec<OwnerContact>, DigestError> {
+            unimplemented!("from_lookup never reads the source")
+        }
+    }
+
+    struct UnreachableProse;
+    #[async_trait::async_trait]
+    impl ProseProvider for UnreachableProse {
+        async fn write_brief(&self, _brief: &DigestBrief) -> Result<String, DigestError> {
+            unimplemented!("from_lookup never writes prose")
+        }
+    }
+
+    struct UnreachableEmail;
+    #[async_trait::async_trait]
+    impl crate::email::service::EmailService for UnreachableEmail {
+        async fn send(
+            &self,
+            _email: crate::email::service::OutboundEmail,
+        ) -> Result<crate::email::service::SendReceipt, crate::email::service::EmailError> {
+            unimplemented!("from_lookup never sends email")
+        }
+    }
+
+    fn unreachable_dependencies() -> (
+        Arc<dyn DigestSource>,
+        Arc<dyn ProseProvider>,
+        Arc<dyn crate::email::service::EmailService>,
+    ) {
+        (
+            Arc::new(UnreachableSource),
+            Arc::new(UnreachableProse),
+            Arc::new(UnreachableEmail),
+        )
+    }
+
+    fn lookup_with(entries: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        let owned: Vec<(String, String)> = entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect();
+        move |key: &str| {
+            owned
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.clone())
+        }
+    }
+
+    #[test]
+    fn context_construction_demands_channel_token_and_harness_for_overrides() {
+        let (source, prose, email) = unreachable_dependencies();
+        // A live deployment demands the production messages channel...
+        assert_eq!(
+            Context::from_lookup(
+                source.clone(),
+                prose.clone(),
+                email.clone(),
+                false,
+                lookup_with(&[("SLACK_BOT_TOKEN", "token")]),
+            )
+            .err()
+            .expect("from_lookup must refuse"),
+            SettingsError::Missing("SLACK_MESSAGES_CHANNEL_ID"),
+        );
+        // ...a simulated deployment the staging channel.
+        assert_eq!(
+            Context::from_lookup(
+                source.clone(),
+                prose.clone(),
+                email.clone(),
+                true,
+                lookup_with(&[("SLACK_BOT_TOKEN", "token")]),
+            )
+            .err()
+            .expect("from_lookup must refuse"),
+            SettingsError::Missing("SLACK_STAGING_MESSAGES_CHANNEL_ID"),
+        );
+        // The bot token is required, and a blank one is as good as none.
+        for lookup in [
+            lookup_with(&[("SLACK_MESSAGES_CHANNEL_ID", "channel")]),
+            lookup_with(&[
+                ("SLACK_MESSAGES_CHANNEL_ID", "channel"),
+                ("SLACK_BOT_TOKEN", "   "),
+            ]),
+        ] {
+            assert_eq!(
+                Context::from_lookup(source.clone(), prose.clone(), email.clone(), false, lookup)
+                    .err()
+                    .expect("from_lookup must refuse"),
+                SettingsError::Missing("SLACK_BOT_TOKEN"),
+            );
+        }
+        // An API override outside the CI harness is refused.
+        assert_eq!(
+            Context::from_lookup(
+                source.clone(),
+                prose.clone(),
+                email.clone(),
+                false,
+                lookup_with(&[
+                    ("SLACK_MESSAGES_CHANNEL_ID", "channel"),
+                    ("SLACK_BOT_TOKEN", "token"),
+                    ("SLACK_API_BASE_URL", "http://127.0.0.1:9999"),
+                ]),
+            )
+            .err()
+            .expect("from_lookup must refuse"),
+            SettingsError::Invalid("SLACK_API_BASE_URL"),
+        );
+        // Everything present: the context carries the resolved channel.
+        let context = Context::from_lookup(
+            source,
+            prose,
+            email,
+            false,
+            lookup_with(&[
+                ("SLACK_MESSAGES_CHANNEL_ID", "channel"),
+                ("SLACK_BOT_TOKEN", "token"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(context.channel_id, "channel");
+    }
+
+    #[test]
+    fn run_day_refuses_workflow_ids_that_are_not_this_modules() {
+        // Outside a running workflow there is no id at all, so neither
+        // prefix parses into a day.
+        assert!(matches!(run_day(WORKFLOW), Err(DigestError::Invalid(_))));
+        assert!(matches!(
+            run_day(ALERT_WORKFLOW),
+            Err(DigestError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn the_firm_child_id_names_the_prefix_the_day_and_the_firm() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 9).expect("a fixed day");
+        assert_eq!(
+            firm_child_id("CeoDigestFirm", day, Uuid::nil()),
+            format!("CeoDigestFirm-2026-11-09/{}", Uuid::nil()),
+        );
+    }
+
+    #[test]
+    fn the_input_digest_is_stable_and_moves_with_the_brief() {
+        let sample = brief();
+        let first = input_digest(&sample);
+        assert_eq!(first.len(), 64);
+        assert_eq!(first, input_digest(&sample));
+        // Pin the id so the only difference is the name under test.
+        let mut changed = brief();
+        changed.firm_id = sample.firm_id;
+        changed.firm_name = "A different firm".to_string();
+        assert_ne!(first, input_digest(&changed));
+    }
+
+    #[tokio::test]
+    async fn the_alert_post_refuses_when_there_is_no_effect_key() {
+        // Outside a running workflow the effect key is absent, so the post
+        // must refuse rather than send undeduplicated. The capturing bot is
+        // never reached.
+        let slack = CapturingSlackBot::default();
+        assert!(matches!(
+            post_once(&slack, "channel", "text", Utc::now()).await,
+            Err(dbos::Error::Application(DigestError::Notify))
+        ));
+    }
+
+    #[test]
+    fn checks_skip_targets_that_are_not_plain_numbers() {
+        let mut brief = brief();
+        brief.assumptions.push(AssumptionState {
+            key: "plan.target_minutes.letter".to_string(),
+            version: 1,
+            value: serde_json::json!("fast"),
+        });
+        let checks = assumption_checks(&brief);
+        assert!(!checks.iter().any(|check| check.key.ends_with("letter")));
+        assert!(checks
+            .iter()
+            .any(|check| check.key.ends_with("document_review")));
+    }
+
+    #[test]
+    fn the_email_names_the_empty_assumptions_block() {
+        let body = render_brief_email(&brief(), "The week in prose.", &[]);
+        assert!(body.contains("No target-minutes assumptions recorded."));
+    }
+
+    #[test]
+    fn the_slots_are_noon_for_the_alert_and_fourteen_for_the_weekly() {
+        assert_eq!(
+            slot_time(),
+            NaiveTime::from_hms_opt(14, 0, 0).expect("14:00")
+        );
+        assert_eq!(
+            alert_slot_time(),
+            NaiveTime::from_hms_opt(12, 0, 0).expect("12:00")
+        );
+        // A Sunday belongs to the Monday six days back.
+        let sunday = Utc.with_ymd_and_hms(2026, 11, 8, 9, 0, 0).unwrap();
+        assert_eq!(
+            slot(sunday),
+            Utc.with_ymd_and_hms(2026, 11, 2, 14, 0, 0).unwrap()
+        );
+    }
     use std::collections::BTreeMap;
     use store::firm_digest::{FirmDeadlines, MatterLine, NeedsYouItem};
     use store::legal_plans::PlanMatterType;
