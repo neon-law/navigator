@@ -76,10 +76,18 @@ pub(crate) async fn private_terms(
             .send()
             .await
             .map_err(|_| anyhow!("could not read private terms; privacy coverage is incomplete"))?;
-        if !response.status().is_success() {
+        let status = response.status();
+        if !status.is_success() {
+            let reason = match status {
+                reqwest::StatusCode::NOT_FOUND => {
+                    "the Project is unavailable to this firm-side session"
+                }
+                reqwest::StatusCode::UNAUTHORIZED => "the site login is unavailable or expired",
+                _ if status.is_server_error() => "the server could not resolve private terms",
+                _ => "the server refused the private-terms read",
+            };
             return Err(anyhow!(
-                "private terms refused: {}; a firm-side participant on the Project reads them",
-                response.status()
+                "{reason} ({status}), so privacy coverage is incomplete"
             ));
         }
         let read: PrivateTerms = response.json().await.map_err(|_| {
@@ -265,6 +273,28 @@ mod tests {
         assert!(
             cli::feedback_scan::scan("the command fails on an empty directory", &terms).is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn a_server_failure_reports_incomplete_coverage_without_echoing_private_values() {
+        let server = site().await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/app/api/projects/11111111-1111-1111-1111-111111111111/private-terms",
+            ))
+            .respond_with(ResponseTemplate::new(500).set_body_string("Synthetic Private Marker"))
+            .mount(&server)
+            .await;
+
+        let error = private_terms(&server.uri(), "a-token", &[])
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("privacy coverage is incomplete"));
+        assert!(message.contains("server could not resolve private terms"));
+        assert!(message.contains("500"));
+        assert!(!message.contains("Synthetic Private Marker"));
+        assert!(!message.contains("firm-side participant"));
     }
 
     #[tokio::test]

@@ -2111,10 +2111,11 @@ async fn private_terms_for_project(
     let entities = store::entities::find_by_ids(db, &entity_ids)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
-    if people.len() != person_ids.len() || entities.len() != entity_ids.len() {
-        return Err(ApiError::Db(
-            "private identifier coverage is incomplete".into(),
-        ));
+    if people.len() != person_ids.len() {
+        return Err(ApiError::Db("private terms: missing Person record".into()));
+    }
+    if entities.len() != entity_ids.len() {
+        return Err(ApiError::Db("private terms: missing Entity record".into()));
     }
     let mut identifiers = vec![project.id.to_string()];
     let mut participants = Vec::new();
@@ -2139,7 +2140,7 @@ async fn private_terms_for_project(
         if let Some(metadata) = entity.metadata.as_ref() {
             let object = metadata
                 .as_object()
-                .ok_or_else(|| ApiError::Db("private identifier coverage is incomplete".into()))?;
+                .ok_or_else(|| ApiError::Db("private terms: invalid Entity metadata".into()))?;
             if let Some(value) = object.get("ein") {
                 let ein = value
                     .as_str()
@@ -2153,9 +2154,7 @@ async fn private_terms_for_project(
                                 }
                             })
                     })
-                    .ok_or_else(|| {
-                        ApiError::Db("private identifier coverage is incomplete".into())
-                    })?;
+                    .ok_or_else(|| ApiError::Db("private terms: invalid Entity EIN".into()))?;
                 identifiers.push(ein.to_owned());
             }
         }
@@ -14085,6 +14084,69 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
     }
 
     #[tokio::test]
+    async fn private_terms_recover_after_an_orphaned_lawyer_dri_is_removed() {
+        let f = door_fixture().await;
+        let lawyer_id = f.lawyer.person_id.unwrap();
+        let missing = store::persons::create(
+            &f.db,
+            &store::persons::NewPerson::with_role(
+                "Former Lawyer",
+                "former-lawyer@example.com",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        let mut orphaned_role = None;
+        for person_id in [lawyer_id, missing.id] {
+            let role = store::participation::add_participant(
+                &f.db,
+                &store::participation::AddParticipantCommand {
+                    project_id: f.project,
+                    person_id,
+                    dri: store::participation::DriRequest::Designate(
+                        store::projects::DriSide::Lawyer,
+                    ),
+                    actor: store::participation::DriActor::System,
+                },
+            )
+            .await
+            .unwrap();
+            if person_id == missing.id {
+                orphaned_role = Some(role.id);
+            }
+        }
+        f.db.query("DELETE $person")
+            .bind(("person", store::surreal::record_id("person", missing.id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        let path = format!("/app/api/projects/{}/private-terms", f.project);
+        let (status, body) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(body.get("identifiers").is_none());
+
+        store::participation::remove_participant(
+            &f.db,
+            f.project,
+            orphaned_role.unwrap(),
+            store::participation::DriActor::Person(lawyer_id),
+        )
+        .await
+        .unwrap();
+
+        let (status, body) = call(&f.state, Some(&f.lawyer), "GET", &path, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|person| { person["email"] == "outside-lawyer@example.com" }));
+    }
+
+    #[tokio::test]
     async fn private_terms_refuse_a_missing_attached_entity() {
         let f = door_fixture().await;
         store::participation::add_participant(
@@ -14111,6 +14173,10 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             .unwrap()
             .check()
             .unwrap();
+        assert!(matches!(
+            super::private_terms_for_project(&f.db, project).await,
+            Err(ApiError::Db(reason)) if reason == "private terms: missing Entity record"
+        ));
         let (status, json) = call(
             &f.state,
             Some(&f.lawyer),
