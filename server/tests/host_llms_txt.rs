@@ -125,7 +125,10 @@ async fn the_firm_llms_txt_advertises_only_documents_the_firm_host_serves() {
 #[tokio::test]
 async fn the_index_lists_nautilus_without_business_counsel() {
     let body = document(&app().await).await;
-    assert!(body.contains("/nautilus)"), "published page missing: /nautilus");
+    assert!(
+        body.contains("/nautilus)"),
+        "published page missing: /nautilus"
+    );
     assert!(!body.contains("/disputes)") && !body.contains("/business)"));
     assert!(!body.contains("/services)"));
     assert!(body.contains("Nautilus is one subscription"));
