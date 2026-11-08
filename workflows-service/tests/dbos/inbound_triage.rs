@@ -2,7 +2,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use store::inbox::{ingest_inbound, IngestInbound};
 use store::inbox_triage::{find_for_message, PrivilegeLabel, TriageDisposition};
+use store::surreal::SurrealDb;
 use tower::ServiceExt;
+use uuid::Uuid;
 use workflows::{InboundTriageReport, InboundTriageRequest};
 use workflows_service::dbos_ingress::{TriageIngress, WorkerIngress};
 use workflows_service::health::router_with_dbos_ingress;
@@ -10,15 +12,12 @@ use workflows_service::inbound_triage::{register_dbos, InboundTriageService, Tri
 
 use crate::support::{database, APP_VERSION, DEADLINE};
 
-#[tokio::test]
-async fn a_replayed_inbound_message_keeps_one_rules_only_triage_row() {
-    let Some(db) = database().await else {
-        return;
-    };
-    let surreal = store::test_support::mem_surreal().await;
-    let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
-    let message = ingest_inbound(
-        &surreal,
+const ROUTE: &str = "/internal/dbos/inbound-triage";
+
+async fn seed_message(surreal: &SurrealDb) -> Uuid {
+    let firm_id = store::test_support::seed_firm_with_brand(surreal, "neon").await;
+    ingest_inbound(
+        surreal,
         &IngestInbound {
             firm_id,
             brand_key: Some("neon"),
@@ -46,15 +45,22 @@ async fn a_replayed_inbound_message_keeps_one_rules_only_triage_row() {
         },
     )
     .await
-    .expect("ingest a synthetic email");
-    let request = InboundTriageRequest {
-        message_id: message.message_id,
+    .expect("ingest a synthetic email")
+    .message_id
+}
+
+#[tokio::test]
+async fn a_replayed_inbound_message_keeps_one_rules_only_triage_row() {
+    let Some(db) = database().await else {
+        return;
     };
+    let surreal = store::test_support::mem_surreal().await;
+    let message_id = seed_message(&surreal).await;
+    let request = InboundTriageRequest { message_id };
     let dbos = dbos::DBOS::new(workflows::dbos_engine::config(&db.url, APP_VERSION));
     let workflow = register_dbos(&dbos, InboundTriageService::new(surreal.clone(), None))
         .expect("register triage");
     dbos.launch().await.expect("launch DBOS");
-    const ROUTE: &str = "/internal/dbos/inbound-triage";
     let router = router_with_dbos_ingress(
         WorkerIngress {
             inbound_triage: Some(TriageIngress {
@@ -85,7 +91,7 @@ async fn a_replayed_inbound_message_keeps_one_rules_only_triage_row() {
             .expect("submit triage");
         assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
-    let workflow_id = format!("InboundTriage:{}", message.message_id);
+    let workflow_id = format!("InboundTriage:{message_id}");
     let handle = dbos
         .retrieve_workflow::<InboundTriageReport, TriageError>(&workflow_id)
         .expect("both requests use the same Message-keyed run");
@@ -93,7 +99,7 @@ async fn a_replayed_inbound_message_keeps_one_rules_only_triage_row() {
         .await
         .expect("triage completed within the deadline")
         .expect("triage succeeded");
-    let original = find_for_message(&surreal, message.message_id)
+    let original = find_for_message(&surreal, message_id)
         .await
         .expect("find the triage row")
         .expect("triage row was recorded");
@@ -110,7 +116,7 @@ async fn a_replayed_inbound_message_keeps_one_rules_only_triage_row() {
         .await
         .expect("recover an already-recorded message");
     assert_eq!(
-        find_for_message(&surreal, message.message_id)
+        find_for_message(&surreal, message_id)
             .await
             .expect("read triage after recovery"),
         Some(original)
