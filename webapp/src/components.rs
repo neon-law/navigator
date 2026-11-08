@@ -76,6 +76,7 @@ pub mod site_footer;
 pub mod site_header;
 pub mod social;
 pub mod social_mark;
+pub mod stat_band;
 pub mod status_strip;
 pub mod tabs;
 pub mod testimonial;
@@ -149,6 +150,7 @@ pub use site_footer::{
     FooterSocialLink, SiteFooterLegal, FOOTER_TAGLINE,
 };
 pub(crate) use social_mark::SocialMarkGlyph;
+pub use stat_band::{StatEntry, StatGrid};
 pub use status_strip::{StatusCell, StatusStrip};
 pub use toggle_group::{ToggleGroup, ToggleOption};
 // `pub(crate)`, not `pub`: these two are reused by `crate::litigation_page`
