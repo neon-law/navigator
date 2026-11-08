@@ -212,7 +212,8 @@ impl Context {
     }
 }
 
-/// Whether this schedule is enabled. Only literal `true` opts in.
+/// Whether this schedule is enabled. Only literal `true` opts in; `ops ship`
+/// renders `true` into every deployed `web` that runs DBOS unless the row opts out.
 ///
 /// # Errors
 ///
