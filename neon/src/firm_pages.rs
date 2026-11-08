@@ -1588,6 +1588,30 @@ pub(crate) fn resolve_firm_home_content(
             content.signup = None;
             content
         }
+        // Lex Tecnica's home is a marketing-page band sequence (the
+        // `home-marketing` catalog), not the legacy home schema.
+        BrandKey::LexTecnica => {
+            let page = locales::lex_tecnica_home(branding, deployment_host);
+            webapp::home::HomeContent {
+                head_title: page.head_title.clone(),
+                meta_description: page.meta_description.clone(),
+                heading: page.tagline.clone(),
+                marketing_page: Some(page),
+                ..Default::default()
+            }
+        }
+        // IEP Defenders' home is a marketing-page band sequence (the
+        // `home-marketing` catalog), not the legacy home schema.
+        BrandKey::IepDefenders => {
+            let page = locales::iep_home(branding, deployment_host);
+            webapp::home::HomeContent {
+                head_title: page.head_title.clone(),
+                meta_description: page.meta_description.clone(),
+                heading: page.tagline.clone(),
+                marketing_page: Some(page),
+                ..Default::default()
+            }
+        }
         BrandKey::DeleteYourData
         | BrandKey::Vesta
         | BrandKey::Misericordia
@@ -1597,9 +1621,7 @@ pub(crate) fn resolve_firm_home_content(
         | BrandKey::CyberInjuryLaw
         | BrandKey::Summons
         | BrandKey::Aegis
-        | BrandKey::Groundwork
-        | BrandKey::LexTecnica
-        | BrandKey::IepDefenders => locales::home_for_host(branding, deployment_host),
+        | BrandKey::Groundwork => locales::home_for_host(branding, deployment_host),
     }
 }
 
