@@ -96,6 +96,16 @@ DEFINE FIELD OVERWRITE jurisdiction_id ON project TYPE option<record<jurisdictio
 -- `project.onboarding_jurisdiction` (see `rules::clauses`). Optional: a
 -- historical row has none, and nothing infers one.
 DEFINE FIELD OVERWRITE onboarding_jurisdiction ON project TYPE option<string>;
+-- The matter's client DRI Person — the client the Directly Responsible
+-- Individual's letters name. The participation model carries the
+-- accountability marker (`person_project_role.is_client_dri`); this column
+-- pins which one of the client-side rows a CLIENT_DRI special question and a
+-- `project.client_dri` Clause binding resolve to at render time, instead of
+-- guessing one from the participation set. Optional: a historical row has
+-- none, and nothing infers one. Every write goes through
+-- `store::projects::set_client_dri_person_id`, which refuses a Person with
+-- no `is_client_dri` row on this matter — fails closed, never guessed.
+DEFINE FIELD OVERWRITE client_dri_person_id ON project TYPE option<record<person>>;
 DEFINE FIELD OVERWRITE description ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE drive_folder_id ON project TYPE option<string>;
 -- The full URL of the one source repository this Project's templates and

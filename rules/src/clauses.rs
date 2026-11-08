@@ -154,23 +154,28 @@ fn selections(doc: &Value) -> Result<BTreeMap<String, (Reference, Clause)>, Stri
             ));
         }
         for (name, state) in &reference.inputs {
-            // A direct Project binding (`project.onboarding_jurisdiction`)
-            // answers no questionnaire question: the render context supplies
-            // the value from the notation's live Project row. Only that one
-            // field binds directly, and only to a `jurisdiction` input.
+            // A direct Project binding (`project.onboarding_jurisdiction`,
+            // `project.client_dri`) answers no questionnaire question: the
+            // render context supplies the value from the notation's live
+            // Project row. Only those two fields bind directly, each only
+            // to an input of the field's own kind.
             if let Some((table, field)) = state.split_once('.') {
-                if table != "project" || field != "onboarding_jurisdiction" {
-                    return Err(format!(
-                        "Clause `{alias}` input `{name}` binds `{state}`; only `project.onboarding_jurisdiction` binds directly to the Project"
-                    ));
-                }
+                let required = match (table, field) {
+                    ("project", "onboarding_jurisdiction") => "jurisdiction",
+                    ("project", "client_dri") => "person",
+                    _ => {
+                        return Err(format!(
+                            "Clause `{alias}` input `{name}` binds `{state}`; only `project.onboarding_jurisdiction` and `project.client_dri` bind directly to the Project"
+                        ));
+                    }
+                };
                 if !clause.inputs[name]
                     .types
                     .iter()
-                    .any(|allowed| allowed == "jurisdiction")
+                    .any(|allowed| allowed == required)
                 {
                     return Err(format!(
-                        "Clause `{alias}` input `{name}` binds `project.onboarding_jurisdiction`, which is a jurisdiction and must bind a `jurisdiction` input"
+                        "Clause `{alias}` input `{name}` binds `{state}`, which is a {required} and must bind a `{required}` input"
                     ));
                 }
                 continue;
@@ -791,5 +796,40 @@ mod tests {
         );
         let error = compile(&template.contents).unwrap_err();
         assert!(error.contains("project.governing_law"), "{error}");
+    }
+
+    /// A `person` input may bind straight to the Project's `client_dri`
+    /// field: the compiled body carries the dotted `project.client_dri`
+    /// placeholders the render context seeds from the bound Person row.
+    #[test]
+    fn a_person_input_may_bind_directly_to_the_project_client_dri() {
+        let template = crate::SourceFile {
+            path: "letter__notice.md".into(),
+            contents: "---\nkind: letter\nquestionnaire: [jurisdiction__governing_law]\nclauses:\n  contact:\n    source: client_dri_contact@1\n    inputs:\n      client: project.client_dri\n---\n{{> contact}}\n".into(),
+        };
+        let compiled = compile(&template.contents).unwrap();
+        assert!(
+            compiled.contains("{{project.client_dri.name}}"),
+            "the person binding expands the field reference: {compiled}"
+        );
+        assert!(
+            compiled.contains("{{project.client_dri.email}}"),
+            "the person binding expands the email reference: {compiled}"
+        );
+    }
+
+    /// Fails closed: `project.client_dri` is a person, so a non-person
+    /// input bound to it is refused, naming the field and the input kind.
+    #[test]
+    fn a_client_dri_binding_refuses_a_non_person_input() {
+        let template = onboarding(
+            "clauses:\n  arbitration:\n    source: engagement_arbitration@1\n    inputs:\n      law: project.client_dri\n      seat: jurisdiction__arbitration_seat\n",
+            "{{> arbitration}}\n",
+        );
+        let error = compile(&template.contents).unwrap_err();
+        assert!(
+            error.contains("project.client_dri") && error.contains("person"),
+            "the refusal names the field and its kind: {error}"
+        );
     }
 }

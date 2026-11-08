@@ -62,6 +62,16 @@ pub struct Project {
     /// for onboarding prose, deliberately editable, and read live at render
     /// time by a Clause input bound to `project.onboarding_jurisdiction`.
     pub onboarding_jurisdiction: Option<String>,
+    /// The matter's client DRI — the Person a `CLIENT_DRI` special question
+    /// and a `project.client_dri` Clause binding resolve to at render time
+    /// (LAW-177). The participation model carries the accountability marker
+    /// (`person_project_role.is_client_dri`); this column pins *which* of the
+    /// client-side rows renders, so a template is never answered from a guess.
+    /// Optional: a row written before the field existed has none, and nothing
+    /// infers one. Every write goes through [`set_client_dri_person_id`],
+    /// which refuses a Person holding no `is_client_dri` row on this matter —
+    /// fails closed, never guessed.
+    pub client_dri_person_id: Option<Uuid>,
     /// The legal-plan panel economics this matter carries (ENG-1269). All
     /// nine are optional: commercial-litigation and pro-bono matters leave
     /// every one unset, which is also how reporting separates the Firm's
@@ -190,6 +200,9 @@ struct ProjectRow {
     /// Optional because rows written before the field existed keep no value;
     /// reads collapse the absence to `None`.
     onboarding_jurisdiction: Option<String>,
+    /// The matter's client DRI Person. A `record<person>` link in the
+    /// SurrealDB source; [`Project`] carries the bare `Uuid`.
+    client_dri_person_id: Option<surrealdb::types::RecordId>,
     /// Plan-panel economics (ENG-1269). Bare `uuid` for the plan pointer;
     /// everything else plain text. Optional for the same reason as
     /// `onboarding_jurisdiction`.
@@ -224,6 +237,10 @@ impl ProjectRow {
                 Some(id) => Some(record_uuid(id)?),
             },
             onboarding_jurisdiction: self.onboarding_jurisdiction,
+            client_dri_person_id: match self.client_dri_person_id.as_ref() {
+                None => None,
+                Some(id) => Some(record_uuid(id)?),
+            },
             description: self.description,
             drive_folder_id: self.drive_folder_id,
             repository_url: self.repository_url,
@@ -258,7 +275,8 @@ pub(crate) const PROJECT_TABLE: &str = "project";
 const ENTITY_TABLE: &str = "entity";
 const PERSON_PROJECT_ROLE_TABLE: &str = "person_project_role";
 const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id, \
-                              jurisdiction_id, onboarding_jurisdiction, description, \
+                              jurisdiction_id, onboarding_jurisdiction, \
+                              client_dri_person_id, description, \
                               drive_folder_id, repository_url, git_initialized_at, \
                               forge_provisioned_at, closed_at, closure_reason, \
                               internal_slack_channel_url, external_slack_channel_url, \
@@ -2478,6 +2496,84 @@ pub async fn set_jurisdiction(
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
     Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+}
+
+/// Refusal for a `client_dri_person_id` naming a Person who holds no
+/// `is_client_dri` participation row on the matter. The column exists to pin
+/// *which* client-side row a `CLIENT_DRI` special question renders (LAW-177);
+/// a value pointing anywhere else would let a letter name someone the
+/// accountability model never marked, so the write fails closed instead of
+/// guessing.
+const CLIENT_DRI_NOT_ON_PROJECT: &str = "client_dri_person_id names a Person with no client-DRI \
+ participation row on this matter — designate one first";
+
+/// Set or clear the Project's client DRI Person (LAW-177).
+///
+/// `Some(person_id)` must name a Person who exists and holds an
+/// `is_client_dri` participation row on *this* matter — the column only pins
+/// an accountability the participation model already marked, never invents
+/// one. `None` clears the column. The PostgreSQL foreign key is the backstop
+/// for a writer that skips this accessor.
+///
+/// Returns `Ok(None)` when the matter no longer exists.
+///
+/// # Errors
+/// [`ProjectCommandError::Invalid`] when the Person is unknown or holds no
+/// client-DRI row on the matter, and propagates a database error.
+pub async fn set_client_dri_person_id(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+    person_id: Option<Uuid>,
+) -> Result<Option<Project>, ProjectCommandError> {
+    if let Some(person_id) = person_id {
+        if crate::persons::find_by_id(surreal, person_id)
+            .await
+            .map_err(|error| ProjectCommandError::Db(error.to_string()))?
+            .is_none()
+        {
+            return Err(ProjectCommandError::Invalid("no such person"));
+        }
+        let mut designated = surreal
+            .query(format!(
+                "SELECT VALUE id FROM ONLY {PERSON_PROJECT_ROLE_TABLE} \
+                 WHERE person_id = $person_id AND project_id = $project_id \
+                 AND is_client_dri = true LIMIT 1"
+            ))
+            .bind(("person_id", record_id("person", person_id)))
+            .bind(("project_id", record_id(PROJECT_TABLE, project_id)))
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+        let on_this_matter: Option<surrealdb::types::RecordId> = designated
+            .take(0)
+            .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+        if on_this_matter.is_none() {
+            return Err(ProjectCommandError::Invalid(CLIENT_DRI_NOT_ON_PROJECT));
+        }
+    }
+    if find_by_id(surreal, project_id)
+        .await
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    surreal
+        .query("UPDATE $id SET client_dri_person_id = $person_id, updated_at = $updated_at")
+        .bind(("id", record_id(PROJECT_TABLE, project_id)))
+        .bind(("person_id", person_id.map(|id| record_id("person", id))))
+        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    // Read the updated row through the production SELECT instead of the
+    // UPDATE's own RETURN: a RETURN projection serializes a record link as a
+    // string, which deserializes back as `None` — the value would be silently
+    // lost exactly when it was just written.
+    let updated = find_by_id(surreal, project_id)
+        .await
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    Ok(mirrored(surreal, updated).await)
 }
 
 /// The legal-plan panel columns staged onto a plan matter (ENG-1269). The

@@ -1372,6 +1372,7 @@ erDiagram
         string booking_url
         string brand
         string calendar_id
+        uuid client_dri_person_id
         string closed_at
         string closure_reason
         string code
@@ -2063,6 +2064,7 @@ erDiagram
     firm }o--|| project : references
     jurisdiction }o--|| project : references
     legal_plan }o--|| project : references
+    person }o--|| project : references
     project_archive_generation }o--|| project_archive_item : references
     person }o--|| project_cost_events : references
     project_costs }o--|| project_cost_events : references
