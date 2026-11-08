@@ -1067,6 +1067,7 @@ mod tests {
             firm_id: None,
             jurisdiction_id: None,
             onboarding_jurisdiction: None,
+            client_dri_person_id: None,
             description: None,
             drive_folder_id: None,
             repository_url: None,

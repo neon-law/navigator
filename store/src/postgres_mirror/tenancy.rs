@@ -81,6 +81,7 @@ const PROJECT_COLUMNS: &[&str] = &[
     "calendar_id",
     "booking_url",
     "onboarding_jurisdiction",
+    "client_dri_person_id",
     // Plan-panel economics (ENG-1269). The three plan dates are DATE in
     // PostgreSQL; the SurrealDB source carries them as ISO `YYYY-MM-DD`
     // text, parsed by [`date`].
@@ -410,6 +411,8 @@ struct ProjectImage {
     calendar_id: Option<String>,
     booking_url: Option<String>,
     onboarding_jurisdiction: Option<String>,
+    /// The matter's client DRI Person (LAW-177), as PostgreSQL's UUID FK.
+    client_dri_person_id: Option<Uuid>,
     /// Plan-panel economics (ENG-1269). The three plan dates hold
     /// PostgreSQL DATE values; the SurrealDB source carries ISO text that
     /// [`ProjectImage::from_source`] parses.
@@ -452,6 +455,7 @@ impl ProjectImage {
             calendar_id: project.calendar_id.clone(),
             booking_url: project.booking_url.clone(),
             onboarding_jurisdiction: project.onboarding_jurisdiction.clone(),
+            client_dri_person_id: project.client_dri_person_id,
             legal_plan_id: project.legal_plan_id,
             plan_member_id: project.plan_member_id.clone(),
             benefit_code: project.benefit_code.clone(),
@@ -494,6 +498,7 @@ impl ProjectImage {
             calendar_id: row.try_get("calendar_id")?,
             booking_url: row.try_get("booking_url")?,
             onboarding_jurisdiction: row.try_get("onboarding_jurisdiction")?,
+            client_dri_person_id: row.try_get("client_dri_person_id")?,
             legal_plan_id: row.try_get("legal_plan_id")?,
             plan_member_id: row.try_get("plan_member_id")?,
             benefit_code: row.try_get("benefit_code")?,
@@ -816,6 +821,7 @@ async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirro
         .bind(&project.calendar_id)
         .bind(&project.booking_url)
         .bind(&project.onboarding_jurisdiction)
+        .bind(project.client_dri_person_id)
         .bind(project.legal_plan_id)
         .bind(&project.plan_member_id)
         .bind(&project.benefit_code)

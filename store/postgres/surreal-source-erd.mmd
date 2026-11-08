@@ -1074,6 +1074,7 @@ erDiagram
         string booking_url
         string brand
         string calendar_id
+        uuid client_dri_person_id
         string closed_at
         string closure_reason
         string code
@@ -1558,6 +1559,7 @@ erDiagram
     person }o--|| person_project_role : person_id
     project }o--|| person_project_role : project_id
     entity }o--|| playbook : entity_id
+    person }o--|| project : client_dri_person_id
     entity }o--|| project : entity_id
     firm }o--|| project : firm_id
     jurisdiction }o--|| project : jurisdiction_id
