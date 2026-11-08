@@ -41,7 +41,9 @@ fn select_pin<'m>(
     practice_area: Option<&str>,
 ) -> Result<&'m manifest::SkillPin> {
     if pins.is_empty() {
-        return Err(anyhow!("no Kit is pinned: run `navigator project skill use` first"));
+        return Err(anyhow!(
+            "no Kit is pinned: run `navigator project skill use` first"
+        ));
     }
     let matched: Vec<&manifest::SkillPin> = pins
         .iter()
@@ -56,12 +58,16 @@ fn select_pin<'m>(
         .collect();
     match matched.as_slice() {
         [one] => Ok(one),
-        [] => Err(anyhow!("no pinned Kit matches that jurisdiction and practice area")),
+        [] => Err(anyhow!(
+            "no pinned Kit matches that jurisdiction and practice area"
+        )),
         [first, rest @ ..] => Err(anyhow!(
             "several Kits are pinned ({} through {}); name the one to report with \
              --jurisdiction and --practice-area",
             first.practice_area,
-            rest.last().map_or(first.practice_area.as_str(), |last| last.practice_area.as_str())
+            rest.last().map_or(first.practice_area.as_str(), |last| last
+                .practice_area
+                .as_str())
         )),
     }
 }
@@ -95,7 +101,10 @@ pub async fn run(
     match run_checked(file, jurisdiction.as_deref(), practice_area.as_deref()).await {
         Outcome::Prepared => ExitCode::SUCCESS,
         Outcome::Identifier(count) => {
-            eprintln!("navigator: {count} identifier{} found; replace each and re-run", if count == 1 { "" } else { "s" });
+            eprintln!(
+                "navigator: {count} identifier{} found; replace each and re-run",
+                if count == 1 { "" } else { "s" }
+            );
             ExitCode::FAILURE
         }
         Outcome::Fatal(error) => {
@@ -140,9 +149,7 @@ async fn run_checked(
         ));
     };
     let terms = match remote::resolve(Some(host)) {
-        Ok((base, token)) => {
-            feedback_check::private_terms(&base, &token, &[project]).await
-        }
+        Ok((base, token)) => feedback_check::private_terms(&base, &token, &[project]).await,
         Err(_) => {
             return Outcome::Fatal(anyhow!(
                 "site login unavailable or expired; privacy coverage is incomplete"
@@ -189,9 +196,14 @@ mod tests {
         let pins = vec![pin("NV", "estates", "1")];
         assert_eq!(select_pin(&pins, None, None).unwrap().version, "1");
 
-        let pins = vec![pin("NV", "estates", "1"), pin("ny", "uncontested-divorce", "1.0.0")];
+        let pins = vec![
+            pin("NV", "estates", "1"),
+            pin("ny", "uncontested-divorce", "1.0.0"),
+        ];
         assert_eq!(
-            select_pin(&pins, Some("NY"), Some("UNCONTESTED-DIVORCE")).unwrap().version,
+            select_pin(&pins, Some("NY"), Some("UNCONTESTED-DIVORCE"))
+                .unwrap()
+                .version,
             "1.0.0"
         );
         assert!(select_pin(&pins, Some("TX"), None).is_err());
@@ -210,9 +222,18 @@ mod tests {
     /// nothing else the command knows about the matter.
     #[test]
     fn a_prepared_issue_names_the_kit_and_the_destination_only() {
-        let issue = prepared_issue(&pin("NV", "estates", "1"), "Section 3 cites the wrong statute.");
-        assert!(issue.starts_with("Kit NV estates version 1: template defect report"), "{issue}");
+        let issue = prepared_issue(
+            &pin("NV", "estates", "1"),
+            "Section 3 cites the wrong statute.",
+        );
+        assert!(
+            issue.starts_with("Kit NV estates version 1: template defect report"),
+            "{issue}"
+        );
         assert!(issue.contains("wrong statute"), "{issue}");
-        assert!(issue.ends_with("File with the Lawyers team's issue tracker."), "{issue}");
+        assert!(
+            issue.ends_with("File with the Lawyers team's issue tracker."),
+            "{issue}"
+        );
     }
 }

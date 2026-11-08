@@ -5531,7 +5531,11 @@ mod kit_version_tests {
     /// the shape `navigator project skill use` writes through.
     #[test]
     fn a_three_segment_kit_version_is_valid() {
-        for value in ["NV/estates/1", "ny/uncontested-divorce/1.0.0", "TX/probate/2026.01"] {
+        for value in [
+            "NV/estates/1",
+            "ny/uncontested-divorce/1.0.0",
+            "TX/probate/2026.01",
+        ] {
             assert!(is_valid_kit_version(value), "{value}");
         }
     }
