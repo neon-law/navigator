@@ -36,6 +36,7 @@ mod glossary;
 mod inbox;
 mod inbox_import;
 mod journal;
+mod legal_plans;
 mod login;
 mod lsp_download;
 mod lsp_publish;
@@ -874,6 +875,16 @@ enum Command {
         #[command(subcommand)]
         action: journal::JournalCmd,
     },
+    /// A Firm's Legal Plans: where each is logged into, who to call, and its
+    /// service levels.
+    LegalPlans {
+        #[arg(long)]
+        firm: uuid::Uuid,
+        #[arg(long)]
+        host: Option<String>,
+        #[command(subcommand)]
+        action: legal_plans::LegalPlansCmd,
+    },
     /// A Firm's stated premises the CEO Digest checks actuals against.
     Assumptions {
         #[arg(long)]
@@ -1115,6 +1126,11 @@ enum ProjectsCmd {
     Communication {
         #[command(subcommand)]
         action: CommunicationCmd,
+    },
+    /// Read or set the Legal Plan this Project is paid through.
+    LegalPlan {
+        #[command(subcommand)]
+        action: LegalPlanCmd,
     },
     /// Read the live Project lifecycle and onboarding evidence.
     Status {
@@ -1977,6 +1993,29 @@ enum CommunicationCmd {
         /// Print the request and write nothing.
         #[arg(long)]
         dry_run: bool,
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+}
+
+#[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
+enum LegalPlanCmd {
+    /// The matter's plan, Plan Case Number, and plan dates.
+    Show {
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Link the matter to one of the Firm's plans; only the flags given change.
+    Set {
+        #[command(flatten)]
+        fields: legal_plans::PlanFields,
         /// Project code. Defaults to project.name in navigator.yaml.
         #[arg(long)]
         project: Option<String>,
@@ -5221,6 +5260,9 @@ fn run() -> ExitCode {
         Command::Assumptions { firm, host, action } => {
             runtime().block_on(assumptions::run(firm, host, action))
         }
+        Command::LegalPlans { firm, host, action } => {
+            runtime().block_on(legal_plans::run(firm, host, action))
+        }
         Command::Mail { action } => runtime().block_on(mail::run(action)),
         Command::Inbox { action } => runtime().block_on(inbox::run(action)),
         Command::Downloads { action } => runtime().block_on(downloads::run(action)),
@@ -6190,6 +6232,16 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 )
                 .await
             }
+        },
+        ProjectsCmd::LegalPlan { action } => match action {
+            LegalPlanCmd::Show { project, host } => {
+                legal_plans::show(host.host.as_deref(), project.as_deref()).await
+            }
+            LegalPlanCmd::Set {
+                fields,
+                project,
+                host,
+            } => legal_plans::set(host.host.as_deref(), project.as_deref(), &fields).await,
         },
         ProjectsCmd::Adverse { action } => match action {
             AdverseCmd::Add {

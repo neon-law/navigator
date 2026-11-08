@@ -4,6 +4,8 @@
 mod firm_assumptions_api;
 #[path = "firm_journal_api.rs"]
 mod firm_journal_api;
+#[path = "legal_plans_api.rs"]
+mod legal_plans_api;
 
 use std::sync::Arc;
 
@@ -248,6 +250,26 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "GET",
             "/app/api/assumptions",
             get(firm_assumptions_api::catalog),
+        ),
+        (
+            "GET",
+            "/app/api/firms/{id}/legal-plans",
+            get(legal_plans_api::list),
+        ),
+        (
+            "POST",
+            "/app/api/firms/{id}/legal-plans",
+            post(legal_plans_api::create),
+        ),
+        (
+            "GET",
+            "/app/api/projects/{id}/legal-plan",
+            get(legal_plans_api::project),
+        ),
+        (
+            "PATCH",
+            "/app/api/projects/{id}/legal-plan",
+            patch(legal_plans_api::set_project),
         ),
         (
             "POST",
