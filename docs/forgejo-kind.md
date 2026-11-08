@@ -27,7 +27,7 @@ namespace:
 | `navigator-forgejo` StatefulSet | `k8s/forgejo` | 1 GiB claim; Rauthy loopback sidecar |
 | `navigator-forgejo-runner` Deployment | `k8s/forgejo/runner` | KIND only; no deployment overlay has it |
 
-The server and the runner are pinned by digest: Forgejo 15.0.9 (`codeberg.org/forgejo/forgejo@sha256:caf1bca3…`) and
+The server and the runner are pinned by digest: Forgejo 15.0.9 (`data.forgejo.org/forgejo/forgejo@sha256:caf1bca3…`) and
 Forgejo Runner 13.2.0 (`data.forgejo.org/forgejo/runner@sha256:ca3d5eea…`). The PostgreSQL Jobs use the server's own
 image digest; `cli/tests/staging_manifests.rs` fails when they drift.
 

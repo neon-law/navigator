@@ -10,5 +10,5 @@ configMapGenerator:
       - identity.sh
 images:
   - name: forgejo
-    newName: codeberg.org/forgejo/forgejo
+    newName: data.forgejo.org/forgejo/forgejo
     digest: sha256:caf1bca332f95cdcf124227a4bfa3b49bbbfbbc8a5e4a97406921cb581165413
