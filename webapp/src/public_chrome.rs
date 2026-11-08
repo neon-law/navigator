@@ -1136,6 +1136,16 @@ mod tests {
                     && html.find("site-footer__gvc-badge") < html.find("site-footer__legal"),
                 "{html}"
             );
+            let gvc_link = html
+                .find(r#"href="https://www.vancouverusa.com""#)
+                .expect("the chamber badge links the chamber's site");
+            assert!(
+                html.find("site-footer__gvc-badge") < Some(gvc_link)
+                    && html[gvc_link..].starts_with(
+                        r#"href="https://www.vancouverusa.com" class="site-footer__membership-link" target="_blank" rel="noopener noreferrer">GVC "#
+                    ),
+                "{html}"
+            );
         }
     }
 
