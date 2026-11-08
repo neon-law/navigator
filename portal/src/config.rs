@@ -251,6 +251,13 @@ pub fn enforce_deployment_invariants<F: Fn(&str) -> Option<String>>(
     }
 }
 
+/// Whether the operator explicitly selected the hosted staging release ring.
+#[must_use]
+pub fn hosted_staging_from(get: impl Fn(&str) -> Option<String>) -> bool {
+    get(store::config::NAVIGATOR_ENVIRONMENT).as_deref() == Some("production")
+        && store::config::staging_from(get) == Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{enforce_deployment_invariants, AppConfig, ConfigError};

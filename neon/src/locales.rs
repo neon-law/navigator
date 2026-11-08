@@ -1232,6 +1232,7 @@ pub fn home_for_host(
     webapp::home::HomeContent {
         path: String::new(),
         marketing_page: None,
+        nautilus_search: false,
         head_title: copy.head_title,
         meta_description: copy.meta_description,
         og_description: copy.og_description,
