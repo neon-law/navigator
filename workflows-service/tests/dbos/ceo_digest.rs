@@ -60,6 +60,7 @@ impl DigestSource for TwoFirmSource {
 
     async fn firm_brief(&self, firm_id: Uuid) -> Result<DigestBrief, DigestError> {
         let fixture = self.fixture(firm_id);
+        let needs_you = self.needs_you(firm_id).await?;
         let brief = DigestBrief {
             firm_id,
             firm_name: fixture.name.to_owned(),
@@ -74,7 +75,7 @@ impl DigestSource for TwoFirmSource {
                 due_soon: Vec::new(),
                 missed: Vec::new(),
             },
-            needs_you: Vec::new(),
+            needs_you,
             minutes: Vec::new(),
             last_activity: Vec::new(),
             economics: Vec::new(),
