@@ -828,13 +828,14 @@ pub(crate) async fn send_intake(
          Nothing is sent for signature until an attorney has reviewed it."
     );
     let html = workflows::email::render_email_html(&body, &base_url);
-    let msg = crate::email::OutboundEmail::new(
+    let mut msg = crate::email::OutboundEmail::new(
         client.email.clone(),
         "Finish your Neon Law Navigator intake",
         body,
     )
     .with_html(html)
     .with_person(client.id.to_string());
+    msg.from = views::brand::request_sender_email();
     // `person_id`, never the address: an email identifies a client, and
     // telemetry leaves the firm's trust boundary (`telemetry/src/lib.rs`).
     // The id answers "which intake failed" just as well.
