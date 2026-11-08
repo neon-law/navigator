@@ -37,8 +37,9 @@ pub(super) fn DaybridgeHome(content: HomeContent, daybridge: DaybridgeContent) -
                     p { class: "daybridge-eyebrow", "{daybridge.eyebrow}" }
                     h1 { id: "daybridge-title", "{content.heading}" }
                     p { class: "daybridge-lead", "{content.lead}" }
+                    super::HeroCall { content: content.clone() }
                     a {
-                        class: "nav-btn nav-btn--primary daybridge-cta",
+                        class: "{content.cta_class()} daybridge-cta",
                         href: "{content.contact_href}",
                         target: if contact_external { Some("_blank") } else { None },
                         rel: if contact_external { Some("noopener noreferrer") } else { None },

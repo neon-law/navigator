@@ -388,9 +388,12 @@ pub struct Branding {
     /// deployment derives service hostnames from (`workflows.<apex>`) — moving
     /// the mailbox must not move the cluster.
     pub support_domain: &'static str,
-    /// The firm's published voice line, rendered on `/contact` and in the
-    /// public footer, dialled from the `tel:` link at either. Brand identity
-    /// like the postal address: a deployment that mounts its own manifest
+    /// This brand's published voice line: the click-to-call action in its
+    /// header and home hero, and the number on `/contact` and in the footer.
+    /// Each brand publishes its own, because the dialled number is how an
+    /// inbound call resolves to its Brand (a voice-lane Brand Phone Number in
+    /// `brand_phone_number`) and so to that brand's call script. A brand without a line of its own publishes
+    /// the firm's shared number. A deployment that mounts its own manifest
     /// publishes its own number.
     pub firm_phone: &'static str,
     /// Every office the firm publishes, rendered in the public footer. See

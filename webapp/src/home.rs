@@ -4,11 +4,11 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    is_external_href, BrandFavicon, PracticeCard, PublicShell, SiteHeader, SiteNavLink, SocialMeta,
-    TestimonialCard, TestimonialSection, THEME_STYLESHEET_HREF,
+    is_external_href, BrandFavicon, PracticeCard, PublicShell, SocialMeta, TestimonialCard,
+    TestimonialSection, THEME_STYLESHEET_HREF,
 };
 use crate::lead_capture::{LeadCaptureContext, LeadCaptureCopy, LeadCaptureForm};
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 pub use crate::components::PracticeMark;
 mod summons;
@@ -153,6 +153,10 @@ pub struct HomeContent {
     pub lead: String,
     pub contact_href: String,
     pub contact_label: String,
+    /// The request brand's voice line, copied from the chrome at render so
+    /// each hero dials the number of the brand that served it.
+    #[serde(default)]
+    pub phone: String,
     /// Optional public photograph with its resolved asset URL and accessible copy.
     #[serde(default)]
     pub photo: Option<HomePhoto>,
@@ -201,6 +205,23 @@ impl HomeContent {
             "/"
         } else {
             &self.path
+        }
+    }
+
+    /// Whether the hero leads with [`HeroCall`]: the brand publishes a number
+    /// and the hero's own call to action does not already dial it.
+    #[must_use]
+    pub fn calls_first(&self) -> bool {
+        !self.phone.is_empty() && !self.contact_href.starts_with("tel:")
+    }
+
+    /// The hero's own call to action yields the primary style to the call.
+    #[must_use]
+    pub fn cta_class(&self) -> &'static str {
+        if self.calls_first() {
+            "nav-btn nav-btn--secondary"
+        } else {
+            "nav-btn nav-btn--primary"
         }
     }
 }
@@ -479,6 +500,10 @@ fn HomePageBody(
     #[props(default)] testimonials: Vec<TestimonialCard>,
     #[props(default)] video_posts: Vec<HomeVideoPost>,
 ) -> Element {
+    let content = HomeContent {
+        phone: chrome.firm_phone.clone(),
+        ..content
+    };
     if let Some(page) = content.marketing_page.clone() {
         return rsx! {
             crate::marketing_page::MarketingPage {
@@ -487,6 +512,7 @@ fn HomePageBody(
                 lead_capture: lead_context,
                 query: String::new(),
                 path: content.page_path().to_string(),
+                hero_phone: content.phone.clone(),
             }
         };
     }
@@ -589,21 +615,7 @@ fn HomePageBody(
         };
     }
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }
@@ -687,8 +699,9 @@ fn HomePageBody(
                 }
                 p { class: "home-statement__lead", "{content.lead}" }
                 div { class: "home-statement__actions",
+                    HeroCall { content: content.clone() }
                     a {
-                        class: "nav-btn nav-btn--primary home-statement__cta",
+                        class: "{content.cta_class()} home-statement__cta",
                         href: "{content.contact_href}",
                         target: if is_external_href(&content.contact_href) { Some("_blank") } else { None },
                         rel: if is_external_href(&content.contact_href) { Some("noopener noreferrer") } else { None },
@@ -742,6 +755,20 @@ fn HomePageBody(
     }
 }
 
+/// The hero's click-to-call action: the brand's own voice line, first among
+/// the hero's actions. Renders nothing when the brand publishes no number or
+/// when the hero's own call to action already dials it.
+#[component]
+pub(crate) fn HeroCall(content: HomeContent) -> Element {
+    if !content.calls_first() {
+        return rsx! {};
+    }
+    let tel = crate::components::site_footer::tel_href(&content.phone);
+    rsx! {
+        a { class: "nav-btn nav-btn--primary home-call", href: "{tel}", "Call {content.phone}" }
+    }
+}
+
 /// An inline contact request for home layouts without a dedicated form.
 #[component]
 fn HomeLeadSection(copy: LeadCaptureCopy, context: LeadCaptureContext) -> Element {
@@ -763,19 +790,22 @@ fn DebtHome(content: HomeContent) -> Element {
                 div { class: "home-statement",
                     h1 { class: "home-statement__heading", "{content.heading}" }
                     p { class: "home-statement__lead", "{content.lead}" }
-                    a {
-                        class: "nav-btn nav-btn--primary home-statement__cta",
-                        href: "{content.contact_href}",
-                        "{content.contact_label}"
+                    div { class: "home-statement__actions",
+                        HeroCall { content: content.clone() }
+                        a {
+                            class: "{content.cta_class()} home-statement__cta",
+                            href: "{content.contact_href}",
+                            "{content.contact_label}"
+                        }
                     }
                 }
-                if let Some(service) = content.service {
+                if let Some(service) = content.service.clone() {
                     aside { class: "debt-home__conversation",
                         ServiceProse { service }
                     }
                 }
             }
-            PracticeLinks { heading: content.practices_heading, practices: content.practices }
+            PracticeLinks { heading: content.practices_heading.clone(), practices: content.practices.clone() }
         }
     }
 }
@@ -1191,6 +1221,7 @@ mod tests {
                         lead: "Our clients are law firms.".to_string(),
                         contact_href: "mailto:contact@neonlaw.com".to_string(),
                         contact_label: "Contact us".to_string(),
+                        phone: String::new(),
                         practices_heading: "The rest of what we do".to_string(),
                         practices: vec![PracticeLink {
                             mark: PracticeMark::Scales,

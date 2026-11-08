@@ -87,8 +87,9 @@ pub(super) fn EstateHome(
                     h1 { id: "vesta-title", "{content.heading}" }
                     p { class: "vesta-lead", "{content.lead}" }
                     div { class: "vesta-actions",
+                        super::HeroCall { content: content.clone() }
                         a {
-                            class: "nav-btn nav-btn--primary",
+                            class: "{content.cta_class()}",
                             href: "{content.contact_href}",
                             target: if contact_external { Some("_blank") } else { None },
                             rel: if contact_external { Some("noopener noreferrer") } else { None },

@@ -19,9 +19,9 @@ use std::sync::LazyLock;
 use axum::response::Html;
 use dioxus::prelude::*;
 
-use crate::components::{PublicShell, SiteHeader, SiteNavLink, THEME_STYLESHEET_HREF};
+use crate::components::{PublicShell, THEME_STYLESHEET_HREF};
 use crate::html_escape::escape_attr;
-use crate::public_chrome::{ChromeNavLink, PublicChrome, PublicFooter};
+use crate::public_chrome::{ChromeNavLink, PublicChrome, PublicFooter, PublicHeader};
 
 /// Whether the visitor is signed in, which decides the header's utility group.
 ///
@@ -211,21 +211,7 @@ fn ErrorPage(props: ErrorPageProps) -> Element {
         support_email,
     } = props;
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }

@@ -159,3 +159,42 @@ async fn debt_home_connects_panda_and_brooklyn_on_both_hosts() {
         assert!(!home.contains("We do not settle debts"));
     }
 }
+
+/// Every live brand leads with its own voice line: a `tel:` link in the header
+/// and another in the home hero (the section holding the page's `<h1>`), each
+/// dialling that brand's `Branding::firm_phone`. One number per brand is what
+/// lets an inbound call pick that brand's call script.
+#[tokio::test]
+async fn every_brand_home_leads_with_its_own_click_to_call_number() {
+    use views::brand::{BrandKey, DEFAULT_BRANDING};
+    // Death & Divorce is being retired, so its hero takes no new action.
+    for key in BrandKey::LIVE
+        .iter()
+        .filter(|key| key.as_str() != "death-and-divorce")
+    {
+        let host = key.canonical_host();
+        let phone = key.resolve_branding(&DEFAULT_BRANDING).firm_phone;
+        let digits: String = phone
+            .chars()
+            .filter(|c| c.is_ascii_digit() || *c == '+')
+            .collect();
+        let dial = format!("href=\"tel:{digits}\"");
+        let html = page(host, "/").await;
+        let header_end = html
+            .find("</header>")
+            .unwrap_or_else(|| panic!("{host} has a header"));
+        assert!(
+            html[..header_end].contains(&dial),
+            "{host}: header does not dial {phone}"
+        );
+        let h1 = header_end
+            + html[header_end..]
+                .find("</h1>")
+                .unwrap_or_else(|| panic!("{host} has an h1"));
+        let hero_end = h1 + html[h1..].find("</section>").unwrap_or(html.len() - h1);
+        assert!(
+            html[header_end..hero_end].contains(&dial),
+            "{host}: the hero does not dial {phone}"
+        );
+    }
+}

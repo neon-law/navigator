@@ -8,10 +8,10 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    CatalogHero, PlainCodeBlock, PublicShell, SiteHeader, SiteNavLink, SocialMeta, TestimonialCard,
-    TestimonialSection, CATALOG_STYLESHEET_HREF,
+    CatalogHero, PlainCodeBlock, PublicShell, SocialMeta, TestimonialCard, TestimonialSection,
+    CATALOG_STYLESHEET_HREF,
 };
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// One material in an index — a workshop or a presentation. `eyebrow` is the
 /// small uppercase line above the title, naming the audience the material is
@@ -169,21 +169,7 @@ pub fn CatalogIndexPage(
     #[props(default)] testimonials: Vec<TestimonialCard>,
 ) -> Element {
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }

@@ -20,10 +20,8 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{
-    Card, LegalBlueprintDisclaimer, PlainCodeBlock, PublicShell, SiteHeader, SiteNavLink,
-};
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::components::{Card, LegalBlueprintDisclaimer, PlainCodeBlock, PublicShell};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// The gallery index's `<meta description>`, as the page set it.
 const INDEX_DESCRIPTION: &str = "Browse and download Neon Law's legal templates — \
@@ -146,21 +144,7 @@ pub fn TemplateDetailEntry() -> Element {
 /// The firm public-shell header for a gallery page.
 fn gallery_header(chrome: &PublicChrome) -> Element {
     rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     }
 }
 

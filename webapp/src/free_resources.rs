@@ -10,10 +10,8 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{
-    CatalogHero, PublicShell, SiteHeader, SiteNavLink, SocialMeta, CATALOG_STYLESHEET_HREF,
-};
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::components::{CatalogHero, PublicShell, SocialMeta, CATALOG_STYLESHEET_HREF};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// One jurisdiction on the index — its display name, its catalog page, and
 /// what the registry currently holds there.
@@ -188,21 +186,7 @@ pub fn FreeResourcesJurisdictionEntry() -> Element {
 
 fn shell_header(chrome: &PublicChrome) -> Element {
     rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     }
 }
 

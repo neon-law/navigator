@@ -29,6 +29,7 @@ pub(super) fn CyberInjuryHome(
     #[props(default)] lead_capture: Option<LeadCaptureCopy>,
     #[props(default)] lead_context: LeadCaptureContext,
 ) -> Element {
+    let tel = crate::components::site_footer::tel_href(&chrome.firm_phone);
     rsx! {
         document::Title { "{content.head_title}" }
         document::Meta { name: "description", content: content.meta_description.clone() }
@@ -52,6 +53,9 @@ pub(super) fn CyberInjuryHome(
                     a { href: "#cyber-advantage", "{copy.advantage_label}" }
                     a { href: via_tagged("/testimonials", "home-nav-testimonials"), span { "aria-hidden": "true", "♡ " } "{copy.testimonials_label}" }
                     a { class: "cyber-button cyber-button--small", href: "#cyber-assessment", "{copy.assessment_label}" span { "aria-hidden": "true", "↗" } }
+                }
+                if !chrome.firm_phone.is_empty() {
+                    a { class: "cyber-button cyber-button--small cyber-header-call", href: "{tel}", "Call {chrome.firm_phone}" }
                 }
                 a { class: "cyber-booking", href: via_tagged("/consultation", "home-booking"), "aria-label": "{copy.booking_label}",
                     img { src: "/public/brand/cyber-consultation-qr.svg", alt: "{copy.booking_qr_alt}", width: "84", height: "84" }
@@ -78,6 +82,9 @@ pub(super) fn CyberInjuryHome(
                             }
                         }
                         p { class: "cyber-lead", "{content.lead}" }
+                        if !chrome.firm_phone.is_empty() {
+                            a { class: "cyber-button home-call", href: "{tel}", "Call {chrome.firm_phone}" }
+                        }
                         a { class: "cyber-button", href: "#cyber-assessment", "{content.contact_label}" span { "aria-hidden": "true", "↗" } }
                         p { class: "cyber-hero__notes", "{copy.hero_summary}" }
                         p { class: "cyber-fine", "{copy.hero_note}" }

@@ -11,8 +11,8 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{PublicShell, SiteHeader, SiteNavLink};
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::components::PublicShell;
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// One post's index-card summary — the pre-formatted date comes from the portal
 /// side so the wasm DTO carries no date-formatting logic.
@@ -71,21 +71,7 @@ pub fn BlogIndexPage() -> Element {
 #[component]
 pub fn BlogIndex(chrome: PublicChrome, posts: Vec<BlogPostSummary>) -> Element {
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }

@@ -686,16 +686,7 @@ pub fn DesignGallery() -> Element {
         _ => return rsx! {},
     };
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            menu_id: "design-site-menu".to_string(),
-            destinations: chrome.destinations.iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone())).collect(),
-            utility: chrome.utility.iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone())).collect(),
-        }
+        crate::public_chrome::PublicHeader { chrome: chrome.clone(), menu_id: "design-site-menu".to_string() }
     };
     rsx! {
         document::Title { "{chrome.brand_name} | Design system" }
@@ -1510,6 +1501,7 @@ fn SiteHeaderShowcase(chrome: PublicChrome) -> Element {
                 logo_href: chrome.logo_href.clone(),
                 destinations,
                 utility: vec![SiteNavLink::new("Portal", "/app/projects")],
+                phone: chrome.firm_phone.clone(),
             }
         }
     }
