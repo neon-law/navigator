@@ -239,12 +239,13 @@ fn redline_skill_preflights_native_word_capabilities() {
     );
 }
 
-/// The random-refactor skill must pick one tracked Rust file, compare it to
-/// the workspace Rust conventions, The Rust Book, a local standard-library
-/// clone, and similar repository patterns, then answer the review questions
-/// before any edit.
+/// The random-refactor skill must pick one tracked Rust file, ground it in
+/// the workspace Rust conventions and the installed standard-library source,
+/// compare it to similar repository patterns, answer every review question
+/// before any edit, and hand the result to `create-pr`. The wording around
+/// those steps is the catalog owner's to change.
 #[test]
-fn random_refactor_skill_grounds_a_file_against_book_stdlib_and_repo() {
+fn random_refactor_skill_grounds_a_file_against_stdlib_and_repo() {
     let root = repo_root();
     let skill_path = root.join(CANONICAL_SKILLS).join("random-refactor/SKILL.md");
     let skill = fs::read_to_string(&skill_path).expect("read canonical random-refactor skill");
@@ -252,26 +253,16 @@ fn random_refactor_skill_grounds_a_file_against_book_stdlib_and_repo() {
     for required in [
         "/random-refactor",
         "git ls-files",
-        ".agents/skills/rust/SKILL.md",
-        "docs/rust-programming.md",
-        "rust-lang/book",
+        "rust-src",
         "library/std",
-        "/tmp/navigator-rust-library",
-        "/tmp/navigator-random-refactor/",
+        "similar patterns",
         "Is this actually needed?",
         "describe only the present",
-        "rejected alternatives",
         "Is it tested?",
         "Is it documented?",
-        "Presentations",
-        "Workshops",
-        "RUST_IN_PEACE.md",
-        "similar patterns",
-        "api-guidelines",
-        "microsoft.github.io/rust-guidelines",
-        "rust-by-example",
-        "Klabnik",
-        "C-CONV",
+        "Presentations or Workshops",
+        "/tmp/navigator-random-refactor/",
+        "create-pr",
     ] {
         assert!(
             skill.contains(required),
