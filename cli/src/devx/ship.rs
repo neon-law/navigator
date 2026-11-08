@@ -550,46 +550,70 @@ const DBOS_WEB_PATCH: WebPatch = WebPatch {
     path: "postgres/web/web-dbos.yaml",
 };
 
-/// A daily workflow the DBOS executor in `web` can host in place of its
-/// Restate trigger `CronJob`. Its `config.toml` switch, the `CronJob` it
-/// retires, that `CronJob`'s line in the exports `kustomization.yaml` (which
-/// doubles as the placeholder `ops ship` drops when the switch is on), the
-/// `config.toml` coordinates rendered into `web` beside the switch, and the
-/// row secret `web` refuses to boot without.
+/// A daily workflow the DBOS executor in `web` hosts: its `config.toml`
+/// switch, the Restate trigger `CronJob` it retires (none for a workflow born
+/// on DBOS), the `config.toml` coordinates rendered into `web` beside the
+/// switch, and the row secret `web` refuses to boot without.
 struct DbosSchedule {
     env: &'static str,
-    cronjob: &'static str,
-    resource: &'static str,
+    retires: Option<RetiredCronJob>,
     coordinates: &'static [&'static str],
     secret: Option<&'static str>,
 }
 
-const DBOS_SCHEDULES: [DbosSchedule; 4] = [
+/// A Restate trigger `CronJob` and its line in the exports
+/// `kustomization.yaml`, which doubles as the placeholder `ops ship` drops
+/// when the switch is on.
+#[derive(Clone, Copy)]
+struct RetiredCronJob {
+    cronjob: &'static str,
+    resource: &'static str,
+}
+
+const fn retired(cronjob: &'static str, resource: &'static str) -> RetiredCronJob {
+    RetiredCronJob { cronjob, resource }
+}
+
+const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
-        cronjob: "general-nag",
-        resource: "  - cron-general-nag.yaml\n",
+        retires: Some(retired("general-nag", "  - cron-general-nag.yaml\n")),
         coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
         secret: None,
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
-        cronjob: "dri-digest-trigger",
-        resource: "  - cron-dri-digest-trigger.yaml\n",
+        retires: Some(retired(
+            "dri-digest-trigger",
+            "  - cron-dri-digest-trigger.yaml\n",
+        )),
         coordinates: &[],
         secret: Some(SLACK_WEBHOOK_URL),
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
-        cronjob: "billing-digest-trigger",
-        resource: "  - cron-billing-digest-trigger.yaml\n",
+        retires: Some(retired(
+            "billing-digest-trigger",
+            "  - cron-billing-digest-trigger.yaml\n",
+        )),
         coordinates: &["BILLING_EXPORT_TABLE", "BIGQUERY_PROJECT"],
         secret: Some(SLACK_WEBHOOK_URL),
     },
     DbosSchedule {
         env: "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED",
-        cronjob: "notation-reset-trigger",
-        resource: "  - cron-notation-reset-trigger.yaml\n",
+        retires: Some(retired(
+            "notation-reset-trigger",
+            "  - cron-notation-reset-trigger.yaml\n",
+        )),
+        coordinates: &[
+            "SLACK_MESSAGES_CHANNEL_ID",
+            "SLACK_STAGING_MESSAGES_CHANNEL_ID",
+        ],
+        secret: None,
+    },
+    DbosSchedule {
+        env: "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED",
+        retires: None,
         coordinates: &[
             "SLACK_MESSAGES_CHANNEL_ID",
             "SLACK_STAGING_MESSAGES_CHANNEL_ID",
@@ -654,11 +678,13 @@ where
         if !enabled {
             continue;
         }
-        substitutions.push(Substitution {
-            token: schedule.resource,
-            env: schedule.env,
-            value: String::new(),
-        });
+        if let Some(retired) = schedule.retires {
+            substitutions.push(Substitution {
+                token: retired.resource,
+                env: schedule.env,
+                value: String::new(),
+            });
+        }
         for key in schedule.coordinates {
             let value = non_empty_env(key, get).with_context(|| {
                 format!(
@@ -716,7 +742,12 @@ fn retired_cronjobs(deployment: &super::deployments::Deployment) -> Result<Vec<&
     Ok(flags
         .into_iter()
         .zip(&DBOS_SCHEDULES)
-        .filter_map(|(enabled, schedule)| enabled.then_some(schedule.cronjob))
+        .filter_map(|(enabled, schedule)| {
+            schedule
+                .retires
+                .filter(|_| enabled)
+                .map(|retired| retired.cronjob)
+        })
         .chain(RETIRED_CRONJOBS)
         .collect())
 }
@@ -7602,11 +7633,13 @@ mod tests {
             let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
             for schedule in &DBOS_SCHEDULES {
                 assert_eq!(web_env_value(&web, schedule.env).as_deref(), Some("false"));
-                assert!(
-                    renders_cronjob(&manifests, schedule.cronjob),
-                    "{value:?} keeps the {} Restate CronJob",
-                    schedule.cronjob
-                );
+                if let Some(retired) = schedule.retires {
+                    assert!(
+                        renders_cronjob(&manifests, retired.cronjob),
+                        "{value:?} keeps the {} Restate CronJob",
+                        retired.cronjob
+                    );
+                }
             }
             assert_eq!(web_env_value(&web, "SLACK_GENERAL_CHANNEL_ID"), None);
         }
@@ -7737,6 +7770,32 @@ mod tests {
                 .contains("SLACK_STAGING_MESSAGES_CHANNEL_ID"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn profit_digest_reaches_web_with_both_messages_channels_and_retires_nothing() {
+        let switched = |key: &str| match key {
+            NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => {
+                Some("true".to_owned())
+            }
+            _ => env_getter(FULL_ENV)(key),
+        };
+        let manifests = rendered_manifests(switched);
+        let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+        for (name, value) in [
+            ("NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED", "true"),
+            ("SLACK_MESSAGES_CHANNEL_ID", "C012MESSAGES"),
+            ("SLACK_STAGING_MESSAGES_CHANNEL_ID", "C012STAGING"),
+        ] {
+            assert_eq!(web_env_value(&web, name).as_deref(), Some(value), "{name}");
+        }
+        for schedule in DBOS_SCHEDULES.iter().filter_map(|s| s.retires) {
+            assert!(
+                renders_cronjob(&manifests, schedule.cronjob),
+                "{}",
+                schedule.cronjob
+            );
+        }
     }
 
     #[test]
