@@ -1570,7 +1570,7 @@ mod tests {
                 .strip_prefix(&format!("{reader_location}/"))
                 .unwrap();
             let actual_bytes = object(&storage, path).await;
-            assert_eq!(task.file_size_in_bytes, actual_bytes.len() as u64);
+            assert_eq!(task.file_size_in_bytes(), actual_bytes.len() as u64);
             let batches: Vec<_> = table
                 .reader_builder()
                 .build()
