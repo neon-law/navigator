@@ -11008,7 +11008,15 @@ mod tests {
         );
         // Defaults apply when no content type, visibility, or real description is given.
         let requests = server.received_requests().await.unwrap();
-        let first: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        // The conditional-upload pre-read (a best-effort head read) precedes the
+        // session-open POST, so assert on the first session-open body, not index 0.
+        let session_open = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/documents/upload-session"))
+            .expect("the session-open POST is recorded")
+            .body
+            .clone();
+        let first: serde_json::Value = serde_json::from_slice(&session_open).unwrap();
         assert_eq!(first["content_type"], "application/octet-stream");
         assert_eq!(first["visibility"], "internal");
         assert!(first.get("description").is_none());
