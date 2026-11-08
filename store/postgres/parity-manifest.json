@@ -1968,7 +1968,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 162,
+    "table_count": 163,
     "tables": {
       "address": {
         "columns": {
