@@ -125,14 +125,6 @@ impl ProseProvider for RecordingProse {
     }
 }
 
-fn lookup() -> impl Fn(&str) -> Option<String> {
-    |key: &str| match key {
-        "SLACK_BOT_TOKEN" => Some("xoxb-test".to_owned()),
-        "SLACK_MESSAGES_CHANNEL_ID" => Some("C-MESSAGES".to_owned()),
-        _ => None,
-    }
-}
-
 fn monday_slot() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 11, 9, 14, 0, 0).unwrap()
 }
@@ -181,14 +173,13 @@ async fn each_firm_gets_its_own_child_and_the_model_sees_only_that_firms_figures
         fixtures: Arc::new(fixtures),
         briefs_seen: Arc::new(Mutex::new(Vec::new())),
     };
-    let context = Context::from_lookup(
-        Arc::new(source.clone()),
-        Arc::new(prose),
-        Arc::new(email.clone()),
-        false,
-        lookup(),
-    )
-    .expect("delivery configuration");
+    let context = Context {
+        source: Arc::new(source.clone()),
+        prose: Arc::new(prose),
+        email: Arc::new(email.clone()),
+        slack: Arc::new(bot.clone()),
+        channel_id: "C-MESSAGES".to_owned(),
+    };
     let executor = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
     let registered = ceo_digest::register(&executor, context).expect("register CeoDigest");
     executor.launch().await.expect("launch");
@@ -277,14 +268,13 @@ async fn the_alert_posts_once_on_a_weekday_and_stays_silent_on_a_weekend_or_empt
     };
     let email = CapturingEmail::new();
     let bot = CapturingSlackBot::new();
-    let context = Context::from_lookup(
-        Arc::new(source.clone()),
-        Arc::new(RecordingProse),
-        Arc::new(email),
-        false,
-        lookup(),
-    )
-    .expect("delivery configuration");
+    let context = Context {
+        source: Arc::new(source.clone()),
+        prose: Arc::new(RecordingProse),
+        email: Arc::new(email),
+        slack: Arc::new(bot.clone()),
+        channel_id: "C-MESSAGES".to_owned(),
+    };
     let executor = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
     let registered = ceo_digest::register(&executor, context).expect("register CeoDigest");
     executor.launch().await.expect("launch");
@@ -338,14 +328,13 @@ async fn a_weekend_alert_slot_posts_nothing() {
     };
     let email = CapturingEmail::new();
     let bot = CapturingSlackBot::new();
-    let context = Context::from_lookup(
-        Arc::new(source.clone()),
-        Arc::new(RecordingProse),
-        Arc::new(email),
-        false,
-        lookup(),
-    )
-    .expect("delivery configuration");
+    let context = Context {
+        source: Arc::new(source.clone()),
+        prose: Arc::new(RecordingProse),
+        email: Arc::new(email),
+        slack: Arc::new(bot.clone()),
+        channel_id: "C-MESSAGES".to_owned(),
+    };
     let executor = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
     let registered = ceo_digest::register(&executor, context).expect("register CeoDigest");
     executor.launch().await.expect("launch");
