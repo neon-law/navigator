@@ -105,6 +105,9 @@
 {"file":"billing/src/lib.rs","line":1189,"function":"list_trust_transactions","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/answers_file.rs","line":42,"function":"answers_to_yaml","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/answers_file.rs","line":91,"function":"load_answers_file","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/answers_file.rs","line":100,"function":"pdf_answers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/answers_file.rs","line":145,"function":"pdf_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/answers_file.rs","line":151,"function":"pdf_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/assets.rs","line":680,"function":"content_image_refs","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/assets.rs","line":733,"function":"reachable_image_keys","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/assets.rs","line":734,"function":"reachable_image_keys","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
@@ -330,7 +333,7 @@
 {"file":"cli/src/journal.rs","line":78,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":321,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail/login.rs","line":415,"function":"prompt_hidden","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/main.rs","line":8448,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/main.rs","line":8478,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/notices.rs","line":500,"function":"identical_texts_collapse_into_one_entry","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/pii_audit.rs","line":399,"function":"audit_tree","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/postgres_backfill.rs","line":75,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
@@ -421,6 +424,15 @@
 {"file":"cli/src/remote.rs","line":2957,"function":"document_upload_directory_from","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/remote.rs","line":2961,"function":"document_upload_directory_from","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/remote.rs","line":3908,"function":"find_visible_person","operation":"query","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/remote.rs","line":4888,"function":"pdf_project_answers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/remote.rs","line":4902,"function":"pdf_project_answers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/remote.rs","line":4907,"function":"pdf_project_answers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/remote.rs","line":4932,"function":"pdf_store_defaults","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/remote.rs","line":4936,"function":"pdf_store_defaults","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/remote.rs","line":4945,"function":"pdf_store_defaults","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/remote.rs","line":4949,"function":"pdf_store_defaults","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/remote.rs","line":4984,"function":"pdf_store_defaults","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/remote.rs","line":4988,"function":"pdf_store_defaults","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/scraper/adapters/la_superior.rs","line":185,"function":"notices","operation":"insert","sql_operations":[],"tables":["case"],"transaction":false}
 {"file":"cli/src/scraper/adapters/pacer.rs","line":319,"function":"parse_docket","operation":"select","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/scraper/adapters/pacer.rs","line":332,"function":"parse_docket","operation":"select","sql_operations":[],"tables":[],"transaction":false}
