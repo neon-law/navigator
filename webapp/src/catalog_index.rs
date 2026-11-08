@@ -380,6 +380,7 @@ fn TemplateGallery(materials: Vec<CatalogMaterial>) -> Element {
             label { r#for: "template-search", "Search templates" }
             input {
                 id: "template-search",
+                class: "nav-template-search__input",
                 r#type: "search",
                 placeholder: "Title, form code, jurisdiction, or description",
                 "aria-controls": "template-results",
