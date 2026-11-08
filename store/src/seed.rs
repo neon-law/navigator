@@ -2317,6 +2317,15 @@ pub fn sample_matter_names() -> Vec<&'static str> {
     SAMPLE_MATTERS.iter().map(|matter| matter.name).collect()
 }
 
+/// Every sample matter's client Entity name, in table order.
+#[must_use]
+pub fn sample_matter_clients() -> Vec<&'static str> {
+    SAMPLE_MATTERS
+        .iter()
+        .map(|matter| matter.client_entity)
+        .collect()
+}
+
 /// The public repository whose bundle mounts on one sample matter, or
 /// `None` for a code that names no sample matter.
 #[must_use]
