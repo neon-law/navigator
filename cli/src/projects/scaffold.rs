@@ -156,12 +156,11 @@ pub async fn run(
     }
 }
 
-async fn run_inner(
-    host: Option<&str>,
+fn validate_scaffold_start(
     directory: &Path,
     resume: Option<&str>,
-    options: ScaffoldOptions,
-) -> Result<ExitCode> {
+    options: &ScaffoldOptions,
+) -> Result<bool> {
     let empty = is_empty_dir(directory)?;
     if let Some(code) = resume {
         if !store::projects::is_valid_code(code) {
@@ -205,6 +204,16 @@ async fn run_inner(
             );
         }
     }
+    Ok(empty)
+}
+
+async fn run_inner(
+    host: Option<&str>,
+    directory: &Path,
+    resume: Option<&str>,
+    options: ScaffoldOptions,
+) -> Result<ExitCode> {
+    let empty = validate_scaffold_start(directory, resume, &options)?;
     let (base, _) = crate::remote::resolve(host)?;
     let code = if let Some(code) = resume {
         if !crate::remote::project_code_exists(host, code).await? {
