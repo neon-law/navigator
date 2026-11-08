@@ -1103,6 +1103,32 @@ mod tests {
         }
     }
 
+    /// The footer links each legal document once, on every brand: the row is
+    /// the one place a reader looks for them, so a second link would only be
+    /// the same document twice.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn every_brand_footer_links_privacy_and_terms_once() {
+        for key in views::brand::BrandKey::ALL {
+            let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+            let chrome =
+                views::brand::scope(branding, async { chrome_for(&branding.firm, Vec::new()) })
+                    .await;
+            let html = render_chrome(chrome);
+            for (label, href) in [
+                ("Privacy", branding.privacy_url),
+                ("Terms", branding.terms_url),
+            ] {
+                assert_eq!(
+                    html.matches(&format!(">{label}")).count(),
+                    usize::from(!href.is_empty()),
+                    "{} links {label} once: {html}",
+                    key.as_str()
+                );
+            }
+        }
+    }
+
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn guieb_shook_brands_never_credit_another_firm() {

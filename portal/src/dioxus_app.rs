@@ -2322,16 +2322,16 @@ pub fn legal_page_router(path: &'static str, content: webapp::legal_page::LegalC
 /// shared, but the *copy* is not: each deployment owns its own privacy and
 /// terms text (`neon/content/*.md`) and passes it here, so a change to the
 /// firm's policy never edits a white-label tenant's and vice versa.
-/// `brand_name` names the deployment in the `<meta>` description; the `<title>`
-/// is assembled from the request-scoped brand by `webapp::legal_page`.
+/// The `<title>` and `<meta>` description are assembled from the request-scoped
+/// brand by `webapp::legal_page`.
 #[must_use]
-pub fn legal_dioxus_routers(brand_name: &str, privacy_body: &str, terms_body: &str) -> Vec<Router> {
+pub fn legal_dioxus_routers(privacy_body: &str, terms_body: &str) -> Vec<Router> {
     vec![
         legal_page_router(
             PRIVACY_PATH,
             webapp::legal_page::LegalContent {
                 title: "Privacy Policy".to_string(),
-                description: format!("Privacy Policy for {brand_name}."),
+                description: String::new(),
                 body_html: views::markdown::render(privacy_body),
             },
         ),
@@ -2339,7 +2339,7 @@ pub fn legal_dioxus_routers(brand_name: &str, privacy_body: &str, terms_body: &s
             TERMS_PATH,
             webapp::legal_page::LegalContent {
                 title: "Terms of Service".to_string(),
-                description: format!("Terms of Service for {brand_name}."),
+                description: String::new(),
                 body_html: views::markdown::render(terms_body),
             },
         ),

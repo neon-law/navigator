@@ -19,7 +19,7 @@ use crate::public_chrome::{PublicChrome, PublicFooter};
 pub struct LegalContent {
     /// The page heading and `<title>` suffix ("Privacy Policy").
     pub title: String,
-    /// The `<meta name="description">`.
+    /// The `<meta name="description">`, named for the request's brand.
     pub description: String,
     /// The rendered HTML body (already sanitized; NOT raw markdown).
     pub body_html: String,
@@ -49,11 +49,51 @@ pub async fn get_legal_page() -> Result<LegalPageView, ServerFnError> {
     // white-label bundle.
     let chrome = crate::public_chrome::firm_public_chrome_from_context().await;
     let head_title = format!("{} | {}", chrome.brand_name, content.title);
+    let content = LegalContent {
+        description: format!("{} for {}.", content.title, chrome.brand_name),
+        body_html: firm_named_body(&content.body_html, &chrome),
+        ..content
+    };
     Ok(LegalPageView {
         chrome,
         content,
         head_title,
     })
+}
+
+/// The document as the request's brand publishes it.
+///
+/// The documents are written for Neon Law, the trade name of one Guieb & Shook
+/// PC brand. Every other Guieb & Shook PC brand publishes them under the firm's
+/// own name: the trade name becomes the legal entity, the clause defining it
+/// and the Neon Law trademark section drop out, and the contact addresses are
+/// the brand's own.
+#[cfg(feature = "server")]
+fn firm_named_body(body_html: &str, chrome: &PublicChrome) -> String {
+    const TRADE_NAME: &str = "Neon Law";
+    const FIRM: &str = "Guieb &amp; Shook PC";
+    if chrome.legal_entity != "Guieb & Shook PC" || chrome.brand_name == TRADE_NAME {
+        return body_html.to_string();
+    }
+    let body = match body_html.split_once("<h2>Trademarks</h2>") {
+        Some((before, after)) => {
+            let rest = after.find("<h2>").map_or("", |next| &after[next..]);
+            format!("{before}{rest}")
+        }
+        None => body_html.to_string(),
+    };
+    body.replace(
+        &format!("<strong>{TRADE_NAME}</strong> ({FIRM})"),
+        &format!("<strong>{FIRM}</strong>"),
+    )
+    .replace(&format!("{TRADE_NAME} ({FIRM})"), FIRM)
+    .replace(
+        &format!(" Every reference to &quot;{TRADE_NAME}&quot; in these Terms means {FIRM}."),
+        "",
+    )
+    .replace("contact@neonlaw.com", &chrome.firm_email)
+    .replace("support@neonlaw.com", &chrome.firm_email)
+    .replace(TRADE_NAME, FIRM)
 }
 
 /// The legal document page.

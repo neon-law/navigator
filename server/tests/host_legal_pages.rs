@@ -304,3 +304,64 @@ async fn the_documents_render_their_markdown_as_html() {
     assert!(html.contains("<h2"), "no rendered heading: {html}");
     assert!(!html.contains("&lt;h2"), "the body was escaped: {html}");
 }
+
+/// Neon Law is the trade name of one brand. Every other Guieb & Shook PC brand
+/// publishes the same Privacy Policy and Terms under the firm's own name, so
+/// neither the documents nor the footer links to them say "Neon Law".
+#[tokio::test]
+async fn guieb_shook_brand_legal_pages_never_name_neon_law() {
+    use views::brand::BrandKey;
+    let state = state().await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    for key in BrandKey::ALL.iter().copied().filter(|key| {
+        *key != BrandKey::Neon
+            && key
+                .resolve_branding(&views::brand::DEFAULT_BRANDING)
+                .firm
+                .legal_entity
+                == "Guieb & Shook PC"
+    }) {
+        for path in ["/privacy", "/terms"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("host", key.canonical_host())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{} {path}", key.as_str());
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let html = String::from_utf8(bytes.to_vec()).unwrap();
+            let (head, rest) = html.split_once("<footer ").expect("public footer");
+            let nav = rest
+                .split_once("site-footer__nav")
+                .and_then(|(_, row)| row.split_once("</ul>"))
+                .expect("footer link row")
+                .0;
+            let flat = head
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .replace("&amp;", "&")
+                .replace("&#38;", "&");
+            assert!(
+                flat.contains("Guieb & Shook PC"),
+                "{} {path} names the firm: {flat}",
+                key.as_str()
+            );
+            for region in [flat.as_str(), nav] {
+                assert!(
+                    !region.contains("Neon Law"),
+                    "{} {path} names Neon Law: {region}",
+                    key.as_str()
+                );
+            }
+        }
+    }
+}
