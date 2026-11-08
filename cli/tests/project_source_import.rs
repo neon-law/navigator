@@ -97,10 +97,10 @@ struct Run {
 }
 
 fn run(command: &mut Command) -> Run {
-    run_result(command.output().unwrap())
+    run_result(&command.output().unwrap())
 }
 
-fn run_result(output: Output) -> Run {
+fn run_result(output: &Output) -> Run {
     Run {
         success: output.status.success(),
         code: output.status.code(),
@@ -570,7 +570,7 @@ fn scaffold_at_terminal(
     let mut input = fs::File::from(terminal.master);
     input.write_all(answers.as_bytes()).unwrap();
     run_result(
-        navigator_command(credentials)
+        &navigator_command(credentials)
             .args(["project", "scaffold", "--host", host, "--dir"])
             .arg(dir)
             .args(extra)
