@@ -10583,6 +10583,68 @@ async fn the_iep_defenders_home_renders_its_band_sequence_with_qualifiers() {
     }
 }
 
+/// The Lex Tecnica home is a marketing-page band sequence lifted from the
+/// firm's published lextecnica.com — the #SaveTheTrees case banner, the
+/// three pillars, and the closing "Let's Go Change the World" statement —
+/// so its rendered HTML carries the pillar band's anchor, every statement
+/// heading, exactly one `<h1>`, and its own brand tokens stylesheet.
+#[tokio::test]
+async fn the_lex_tecnica_home_renders_its_band_sequence_from_the_reference() {
+    let state = empty_state_with_canonical_host(CanonicalHost::new(None)).await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+
+    let resp = get_on_host(&app, "/", "lex-tecnica.neonlaw.com").await;
+    assert_eq!(resp.status(), StatusCode::OK, "lex-tecnica.neonlaw.com /");
+    let body = body_string(resp).await;
+
+    // The cards band's anchor survives the full SSR pass. Statement bands
+    // carry no anchor attribute in the shared renderer, so they are
+    // asserted by heading below (fragments stop before apostrophes, whose
+    // HTML escaping the contract must not depend on).
+    assert!(
+        body.contains(r#"id="pillars""#),
+        "the pillar band anchor is missing: {body}"
+    );
+    for statement_fragment in ["case against SNWA and LVVWD", "Go Change the World"] {
+        assert!(
+            body.contains(statement_fragment),
+            "the `{statement_fragment}` statement band is missing: {body}"
+        );
+    }
+
+    // The three pillars render under their reference titles.
+    for pillar in ["On Your Team", "Strategic Focus", "Full Spectrum"] {
+        assert!(
+            body.contains(pillar),
+            "the `{pillar}` pillar is missing: {body}"
+        );
+    }
+
+    // Exactly one h1: the practice skin's hero tagline.
+    let h1_count = body.matches("<h1").count();
+    assert_eq!(
+        h1_count, 1,
+        "the Lex Tecnica home must render exactly one h1, saw {h1_count}: {body}"
+    );
+    assert!(
+        body.contains("law firm for entrepreneurs, by entrepreneurs"),
+        "the hero tagline is missing: {body}"
+    );
+
+    // The hero and closing CTAs name their destination.
+    assert!(
+        body.matches("Contact Us").count() >= 2,
+        "the hero and closing CTAs are missing: {body}"
+    );
+    assert!(body.contains(r#"href="/contact""#), "{body}");
+
+    // The page resolves its own brand tokens stylesheet.
+    assert!(
+        body.contains("/public/css/brand-lex-tecnica-tokens.css"),
+        "the lex-tecnica tokens stylesheet is missing: {body}"
+    );
+}
+
 async fn get_with_role_and_host(
     app: axum::Router,
     uri: &str,
