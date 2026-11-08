@@ -605,14 +605,14 @@
 {"file":"mcp/src/tools/delete_closed_repository.rs","line":386,"function":"commit_generation","operation":"bind","sql_operations":[],"tables":["asset"],"transaction":false}
 {"file":"mcp/src/tools/delete_closed_repository.rs","line":386,"function":"commit_generation","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
 {"file":"neon/src/firm_pages.rs","line":1457,"function":"inject_branded","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"neon/src/firm_pages.rs","line":1907,"function":"collect_markdown_paths","operation":"insert","sql_operations":[],"tables":["template"],"transaction":false}
-{"file":"neon/src/firm_pages.rs","line":1967,"function":"business_notations_have_fillable_previews_and_review_workflows","operation":"insert","sql_operations":[],"tables":["question"],"transaction":false}
+{"file":"neon/src/firm_pages.rs","line":1908,"function":"collect_markdown_paths","operation":"insert","sql_operations":[],"tables":["template"],"transaction":false}
 {"file":"neon/src/firm_pages.rs","line":1968,"function":"business_notations_have_fillable_previews_and_review_workflows","operation":"insert","sql_operations":[],"tables":["question"],"transaction":false}
+{"file":"neon/src/firm_pages.rs","line":1969,"function":"business_notations_have_fillable_previews_and_review_workflows","operation":"insert","sql_operations":[],"tables":["question"],"transaction":false}
 {"file":"neon/src/lib.rs","line":234,"function":"sitemap_paths","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"neon/src/lib.rs","line":235,"function":"sitemap_paths","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"neon/src/lib.rs","line":236,"function":"sitemap_paths","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"neon/src/lib.rs","line":238,"function":"sitemap_paths","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"neon/src/locales.rs","line":1446,"function":"legal_aid","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"neon/src/locales.rs","line":1447,"function":"legal_aid","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"pdf/src/acroform.rs","line":120,"function":"fill_acroform","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"pdf/src/acroform.rs","line":335,"function":"collect_named_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"pdf/src/acroform.rs","line":606,"function":"add_radio_group","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
