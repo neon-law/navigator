@@ -167,11 +167,7 @@ async fn debt_home_connects_panda_and_brooklyn_on_both_hosts() {
 #[tokio::test]
 async fn every_brand_home_leads_with_its_own_click_to_call_number() {
     use views::brand::{BrandKey, DEFAULT_BRANDING};
-    // Death & Divorce is being retired, so its hero takes no new action.
-    for key in BrandKey::LIVE
-        .iter()
-        .filter(|key| key.as_str() != "death-and-divorce")
-    {
+    for key in BrandKey::LIVE {
         let host = key.canonical_host();
         let phone = key.resolve_branding(&DEFAULT_BRANDING).firm_phone;
         let digits: String = phone
