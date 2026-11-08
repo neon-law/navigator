@@ -3122,7 +3122,13 @@ mod tests {
     #[test]
     fn neither_row_links_a_retired_url() {
         for link in FIRM_BRAND.nav.iter().chain(super::firm_footer_nav().iter()) {
-            for retired in ["/foundation", "legal-aid", "/mission", "/attorneys", "/business"] {
+            for retired in [
+                "/foundation",
+                "legal-aid",
+                "/mission",
+                "/attorneys",
+                "/business",
+            ] {
                 assert!(
                     !link.href.starts_with(retired),
                     "{} links the retired {retired}: {}",
