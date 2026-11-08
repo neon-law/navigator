@@ -60,6 +60,7 @@ const DECKS: &[&str] = &[
     RUST_IN_PEACE,
     DELETE_YOUR_DATA,
     WELCOME_TO_NEON_LAW,
+    "server/content/workshops/navigator/PORTLAND_CLOUD_NATIVE.md",
 ];
 
 /// Collapse a markdown file's whitespace so a claim split across a reflowed
@@ -178,7 +179,13 @@ fn each_deck_frontmatter_title_matches_the_title_the_loader_publishes() {
         // agrees. Keying on the title is what makes a mismatch a failure rather
         // than a silently skipped file.
         let matched = DECKS.iter().find(|deck| {
-            frontmatter_value(&repo_file(deck), "title").as_deref() == Some(material.title.as_str())
+            frontmatter_value(&repo_file(deck), "title").is_some_and(|title| {
+                let title = title
+                    .strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+                    .unwrap_or(&title);
+                title == material.title
+            })
         });
         assert!(
             matched.is_some(),
