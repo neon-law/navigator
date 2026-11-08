@@ -234,7 +234,7 @@ pub mod fixtures {
         [
             "LegalShield Member Assignment",
             "",
-            "Member: Riley Example",
+            "Member: Harper Sample",
             "Membership ID: LS-902441",
             "Certificate Number: CERT-330291",
             "Legal Matter: Consumer Contract Review",
@@ -275,7 +275,7 @@ mod tests {
         let assignment =
             parse_text(&fixtures::legal_shield_assignment_text()).expect("fixture parses");
         assert_eq!(assignment.provider, PlanProvider::LegalShield);
-        assert_eq!(assignment.member_name, "Riley Example");
+        assert_eq!(assignment.member_name, "Harper Sample");
         assert_eq!(assignment.member_number, "LS-902441");
         assert_eq!(assignment.plan_number.as_deref(), Some("CERT-330291"));
         assert_eq!(assignment.matter_type, "Consumer Contract Review");

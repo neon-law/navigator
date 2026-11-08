@@ -94,6 +94,14 @@ values = [
   "notuscourts.gov",
 ]
 
+[[email_domains]]
+reason = "Plan providers' assignment notice-sender domains and the intake lane's invented lookalike: institutional senders and invented mailboxes, no person reads them."
+values = [
+  "arag.com",
+  "legalshield.com",
+  "notarag.com",
+]
+
 [[values]]
 reason = "Negative-test and parser fixtures: placeholder mailboxes no person reads."
 values = [
