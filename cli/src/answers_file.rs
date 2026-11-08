@@ -93,6 +93,68 @@ pub fn load_answers_file(path: &Path) -> Result<SavedAnswers> {
     Ok(saved)
 }
 
+/// Flatten saved scalars and filed Answer envelopes into PDF placeholders.
+pub fn pdf_answers(path: &Path, overrides: Vec<(String, String)>) -> Result<Vec<(String, String)>> {
+    let mut fields = pdf_fields(load_answers_file(path)?)?;
+    for (field, value) in overrides {
+        if fields.insert(field.clone(), value).is_some() {
+            eprintln!("navigator: an explicit --answer overrides a YAML field");
+        }
+    }
+    Ok(fields.into_iter().collect())
+}
+
+pub(crate) fn pdf_placeholders(text: &str) -> std::collections::BTreeSet<&str> {
+    text.split("{{")
+        .skip(1)
+        .filter_map(|part| part.split_once("}}"))
+        .map(|(field, _)| field.trim())
+        .filter(|field| {
+            !field.is_empty()
+                && field
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.'))
+        })
+        .collect()
+}
+
+pub(crate) fn report_pdf_sources(
+    placeholders: std::collections::BTreeSet<&str>,
+    sources: &BTreeMap<String, &str>,
+) {
+    for field in placeholders {
+        let source = sources.get(field).copied().unwrap_or_else(|| {
+            if field.starts_with("project__") || field.starts_with("entity__client") {
+                "unanswered; check the Project store or provide --answer"
+            } else if field.starts_with("person__client_dri")
+                || field.starts_with("person__firm_attorney")
+            {
+                "unanswered; check the manifest and Project participation or provide --answer"
+            } else {
+                "unanswered; use saved Answers or provide --answer"
+            }
+        });
+        eprintln!("navigator: {field} — {source}");
+    }
+}
+
+pub(crate) fn pdf_fields(saved: SavedAnswers) -> Result<BTreeMap<String, String>> {
+    let mut fields = BTreeMap::new();
+    for (state, saved) in saved {
+        let value = saved.get("value").unwrap_or(&saved);
+        fields.insert(
+            state.clone(),
+            saved_scalar(value).with_context(|| format!("read saved Answer for `{state}`"))?,
+        );
+        for property in ["id", "name"] {
+            if let Some(value) = saved.get(property) {
+                fields.insert(format!("{state}.{property}"), saved_scalar(value)?);
+            }
+        }
+    }
+    Ok(fields)
+}
+
 /// The scalar text of a saved answer, as the step route's `value` field
 /// accepts. Non-scalar saved values (a `people_list` row set or a schedule
 /// table) have no single form field and are refused — prefill walks scalar
@@ -135,6 +197,28 @@ mod tests {
             state_name: state.map(str::to_string),
             value,
         }
+    }
+
+    #[test]
+    fn pdf_yaml_answers_preserve_reference_fields_and_explicit_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("answers.yaml");
+        std::fs::write(
+            &path,
+            "governing_law: Nevada\nclient: { value: Example, name: Example, id: example-id }\n",
+        )
+        .unwrap();
+        let fields: std::collections::BTreeMap<_, _> =
+            super::pdf_answers(&path, vec![("governing_law".into(), "Oregon".into())])
+                .unwrap()
+                .into_iter()
+                .collect();
+        assert_eq!(fields["governing_law"], "Oregon");
+        assert_eq!(fields["client"], "Example");
+        assert_eq!(fields["client.id"], "example-id");
+        assert_eq!(fields["client.name"], "Example");
+        std::fs::write(&path, "[").unwrap();
+        assert!(super::pdf_answers(&path, Vec::new()).is_err());
     }
 
     #[test]
