@@ -184,7 +184,7 @@ async fn the_retired_personal_plan_path_redirects_instead_of_404ing() {
 #[tokio::test]
 async fn no_firm_page_still_markets_the_retired_consumer_plan() {
     let app = site_app().await;
-    for path in ["/", "/services"] {
+    for path in ["/"] {
         let body = body_string(anon_get(&app, path).await).await;
         for gone in [
             "Personal plan",
@@ -225,6 +225,23 @@ async fn the_home_publishes_nautilus_and_links_the_three_products() {
     );
 }
 
+/// Neon's retired fee schedule answers a permanent move home, so its
+/// published links keep their search value instead of landing on a 404.
+#[tokio::test]
+async fn the_retired_services_page_redirects_home() {
+    let app = site_app().await;
+    let resp = anon_get(&app, "/services").await;
+    assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(
+        resp.headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/"),
+    );
+    let home = body_string(anon_get(&app, "/").await).await;
+    assert!(!home.contains(r#"href="/services""#), "{home}");
+}
+
 /// The retired business-counsel page sends its published links to Nautilus,
 /// where formation and contract templates now live.
 #[tokio::test]
@@ -237,22 +254,6 @@ async fn the_retired_business_path_redirects_to_nautilus() {
             .and_then(|value| value.to_str().ok()),
         Some("/"),
     );
-}
-
-/// The fee schedule stays reachable without a business-counsel link.
-#[tokio::test]
-async fn the_services_page_renders_the_catalog() {
-    let app = site_app().await;
-    let response = anon_get(&app, "/services").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = body_string(response).await;
-
-    // The individual-services search band and a real catalog entry.
-    assert!(body.contains("Search individual services"), "{body}");
-    assert!(body.contains("Start a company"), "{body}");
-
-    assert!(!body.contains(r#"href="/business""#));
-    assert!(!body.contains(r#"href="/disputes""#));
 }
 
 #[tokio::test]
@@ -440,11 +441,12 @@ async fn every_public_page_wears_the_brand_mark_as_its_tab_icon() {
 async fn the_sitemap_lists_the_products_and_excludes_retired_pages() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/sitemap.xml").await).await;
-    for path in ["/navigator", "/notations", "/services", "/nautilus"] {
+    for path in ["/navigator", "/notations", "/nautilus"] {
         assert!(body.contains(path), "missing {path}: {body}");
     }
     assert!(!body.contains("/disputes"));
     assert!(!body.contains("/business"));
+    assert!(!body.contains("/services"));
 }
 
 /// Every currency amount `body` prints, each returned with the short run of

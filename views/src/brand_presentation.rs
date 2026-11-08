@@ -105,12 +105,6 @@ pub const TYPEFACES: &[Typeface] = &[
         stack: "\"Source Serif 4\", Georgia, \"Times New Roman\", serif",
         operator_licence_required: false,
     },
-    Typeface {
-        id: "pirata-one",
-        label: "Pirata One",
-        stack: "\"Pirata One\", Georgia, serif",
-        operator_licence_required: false,
-    },
     // Devanagari and Latin in one family, so an Abhaya page translated into
     // Hindi keeps its face instead of dropping to a system fallback.
     Typeface {
@@ -637,44 +631,6 @@ pub const PALETTE: &[Palette] = &[
             border: None,
         },
     },
-    // Terracotta against paper and charcoal: a restrained sunset accent for
-    // Death & Divorce's black-and-white surface.
-    Palette {
-        id: "death-and-divorce",
-        label: "Death & Divorce terracotta",
-        light: PaletteScheme {
-            primary: "#B45535",
-            primary_hover: "#963F27",
-            primary_active: "#78321F",
-            on_primary: "#FFFFFF",
-            on_brand: "#FFFFFF",
-            link: "#8A321E",
-            link_hover: "#652313",
-            surface_subtle: "#f5f1ee",
-            bg: Some("#ffffff"),
-            surface: Some("#ffffff"),
-            surface_raised: Some("#faf8f6"),
-            text: Some("#111111"),
-            text_muted: Some("#5a5552"),
-            border: Some("#d9d2cd"),
-        },
-        dark: PaletteScheme {
-            primary: "#F0A080",
-            primary_hover: "#F6B49A",
-            primary_active: "#F9C8B3",
-            on_primary: "#111111",
-            on_brand: "#111111",
-            link: "#F0A080",
-            link_hover: "#F6B49A",
-            surface_subtle: "#211a17",
-            bg: Some("#111111"),
-            surface: Some("#181412"),
-            surface_raised: Some("#211a17"),
-            text: Some("#f8f6f4"),
-            text_muted: Some("#c9c1bd"),
-            border: Some("#493a34"),
-        },
-    },
     // Deep violet — clarity and advocacy for the special-education practice,
     // deliberately unlike any sibling palette so a directory card is
     // recognizable without reading the label.
@@ -758,9 +714,6 @@ impl BrandKey {
             Self::Groundwork | Self::Daybridge => {
                 typeface_by_id("source-serif-4").expect("source-serif-4 is catalogued")
             }
-            Self::DeathAndDivorce => {
-                typeface_by_id("pirata-one").expect("pirata-one is catalogued")
-            }
         }
     }
 
@@ -797,7 +750,6 @@ impl BrandKey {
             | Self::Summons
             | Self::Daybridge
             | Self::Groundwork
-            | Self::DeathAndDivorce
             | Self::LexTecnica => None,
         }
     }
@@ -832,9 +784,6 @@ impl BrandKey {
                 palette_by_id("groundwork").expect("invariant: groundwork is catalogued above")
             }
             Self::Daybridge => palette_by_id("daybridge").expect("daybridge is catalogued"),
-            Self::DeathAndDivorce => {
-                palette_by_id("death-and-divorce").expect("death-and-divorce is catalogued")
-            }
         }
     }
 }
@@ -1262,7 +1211,6 @@ mod tests {
                 "eb-garamond",
                 "source-sans-3",
                 "source-serif-4",
-                "pirata-one",
                 "mukta",
                 "public-sans",
                 "libre-franklin",

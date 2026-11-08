@@ -32,7 +32,6 @@ Neon Law (`neon/`):
 | `neon/locales/en/neon/navigator.yaml` | `/navigator` and the shared hosted legal-aid offer |
 | `neon/locales/en/neon/legal-aid.yaml` | `/legal-aid` workshop and self-hosting paths |
 | `neon/locales/en/neon/notations.yaml` | `/notations` format introduction |
-| `neon/locales/en/neon/services.yaml` | `/services` |
 | `neon/locales/en/neon/team.yaml` | `/team` and short individual profiles |
 | `neon/locales/en/neon/gateway-delete-your-debt.yaml` | `/delete-your-debt` — Neon-only gateway to DeleteYourDebt.com |
 
@@ -63,18 +62,10 @@ Daybridge Divorce Law (`daybridge/`):
 | `neon/locales/en/daybridge/home.yaml` | `/` agreed divorce for couples |
 | `neon/locales/en/daybridge/services.yaml` | `/services` scope, timing, and cost disclosures |
 
-Death & Divorce (`death-and-divorce/`) publishes no prices:
-
-| File | Page |
-| --- | --- |
-| `neon/locales/en/death-and-divorce/home.yaml` | `/` divorce and probate |
-| `neon/locales/en/death-and-divorce/services.yaml` | `/services` divorce, probate, and Vesta referral |
-
-Daybridge serves couples who agree for a one-time $5,000 fee for a mutual split. Its public pages present that single
-fee. Joint representation is subject to applicable rules, conflict review, and informed written consent. Its pages
-explain shared information, independent advice, and stopping joint work when a conflict prevents it. Contested
-proceedings sit outside the joint engagement. Agreement and consent alone do not establish eligibility for joint
-representation.
+Daybridge serves couples who agree for a one-time $333 fee for a mutual split. Its public pages present that single fee.
+Joint representation is subject to applicable rules, conflict review, and informed written consent. Its pages explain
+shared information, independent advice, and stopping joint work when a conflict prevents it. Contested proceedings sit
+outside the joint engagement. Agreement and consent alone do not establish eligibility for joint representation.
 
 [Nevada conflict rules](https://www.leg.state.nv.us/courtrules/rpc.html) restrict claims between clients in the same
 proceeding. The copy preserves that limit.

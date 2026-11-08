@@ -263,7 +263,7 @@ all three read. The buckets are `NAVIGATOR_ASSETS_BUCKET` in each `deployments/<
 | production | `www.neonlaw.com` | `https://www.neonlaw.com/assets` |
 
 The origin is the app's own `/assets/{key}` route, not a raw storage URL, so the browser stays on the site's origin.
-Every brand host a deployment serves (`www.cyberinjurylaw.com`, `www.deathanddivorcelaw.com`, …) reads that deployment's
+Every brand host a deployment serves (`www.cyberinjurylaw.com`, `www.daybridgedivorce.com`, …) reads that deployment's
 one bucket, so uploading through the `neonlaw.com` host publishes for every brand. Publish to both:
 
 ```bash
@@ -338,7 +338,6 @@ verification and orphan-scan contracts.
 | `eb-garamond` | EB Garamond | Vesta Estate Planning and Guieb & Shook (headings and body) |
 | `source-sans-3` | Source Sans 3 | Misericordia Injury Law (body) |
 | `source-serif-4` | Source Serif 4 | Misericordia (display); Daybridge and Groundwork |
-| `pirata-one` | Pirata One | Death & Divorce |
 | `mukta` | Mukta | Abhaya Immigration |
 | `public-sans` | Public Sans | DeleteYourDebt.com |
 | `libre-franklin` | Libre Franklin | the summons practice |
@@ -611,17 +610,6 @@ The homepage shows the newest five published video Posts in a horizontal scroll,
 keyboard access. When fewer than five videos are published, it shows the available videos. Post pages also play each
 video and show its confirmed social post links when present. The shared `nav-video-rail` style in `theme.css` keeps
 portrait cards in a horizontal row with native scrolling and keyboard access for any house site.
-
-## Death & Divorce hero
-
-Death & Divorce's home hero is a picture at `img/death-and-divorce/hero.png`
-(`views::assets::DEATH_AND_DIVORCE_HERO_KEY`), served from the public asset lane like CyberInjuryLaw's portrait. The
-favicon and header logo stay the tracked `server/public/brand/death-and-divorce/mark.svg`. `assets verify` and `ops
-ship` both check the hero key, so a release fails loudly until it is published:
-
-```bash
-navigator site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/death-and-divorce/hero.png
-```
 
 ## Astrocartography design map
 

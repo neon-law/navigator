@@ -10,8 +10,8 @@ is the source of truth**; every other place a key appears refers back to that ro
 compiled routing key with the same spelling.
 
 **Format.** By convention a key is lowercase ASCII letters and digits, words joined by single hyphens, with no spaces,
-underscores, or slashes (`death-and-divorce`). Every House Brand follows it, and a new key should too. The create form
-at `/app/admin/brands/new` does not yet enforce the format, so a stored key is compared exactly as typed: matching is
+underscores, or slashes (`delete-your-data`). Every House Brand follows it, and a new key should too. The create form at
+`/app/admin/brands/new` does not yet enforce the format, so a stored key is compared exactly as typed: matching is
 case-sensitive, `Neon` is not `neon`, and a key holding a `/` cannot be reached at its edit path. The display `name`
 (`Delete Your Data`) is a separate field; a command that takes a key never accepts the name.
 
