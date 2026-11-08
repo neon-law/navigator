@@ -10,8 +10,9 @@ title: Nautilus
 hero_mark: helm
 tagline: Your shell in a connected world.
 hero_lead: >-
-  Privacy checks, your LLC paperwork, and a lawyer a tap away, in one
-  subscription. $29/mo. Cancel anytime, even if you only need it for a month.
+  Delete your data, watch your credit and the dark web, insure your identity,
+  form your LLC, and keep a lawyer a tap away. Every check for $29/mo, or
+  $290/year with two months free. Cancel anytime, even after one month.
 hero_cta:
   href: "#enrollment"
   label: Start for $29/mo
@@ -20,11 +21,12 @@ bands:
   - kind: app_preview
     anchor: app
     overline: Coming to iPhone and Android
-    heading: Every check, in your pocket.
+    heading: Eight checks. One app. One price.
     description: >-
       Download Nautilus from the App Store or Google Play and subscribe for
-      $29/mo, billed through the store you already use. Each check runs for
-      you and reports back in the app. Screens are illustrative.
+      $29/mo through the store you already use. Each check runs for you and
+      reports back in the app, so you see what was requested, what was found,
+      and what was filed. Screens are illustrative.
     app_name: Nautilus
     app_subtitle: Privacy and paperwork
     install_label: Get
@@ -62,33 +64,64 @@ bands:
     play_store_label: Google Play
     availability: Coming soon to
   - kind: cards
-    anchor: paperwork
-    overline: Included
-    heading: Your business paperwork comes with it.
+    anchor: included
+    overline: What you get
+    heading: More than a privacy app. More than a legal-forms site.
     description: >-
-      The formation and document work online legal-form sites sell one package
-      at a time is part of the subscription. No separate business plan, and no
-      per-filing package. Government fees are separate.
+      Privacy services and online legal-form sites each sell one piece at a
+      time. Nautilus runs all of it for one price, and keeps the record of
+      every request, claim, and filing in one place.
     items:
-      - title: Form an LLC
+      - title: Your privacy, handled
+        chips: ["Included"]
         body:
           - - text: >-
-                Answer the formation questions in the app. We prepare and file
-                the paperwork for a basic LLC. State filing fees are separate.
-      - title: Contract templates
+                Data removal requests with a record of every reply, privacy
+                protection, credit monitoring, dark web monitoring, and
+                identity theft insurance. Coverage is confirmed before
+                activation.
+        href: "#enrollment"
+        href_label: Start for $29/mo
+      - title: Your paperwork, included
+        chips: ["Included"]
         body:
           - - text: >-
-                Fill out NDAs, offer letters, consulting agreements, and privacy
-                notices from our template library, written in plain English.
+                Form an LLC from a few answers. Fill NDAs, offer letters,
+                consulting agreements, and privacy notices from the template
+                library, and file court and agency forms from the same answers.
+                Government fees are separate.
         href: /notations
         href_label: See the templates
-      - title: Government forms
+      - title: Your money and your plan
+        chips: ["Included"]
         body:
           - - text: >-
-                Court and agency forms from the same library, filled from your
-                answers and ready to file.
-        href: /notations
-        href_label: See the forms
+                We search government databases for unclaimed property and file
+                the claims for you, and check in on your will, beneficiaries,
+                and plan documents once a year.
+        href: "#enrollment"
+        href_label: Start for $29/mo
+  - kind: cards
+    anchor: pricing
+    overline: Pricing
+    heading: One subscription. Cancel anytime.
+    description: >-
+      Every check is included in either price. Keep Nautilus for one month or
+      for years; cancel anytime from the same account. Government fees are
+      separate. Nautilus is a non-legal service: legal fees are excluded from
+      both plans and must be prepaid before any legal work begins.
+    pricing_style: true
+    items:
+      - title: Monthly
+        body:
+          - - text: Every check, billed each month. Cancel anytime.
+        href: "#enrollment"
+        href_label: Start monthly
+      - title: Annual
+        body:
+          - - text: Every check, prepaid for the year. Two months free.
+        href: "#enrollment"
+        href_label: Start annual
   - kind: steps
     anchor: how-it-works
     overline: How it works
@@ -112,27 +145,6 @@ bands:
           - - text: >-
                 Ask a licensed attorney to review what you prepared. Reviews
                 start at $20 and are prepaid under their own engagement.
-  - kind: cards
-    anchor: pricing
-    overline: Pricing
-    heading: One subscription. Cancel anytime.
-    description: >-
-      Every check is included in either price. Keep Nautilus for one month or
-      for years; cancel anytime. Government fees are separate. Nautilus is a
-      non-legal service: legal fees are excluded from both plans and must be
-      prepaid before any legal work begins.
-    pricing_style: true
-    items:
-      - title: Monthly
-        body:
-          - - text: Every check, billed each month. Cancel anytime.
-        href: "#enrollment"
-        href_label: Start monthly
-      - title: Annual
-        body:
-          - - text: Every check, prepaid for the year. Two months free.
-        href: "#enrollment"
-        href_label: Start annual
   - kind: cards
     anchor: lawyer-review
     overline: When you want a lawyer

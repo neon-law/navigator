@@ -2571,6 +2571,12 @@ enum NotationCmd {
         /// `--answer counterparty_legal_name="NEON GmbH"`.
         #[arg(long = "answer", value_parser = parse_answer)]
         answers: Vec<(String, String)>,
+        /// Load questionnaire Answers from a local YAML file.
+        #[arg(long)]
+        answers_file: Option<PathBuf>,
+        /// Reuse Answers from the latest Notation for this Draft or a Notation UUID.
+        #[arg(long, conflicts_with = "answers_file")]
+        answers_from: Option<String>,
         /// Render a draft for review: unanswered placeholders survive,
         /// highlighted. Without it the render is final and refuses any
         /// unanswered placeholder, bracketed drafting marker, fill-in blank
@@ -5517,8 +5523,32 @@ fn run() -> ExitCode {
                 file,
                 out,
                 answers,
+                answers_file,
+                answers_from,
                 preview,
-            } => run_render(&file, &out, &answers, "pdf", preview),
+            } => {
+                let answers = match answers_file {
+                    Some(path) => match answers_file::pdf_answers(&path, answers) {
+                        Ok(answers) => answers,
+                        Err(error) => {
+                            eprintln!("navigator: {error:#}");
+                            return ExitCode::from(2);
+                        }
+                    },
+                    None => match runtime().block_on(remote::pdf_project_answers(
+                        &file,
+                        answers_from.as_deref(),
+                        answers,
+                    )) {
+                        Ok(answers) => answers,
+                        Err(error) => {
+                            eprintln!("navigator: {error:#}");
+                            return ExitCode::from(2);
+                        }
+                    },
+                };
+                run_render(&file, &out, &answers, "pdf", preview)
+            }
             NotationCmd::Word {
                 file,
                 out,

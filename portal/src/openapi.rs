@@ -1939,6 +1939,7 @@ fn canonical_document(base: &str) -> Value {
                row and designated the accountable lawyer DRI — never taken from the request body. \
                Authorization: the caller's `persons.role` must be `lawyer` or `admin`; at this firm \
                `lawyer` is an attorney, so this is the 'an attorney is opening and attesting' gate. \
+               The lawyer DRI's email must use an approved domain on a Brand worn by the owning Firm. \
                Anonymous, `client`, and non-lawyer `clerk` callers are rejected. Optionally opens \
                the matter already closed: `status: \"closed\"` with a required `closed_at` records \
                an engagement that ended before anyone opened its row, in one call, through the \
@@ -1959,7 +1960,7 @@ fn canonical_document(base: &str) -> Value {
               "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
-              "400": { "description": "Validation failed, a bad client/entity reference, a non-client client of record, a non-lawyer attester, or a missing attestation", "content": { "application/json": {
+              "400": { "description": "Validation failed, a bad client/entity reference, a non-client client of record, an ineligible lawyer DRI, or a missing attestation", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "409": { "description": "A blocking conflict (adverse to a current client) or a duplicate project code", "content": { "application/json": {

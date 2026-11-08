@@ -224,6 +224,22 @@ pub async fn seed_firm_with_brand(surreal: &crate::surreal::SurrealDb, brand: &s
     firm.id
 }
 
+/// Approve a synthetic email domain for a Brand used by Project-open fixtures.
+pub async fn approve_test_brand_domain(surreal: &crate::surreal::SurrealDb, key: &str) {
+    let brand = crate::brands::find_by_key(surreal, key)
+        .await
+        .expect("read test Brand")
+        .expect("test Brand exists");
+    crate::brands::set_website_url(
+        surreal,
+        crate::persons::Role::Owner,
+        brand.id,
+        Some("https://example.com"),
+    )
+    .await
+    .expect("approve test Brand domain");
+}
+
 /// Rename the firm anchor aside and surrender its `firm_anchor_key`,
 /// opening the "white-label window" in which the protected name exists in
 /// configuration but no row carries it.
