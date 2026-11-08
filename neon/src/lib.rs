@@ -615,7 +615,6 @@ pub fn public_dioxus_routers(state: &AppState) -> Vec<PublicRouter> {
 /// message-frequency, opt-out, and carrier-liability disclosures live.
 fn legal_dioxus_routers() -> Vec<PublicRouter> {
     portal::dioxus_app::legal_dioxus_routers(
-        views::brand::FIRM_BRAND.site_name,
         include_str!("../content/privacy.md"),
         include_str!("../content/terms.md"),
     )
