@@ -254,6 +254,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "firm_assumption",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "firm_forgejo_organization",
       "missing_column": null,
       "missing_table": null,
@@ -1953,7 +1960,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 161,
+    "table_count": 162,
     "tables": {
       "address": {
         "columns": {
@@ -3095,6 +3102,33 @@
         "foreign_keys": [],
         "name": "firm_anchor",
         "references": []
+      },
+      "firm_assumption": {
+        "columns": {
+          "firm_id": "UUID",
+          "id": "UUID",
+          "key": "TEXT",
+          "reason": "TEXT",
+          "set_at": "TIMESTAMPTZ",
+          "set_by": "UUID",
+          "value": "JSONB",
+          "version": "INTEGER"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "set_by",
+            "person"
+          ]
+        ],
+        "name": "firm_assumption",
+        "references": [
+          "firm",
+          "person"
+        ]
       },
       "firm_brand": {
         "columns": {

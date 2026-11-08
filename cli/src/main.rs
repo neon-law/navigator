@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 mod answers_file;
 mod assets;
+mod assumptions;
 mod atomic_directory;
 mod authorities;
 mod blog;
@@ -872,6 +873,15 @@ enum Command {
         host: Option<String>,
         #[command(subcommand)]
         action: journal::JournalCmd,
+    },
+    /// A Firm's stated premises the CEO Digest checks actuals against.
+    Assumptions {
+        #[arg(long)]
+        firm: uuid::Uuid,
+        #[arg(long)]
+        host: Option<String>,
+        #[command(subcommand)]
+        action: assumptions::AssumptionsCmd,
     },
     /// Search, read, draft, and file Gmail correspondence without sending it.
     Mail {
@@ -5207,6 +5217,9 @@ fn run() -> ExitCode {
         Command::Person { action } => runtime().block_on(run_person(action)),
         Command::Journal { firm, host, action } => {
             runtime().block_on(journal::run(firm, host, action))
+        }
+        Command::Assumptions { firm, host, action } => {
+            runtime().block_on(assumptions::run(firm, host, action))
         }
         Command::Mail { action } => runtime().block_on(mail::run(action)),
         Command::Inbox { action } => runtime().block_on(inbox::run(action)),

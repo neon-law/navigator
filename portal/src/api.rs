@@ -1,5 +1,7 @@
 //! JSON API commands and reads over the canonical store.
 
+#[path = "firm_assumptions_api.rs"]
+mod firm_assumptions_api;
 #[path = "firm_journal_api.rs"]
 mod firm_journal_api;
 
@@ -221,6 +223,31 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "GET",
             "/app/api/firms/{id}/journal",
             get(firm_journal_api::list),
+        ),
+        (
+            "GET",
+            "/app/api/firms/{id}/assumptions",
+            get(firm_assumptions_api::list),
+        ),
+        (
+            "GET",
+            "/app/api/firms/{id}/assumptions/{key}/history",
+            get(firm_assumptions_api::history),
+        ),
+        (
+            "GET",
+            "/app/api/firms/{id}/assumptions/{key}",
+            get(firm_assumptions_api::current),
+        ),
+        (
+            "POST",
+            "/app/api/firms/{id}/assumptions/{key}",
+            post(firm_assumptions_api::set),
+        ),
+        (
+            "GET",
+            "/app/api/assumptions",
+            get(firm_assumptions_api::catalog),
         ),
         (
             "POST",

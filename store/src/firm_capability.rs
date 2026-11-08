@@ -90,6 +90,11 @@ pub enum FirmCapability {
     /// Firm-sensitive, so like [`Self::ViewCommunications`] only the Firm's
     /// Admin membership admits it.
     ViewPlanMetrics,
+    /// Read, set, and walk the history of the Firm's assumptions (ENG-1264):
+    /// the stated premises the CEO digest checks and kits resolve at run
+    /// time. The values are the Firm's own economics, so like
+    /// [`Self::ViewPlanMetrics`] only the Firm's Admin membership admits it.
+    ManageFirmAssumptions,
 }
 
 impl FirmCapability {
@@ -110,6 +115,7 @@ impl FirmCapability {
             | Self::ManageRecoveryArchives
             | Self::ViewCommunications
             | Self::ViewPlanMetrics
+            | Self::ManageFirmAssumptions
             | Self::ManageBrand => membership == FirmMembership::Admin,
             Self::ManageBrandContent
             | Self::ManageSummaryApprovals
@@ -140,6 +146,7 @@ impl FirmCapability {
             Self::AttachBrand => "attach_brand",
             Self::ViewCommunications => "view_communications",
             Self::ViewPlanMetrics => "view_plan_metrics",
+            Self::ManageFirmAssumptions => "manage_firm_assumptions",
         }
     }
 
@@ -292,6 +299,12 @@ async fn resolve_inner(
             "plan_metrics_requires_admin",
         ));
     }
+    if capability == FirmCapability::ManageFirmAssumptions && actor_role != Role::Admin {
+        return Ok((
+            FirmCapabilityDecision::Forbidden,
+            "assumptions_requires_admin",
+        ));
+    }
     if actor_role == Role::Client {
         return Ok((
             FirmCapabilityDecision::Forbidden,
@@ -351,6 +364,9 @@ pub async fn allowed_firm_ids(
             .collect());
     }
     if capability == FirmCapability::ViewCommunications && actor_role != Role::Admin {
+        return Ok(Vec::new());
+    }
+    if capability == FirmCapability::ManageFirmAssumptions && actor_role != Role::Admin {
         return Ok(Vec::new());
     }
     if actor_role == Role::Client {
@@ -736,6 +752,59 @@ mod tests {
             FirmCapabilityDecision::Forbidden,
             "the Firm's own Admin member does not thereby appoint its DRI"
         );
+    }
+
+    /// `ManageFirmAssumptions` is the Firm's economics in words: Owner
+    /// holds it system-wide, the Firm's Admin membership admits it, and a
+    /// Lawyer or Clerk is refused even on their own Firm (ENG-1264).
+    #[tokio::test]
+    async fn manage_firm_assumptions_is_owner_and_firm_admin_only() {
+        let db = mem_surreal().await;
+        let firm = practice(&db, "Practice").await;
+        let owner = person(&db, "owner", Role::Owner).await;
+        let admin = person(&db, "admin", Role::Admin).await;
+        member(&db, admin.id, firm.id, FirmMembership::Admin).await;
+        let lawyer = person(&db, "lawyer", Role::Lawyer).await;
+        member(&db, lawyer.id, firm.id, FirmMembership::Lawyer).await;
+        let clerk = person(&db, "clerk", Role::Clerk).await;
+        member(&db, clerk.id, firm.id, FirmMembership::Clerk).await;
+
+        assert_decision(
+            &db,
+            Role::Owner,
+            owner.id,
+            firm.id,
+            FirmCapability::ManageFirmAssumptions,
+            FirmCapabilityDecision::Allowed,
+        )
+        .await;
+        assert_decision(
+            &db,
+            admin.role,
+            admin.id,
+            firm.id,
+            FirmCapability::ManageFirmAssumptions,
+            FirmCapabilityDecision::Allowed,
+        )
+        .await;
+        for (actor, why) in [
+            (&lawyer, "a Lawyer is refused their own Firm's assumptions"),
+            (&clerk, "a Clerk is refused their own Firm's assumptions"),
+        ] {
+            assert_eq!(
+                resolve(
+                    &db,
+                    actor.role,
+                    Some(actor.id),
+                    firm.id,
+                    FirmCapability::ManageFirmAssumptions
+                )
+                .await
+                .unwrap(),
+                FirmCapabilityDecision::Forbidden,
+                "{why}"
+            );
+        }
     }
 
     #[tokio::test]
