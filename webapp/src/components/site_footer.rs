@@ -30,13 +30,12 @@ pub const FOOTER_TAGLINE: [&str; 2] = [
 
 use crate::components::{ExternalLink, Icon, IconName};
 
-/// Provider and property notices, independent of the operating firm.
+/// The provider notice, independent of the operating firm.
 #[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FooterDisclosure {
     pub prefix: String,
     pub provider: String,
     pub href: String,
-    pub ownership: String,
 }
 
 /// One published office — the state it sits in and its street address.
@@ -307,20 +306,6 @@ pub fn SiteFooterLegal(
     /// Guieb & Shook PC only.
     #[props(default)]
     tagline: bool,
-    /// The registered word mark the site trades under, spelled the way the
-    /// register spells it, and the registration that proves it. Renders one
-    /// notice under the copyright line — the site's two ownership facts read
-    /// together — naming the mark, the registrant, and the number, with the
-    /// number linked to the register's own record so a reader verifies the
-    /// claim there rather than trusting the site's line about itself. That is
-    /// the same rule the bar-licence rows below follow.
-    ///
-    /// A supplied ownership disclosure replaces this generic notice. Without
-    /// one, the generic footer names its copyright holder as the mark owner.
-    #[props(default)]
-    trademark: String,
-    #[props(default)] trademark_registration: String,
-    #[props(default)] trademark_record_url: String,
     /// The version this deployment is running, plain text right after the
     /// linked repository — "Powered by neon-law/navigator 26.9.27 ★ 4" closes
     /// the strip, one line and no attribution prose. Empty renders no version
@@ -601,45 +586,13 @@ pub fn SiteFooterLegal(
                 }
                 div { class: "site-footer__legal",
                     p { class: "site-footer__disclaimer", "{disclaimer}" }
-                    // Above the ownership lines, not inside them: a reader
+                    // Above the copyright line, not inside it: a reader
                     // looking for who they are dealing with should not have to
                     // parse the copyright line to find it.
                     if !attribution.is_empty() {
                         p { class: "site-footer__attribution", "{attribution}" }
                     }
                     div { class: "site-footer__legal-practice",
-                    // The ownership fact about the wordmark: it is a registered
-                    // mark, and this is who holds it and under what number. It
-                    // sits above the bar licences because it is a property
-                    // notice about the site rather than regulated attorney
-                    // copy, and it links out for the same reason those rows do
-                    // — a reader checks the register, not the page's word for
-                    // it.
-                    if !trademark.is_empty() && disclosure.ownership.is_empty() {
-                        p { class: "site-footer__trademark",
-                            "{trademark}"
-                            if trademark_registration.is_empty() {
-                                sup { class: "site-footer__trademark-mark", "™" }
-                                " is a common-law mark of {copyright_holder}"
-                            } else {
-                                // `line-height: 0` in the stylesheet keeps the
-                                // superscript from stretching the fine print's
-                                // line box; the glyph is part of the mark, not
-                                // decoration, so it stays in the text.
-                                sup { class: "site-footer__trademark-mark", "®" }
-                                " is a registered trademark of {copyright_holder}, "
-                                if trademark_record_url.is_empty() {
-                                    "U.S. Reg. No. {trademark_registration}"
-                                } else {
-                                    ExternalLink {
-                                        href: trademark_record_url.clone(),
-                                        class: "link-secondary".to_string(),
-                                        "U.S. Reg. No. {trademark_registration}"
-                                    }
-                                }
-                            }
-                        }
-                    }
                     // Who is licensed, where, and under what number — each
                     // linked to the bar's own record so a visitor can verify
                     // the licence rather than take the site's word for it. This
@@ -671,14 +624,6 @@ pub fn SiteFooterLegal(
                         p { class: "site-footer__provider",
                             "{disclosure.prefix} "
                             ExternalLink { href: disclosure.href.clone(), "{disclosure.provider}" }
-                        }
-                    }
-                    if !disclosure.ownership.is_empty() {
-                        p { class: "site-footer__ownership", "{disclosure.ownership}"
-                            if !trademark_registration.is_empty() && !trademark_record_url.is_empty() {
-                                " "
-                                ExternalLink { class: "link-secondary".to_string(), href: trademark_record_url.clone(), "U.S. Reg. No. {trademark_registration}" }
-                            }
                         }
                     }
                     if tagline {
@@ -726,18 +671,16 @@ pub fn SiteFooterLegal(
 mod tests {
 
     #[test]
-    fn provider_and_owner_are_independent_of_the_operating_firm() {
+    fn provider_is_independent_of_the_operating_firm() {
         fn app() -> Element {
             rsx! { SiteFooterLegal {
                 copyright_holder: "Example Practice PC".to_string(),
                 copyright_year: 2026,
                 disclaimer: String::new(),
-                trademark: "NEON LAW".to_string(),
                 disclosure: FooterDisclosure {
                     prefix: "Legal services prepared by".into(),
                     provider: "Lex Tecnica".into(), // pii-scan: allow — public provider name, not a person.
                     href: "https://www.lextecnica.com/".into(),
-                    ownership: "Neon Law is a trademark of Neon Law IP LLC.".into(),
                 },
             } }
         }
@@ -746,12 +689,7 @@ mod tests {
         let html = dioxus_ssr::render(&dom);
         assert!(html.contains("© 2026 Example Practice PC"), "{html}");
         assert!(html.contains("https://www.lextecnica.com/"), "{html}");
-        let provider = html.find("Legal services prepared by").expect("provider");
-        let owner = html
-            .find("Neon Law is a trademark of Neon Law IP LLC.")
-            .expect("owner");
-        assert!(provider < owner, "{html}");
-        assert!(!html.contains("trademark of Example Practice PC"), "{html}");
+        assert!(html.contains("Legal services prepared by"), "{html}");
     }
     use super::*;
     use views::brand::JTA_STANDING;
@@ -790,49 +728,12 @@ mod tests {
                     copyright_holder: "Neon Law".to_string(),
                     disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.".to_string(),
                     copyright_year: 2026,
-                    trademark: "NEON LAW".to_string(),
-                    trademark_registration: "6,325,650".to_string(),
-                    trademark_record_url:
-                        "https://tmsearch.uspto.gov/search/search-results/90039224".to_string(),
                     github_stars: 1234u64,
                     navigator_version: "26.8.20".to_string(),
                 }
             }
         }
         ssr(app)
-    }
-
-    /// The mark notice names the mark, the registrant, and the number, and
-    /// links the number to the register's own record.
-    ///
-    /// Order is the substance: the notice precedes the bar licences, and the
-    /// copyright closes the strip below both.
-    #[test]
-    fn notices_the_registered_mark_above_the_licences() {
-        let out = legal_html();
-        assert!(
-            out.contains("NEON LAW") && out.contains("®"),
-            "the mark renders as the register spells it, with its symbol: {out}"
-        );
-        assert!(
-            out.contains("is a registered trademark of Neon Law"),
-            "and names the registrant the copyright line names: {out}"
-        );
-        assert!(
-            out.contains("U.S. Reg. No. 6,325,650"),
-            "the registration is the claim: {out}"
-        );
-        assert!(
-            out.contains(r#"href="https://tmsearch.uspto.gov/search/search-results/90039224""#),
-            "linked to the register's own record: {out}"
-        );
-        let copyright = out.find("site-footer__copyright").expect("the copyright");
-        let mark = out.find("site-footer__trademark").expect("the mark notice");
-        let licences = out.find("site-footer__licenses").unwrap_or(mark);
-        assert!(
-            mark <= licences && licences < copyright,
-            "the mark notice sits above the bar rows, the copyright below: {out}"
-        );
     }
 
     #[test]
@@ -848,80 +749,16 @@ mod tests {
         let copyright = legal
             .find("site-footer__copyright")
             .expect("the copyright renders");
-        let trademark = legal
-            .find("site-footer__trademark")
-            .expect("the trademark renders");
         let platform = legal
             .find("site-footer__legal-platform")
             .expect("the platform renders");
         let powered = legal
             .find("site-footer__powered")
             .expect("the platform line renders");
-        assert!(disclaimer < trademark && trademark < platform);
+        assert!(disclaimer < platform);
         assert!(platform < copyright && copyright < powered);
         assert!(!legal.contains("site-footer__tagline"));
         assert!(!legal.contains("Made with"));
-    }
-
-    /// A deploy holding no registration notices none, and one that cites a
-    /// number with no public record renders the claim unlinked rather than
-    /// pointing at nothing.
-    #[test]
-    fn omits_the_mark_notice_when_unregistered_and_the_link_when_unrecorded() {
-        fn unregistered() -> Element {
-            rsx! {
-                SiteFooterLegal {
-                    copyright_holder: "Cascade Law LLP".to_string(),
-                    disclaimer: "This is an attorney advertisement.".to_string(),
-                    copyright_year: 2026,
-                }
-            }
-        }
-        fn unrecorded() -> Element {
-            rsx! {
-                SiteFooterLegal {
-                    copyright_holder: "Neon Law".to_string(),
-                    disclaimer: "This is an attorney advertisement.".to_string(),
-                    copyright_year: 2026,
-                    trademark: "NEON LAW".to_string(),
-                    trademark_registration: "6,325,650".to_string(),
-                }
-            }
-        }
-        fn common_law() -> Element {
-            rsx! {
-                SiteFooterLegal {
-                    copyright_holder: "Guieb & Shook PC".to_string(),
-                    disclaimer: "This is an attorney advertisement.".to_string(),
-                    copyright_year: 2026,
-                    trademark: "VESTA".to_string(),
-                }
-            }
-        }
-
-        let out = ssr(unregistered);
-        assert!(
-            !out.contains("site-footer__trademark") && !out.contains("registered trademark"),
-            "no registration, no notice: {out}"
-        );
-
-        let out = ssr(unrecorded);
-        assert!(
-            out.contains("U.S. Reg. No. 6,325,650"),
-            "the claim still renders: {out}"
-        );
-        assert!(
-            !out.contains("tmsearch"),
-            "with no link to a record it does not have: {out}"
-        );
-
-        let out = ssr(common_law);
-        assert!(out.contains("VESTA") && out.contains("™"), "{out}");
-        assert!(
-            out.contains("common-law mark of Guieb &#38; Shook PC"),
-            "{out}"
-        );
-        assert!(!out.contains("®") && !out.contains("U.S. Reg."), "{out}");
     }
 
     /// The platform line names the public source repository, links it, and

@@ -120,12 +120,11 @@ Feature: Public routing on the firm's own host
       | /education               |
       | /does-not-exist          |
 
-  # The brand's live firm identity changes without removing shared public notices.
+  # The brand's live firm identity changes without removing the advertising notice.
   Scenario: A moved brand's footer follows its new firm
     Given the brand "neon" is moved to a firm whose entity is "Mobility Test Holdings PC"
     When a visitor opens / on host "staging.neonlaw.com"
     Then the response status is 200
     And the footer copyright names "Mobility Test Holdings PC"
-    And the footer renders the trademark notice: yes
-    And the footer trademark owner remains "Neon Law IP LLC" and is not "Mobility Test Holdings PC"
+    And the footer renders no trademark notice
     And the footer renders the attorney-advertising disclaimer
