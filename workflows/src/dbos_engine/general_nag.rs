@@ -129,25 +129,11 @@ async fn post_once(
     text: &str,
     oldest: DateTime<Utc>,
 ) -> dbos::Result<(), GeneralNagError> {
-    let key = super::effect_key().ok_or(dbos::Error::Application(GeneralNagError::Notify))?;
-    let receipt = match slack
-        .message_receipt_by_correlation_since(channel, &key, oldest)
-        .await
-        .map_err(|_| dbos::Error::Application(GeneralNagError::Notify))?
-    {
-        Some(receipt) => receipt,
-        None => slack
-            .post_message_with_receipt(channel, text, Some(&key))
-            .await
-            .map_err(|_| dbos::Error::Application(GeneralNagError::Notify))?,
-    };
-    if receipt.channel_id != channel
-        || receipt.correlation_id.as_deref() != Some(key.as_str())
-        || receipt.timestamp.is_empty()
-    {
-        return Err(dbos::Error::Application(GeneralNagError::Notify));
+    if super::post_once(slack, channel, text, oldest).await {
+        Ok(())
+    } else {
+        Err(dbos::Error::Application(GeneralNagError::Notify))
     }
-    Ok(())
 }
 
 pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<GeneralNagWorkflow> {
