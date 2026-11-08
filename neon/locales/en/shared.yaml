@@ -33,12 +33,6 @@ entries:
   home.mission_north_star: Our north star is improving access to justice.
   home.mission_promise: You deserve a lawyer who listens, explains your options, and tells you what help will cost.
 
-  # `/services`
-  services.eyebrow: One-time services
-  services.title: Find the help you need.
-  services.lede: Start with your business, your family, or the next step in your life. Explore our brands or choose an individual service below. We confirm the lawyers, scope, and fees in your written engagement.
-  services.catalog_heading: Need help with one thing?
-
   # `/business` — the Business plan.
   fractional_gc.eyebrow: Business plan
   fractional_gc.title: The legal library for your business.

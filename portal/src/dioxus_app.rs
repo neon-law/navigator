@@ -669,9 +669,6 @@ static CYBER_INJURY_HEAD: std::sync::LazyLock<String> = std::sync::LazyLock::new
 static DAYBRIDGE_HEAD: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| bucket_font_head("Source Serif 4", "source-serif-4/SourceSerif4"));
 
-static DEATH_AND_DIVORCE_HEAD: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| bucket_font_head("Pirata One", "pirata-one/PirataOne"));
-
 /// The `@font-face` head fragment a page wears when this process serves
 /// `key` — the preload and declarations injected at the end of every rendered
 /// `<head>`.
@@ -694,7 +691,6 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
         views::brand::BrandKey::DeleteYourDebt => &DELETE_YOUR_DEBT_HEAD,
         views::brand::BrandKey::Summons => &SUMMONS_HEAD,
         views::brand::BrandKey::Groundwork | views::brand::BrandKey::Daybridge => &DAYBRIDGE_HEAD,
-        views::brand::BrandKey::DeathAndDivorce => &DEATH_AND_DIVORCE_HEAD,
         views::brand::BrandKey::Aegis | views::brand::BrandKey::CyberInjuryLaw => {
             &CYBER_INJURY_HEAD
         }
@@ -6489,8 +6485,8 @@ mod tests {
             );
         }
         assert_eq!(
-            title_for_path_with_firm("/", "Death & Divorce"),
-            "Death & Divorce | Home"
+            title_for_path_with_firm("/", "Guieb & Shook"),
+            "Guieb & Shook | Home"
         );
     }
 

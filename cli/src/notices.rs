@@ -282,7 +282,7 @@ pub fn render(notices: &Notices) -> String {
          \n\
          Guieb & Shook PC practice names. Guieb & Shook PC uses these practice names:\n\
          Abhaya Immigration, Aegis Criminal Defense, CyberInjuryLaw, Daybridge Divorce Law,\n\
-         Death & Divorce, DeleteYourData.com, DeleteYourDebt.com, Groundwork Real Estate Law,\n\
+         DeleteYourData.com, DeleteYourDebt.com, Groundwork Real Estate Law,\n\
          Misericordia Injury Law, Summons Defense, and Vesta Estate Planning. Whatever rights\n\
          Guieb & Shook PC or its affiliates hold in those names are reserved, and this project\n\
          grants none. NEON LAW is addressed in NOTICE.\n\
@@ -721,7 +721,6 @@ source = "git+https://example.invalid/repo"
             "Aegis Criminal Defense",
             "CyberInjuryLaw",
             "Daybridge Divorce Law",
-            "Death & Divorce",
             "DeleteYourData.com",
             "DeleteYourDebt.com",
             "Groundwork Real Estate Law",

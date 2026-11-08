@@ -1240,7 +1240,9 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     routers.push(with_branded(
         dioxus_app::marketing_page_router(
             dioxus_app::FIRM_SERVICES_PATH,
-            firm_copy::legal_services(branding),
+            // Neon publishes no `/services`, so the fallback copy is a
+            // publishing brand's; `services_copy` injects each host's own.
+            firm_copy::legal_services(BrandKey::GuiebShook.resolve_branding(branding)),
             state.sessions.clone(),
             portal::secure_cookies(state),
         ),
@@ -1477,6 +1479,14 @@ async fn reject_unpublished_firm_path(req: Request, next: Next) -> Response {
         .unwrap_or_default();
     if key.publishes_firm_path(req.uri().path()) {
         next.run(req).await
+    } else if key == BrandKey::Neon && req.uri().path().trim_end_matches('/') == "/services" {
+        // Neon's fee schedule is retired; its published links land on the
+        // home page with a 301, the status the retired `/personal` answers.
+        (
+            StatusCode::MOVED_PERMANENTLY,
+            [(axum::http::header::LOCATION, "/")],
+        )
+            .into_response()
     } else {
         (StatusCode::NOT_FOUND, webapp::error_pages::not_found()).into_response()
     }
@@ -1506,8 +1516,7 @@ fn resolve_firm_contact_content(
         | BrandKey::Daybridge
         | BrandKey::CyberInjuryLaw
         | BrandKey::Aegis
-        | BrandKey::Groundwork
-        | BrandKey::DeathAndDivorce => format!(
+        | BrandKey::Groundwork => format!(
             "Reach {firm_name}, a practice of Guieb & Shook PC, about legal services. \
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
@@ -1601,7 +1610,6 @@ pub(crate) fn resolve_firm_home_content(
         | BrandKey::Summons
         | BrandKey::Aegis
         | BrandKey::Groundwork
-        | BrandKey::DeathAndDivorce
         | BrandKey::LexTecnica
         | BrandKey::IepDefenders => locales::home_for_host(branding, deployment_host),
     }
@@ -1653,7 +1661,6 @@ mod home_page_tests {
                         || content.privacy.is_some()
                         || content.company.is_some()
                         || content.daybridge.is_some()
-                        || content.death_and_divorce.is_some()
                         || content.cyber_injury.is_some()
                         || content.summons.is_some()
                         || !content.practices.is_empty());

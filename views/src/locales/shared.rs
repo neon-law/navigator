@@ -65,10 +65,6 @@ pub const REQUIRED_KEYS: &[&str] = &[
     "litigation.eyebrow",
     "litigation.lede",
     "litigation.title",
-    "services.catalog_heading",
-    "services.eyebrow",
-    "services.lede",
-    "services.title",
 ];
 
 /// The shared catalog document.

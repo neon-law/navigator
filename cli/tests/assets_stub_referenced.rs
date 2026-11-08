@@ -121,10 +121,6 @@ fn stub_referenced_writes_the_gallery_and_licensed_fonts_without_content_images(
         .is_file());
     assert!(out
         .path()
-        .join(views::assets::DEATH_AND_DIVORCE_HERO_KEY)
-        .is_file());
-    assert!(out
-        .path()
         .join(views::assets::ABHAYA_COMMUNITY_PHOTO_KEY)
         .is_file());
     assert!(out

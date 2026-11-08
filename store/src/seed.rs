@@ -3391,13 +3391,6 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
         primary_hex: "#255C67",
     },
     CompiledBrand {
-        key: "death-and-divorce",
-        website_url: "https://www.deathanddivorcelaw.com",
-        name: "Death & Divorce",
-        typeface: "pirata-one",
-        primary_hex: "#B45535",
-    },
-    CompiledBrand {
         key: "cyber-injury-law",
         website_url: "https://www.cyberinjurylaw.com",
         name: "CyberInjuryLaw",

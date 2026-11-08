@@ -100,10 +100,6 @@ pub const CYBER_INJURY_HERO_KEY: &str = "img/cyber-injury-law/cyber-warrior-ferr
 /// Flat subway-ad artwork for the `CyberInjuryLaw` campaign.
 pub const CYBER_INJURY_AD_KEY: &str = "img/cyber-injury-law/canal-street-ad-f9faa356.png";
 
-/// Death & Divorce's home hero picture. The mark stays tracked as the favicon
-/// and header logo; this picture lives only in the public asset lane.
-pub const DEATH_AND_DIVORCE_HERO_KEY: &str = "img/death-and-divorce/hero.png";
-
 /// Public architectural photographs supplied for house-brand pages.
 pub const ARCHITECTURE_PHOTOS: [&str; 5] = [
     "img/architecture/civic-building.jpg",

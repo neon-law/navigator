@@ -145,10 +145,9 @@ const FIRM_NAV: &[NavLink] = &[
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
-/// Neon's header links its fee schedule and separate business counsel page;
+/// Neon's header links its business counsel page and the booking calendar;
 /// the logo carries the reader home to Nautilus.
 const NEON_NAV: &[NavLink] = &[
-    NavLink::leaf("Services", "/services"),
     NavLink::leaf("Business", "/business"),
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
@@ -892,47 +891,10 @@ pub static DAYBRIDGE_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "daybridgedivorce.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Daybridge Divorce Law is operated by Guieb & Shook PC for couples who agree. Joint representation is subject to applicable rules, conflict review, and informed written consent. A one-time $5,000 fee covers a mutual split within the written retainer. Contested work is outside the joint engagement. Attorney advertisement; no result is promised.",
-    service_description: "Agreed divorce for couples through Daybridge Divorce Law, operated by Guieb & Shook PC. Joint representation where permitted after conflict review and informed written consent. A one-time $5,000 fee for a mutual split. The written retainer defines the work.",
+    mission_description: "Daybridge Divorce Law is operated by Guieb & Shook PC for couples who agree. Joint representation is subject to applicable rules, conflict review, and informed written consent. A one-time $333 fee covers a mutual split within the written retainer. Contested work is outside the joint engagement. Attorney advertisement; no result is promised.",
+    service_description: "Agreed divorce for couples through Daybridge Divorce Law, operated by Guieb & Shook PC. Joint representation where permitted after conflict review and informed written consent. A one-time $333 fee for a mutual split. The written retainer defines the work.",
     portal_only: false,
     brand_key: BrandKey::Daybridge,
-};
-
-/// The `death-and-divorce` house brand. Page copy lives in
-/// `neon/locales/en/death-and-divorce/`.
-pub static DEATH_AND_DIVORCE_BRANDING: Branding = Branding {
-    firm: SiteBrand {
-        site_name: "Death & Divorce",
-        home_href: "/",
-        tagline: "Divorce and probate. Care for what comes next.",
-        postal_address: "5150 Mae Anne Ave Ste 405-9002, Reno, NV 89523",
-        logo_href: "/public/brand/death-and-divorce/mark.svg",
-        social_image: "/public/brand/death-and-divorce/mark.svg",
-        nav: &[],
-        is_law_firm: true,
-        legal_entity: "Guieb & Shook PC",
-    },
-    firm_email: "contact@deathanddivorcelaw.com",
-    support_domain: "deathanddivorcelaw.com",
-    firm_phone: "+1 510 800 2090",
-    firm_offices: FIRM_OFFICES,
-    firm_attorneys: &[],
-    firm_memberships: FIRM_MEMBERSHIPS,
-    firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
-    consultation_url: SHOOK_CONSULTATION_URL,
-    terms_url: "/terms",
-    privacy_url: "/privacy",
-    base_url: "",
-    primary_domain: "deathanddivorcelaw.com",
-    firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Death & Divorce is a practice of Guieb & Shook PC for divorce and probate. Estate planning is offered through Vesta Estate Planning. We help people move through endings, transitions, and what comes after. This is an attorney advertisement, not a promise about a result.",
-    service_description: "Divorce and probate from Death & Divorce, a practice of Guieb & Shook PC. Scope and fees are set out in writing before work begins.",
-    portal_only: false,
-    brand_key: BrandKey::DeathAndDivorce,
 };
 
 /// CyberInjuryLaw uses the firm's verified contact and engagement identity.
@@ -1091,8 +1053,6 @@ pub enum BrandKey {
     Summons,
     /// The mutual-split divorce practice.
     Daybridge,
-    /// Divorce and probate for endings and transitions.
-    DeathAndDivorce,
     /// Injury claims and cybercrime, including vehicle collisions and online harm.
     CyberInjuryLaw,
     /// Criminal defense.
@@ -1121,7 +1081,6 @@ impl BrandKey {
         Self::Abhaya,
         Self::Summons,
         Self::Daybridge,
-        Self::DeathAndDivorce,
         Self::CyberInjuryLaw,
         Self::Aegis,
         Self::Groundwork,
@@ -1140,7 +1099,6 @@ impl BrandKey {
         Self::Abhaya,
         Self::Summons,
         Self::Daybridge,
-        Self::DeathAndDivorce,
         Self::CyberInjuryLaw,
         Self::Aegis,
         Self::Groundwork,
@@ -1162,7 +1120,6 @@ impl BrandKey {
         Self::Abhaya,
         Self::Summons,
         Self::Daybridge,
-        Self::DeathAndDivorce,
         Self::CyberInjuryLaw,
         Self::Aegis,
         Self::Groundwork,
@@ -1190,7 +1147,6 @@ impl BrandKey {
             Self::DeleteYourDebt => "delete-your-debt",
             Self::Summons => "summons",
             Self::Daybridge => "daybridge",
-            Self::DeathAndDivorce => "death-and-divorce",
             Self::Aegis => "aegis",
             Self::Groundwork => "groundwork",
             Self::GuiebShook => "guieb-shook",
@@ -1247,9 +1203,9 @@ impl BrandKey {
     /// ships every stem in [`crate::locales::KNOWN_PAGES`] — `fractional-gc`
     /// and `litigation` remain authored, and remain the only readers of their
     /// `{shared:…}` keys. `/business` publishes the first; `/disputes` returns
-    /// 404. `services` is also authored here, and answers
-    /// `/services` too. Dropping a stem here while the file still ships would
-    /// strand its shared copy, which
+    /// 404. Neon authors no `services` stem; its `/services` redirects home.
+    /// Dropping a stem here while the file still ships would strand its
+    /// shared copy, which
     /// `shared_copy_is_consumed_by_pages_or_the_exported_home_contract` fails
     /// on.
     ///
@@ -1289,8 +1245,7 @@ impl BrandKey {
             | Self::Abhaya
             | Self::DeleteYourDebt
             | Self::Summons
-            | Self::Daybridge
-            | Self::DeathAndDivorce => &["home", "services"],
+            | Self::Daybridge => &["home", "services"],
         }
     }
 
@@ -1352,7 +1307,7 @@ impl BrandKey {
             return self == Self::Vesta;
         }
         match self {
-            Self::Neon => path.trim_end_matches('/') != "/disputes",
+            Self::Neon => !matches!(path.trim_end_matches('/'), "/disputes" | "/services"),
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),
             // Guieb & Shook publishes its services page: the homepage's
             // practice cards link there, so the route must resolve on this
@@ -1372,7 +1327,6 @@ impl BrandKey {
             | Self::Abhaya
             | Self::DeleteYourDebt
             | Self::Daybridge
-            | Self::DeathAndDivorce
             | Self::IepDefenders => {
                 matches!(path, "/" | "/services" | "/contact" | "/testimonials")
             }
@@ -1441,7 +1395,6 @@ impl BrandKey {
             Self::DeleteYourDebt => "deleteyourdebt.com",
             Self::Summons => "summonsdefense.nyc",
             Self::Daybridge => "daybridgedivorce.com",
-            Self::DeathAndDivorce => "deathanddivorcelaw.com",
             Self::Aegis => "aegiscriminaldefense.com",
             Self::Groundwork => "groundworkrealestatelaw.com",
             Self::GuiebShook => "guiebshook.com",
@@ -1503,10 +1456,6 @@ impl BrandKey {
             Self::DeleteYourDebt => &["www.deleteyourdebt.com", "staging.deleteyourdebt.com"],
             Self::Summons => &["www.summonsdefense.nyc", "staging.summonsdefense.nyc"],
             Self::Daybridge => &["www.daybridgedivorce.com", "staging.daybridgedivorce.com"],
-            Self::DeathAndDivorce => &[
-                "www.deathanddivorcelaw.com",
-                "staging.deathanddivorcelaw.com",
-            ],
             Self::Aegis => &[
                 "www.aegiscriminaldefense.com",
                 "staging.aegiscriminaldefense.com",
@@ -1538,7 +1487,6 @@ impl BrandKey {
             Self::DeleteYourDebt => &DELETE_YOUR_DEBT_BRANDING,
             Self::Summons => &SUMMONS_BRANDING,
             Self::Daybridge => &DAYBRIDGE_BRANDING,
-            Self::DeathAndDivorce => &DEATH_AND_DIVORCE_BRANDING,
             Self::Aegis => &AEGIS_BRANDING,
             Self::Groundwork => &GROUNDWORK_BRANDING,
             Self::GuiebShook => &GUIEB_SHOOK_BRANDING,
@@ -1574,7 +1522,6 @@ impl BrandKey {
             Self::DeleteYourDebt => Some("NAVIGATOR_LOCAL_DELETE_YOUR_DEBT_PORT"),
             Self::Summons => Some("NAVIGATOR_LOCAL_SUMMONS_PORT"),
             Self::Daybridge => Some("NAVIGATOR_LOCAL_DAYBRIDGE_PORT"),
-            Self::DeathAndDivorce => Some("NAVIGATOR_LOCAL_DEATH_AND_DIVORCE_PORT"),
             Self::Aegis => Some("NAVIGATOR_LOCAL_AEGIS_PORT"),
             Self::Groundwork => Some("NAVIGATOR_LOCAL_GROUNDWORK_PORT"),
             Self::GuiebShook => Some("NAVIGATOR_LOCAL_GUIEB_SHOOK_PORT"),
@@ -2908,15 +2855,13 @@ mod tests {
     }
 
     #[test]
-    fn the_firm_nav_links_services_business_and_consultation() {
-        assert_eq!(FIRM_BRAND.nav.len(), 3);
-        assert_eq!(FIRM_BRAND.nav[0].label, "Services");
-        assert_eq!(FIRM_BRAND.nav[0].href, "/services");
-        assert_eq!(FIRM_BRAND.nav[1].label, "Business");
-        assert_eq!(FIRM_BRAND.nav[1].href, "/business");
-        assert_eq!(FIRM_BRAND.nav[2].label, "Book Consultation");
+    fn the_firm_nav_links_business_and_consultation() {
+        assert_eq!(FIRM_BRAND.nav.len(), 2);
+        assert_eq!(FIRM_BRAND.nav[0].label, "Business");
+        assert_eq!(FIRM_BRAND.nav[0].href, "/business");
+        assert_eq!(FIRM_BRAND.nav[1].label, "Book Consultation");
         assert_eq!(
-            FIRM_BRAND.nav[2].href,
+            FIRM_BRAND.nav[1].href,
             "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
         );
     }
@@ -3658,7 +3603,7 @@ mod tests {
         assert!(!BrandKey::DeleteYourData.publishes_firm_path("/services"));
         assert!(BrandKey::DeleteYourData.publishes_firm_path("/contact"));
         assert!(!BrandKey::DeleteYourData.publishes_firm_path("/disputes"));
-        assert!(BrandKey::Neon.publishes_firm_path("/services"));
+        assert!(!BrandKey::Neon.publishes_firm_path("/services"));
         assert!(BrandKey::Neon.publishes_firm_path("/business"));
         assert!(!BrandKey::Neon.publishes_firm_path("/disputes"));
         assert!(BrandKey::CyberInjuryLaw.publishes_firm_path("/services"));

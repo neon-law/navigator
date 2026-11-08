@@ -125,10 +125,11 @@ async fn the_firm_llms_txt_advertises_only_documents_the_firm_host_serves() {
 #[tokio::test]
 async fn the_index_separates_nautilus_from_business_counsel() {
     let body = document(&app().await).await;
-    for path in ["/business)", "/nautilus)", "/services)"] {
+    for path in ["/business)", "/nautilus)"] {
         assert!(body.contains(path), "published page missing: {path}");
     }
     assert!(!body.contains("/disputes)"));
+    assert!(!body.contains("/services)"));
     assert!(body.contains("Nautilus is one subscription"));
     assert!(body.contains("from $50/day"));
     assert!(!body.contains("starts at $100/day"));
@@ -142,7 +143,6 @@ async fn the_index_advertises_the_firms_pages() {
 
     for firm_page in [
         "/",
-        "/services",
         "/business",
         "/nautilus",
         "/navigator",

@@ -1011,7 +1011,6 @@ pub(crate) const FIRM_CERTIFICATE_NAME: &str = "navigator-firm";
 /// <https://docs.cloud.google.com/kubernetes-engine/docs/how-to/managed-certs>.
 const FIRM_CERTIFICATE_ONLY: &[BrandKey] = &[
     BrandKey::Abhaya,
-    BrandKey::DeathAndDivorce,
     BrandKey::GuiebShook,
     // Born on the Firm certificate: they never had one of their own.
     BrandKey::LexTecnica,
@@ -7828,7 +7827,6 @@ mod tests {
             retired,
             [
                 "navigator-web-abhaya",
-                "navigator-web-death-and-divorce",
                 "navigator-web-guieb-shook",
                 "navigator-web-lex-tecnica",
                 "navigator-web-iep-defenders",
@@ -8020,7 +8018,6 @@ mod tests {
                 "www.abhayaimmigration.com",
                 "www.summonsdefense.nyc",
                 "www.daybridgedivorce.com",
-                "www.deathanddivorcelaw.com",
                 "www.cyberinjurylaw.com",
                 "www.aegiscriminaldefense.com",
                 "www.groundworkrealestatelaw.com",
@@ -8041,7 +8038,6 @@ mod tests {
                 "staging.abhayaimmigration.com",
                 "staging.summonsdefense.nyc",
                 "staging.daybridgedivorce.com",
-                "staging.deathanddivorcelaw.com",
                 "staging.cyberinjurylaw.com",
                 "staging.aegiscriminaldefense.com",
                 "staging.groundworkrealestatelaw.com",
