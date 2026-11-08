@@ -145,12 +145,13 @@ const FIRM_NAV: &[NavLink] = &[
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
-/// Neon's header links its fee schedule and separate business counsel page;
-/// the logo carries the reader home to Nautilus.
+/// Neon's header names its three products: Nautilus, the subscription at
+/// `/`; Navigator, the engine; and Notations, the document format. The shared
+/// footer row still links Navigator and Notations for every brand.
 const NEON_NAV: &[NavLink] = &[
-    NavLink::leaf("Services", "/services"),
-    NavLink::leaf("Business", "/business"),
-    NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
+    NavLink::leaf("Nautilus", "/"),
+    NavLink::leaf("Navigator", "/navigator"),
+    NavLink::leaf("Notations", "/notations"),
 ];
 
 /// Public footer pages. `firm_footer_nav` adds Contact, Testimonials, Privacy,
@@ -1246,8 +1247,8 @@ impl BrandKey {
     /// answers: [`Self::publishes_firm_path`] is the route gate. Neon still
     /// ships every stem in [`crate::locales::KNOWN_PAGES`] — `fractional-gc`
     /// and `litigation` remain authored, and remain the only readers of their
-    /// `{shared:…}` keys. `/business` publishes the first; `/disputes` returns
-    /// 404. `services` is also authored here, and answers
+    /// `{shared:…}` keys. Neither publishes: `/business` redirects to `/` and
+    /// `/disputes` returns 404. `services` is also authored here, and answers
     /// `/services` too. Dropping a stem here while the file still ships would
     /// strand its shared copy, which
     /// `shared_copy_is_consumed_by_pages_or_the_exported_home_contract` fails
@@ -1296,8 +1297,8 @@ impl BrandKey {
 
     /// Firm marketing paths this key answers on its own hosts.
     ///
-    /// Neon answers Nautilus at `/`, business counsel at `/business`, and its
-    /// fee schedule at `/services`; `/disputes` returns 404. DeleteYourData
+    /// Neon answers Nautilus at `/` and its fee schedule at `/services`;
+    /// `/business` answers a redirect to `/`, and `/disputes` returns 404. DeleteYourData
     /// answers only the pages it has a catalog for (plus `/contact`, which is
     /// addresses rather than a YAML stem). Every brand answers `/contact/sent`
     /// for its lead form and serves its own Posts at `/blog`, the target of
@@ -2908,16 +2909,15 @@ mod tests {
     }
 
     #[test]
-    fn the_firm_nav_links_services_business_and_consultation() {
-        assert_eq!(FIRM_BRAND.nav.len(), 3);
-        assert_eq!(FIRM_BRAND.nav[0].label, "Services");
-        assert_eq!(FIRM_BRAND.nav[0].href, "/services");
-        assert_eq!(FIRM_BRAND.nav[1].label, "Business");
-        assert_eq!(FIRM_BRAND.nav[1].href, "/business");
-        assert_eq!(FIRM_BRAND.nav[2].label, "Book Consultation");
+    fn the_neon_nav_links_its_three_products() {
+        let nav: Vec<(&str, &str)> = FIRM_BRAND.nav.iter().map(|n| (n.label, n.href)).collect();
         assert_eq!(
-            FIRM_BRAND.nav[2].href,
-            "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
+            nav,
+            [
+                ("Nautilus", "/"),
+                ("Navigator", "/navigator"),
+                ("Notations", "/notations"),
+            ]
         );
     }
 
@@ -2952,12 +2952,14 @@ mod tests {
         let mut sorted = footer.clone();
         sorted.sort_unstable();
         assert_eq!(footer, sorted, "the footer nav is alphabetized by label");
-        // Every label is linked once, from exactly one of the two rows. There
-        // is no longer any exception: the one duplicate was the nonprofit's
-        // cross-link, which had to sit in both rows while the site served two
-        // faces, and both faces are one now.
+        // Every label is linked once, from exactly one of the two rows, except
+        // the two products Neon's header promotes: the footer row is shared by
+        // every brand, which still links them there.
         let header: Vec<&str> = FIRM_BRAND.nav.iter().map(|n| n.label).collect();
-        for label in &footer {
+        for label in footer
+            .iter()
+            .filter(|label| !matches!(**label, "Navigator" | "Notations"))
+        {
             assert!(
                 !header.contains(label),
                 "{label} is linked once, from the footer"
@@ -3120,7 +3122,7 @@ mod tests {
     #[test]
     fn neither_row_links_a_retired_url() {
         for link in FIRM_BRAND.nav.iter().chain(super::firm_footer_nav().iter()) {
-            for retired in ["/foundation", "legal-aid", "/mission", "/attorneys"] {
+            for retired in ["/foundation", "legal-aid", "/mission", "/attorneys", "/business"] {
                 assert!(
                     !link.href.starts_with(retired),
                     "{} links the retired {retired}: {}",
@@ -3659,7 +3661,6 @@ mod tests {
         assert!(BrandKey::DeleteYourData.publishes_firm_path("/contact"));
         assert!(!BrandKey::DeleteYourData.publishes_firm_path("/disputes"));
         assert!(BrandKey::Neon.publishes_firm_path("/services"));
-        assert!(BrandKey::Neon.publishes_firm_path("/business"));
         assert!(!BrandKey::Neon.publishes_firm_path("/disputes"));
         assert!(BrandKey::CyberInjuryLaw.publishes_firm_path("/services"));
     }

@@ -1,20 +1,20 @@
 head_title: "{site_name} | Nautilus"
 meta_description: >-
-  Nautilus is one subscription of privacy and paperwork checks: data removal,
-  privacy protection, credit monitoring, dark web monitoring, identity theft
-  insurance, unclaimed property, estate planning, and basic form filings, for
-  $29/mo or $290/year prepaid. A lawyer can review your work from $20. Coming
-  to iPhone and Android. Attorney advertisement.
+  Nautilus is one subscription for your privacy and your paperwork: data
+  removal, privacy protection, credit monitoring, dark web monitoring, identity
+  theft insurance, unclaimed property, estate planning, contract templates, and
+  basic form filings such as forming an LLC, for $29/mo or $290/year prepaid.
+  Cancel anytime. A lawyer can review your work from $20. Coming to iPhone and
+  Android. Attorney advertisement.
 title: Nautilus
 hero_mark: helm
 tagline: Your shell in a connected world.
 hero_lead: >-
-  One subscription for the checks that keep your personal life protected.
-  $29/mo or $290/year prepaid. When you want a lawyer to look at your work, a
-  review starts at $20.
+  Privacy checks, your LLC paperwork, and a lawyer a tap away, in one
+  subscription. $29/mo. Cancel anytime, even if you only need it for a month.
 hero_cta:
   href: "#enrollment"
-  label: Get started
+  label: Start for $29/mo
 skin: nautilus
 bands:
   - kind: app_preview
@@ -23,9 +23,10 @@ bands:
     heading: Every check, in your pocket.
     description: >-
       Download Nautilus from the App Store or Google Play and subscribe for
-      $29/mo. Each check runs for you and reports back in the app.
+      $29/mo, billed through the store you already use. Each check runs for
+      you and reports back in the app. Screens are illustrative.
     app_name: Nautilus
-    app_subtitle: Privacy checks
+    app_subtitle: Privacy and paperwork
     install_label: Get
     checks_heading: Your checks
     checks:
@@ -45,29 +46,93 @@ bands:
         detail: A yearly check-in on your will, beneficiaries, and plan documents.
       - title: Basic form filings
         detail: Simple filings, such as forming an LLC. Government fees are separate.
+    android_heading: Your paperwork
+    android_items:
+      - title: Form an LLC
+        detail: Answer a few questions. We prepare the filing for you.
+      - title: Contract templates
+        detail: NDAs, offer letters, and privacy notices, filled from your answers.
+      - title: Removal requests
+        detail: Each request and each reply, kept in one record.
+      - title: Unclaimed property
+        detail: Claims you can follow from search to filing.
+      - title: Ask a lawyer
+        detail: Request a review of your work. From $20, prepaid.
     app_store_label: App Store
     play_store_label: Google Play
     availability: Coming soon to
   - kind: cards
+    anchor: paperwork
+    overline: Included
+    heading: Your business paperwork comes with it.
+    description: >-
+      The formation and document work online legal-form sites sell one package
+      at a time is part of the subscription. No separate business plan, and no
+      per-filing package. Government fees are separate.
+    items:
+      - title: Form an LLC
+        body:
+          - - text: >-
+                Answer the formation questions in the app. We prepare and file
+                the paperwork for a basic LLC. State filing fees are separate.
+      - title: Contract templates
+        body:
+          - - text: >-
+                Fill out NDAs, offer letters, consulting agreements, and privacy
+                notices from our template library, written in plain English.
+        href: /notations
+        href_label: See the templates
+      - title: Government forms
+        body:
+          - - text: >-
+                Court and agency forms from the same library, filled from your
+                answers and ready to file.
+        href: /notations
+        href_label: See the forms
+  - kind: steps
+    anchor: how-it-works
+    overline: How it works
+    heading: Download, subscribe, and we run the checks.
+    items:
+      - title: Download Nautilus
+        body:
+          - - text: Get the app from the App Store or Google Play.
+      - title: Subscribe in the app
+        body:
+          - - text: >-
+                Pay $29/mo through your App Store or Google Play account, or
+                prepay $290 for the year. Cancel anytime from the same account.
+      - title: Your checks run
+        body:
+          - - text: >-
+                Data removal, monitoring, unclaimed property, and your
+                paperwork report back in the app as each one moves.
+      - title: Add a lawyer when you want one
+        body:
+          - - text: >-
+                Ask a licensed attorney to review what you prepared. Reviews
+                start at $20 and are prepaid under their own engagement.
+  - kind: cards
     anchor: pricing
     overline: Pricing
-    heading: One subscription. Two ways to pay.
+    heading: One subscription. Cancel anytime.
     description: >-
-      Every check is included in either price. Government fees are separate.
-      Nautilus is a non-legal service: legal fees are excluded from both plans
-      and must be prepaid before any legal work begins.
+      Every check is included in either price. Keep Nautilus for one month or
+      for years; cancel anytime. Government fees are separate. Nautilus is a
+      non-legal service: legal fees are excluded from both plans and must be
+      prepaid before any legal work begins.
     pricing_style: true
     items:
       - title: Monthly
         body:
-          - - text: Every check, billed each month.
+          - - text: Every check, billed each month. Cancel anytime.
         href: "#enrollment"
-        href_label: Get started
+        href_label: Start monthly
       - title: Annual
         body:
-          - - text: Every check, prepaid for the year.
+          - - text: Every check, prepaid for the year. Two months free.
         href: "#enrollment"
-        href_label: Get started
+        href_label: Start annual
   - kind: cards
     anchor: lawyer-review
     overline: When you want a lawyer

@@ -5280,9 +5280,10 @@ async fn every_sample_matter_page_renders_in_the_client_and_lawyer_lens() {
     c.close().await.unwrap();
 }
 
-/// Nautilus is the subscription home; business counsel has its own destination.
+/// Nautilus is the subscription home; the header carries a reader to
+/// Navigator and back.
 #[tokio::test]
-async fn nautilus_home_links_to_separate_business_counsel() {
+async fn nautilus_home_links_to_navigator_and_back() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
@@ -5293,19 +5294,14 @@ async fn nautilus_home_links_to_separate_business_counsel() {
         .for_element(Locator::Css("[data-nautilus-intake]"))
         .await
         .expect("Nautilus enrollment on the home page");
-    c.find(Locator::Css(".site-header a[href='/business']"))
+    c.find(Locator::Css(".site-header a[href='/navigator']"))
         .await
-        .expect("separate business link")
+        .expect("Navigator link")
         .click()
         .await
         .unwrap();
-    wait_for_text(&c, "Your retainer at work.", Duration::from_secs(10)).await;
-    assert_eq!(c.current_url().await.unwrap().path(), "/business");
-    assert!(c
-        .find_all(Locator::Css("[data-nautilus-intake]"))
-        .await
-        .unwrap()
-        .is_empty());
+    wait_for_text(&c, "Neon Law Navigator", Duration::from_secs(10)).await;
+    assert_eq!(c.current_url().await.unwrap().path(), "/navigator");
     c.find(Locator::Css(".site-header a[href='/']"))
         .await
         .expect("home link")

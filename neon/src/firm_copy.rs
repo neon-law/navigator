@@ -408,6 +408,8 @@ mod firm_copy_tests {
             price,
             checks_heading,
             checks,
+            android_heading,
+            android_items,
             app_store_label,
             play_store_label,
             availability,
@@ -418,13 +420,15 @@ mod firm_copy_tests {
         };
         let checks = checks
             .iter()
+            .chain(android_items)
             .map(|check| format!("{} {}", check.title, check.detail))
             .collect::<Vec<_>>()
             .join(" ");
         let description = description.clone().unwrap_or_default();
         format!(
             "{overline} {heading} {description} {app_name} {app_subtitle} {price} \
-             {checks_heading} {checks} {app_store_label} {play_store_label} {availability}"
+             {checks_heading} {android_heading} {checks} {app_store_label} {play_store_label} \
+             {availability}"
         )
     }
 
@@ -794,10 +798,8 @@ mod firm_copy_tests {
     /// Litigation is quoted per engagement because its scope is not knowable
     /// in advance; a published litigation "price" would be a floor dressed as
     /// a fee, the misleading-fee-advertising problem the flat-fee schedule
-    /// exists to avoid. Fractional GC is different: it now publishes its own
-    /// figures, but on its own page (`/business`) as a retainer, not here
-    /// — this schedule is for one-time matters, and a recurring retainer does
-    /// not belong on it regardless of whether it has a public number.
+    /// exists to avoid. Fractional GC is a recurring retainer, and this
+    /// schedule is for one-time matters.
     #[test]
     fn the_services_page_does_not_price_litigation_or_fractional_gc() {
         let content = super::legal_services(&views::brand::DEFAULT_BRANDING);
