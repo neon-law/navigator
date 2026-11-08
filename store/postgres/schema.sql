@@ -4378,7 +4378,7 @@ BEGIN
 END
 $$;
 
--- Migration: 20261107140000_create_firm_assumption.sql
+-- Migration: 20261107160000_create_firm_assumption.sql
 -- A Firm assumption: the stated premise the CEO digest checks actuals
 -- against and a Kit resolves at run time (ENG-1264). `key` is a dotted path
 -- from the repository's public `assumptions/schema.yaml` catalog, which

@@ -1500,12 +1500,12 @@ mod tests {
                 ),
             ),
             (
-                "20261107140000_create_firm_assumption.sql",
-                include_str!("../postgres/migrations/20261107140000_create_firm_assumption.sql"),
-            ),
-            (
                 "20261107150000_enable_postgis.sql",
                 include_str!("../postgres/migrations/20261107150000_enable_postgis.sql"),
+            ),
+            (
+                "20261107160000_create_firm_assumption.sql",
+                include_str!("../postgres/migrations/20261107160000_create_firm_assumption.sql"),
             ),
         ])
         .expect("timestamped migration assembles");
