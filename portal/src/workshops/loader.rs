@@ -114,6 +114,15 @@ const NAVIGATOR_MANIFEST: &[ManifestEntry] = &[
         benefit: "Leave with a practical way to see where data travels, ask who benefits, and exercise your choice to say no.",
         filename: "DELETE_YOUR_DATA.md",
     },
+    ManifestEntry {
+        category: "presentations",
+        slug: "portland-cloud-native",
+        title: "Navigator: open-source cloud-native services for justice",
+        description: "Follow a fictional probate workflow through Navigator and see how its infrastructure decisions become reusable.",
+        audience: "For cloud-native practitioners",
+        benefit: "See how a law firm's open-source stack captures engineering decisions that other teams and agents can reuse.",
+        filename: "PORTLAND_CLOUD_NATIVE.md",
+    },
 ];
 
 /// Load every manifest entry for the Neon Law Navigator workshop. Missing
