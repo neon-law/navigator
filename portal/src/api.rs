@@ -10137,6 +10137,7 @@ mod tests {
         )
         .await
         .unwrap();
+        store::test_support::approve_test_brand_domain(&surreal, "neon").await;
         let owner = crate::SessionData::fresh("owner", store::persons::Role::Owner);
         let axum::Json(owner_firms) = list_firms(State(surreal.clone()), AuthedSession(owner))
             .await
