@@ -429,18 +429,7 @@ async fn load_firm_menu(
     firm_id: Uuid,
 ) -> Result<Vec<ProjectOption>, HandlerError> {
     let menu = ctx
-        .run(move || async move {
-            let choices = store::inbox::projects_in_firm(&surreal, firm_id).await?;
-            let options = choices
-                .into_iter()
-                .map(|choice| ProjectOption {
-                    id: choice.id,
-                    code: choice.code,
-                    name: choice.name,
-                })
-                .collect::<Vec<ProjectOption>>();
-            Ok(Json(options))
-        })
+        .run(move || async move { Ok(Json(firm_menu(&surreal, firm_id).await?)) })
         .name("load-firm-project-menu")
         .await?
         .into_inner();
@@ -465,34 +454,10 @@ async fn run_classifier_step(
     let menu = menu.to_vec();
     let attempt = ctx
         .run(move || async move {
-            // Only the attempt leaves this step. Raw input stays in the
-            // store and in this provider call, outside the context checkpoint.
-            let config = invocation.run;
-            let Some(mut providers) = providers else {
-                return Ok(Json(ClassifierAttempt {
-                    output: None,
-                    raw_output: None,
-                    run_config: Some(config),
-                }));
-            };
-            providers.project_id = invocation.project_id;
-            let message = store::inbox::message_by_id(&surreal, message_id)
-                .await
-                .map_err(HandlerError::from)?
-                .ok_or_else(|| TerminalError::new("inbound message not found"))?;
-            let conversation = store::inbox::conversation_by_id(&surreal, message.conversation_id)
-                .await
-                .map_err(HandlerError::from)?
-                .ok_or_else(|| TerminalError::new("inbound conversation not found"))?;
-            let prompt = build_triage_prompt(
-                &channel,
-                conversation.subject.as_deref(),
-                &message.body,
-                config.max_input_chars,
-                &menu,
-                &config,
-            );
-            Ok::<_, HandlerError>(Json(classify_message(&providers, config, prompt).await))
+            Ok::<_, HandlerError>(Json(
+                classifier_attempt(providers, surreal, message_id, invocation, channel, menu)
+                    .await?,
+            ))
         })
         .name("classify-inbound-message")
         .await?
@@ -513,31 +478,195 @@ async fn record_triage_step(
 ) -> Result<InboundTriageReport, HandlerError> {
     let report = ctx
         .run(move || async move {
-            let validated = validate_suggestion(
-                &surreal,
-                context.firm_id,
-                attempt
-                    .output
-                    .as_ref()
-                    .and_then(|output| output.suggested_project_id),
-            )
-            .await?;
-            let row = assemble_triage(
-                message_id,
-                context.firm_id,
-                &context.channel,
-                context.public_social,
-                &lane,
-                attempt.output.as_ref(),
-                validated,
-            );
-            let recorded = store::inbox_triage::record(&surreal, &row).await?;
-            Ok(Json(triage_report(message_id, &recorded)))
+            Ok(Json(
+                record_triage(&surreal, message_id, context, lane, attempt).await?,
+            ))
         })
         .name("record-inbound-triage")
         .await?
         .into_inner();
     Ok(report)
+}
+
+async fn firm_menu(surreal: &SurrealDb, firm_id: Uuid) -> Result<Vec<ProjectOption>, HandlerError> {
+    let choices = store::inbox::projects_in_firm(surreal, firm_id).await?;
+    Ok(choices
+        .into_iter()
+        .map(|choice| ProjectOption {
+            id: choice.id,
+            code: choice.code,
+            name: choice.name,
+        })
+        .collect())
+}
+
+async fn classifier_attempt(
+    providers: Option<TriageProviders>,
+    surreal: SurrealDb,
+    message_id: Uuid,
+    invocation: ClassifierConfig,
+    channel: String,
+    menu: Vec<ProjectOption>,
+) -> Result<ClassifierAttempt, HandlerError> {
+    // Only the attempt leaves this step. Raw input stays in the
+    // store and in this provider call, outside the context checkpoint.
+    let config = invocation.run;
+    let Some(mut providers) = providers else {
+        return Ok(ClassifierAttempt {
+            output: None,
+            raw_output: None,
+            run_config: Some(config),
+        });
+    };
+    providers.project_id = invocation.project_id;
+    let message = store::inbox::message_by_id(&surreal, message_id)
+        .await
+        .map_err(HandlerError::from)?
+        .ok_or_else(|| TerminalError::new("inbound message not found"))?;
+    let conversation = store::inbox::conversation_by_id(&surreal, message.conversation_id)
+        .await
+        .map_err(HandlerError::from)?
+        .ok_or_else(|| TerminalError::new("inbound conversation not found"))?;
+    let prompt = build_triage_prompt(
+        &channel,
+        conversation.subject.as_deref(),
+        &message.body,
+        config.max_input_chars,
+        &menu,
+        &config,
+    );
+    Ok(classify_message(&providers, config, prompt).await)
+}
+
+async fn record_triage(
+    surreal: &SurrealDb,
+    message_id: Uuid,
+    context: TriageContext,
+    lane: ClassifierLane,
+    attempt: ClassifierAttempt,
+) -> Result<InboundTriageReport, HandlerError> {
+    let validated = validate_suggestion(
+        surreal,
+        context.firm_id,
+        attempt
+            .output
+            .as_ref()
+            .and_then(|output| output.suggested_project_id),
+    )
+    .await?;
+    let row = assemble_triage(
+        message_id,
+        context.firm_id,
+        &context.channel,
+        context.public_social,
+        &lane,
+        attempt.output.as_ref(),
+        validated,
+    );
+    let recorded = store::inbox_triage::record(surreal, &row).await?;
+    Ok(triage_report(message_id, &recorded))
+}
+
+pub type TriageWorkflow = dbos::WorkflowRef<InboundTriageRequest, InboundTriageReport, TriageError>;
+
+#[derive(Debug, thiserror::Error, Serialize, Deserialize)]
+pub enum TriageError {
+    #[error("the inbound triage store read or write failed")]
+    Store,
+}
+
+fn triage_step_error(_: HandlerError) -> dbos::Error<TriageError> {
+    dbos::Error::Application(TriageError::Store)
+}
+
+pub fn register_dbos(
+    dbos: &dbos::DBOS,
+    service: InboundTriageService,
+) -> dbos::Result<TriageWorkflow> {
+    dbos.register_workflow("InboundTriage", move |request: InboundTriageRequest| {
+        let service = service.clone();
+        async move { run_dbos(service, request.message_id).await }
+    })
+}
+
+async fn run_dbos(
+    service: InboundTriageService,
+    message_id: Uuid,
+) -> dbos::Result<InboundTriageReport, TriageError> {
+    let context = dbos::step("load-inbound-triage-context", || async {
+        triage_context(&service.surreal, message_id, service.providers.as_ref())
+            .await
+            .map_err(triage_step_error)
+    })
+    .await?;
+    let Some(context) = context else {
+        return Ok(non_inbound_report(message_id));
+    };
+    let existing = dbos::step("find-existing-triage", || async {
+        store::inbox_triage::find_for_message(&service.surreal, message_id)
+            .await
+            .map_err(|_| dbos::Error::Application(TriageError::Store))
+    })
+    .await?;
+    if let Some(row) = existing {
+        return Ok(triage_report(message_id, &row));
+    }
+    let attempt = if let Some(invocation) = context.classifier.as_ref() {
+        let menu = dbos::step("load-firm-project-menu", || async {
+            firm_menu(&service.surreal, context.firm_id)
+                .await
+                .map_err(triage_step_error)
+        })
+        .await?;
+        dbos::step("classify-inbound-message", || {
+            let invocation = invocation.clone();
+            let menu = menu.clone();
+            let channel = context.channel.clone();
+            let service = service.clone();
+            async move {
+                classifier_attempt(
+                    service.providers,
+                    service.surreal,
+                    message_id,
+                    invocation,
+                    channel,
+                    menu,
+                )
+                .await
+                .map_err(triage_step_error)
+            }
+        })
+        .await?
+    } else {
+        ClassifierAttempt {
+            output: None,
+            raw_output: None,
+            run_config: None,
+        }
+    };
+    dbos::step("record-inbound-triage", || {
+        let (context, attempt) = (context.clone(), attempt.clone());
+        let surreal = service.surreal.clone();
+        async move {
+            // The write may have succeeded before DBOS checkpointed the step.
+            if let Some(row) = store::inbox_triage::find_for_message(&surreal, message_id)
+                .await
+                .map_err(|_| dbos::Error::Application(TriageError::Store))?
+            {
+                return Ok(triage_report(message_id, &row));
+            }
+            match record_triage(&surreal, message_id, context, attempt.lane(), attempt).await {
+                Ok(report) => Ok(report),
+                Err(error) => store::inbox_triage::find_for_message(&surreal, message_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|row| triage_report(message_id, &row))
+                    .ok_or_else(|| triage_step_error(error)),
+            }
+        }
+    })
+    .await
 }
 
 /// The report shape of a triage row as it was recorded — the replay and

@@ -123,25 +123,7 @@ pub(crate) async fn ingest_attachments(
 /// itself is never rolled back, and the alert that was already submitted is
 /// keyed identically and survives the replay untouched.
 pub async fn start_inbound_message_triage(message_id: Uuid) -> Result<(), String> {
-    let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(());
-    };
-    let request = workflows::InboundTriageRequest { message_id };
-    workflows::start_workflow(
-        &ingress,
-        std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
-        "InboundTriage",
-        &message_id.to_string(),
-        "run",
-        &request,
-        true,
-    )
-    .await
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+    workflows::trigger::start_inbound_triage(message_id).await
 }
 
 /// Record support intake in the shared email/SMS transcript. Public Neon Law
