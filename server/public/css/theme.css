@@ -1043,9 +1043,8 @@ a.nav-pagination__link:hover {
 }
 
 .site-header__nav {
-  width: min(100%, 72rem);
+  width: 100%;
   box-sizing: border-box;
-  margin: 0 auto;
   padding: 0.75rem 1rem;
   display: flex;
   flex-wrap: wrap;
@@ -1205,10 +1204,7 @@ a.nav-pagination__link:hover {
    brand-driven legal strip (regulated entity, bar admissions, per-attorney bar
    licenses, disclaimer, joint copyright) every public page carries.
 
-   The rule is full-bleed and the content is width-capped, mirroring the header
-   exactly: `.site-header` owns the border, `.site-header__nav` owns the 72rem
-   column. That is what lines the footer up with the navbar above it instead of
-   letting it run to the viewport edge. */
+   The footer spans the page and its inner content sits in a centered column. */
 .site-footer {
   position: relative;
   overflow: clip;
