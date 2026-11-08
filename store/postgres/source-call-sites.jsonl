@@ -5287,7 +5287,7 @@
 {"file":"webapp/src/app_chrome.rs","line":751,"function":"resolve_app_brand_mark_prefers_an_uploaded_logo","operation":"query","sql_operations":["UPDATE"],"tables":[],"transaction":false}
 {"file":"webapp/src/brands_edit.rs","line":1055,"function":"social_account_cards_offer_connect_and_disconnect","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/brands_edit.rs","line":1095,"function":"saved_destinations_are_read_only_with_an_explicit_update_toggle","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/components.rs","line":377,"function":"nav_names","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/components.rs","line":379,"function":"nav_names","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/document_link.rs","line":93,"function":"from_secret","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/document_link.rs","line":145,"function":"verify","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/document_link.rs","line":161,"function":"sign","operation":"update","sql_operations":[],"tables":[],"transaction":false}

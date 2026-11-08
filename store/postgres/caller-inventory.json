@@ -14667,6 +14667,7 @@
       "webapp/src/home.rs",
       "webapp/src/lawyer_project_detail.rs",
       "webapp/src/lawyer_project_testimonial.rs",
+      "webapp/src/marketing_page.rs",
       "webapp/src/matter_surface.rs",
       "webapp/src/portal_project_detail.rs",
       "webapp/src/sections/page.rs",
