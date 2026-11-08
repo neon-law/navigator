@@ -2,9 +2,10 @@
 //! — and the parser/validator every entry is held to.
 //!
 //! A **Project Skill** is a practice playbook: a jurisdiction, a practice
-//! area, a name, a version, and the [Notation](crate::kind) codes it bundles.
-//! `navigator project skill use` (in the `cli` crate) pins one onto a
-//! Project's `navigator.yaml`. This module owns only the offline shape of
+//! area, a name, a version, the [Notation](crate::kind) codes it bundles,
+//! and the Firm Assumption keys it renders. `navigator project skill use`
+//! (in the `cli` crate) pins one onto a Project's `navigator.yaml`. This
+//! module owns only the offline shape of
 //! the catalog entry — parsing one file's frontmatter into [`ProjectSkill`],
 //! and [`catalog_violations`], the cross-file pass that walks `skills/` the
 //! way [`crate::code_uniqueness_violations`] walks `templates/` for `N111`.
@@ -28,6 +29,7 @@
 //! reads at runtime. This module reuses that static rather than opening a
 //! second embed of the same seed file.
 
+use crate::assumption_keys::catalog_keys;
 use crate::f110::JURISDICTIONS;
 use crate::{frontmatter, line_byte_range, FileFilter, Violation};
 use std::collections::HashMap;
@@ -40,6 +42,9 @@ use walkdir::WalkDir;
 pub const MALFORMED_CODE: &str = "N126";
 /// `N127` — two catalog entries declare the same `(jurisdiction, practice_area)` pair.
 pub const DUPLICATE_CODE: &str = "N127";
+/// `N128` — a catalog entry declares an assumption key the Firm Assumptions
+/// catalog (`assumptions/schema.yaml`) does not define.
+pub const UNDEFINED_ASSUMPTION_CODE: &str = "N128";
 
 /// One parsed `skills/<jurisdiction>/<practice_area>.md` catalog entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +62,11 @@ pub struct ProjectSkill {
     /// Notation `code`s this skill bundles, scaffolded onto a Project that
     /// pins it.
     pub notations: Vec<String>,
+    /// Firm Assumption keys this kit renders, declared in the optional
+    /// `assumptions:` frontmatter list. A kit carries no Firm numbers: the
+    /// body references a key by dotted path and the Firm's own value is
+    /// resolved at run time (`docs/glossary/firm-assumption.md`).
+    pub assumptions: Vec<String>,
     /// The markdown body below the frontmatter — the playbook itself.
     pub body: String,
 }
@@ -82,6 +92,10 @@ pub enum ProjectSkillError {
     /// `store/seeds/Jurisdiction.yaml` — a free-text value like `Nevada`
     /// lands here, not in [`Self::Missing`] or [`Self::Empty`].
     UnknownJurisdiction(String),
+    /// The body references an assumption key the frontmatter does not
+    /// declare in `assumptions:` — a typo lands here rather than rendering
+    /// blank quietly at run time.
+    UndeclaredReference(String),
 }
 
 impl std::fmt::Display for ProjectSkillError {
@@ -98,6 +112,11 @@ impl std::fmt::Display for ProjectSkillError {
                 f,
                 "unknown jurisdiction `{value}`; expected a code seeded in \
                  store/seeds/Jurisdiction.yaml"
+            ),
+            Self::UndeclaredReference(key) => write!(
+                f,
+                "body references assumption key `{key}`, which the \
+                 `assumptions:` frontmatter does not declare"
             ),
         }
     }
@@ -163,20 +182,107 @@ pub fn parse(contents: &str) -> Result<ProjectSkill, ProjectSkillError> {
         Some(_) => return Err(ProjectSkillError::NotASequence("notations")),
     };
 
+    // `assumptions:` mirrors `notations:` — an optional list of scalar keys.
+    // Declaring keys here is what lets the gate (`N128`) catch a typo'd
+    // dotted path before a Firm renders the kit, and what lets the body's
+    // `{{ key }}` references be checked against a declaration rather than
+    // trusted.
+    let assumptions = match mapping.get("assumptions") {
+        None => Vec::new(),
+        Some(serde_yaml::Value::Sequence(items)) => {
+            let mut keys = Vec::with_capacity(items.len());
+            for item in items {
+                match item.as_str() {
+                    Some(key) if !key.trim().is_empty() => keys.push(key.trim().to_string()),
+                    _ => return Err(ProjectSkillError::NotASequence("assumptions")),
+                }
+            }
+            keys
+        }
+        Some(_) => return Err(ProjectSkillError::NotASequence("assumptions")),
+    };
+
+    for reference in assumption_references(body) {
+        if !assumptions.iter().any(|key| key == &reference) {
+            return Err(ProjectSkillError::UndeclaredReference(reference));
+        }
+    }
+
     Ok(ProjectSkill {
         jurisdiction,
         practice_area,
         name,
         version,
         notations,
+        assumptions,
         body: body.to_string(),
     })
 }
 
-/// Cross-file catalog checks (`N126`/`N127`): walk `<dir>/skills/`, parse
-/// every `.md` file, and report each parse failure plus every duplicate
-/// `(jurisdiction, practice_area)` pair. A repository with no `skills/`
-/// directory simply finds nothing — mirrors
+/// Every Firm Assumption key the body renders through `{{ key }}`, deduplicated
+/// and sorted. A span is an assumption reference when it sits inside `{{`/`}}`
+/// and carries no whitespace after trimming — a dotted key, not prose or an
+/// unrelated template syntax.
+#[must_use]
+pub fn assumption_references(body: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut rest = body;
+    while let Some(open) = rest.find("{{") {
+        let after = &rest[open + 2..];
+        match after.find("}}") {
+            Some(close) => {
+                let candidate = after[..close].trim();
+                let is_key = !candidate.is_empty()
+                    && !candidate.chars().any(char::is_whitespace)
+                    && !keys.iter().any(|key| key == candidate);
+                if is_key {
+                    keys.push(candidate.to_string());
+                }
+                rest = &after[close + 2..];
+            }
+            None => break,
+        }
+    }
+    keys.sort();
+    keys
+}
+
+/// Render one catalog entry's body against a Firm's resolved assumption
+/// values. Each `{{ key }}` span becomes the resolver's value for `key`, and
+/// an unset or unknown key renders as the empty string — a fresh deployment
+/// shows blanks, never a crash and never another Firm's economics.
+///
+/// The substitution is pure: the caller resolves keys through
+/// `store::firm_assumptions::lookup`, which is firm-scoped by construction.
+#[must_use]
+pub fn render_assumptions(body: &str, resolve: impl Fn(&str) -> Option<String>) -> String {
+    let mut rendered = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(open) = rest.find("{{") {
+        rendered.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+        let Some(close) = after.find("}}") else {
+            rendered.push_str("{{");
+            rest = after;
+            continue;
+        };
+        let candidate = after[..close].trim();
+        if candidate.is_empty() || candidate.chars().any(char::is_whitespace) {
+            rendered.push_str(&after[..close + 2]);
+        } else {
+            rendered.push_str(resolve(candidate).as_deref().unwrap_or_default());
+        }
+        rest = &after[close + 2..];
+    }
+    rendered.push_str(rest);
+    rendered
+}
+
+/// Cross-file catalog checks (`N126`/`N127`/`N128`): walk `<dir>/skills/`,
+/// parse every `.md` file, report each parse failure, every duplicate
+/// `(jurisdiction, practice_area)` pair, and every `assumptions:` declaration
+/// the Firm Assumptions catalog does not define. A repository with no
+/// `skills/` directory simply finds nothing — mirrors
 /// [`crate::code_uniqueness_violations`] and [`crate::service_template_violations`].
 ///
 /// # Errors
@@ -218,9 +324,24 @@ pub fn catalog_violations(dir: &Path, filter: &dyn FileFilter) -> io::Result<Vec
 
     let mut violations = Vec::new();
     let mut first_seen: HashMap<(String, String), PathBuf> = HashMap::new();
+    let defined_keys = catalog_keys();
     for (path, contents) in entries {
         match parse(&contents) {
             Ok(skill) => {
+                for key in &skill.assumptions {
+                    if !defined_keys.contains(key) {
+                        violations.push(Violation {
+                            code: UNDEFINED_ASSUMPTION_CODE,
+                            path: path.clone(),
+                            line: 1,
+                            range: line_byte_range(&contents, 1),
+                            message: format!(
+                                "Project Skill declares assumption key `{key}`, which \
+                                 assumptions/schema.yaml does not define"
+                            ),
+                        });
+                    }
+                }
                 let pair = (skill.jurisdiction, skill.practice_area);
                 if let Some(prev) = first_seen.get(&pair) {
                     violations.push(Violation {
@@ -253,7 +374,10 @@ pub fn catalog_violations(dir: &Path, filter: &dyn FileFilter) -> io::Result<Vec
 
 #[cfg(test)]
 mod tests {
-    use super::{catalog_violations, parse, ProjectSkillError, DUPLICATE_CODE, MALFORMED_CODE};
+    use super::{
+        catalog_violations, parse, ProjectSkillError, DUPLICATE_CODE, MALFORMED_CODE,
+        UNDEFINED_ASSUMPTION_CODE,
+    };
     use crate::DefaultFileFilter;
 
     const ESTATES: &str = "---\njurisdiction: NV\npractice_area: estates\nname: Nevada Estates Playbook\nversion: \"1\"\nnotations:\n  - onboarding__letter\n---\n\nSynthetic playbook body.\n";
@@ -454,5 +578,111 @@ mod tests {
             "{}",
             duplicate.message
         );
+    }
+
+    #[test]
+    fn an_optional_assumptions_list_parses() {
+        let body = "---\njurisdiction: NV\npractice_area: estates\nname: N\nversion: \"1\"\nassumptions:\n  - plan.target_minutes.document_review\n---\nbody\n";
+        let skill = parse(body).expect("parses");
+        assert_eq!(
+            skill.assumptions,
+            vec!["plan.target_minutes.document_review".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_assumptions_list_that_is_not_a_list_of_scalars_is_malformed() {
+        let body = "---\njurisdiction: NV\npractice_area: estates\nname: N\nversion: \"1\"\nassumptions: 45\n---\nbody\n";
+        assert_eq!(
+            parse(body),
+            Err(ProjectSkillError::NotASequence("assumptions"))
+        );
+        let blank = "---\njurisdiction: NV\npractice_area: estates\nname: N\nversion: \"1\"\nassumptions:\n  - \"\"\n---\nbody\n";
+        assert_eq!(
+            parse(blank),
+            Err(ProjectSkillError::NotASequence("assumptions"))
+        );
+    }
+
+    #[test]
+    fn a_body_reference_to_an_undeclared_key_is_malformed() {
+        let body = "---\njurisdiction: NV\npractice_area: estates\nname: N\nversion: \"1\"\nassumptions:\n  - plan.target_minutes.letter\n---\nThe plan targets {{ plan.target_minutes.document_review }} minutes.\n";
+        let error = parse(body).expect_err("the undeclared reference is refused");
+        assert_eq!(
+            error,
+            ProjectSkillError::UndeclaredReference(
+                "plan.target_minutes.document_review".to_string()
+            )
+        );
+        assert!(error.to_string().contains("does not declare"), "{error}");
+    }
+
+    #[test]
+    fn a_declared_key_outside_the_firm_assumptions_catalog_is_n128() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills = dir.path().join("skills");
+        std::fs::create_dir_all(skills.join("nv")).unwrap();
+        std::fs::write(
+            skills.join("nv/estates.md"),
+            "---\njurisdiction: NV\npractice_area: estates\nname: N\nversion: \"1\"\nassumptions:\n  - plan.target_minutes.nope\n---\nbody\n",
+        )
+        .unwrap();
+
+        let violations = catalog_violations(dir.path(), &DefaultFileFilter::default()).unwrap();
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].code, UNDEFINED_ASSUMPTION_CODE);
+        assert!(violations[0].message.contains("plan.target_minutes.nope"));
+    }
+
+    #[test]
+    fn a_declared_catalog_key_passes_the_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let skills = dir.path().join("skills");
+        std::fs::create_dir_all(skills.join("nv")).unwrap();
+        std::fs::write(
+            skills.join("nv/estates.md"),
+            "---\njurisdiction: NV\npractice_area: estates\nname: N\nversion: \"1\"\nassumptions:\n  - plan.target_minutes.document_review\n---\nThe plan targets {{ plan.target_minutes.document_review }} minutes.\n",
+        )
+        .unwrap();
+
+        let violations = catalog_violations(dir.path(), &DefaultFileFilter::default()).unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
+    fn reference_extraction_finds_deduplicates_and_sorts() {
+        let body = "B references {{plan.target_minutes.letter}} then {{ plan.target_minutes.document_review }} and repeats {{plan.target_minutes.letter}}; {{not an assumption}} and {{ untethered stay literal.";
+        assert_eq!(
+            super::assumption_references(body),
+            vec![
+                "plan.target_minutes.document_review".to_string(),
+                "plan.target_minutes.letter".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn rendering_substitutes_resolved_values_and_blanks_the_rest() {
+        let body = "Review: {{ plan.target_minutes.document_review }}; letter: {{plan.target_minutes.letter}}; unset: {{ plan.target_minutes.uncontested_divorce }}.";
+        let rendered = super::render_assumptions(body, |key| {
+            if key == "plan.target_minutes.document_review" {
+                Some("45".to_string())
+            } else if key == "plan.target_minutes.letter" {
+                Some("30".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            rendered, "Review: 45; letter: 30; unset: .",
+            "an unset key renders blank, never a crash and never another Firm's number"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_renders_blank_rather_than_crashing() {
+        let rendered =
+            super::render_assumptions("Value: {{ plan.target_minutes.everything }}.", |_| None);
+        assert_eq!(rendered, "Value: .");
     }
 }
