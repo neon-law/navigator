@@ -307,7 +307,7 @@ async fn the_documents_render_their_markdown_as_html() {
 
 /// Neon Law is the trade name of one brand. Every other Guieb & Shook PC brand
 /// publishes the same Privacy Policy and Terms under the firm's own name, so
-/// neither the documents nor the footer links to them say "Neon Law".
+/// nothing on those pages, footer included, says "Neon Law".
 #[tokio::test]
 async fn guieb_shook_brand_legal_pages_never_name_neon_law() {
     use views::brand::BrandKey;
@@ -338,13 +338,7 @@ async fn guieb_shook_brand_legal_pages_never_name_neon_law() {
                 .await
                 .unwrap();
             let html = String::from_utf8(bytes.to_vec()).unwrap();
-            let (head, rest) = html.split_once("<footer ").expect("public footer");
-            let nav = rest
-                .split_once("site-footer__nav")
-                .and_then(|(_, row)| row.split_once("</ul>"))
-                .expect("footer link row")
-                .0;
-            let flat = head
+            let flat = html
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" ")
@@ -355,10 +349,10 @@ async fn guieb_shook_brand_legal_pages_never_name_neon_law() {
                 "{} {path} names the firm: {flat}",
                 key.as_str()
             );
-            for region in [flat.as_str(), nav] {
+            for retired in ["Neon Law", "Every reference to"] {
                 assert!(
-                    !region.contains("Neon Law"),
-                    "{} {path} names Neon Law: {region}",
+                    !flat.contains(retired),
+                    "{} {path} still says {retired:?}: {flat}",
                     key.as_str()
                 );
             }

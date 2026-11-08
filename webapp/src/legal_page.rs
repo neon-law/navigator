@@ -88,7 +88,7 @@ fn firm_named_body(body_html: &str, chrome: &PublicChrome) -> String {
     )
     .replace(&format!("{TRADE_NAME} ({FIRM})"), FIRM)
     .replace(
-        &format!(" Every reference to &quot;{TRADE_NAME}&quot; in these Terms means {FIRM}."),
+        &format!("Every reference to \"{TRADE_NAME}\" in these Terms means {FIRM}."),
         "",
     )
     .replace("contact@neonlaw.com", &chrome.firm_email)

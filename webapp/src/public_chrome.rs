@@ -339,26 +339,29 @@ pub(crate) fn marketing_copy(key: &str) -> String {
     .to_string()
 }
 
-/// The firm's own page speaks for itself: no provider credit, no Neon mark.
+/// Neon Law is the trade name of one Guieb & Shook PC brand. The firm's other
+/// brands carry neither its mark nor its ownership notice; another firm keeps
+/// its own mark.
 #[cfg(feature = "server")]
-fn firm_own_page() -> bool {
-    views::brand::brand_key() == views::brand::BrandKey::GuiebShook
+fn neon_mark_withheld() -> bool {
+    views::brand::FIRM_BRAND.legal_entity == "Guieb & Shook PC"
+        && views::brand::brand_key() != views::brand::BrandKey::Neon
 }
 
-/// The footer's mark notice, empty on the firm's own page.
+/// The footer's mark notice.
 #[cfg(feature = "server")]
 fn footer_trademark() -> (&'static str, &'static str, &'static str) {
-    if firm_own_page() {
+    if neon_mark_withheld() {
         ("", "", "")
     } else {
         views::brand::firm_trademark()
     }
 }
 
-/// The ownership notice, empty on the Firm's own page.
+/// The Neon Law ownership notice, on Neon Law's own pages only.
 #[cfg(feature = "server")]
 fn footer_disclosure() -> crate::components::site_footer::FooterDisclosure {
-    if views::brand::FIRM_BRAND.legal_entity == "Guieb & Shook PC" && !firm_own_page() {
+    if views::brand::FIRM_BRAND.legal_entity == "Guieb & Shook PC" && !neon_mark_withheld() {
         crate::components::site_footer::FooterDisclosure {
             ownership: marketing_copy("footer.ownership"),
             ..Default::default()
