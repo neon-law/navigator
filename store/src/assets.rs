@@ -3238,6 +3238,7 @@ mod tests {
                 signing: None,
                 notarization: Vec::new(),
                 evidence: None,
+                folder: None,
             },
             expected,
             bytes,

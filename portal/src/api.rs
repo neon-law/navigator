@@ -14304,6 +14304,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 notarization: Vec::new(),
                 evidence: None,
                 folder: Some("Discovery".to_string()),
+                expected_head: None,
             }),
         )
         .await
@@ -14343,6 +14344,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 notarization: Vec::new(),
                 evidence: None,
                 folder: None,
+                expected_head: None,
             }),
         )
         .await
@@ -14400,6 +14402,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 notarization: Vec::new(),
                 evidence: None,
                 folder: Some("Left Drawer".to_string()),
+                expected_head: None,
             }),
         )
         .await
