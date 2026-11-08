@@ -1038,6 +1038,45 @@ pub(crate) struct RevisionSummary {
 const INTEGRITY_PAGE: usize = 50;
 /// Rows per request when the server re-hashes each object.
 const INTEGRITY_DEEP_PAGE: usize = 10;
+
+/// The page size for an integrity fetch, deep or shallow.
+pub(crate) fn integrity_page_limit(deep: bool) -> usize {
+    if deep {
+        INTEGRITY_DEEP_PAGE
+    } else {
+        INTEGRITY_PAGE
+    }
+}
+
+/// An integrity report with no rows yet, ready to fold pages into.
+fn empty_integrity_response() -> IntegrityResponse {
+    IntegrityResponse {
+        assets: Vec::new(),
+        total: None,
+        next_offset: None,
+        integrations: Vec::new(),
+    }
+}
+
+/// Fold one fetched integrity page into `merged`, reporting the offset of
+/// the next page — `None` when the fetch is complete.
+pub(crate) fn integrity_advance(
+    merged: &mut IntegrityResponse,
+    page: IntegrityResponse,
+    offset: usize,
+) -> Result<Option<usize>> {
+    merged.total = page.total;
+    merged.assets.extend(page.assets);
+    merged.integrations.extend(page.integrations);
+    match page.next_offset {
+        None => Ok(None),
+        Some(next) if next > offset => Ok(Some(next)),
+        Some(next) => Err(anyhow!(
+            "document integrity paging did not advance: the server answered \
+             next_offset {next} for offset {offset}"
+        )),
+    }
+}
 /// Tries per page or per revision read before the check fails. The reads
 /// share one budget: both are bounded idempotent GETs, and both retry a
 /// plain 500 alongside the gateway errors.
@@ -1459,39 +1498,27 @@ impl DocumentClient {
     /// The server answers in bounded pages, so a matter with hundreds of
     /// pointers never waits on one gateway-length request. A page that fails
     /// at the gateway or times out is retried; the rest of the pages are
-    /// never skipped, so every row is still checked.
+    /// never skipped, so every row is still checked. A `401` on any page is
+    /// a [`SessionRefused`] — renewal above this layer (`LiveSession`)
+    /// answers it; here it is never retried.
     pub(crate) async fn integrity(&self, deep: bool) -> Result<IntegrityResponse> {
-        let limit = if deep {
-            INTEGRITY_DEEP_PAGE
-        } else {
-            INTEGRITY_PAGE
-        };
-        let mut merged = IntegrityResponse {
-            assets: Vec::new(),
-            total: None,
-            next_offset: None,
-            integrations: Vec::new(),
-        };
+        let limit = integrity_page_limit(deep);
+        let mut merged = empty_integrity_response();
         let mut offset = 0;
         loop {
             let page = self.integrity_page(deep, offset, limit).await?;
-            merged.total = page.total;
-            merged.assets.extend(page.assets);
-            merged.integrations.extend(page.integrations);
-            match page.next_offset {
+            match integrity_advance(&mut merged, page, offset)? {
                 None => return Ok(merged),
-                Some(next) if next > offset => offset = next,
-                Some(next) => {
-                    return Err(anyhow!(
-                        "document integrity paging did not advance: the server answered \
-                         next_offset {next} for offset {offset}"
-                    ));
-                }
+                Some(next) => offset = next,
             }
         }
     }
 
-    async fn integrity_page(
+    /// One bounded page of the integrity report. A page that fails at the
+    /// gateway or times out is retried; a `401` is a [`SessionRefused`] —
+    /// it says nothing about the documents, only the session, and renewal
+    /// above this layer (`LiveSession`) stays the one path that answers it.
+    pub(crate) async fn integrity_page(
         &self,
         deep: bool,
         offset: usize,
@@ -1521,6 +1548,11 @@ impl DocumentClient {
                         return serde_json::from_str(&text).with_context(|| {
                             format!("parse document integrity response at offset {offset}")
                         });
+                    }
+                    if status == reqwest::StatusCode::UNAUTHORIZED {
+                        return Err(anyhow::Error::new(SessionRefused {
+                            detail: first_line(&text),
+                        }));
                     }
                     failure = integrity_failure(Ok((status, &text)), INTEGRITY_REQUEST_TIMEOUT);
                     transient_status(status)
