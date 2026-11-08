@@ -1,0 +1,77 @@
+head_title: "{site_name} | Home"
+meta_description: >-
+  Lex Tecnica is a law firm for entrepreneurs, by entrepreneurs. Fractional
+  general counsel, business law, litigation, intellectual property, and
+  more. Attorney advertisement.
+title: Your general counsel
+tagline: A law firm for entrepreneurs, by entrepreneurs.
+hero_lead: >-
+  Lex Tecnica works as your general counsel. Our attorneys have run legal
+  teams inside businesses, and we bring that in-house view to your company,
+  your dispute, or your family's plans. You choose the attorney you work
+  with, and we confirm the scope and fees in writing before work begins.
+hero_cta:
+  href: /contact
+  label: Contact Us
+skin: practice
+bands:
+  - kind: statement
+    overline: In the courts and in the movement
+    heading: >-
+      Explore Lex Tecnica's case against SNWA and LVVWD, and the movement to
+      #SaveTheTrees.
+  - kind: cards
+    anchor: pillars
+    overline: How we work
+    heading: Three things we bring to every engagement.
+    items:
+      - title: On Your Team
+        body:
+          - - text: >-
+                At Lex Tecnica, we understand the doubts that come with
+                hiring outside counsel — we've managed legal teams for
+                billion-dollar businesses ourselves. That's why we operate
+                as true partners, offering national firm expertise at a
+                fraction of the cost, with the loyalty and agility of
+                in-house counsel.
+          - - text: >-
+                Contact us today to see how we can help you win.
+      - title: Strategic Focus
+        body:
+          - - text: >-
+                At Lex Tecnica, we understand the importance of building
+                bridges and providing the legal support needed to move
+                mountains. By representing only a select number of clients,
+                we dedicate our time, strategy, and talents to advancing
+                your goals and realizing your constructive vision.
+          - - text: >-
+                We understand entrepreneurs because we are entrepreneurs
+                ourselves. We know the cost to grow and build business.
+      - title: Full Spectrum
+        body:
+          - - text: >-
+                Lex Tecnica attorneys bring decades of experience across all
+                areas of law — from transactional and regulatory compliance
+                to intellectual property and complex litigation. With a Lex
+                Tecnica Digital General Counsel, you gain not only their
+                expertise but also the collective talents of an entire firm
+                of attorneys who have excelled in business, litigation, and
+                government.
+  - kind: statement
+    overline: What comes next
+    heading: Let's Go Change the World
+    body:
+      - - text: >-
+            Lex Tecnica brings experienced attorneys, modern technology, and
+            an entrepreneurial mindset together to deliver legal counsel
+            built around the way people and businesses operate today.
+  - kind: cta
+    heading: Start the conversation.
+    body: >-
+      From everyday legal needs to complex business, litigation,
+      intellectual property, immigration, education, and beyond, our
+      attorneys meet you where you are and help you move forward.
+    email: "{firm_email}"
+    action:
+      href: /contact
+      label: Contact Us

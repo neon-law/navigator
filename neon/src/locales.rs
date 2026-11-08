@@ -237,7 +237,9 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
 /// catalogs.
 fn lex_tecnica_catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
     match (key, page) {
-        (BrandKey::LexTecnica, "home") => Some(include_str!("../locales/en/lex-tecnica/home.yaml")),
+        (BrandKey::LexTecnica, "home-marketing") => Some(include_str!(
+            "../locales/en/lex-tecnica/home-marketing.yaml"
+        )),
         (BrandKey::LexTecnica, "services") => {
             Some(include_str!("../locales/en/lex-tecnica/services.yaml"))
         }
@@ -1591,6 +1593,18 @@ pub fn delete_your_data_gateway(
     content
 }
 
+/// Lex Tecnica's home is a marketing-page band sequence mirroring the
+/// firm's published lextecnica.com structure — the `#SaveTheTrees` case
+/// banner, the three pillars, and the closing "Let's Go Change the World"
+/// statement — served through the same `HomeContent.marketing_page` seam
+/// as the other band-built homes.
+pub fn lex_tecnica_home(
+    branding: &views::brand::Branding,
+    _deployment_host: Option<&str>,
+) -> PageContent {
+    marketing_page(load_page(branding, "home-marketing"), None, branding)
+}
+
 /// IEP Defenders' home is a marketing-page band sequence mirroring the
 /// firm's published iepdefenders.com structure, served through the same
 /// `HomeContent.marketing_page` seam as the other band-built homes.
@@ -1818,14 +1832,31 @@ mod tests {
     /// pipe, then the page: `{site_name} | Home`.
     #[test]
     fn every_brand_home_carries_the_account_invitation() {
-        // IEP Defenders' home is a marketing-page band sequence, not the
-        // legacy home schema this invariant polices.
+        // Lex Tecnica and IEP Defenders have band-built marketing-page
+        // homes, not the legacy home schema this invariant polices.
         for key in views::brand::BrandKey::ALL
             .iter()
-            .filter(|key| **key != BrandKey::IepDefenders)
+            .filter(|key| !matches!(key, BrandKey::IepDefenders | BrandKey::LexTecnica))
         {
             let content = home(key.resolve_branding(&views::brand::DEFAULT_BRANDING));
             assert!(content.signup.is_some(), "{}", key.as_str());
+        }
+    }
+
+    /// The Lex Tecnica home is band data, and band data never names a
+    /// colour: the gold-on-parchment palette resolves through the
+    /// `lex-tecnica` token stylesheet, so a hex literal in the catalog
+    /// would be a theme escape hatch the token system forbids.
+    #[test]
+    fn the_lex_tecnica_home_band_data_names_no_color() {
+        let yaml = include_str!("../locales/en/lex-tecnica/home-marketing.yaml");
+        let hex_run = |rest: &str| rest.chars().take_while(char::is_ascii_hexdigit).count() >= 6;
+        for (index, fragment) in yaml.split('#').enumerate().skip(1) {
+            assert!(
+                !hex_run(fragment),
+                "band data names a hex literal at `#{}` (fragment {index})",
+                &fragment[..fragment.len().min(8)]
+            );
         }
     }
 
