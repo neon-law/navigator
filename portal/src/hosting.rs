@@ -1083,6 +1083,15 @@ async fn dbos_schedules(
         None
     };
     let profit_digest = profit_digest_context(rt, host_dbos, lookup).await?;
+    let ceo_digest = if should_host_ceo_digest(host_dbos, lookup)? {
+        Some(
+            ceo_digest_context(rt, lookup)
+                .await
+                .context("configure DBOS CeoDigest")?,
+        )
+    } else {
+        None
+    };
     Ok(dbos_engine::Schedules {
         general_nag,
         dri_digest,
@@ -1095,6 +1104,7 @@ async fn dbos_schedules(
         billing_digest,
         notation_reset,
         profit_digest,
+        ceo_digest,
     })
 }
 
@@ -1356,6 +1366,45 @@ fn should_host_dri_digest(
     }
     workflows::dbos_engine::dri_digest::enabled(lookup)
         .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")
+}
+
+async fn ceo_digest_context(
+    rt: &HostRuntime,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<workflows::dbos_engine::ceo_digest::Context> {
+    let simulated = store::sample_matters(rt.config.environment)
+        .context("resolve simulated-matters deployment")?;
+    let prose = workflows::dbos_engine::ceo_digest::VertexProseProvider::from_lookup(lookup)
+        .context("configure the CEO digest prose provider")?;
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .context("connect PostgreSQL for the CEO digest")?;
+    workflows::dbos_engine::ceo_digest::Context::from_lookup(
+        Arc::new(workflows::dbos_engine::ceo_digest::StoreDigestSource::new(
+            rt.state.surreal.clone(),
+            pg,
+        )),
+        Arc::new(prose),
+        crate::email::from_lookup(lookup, rt.state.surreal.clone())
+            .context("configure the CEO digest email backend")?,
+        simulated,
+        lookup,
+    )
+    .context("validate CEO digest delivery configuration")
+}
+
+/// Resolve the independent CEO digest gate before constructing a delivery
+/// context, so an unused schedule never requires Slack credentials or a
+/// Vertex project.
+fn should_host_ceo_digest(
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<bool> {
+    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
+        return Ok(false);
+    }
+    workflows::dbos_engine::ceo_digest::enabled(lookup)
+        .context("read NAVIGATOR_DBOS_CEO_DIGEST_ENABLED")
 }
 
 fn general_nag_context(
