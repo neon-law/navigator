@@ -1521,6 +1521,10 @@ mod tests {
                 "20261108000000_add_project_client_dri.sql",
                 include_str!("../postgres/migrations/20261108000000_add_project_client_dri.sql"),
             ),
+            (
+                "20261108120000_seed_sun_lower_meridian.sql",
+                include_str!("../postgres/migrations/20261108120000_seed_sun_lower_meridian.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
