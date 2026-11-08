@@ -1239,11 +1239,15 @@ pub fn home_for_host(
         tagline: copy.tagline,
         lead: copy.lead,
         contact_href: match branding.brand_key {
-            BrandKey::Misericordia => "tel:+15108002090".to_string(),
+            BrandKey::Misericordia => {
+                webapp::components::site_footer::tel_href(branding.firm_phone)
+            }
             BrandKey::CyberInjuryLaw => "/consultation".to_string(),
             _ => branding.consultation_url.to_string(),
         },
         contact_label: copy.contact_label,
+        // Filled from the request's chrome at render.
+        phone: String::new(),
         signup: Some(signup_prompt(branding)),
         photo: copy.photo.map(|photo| webapp::home::HomePhoto {
             src: views::assets::asset_url(&photo.src),
@@ -2108,6 +2112,33 @@ mod tests {
                     .contains("mailto:"),
                 "{key:?} services contain an email draft link"
             );
+        }
+    }
+
+    /// A brand's copy dials only that brand's own number. Each brand's number
+    /// routes to its own call script, so a `tel:` written into the copy must
+    /// move with `Branding::firm_phone` when a brand gets its own line.
+    #[test]
+    fn every_tel_link_in_a_brands_copy_dials_that_brands_number() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales/en");
+        for key in BrandKey::ALL {
+            let Ok(entries) = std::fs::read_dir(root.join(key.as_str())) else {
+                continue;
+            };
+            let dial = webapp::components::site_footer::tel_href(
+                key.resolve_branding(&views::brand::DEFAULT_BRANDING)
+                    .firm_phone,
+            );
+            for path in entries.map(|entry| entry.expect("locale entry").path()) {
+                let yaml = std::fs::read_to_string(&path).expect("locale file");
+                for (at, _) in yaml.match_indices("tel:") {
+                    let found: String = yaml[at..]
+                        .chars()
+                        .take_while(|c| *c == ':' || c.is_ascii_alphanumeric() || *c == '+')
+                        .collect();
+                    assert_eq!(found, dial, "{}", path.display());
+                }
+            }
         }
     }
 

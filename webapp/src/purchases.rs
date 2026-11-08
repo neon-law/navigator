@@ -8,8 +8,8 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{PublicShell, SiteHeader, SiteNavLink};
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::components::PublicShell;
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// What this Client may do with one Offering.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -119,21 +119,7 @@ pub fn PurchasePage(
     csrf_token: String,
 ) -> Element {
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! { PublicFooter { chrome: chrome.clone() } };
     rsx! {

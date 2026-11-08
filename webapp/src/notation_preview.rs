@@ -44,15 +44,14 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    Accordion, BackBreadcrumb, CodeBlock, PublicShell, SiteHeader, SiteNavLink, SocialMeta,
-    CATALOG_STYLESHEET_HREF,
+    Accordion, BackBreadcrumb, CodeBlock, PublicShell, SocialMeta, CATALOG_STYLESHEET_HREF,
 };
 use crate::harvard_outline::{HARVARD_OUTLINE_SCRIPT_HREF, HARVARD_OUTLINE_STYLESHEET_HREF};
 use crate::notation_demo::{
     questionnaire_error_panel, render_live_template, DemoQuestion, QuestionnaireDemo,
 };
 use crate::notation_workflow::{WorkflowDiagram, WorkflowStateView};
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// One bundled document ready to preview.
 #[derive(Clone, Default)]
@@ -173,21 +172,7 @@ pub fn NotationPreviewPage(
     let (header, footer) = if mode == NotationPreviewMode::Published {
         (
             rsx! {
-                SiteHeader {
-                    brand_name: chrome.brand_name.clone(),
-                    home_href: chrome.home_href.clone(),
-                    logo_href: chrome.logo_href.clone(),
-                    destinations: chrome
-                        .destinations
-                        .iter()
-                        .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                        .collect(),
-                    utility: chrome
-                        .utility
-                        .iter()
-                        .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                        .collect(),
-                }
+                PublicHeader { chrome: chrome.clone() }
             },
             rsx! { PublicFooter { chrome: chrome.clone() } },
         )

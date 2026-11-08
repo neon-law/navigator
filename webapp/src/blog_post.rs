@@ -13,8 +13,8 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{PublicShell, SiteHeader, SiteNavLink, SocialMeta};
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::components::{PublicShell, SocialMeta};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// First-party progressive enhancement for photo collages in rendered posts.
 /// It turns the existing, correctly labelled images into keyboard-operable
@@ -127,21 +127,7 @@ pub fn BlogPostEntry() -> Element {
 #[component]
 pub fn BlogPostPage(chrome: PublicChrome, content: BlogPostContent, head_title: String) -> Element {
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }

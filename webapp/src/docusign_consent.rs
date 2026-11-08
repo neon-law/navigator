@@ -7,8 +7,8 @@
 use axum::response::Html;
 use dioxus::prelude::*;
 
-use crate::components::{PublicShell, SiteHeader, SiteNavLink};
-use crate::public_chrome::{firm_public_chrome, PublicFooter};
+use crate::components::PublicShell;
+use crate::public_chrome::{firm_public_chrome, PublicFooter, PublicHeader};
 
 /// Render the confirmation shown after an operator grants `DocuSign` consent.
 pub fn render() -> Html<String> {
@@ -23,21 +23,7 @@ pub fn render() -> Html<String> {
 fn consent_body() -> Element {
     let chrome = firm_public_chrome(vec![]);
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }

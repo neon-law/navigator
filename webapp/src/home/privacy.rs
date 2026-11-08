@@ -81,6 +81,7 @@ pub(super) fn PrivacyHome(content: HomeContent, privacy: PrivacyContent) -> Elem
                     p { "{content.lead}" }
                     PricingSection { cards, cols_lg: 2 }
                     div { class: "privacy-actions",
+                        super::HeroCall { content: content.clone() }
                         a { class: "privacy-link", href: "#gift", "{privacy.gift_link}" }
                     }
                     p { class: "privacy-small", "{privacy.offer_note}" }

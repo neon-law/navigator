@@ -19,8 +19,8 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{PublicShell, SiteHeader, SiteNavLink, SocialMeta};
-use crate::public_chrome::{PublicChrome, PublicFooter};
+use crate::components::{PublicShell, SocialMeta};
+use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
 /// The page heading and `<title>` suffix.
 pub const GLOSSARY_TITLE: &str = "Glossary";
@@ -162,21 +162,7 @@ pub fn glossary_body(view: &GlossaryPageView) -> Element {
     // site name ahead of the page name.
     let head_title = format!("{} | {GLOSSARY_TITLE}", chrome.brand_name);
     let header = rsx! {
-        SiteHeader {
-            brand_name: chrome.brand_name.clone(),
-            home_href: chrome.home_href.clone(),
-            logo_href: chrome.logo_href.clone(),
-            destinations: chrome
-                .destinations
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-            utility: chrome
-                .utility
-                .iter()
-                .map(|link| SiteNavLink::new(link.label.clone(), link.href.clone()))
-                .collect(),
-        }
+        PublicHeader { chrome: chrome.clone() }
     };
     let footer = rsx! {
         PublicFooter { chrome: chrome.clone() }

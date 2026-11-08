@@ -18,6 +18,10 @@ closed on an unknown number, verify Twilio's signature against that number's own
 then ingest. A registration whose credential cannot be unsealed refuses the lane; an unregistered callee is a 404 that
 ingests nothing.
 
+The number a Brand's public site publishes — the click-to-call action in its header and home hero — is
+`views::brand::Branding::firm_phone`. A voice call to it resolves through this registry to that Brand, which is what
+lets each Brand answer with its own call script; a Brand without a number of its own publishes the firm's shared one.
+
 - Schema: `brand_phone_number` in [`store/postgres/migrations/`](../../store/postgres/) ·
   [`store::brand_phone_numbers`](../../store/src/brand_phone_numbers.rs) ·
   [`portal::twilio_resolution`](../../portal/src/twilio_resolution.rs)
