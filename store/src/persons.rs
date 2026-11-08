@@ -938,6 +938,44 @@ pub async fn find_by_role(db: &SurrealDb, role: Role) -> Result<Vec<Person>, Per
     many(response)
 }
 
+/// Every person currently holding `role` at one Firm. The PostgreSQL
+/// authority path filters through `person_firm_role`; the Surreal fallback
+/// reads the deployment-wide role list and narrows it with the Firm's
+/// membership rows. [`find_by_role`] has no Firm filter — a digest that
+/// emailed every Owner on the deployment would leak across Firms.
+///
+/// # Errors
+///
+/// [`PersonError`] on a database failure.
+pub async fn find_by_role_and_firm(
+    db: &SurrealDb,
+    role: Role,
+    firm_id: Uuid,
+) -> Result<Vec<Person>, PersonError> {
+    if let Some(pg) = postgres_authority().await? {
+        return Box::pin(crate::postgres::people::by_role_and_firm(
+            &pg, role, firm_id,
+        ))
+        .await;
+    }
+    let memberships = crate::firms::memberships_for_firm(db, firm_id)
+        .await
+        .map_err(|_| PersonError::Postgres("firm membership read failed".into()))?;
+    let members: std::collections::HashSet<Uuid> = memberships
+        .into_iter()
+        .map(|membership| membership.person_id)
+        .collect();
+    let response = db
+        .query(format!("SELECT {SELECT} FROM person WHERE role = $role"))
+        .bind(("role", role.as_str().to_string()))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    Ok(many(response)?
+        .into_iter()
+        .filter(|person| members.contains(&person.id))
+        .collect())
+}
+
 /// Resolve a person by their IdP `sub` claim — the first thing the OIDC
 /// callback asks, before falling back to the email.
 ///

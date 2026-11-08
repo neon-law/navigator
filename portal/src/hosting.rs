@@ -1018,22 +1018,7 @@ async fn dbos_schedules(
     } else {
         None
     };
-    let source_imports = if should_host_source_imports(host_dbos, lookup)? {
-        let pg = store::postgres::PostgresDb::from_env()
-            .await
-            .context("connect PostgreSQL for source imports")?;
-        Some(workflows::dbos_engine::source_imports::Context::new(
-            Arc::new(
-                workflows::dbos_engine::source_imports::StoreImportSource::new(
-                    rt.state.surreal.clone(),
-                    pg,
-                    cloud::runtime_kms_from_env().await,
-                ),
-            ),
-        ))
-    } else {
-        None
-    };
+    let source_imports = source_imports_schedule(rt, host_dbos, lookup).await?;
     let retention_purge = if should_host_retention_purge(host_dbos, lookup)? {
         Some(
             retention_purge_context(rt, lookup)
@@ -1083,6 +1068,7 @@ async fn dbos_schedules(
         None
     };
     let profit_digest = profit_digest_context(rt, host_dbos, lookup).await?;
+    let ceo_digest = ceo_digest_schedule(rt, host_dbos, lookup).await?;
     Ok(dbos_engine::Schedules {
         general_nag,
         dri_digest,
@@ -1095,7 +1081,48 @@ async fn dbos_schedules(
         billing_digest,
         notation_reset,
         profit_digest,
+        ceo_digest,
     })
+}
+
+/// Resolve the independent SourceImports gate and build its context, so an
+/// unused schedule never requires PostgreSQL or KMS credentials.
+async fn source_imports_schedule(
+    rt: &HostRuntime,
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<Option<workflows::dbos_engine::source_imports::Context>> {
+    if !should_host_source_imports(host_dbos, lookup)? {
+        return Ok(None);
+    }
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .context("connect PostgreSQL for source imports")?;
+    Ok(Some(workflows::dbos_engine::source_imports::Context::new(
+        Arc::new(
+            workflows::dbos_engine::source_imports::StoreImportSource::new(
+                rt.state.surreal.clone(),
+                pg,
+                cloud::runtime_kms_from_env().await,
+            ),
+        ),
+    )))
+}
+
+/// Resolve the independent CeoDigest gate and build its context, so an
+/// unused schedule never requires Vertex, email, or PostgreSQL credentials.
+async fn ceo_digest_schedule(
+    rt: &HostRuntime,
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<Option<workflows::dbos_engine::ceo_digest::Context>> {
+    if !should_host_ceo_digest(host_dbos, lookup)? {
+        return Ok(None);
+    }
+    let context = ceo_digest_context(rt, lookup)
+        .await
+        .context("configure DBOS CeoDigest")?;
+    Ok(Some(context))
 }
 
 /// Resolve the independent BillingCanary gate.
@@ -1356,6 +1383,45 @@ fn should_host_dri_digest(
     }
     workflows::dbos_engine::dri_digest::enabled(lookup)
         .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")
+}
+
+async fn ceo_digest_context(
+    rt: &HostRuntime,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<workflows::dbos_engine::ceo_digest::Context> {
+    let simulated = store::sample_matters(rt.config.environment)
+        .context("resolve simulated-matters deployment")?;
+    let prose = workflows::dbos_engine::ceo_digest::VertexProseProvider::from_lookup(lookup)
+        .context("configure the CEO digest prose provider")?;
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .context("connect PostgreSQL for the CEO digest")?;
+    workflows::dbos_engine::ceo_digest::Context::from_lookup(
+        Arc::new(workflows::dbos_engine::ceo_digest::StoreDigestSource::new(
+            rt.state.surreal.clone(),
+            pg,
+        )),
+        Arc::new(prose),
+        crate::email::from_lookup(lookup, rt.state.surreal.clone())
+            .context("configure the CEO digest email backend")?,
+        simulated,
+        lookup,
+    )
+    .context("validate CEO digest delivery configuration")
+}
+
+/// Resolve the independent CEO digest gate before constructing a delivery
+/// context, so an unused schedule never requires Slack credentials or a
+/// Vertex project.
+fn should_host_ceo_digest(
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<bool> {
+    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
+        return Ok(false);
+    }
+    workflows::dbos_engine::ceo_digest::enabled(lookup)
+        .context("read NAVIGATOR_DBOS_CEO_DIGEST_ENABLED")
 }
 
 fn general_nag_context(
