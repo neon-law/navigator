@@ -104,6 +104,13 @@ values = [
   "secret@www.tiktok.com",
 ]
 
+[[email_domains]]
+reason = "Legal-plan providers' published provider-support mailboxes (legaleaseplan.com/provider-info, araglegal.com/attorneys): institutional desks, not people."
+values = [
+  "legaleaseplan.com",
+  "araglegal.com",
+]
+
 # --- Phones and numbers ---------------------------------------------------
 
 [[phones]]
@@ -117,6 +124,9 @@ values = ["+1 725 239 8413"]
 [[phones]]
 reason = "IEP Defenders' published voice line (iepdefenders.com/contact-us/)."
 values = ["+1 743 437 4357"]
+[[phones]]
+reason = "Legal-plan provider-support lines published on araglegal.com/attorneys and legaleaseplan.com/provider-info."
+values = ["+1 866 272 4529", "+1 866 208 5143"]
 [[phones]]
 reason = "Synthetic E.164 validity fixtures in the store inbox tests (555-range and foreign-format shapes no person holds)."
 values = [

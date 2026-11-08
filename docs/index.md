@@ -122,6 +122,8 @@ cannot decay the way the old seven-line stub did.
   each matter's held balance, and one withdrawal split across the invoices it settles.
 - [`xero-billing.md`](xero-billing.md) — Xero billing setup, invoice flow, and production cutover.
 - [`docusign-esignature.md`](docusign-esignature.md) — DocuSign e-signature setup and signing flow.
+- [`legal-plans.md`](legal-plans.md) — the legal plans the Firm works: where it logs in, how a referral is linked to
+  its Project by Plan Case Number, and how the plan pays.
 
 ## Observability pipelines and data
 
