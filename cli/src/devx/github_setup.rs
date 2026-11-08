@@ -2306,29 +2306,8 @@ async fn reconcile(
     // workflow home refuses it stops the run here, before a ruleset is touched.
     actions.extend(plan_actions_access(client, &scope, workflow_home).await?);
 
-    if actions.is_empty() {
-        eprintln!("==> GitHub settings already match the desired state");
-        return Ok(());
-    }
-    if !dry_run
-        && lacks_workflow_scope
-        && workflow_paths
-            .iter()
-            .any(|update| update.path.starts_with(".github/workflows/"))
-    {
-        bail!(
-            "the GitHub token lacks the `workflow` scope required to update workflow files. \
-             Rerun with a token that can write workflows"
-        );
-    }
-    for action in &actions {
-        eprintln!(
-            "{} {}",
-            if dry_run { "would" } else { "will" },
-            action.description()
-        );
-    }
-    if dry_run {
+    report_reconciliation(&actions, &workflow_paths, dry_run, lacks_workflow_scope)?;
+    if dry_run || actions.is_empty() {
         return Ok(());
     }
     if !workflow_paths.is_empty() {
@@ -2352,6 +2331,37 @@ async fn reconcile(
         .await?;
     }
     eprintln!("==> GitHub settings reconciled");
+    Ok(())
+}
+
+fn report_reconciliation(
+    actions: &[Action],
+    workflow_paths: &[ProjectFileUpdate],
+    dry_run: bool,
+    lacks_workflow_scope: bool,
+) -> Result<()> {
+    if actions.is_empty() {
+        eprintln!("==> GitHub settings already match the desired state");
+        return Ok(());
+    }
+    if !dry_run
+        && lacks_workflow_scope
+        && workflow_paths
+            .iter()
+            .any(|update| update.path.starts_with(".github/workflows/"))
+    {
+        bail!(
+            "the GitHub token lacks the `workflow` scope required to update workflow files. \
+             Rerun with a token that can write workflows"
+        );
+    }
+    for action in actions {
+        eprintln!(
+            "{} {}",
+            if dry_run { "would" } else { "will" },
+            action.description()
+        );
+    }
     Ok(())
 }
 
