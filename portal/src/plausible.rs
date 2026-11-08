@@ -36,6 +36,17 @@ pub const PLAUSIBLE_ORIGIN: &str = "https://plausible.io";
 
 /// The first-party stub that queues calls until the vendor script arrives.
 pub const PLAUSIBLE_LOADER_HREF: &str = "/public/js/plausible.js";
+
+/// The goals the browser reports, as each site's Goals panel must name them:
+/// a `tel:` click, a booking-link click (both fired by the loader), and
+/// Plausible's own outbound-link and form-submission events, which the
+/// loader's `init()` turns on.
+pub const BROWSER_GOALS: [&str; 4] = [
+    "Phone: Clicked",
+    "Booking: Clicked",
+    "Outbound Link: Click",
+    "Form: Submission",
+];
 const UNCONFIGURED_DEATH_AND_DIVORCE_ID: &str = "pa-unconfigured-death-and-divorce";
 const UNCONFIGURED_AEGIS_ID: &str = "pa-unconfigured-aegis";
 const UNCONFIGURED_GROUNDWORK_ID: &str = "pa-unconfigured-groundwork";
@@ -104,7 +115,8 @@ impl PlausibleSite {
 
     /// The two `<script>` elements that start analytics, for injection at the
     /// end of a public page's `<body>`: the first-party stub, then the vendor
-    /// script.
+    /// script. The stub carries the request's booking link as `data-booking`,
+    /// so it can tell a booking click from any other outbound one.
     ///
     /// Both carry `defer`, and the order is load-bearing. Deferred classic
     /// scripts execute in document order, so the stub has defined
@@ -128,8 +140,9 @@ impl PlausibleSite {
             return String::new();
         }
         format!(
-            "<script src=\"{PLAUSIBLE_LOADER_HREF}\" defer></script>\
+            "<script src=\"{PLAUSIBLE_LOADER_HREF}\" data-booking=\"{booking}\" defer></script>\
              <script src=\"{PLAUSIBLE_ORIGIN}/js/{id}.js\" defer></script>",
+            booking = webapp::html_escape::escape_attr(views::brand::consultation_url()),
             id = webapp::html_escape::escape_attr(script_id),
         )
     }
@@ -283,7 +296,7 @@ impl ConversionReporter {
 mod tests {
     use super::{
         conversion_domain, enabled_from, script_id, ConversionGoal, ConversionReporter,
-        PlausibleSite, PLAUSIBLE_LOADER_HREF,
+        PlausibleSite, BROWSER_GOALS, PLAUSIBLE_LOADER_HREF,
     };
     use views::brand::BrandKey;
 
@@ -348,12 +361,39 @@ mod tests {
     #[test]
     fn the_script_tags_are_the_stub_then_the_vendor_script() {
         let tags = PlausibleSite::new("pa-dktgfAn-5R5ufpXARu6zb").script_tags();
-        assert_eq!(
-            tags,
-            "<script src=\"/public/js/plausible.js\" defer></script>\
-             <script src=\"https://plausible.io/js/pa-dktgfAn-5R5ufpXARu6zb.js\" defer></script>"
+        assert!(
+            tags.ends_with(
+                " defer></script>\
+                 <script src=\"https://plausible.io/js/pa-dktgfAn-5R5ufpXARu6zb.js\" defer></script>"
+            ),
+            "{tags}"
         );
         assert!(tags.find(PLAUSIBLE_LOADER_HREF).unwrap() < tags.find("plausible.io/js").unwrap());
+    }
+
+    /// The loader carries the request's booking link, so a click on it can
+    /// be told from any other outbound link.
+    #[test]
+    fn the_loader_tag_carries_the_booking_url() {
+        let tags = PlausibleSite::new("pa-test").script_tags();
+        let booking = webapp::html_escape::escape_attr(views::brand::consultation_url());
+        assert!(
+            tags.starts_with(&format!(
+                "<script src=\"{PLAUSIBLE_LOADER_HREF}\" data-booking=\"{booking}\" defer>"
+            )),
+            "{tags}"
+        );
+    }
+
+    /// Every browser goal the dashboard is told to create is one the loader
+    /// actually fires.
+    #[test]
+    fn the_loader_fires_every_browser_goal() {
+        let loader = include_str!("../../server/public/js/plausible.js");
+        for goal in BROWSER_GOALS {
+            assert!(loader.contains(&format!("\"{goal}\"")), "{goal}");
+        }
+        assert!(loader.contains("outboundLinks: true, formSubmissions: true"));
     }
 
     #[test]
