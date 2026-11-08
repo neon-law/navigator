@@ -2111,10 +2111,11 @@ async fn private_terms_for_project(
     let entities = store::entities::find_by_ids(db, &entity_ids)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
-    if people.len() != person_ids.len() || entities.len() != entity_ids.len() {
-        return Err(ApiError::Db(
-            "private identifier coverage is incomplete".into(),
-        ));
+    if people.len() != person_ids.len() {
+        return Err(ApiError::Db("private terms: missing Person record".into()));
+    }
+    if entities.len() != entity_ids.len() {
+        return Err(ApiError::Db("private terms: missing Entity record".into()));
     }
     let mut identifiers = vec![project.id.to_string()];
     let mut participants = Vec::new();
@@ -2139,7 +2140,7 @@ async fn private_terms_for_project(
         if let Some(metadata) = entity.metadata.as_ref() {
             let object = metadata
                 .as_object()
-                .ok_or_else(|| ApiError::Db("private identifier coverage is incomplete".into()))?;
+                .ok_or_else(|| ApiError::Db("private terms: invalid Entity metadata".into()))?;
             if let Some(value) = object.get("ein") {
                 let ein = value
                     .as_str()
@@ -2153,9 +2154,7 @@ async fn private_terms_for_project(
                                 }
                             })
                     })
-                    .ok_or_else(|| {
-                        ApiError::Db("private identifier coverage is incomplete".into())
-                    })?;
+                    .ok_or_else(|| ApiError::Db("private terms: invalid Entity EIN".into()))?;
                 identifiers.push(ein.to_owned());
             }
         }
@@ -14111,6 +14110,10 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             .unwrap()
             .check()
             .unwrap();
+        assert!(matches!(
+            super::private_terms_for_project(&f.db, project).await,
+            Err(ApiError::Db(reason)) if reason == "private terms: missing Entity record"
+        ));
         let (status, json) = call(
             &f.state,
             Some(&f.lawyer),
