@@ -147,6 +147,16 @@ pub(crate) type Remint =
 /// How many revision reads the check keeps in flight at once.
 const REVISION_CONCURRENCY: usize = 8;
 
+/// The CI session's server-side TTL is ten minutes at most (`CI_SESSION_TTL_SECS`
+/// in the portal); the runner's OIDC token can only shorten it, and the mint
+/// door answers no expiry — the reactive `401` renewal covers that case.
+const CI_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Renew the session proactively once the run has held it for this share of
+/// its TTL — before it expires, instead of paying a refused-read-plus-remint
+/// tax on every expiry.
+const SESSION_RENEW_AT: f64 = 0.8;
+
 /// A revision read the deployment refused for want of a live session.
 #[derive(Debug)]
 struct SessionExpired(String);
@@ -164,10 +174,11 @@ fn is_session_failure(error: &anyhow::Error) -> bool {
     error.downcast_ref::<SessionExpired>().is_some() || crate::remote::is_session_refused(error)
 }
 
-/// The revision reads of one check run. A `401` renews the session once
-/// through `remint` and retries the read; when there is no `remint`, or the
-/// renewed session is refused too, the read fails as an expired session —
-/// a `401` never reads as a missing document.
+/// The remote reads of one check run — revision chains and integrity pages.
+/// A `401` renews the session once through `remint` and retries the read;
+/// when there is no `remint`, or the renewed session is refused too, the
+/// read fails as an expired session — a `401` never reads as a missing
+/// document.
 struct LiveSession<'a> {
     initial: &'a DocumentClient,
     remint: Option<&'a Remint>,
@@ -183,6 +194,9 @@ struct SessionState {
     renewed: Option<std::sync::Arc<DocumentClient>>,
     /// Set once a renewal fails or a renewed session is refused too.
     exhausted: Option<String>,
+    /// When the current session was minted, so renewal can fire ahead of
+    /// its expiry instead of after a refused read.
+    minted_at: Option<tokio::time::Instant>,
 }
 
 impl<'a> LiveSession<'a> {
@@ -190,7 +204,10 @@ impl<'a> LiveSession<'a> {
         Self {
             initial,
             remint,
-            state: std::sync::Mutex::new(SessionState::default()),
+            state: std::sync::Mutex::new(SessionState {
+                minted_at: Some(tokio::time::Instant::now()),
+                ..SessionState::default()
+            }),
             renewing: tokio::sync::Mutex::new(()),
         }
     }
@@ -202,12 +219,55 @@ impl<'a> LiveSession<'a> {
     }
 
     async fn list_revisions(&self, slug: &str) -> Result<RevisionsResponse> {
+        self.renewing_read(|client| {
+            let slug = slug.to_string();
+            Box::pin(async move { client.list_revisions(&slug).await })
+        })
+        .await
+    }
+
+    /// Every asset row the deployment sees, paged through the renewable
+    /// session: a `401` on any page renews the session once and retries
+    /// that page, so a long run never loses the job to a session that died
+    /// mid-paging.
+    async fn integrity(&self, deep: bool) -> Result<crate::remote::IntegrityResponse> {
+        let limit = crate::remote::integrity_page_limit(deep);
+        let mut merged = crate::remote::IntegrityResponse {
+            assets: Vec::new(),
+            total: None,
+            next_offset: None,
+            integrations: Vec::new(),
+        };
+        let mut offset = 0;
+        loop {
+            let page = self
+                .renewing_read(|client| {
+                    Box::pin(async move { client.integrity_page(deep, offset, limit).await })
+                })
+                .await?;
+            match crate::remote::integrity_advance(&mut merged, page, offset)? {
+                None => return Ok(merged),
+                Some(next) => offset = next,
+            }
+        }
+    }
+
+    /// One read against the live session: renew ahead of the session's
+    /// expiry, read with the current session, and on a refusal renew once
+    /// through the shared mutex and retry the same read; a second refusal
+    /// marks the session exhausted — a `401` never reads as a missing
+    /// document.
+    async fn renewing_read<T>(
+        &self,
+        read: impl for<'c> Fn(&'c DocumentClient) -> futures::future::BoxFuture<'c, Result<T>>,
+    ) -> Result<T> {
+        self.renew_ahead_of_expiry().await?;
         let (generation, renewed) = {
             let state = self.state();
             (state.generation, state.renewed.clone())
         };
         let client = renewed.as_deref().unwrap_or(self.initial);
-        let refused = match client.list_revisions(slug).await {
+        let refused = match read(client).await {
             Err(error) if crate::remote::is_session_refused(&error) => error,
             other => return other,
         };
@@ -215,13 +275,41 @@ impl<'a> LiveSession<'a> {
             Ok(fresh) => fresh,
             Err(reason) => return Err(self.expired(&format!("{refused:#}; {reason}"))),
         };
-        match fresh.list_revisions(slug).await {
+        match read(&fresh).await {
             Err(error) if crate::remote::is_session_refused(&error) => {
                 let reason = format!("the renewed session was refused too: {error:#}");
                 self.state().exhausted.get_or_insert(reason.clone());
                 Err(self.expired(&reason))
             }
             other => other,
+        }
+    }
+
+    /// Renew ahead of the session's expiry once the run has held the current
+    /// session for most of its TTL, so a long run re-mints before the session
+    /// dies. A no-op without a way to renew (a local login). Serialized
+    /// through the same `renewing` mutex as a reactive renewal, so concurrent
+    /// reads mint at most once per session window; a failed renewal is the
+    /// same terminal exhaustion a refused reactive renewal is.
+    async fn renew_ahead_of_expiry(&self) -> Result<()> {
+        if self.remint.is_none() {
+            return Ok(());
+        }
+        let (generation, minted_at) = {
+            let state = self.state();
+            (state.generation, state.minted_at)
+        };
+        let Some(minted_at) = minted_at else {
+            return Ok(());
+        };
+        if minted_at.elapsed() < CI_SESSION_TTL.mul_f64(SESSION_RENEW_AT) {
+            return Ok(());
+        }
+        match self.renew(generation).await {
+            Ok(_) => Ok(()),
+            Err(reason) => Err(self.expired(&format!(
+                "renewing ahead of the session's expiry failed: {reason}"
+            ))),
         }
     }
 
@@ -252,6 +340,7 @@ impl<'a> LiveSession<'a> {
                 let mut state = self.state();
                 state.generation += 1;
                 state.renewed = Some(fresh.clone());
+                state.minted_at = Some(tokio::time::Instant::now());
                 Ok(fresh)
             }
             Err(error) => {
@@ -315,7 +404,7 @@ pub(crate) async fn check_with(
     if let Some(outcome) = reconcile_legacy_layout(dir, write, &mut fixes)? {
         return Ok(outcome);
     }
-    let integrity = client.integrity(deep).await?;
+    let integrity = session.integrity(deep).await?;
     let mut errors = Vec::new();
     let mut locals = index_pointers(dir, &mut errors)?;
     let live_slugs = live_slugs(&integrity.assets);
@@ -1598,11 +1687,22 @@ mod tests {
     }
 
     async fn mount_integrity(server: &MockServer, project_id: Uuid, body: serde_json::Value) {
+        mount_integrity_bearer(server, project_id, "test-token", body).await;
+    }
+
+    /// The integrity door answers one request carrying a specific bearer —
+    /// pinning the bearer lets a test prove which session ran the read.
+    async fn mount_integrity_bearer(
+        server: &MockServer,
+        project_id: Uuid,
+        bearer: &str,
+        body: serde_json::Value,
+    ) {
         Mock::given(method("GET"))
             .and(path(format!(
                 "/app/api/projects/{project_id}/documents/integrity"
             )))
-            .and(header("authorization", "Bearer test-token"))
+            .and(header("authorization", format!("Bearer {bearer}")))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .expect(1)
             .mount(server)
@@ -1647,6 +1747,37 @@ mod tests {
                 }]
             })))
             .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    /// The revisions door under the renewed bearer, for the session-renewal
+    /// cases — a read that follows a re-mint carries `fresh-token`.
+    async fn mount_revisions_fresh(
+        server: &MockServer,
+        project_id: Uuid,
+        slug: &str,
+        asset_id: Uuid,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/revisions"
+            )))
+            .and(query_param("slug", slug))
+            .and(header("authorization", "Bearer fresh-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "kind": "filing",
+                "revisions": [{
+                    "version": 1,
+                    "asset_id": asset_id,
+                    "created_at": "2026-09-05T12:00:00Z",
+                    "sha256": SHA,
+                    "size_bytes": 18,
+                    "filename": slug.rsplit('/').next().unwrap_or(slug),
+                    "visibility": "internal",
+                    "operative": true
+                }]
+            })))
             .mount(server)
             .await;
     }
@@ -2418,6 +2549,166 @@ mod tests {
         let integrity = client(&server, project_id).integrity(false).await.unwrap();
 
         assert_eq!(integrity.assets.len(), 1);
+    }
+
+    /// LAW-268: a `401` on the first integrity page renews the session once
+    /// and retries that page — the run finishes with the full page set
+    /// checked, and no `401` ever reads as a missing document.
+    #[tokio::test]
+    async fn an_integrity_page_refused_once_is_renewed_and_the_page_retried() {
+        let (server, project_id, first_id) = server().await;
+        let second_id = Uuid::now_v7();
+        let dir = tempfile::tempdir().unwrap();
+        let route = format!("/app/api/projects/{project_id}/documents/integrity");
+        // The first page request carries the lapsed session and is refused
+        // once; every later request carries the renewed bearer.
+        Mock::given(method("GET"))
+            .and(path(route.clone()))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("session expired"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let page = |asset_id: Uuid, slug: &str, next: serde_json::Value| {
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "assets": [asset(asset_id, Some(slug), true, None)],
+                "total": 2,
+                "next_offset": next,
+            }))
+        };
+        Mock::given(method("GET"))
+            .and(path(route.clone()))
+            .and(query_param("offset", "0"))
+            .and(header("authorization", "Bearer fresh-token"))
+            .respond_with(page(first_id, "a.pdf", serde_json::json!(1)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(route))
+            .and(query_param("offset", "1"))
+            .and(header("authorization", "Bearer fresh-token"))
+            .respond_with(page(second_id, "b.pdf", serde_json::Value::Null))
+            .expect(1)
+            .mount(&server)
+            .await;
+        mount_revisions_fresh(&server, project_id, "a.pdf", first_id).await;
+        mount_revisions_fresh(&server, project_id, "b.pdf", second_id).await;
+        let (remint, mints) = counting_remint();
+
+        let outcome = check_with(
+            dir.path(),
+            &client(&server, project_id),
+            Some(&remint),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            outcome
+                .fixes
+                .iter()
+                .map(|fix| fix.path.as_str())
+                .collect::<Vec<_>>(),
+            ["blobs/a.pdf.yaml", "blobs/b.pdf.yaml"]
+        );
+    }
+
+    /// LAW-268: an integrity page the deployment keeps refusing after
+    /// renewal fails the run with the session-exhausted wording — never a
+    /// missing document — and is renewed only once.
+    #[tokio::test]
+    async fn an_integrity_refusal_after_renewal_is_session_exhaustion() {
+        let (server, project_id, _) = server().await;
+        let dir = tempfile::tempdir().unwrap();
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/integrity"
+            )))
+            .respond_with(ResponseTemplate::new(401).set_body_string("session expired"))
+            .mount(&server)
+            .await;
+        let (remint, mints) = counting_remint();
+
+        let error = check_with(
+            dir.path(),
+            &client(&server, project_id),
+            Some(&remint),
+            false,
+            false,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.starts_with("CI session expired or is unauthenticated"),
+            "{error}"
+        );
+        assert!(
+            error.contains("the renewed session was refused too"),
+            "{error}"
+        );
+        assert!(!error.contains("no live document"), "{error}");
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// LAW-268: holding the session past 80% of its TTL renews it ahead of
+    /// its expiry — exactly one proactive mint, no read refused. The mint's
+    /// timestamp is stepped back across the threshold with no request in
+    /// flight (a paused clock would fire the 100 s request timeout before
+    /// any mock answer arrives).
+    #[tokio::test]
+    async fn a_session_held_past_eighty_percent_of_its_ttl_is_renewed_ahead_of_expiry() {
+        let (server, project_id, asset_id) = server().await;
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({ "assets": [asset(asset_id, Some("a.pdf"), true, None)] }),
+        )
+        .await;
+        mount_revisions_fresh(&server, project_id, "a.pdf", asset_id).await;
+        let client = client(&server, project_id);
+        let (remint, mints) = counting_remint();
+        let session = LiveSession::new(&client, Some(&remint));
+
+        // A fresh session: the first page fetch mints nothing.
+        let integrity = session.integrity(false).await.unwrap();
+        assert_eq!(integrity.assets.len(), 1);
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // Hold the session across 80% of its TTL with no request in flight.
+        {
+            let mut state = session.state();
+            state.minted_at =
+                Some(tokio::time::Instant::now() - CI_SESSION_TTL.mul_f64(SESSION_RENEW_AT));
+        }
+
+        // The next page fetch renews ahead of expiry — exactly one mint —
+        // and the stream continues with the renewed bearer, no read refused.
+        // The door answers only the renewed bearer, so this fetch cannot
+        // succeed unless the proactive mint actually happened.
+        let b_id = Uuid::now_v7();
+        mount_integrity_bearer(
+            &server,
+            project_id,
+            "fresh-token",
+            serde_json::json!({ "assets": [asset(b_id, Some("b.pdf"), true, None)] }),
+        )
+        .await;
+        mount_revisions_fresh(&server, project_id, "b.pdf", b_id).await;
+        let integrity = session.integrity(false).await.unwrap();
+        assert_eq!(integrity.assets.len(), 1);
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // A read after the proactive renewal runs on the renewed session —
+        // the fresh-token door answers, and no further mint fires.
+        session.list_revisions("b.pdf").await.unwrap();
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     /// A page that never recovers fails the check, naming the status, the
