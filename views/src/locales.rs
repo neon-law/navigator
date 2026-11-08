@@ -20,13 +20,11 @@ pub use summons::SummonsCopy;
 mod cyber_injury;
 pub use cyber_injury::CyberInjuryCopy;
 mod daybridge;
-mod death_and_divorce;
 mod estate;
 mod privacy;
 mod sibling_practice;
 mod team;
 pub use daybridge::DaybridgeCopy;
-pub use death_and_divorce::DeathAndDivorceCopy;
 pub use privacy::PrivacyCopy;
 pub use sibling_practice::SiblingPracticeCopy;
 pub mod services;
@@ -44,7 +42,7 @@ pub const DEFAULT_LOCALE: &str = "en";
 /// gateway, published solely under `neon/locales/en/neon/` and never shipped
 /// by another `BrandKey` (see [`crate::brand::BrandKey::catalog_pages`]). Each
 /// gateway page still deserializes as [`MarketingPageCopy`] like `navigator`
-/// and `services` do; only the stem is new.
+/// does; only the stem is new.
 pub const KNOWN_PAGES: &[&str] = &[
     "fractional-gc",
     "free-resources",
@@ -68,7 +66,6 @@ pub const KNOWN_PAGES: &[&str] = &[
     "nautilus",
     "navigator",
     "notations",
-    "services",
     "team",
 ];
 
@@ -134,6 +131,9 @@ pub struct HomeCopy {
     #[serde(default)]
     pub og_description: Option<String>,
     pub heading: String,
+    /// A short line under the heading; absent renders none.
+    #[serde(default)]
+    pub tagline: String,
     pub lead: String,
     pub contact_label: String,
     #[serde(default)]
@@ -160,9 +160,6 @@ pub struct HomeCopy {
     /// The mutual-split divorce fee and scope.
     #[serde(default)]
     pub daybridge: Option<DaybridgeCopy>,
-    /// Divorce and probate for the Death & Divorce brand.
-    #[serde(default)]
-    pub death_and_divorce: Option<DeathAndDivorceCopy>,
     /// AI-assisted personal injury campaign.
     #[serde(default)]
     pub cyber_injury: Option<CyberInjuryCopy>,
@@ -574,8 +571,9 @@ pub enum BandCopy {
         #[serde(default)]
         package: Option<PackageInstallCopy>,
     },
-    /// A subscription's phone app, drawn as one iPhone listing the checks it
-    /// runs, beside the two store badges.
+    /// A subscription's phone app, drawn as an iPhone listing the checks it
+    /// runs and, when `android_items` is authored, a Pixel showing a second
+    /// screen, beside the two store badges.
     AppPreview {
         #[serde(default)]
         anchor: String,
@@ -592,6 +590,12 @@ pub enum BandCopy {
         install_label: String,
         checks_heading: String,
         checks: Vec<AppCheckCopy>,
+        /// The Pixel screen's heading. Unused when `android_items` is empty.
+        #[serde(default)]
+        android_heading: String,
+        /// The Pixel's screen. Empty draws the iPhone alone.
+        #[serde(default)]
+        android_items: Vec<AppCheckCopy>,
         app_store_label: String,
         play_store_label: String,
         /// Shown on both badges while the apps are not yet published.

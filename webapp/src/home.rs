@@ -19,8 +19,6 @@ mod cyber_injury;
 pub use cyber_injury::CyberInjuryContent;
 mod daybridge;
 pub use daybridge::DaybridgeContent;
-mod death_and_divorce;
-pub use death_and_divorce::DeathAndDivorceContent;
 mod estate;
 pub use estate::EstateContent;
 mod privacy;
@@ -149,6 +147,9 @@ pub struct HomeContent {
     /// The question the page opens on. It is the page's one `<h1>` and the
     /// first thing a reader sees under the header: nothing sits above it.
     pub heading: String,
+    /// A short line under the heading. Empty renders nothing.
+    #[serde(default)]
+    pub tagline: String,
     pub lead: String,
     pub contact_href: String,
     pub contact_label: String,
@@ -184,9 +185,6 @@ pub struct HomeContent {
     /// The Daybridge one-time mutual-split divorce offer.
     #[serde(default)]
     pub daybridge: Option<DaybridgeContent>,
-    /// Death & Divorce's black-and-white practice surface.
-    #[serde(default)]
-    pub death_and_divorce: Option<DeathAndDivorceContent>,
     /// `CyberInjuryLaw` campaign.
     #[serde(default)]
     pub cyber_injury: Option<CyberInjuryContent>,
@@ -635,9 +633,6 @@ fn HomePageBody(
         if content.daybridge.is_some() {
             document::Stylesheet { href: "/public/css/daybridge.css" }
         }
-        if content.death_and_divorce.is_some() {
-            document::Stylesheet { href: "/public/css/death-and-divorce.css" }
-        }
         PublicShell { header, footer,
             if let Some(company) = content.company.as_ref() {
                 company::CompanyHome {
@@ -671,16 +666,6 @@ fn HomePageBody(
                     lead: String::new(),
                     cards: testimonials,
                 }
-            } else if let Some(death_and_divorce) = content.death_and_divorce.as_ref() {
-                death_and_divorce::DeathAndDivorceHome {
-                    content: content.clone(),
-                    death_and_divorce: death_and_divorce.clone(),
-                }
-                TestimonialSection {
-                    heading: "Testimonials".to_string(),
-                    lead: String::new(),
-                    cards: testimonials,
-                }
             } else if chrome.tokens_href == crate::brand_style::brand_tokens_href("delete-your-debt") {
                 DebtHome { content: content.clone() }
                 if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
@@ -697,6 +682,9 @@ fn HomePageBody(
                     "home-statement"
                 },
                 h1 { class: "home-statement__heading", "{content.heading}" }
+                if !content.tagline.is_empty() {
+                    p { class: "home-statement__tagline", "{content.tagline}" }
+                }
                 p { class: "home-statement__lead", "{content.lead}" }
                 div { class: "home-statement__actions",
                     a {
@@ -1198,6 +1186,7 @@ mod tests {
                         head_title: "Home".to_string(),
                         meta_description: "AI enablement for law firms.".to_string(),
                         og_description: None,
+                        tagline: String::new(),
                         heading: "AI enablement for law firms".to_string(),
                         lead: "Our clients are law firms.".to_string(),
                         contact_href: "mailto:contact@neonlaw.com".to_string(),
@@ -1245,7 +1234,6 @@ mod tests {
                         company: None,
                         bare: None,
                         estate: None,
-                        death_and_divorce: None,
                         cyber_injury: None,
                         summons: None,
                     },
@@ -1584,6 +1572,32 @@ mod tests {
         assert!(logo < heading);
         assert!(out.contains(r#"src="/assets/brand/guieb-shook/logo.svg""#));
         assert!(!out.contains("<header"));
+    }
+
+    #[test]
+    fn a_tagline_sits_between_the_heading_and_the_lead() {
+        fn app() -> Element {
+            rsx! {
+                HomePage {
+                    chrome: PublicChrome::default(),
+                    content: HomeContent {
+                        heading: "Guieb & Shook PC".to_string(),
+                        tagline: "East Coast rigor, West Coast Vibes.".to_string(),
+                        lead: "An American law firm.".to_string(),
+                        ..HomeContent::default()
+                    },
+                }
+            }
+        }
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        let out = dioxus_ssr::render(&dom);
+        let heading = out.find("home-statement__heading").expect("heading");
+        let tagline = out
+            .find(r#"<p class="home-statement__tagline">East Coast rigor, West Coast Vibes.</p>"#)
+            .expect("tagline");
+        let lead = out.find("home-statement__lead").expect("lead");
+        assert!(heading < tagline && tagline < lead, "{out}");
     }
 
     #[test]

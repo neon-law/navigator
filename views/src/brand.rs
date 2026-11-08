@@ -145,12 +145,13 @@ const FIRM_NAV: &[NavLink] = &[
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
-/// Neon's header links its fee schedule and separate business counsel page;
-/// the logo carries the reader home to Nautilus.
+/// Neon's header names its three products: Nautilus, the subscription at
+/// `/`; Navigator, the engine; and Notations, the document format. The shared
+/// footer row still links Navigator and Notations for every brand.
 const NEON_NAV: &[NavLink] = &[
-    NavLink::leaf("Services", "/services"),
-    NavLink::leaf("Business", "/business"),
-    NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
+    NavLink::leaf("Nautilus", "/"),
+    NavLink::leaf("Navigator", "/navigator"),
+    NavLink::leaf("Notations", "/notations"),
 ];
 
 /// Public footer pages. `firm_footer_nav` adds Contact, Testimonials, Privacy,
@@ -401,9 +402,9 @@ pub struct Branding {
     pub firm_attorneys: &'static [FirmAttorney],
     /// The associations the firm has a public affiliation with, rendered as
     /// the footer's standing line on every page. See [`FIRM_MEMBERSHIPS`]. Empty on a
-    /// bundle that renames the firm, for the same reason the trademark
-    /// notice is: the affiliation is Guieb & Shook PC's, and a renamed firm is a
-    /// different firm whose affiliations this repository cannot vouch for.
+    /// bundle that renames the firm: the affiliation is Guieb & Shook PC's, and
+    /// a renamed firm is a different firm whose affiliations this repository
+    /// cannot vouch for.
     pub firm_memberships: &'static [FirmMembership],
     /// This Brand's verified public profiles and the shared `YouTube` channel.
     /// Empty on a bundle that renames the firm.
@@ -412,23 +413,6 @@ pub struct Branding {
     /// non-empty family marks a house brand, whose footer borrows the firm's
     /// shared page links; empty on a bundle that renames the firm.
     pub firm_family: &'static [BrandKey],
-    /// The firm's registered word mark, spelled the way the register spells it
-    /// — `NEON LAW`, not the title-case wordmark the header wears. The footer's
-    /// trademark notice opens on it, followed by `®`.
-    pub firm_trademark: &'static str,
-    /// The U.S. registration number for [`Branding::firm_trademark`], written
-    /// the way the certificate writes it (`6,325,650`).
-    ///
-    /// The registrant the notice names is [`SiteBrand::legal_entity`], which is
-    /// the same legal person on the firm's deploy. Those two must move together:
-    /// a notice that cites this number and names anyone else states the wrong
-    /// owner of a live registration, and `cli/tests/license_of_record.rs`
-    /// fails the build over exactly that on every other surface that cites it.
-    pub firm_trademark_registration: &'static str,
-    /// The register's own record for that registration, so a reader verifies the
-    /// claim against the USPTO rather than trusting the site's line about
-    /// itself — the same rule the footer's bar-licence rows already follow.
-    pub firm_trademark_record_url: &'static str,
     pub consultation_url: &'static str,
     pub terms_url: &'static str,
     pub privacy_url: &'static str,
@@ -501,16 +485,6 @@ pub static DEFAULT_BRANDING: Branding = Branding {
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: FIRM_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    // The mark as registered: the register carries the word mark in capitals,
-    // and a notice that cites a registration should spell the mark the way the
-    // registration does. `site_name` above is the same mark set the way the
-    // firm signs its door.
-    firm_trademark: "NEON LAW",
-    firm_trademark_registration: "6,325,650",
-    // Serial 90039224 is the file this registration issued from, and the search
-    // record is the public page that resolves it. The registration number is
-    // what the notice claims; this is where a reader checks it.
-    firm_trademark_record_url: "https://tmsearch.uspto.gov/search/search-results/90039224",
     consultation_url: SHOOK_CONSULTATION_URL,
     terms_url: "/terms",
     privacy_url: "/privacy",
@@ -552,9 +526,6 @@ pub static DELETE_YOUR_DATA_BRANDING: Branding = Branding {
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     consultation_url: SHOOK_CONSULTATION_URL,
     terms_url: "/terms",
     privacy_url: "/privacy",
@@ -591,9 +562,6 @@ pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     consultation_url: SHOOK_CONSULTATION_URL,
     terms_url: "/terms",
     privacy_url: "/privacy",
@@ -636,9 +604,6 @@ pub static LEX_TECNICA_BRANDING: Branding = Branding {
     firm_memberships: &[],
     firm_social: &[],
     firm_family: BrandKey::LEX_TECNICA_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     consultation_url: LEX_TECNICA_CONTACT_URL,
     // The firm's own published terms. lextecnica.com publishes no privacy
     // policy page, so there is no privacy link.
@@ -687,9 +652,6 @@ pub static VESTA_BRANDING: Branding = Branding {
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: VESTA_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     consultation_url: SHOOK_CONSULTATION_URL,
     terms_url: "/terms",
     privacy_url: "/privacy",
@@ -726,9 +688,6 @@ pub static MISERICORDIA_BRANDING: Branding = Branding {
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     consultation_url: SHOOK_CONSULTATION_URL,
     terms_url: "/terms",
     privacy_url: "/privacy",
@@ -765,9 +724,6 @@ pub static ABHAYA_BRANDING: Branding = Branding {
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     consultation_url: SHOOK_CONSULTATION_URL,
     terms_url: "/terms",
     privacy_url: "/privacy",
@@ -804,9 +760,6 @@ pub static DELETE_YOUR_DEBT_BRANDING: Branding = Branding {
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     consultation_url: "https://www.pandalawfirm.com/contact/",
     terms_url: "/terms",
     privacy_url: "/privacy",
@@ -846,9 +799,6 @@ pub static SUMMONS_BRANDING: Branding = Branding {
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     consultation_url: SHOOK_CONSULTATION_URL,
     terms_url: "/terms",
     privacy_url: "/privacy",
@@ -883,56 +833,16 @@ pub static DAYBRIDGE_BRANDING: Branding = Branding {
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     consultation_url: SHOOK_CONSULTATION_URL,
     terms_url: "/terms",
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "daybridgedivorce.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Daybridge Divorce Law is operated by Guieb & Shook PC for couples who agree. Joint representation is subject to applicable rules, conflict review, and informed written consent. A one-time $5,000 fee covers a mutual split within the written retainer. Contested work is outside the joint engagement. Attorney advertisement; no result is promised.",
-    service_description: "Agreed divorce for couples through Daybridge Divorce Law, operated by Guieb & Shook PC. Joint representation where permitted after conflict review and informed written consent. A one-time $5,000 fee for a mutual split. The written retainer defines the work.",
+    mission_description: "Daybridge Divorce Law is operated by Guieb & Shook PC for couples who agree. Joint representation is subject to applicable rules, conflict review, and informed written consent. A one-time $333 fee covers a mutual split within the written retainer. Contested work is outside the joint engagement. Attorney advertisement; no result is promised.",
+    service_description: "Agreed divorce for couples through Daybridge Divorce Law, operated by Guieb & Shook PC. Joint representation where permitted after conflict review and informed written consent. A one-time $333 fee for a mutual split. The written retainer defines the work.",
     portal_only: false,
     brand_key: BrandKey::Daybridge,
-};
-
-/// The `death-and-divorce` house brand. Page copy lives in
-/// `neon/locales/en/death-and-divorce/`.
-pub static DEATH_AND_DIVORCE_BRANDING: Branding = Branding {
-    firm: SiteBrand {
-        site_name: "Death & Divorce",
-        home_href: "/",
-        tagline: "Divorce and probate. Care for what comes next.",
-        postal_address: "5150 Mae Anne Ave Ste 405-9002, Reno, NV 89523",
-        logo_href: "/public/brand/death-and-divorce/mark.svg",
-        social_image: "/public/brand/death-and-divorce/mark.svg",
-        nav: &[],
-        is_law_firm: true,
-        legal_entity: "Guieb & Shook PC",
-    },
-    firm_email: "contact@deathanddivorcelaw.com",
-    support_domain: "deathanddivorcelaw.com",
-    firm_phone: "+1 510 800 2090",
-    firm_offices: FIRM_OFFICES,
-    firm_attorneys: &[],
-    firm_memberships: FIRM_MEMBERSHIPS,
-    firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
-    consultation_url: SHOOK_CONSULTATION_URL,
-    terms_url: "/terms",
-    privacy_url: "/privacy",
-    base_url: "",
-    primary_domain: "deathanddivorcelaw.com",
-    firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Death & Divorce is a practice of Guieb & Shook PC for divorce and probate. Estate planning is offered through Vesta Estate Planning. We help people move through endings, transitions, and what comes after. This is an attorney advertisement, not a promise about a result.",
-    service_description: "Divorce and probate from Death & Divorce, a practice of Guieb & Shook PC. Scope and fees are set out in writing before work begins.",
-    portal_only: false,
-    brand_key: BrandKey::DeathAndDivorce,
 };
 
 /// CyberInjuryLaw uses the firm's verified contact and engagement identity.
@@ -973,9 +883,6 @@ pub const AEGIS_BRANDING: Branding = Branding {
     service_description: "Criminal defense. Scope, fees, and jurisdiction are confirmed before an engagement.",
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     brand_key: BrandKey::Aegis,
     ..DEFAULT_BRANDING
 };
@@ -1000,9 +907,6 @@ pub const GROUNDWORK_BRANDING: Branding = Branding {
     service_description: "Real estate legal services. Scope, fees, and jurisdiction are confirmed before an engagement.",
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     brand_key: BrandKey::Groundwork,
     ..DEFAULT_BRANDING
 };
@@ -1012,8 +916,7 @@ pub const GROUNDWORK_BRANDING: Branding = Branding {
 /// Lex Tecnica is a second firm alongside Guieb & Shook PC, so none of
 /// Guieb & Shook PC's offices, attorneys, memberships, socials, or postal
 /// box are inherited here: those fields start empty until Lex's own
-/// verified public details exist. The trademark fields are empty because
-/// no registration exists to cite. Served at `iep.neonlaw.com`.
+/// verified public details exist. Served at `iep.neonlaw.com`.
 pub const IEP_DEFENDERS_BRANDING: Branding = Branding {
     firm: SiteBrand {
         site_name: "IEP Defenders",
@@ -1043,11 +946,6 @@ pub const IEP_DEFENDERS_BRANDING: Branding = Branding {
     firm_social: &[],
     // Lex Tecnica's own family, never the Guieb & Shook one.
     firm_family: BrandKey::LEX_TECNICA_FAMILY,
-    // Held empty until a registration exists to cite; a brand with an
-    // empty trademark renders no trademark notice at all.
-    firm_trademark: "",
-    firm_trademark_registration: "",
-    firm_trademark_record_url: "",
     consultation_url: "",
     // The brand's own published privacy policy. iepdefenders.com publishes
     // no terms page, so there is no terms link; `/privacy` and `/terms` on
@@ -1091,8 +989,6 @@ pub enum BrandKey {
     Summons,
     /// The mutual-split divorce practice.
     Daybridge,
-    /// Divorce and probate for endings and transitions.
-    DeathAndDivorce,
     /// Injury claims and cybercrime, including vehicle collisions and online harm.
     CyberInjuryLaw,
     /// Criminal defense.
@@ -1121,7 +1017,6 @@ impl BrandKey {
         Self::Abhaya,
         Self::Summons,
         Self::Daybridge,
-        Self::DeathAndDivorce,
         Self::CyberInjuryLaw,
         Self::Aegis,
         Self::Groundwork,
@@ -1140,7 +1035,6 @@ impl BrandKey {
         Self::Abhaya,
         Self::Summons,
         Self::Daybridge,
-        Self::DeathAndDivorce,
         Self::CyberInjuryLaw,
         Self::Aegis,
         Self::Groundwork,
@@ -1162,7 +1056,6 @@ impl BrandKey {
         Self::Abhaya,
         Self::Summons,
         Self::Daybridge,
-        Self::DeathAndDivorce,
         Self::CyberInjuryLaw,
         Self::Aegis,
         Self::Groundwork,
@@ -1190,7 +1083,6 @@ impl BrandKey {
             Self::DeleteYourDebt => "delete-your-debt",
             Self::Summons => "summons",
             Self::Daybridge => "daybridge",
-            Self::DeathAndDivorce => "death-and-divorce",
             Self::Aegis => "aegis",
             Self::Groundwork => "groundwork",
             Self::GuiebShook => "guieb-shook",
@@ -1246,10 +1138,10 @@ impl BrandKey {
     /// answers: [`Self::publishes_firm_path`] is the route gate. Neon still
     /// ships every stem in [`crate::locales::KNOWN_PAGES`] — `fractional-gc`
     /// and `litigation` remain authored, and remain the only readers of their
-    /// `{shared:…}` keys. `/business` publishes the first; `/disputes` returns
-    /// 404. `services` is also authored here, and answers
-    /// `/services` too. Dropping a stem here while the file still ships would
-    /// strand its shared copy, which
+    /// `{shared:…}` keys. Neither publishes: `/business` redirects to `/` and
+    /// `/disputes` returns 404. Neon authors no `services` stem; its
+    /// `/services` redirects home too. Dropping a stem here while the file
+    /// still ships would strand its shared copy, which
     /// `shared_copy_is_consumed_by_pages_or_the_exported_home_contract` fails
     /// on.
     ///
@@ -1289,15 +1181,14 @@ impl BrandKey {
             | Self::Abhaya
             | Self::DeleteYourDebt
             | Self::Summons
-            | Self::Daybridge
-            | Self::DeathAndDivorce => &["home", "services"],
+            | Self::Daybridge => &["home", "services"],
         }
     }
 
     /// Firm marketing paths this key answers on its own hosts.
     ///
-    /// Neon answers Nautilus at `/`, business counsel at `/business`, and its
-    /// fee schedule at `/services`; `/disputes` returns 404. DeleteYourData
+    /// Neon answers Nautilus at `/` and its fee schedule at `/services`;
+    /// `/business` answers a redirect to `/`, and `/disputes` returns 404. DeleteYourData
     /// answers only the pages it has a catalog for (plus `/contact`, which is
     /// addresses rather than a YAML stem). Every brand answers `/contact/sent`
     /// for its lead form and serves its own Posts at `/blog`, the target of
@@ -1352,7 +1243,7 @@ impl BrandKey {
             return self == Self::Vesta;
         }
         match self {
-            Self::Neon => path.trim_end_matches('/') != "/disputes",
+            Self::Neon => !matches!(path.trim_end_matches('/'), "/disputes" | "/services"),
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),
             // Guieb & Shook publishes its services page: the homepage's
             // practice cards link there, so the route must resolve on this
@@ -1372,7 +1263,6 @@ impl BrandKey {
             | Self::Abhaya
             | Self::DeleteYourDebt
             | Self::Daybridge
-            | Self::DeathAndDivorce
             | Self::IepDefenders => {
                 matches!(path, "/" | "/services" | "/contact" | "/testimonials")
             }
@@ -1441,7 +1331,6 @@ impl BrandKey {
             Self::DeleteYourDebt => "deleteyourdebt.com",
             Self::Summons => "summonsdefense.nyc",
             Self::Daybridge => "daybridgedivorce.com",
-            Self::DeathAndDivorce => "deathanddivorcelaw.com",
             Self::Aegis => "aegiscriminaldefense.com",
             Self::Groundwork => "groundworkrealestatelaw.com",
             Self::GuiebShook => "guiebshook.com",
@@ -1503,10 +1392,6 @@ impl BrandKey {
             Self::DeleteYourDebt => &["www.deleteyourdebt.com", "staging.deleteyourdebt.com"],
             Self::Summons => &["www.summonsdefense.nyc", "staging.summonsdefense.nyc"],
             Self::Daybridge => &["www.daybridgedivorce.com", "staging.daybridgedivorce.com"],
-            Self::DeathAndDivorce => &[
-                "www.deathanddivorcelaw.com",
-                "staging.deathanddivorcelaw.com",
-            ],
             Self::Aegis => &[
                 "www.aegiscriminaldefense.com",
                 "staging.aegiscriminaldefense.com",
@@ -1538,7 +1423,6 @@ impl BrandKey {
             Self::DeleteYourDebt => &DELETE_YOUR_DEBT_BRANDING,
             Self::Summons => &SUMMONS_BRANDING,
             Self::Daybridge => &DAYBRIDGE_BRANDING,
-            Self::DeathAndDivorce => &DEATH_AND_DIVORCE_BRANDING,
             Self::Aegis => &AEGIS_BRANDING,
             Self::Groundwork => &GROUNDWORK_BRANDING,
             Self::GuiebShook => &GUIEB_SHOOK_BRANDING,
@@ -1574,7 +1458,6 @@ impl BrandKey {
             Self::DeleteYourDebt => Some("NAVIGATOR_LOCAL_DELETE_YOUR_DEBT_PORT"),
             Self::Summons => Some("NAVIGATOR_LOCAL_SUMMONS_PORT"),
             Self::Daybridge => Some("NAVIGATOR_LOCAL_DAYBRIDGE_PORT"),
-            Self::DeathAndDivorce => Some("NAVIGATOR_LOCAL_DEATH_AND_DIVORCE_PORT"),
             Self::Aegis => Some("NAVIGATOR_LOCAL_AEGIS_PORT"),
             Self::Groundwork => Some("NAVIGATOR_LOCAL_GROUNDWORK_PORT"),
             Self::GuiebShook => Some("NAVIGATOR_LOCAL_GUIEB_SHOOK_PORT"),
@@ -1826,23 +1709,6 @@ impl Branding {
         );
         let service_description =
             Box::leak(format!("Flat-fee legal services from {firm_name}.").into_boxed_str());
-        // A registration belongs to its registrant, and a bundle that renames
-        // the firm is a different firm: it publishes no mark notice at all,
-        // because U.S. Reg. No. 6,325,650 is not theirs to notice. There is
-        // deliberately no manifest key for it either — an operator with their
-        // own registration is making an ownership claim this repository cannot
-        // verify, and a notice naming the wrong owner is worse than none, since
-        // it is the line a reader relies on for permission.
-        let (firm_trademark, firm_trademark_registration, firm_trademark_record_url) =
-            if brand.firm.is_some() {
-                ("", "", "")
-            } else {
-                (
-                    DEFAULT_BRANDING.firm_trademark,
-                    DEFAULT_BRANDING.firm_trademark_registration,
-                    DEFAULT_BRANDING.firm_trademark_record_url,
-                )
-            };
         // The same rule for the firm's affiliations: the association
         // affiliation and the house-brand family are Guieb & Shook PC's, so a
         // bundle that renames the firm publishes neither — a footer claiming
@@ -1945,9 +1811,6 @@ impl Branding {
             firm_memberships,
             firm_family,
             firm_social,
-            firm_trademark,
-            firm_trademark_registration,
-            firm_trademark_record_url,
             consultation_url: value(
                 brand.consultation_url.as_deref(),
                 DEFAULT_BRANDING.consultation_url,
@@ -2096,24 +1959,6 @@ pub fn firm_social() -> &'static [FirmSocial] {
 #[must_use]
 pub fn firm_family() -> &'static [BrandKey] {
     current().firm_family
-}
-
-/// The firm's registered word mark, its U.S. registration number, and the
-/// register's own record for it — the three parts of the footer's trademark
-/// notice, resolved together because a notice missing any of them makes a claim
-/// a reader cannot check.
-///
-/// All three are empty on a bundle that renamed the firm: see
-/// [`Branding::firm_trademark_registration`] for why a host publishes no notice
-/// rather than this one.
-#[must_use]
-pub fn firm_trademark() -> (&'static str, &'static str, &'static str) {
-    let branding = current();
-    (
-        branding.firm_trademark,
-        branding.firm_trademark_registration,
-        branding.firm_trademark_record_url,
-    )
 }
 
 /// The public pages the footer links rather than the header — [`FIRM_FOOTER_NAV`]
@@ -2477,62 +2322,7 @@ mod tests {
         assert_eq!(DEFAULT_BRANDING.firm.legal_entity, "Guieb & Shook PC");
     }
 
-    /// The compiled default notices the live registration, spelled the way the
-    /// register spells it and pointing at the register's own record.
-    ///
-    /// The registrant is [`SiteBrand::legal_entity`], asserted here beside the
-    /// number so the pair cannot drift: U.S. Reg. No. 6,325,650 is the Firm's,
-    /// and the footer composes its notice from these two fields.
-    #[test]
-    fn the_default_notices_the_registration_and_where_to_verify_it() {
-        let (mark, registration, record) = (
-            DEFAULT_BRANDING.firm_trademark,
-            DEFAULT_BRANDING.firm_trademark_registration,
-            DEFAULT_BRANDING.firm_trademark_record_url,
-        );
-        assert_eq!(mark, "NEON LAW");
-        assert_eq!(registration, "6,325,650");
-        assert_eq!(
-            record,
-            "https://tmsearch.uspto.gov/search/search-results/90039224"
-        );
-        assert_eq!(
-            DEFAULT_BRANDING.firm.legal_entity, "Guieb & Shook PC",
-            "the notice names this entity as the registrant"
-        );
-    }
-
-    /// A bundle that renames the firm publishes no mark notice.
-    ///
-    /// The registration is not the mounting host's, so there is nothing for it
-    /// to notice — and a host inheriting this one would tell its own readers
-    /// that someone else's registration covers the name on its door.
-    #[tokio::test]
-    async fn a_renamed_firm_notices_no_registration() {
-        let manifest: BrandManifest =
-            serde_yaml::from_str("version: 1\nbrand:\n  firm: Cascade Law\n").unwrap();
-        let branding = Branding::from_manifest(&manifest);
-        scope(branding, async {
-            assert_eq!(super::firm_trademark(), ("", "", ""));
-        })
-        .await;
-        // A bundle that changed something else keeps it: the firm did not move.
-        let untouched: BrandManifest =
-            serde_yaml::from_str("version: 1\nbrand:\n  firm_phone: '+1 555 000 0000'\n").unwrap();
-        scope(Branding::from_manifest(&untouched), async {
-            assert_eq!(
-                super::firm_trademark(),
-                (
-                    "NEON LAW",
-                    "6,325,650",
-                    DEFAULT_BRANDING.firm_trademark_record_url
-                )
-            );
-        })
-        .await;
-    }
-
-    /// The firm's affiliations follow the trademark rule: a bundle that
+    /// The firm's affiliations stay with the firm: a bundle that
     /// renames the firm publishes no association affiliation and lists no
     /// house-brand family, because both are Guieb & Shook PC's; a bundle that
     /// changes anything else keeps them. Every house brand carries the same
@@ -2908,16 +2698,15 @@ mod tests {
     }
 
     #[test]
-    fn the_firm_nav_links_services_business_and_consultation() {
-        assert_eq!(FIRM_BRAND.nav.len(), 3);
-        assert_eq!(FIRM_BRAND.nav[0].label, "Services");
-        assert_eq!(FIRM_BRAND.nav[0].href, "/services");
-        assert_eq!(FIRM_BRAND.nav[1].label, "Business");
-        assert_eq!(FIRM_BRAND.nav[1].href, "/business");
-        assert_eq!(FIRM_BRAND.nav[2].label, "Book Consultation");
+    fn the_neon_nav_links_its_three_products() {
+        let nav: Vec<(&str, &str)> = FIRM_BRAND.nav.iter().map(|n| (n.label, n.href)).collect();
         assert_eq!(
-            FIRM_BRAND.nav[2].href,
-            "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
+            nav,
+            [
+                ("Nautilus", "/"),
+                ("Navigator", "/navigator"),
+                ("Notations", "/notations"),
+            ]
         );
     }
 
@@ -2952,12 +2741,14 @@ mod tests {
         let mut sorted = footer.clone();
         sorted.sort_unstable();
         assert_eq!(footer, sorted, "the footer nav is alphabetized by label");
-        // Every label is linked once, from exactly one of the two rows. There
-        // is no longer any exception: the one duplicate was the nonprofit's
-        // cross-link, which had to sit in both rows while the site served two
-        // faces, and both faces are one now.
+        // Every label is linked once, from exactly one of the two rows, except
+        // the two products Neon's header promotes: the footer row is shared by
+        // every brand, which still links them there.
         let header: Vec<&str> = FIRM_BRAND.nav.iter().map(|n| n.label).collect();
-        for label in &footer {
+        for label in footer
+            .iter()
+            .filter(|label| !matches!(**label, "Navigator" | "Notations"))
+        {
             assert!(
                 !header.contains(label),
                 "{label} is linked once, from the footer"
@@ -3120,7 +2911,13 @@ mod tests {
     #[test]
     fn neither_row_links_a_retired_url() {
         for link in FIRM_BRAND.nav.iter().chain(super::firm_footer_nav().iter()) {
-            for retired in ["/foundation", "legal-aid", "/mission", "/attorneys"] {
+            for retired in [
+                "/foundation",
+                "legal-aid",
+                "/mission",
+                "/attorneys",
+                "/business",
+            ] {
                 assert!(
                     !link.href.starts_with(retired),
                     "{} links the retired {retired}: {}",
@@ -3342,11 +3139,9 @@ mod tests {
     // --- The launch gate ---------------------------------------------------
 
     /// IEP Defenders is live on its `neonlaw.com` subdomains, which have no
-    /// naked domain of their own, and its compiled trademark fields stay empty
-    /// until a registration exists to cite — so no trademark notice may render
-    /// for it under any footer shape.
+    /// naked domain of their own, and it is a Lex Tecnica, Ltd. brand.
     #[test]
-    fn iep_defenders_is_live_on_neonlaw_subdomains_with_empty_trademark() {
+    fn iep_defenders_is_live_on_neonlaw_subdomains() {
         let key = BrandKey::parse("iep-defenders").expect("iep-defenders is registered");
         assert!(key.is_live());
         assert_eq!(key.hosts(), ["iep.neonlaw.com", "staging-iep.neonlaw.com"]);
@@ -3359,9 +3154,6 @@ mod tests {
         assert_eq!(branding.firm.legal_entity, "Lex Tecnica, Ltd.");
         assert!(branding.firm.is_law_firm);
         assert_eq!(branding.firm_family, BrandKey::LEX_TECNICA_FAMILY);
-        assert_eq!(branding.firm_trademark, "");
-        assert_eq!(branding.firm_trademark_registration, "");
-        assert_eq!(branding.firm_trademark_record_url, "");
     }
 
     /// The gate admits the approved set and nothing else, in both
@@ -3611,9 +3403,9 @@ mod tests {
     }
 
     /// Chrome copy for a house brand is real prose, not a `Placeholder …`
-    /// string, and it does not invent a trademark notice.
+    /// string.
     #[test]
-    fn delete_your_data_chrome_copy_is_not_a_placeholder_and_carries_no_mark() {
+    fn delete_your_data_chrome_copy_is_not_a_placeholder() {
         let branding = &DELETE_YOUR_DATA_BRANDING;
         assert!(!branding.firm.tagline.contains("Placeholder"));
         assert!(!branding.mission_description.contains("Placeholder"));
@@ -3626,9 +3418,6 @@ mod tests {
         assert!(!branding.service_description.contains("additional member"));
         assert!(!branding.service_description.contains("$50"));
         assert!(branding.service_description.contains("opt-in"));
-        assert!(branding.firm_trademark.is_empty());
-        assert!(branding.firm_trademark_registration.is_empty());
-        assert!(branding.firm_trademark_record_url.is_empty());
     }
 
     #[test]
@@ -3658,8 +3447,7 @@ mod tests {
         assert!(!BrandKey::DeleteYourData.publishes_firm_path("/services"));
         assert!(BrandKey::DeleteYourData.publishes_firm_path("/contact"));
         assert!(!BrandKey::DeleteYourData.publishes_firm_path("/disputes"));
-        assert!(BrandKey::Neon.publishes_firm_path("/services"));
-        assert!(BrandKey::Neon.publishes_firm_path("/business"));
+        assert!(!BrandKey::Neon.publishes_firm_path("/services"));
         assert!(!BrandKey::Neon.publishes_firm_path("/disputes"));
         assert!(BrandKey::CyberInjuryLaw.publishes_firm_path("/services"));
     }

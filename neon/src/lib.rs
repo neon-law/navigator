@@ -61,6 +61,9 @@ pub const PUBLIC_PATHS: &[&str] = &[
     "/purchases",
     "/purchases/{offering}",
     "/disputes",
+    // Answers a 301 to Nautilus at `/`, like `/personal` above: the business
+    // counsel page is retired and its formation and template work is part of
+    // the Nautilus subscription.
     "/business",
     "/navigator",
     "/legal-aid",
@@ -167,7 +170,6 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
         | BrandKey::DeleteYourDebt
         | BrandKey::Summons
         | BrandKey::Daybridge
-        | BrandKey::DeathAndDivorce
         | BrandKey::IepDefenders => ["/", "/services", "/contact", "/testimonials"]
             .iter()
             .map(|path| (*path).to_string())
@@ -196,8 +198,6 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
         BrandKey::Neon => {
             let mut paths: std::collections::BTreeSet<String> = [
                 "/",
-                "/services",
-                "/business",
                 "/navigator",
                 "/legal-aid",
                 "/delete-your-debt",
@@ -290,11 +290,6 @@ fn practice_brand_llms_txt(key: BrandKey) -> portal::LlmsTxt {
 /// meets them. Every entry is a page this host serves anonymously; the
 /// individual posts a crawler walks from `/blog` are enumerated by
 /// [`sitemap_paths`] rather than curated here.
-///
-/// `/services` is named as the fee schedule it is. The firm charges a fixed fee
-/// per matter, which is the thing that page exists to say — an index describing
-/// it as generic "legal services" would understate it. The index carries the
-/// same $5, $10/day, and $100-starting pricing summary the public pages publish.
 #[must_use]
 pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
     match key {
@@ -309,7 +304,6 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
         | BrandKey::Daybridge
         | BrandKey::Aegis
         | BrandKey::Groundwork
-        | BrandKey::DeathAndDivorce
         | BrandKey::CyberInjuryLaw
         | BrandKey::GuiebShook
         | BrandKey::LexTecnica
@@ -375,7 +369,7 @@ fn indexed_page(title: &str, path: &str, description: &str) -> portal::LlmsTxtLi
 }
 
 /// The pages `/llms.txt` lists, in the order a reader meets them: the firm's
-/// practice, then its fee schedule, then everything it publishes beside them.
+/// practice, then everything it publishes beside it.
 fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
     let mut pages = vec![
         indexed_page(
@@ -383,12 +377,6 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "/",
             &locales::nautilus(&views::brand::DEFAULT_BRANDING, None).meta_description,
         ),
-        indexed_page(
-            "Business counsel",
-            "/business",
-            &locales::home(&views::brand::DEFAULT_BRANDING).meta_description,
-        ),
-        services_page_link(),
         indexed_page(
             "Debt relief with PandA Law",
             "/delete-your-debt",
@@ -408,11 +396,11 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "Nautilus",
             "/nautilus",
             "Nautilus, one subscription of privacy and paperwork checks for $29/mo or \
-             $290/year prepaid: data removal, privacy protection, credit monitoring, dark web \
-             monitoring, identity theft insurance, unclaimed property, estate planning, and basic \
-             form filings such as forming an LLC. Government fees are separate. Legal fees are \
-             excluded and must be prepaid; a lawyer review starts at $20. Coming to iPhone and \
-             Android.",
+             $290/year prepaid, cancel anytime: data removal, privacy protection, credit \
+             monitoring, dark web monitoring, identity theft insurance, unclaimed property, estate \
+             planning, contract templates, and basic form filings such as forming an LLC. \
+             Government fees are separate. Legal fees are excluded and must be prepaid; a lawyer \
+             review starts at $20. Coming to iPhone and Android.",
         ),
     ];
     pages.extend(immigration_indexed_pages());
@@ -439,7 +427,7 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "Divorce",
             "/divorce",
             "Neon's gateway page naming Daybridge Divorce Law as the destination for couples \
-             who agree: a one-time $5,000 \
+             who agree: a one-time $333 \
              fee for a mutual split. Joint representation is subject to applicable \
              rules, conflict review, and informed written consent. No result or \
              timeline is promised.",
@@ -481,8 +469,7 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
 
 /// Neon's `/immigration*` entries in its `/llms.txt` index: the gateway
 /// first, then each practice page a reader can follow from it. Lifted
-/// out of [`indexed_pages`] for the same reason [`services_page_link`]
-/// is its own function.
+/// out of [`indexed_pages`] to keep that function under clippy's line limit.
 fn immigration_indexed_pages() -> Vec<portal::LlmsTxtLink> {
     const PAGES: &[(&str, &str, &str)] = &[
         (
@@ -563,25 +550,6 @@ fn immigration_indexed_pages() -> Vec<portal::LlmsTxtLink> {
         .collect()
 }
 
-/// Neon's `/services` entry in its own `llms.txt` index.
-///
-/// Lifted out of [`indexed_pages`] for the same reason
-/// [`practice_brand_llms_txt`] is its own function: the description is long
-/// enough on its own that inlining it pushed the caller past clippy's line
-/// limit.
-fn services_page_link() -> portal::LlmsTxtLink {
-    portal::LlmsTxtLink {
-        title: "Legal Services and fees".to_string(),
-        path: "/services".to_string(),
-        description: "Individual services, each with an agreed scope and price before work \
-             begins: company formation, compliance filings, a trademark application, a legal \
-             name change, wills, trusts, contract review, a demand letter, and eviction help. \
-             Flat-fee items are $100; sending an unchanged template for signature is $5. \
-             Government filing fees are separate where they apply."
-            .to_string(),
-    }
-}
-
 /// The site's public Axum table: the crawler documents, and the one write on
 /// each workshop or presentation surface.
 ///
@@ -615,7 +583,6 @@ pub fn public_dioxus_routers(state: &AppState) -> Vec<PublicRouter> {
 /// message-frequency, opt-out, and carrier-liability disclosures live.
 fn legal_dioxus_routers() -> Vec<PublicRouter> {
     portal::dioxus_app::legal_dioxus_routers(
-        views::brand::FIRM_BRAND.site_name,
         include_str!("../content/privacy.md"),
         include_str!("../content/terms.md"),
     )

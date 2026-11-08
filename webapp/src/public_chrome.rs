@@ -138,11 +138,6 @@ pub struct PublicChrome {
     #[serde(default)]
     pub attribution: String,
     pub disclaimer: String,
-    /// Registration metadata resolved from the firm brand. The disclosure
-    /// names the trademark holder independently of the operating legal entity.
-    pub trademark: String,
-    pub trademark_registration: String,
-    pub trademark_record_url: String,
     pub copyright_year: i32,
     /// The firm's inbound support address — the footer's contact CTA.
     pub firm_email: String,
@@ -236,10 +231,6 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
             attribution: if practice_footer { String::new() } else { chrome.attribution.clone() },
             copyright_href: if practice_footer { chrome.firm_home_href.clone() } else { String::new() },
             disclaimer: chrome.disclaimer.clone(),
-            // Registration metadata accompanies the independently resolved ownership notice.
-            trademark: chrome.trademark.clone(),
-            trademark_registration: chrome.trademark_registration.clone(),
-            trademark_record_url: chrome.trademark_record_url.clone(),
             copyright_year: chrome.copyright_year,
             logo_href: chrome.firm_logo_href.clone(),
             // The wordmark beside the footer mark is the firm's, on every
@@ -339,35 +330,6 @@ pub(crate) fn marketing_copy(key: &str) -> String {
     .to_string()
 }
 
-/// The firm's own page speaks for itself: no provider credit, no Neon mark.
-#[cfg(feature = "server")]
-fn firm_own_page() -> bool {
-    views::brand::brand_key() == views::brand::BrandKey::GuiebShook
-}
-
-/// The footer's mark notice, empty on the firm's own page.
-#[cfg(feature = "server")]
-fn footer_trademark() -> (&'static str, &'static str, &'static str) {
-    if firm_own_page() {
-        ("", "", "")
-    } else {
-        views::brand::firm_trademark()
-    }
-}
-
-/// The ownership notice, empty on the Firm's own page.
-#[cfg(feature = "server")]
-fn footer_disclosure() -> crate::components::site_footer::FooterDisclosure {
-    if views::brand::FIRM_BRAND.legal_entity == "Guieb & Shook PC" && !firm_own_page() {
-        crate::components::site_footer::FooterDisclosure {
-            ownership: marketing_copy("footer.ownership"),
-            ..Default::default()
-        }
-    } else {
-        crate::components::site_footer::FooterDisclosure::default()
-    }
-}
-
 /// The brand's absolute `og:image` URL. The deployment's `NAV_BASE_URL`
 /// resolution wins, as everywhere `views::assets::absolute_url` runs; when
 /// the deployment advertises no origin (dev, tests, an OSS fork), the
@@ -394,11 +356,6 @@ fn social_image_url(brand: &views::brand::SiteBrand) -> String {
 #[cfg(feature = "server")]
 fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> PublicChrome {
     use views::brand::FIRM_BRAND;
-
-    // The mark, its registration, and the register's record, resolved together
-    // — the notice is one claim and a footer holding two thirds of it makes an
-    // ownership statement a reader cannot check.
-    let (trademark, registration, record) = footer_trademark();
 
     let destinations = brand
         .nav
@@ -428,7 +385,7 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         firm_logo_href: FIRM_BRAND.logo_href.to_string(),
         firm_home_href: FIRM_BRAND.home_href.to_string(),
         legal_entity: FIRM_BRAND.legal_entity.to_string(),
-        disclosure: footer_disclosure(),
+        disclosure: crate::components::site_footer::FooterDisclosure::default(),
         membership_badge_href: if FIRM_BRAND.legal_entity == "Guieb & Shook PC" {
             views::assets::asset_url(views::assets::GUIEB_SHOOK_GVC_BADGE_KEY)
         } else {
@@ -437,9 +394,6 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         tagline: FIRM_BRAND.legal_entity == "Guieb & Shook PC",
         attribution: firm_attribution(brand),
         disclaimer: views::brand::firm_disclaimer().to_string(),
-        trademark: trademark.to_string(),
-        trademark_registration: registration.to_string(),
-        trademark_record_url: record.to_string(),
         // The footer fixes the joint-copyright year too; a deploy-time
         // value replaces the constant when the footer year is wired through.
         copyright_year: 2026,
@@ -528,27 +482,6 @@ pub fn apply_resolved_firm_footer(
         chrome.disclosure.provider.clear();
         chrome.disclosure.href.clear();
         let old_entity = chrome.legal_entity.clone();
-        if chrome.disclosure.ownership.is_empty() && !chrome.trademark.is_empty() {
-            chrome.disclosure.ownership = if chrome.trademark_registration.is_empty() {
-                format!(
-                    "{}™ is a common-law mark of {}",
-                    chrome.trademark, old_entity
-                )
-            } else {
-                format!(
-                    "{}® is a registered trademark of {},",
-                    chrome.trademark, old_entity
-                )
-            };
-            // The component appends the linked registration when one exists.
-            if !chrome.trademark_registration.is_empty() && chrome.trademark_record_url.is_empty() {
-                chrome.disclosure.ownership.push_str(" U.S. Reg. No. ");
-                chrome
-                    .disclosure
-                    .ownership
-                    .push_str(&chrome.trademark_registration);
-            }
-        }
         if !old_entity.is_empty() {
             chrome.disclaimer = chrome.disclaimer.replace(&old_entity, &model.legal_entity);
         }
@@ -648,14 +581,6 @@ mod tests {
             tagline: true,
             attribution: "A practice of Guieb & Shook PC".to_string(),
             disclaimer: "This is an attorney advertisement.".to_string(),
-            // The real registration, as `chrome_for` resolves it from the firm
-            // brand: the notice's registrant is `legal_entity` above, so a
-            // fixture inventing a number here would document the one pairing
-            // this footer must never publish.
-            trademark: "NEON LAW".to_string(),
-            trademark_registration: "6,325,650".to_string(),
-            trademark_record_url: "https://tmsearch.uspto.gov/search/search-results/90039224"
-                .to_string(),
             copyright_year: 2026,
             firm_email: "support@neonlaw.com".to_string(),
             firm_phone: "+1 555 010 0100".to_string(),
@@ -872,35 +797,6 @@ mod tests {
         assert!(out.contains("© 2026 Guieb &#38; Shook PC"), "{out}");
     }
 
-    /// The mark notice names the registrant the copyright line names, and
-    /// points at the register rather than at the site's own word for it.
-    ///
-    /// The registrant is the assertion that matters: U.S. Reg. No. 6,325,650 is
-    /// the Firm's, and a footer citing that number beside any other name would
-    /// hand a reader permission nobody gave them.
-    #[test]
-    fn the_mark_notice_names_the_registrant_and_links_the_record() {
-        fn app() -> Element {
-            rsx! { PublicFooter { chrome: firm_chrome() } }
-        }
-        let out = ssr(app);
-        assert!(
-            out.contains("NEON LAW") && out.contains("®"),
-            "the mark renders as registered: {out}"
-        );
-        assert!(
-            out.contains("is a registered trademark of Guieb &#38; Shook PC"),
-            "the registrant is the legal person, not the wordmark: {out}"
-        );
-        assert!(
-            out.contains("U.S. Reg. No. 6,325,650")
-                && out.contains(
-                    r#"href="https://tmsearch.uspto.gov/search/search-results/90039224""#
-                ),
-            "the registration is cited and linked to the register: {out}"
-        );
-    }
-
     /// A different header renders the one shared footer, byte-identical to the
     /// firm's: the bar licenses, the offices, and the contact band all carry
     /// over unchanged.
@@ -995,21 +891,10 @@ mod tests {
         }
     }
 
+    /// Guieb & Shook's own page names no provider.
     #[cfg(feature = "server")]
     #[tokio::test]
-    async fn a_non_default_public_brand_does_not_inherit_the_neon_trademark_notice() {
-        let branding = views::brand::BrandKey::DeleteYourData
-            .resolve_branding(&views::brand::DEFAULT_BRANDING);
-        let chrome = views::brand::scope(branding, async { firm_public_chrome(Vec::new()) }).await;
-        assert!(chrome.trademark.is_empty());
-        assert!(chrome.trademark_registration.is_empty());
-        assert!(chrome.trademark_record_url.is_empty());
-    }
-
-    /// Guieb & Shook's own page names no provider and no Neon Law mark.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn guieb_shook_footer_omits_the_provider_and_neon_mark() {
+    async fn guieb_shook_footer_omits_the_provider() {
         let branding =
             views::brand::BrandKey::GuiebShook.resolve_branding(&views::brand::DEFAULT_BRANDING);
         let chrome =
@@ -1018,8 +903,6 @@ mod tests {
         dom.rebuild_in_place();
         let out = dioxus_ssr::render(&dom);
         assert!(!out.contains("site-footer__provider"), "{out}");
-        assert!(!out.contains("site-footer__ownership"), "{out}");
-        assert!(!out.contains("site-footer__trademark"), "{out}");
     }
 
     /// The public footer carries the firm's own disclaimer.
@@ -1100,6 +983,32 @@ mod tests {
                 "{name}'s page names {} as the publisher: {copyright}",
                 branding.firm.legal_entity
             );
+        }
+    }
+
+    /// The footer links each legal document once, on every brand: the row is
+    /// the one place a reader looks for them, so a second link would only be
+    /// the same document twice.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn every_brand_footer_links_privacy_and_terms_once() {
+        for key in views::brand::BrandKey::ALL {
+            let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+            let chrome =
+                views::brand::scope(branding, async { chrome_for(&branding.firm, Vec::new()) })
+                    .await;
+            let html = render_chrome(chrome);
+            for (label, href) in [
+                ("Privacy", branding.privacy_url),
+                ("Terms", branding.terms_url),
+            ] {
+                assert_eq!(
+                    html.matches(&format!(">{label}")).count(),
+                    usize::from(!href.is_empty()),
+                    "{} links {label} once: {html}",
+                    key.as_str()
+                );
+            }
         }
     }
 
@@ -1230,7 +1139,7 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "server")]
-    fn changed_operator_keeps_advertising_warning_and_original_trademark_owner() {
+    fn changed_operator_keeps_the_advertising_warning() {
         let mut chrome = firm_chrome();
         chrome.is_practice = true;
         chrome.disclaimer = "Attorney advertisement. Guieb & Shook PC. Non-legal services do not create an attorney-client relationship.".into();
@@ -1258,15 +1167,6 @@ mod tests {
         );
         assert!(!html.contains("Independent Provider"), "{html}");
         assert!(!html.contains("site-footer__provider"), "{html}");
-        let ownership = element_text(&html, "site-footer__ownership");
-        assert!(
-            ownership.contains("is a registered trademark of Guieb & Shook PC"),
-            "{ownership}"
-        );
-        assert!(
-            !ownership.contains("is a registered trademark of Synthetic New Entity LLC"),
-            "{ownership}"
-        );
         assert!(
             !html.contains("Aquarius Lumen")
                 && !html.contains("Justice Technology Association")
@@ -1293,9 +1193,8 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "server")]
-    fn canonical_identity_preserves_all_compiled_facts_and_existing_ip_notice() {
+    fn canonical_identity_preserves_all_compiled_facts() {
         let mut chrome = firm_chrome();
-        chrome.disclosure.ownership = "Independent IP owner".into();
         let model = crate::firm_footer::FirmFooterModel {
             legal_entity: chrome.legal_entity.clone(),
             compiled_identity_allowed: true,
@@ -1305,27 +1204,5 @@ mod tests {
         let before = serde_json::to_value(&chrome).unwrap();
         apply_resolved_firm_footer(&mut chrome, &model);
         assert_eq!(serde_json::to_value(&chrome).unwrap(), before);
-    }
-    #[test]
-    #[cfg(feature = "server")]
-    fn common_law_and_existing_independent_property_notices_keep_their_owner() {
-        let mut chrome = firm_chrome();
-        chrome.trademark_registration.clear();
-        apply_resolved_firm_footer(&mut chrome, &resolved_operator("New Entity", false));
-        assert!(chrome
-            .disclosure
-            .ownership
-            .contains("is a common-law mark of Guieb & Shook PC"));
-        let mut chrome = firm_chrome();
-        chrome.disclosure.ownership = "Independent IP owner".into();
-        apply_resolved_firm_footer(&mut chrome, &resolved_operator("New Entity", false));
-        assert_eq!(chrome.disclosure.ownership, "Independent IP owner");
-        let mut chrome = firm_chrome();
-        chrome.trademark_record_url.clear();
-        apply_resolved_firm_footer(&mut chrome, &resolved_operator("New Entity", false));
-        let html = render_chrome(chrome);
-        let ownership = element_text(&html, "site-footer__ownership");
-        assert!(ownership.contains("Guieb & Shook PC"), "{ownership}");
-        assert!(ownership.contains("U.S. Reg. No. 6,325,650"), "{ownership}");
     }
 }

@@ -15,12 +15,12 @@ fn expected_gallery_placeholders() -> usize {
 /// because `cli` ships no library target an integration test could read the
 /// table from; the in-crate `published_asset_refs_names_both_faces_of_every_font_family`
 /// holds the table itself to this same number.
-const EXPECTED_FONT_PLACEHOLDERS: usize = 23;
+const EXPECTED_FONT_PLACEHOLDERS: usize = 21;
 
-/// Nine fixed house-brand media files, including the canonical Aster board and the Guieb & Shook
+/// Eight fixed house-brand media files, including the canonical Aster board and the Guieb & Shook
 /// home-page photograph and membership badge, plus Vesta videos and photos, the Navigator page's Matter Page
 /// screenshots, and architecture photos.
-const EXPECTED_BRAND_MEDIA_PLACEHOLDERS: usize = 9
+const EXPECTED_BRAND_MEDIA_PLACEHOLDERS: usize = 8
     + views::assets::VESTA_UPDATE_VIDEO_KEYS.len()
     + views::assets::VESTA_PHOTOS.len()
     + views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS.len()
@@ -118,10 +118,6 @@ fn stub_referenced_writes_the_gallery_and_licensed_fonts_without_content_images(
     assert!(out
         .path()
         .join(views::assets::CYBER_INJURY_AD_KEY)
-        .is_file());
-    assert!(out
-        .path()
-        .join(views::assets::DEATH_AND_DIVORCE_HERO_KEY)
         .is_file());
     assert!(out
         .path()

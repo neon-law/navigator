@@ -16,7 +16,6 @@ catalog_version: 1
 entries:
   world.description: Explore a calculated astrocartography specimen map and resolve birth places to map coordinates. Birth details are processed within your request.
   world.intro: Explore the calculated specimen map, then find map coordinates for your birth details.
-  footer.ownership: Neon Law is a trademark of Neon Law IP LLC.
   signup.password_label: Password
   signup.existing: Sign in to an existing account
   signup.invalid: Enter a valid email and a password with at least 8 characters.
@@ -32,12 +31,6 @@ entries:
   home.mission_heading: Everyone deserves access to justice.
   home.mission_north_star: Our north star is improving access to justice.
   home.mission_promise: You deserve a lawyer who listens, explains your options, and tells you what help will cost.
-
-  # `/services`
-  services.eyebrow: One-time services
-  services.title: Find the help you need.
-  services.lede: Start with your business, your family, or the next step in your life. Explore our brands or choose an individual service below. We confirm the lawyers, scope, and fees in your written engagement.
-  services.catalog_heading: Need help with one thing?
 
   # `/business` — the Business plan.
   fractional_gc.eyebrow: Business plan

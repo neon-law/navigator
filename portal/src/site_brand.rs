@@ -2,7 +2,7 @@
 //!
 //! `GET /site-brand.json` answers with the brand the request's `Host:` resolved
 //! to (the same [`views::brand::BrandKey`] the rest of the site scopes), so a
-//! portal mounted on `deathanddivorcelaw.com` wears that site's identity and one
+//! portal mounted on `daybridgedivorce.com` wears that site's identity and one
 //! on `www.neonlaw.com` wears Neon Law's. The portal is branded "Navigator" plus
 //! this brand; the palette arrives as the `tokens_href` stylesheet, never as a
 //! colour repainted inside the portal.
@@ -65,17 +65,14 @@ pub async fn site_brand() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use views::brand::{scope, DEATH_AND_DIVORCE_BRANDING, DEFAULT_BRANDING};
+    use views::brand::{scope, DAYBRIDGE_BRANDING, DEFAULT_BRANDING};
 
     #[tokio::test]
-    async fn death_and_divorce_host_shows_its_own_brand() {
-        let brand = scope(&DEATH_AND_DIVORCE_BRANDING, async { current() }).await;
-        assert_eq!(brand.key, "death-and-divorce");
-        assert_eq!(brand.name, "Death & Divorce");
-        assert_eq!(
-            brand.tokens_href,
-            "/public/css/brand-death-and-divorce-tokens.css"
-        );
+    async fn daybridge_host_shows_its_own_brand() {
+        let brand = scope(&DAYBRIDGE_BRANDING, async { current() }).await;
+        assert_eq!(brand.key, "daybridge");
+        assert_eq!(brand.name, "Daybridge Divorce Law");
+        assert_eq!(brand.tokens_href, "/public/css/brand-daybridge-tokens.css");
         assert_eq!(brand.platform, "Powered by Navigator");
     }
 
@@ -85,12 +82,12 @@ mod tests {
         assert_eq!(brand.key, "neon");
         assert_eq!(brand.name, DEFAULT_BRANDING.firm.site_name);
         assert_eq!(brand.tokens_href, "/public/css/brand-neon-tokens.css");
-        assert_ne!(brand.name, "Death & Divorce");
+        assert_ne!(brand.name, "Daybridge Divorce Law");
     }
 
     #[tokio::test]
     async fn the_route_serves_json_keyed_on_host() {
-        let response = scope(&DEATH_AND_DIVORCE_BRANDING, site_brand()).await;
+        let response = scope(&DAYBRIDGE_BRANDING, site_brand()).await;
         assert_eq!(response.headers()[VARY], "Host");
         assert_eq!(
             response.headers()[CONTENT_TYPE],
@@ -100,10 +97,7 @@ mod tests {
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["name"], "Death & Divorce");
-        assert_eq!(
-            json["tokensHref"],
-            "/public/css/brand-death-and-divorce-tokens.css"
-        );
+        assert_eq!(json["name"], "Daybridge Divorce Law");
+        assert_eq!(json["tokensHref"], "/public/css/brand-daybridge-tokens.css");
     }
 }

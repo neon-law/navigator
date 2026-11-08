@@ -195,6 +195,8 @@ async fn main() -> anyhow::Result<()> {
             .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")?;
         let notation_reset_enabled = workflows::dbos_engine::notation_reset::enabled(lookup)
             .context("read NAVIGATOR_DBOS_NOTATION_RESET_ENABLED")?;
+        let profit_digest_enabled = workflows::dbos_engine::profit_digest::enabled(lookup)
+            .context("read NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED")?;
         let archives_enabled = archives::workflow::dbos_enabled(lookup)
             .map_err(anyhow::Error::msg)
             .context("read NAVIGATOR_DBOS_ARCHIVES_ENABLED")?;
@@ -275,6 +277,7 @@ async fn main() -> anyhow::Result<()> {
         let surreal = if general_nag_enabled
             || dri_digest_enabled
             || notation_reset_enabled
+            || profit_digest_enabled
             || reconcile_enabled
             || finance_aggregate_enabled
             || nightly_project_update_enabled
@@ -320,6 +323,25 @@ async fn main() -> anyhow::Result<()> {
                     lookup,
                 )
                 .context("validate NotationReset delivery configuration")?,
+            )
+        } else {
+            None
+        };
+        let profit_digest = if profit_digest_enabled {
+            use workflows::dbos_engine::profit_digest;
+            let surreal = surreal
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("ProfitDigest database not configured"))?;
+            let pg = store::postgres::PostgresDb::from_env()
+                .await
+                .context("connect PostgreSQL for the profit digest")?;
+            Some(
+                profit_digest::Context::from_lookup(
+                    Arc::new(profit_digest::StoreProfitSource::new(surreal, pg)),
+                    simulated_matters,
+                    lookup,
+                )
+                .context("validate ProfitDigest delivery configuration")?,
             )
         } else {
             None
@@ -392,6 +414,7 @@ async fn main() -> anyhow::Result<()> {
                 billing_canary,
                 billing_digest,
                 notation_reset,
+                profit_digest,
                 ..Default::default()
             },
             archives_context,

@@ -839,9 +839,8 @@ a.nav-pagination__link:hover {
   text-decoration: none;
 }
 
-/* `link-secondary` is the muted verification link — a trademark registration
-   number, a bar licence number — and it is always spoken mid-sentence in fine
-   print ("… is a registered trademark of X, U.S. Reg. No. 6,325,650"). The cue
+/* `link-secondary` is the muted verification link — a bar licence number —
+   and it is always spoken mid-sentence in fine print. The cue
    travels with the class rather than with the pages that use it, because the
    class *is* the "quiet link inside a sentence" case: the chrome opt-out above
    deliberately cannot reach it, since these footers really are prose. */
@@ -1769,16 +1768,6 @@ a.nav-pagination__link:hover {
 
 .site-footer__legal a {
   color: inherit;
-}
-
-/* The registered-mark symbol in the trademark notice. A bare `<sup>` is set
-   `vertical-align: super` at `smaller`, which grows the line box it sits in and
-   opens a gap above one line of the fine print but not the others. Zeroing its
-   line height takes it out of that calculation, so the notice sets on the same
-   rhythm as the copyright line above it. */
-.site-footer__trademark-mark {
-  font-size: 0.7em;
-  line-height: 0;
 }
 
 /* The platform line: "Powered by", the repository, the running release, and
@@ -5481,6 +5470,36 @@ a.nav-steps__step:focus-visible {
 }
 .nav-fact-card__body > :first-child { margin-top: 0; }
 .nav-fact-card__body > :last-child { margin-bottom: 0; }
+
+.nav-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--nav-space-3);
+}
+.nav-stat {
+  padding: var(--nav-space-3) var(--nav-space-4);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+  text-align: center;
+}
+.nav-stat__value {
+  margin: 0;
+  color: var(--nav-color-primary);
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.nav-stat__label {
+  margin: var(--nav-space-1) 0 0;
+  color: var(--nav-color-text);
+}
+.nav-stat__note {
+  margin: var(--nav-space-1) 0 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.85rem;
+}
 
 .nav-status-strip {
   display: grid;

@@ -4260,8 +4260,6 @@ enum FontFamilyArg {
     PublicSans,
     /// The NYC summons practice's face.
     LibreFranklin,
-    /// Death & Divorce's gothic display face.
-    PirataOne,
     /// `CyberInjuryLaw` display face.
     BarlowCondensed,
     /// `CyberInjuryLaw` body face.
@@ -4279,7 +4277,6 @@ impl FontFamilyArg {
             Self::Mukta => &assets::MUKTA,
             Self::PublicSans => &assets::PUBLIC_SANS,
             Self::LibreFranklin => &assets::LIBRE_FRANKLIN,
-            Self::PirataOne => &assets::PIRATA_ONE,
             Self::BarlowCondensed => &assets::BARLOW_CONDENSED,
             Self::DmSans => &assets::DM_SANS,
         }

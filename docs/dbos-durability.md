@@ -247,6 +247,22 @@ renders the switch and both messages channels into `web`, drops `notation-reset-
 the live CronJob. Ship refuses the switch without both channel coordinates. Setting it back to `"false"` restores the
 CronJob.
 
+## ProfitDigest
+
+`ProfitDigest` is born on DBOS; it has no Restate twin. Opt in with both `NAVIGATOR_DBOS_ENABLED=true` and
+`NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED=true`. The daily run `ProfitDigest-<UTC date>` starts at 14:00 UTC and catches up
+when the executor starts later that day. It posts the [Profit Digest](glossary/profit-digest.md) to the messages
+channel: `SLACK_STAGING_MESSAGES_CHANNEL_ID` on a simulated-matters deployment, `SLACK_MESSAGES_CHANNEL_ID` otherwise.
+An enabled host needs `SLACK_BOT_TOKEN`, the channel, `NAV_BASE_URL`, and the application's PostgreSQL login, and fails
+the boot without them.
+
+Its steps read yesterday's `expected_cash` event, read and render the Firm rollups in `read`, publish today's
+`expected_cash` event, and `post`. The post uses its Effect Key as Slack's `client_msg_id` and reuses a retained
+receipt, the `GeneralNag` rule. A day with no open contingent matter posts nothing.
+
+Set `NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED = "true"` in the row's `config.toml` and `ops ship`. Ship renders the switch
+and both messages channels into `web`, refuses the switch without them, and retires no CronJob.
+
 ## ProjectRecovery
 
 `ProjectRecovery` is born on DBOS; it has no Restate twin. Opt in with both `NAVIGATOR_DBOS_ENABLED=true` and

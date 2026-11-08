@@ -53,7 +53,6 @@ private instruments and clearance references outside this repository.
 | Notice | Reconcile Cargo notices with the packages and native components in each shipped artifact | Release/counsel |
 | Notice | NuGet license texts for the Word adapter graph | Release/counsel |
 | Notice | Swagger UI 5.17.14 upstream license and NOTICE for CSS, bundle, preset, and favicons | Release |
-| Notice | Pirata One: the tracked record has no full OFL text | Release |
 | Notice | Tinos web WOFF2 files have no colocated OFL record | Release |
 | Notice | Notices delivered inside the extension package and each image | Release |
 | Asset | Ferris illustration and Plausible script provenance | Owner |
@@ -203,7 +202,6 @@ release-maintainer checks for every row, even where the family has a declared li
 | eb-garamond web | [F3][F3] | OFL 1.1 declared | F | Release: verify bytes and full notice |
 | libre-franklin web | [F4][F4] | OFL 1.1 declared | F | Release: verify bytes and full notice |
 | mukta web | [F5][F5] | OFL 1.1 declared | F | Release: verify bytes and full notice |
-| pirata-one web | [F6][F6] | OFL declaration only | F | Release: verify bytes and full notice |
 | plus-jakarta-sans web | [F7][F7] | OFL 1.1 declared | F | Release: verify bytes and full notice |
 | public-sans web | [F8][F8] | OFL 1.1 declared | F | Release: verify bytes and full notice |
 | source-sans-3 web | [F9][F9] | OFL 1.1 declared | F | Release: verify bytes and full notice |
@@ -218,7 +216,6 @@ release-maintainer checks for every row, even where the family has a declared li
 [F3]: ../../server/public/fonts/eb-garamond/OFL.txt
 [F4]: ../../server/public/fonts/libre-franklin/OFL.txt
 [F5]: ../../server/public/fonts/mukta/OFL.txt
-[F6]: ../../server/public/fonts/pirata-one/OFL.txt
 [F7]: ../../server/public/fonts/plus-jakarta-sans/OFL.txt
 [F8]: ../../server/public/fonts/public-sans/OFL.txt
 [F9]: ../../server/public/fonts/source-sans-3/OFL.txt
@@ -230,9 +227,8 @@ The [GORP record](../../server/public/fonts/gorp-serif/LICENSE.txt) identifies T
 operator-supplied WOFF2 assets. The repository is not evidence of an operator's purchased rights. A replacement must
 have verified web-serving, embedding, and redistribution terms. PDF Noto Serif has two variable TTFs; PDF Tinos has four
 static TTFs. The tracked web Tinos directory contains two WOFF2 files without a colocated OFL record; the PDF Tinos
-record is evidence to compare, not proof that it covers those particular web binaries. Pirata One's record has a
-declaration and external link only, so release review must supply the full applicable text. Other web OFL directories
-record families but have no tracked font binaries; deployed asset inventories require a separate operator check.
+record is evidence to compare, not proof that it covers those particular web binaries. Other web OFL directories record
+families but have no tracked font binaries; deployed asset inventories require a separate operator check.
 
 ## Third-party dependency notice coverage
 
@@ -1643,7 +1639,6 @@ assets retain their upstream notice review separately; the synthetic PDF needs e
 | cyber-phone-qr.svg | B8 | Unverified | R; U | Owner/release/counsel |
 | cyber-testimonials-qr.svg | B9 | Unverified | R; U | Owner/release/counsel |
 | logo.svg | B10 | Unverified | R; U | Owner/release/counsel |
-| mark.svg | B11 | Unverified | R; U | Owner/release/counsel |
 | logo.png | B12 | Unverified | R; U | Owner/release/counsel |
 | logo.svg | B13 | Unverified | R; U | Owner/release/counsel |
 | logo.svg | B14 | Unverified | R; U | Owner/release/counsel |
@@ -1688,8 +1683,6 @@ B8: [cyber-phone-qr.svg](../../server/public/brand/cyber-phone-qr.svg)
 B9: [cyber-testimonials-qr.svg](../../server/public/brand/cyber-testimonials-qr.svg)
 
 B10: [logo.svg](../../server/public/brand/daybridge/logo.svg)
-
-B11: [mark.svg](../../server/public/brand/death-and-divorce/mark.svg)
 
 B12: [logo.png](../../server/public/brand/delete-your-data/logo.png)
 
@@ -1813,7 +1806,7 @@ E33: server/public/fonts/gorp-serif/LICENSE.txt
 1. Owner and counsel reconcile first-party authorship, assignments, imported material, and the separate image grant.
    Record clearance references without publishing signed agreements, personal information, or private instruments.
 2. Release maintainers verify each vendored item and font against its exact bytes and prepare artifact-specific notices.
-   Obtain missing Swagger, Pirata One, NuGet, and native-component records; reconcile the Cargo notice graph.
+   Obtain missing Swagger, NuGet, and native-component records; reconcile the Cargo notice graph.
 3. Owner selects replacements for any material whose grant cannot be established. Verify the replacement's provenance,
    license, notice delivery, and embedding/serving requirements before changing code or asset references.
 4. Recheck first-party license and package metadata at the exact publication commit. Preserve third-party instruments

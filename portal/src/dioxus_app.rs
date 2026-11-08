@@ -669,9 +669,6 @@ static CYBER_INJURY_HEAD: std::sync::LazyLock<String> = std::sync::LazyLock::new
 static DAYBRIDGE_HEAD: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| bucket_font_head("Source Serif 4", "source-serif-4/SourceSerif4"));
 
-static DEATH_AND_DIVORCE_HEAD: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| bucket_font_head("Pirata One", "pirata-one/PirataOne"));
-
 /// The `@font-face` head fragment a page wears when this process serves
 /// `key` — the preload and declarations injected at the end of every rendered
 /// `<head>`.
@@ -694,7 +691,6 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
         views::brand::BrandKey::DeleteYourDebt => &DELETE_YOUR_DEBT_HEAD,
         views::brand::BrandKey::Summons => &SUMMONS_HEAD,
         views::brand::BrandKey::Groundwork | views::brand::BrandKey::Daybridge => &DAYBRIDGE_HEAD,
-        views::brand::BrandKey::DeathAndDivorce => &DEATH_AND_DIVORCE_HEAD,
         views::brand::BrandKey::Aegis | views::brand::BrandKey::CyberInjuryLaw => {
             &CYBER_INJURY_HEAD
         }
@@ -2322,16 +2318,16 @@ pub fn legal_page_router(path: &'static str, content: webapp::legal_page::LegalC
 /// shared, but the *copy* is not: each deployment owns its own privacy and
 /// terms text (`neon/content/*.md`) and passes it here, so a change to the
 /// firm's policy never edits a white-label tenant's and vice versa.
-/// `brand_name` names the deployment in the `<meta>` description; the `<title>`
-/// is assembled from the request-scoped brand by `webapp::legal_page`.
+/// The `<title>` and `<meta>` description are assembled from the request-scoped
+/// brand by `webapp::legal_page`.
 #[must_use]
-pub fn legal_dioxus_routers(brand_name: &str, privacy_body: &str, terms_body: &str) -> Vec<Router> {
+pub fn legal_dioxus_routers(privacy_body: &str, terms_body: &str) -> Vec<Router> {
     vec![
         legal_page_router(
             PRIVACY_PATH,
             webapp::legal_page::LegalContent {
                 title: "Privacy Policy".to_string(),
-                description: format!("Privacy Policy for {brand_name}."),
+                description: String::new(),
                 body_html: views::markdown::render(privacy_body),
             },
         ),
@@ -2339,7 +2335,7 @@ pub fn legal_dioxus_routers(brand_name: &str, privacy_body: &str, terms_body: &s
             TERMS_PATH,
             webapp::legal_page::LegalContent {
                 title: "Terms of Service".to_string(),
-                description: format!("Terms of Service for {brand_name}."),
+                description: String::new(),
                 body_html: views::markdown::render(terms_body),
             },
         ),
@@ -6489,8 +6485,8 @@ mod tests {
             );
         }
         assert_eq!(
-            title_for_path_with_firm("/", "Death & Divorce"),
-            "Death & Divorce | Home"
+            title_for_path_with_firm("/", "Guieb & Shook"),
+            "Guieb & Shook | Home"
         );
     }
 

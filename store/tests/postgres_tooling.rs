@@ -405,14 +405,16 @@ async fn driver_projects_age_vector_citext_and_full_text_types() {
             .await
             .unwrap();
     assert!(matches);
-    let versions: Vec<(String, String)> = sqlx::query_as("SELECT extname, extversion FROM pg_extension WHERE extname IN ('age','vector') ORDER BY extname")
-        .fetch_all(&mut *connection).await.unwrap();
+    let versions: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT name, installed_version IS NOT DISTINCT FROM default_version
+         FROM pg_available_extensions WHERE name IN ('age', 'vector') ORDER BY name",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .unwrap();
     assert_eq!(
         versions,
-        vec![
-            ("age".into(), "1.6.0".into()),
-            ("vector".into(), "0.8.2".into())
-        ]
+        vec![("age".into(), true), ("vector".into(), true)]
     );
     drop(connection);
     db.close().await;

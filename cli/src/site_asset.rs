@@ -494,13 +494,13 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/app/api/assets"))
             .and(body_json(serde_json::json!({
-                "key": "img/death-and-divorce/video-art.png",
+                "key": "img/daybridge/video-art.png",
                 "content_base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
                 "content_type": "image/png",
                 "sha256": sha256,
             })))
             .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-                "key": "img/death-and-divorce/video-art.png",
+                "key": "img/daybridge/video-art.png",
                 "bytes": bytes.len(),
                 "content_type": "image/png",
                 "sha256": sha256,
@@ -510,7 +510,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/assets/img/death-and-divorce/video-art.png"))
+            .and(path("/assets/img/daybridge/video-art.png"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_bytes(bytes.clone())
@@ -524,7 +524,7 @@ mod tests {
             workdir.path(),
             &[server_uri],
             &outside,
-            Some("img/death-and-divorce/video-art.png"),
+            Some("img/daybridge/video-art.png"),
         )
         .await;
 

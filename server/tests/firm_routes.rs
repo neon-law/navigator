@@ -184,7 +184,7 @@ async fn the_retired_personal_plan_path_redirects_instead_of_404ing() {
 #[tokio::test]
 async fn no_firm_page_still_markets_the_retired_consumer_plan() {
     let app = site_app().await;
-    for path in ["/", "/services"] {
+    for path in ["/"] {
         let body = body_string(anon_get(&app, path).await).await;
         for gone in [
             "Personal plan",
@@ -201,45 +201,59 @@ async fn no_firm_page_still_markets_the_retired_consumer_plan() {
 }
 
 #[tokio::test]
-async fn the_home_publishes_nautilus_and_links_separate_business_counsel() {
+async fn the_home_publishes_nautilus_and_links_the_three_products() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     for text in [
         "Your shell in a connected world.",
         "data-nautilus-intake",
-        "fm-phone",
-        r#"href="/business""#,
+        r#"data-phone="ios""#,
+        r#"data-phone="android""#,
+        "Cancel anytime",
+        "Form an LLC",
+        r#"href="/navigator""#,
+        r#"href="/notations""#,
     ] {
         assert!(body.contains(text), "missing {text}: {body}");
     }
-    assert!(
-        !body.contains("company-pricing"),
-        "business pricing belongs on /business"
-    );
-    assert_eq!(anon_get(&app, "/business").await.status(), StatusCode::OK);
+    for retired in [r#"href="/business""#, "company-pricing"] {
+        assert!(!body.contains(retired), "{retired} survives: {body}");
+    }
     assert_eq!(
         anon_get(&app, "/disputes").await.status(),
         StatusCode::NOT_FOUND
     );
 }
 
-/// The fee schedule and business counsel are separately reachable.
+/// Neon's retired fee schedule answers a permanent move home, so its
+/// published links keep their search value instead of landing on a 404.
 #[tokio::test]
-async fn the_services_page_renders_the_catalog_and_links_business_counsel() {
+async fn the_retired_services_page_redirects_home() {
     let app = site_app().await;
-    let response = anon_get(&app, "/services").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = body_string(response).await;
+    let resp = anon_get(&app, "/services").await;
+    assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(
+        resp.headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/"),
+    );
+    let home = body_string(anon_get(&app, "/").await).await;
+    assert!(!home.contains(r#"href="/services""#), "{home}");
+}
 
-    // The header nav carries the reader here from every other page.
-    assert!(body.contains("href=\"/services\""), "{body}");
-    // The individual-services search band and a real catalog entry.
-    assert!(body.contains("Search individual services"), "{body}");
-    assert!(body.contains("Start a company"), "{body}");
-    assert!(body.contains("Book Consultation"), "{body}");
-
-    assert!(body.contains(r#"href="/business""#));
-    assert!(!body.contains(r#"href="/disputes""#));
+/// The retired business-counsel page sends its published links to Nautilus,
+/// where formation and contract templates now live.
+#[tokio::test]
+async fn the_retired_business_path_redirects_to_nautilus() {
+    let resp = anon_get(&site_app().await, "/business").await;
+    assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(
+        resp.headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/"),
+    );
 }
 
 #[tokio::test]
@@ -424,13 +438,15 @@ async fn every_public_page_wears_the_brand_mark_as_its_tab_icon() {
 }
 
 #[tokio::test]
-async fn the_sitemap_includes_business_and_excludes_disputes() {
+async fn the_sitemap_lists_the_products_and_excludes_retired_pages() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/sitemap.xml").await).await;
-    for path in ["/navigator", "/services", "/business", "/nautilus"] {
+    for path in ["/navigator", "/notations", "/nautilus"] {
         assert!(body.contains(path), "missing {path}: {body}");
     }
     assert!(!body.contains("/disputes"));
+    assert!(!body.contains("/business"));
+    assert!(!body.contains("/services"));
 }
 
 /// Every currency amount `body` prints, each returned with the short run of
@@ -890,41 +906,11 @@ async fn home_presents_nautilus_subscription_and_checks() {
 }
 
 #[tokio::test]
-async fn business_publishes_the_contract_fee_daily_rate_and_simulator() {
-    let app = site_app().await;
-    let response = anon_get(&app, "/business").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = body_string(response).await;
-    for text in [
-        "$5,000",
-        "$50",
-        "$10,000",
-        "company-simulator",
-        "Additional flat fees may apply",
-    ] {
-        assert!(
-            body.contains(text),
-            "missing business fee or scope {text}: {body}"
-        );
-    }
-    assert!(!body.contains("data-nautilus-intake"));
-    // The page names its own address, not the subscription homepage's.
-    assert!(
-        body.contains(r#"rel="canonical" href="https://www.neonlaw.com/business""#),
-        "{body}"
-    );
-    assert!(
-        body.contains(r#"content="https://www.neonlaw.com/business" property="og:url""#),
-        "{body}"
-    );
-}
-
-#[tokio::test]
 async fn home_metadata_describes_nautilus_at_the_root_url() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     assert!(
-        body.contains("Nautilus is one subscription of privacy and paperwork checks"),
+        body.contains("Nautilus is one subscription for your privacy and your paperwork"),
         "{body}"
     );
     assert!(

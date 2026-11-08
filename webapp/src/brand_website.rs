@@ -58,11 +58,6 @@ const COMPILED_SITES: &[CompiledSite] = &[
         live: true,
     },
     CompiledSite {
-        key: "death-and-divorce",
-        www: "www.deathanddivorcelaw.com",
-        live: true,
-    },
-    CompiledSite {
         key: "aegis",
         www: "www.aegiscriminaldefense.com",
         live: true,
@@ -213,7 +208,6 @@ mod tests {
                 "delete-your-debt",
                 "summons",
                 "daybridge",
-                "death-and-divorce",
                 "aegis",
                 "groundwork",
                 "cyber-injury-law",
