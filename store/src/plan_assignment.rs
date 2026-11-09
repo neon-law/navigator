@@ -244,7 +244,7 @@ pub mod fixtures {
     pub fn arag_case_request_text() -> String {
         [
             "Time-sensitive: Please let us know if you are interested in this case.",
-            "Case Request Alert Nicholas, We are notifying you and other local",
+            "Case Request Alert Counsel, We are notifying you and other local",
             "network attorneys that Dana Example has requested attorney services",
             "in your area for Will Preparation. Follow these steps: 1. Click on",
             "Case Details to learn more about the case.",
@@ -279,7 +279,7 @@ pub mod fixtures {
         [
             "LegalShield Member Assignment",
             "",
-            "Member: Riley Sample",
+            "Member: Harper Sample",
             "Membership ID: LS-902441",
             "Certificate Number: CERT-330291",
             "Legal Matter: Consumer Contract Review",
@@ -378,7 +378,7 @@ mod tests {
         )
         .expect("notice parses");
         assert_eq!(notice.case_number, "CERT-330291");
-        assert_eq!(notice.member_name.as_deref(), Some("Riley Sample"));
+        assert_eq!(notice.member_name.as_deref(), Some("Harper Sample"));
         assert_eq!(notice.member_number.as_deref(), Some("LS-902441"));
         assert_eq!(
             notice.matter_type.as_deref(),
