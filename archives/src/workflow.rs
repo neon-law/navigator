@@ -2,7 +2,11 @@
 //!
 //! Hosted by the `workflows-service` worker (which binds it alongside
 //! the `Notation` virtual object — all workflows live on that one
-//! endpoint, so there is no separate always-on archives pod).
+//! endpoint, so there is no separate always-on archives pod). With
+//! [`DBOS_ENABLED_ENV`] on, the DBOS executor in `web` hosts the same
+//! steps instead ([`register_dbos`], [`DbosContext`]); `web` holds the
+//! PostgreSQL connection, so those runs also export the paired coverage
+//! generation.
 //!
 //! One invocation == one scheduled export. Four durable steps:
 //!
@@ -155,6 +159,69 @@ pub fn dbos_enabled(lookup: impl Fn(&str) -> Option<String>) -> Result<bool, &'s
         None | Some("" | "false") => Ok(false),
         Some("true") => Ok(true),
         Some(_) => Err("NAVIGATOR_DBOS_ARCHIVES_ENABLED must be true or false"),
+    }
+}
+
+/// Settings the `web` host checks at boot before it schedules Archives on
+/// DBOS. That host already holds `NAVIGATOR_POSTGRES_*`, so every scheduled
+/// run exports PostgreSQL coverage: a missing piece fails the boot here rather
+/// than the first 05:55 run.
+const DBOS_HOST_REQUIRED: [&str; 7] = [
+    "NAVIGATOR_ARCHIVES_BUCKET",
+    "NAVIGATOR_POSTGRES_HOST",
+    "NAVIGATOR_ARCHIVE_POSTGRES_USER",
+    "NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD",
+    "NAVIGATOR_ARCHIVE_FORGEJO_USER",
+    "NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD",
+    "NAVIGATOR_ARCHIVE_COVERAGE",
+];
+
+/// Where a DBOS-hosted Archives run posts its digest, once the host's
+/// PostgreSQL coverage configuration is complete.
+pub struct DbosContext {
+    pub slack: Arc<dyn SlackBot>,
+    pub channel_id: String,
+}
+
+impl DbosContext {
+    /// Validate the host's archive configuration without connecting to
+    /// anything. A simulated-matters deployment posts to its staging
+    /// messages channel, as the Restate worker does.
+    ///
+    /// # Errors
+    ///
+    /// A missing Slack token, messages channel, or [`DBOS_HOST_REQUIRED`]
+    /// setting, or a coverage manifest that does not decode.
+    pub fn from_lookup(
+        simulated: bool,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> anyhow::Result<Self> {
+        let required = |key: &str| {
+            lookup(key)
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("DBOS Archives requires {key}"))
+        };
+        for key in DBOS_HOST_REQUIRED {
+            required(key)?;
+        }
+        serde_json::from_str::<crate::coverage::ConfiguredCoverage>(&required(
+            "NAVIGATOR_ARCHIVE_COVERAGE",
+        )?)
+        .map_err(|_| anyhow::anyhow!("NAVIGATOR_ARCHIVE_COVERAGE is not a coverage manifest"))?;
+        let channel_id = required(if simulated {
+            "SLACK_STAGING_MESSAGES_CHANNEL_ID"
+        } else {
+            "SLACK_MESSAGES_CHANNEL_ID"
+        })?;
+        let token = required("SLACK_BOT_TOKEN")?;
+        let base_url = workflows::harness_override(&lookup, "SLACK_API_BASE_URL")
+            .map_err(|_| anyhow::anyhow!("SLACK_API_BASE_URL is invalid"))?;
+        let slack: Arc<dyn SlackBot> = match base_url {
+            Some(base_url) => Arc::new(workflows::SlackBotClient::with_base_url(token, base_url)),
+            None => Arc::new(workflows::SlackBotClient::new(token)),
+        };
+        Ok(Self { slack, channel_id })
     }
 }
 
@@ -825,8 +892,8 @@ async fn promote_iceberg_metadata_over(
 mod tests {
     use super::{
         build_report, dbos_enabled, dbos_workflow_id, digest_message, next_dbos_slot, post_digest,
-        post_digest_idempotent, promote_iceberg_metadata_over, RunRequest, SnapshotSummary,
-        StorageError, DBOS_ENABLED_ENV,
+        post_digest_idempotent, promote_iceberg_metadata_over, DbosContext, RunRequest,
+        SnapshotSummary, StorageError, DBOS_ENABLED_ENV, DBOS_HOST_REQUIRED,
     };
     use crate::digest::SnapshotEntry;
     use crate::drift::DriftDecision;
@@ -868,6 +935,48 @@ mod tests {
             "NAVIGATOR_DBOS_ARCHIVES_ENABLED must be true or false"
         );
         assert_eq!(DBOS_ENABLED_ENV, "NAVIGATOR_DBOS_ARCHIVES_ENABLED");
+    }
+
+    /// The `web` host refuses to schedule Archives with any piece of its
+    /// PostgreSQL coverage missing, and posts to the staging channel on a
+    /// simulated-matters deployment.
+    #[test]
+    fn the_dbos_host_needs_complete_coverage_settings() {
+        let coverage = r#"{"navigator":{"relations":[]},"forgejo":{"relations":[]}}"#;
+        let complete = |key: &str| {
+            Some(match key {
+                "NAVIGATOR_ARCHIVE_COVERAGE" => coverage.to_owned(),
+                "SLACK_MESSAGES_CHANNEL_ID" => "C-LIVE".to_owned(),
+                "SLACK_STAGING_MESSAGES_CHANNEL_ID" => "C-STAGING".to_owned(),
+                key if key == "SLACK_BOT_TOKEN" || DBOS_HOST_REQUIRED.contains(&key) => {
+                    "synthetic".to_owned()
+                }
+                _ => return None,
+            })
+        };
+        assert_eq!(
+            DbosContext::from_lookup(false, complete)
+                .unwrap()
+                .channel_id,
+            "C-LIVE"
+        );
+        assert_eq!(
+            DbosContext::from_lookup(true, complete).unwrap().channel_id,
+            "C-STAGING"
+        );
+        for missing in DBOS_HOST_REQUIRED.into_iter().chain(["SLACK_BOT_TOKEN"]) {
+            let error = DbosContext::from_lookup(false, |key| {
+                (key != missing).then(|| complete(key)).flatten()
+            })
+            .err()
+            .unwrap_or_else(|| panic!("{missing} must be required"));
+            assert!(error.to_string().contains(missing), "{error}");
+        }
+        let malformed = DbosContext::from_lookup(false, |key| match key {
+            "NAVIGATOR_ARCHIVE_COVERAGE" => Some("{}".to_owned()),
+            _ => complete(key),
+        });
+        assert!(malformed.is_err());
     }
 
     #[test]

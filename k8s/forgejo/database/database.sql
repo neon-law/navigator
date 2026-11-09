@@ -35,3 +35,9 @@ ALTER DATABASE forgejo OWNER TO forgejo;
 REVOKE ALL ON DATABASE forgejo FROM PUBLIC;
 GRANT CONNECT, TEMPORARY ON DATABASE forgejo TO forgejo;
 REVOKE ALL ON DATABASE navigator FROM forgejo;
+
+-- Navigator's read-only archive login (`k8s/postgres/access/roles.sql`) reads
+-- this database for the Iceberg archive, when that login exists.
+SELECT 'GRANT CONNECT ON DATABASE forgejo TO navigator_archive'
+WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = 'navigator_archive')
+\gexec

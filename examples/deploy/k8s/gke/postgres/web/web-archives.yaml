@@ -1,0 +1,52 @@
+# Opt-in Archives schedule on the DBOS executor inside `web`.
+#
+# `ops ship` adds this patch only for a deployment whose `config.toml` sets
+# `NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"`, which also requires
+# `NAVIGATOR_POSTGRES_ENABLED` and `NAVIGATOR_DBOS_ENABLED`. The same render
+# drops the Restate `archives-trigger` CronJob and deletes the live one, and
+# adds the `navigator-archive-coverage` ConfigMap from
+# `k8s/postgres/archive`. It must follow `web-postgres.yaml`, whose
+# `NAVIGATOR_POSTGRES_*` values say which server the archive reads.
+#
+# Each 05:55 and 17:55 UTC run exports the whole `navigator` and `forgejo`
+# databases to Iceberg and publishes `postgres/_paired/<generation>.json`.
+# It signs in as the read-only `navigator_archive` login, never the
+# `navigator_app` runtime login, which cannot read `dbos`, AGE's catalogs,
+# the migration ledger, or large objects. The password comes from the
+# `navigator-postgres-archive` Secret, which
+# `navigator ops secrets apply --service postgres` projects from
+# `NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD`. See docs/iceberg-archive.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-web
+  namespace: navigator
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          env:
+            - name: NAVIGATOR_ARCHIVE_POSTGRES_USER
+              value: navigator_archive
+            - name: NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-postgres-archive
+                  key: password
+            # Forgejo's database is on the same server. The archive login
+            # holds CONNECT there too, so one login reads both sources.
+            - name: NAVIGATOR_ARCHIVE_FORGEJO_USER
+              value: navigator_archive
+            - name: NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-postgres-archive
+                  key: password
+            # The reviewed inventory of both databases. A relation the
+            # manifest does not name fails the generation closed.
+            - name: NAVIGATOR_ARCHIVE_COVERAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-archive-coverage
+                  key: coverage.json

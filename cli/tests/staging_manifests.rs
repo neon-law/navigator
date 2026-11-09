@@ -698,6 +698,7 @@ fn postgres_overlays_converge_least_privilege_roles_without_the_superuser_elsewh
             mounted,
             vec![
                 "navigator-postgres-app",
+                "navigator-postgres-archive",
                 "navigator-postgres-backup",
                 "navigator-postgres-dbos",
                 "navigator-postgres-migrator"
@@ -720,6 +721,8 @@ fn postgres_overlays_converge_least_privilege_roles_without_the_superuser_elsewh
             "CREATE SCHEMA IF NOT EXISTS dbos AUTHORIZATION navigator_dbos",
             "REVOKE ALL ON SCHEMA dbos FROM navigator_owner, navigator_app, navigator_backup",
             "REVOKE ALL ON SCHEMA public FROM navigator_dbos",
+            "ALTER ROLE navigator_archive WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION",
+            "GRANT pg_read_all_data TO navigator_archive",
         ] {
             assert!(sql.contains(statement), "roles.sql must keep `{statement}`");
         }
@@ -738,18 +741,38 @@ fn postgres_overlays_converge_least_privilege_roles_without_the_superuser_elsewh
             !sql.contains("WITH GRANT OPTION"),
             "no login gains grant options"
         );
-        let dbos_volume = roles["spec"]["template"]["spec"]["volumes"]
-            .as_sequence()
-            .expect("roles Job volumes")
-            .iter()
-            .find(|volume| volume["name"].as_str() == Some("dbos"))
-            .expect("the roles Job mounts the DBOS login's Secret");
-        assert_eq!(
-            dbos_volume["secret"]["optional"].as_bool(),
-            Some(true),
-            "a deployment without the DBOS login still converges its roles"
-        );
+        for login in ["dbos", "archive"] {
+            let volume = roles["spec"]["template"]["spec"]["volumes"]
+                .as_sequence()
+                .expect("roles Job volumes")
+                .iter()
+                .find(|volume| volume["name"].as_str() == Some(login))
+                .unwrap_or_else(|| panic!("the roles Job mounts the {login} login's Secret"));
+            assert_eq!(
+                volume["secret"]["optional"].as_bool(),
+                Some(true),
+                "a deployment without the {login} login still converges its roles"
+            );
+        }
+        assert_archive_login_only_reads(sql);
     }
+}
+
+/// The archive login reads; it never writes or owns anything.
+fn assert_archive_login_only_reads(sql: &str) {
+    const WRITES: [&str; 5] = [
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "TRUNCATE",
+        "pg_write_all_data",
+    ];
+    assert!(
+        !sql.lines().any(|line| line.contains("GRANT")
+            && line.contains("navigator_archive")
+            && WRITES.iter().any(|write| line.contains(write))),
+        "the archive login gains no write right"
+    );
 }
 
 #[test]

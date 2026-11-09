@@ -383,7 +383,7 @@ Lowest risk first. Each port keeps its Restate twin until a deployment switches 
 | 5 | `BillingDigest` | Cost read and one notice |
 | 6 | `NotationReset` | Daily deletes; DBOS path is opt-in and Restate remains active pending cutover. |
 | 7 | `FinanceAggregate` | Writes object storage |
-| 8 | `Archives` | Nightly export; DBOS schedule and deduped notice are implemented. Keep trigger until ship handover. |
+| 8 | `Archives` | Twice-daily export; runs in `web` behind its switch, and `ops ship` retires the trigger. |
 | 9 | `ReconcileInvoices` | Provider and database writes |
 | 10 | `NightlyProjectUpdate` and its three children | Parent and child workflows |
 | 11 | `ProjectPublisher` | Repository writes |
@@ -392,6 +392,12 @@ Lowest risk first. Each port keeps its Restate twin until a deployment switches 
 | 14 | `SocialPublisher`, `SocialPublishReconciler` | Public posts; provider idempotency first |
 | 15 | `project-slack` | Virtual object → partitioned queue |
 | 16 | `notation` | Binding legal workflows; the `StateMachineRuntime` adapter, last |
+
+`Archives` runs on DBOS in `web` only when `NAVIGATOR_DBOS_ARCHIVES_ENABLED=true`. Its workflow id is `Archives:<UTC
+slot>` for the 05:55 and 17:55 slots, with a 15-minute late-start window. Because `web` holds the PostgreSQL connection,
+each run also exports the paired PostgreSQL coverage generation to Iceberg. `ops ship` renders the read-only archive
+login and the reviewed coverage manifest with the switch, and deletes `archives-trigger`. See [Iceberg
+archive](iceberg-archive.md#where-it-runs).
 
 `BillingDigest` runs on DBOS only when `NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED=true`. Its stable workflow id is
 `BillingDigest-<UTC date>`. The scheduler starts today's run from 13:00 through 13:14 UTC; otherwise it waits until

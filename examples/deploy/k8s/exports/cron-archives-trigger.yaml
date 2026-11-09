@@ -1,5 +1,7 @@
 # Starts one Archives Restate workflow at 05:55 and 17:55 UTC each day.
 # The workflow is hosted by workflows-service; this Job only submits it.
+# `ops ship` drops this CronJob when `NAVIGATOR_DBOS_ARCHIVES_ENABLED` moves
+# Archives onto the DBOS executor in `web`, which also exports PostgreSQL.
 # Restate owns retries of extraction, Iceberg promotion and the Slack digest.
 # The trigger keys each invocation by its UTC scheduled time, so the two
 # daily runs are distinct and retries within a run attach to its journal.

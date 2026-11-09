@@ -104,6 +104,9 @@ spec:
             - name: dbos
               mountPath: /etc/navigator/postgres/dbos
               readOnly: true
+            - name: archive
+              mountPath: /etc/navigator/postgres/archive
+              readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
@@ -128,6 +131,14 @@ spec:
         - name: dbos
           secret:
             secretName: navigator-postgres-dbos
+            defaultMode: 0440
+            optional: true
+        # The Iceberg archive login's password. Optional like the DBOS
+        # login: until the operator adds `NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD`,
+        # the Secret is absent and `roles.sql` skips that login.
+        - name: archive
+          secret:
+            secretName: navigator-postgres-archive
             defaultMode: 0440
             optional: true
         - name: tmp

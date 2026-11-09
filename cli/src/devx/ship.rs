@@ -403,6 +403,7 @@ where
     )?);
     substitutions.push(web_patch_substitution(deployment, &get, &DBOS_WEB_PATCH)?);
     substitutions.extend(dbos_schedule_substitutions(deployment, &get)?);
+    substitutions.extend(archives_substitutions(deployment, &get)?);
     substitutions.extend(replica_substitutions(deployment, &get)?);
     substitutions.extend(mirror_substitutions(&get)?);
     // Not in PLAINTEXT_SUBSTITUTIONS and not read from `get` at all: the additional brand
@@ -576,7 +577,7 @@ const fn retired(cronjob: &'static str, resource: &'static str) -> RetiredCronJo
     RetiredCronJob { cronjob, resource }
 }
 
-const DBOS_SCHEDULES: [DbosSchedule; 5] = [
+const DBOS_SCHEDULES: [DbosSchedule; 6] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
         default_on: true,
@@ -627,7 +628,89 @@ const DBOS_SCHEDULES: [DbosSchedule; 5] = [
         ],
         secret: None,
     },
+    // Archives also renders `web-archives.yaml` and the coverage ConfigMap;
+    // see [`archives_substitutions`].
+    DbosSchedule {
+        env: ARCHIVES_SCHEDULE_ENV,
+        default_on: false,
+        retires: Some(retired(
+            "archives-trigger",
+            "  - cron-archives-trigger.yaml\n",
+        )),
+        coordinates: &[
+            "NAVIGATOR_ARCHIVES_BUCKET",
+            "SLACK_MESSAGES_CHANNEL_ID",
+            "SLACK_STAGING_MESSAGES_CHANNEL_ID",
+        ],
+        secret: None,
+    },
 ];
+
+/// The switch that moves Archives onto the DBOS executor in `web`. Beyond
+/// the shared schedule switch, it gives `web` the archive login and the
+/// reviewed coverage manifest, so each scheduled run exports the whole
+/// PostgreSQL database (`docs/iceberg-archive.md`).
+const ARCHIVES_SCHEDULE_ENV: &str = "NAVIGATOR_DBOS_ARCHIVES_ENABLED";
+
+/// The whole-line placeholder in `kustomization.yaml` that becomes the
+/// archive login's `web` patch. It follows the PostgreSQL and DBOS patches.
+const ARCHIVES_WEB_PATCH_TOKEN: &str = "  # NAVIGATOR_ARCHIVES_WEB_PATCH\n";
+
+/// The whole-line placeholder in `kustomization.yaml` that becomes the
+/// reviewed coverage manifest's `ConfigMap`.
+const ARCHIVES_COVERAGE_RESOURCE_TOKEN: &str = "  # NAVIGATOR_ARCHIVES_COVERAGE_RESOURCE\n";
+
+/// The PostgreSQL service file key holding the archive login's password.
+const POSTGRES_ARCHIVE_PASSWORD: &str = "NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD";
+
+/// The archive login's Secret, required before the first apply only when
+/// Archives runs on DBOS in `web`.
+const ARCHIVES_SERVICE_OBJECT: (&str, &str) = ("secret", "navigator-postgres-archive");
+
+/// Whether this deployment runs Archives on DBOS in `web`. The value itself
+/// is validated with the other schedule switches.
+fn archives_on_dbos<F>(get: &F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    non_empty_env(ARCHIVES_SCHEDULE_ENV, get).as_deref() == Some("true")
+}
+
+/// Archives on DBOS exports PostgreSQL from `web`, so it needs `web`'s
+/// PostgreSQL connection beside the executor. Its patch adds the read-only
+/// archive login and the coverage manifest; off, both placeholders render
+/// empty and the tree is unchanged.
+fn archives_substitutions<F>(deployment: &str, get: &F) -> Result<Vec<Substitution>>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let enabled = archives_on_dbos(get);
+    ensure!(
+        !enabled || non_empty_env(NAVIGATOR_POSTGRES_ENABLED, get).as_deref() == Some("true"),
+        "{ARCHIVES_SCHEDULE_ENV} requires {NAVIGATOR_POSTGRES_ENABLED} = \"true\" in \
+         deployments/{deployment}/config.toml: the archive reads PostgreSQL from web"
+    );
+    Ok(vec![
+        Substitution {
+            token: ARCHIVES_WEB_PATCH_TOKEN,
+            env: ARCHIVES_SCHEDULE_ENV,
+            value: if enabled {
+                "  - path: postgres/web/web-archives.yaml\n    target:\n      kind: Deployment\n      name: navigator-web\n".into()
+            } else {
+                String::new()
+            },
+        },
+        Substitution {
+            token: ARCHIVES_COVERAGE_RESOURCE_TOKEN,
+            env: ARCHIVES_SCHEDULE_ENV,
+            value: if enabled {
+                "  - ../../../../k8s/postgres/archive\n".into()
+            } else {
+                String::new()
+            },
+        },
+    ])
+}
 
 /// The whole-line placeholder in `web-dbos.yaml` that becomes the schedule
 /// switches and the coordinates switched-on schedules read.
@@ -1471,15 +1554,18 @@ pub(super) fn require_ordered_service_prerequisites(
             ][..],
         ),
     ];
-    let dbos_keys: &[&str] = if dbos_enabled(deployment) {
-        &["NAVIGATOR_POSTGRES_DBOS_PASSWORD"]
-    } else {
-        &[]
-    };
+    // Each opt-in login's password, required only when its switch is on.
+    let login_keys: Vec<&str> = [
+        (dbos_enabled(deployment), "NAVIGATOR_POSTGRES_DBOS_PASSWORD"),
+        (archives_enabled(deployment), POSTGRES_ARCHIVE_PASSWORD),
+    ]
+    .into_iter()
+    .filter_map(|(enabled, key)| enabled.then_some(key))
+    .collect();
     let required = required.into_iter().chain([(
         "postgres-secrets.enc.yaml",
         &deployment.postgres_encrypted_keys,
-        dbos_keys,
+        &login_keys[..],
     )]);
     for (file, present, expected) in required {
         let missing: Vec<_> = expected
@@ -1625,6 +1711,11 @@ fn dbos_enabled(deployment: &super::deployments::Deployment) -> bool {
         .is_some_and(|value| value.trim() == "true")
 }
 
+/// Whether this deployment runs Archives on the DBOS executor in `web`.
+fn archives_enabled(deployment: &super::deployments::Deployment) -> bool {
+    archives_on_dbos(&|key: &str| deployment.coordinates.get(key).cloned())
+}
+
 /// The DBOS login's Secret, required before the first apply only when the
 /// deployment hosts the executor.
 const DBOS_SERVICE_OBJECT: (&str, &str) = ("secret", "navigator-postgres-dbos");
@@ -1649,11 +1740,17 @@ const ORDERED_SERVICE_OBJECTS: &[(&str, &str)] = &[
 
 /// Read object names only: `kubectl get secret -o name` never returns Secret
 /// data. These cluster-owned inputs must exist before the first apply.
-fn ensure_ordered_service_objects(cfg: &ShipConfig, dry_run: bool, dbos: bool) -> Result<()> {
+fn ensure_ordered_service_objects(
+    cfg: &ShipConfig,
+    dry_run: bool,
+    dbos: bool,
+    archives: bool,
+) -> Result<()> {
     let required = ORDERED_SERVICE_OBJECTS
         .iter()
         .copied()
-        .chain(dbos.then_some(DBOS_SERVICE_OBJECT));
+        .chain(dbos.then_some(DBOS_SERVICE_OBJECT))
+        .chain(archives.then_some(ARCHIVES_SERVICE_OBJECT));
     if dry_run {
         eprintln!("DRY-RUN: would verify service Secret/ConfigMap names before apply");
         return Ok(());
@@ -3773,7 +3870,12 @@ fn roll(
     //     keeps the rendered catalog from drifting from what `ops secrets
     //     apply` can write.
     ensure_projected_objects_resolve(&manifests)?;
-    ensure_ordered_service_objects(cfg, dry_run, dbos_enabled(deployment))?;
+    ensure_ordered_service_objects(
+        cfg,
+        dry_run,
+        dbos_enabled(deployment),
+        archives_enabled(deployment),
+    )?;
     // 4c. Move a changed shared certificate onto its new domain set before
     //     the apply could patch it in place; see `firm_certificate_roll`.
     super::firm_certificate_roll::reconcile(cfg, opts.certificate_timeout_minutes, dry_run)?;
@@ -6191,6 +6293,19 @@ mod tests {
             .postgres_encrypted_keys
             .insert("NAVIGATOR_POSTGRES_DBOS_PASSWORD".into());
         require_ordered_service_prerequisites(&deployment).expect("DBOS on with its login passes");
+
+        // Archives on DBOS reads PostgreSQL as its own archive login.
+        deployment
+            .coordinates
+            .insert(ARCHIVES_SCHEDULE_ENV.into(), "true".into());
+        let error = require_ordered_service_prerequisites(&deployment)
+            .expect_err("Archives on DBOS needs the archive login's password");
+        assert!(error.to_string().contains(POSTGRES_ARCHIVE_PASSWORD));
+        deployment
+            .postgres_encrypted_keys
+            .insert(POSTGRES_ARCHIVE_PASSWORD.into());
+        require_ordered_service_prerequisites(&deployment)
+            .expect("Archives on DBOS with its login passes");
     }
 
     #[test]
@@ -7673,6 +7788,101 @@ mod tests {
             rendered_manifests(with_schedules(Some("true"), Some("false"), Some("true")));
         assert!(renders_cronjob(&manifests, "general-nag"));
         assert!(!renders_cronjob(&manifests, "dri-digest-trigger"));
+    }
+
+    /// Archives on DBOS moves to `web` with everything its whole-database
+    /// export reads: the archive login, Forgejo's credentials, the archive
+    /// bucket, and the reviewed coverage manifest as a `ConfigMap`. The
+    /// Restate trigger leaves the render and the live one is deleted.
+    #[test]
+    fn archives_moves_to_web_with_its_login_and_coverage_manifest() {
+        let switched = |key: &str| match key {
+            NAVIGATOR_DBOS_ENABLED | NAVIGATOR_POSTGRES_ENABLED | ARCHIVES_SCHEDULE_ENV => {
+                Some("true".to_owned())
+            }
+            _ => env_getter(FULL_ENV)(key),
+        };
+        let manifests = rendered_manifests(switched);
+        let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+        assert_eq!(
+            web_env_value(&web, ARCHIVES_SCHEDULE_ENV).as_deref(),
+            Some("true")
+        );
+        assert!(web_env_value(&web, "NAVIGATOR_ARCHIVES_BUCKET").is_some());
+        assert!(web_env_value(&web, "SLACK_MESSAGES_CHANNEL_ID").is_some());
+        for user in [
+            "NAVIGATOR_ARCHIVE_POSTGRES_USER",
+            "NAVIGATOR_ARCHIVE_FORGEJO_USER",
+        ] {
+            assert_eq!(
+                web_env_value(&web, user).as_deref(),
+                Some("navigator_archive")
+            );
+        }
+        let env = web["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .expect("web env");
+        let source = |name: &str| {
+            env.iter()
+                .find(|entry| entry["name"].as_str() == Some(name))
+                .expect("web carries each archive variable")["valueFrom"]
+                .clone()
+        };
+        for password in [
+            "NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD",
+            "NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD",
+        ] {
+            assert_eq!(
+                source(password)["secretKeyRef"]["name"].as_str(),
+                Some("navigator-postgres-archive")
+            );
+        }
+        assert_eq!(
+            source("NAVIGATOR_ARCHIVE_COVERAGE")["configMapKeyRef"]["name"].as_str(),
+            Some("navigator-archive-coverage")
+        );
+        let coverage = manifest_doc(&manifests, "ConfigMap", "navigator-archive-coverage");
+        let coverage: serde_json::Value = serde_json::from_str(
+            coverage["data"]["coverage.json"]
+                .as_str()
+                .expect("the ConfigMap carries coverage.json"),
+        )
+        .expect("coverage.json is JSON");
+        assert!(coverage["navigator"]["relations"].is_array());
+        assert!(coverage["forgejo"]["relations"].is_array());
+        assert!(!renders_cronjob(&manifests, "archives-trigger"));
+
+        let manifests = rendered_manifests(with_schedules(Some("true"), None, None));
+        assert!(renders_cronjob(&manifests, "archives-trigger"));
+        assert!(!manifests.contains("navigator-archive-coverage"));
+        assert!(!manifests.contains("NAVIGATOR_ARCHIVE_POSTGRES_USER"));
+
+        let without_postgres = |key: &str| match key {
+            NAVIGATOR_DBOS_ENABLED | ARCHIVES_SCHEDULE_ENV => Some("true".to_owned()),
+            _ => env_getter(FULL_ENV)(key),
+        };
+        let error = resolve_substitutions_for_deployment(
+            "synthetic-deployment",
+            "26.9.16",
+            without_postgres,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains(NAVIGATOR_POSTGRES_ENABLED),
+            "{error}"
+        );
+
+        let mut deployment =
+            super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
+                .expect("fixture row loads");
+        for key in [NAVIGATOR_DBOS_ENABLED, ARCHIVES_SCHEDULE_ENV] {
+            deployment.coordinates.insert(key.into(), "true".into());
+        }
+        // General Nag is on wherever the executor runs, so it retires too.
+        assert_eq!(
+            retired_cronjobs(&deployment).unwrap(),
+            ["general-nag", "archives-trigger", "heartbeat-trigger"]
+        );
     }
 
     #[test]
@@ -12815,7 +13025,7 @@ spec:
         let cfg = sample_config();
         wait_statefulset(&cfg, true, "navigator-postgres", ROLLOUT_TIMEOUT).unwrap();
         wait_job(&cfg, true, "navigator-migrate", "15m").unwrap();
-        ensure_ordered_service_objects(&cfg, true, true).unwrap();
+        ensure_ordered_service_objects(&cfg, true, true, true).unwrap();
         retire_dbos_hosted_cronjobs(&cfg, true, &ordered_deployment()).unwrap();
         retire_firm_only_brand_certificates(&cfg, true).unwrap();
         ensure_manifest_images_published(
