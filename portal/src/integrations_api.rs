@@ -471,8 +471,16 @@ async fn reconcile_one_page(
     }
 }
 
+/// The Project's channel name, from (environment, code) alone (ENG-1286):
+/// `navigator-<code>` in production, `staging-<code>` on the simulated-matters
+/// deployment. The same function names the channel the worker's lanes create,
+/// so the two never provision two channels for one Project.
+fn project_channel_name(code: &str) -> String {
+    workflows::project_channel_name(cloud::labels_slack_from_staging_env(), code)
+}
+
 /// `POST /app/api/integrations/slack/ensure` — create or adopt one Project's
-/// Firm-private channel and record its channel id.
+/// Firm-private channel and record its channel id and canonical URL.
 ///
 /// The invite list is empty by construction. The adapter accepts only
 /// provider-issued member ids, Navigator stores none, and it will not turn a
@@ -502,6 +510,7 @@ async fn ensure_one_channel(
         Ok(slack) => slack,
         Err(error) => return unavailable(project, &error),
     };
+    let channel_name = project_channel_name(&project.code);
     // A recorded channel is validated by its own id, never rediscovered by
     // name search: `conversations.list` excludes archived channels and a
     // rename means the name no longer matches the query, so treating "the
@@ -515,8 +524,9 @@ async fn ensure_one_channel(
             Ok(Some(channel)) if !channel.is_private => {
                 return ProjectOutcome::plain(project.code.clone(), "not_private")
             }
-            Ok(Some(channel)) if channel.name != project.code => {
-                return ProjectOutcome::with_detail(project.code.clone(), "renamed", channel.name)
+            Ok(Some(channel)) if channel.name != channel_name => {
+                return repair_channel_name(state, project, slack.as_ref(), &channel, &channel_name)
+                    .await
             }
             Ok(Some(channel)) => {
                 let canonical_url = cloud::slack_channel_url(&channel.id);
@@ -547,7 +557,7 @@ async fn ensure_one_channel(
         }
     }
     let (channel, created) =
-        match cloud::ensure_private_channel(slack.as_ref(), &project.code, &[]).await {
+        match cloud::ensure_private_channel(slack.as_ref(), &channel_name, &[]).await {
             Ok(result) => result,
             // A name collision is reported as its own outcome — an operator
             // decision (something already holds this name) — never folded into
@@ -577,6 +587,40 @@ async fn ensure_one_channel(
         project.code.clone(),
         if created { "created" } else { "adopted" },
     )
+}
+
+/// A recorded channel exists under another name — the pre-ENG-1286
+/// `project-<code>` or a bare code, or a rename by hand. The reconcile renames
+/// it back: Slack keeps the id, so the recorded coordinate and the channel's
+/// history survive, and the former name is reported as the detail. A taken
+/// canonical name is an operator decision, reported as `conflict`.
+async fn repair_channel_name(
+    state: &ApiState,
+    project: &store::projects::Project,
+    slack: &dyn cloud::SlackService,
+    channel: &cloud::FirmSlackChannel,
+    channel_name: &str,
+) -> ProjectOutcome {
+    let former = channel.name.clone();
+    let channel = match slack.rename_channel(&channel.id, channel_name).await {
+        Ok(channel) => channel,
+        Err(cloud::SlackError::NameTaken) => {
+            return ProjectOutcome::with_detail(project.code.clone(), "conflict", former)
+        }
+        Err(_) => return ProjectOutcome::plain(project.code.clone(), "provider_unavailable"),
+    };
+    if store::projects::set_internal_slack_channel(
+        &state.surreal,
+        project.id,
+        &channel.id,
+        &cloud::slack_channel_url(&channel.id),
+    )
+    .await
+    .is_err()
+    {
+        return ProjectOutcome::plain(project.code.clone(), "address_not_recorded");
+    }
+    ProjectOutcome::with_detail(project.code.clone(), "repaired", former)
 }
 
 /// `POST /app/api/integrations/slack/notify` — post one closed-vocabulary,
@@ -615,7 +659,10 @@ pub(crate) async fn slack_notify_door(
     // Notify never provisions. A missing channel is reported so an operator
     // runs `ensure` deliberately, rather than a notice quietly creating the
     // Firm-private channel it wanted to post into.
-    let Ok(found) = slack.find_private_channel(&project.code).await else {
+    let Ok(found) = slack
+        .find_private_channel(&project_channel_name(&project.code))
+        .await
+    else {
         return Ok(report_one(ProjectOutcome::plain(
             project.code.clone(),
             "provider_unavailable",

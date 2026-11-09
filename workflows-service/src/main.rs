@@ -23,6 +23,7 @@ use workflows_service::dri_digest::DriDigestService;
 use workflows_service::email_summary::{EmailSummaryService, SummaryProviders};
 use workflows_service::engine::Engine;
 use workflows_service::finance_aggregate::FinanceAggregateService;
+use workflows_service::firm_slack::{FirmSlackBots, ProjectSlackBots};
 use workflows_service::general_nag::GeneralNagService;
 use workflows_service::inbound_message_alert::InboundMessageAlertService;
 use workflows_service::inbound_triage::{InboundTriageService, TriageProviders};
@@ -41,7 +42,7 @@ use workflows_service::{
 };
 
 macro_rules! bind_common_services {
-    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $forge:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
+    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $project_slack_bots:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $forge:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
         $endpoint
             .bind(NotationService::new(
                 $surreal.clone(),
@@ -50,7 +51,7 @@ macro_rules! bind_common_services {
             ))
             .bind(ProjectSlackService::new(
                 $surreal.clone(),
-                $slack_bot.clone(),
+                $project_slack_bots.clone(),
                 $simulated_matters,
             ))
             .bind(SocialPublisherService::new(
@@ -106,12 +107,12 @@ macro_rules! bind_common_services {
             ))
             .bind(MembershipTagService::new(
                 $surreal.clone(),
-                $slack_bot.clone(),
+                $project_slack_bots.clone(),
                 $simulated_matters,
             ))
             .bind(SlackTagService::new(
                 $surreal.clone(),
-                $slack_bot.clone(),
+                $project_slack_bots,
                 $portal_origin,
                 $forge.clone(),
             ))
@@ -226,15 +227,11 @@ async fn main() -> anyhow::Result<()> {
             workflows_service::dbos_inbound_message_alert::enabled(lookup)
                 .map_err(anyhow::Error::msg)
                 .context("read NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED")?;
+        // The Project Slack lane posts with each Project's owning Firm's bot
+        // (ENG-392), so it needs no deployment-wide SLACK_BOT_TOKEN.
         let project_slack_enabled = workflows_service::dbos_project_slack::enabled(lookup)
             .map_err(anyhow::Error::msg)
             .context("read NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED")?;
-        if project_slack_enabled {
-            anyhow::ensure!(
-                workflows_service::notify_config::bot_enabled(lookup),
-                "DBOS ProjectSlack requires SLACK_BOT_TOKEN"
-            );
-        }
         let project_slack_postgres = if project_slack_enabled {
             Some(
                 store::postgres::PostgresDb::from_env()
@@ -612,11 +609,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+    // Every Project channel is reached through its owning Firm's own Slack
+    // bot, unsealed from the Firm's `slack_bot_token` credential (ENG-392).
+    let project_slack_bots: Arc<dyn ProjectSlackBots> = Arc::new(FirmSlackBots::new(kms.clone()));
     let dbos_nightly_surreal = surreal.clone();
     let dbos_notation_surreal = surreal.clone();
     let dbos_nightly_slack = slack_bot.clone();
+    let dbos_nightly_bots = project_slack_bots.clone();
     let dbos_project_slack_surreal = surreal.clone();
-    let dbos_project_slack_bot = slack_bot.clone();
+    let dbos_project_slack_bots = project_slack_bots.clone();
     let dbos_nightly_repository_forge = repository_forge.clone();
     let dbos_nightly_github_forge = forge.clone();
     let dbos_nightly_portal_origin = portal_origin.clone();
@@ -676,6 +677,7 @@ async fn main() -> anyhow::Result<()> {
             notifier,
             ops_delivery,
             slack_bot,
+            project_slack_bots,
             general_channel,
             finance_channel,
             messages_channel,
@@ -786,6 +788,7 @@ async fn main() -> anyhow::Result<()> {
                                     workflows_service::dbos_nightly_project_update::Context::new(
                                         dbos_nightly_surreal,
                                         dbos_nightly_slack,
+                                        dbos_nightly_bots,
                                         outcome_channel,
                                         simulated_matters,
                                         workflows_service::dbos_nightly_project_update::Providers {
@@ -863,7 +866,7 @@ async fn main() -> anyhow::Result<()> {
                             dbos,
                             workflows_service::dbos_project_slack::Context::new(
                                 dbos_project_slack_surreal.clone(),
-                                dbos_project_slack_bot.clone(),
+                                dbos_project_slack_bots.clone(),
                                 project_slack_postgres
                                     .clone()
                                     .expect("ProjectSlack lane has no PostgreSQL connection"),

@@ -4,8 +4,9 @@
 //! The channel is created, adopted when one of the expected name already
 //! exists, or replaced when the recorded channel has been deleted; the Lawyer
 //! DRI, participating Clerks, and owning-Firm Lawyers and Clerks with recorded
-//! Slack identities are invited. Channels are named `project-<code>`, or
-//! `staging-<code>` on a simulated-matters deployment.
+//! Slack identities are invited. Channels are named `navigator-<code>`, or
+//! `staging-<code>` on a simulated-matters deployment, and every call goes
+//! through the owning Firm's own Slack bot (ENG-392).
 //!
 //! A closed or archived Project is not updated: nobody is invited and no
 //! channel is created; its recorded channel is archived instead. Directory addresses stay inside the journaled step; only
@@ -21,7 +22,8 @@ use uuid::Uuid;
 use workflows::{SlackBot, SlackBotError};
 
 use super::{slack_error, tag_retry_policy, ProjectTagRequest};
-use crate::project_slack::{ensure_channel, ChannelOutcome};
+use crate::firm_slack::ProjectSlackBots;
+use crate::project_slack::{ensure_channel, ChannelOutcome, LaneError};
 
 /// What one Project's `membership` child did. Counts only.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -49,16 +51,16 @@ pub struct ChannelResolution {
 #[derive(Clone)]
 pub struct MembershipTagService {
     surreal: SurrealDb,
-    slack: Arc<dyn SlackBot>,
+    bots: Arc<dyn ProjectSlackBots>,
     simulated: bool,
 }
 
 impl MembershipTagService {
     #[must_use]
-    pub fn new(surreal: SurrealDb, slack: Arc<dyn SlackBot>, simulated: bool) -> Self {
+    pub fn new(surreal: SurrealDb, bots: Arc<dyn ProjectSlackBots>, simulated: bool) -> Self {
         Self {
             surreal,
-            slack,
+            bots,
             simulated,
         }
     }
@@ -74,12 +76,16 @@ impl MembershipTagService {
     ) -> Result<Json<MembershipOutcome>, HandlerError> {
         let project_id = request.into_inner().project_id;
         let surreal = self.surreal.clone();
-        let slack = Arc::clone(&self.slack);
+        let bots = Arc::clone(&self.bots);
         let simulated = self.simulated;
         // The directory addresses stay inside this journaled operation. Only
         // counts enter the Restate journal.
         let outcome = ctx
             .run(move || async move {
+                let slack = bots
+                    .for_project(&surreal, project_id)
+                    .await
+                    .map_err(LaneError::into_handler_error)?;
                 reconcile_project(&surreal, &slack, simulated, project_id)
                     .await
                     .map(Json)
@@ -516,7 +522,7 @@ mod tests {
         );
         assert_eq!(
             *slack.created.lock().expect("created lock"),
-            ["project-sync-no-channel"]
+            ["navigator-sync-no-channel"]
         );
         assert_eq!(
             *slack.lookups.lock().expect("lookups lock"),
@@ -735,7 +741,7 @@ mod tests {
         assert_eq!(report.channels_archived, 0, "no channel to archive");
         assert_eq!(
             *slack.created.lock().expect("created lock"),
-            ["project-sample-stale"]
+            ["navigator-sample-stale"]
         );
         let stored = projects::find_by_id(&surreal, stale.id)
             .await

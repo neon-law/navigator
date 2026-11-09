@@ -3439,7 +3439,7 @@ fn canonical_document(base: &str) -> Value {
           "post": {
             "summary": "Report a push to a Project repository's main",
             "description":
-              "A Project repository's CI reports one push to `main`. Authorization: the document-scoped CI session that `project-gate.yml` (GitHub) or `.forgejo/workflows/cd.yml` (Forgejo) mints for exactly this Project; any other session, including a CI session for another Project, returns 403. The event is handed to the per-Project `project-slack` workflow object, which resolves the Project's private channel from its own row and posts one notice per `(short_sha, run_attempt)`; a repeat of the same pair posts nothing new. The body carries mechanism fields only — no commit subject is accepted.",
+              "A Project repository's CI reports one push to `main`. Authorization: the document-scoped CI session that `project-gate.yml` (GitHub) or `.forgejo/workflows/cd.yml` (Forgejo) mints for exactly this Project; any other session, including a CI session for another Project, returns 403. The event is handed to the per-Project `project-slack` workflow object, which resolves the Project's private channel from its own row and posts one notice per `(short_sha, run_attempt)` with the owning Firm's Slack bot; a repeat of the same pair posts nothing new. A Firm that has not connected Slack is refused with 409 before anything is queued, so a dropped notice never reads as delivered. The body carries the run's mechanism fields and, optionally, the commit's one-line subject, which the notice shows as escaped plain text.",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
             ],
@@ -3453,7 +3453,8 @@ fn canonical_document(base: &str) -> Value {
                 "author_login": { "type": "string", "description": "The pusher's GitHub or Forgejo login" },
                 "gate": { "type": "string", "enum": ["pass", "fail"] },
                 "publish": { "type": "string", "enum": ["pass", "fail", "skipped"], "description": "Absent when the gate reports before the publish half has run" },
-                "run_attempt": { "type": "integer", "minimum": 1 }
+                "run_attempt": { "type": "integer", "minimum": 1 },
+                "subject": { "type": "string", "maxLength": 512, "description": "The commit's subject line, one line; rendered as escaped plain text and truncated to about 120 characters" }
               }
             } } } },
             "responses": {
@@ -3466,6 +3467,7 @@ fn canonical_document(base: &str) -> Value {
               "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "403": { "description": "Not the document-scoped CI session for this Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "404": { "description": "No such Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "409": { "description": "The Project's Firm has not connected Slack, or this deployment cannot unseal Firm credentials; `outcome` carries the integration slug and nothing was queued", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "500": { "description": "The notice could not be queued", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "503": { "description": "No Restate ingress is configured", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
             }

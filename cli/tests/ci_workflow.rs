@@ -283,7 +283,8 @@ fn every_navigator_install_reference_pins_the_same_tag() {
 /// on a push to `main`, mints the same document-scoped CI session the
 /// `documents` job uses, posts to the main-push door, and can never fail the
 /// run — it is `continue-on-error` and the required `ci` job does not depend
-/// on it. It sends no commit subject and no publish outcome.
+/// on it. It sends the commit subject (ENG-1285) through the step's `env:`,
+/// never interpolated into the script, and no publish outcome.
 #[test]
 fn the_project_gate_notifies_the_project_channel_on_a_main_push_without_failing_the_run() {
     let workflow = project_gate_workflow();
@@ -320,9 +321,26 @@ fn the_project_gate_notifies_the_project_channel_on_a_main_push_without_failing_
         .join("\n");
     assert!(run.contains("/auth/ci/document-token"), "{run}");
     assert!(run.contains("/events/main-push"), "{run}");
+    let notify_step = steps
+        .iter()
+        .find(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|run| run.contains("/events/main-push"))
+        })
+        .expect("the notify step");
+    assert_eq!(
+        notify_step["env"]["HEAD_COMMIT_MESSAGE"].as_str(),
+        Some("${{ github.event.head_commit.message }}"),
+        "commit text is untrusted input and reaches the script only through env"
+    );
     assert!(
-        !run.contains("subject"),
-        "no commit subject leaves the runner: {run}"
+        !run.contains("head_commit.message"),
+        "the commit message is never interpolated into the script: {run}"
+    );
+    assert!(
+        run.contains("--arg subject"),
+        "the subject is sent as its own JSON field: {run}"
     );
     assert!(
         !run.contains("publish"),

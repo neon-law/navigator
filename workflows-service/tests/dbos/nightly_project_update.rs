@@ -192,6 +192,7 @@ async fn registered_nightly_parent_resumes_the_same_date_and_deduplicates_notice
     let context = Context::new(
         surreal.clone(),
         slack.clone(),
+        Arc::new(workflows_service::firm_slack::SharedSlackBot(slack.clone())),
         "synthetic-messages".into(),
         true,
         Providers {
@@ -301,6 +302,7 @@ async fn registered_slack_child_reuses_receipt_after_acceptance_before_checkpoin
     let context = Context::new(
         surreal,
         slack.clone(),
+        Arc::new(workflows_service::firm_slack::SharedSlackBot(slack.clone())),
         "synthetic-messages".into(),
         true,
         Providers {

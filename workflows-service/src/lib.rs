@@ -30,6 +30,7 @@ pub mod email_config;
 pub mod email_summary;
 pub mod engine;
 pub mod finance_aggregate;
+pub mod firm_slack;
 pub mod general_nag;
 pub mod health;
 pub mod inbound_message_alert;

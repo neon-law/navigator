@@ -13,6 +13,7 @@ use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::SlackBot;
 
+use crate::firm_slack::ProjectSlackBots;
 use crate::nightly_project_update::{self as nightly, NightlyProjectUpdateReport, Tag, TagOutcome};
 
 pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED";
@@ -41,10 +42,14 @@ pub enum NightlyError {
     Step,
 }
 
+/// `slack` is the deployment's own bot, which posts the start and outcome
+/// notices to the messages channel; `bots` resolves each Project's owning
+/// Firm's bot for the Project-channel tags (ENG-392).
 #[derive(Clone)]
 pub struct Context {
     surreal: SurrealDb,
     slack: Arc<dyn SlackBot>,
+    bots: Arc<dyn ProjectSlackBots>,
     outcome_channel: String,
     simulated: bool,
     github_forge: Option<Arc<dyn cloud::forge::ForgeService>>,
@@ -58,6 +63,7 @@ impl Context {
     pub fn new(
         surreal: SurrealDb,
         slack: Arc<dyn SlackBot>,
+        bots: Arc<dyn ProjectSlackBots>,
         outcome_channel: String,
         simulated: bool,
         providers: Providers,
@@ -65,6 +71,7 @@ impl Context {
         Self {
             surreal,
             slack,
+            bots,
             outcome_channel,
             simulated,
             github_forge: providers.github_forge,
@@ -259,9 +266,10 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                         let resolution = dbos::step("resolve-membership-channel", move || {
                             let context = resolution_context.clone();
                             async move {
+                                let slack = project_bot(&context, project_id).await?;
                                 crate::nightly_project_update::membership::resolve_channel(
                                     &context.surreal,
-                                    &context.slack,
+                                    &slack,
                                     context.simulated,
                                     project_id,
                                 )
@@ -278,9 +286,10 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                                     let context = invite_context.clone();
                                     let channel_id = channel_id.clone();
                                     async move {
+                                        let slack = project_bot(&context, project_id).await?;
                                         crate::nightly_project_update::membership::invite_members(
                                             &context.surreal,
-                                            &context.slack,
+                                            &slack,
                                             project_id,
                                             &channel_id,
                                         )
@@ -306,9 +315,10 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                             let context = canvas_context.clone();
                             let ran_on = canvas_ran_on.clone();
                             async move {
+                                let slack = project_bot(&context, project_id).await?;
                                 crate::nightly_project_update::slack::upsert_canvas(
                                     &context.surreal,
-                                    context.slack.as_ref(),
+                                    slack.as_ref(),
                                     context.portal_origin.as_deref(),
                                     &ran_on,
                                     project_id,
@@ -324,9 +334,10 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                             let context = notice_context.clone();
                             let ran_on = notice_ran_on.clone();
                             async move {
+                                let slack = project_bot(&context, project_id).await?;
                                 crate::nightly_project_update::slack::post_notice(
                                     &context.surreal,
-                                    context.slack.as_ref(),
+                                    slack.as_ref(),
                                     context.github_forge.as_deref(),
                                     &ran_on,
                                     project_id,
@@ -381,6 +392,20 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
     )
 }
 
+/// The owning Firm's bot for one Project-channel step. A Firm that has not
+/// connected Slack fails that Project's tag, which the parent counts; the
+/// sweep goes on to the next Project.
+async fn project_bot(
+    context: &Context,
+    project_id: Uuid,
+) -> Result<Arc<dyn SlackBot>, dbos::Error<NightlyError>> {
+    context
+        .bots
+        .for_project(&context.surreal, project_id)
+        .await
+        .map_err(|_| dbos::Error::Application(NightlyError::Step))
+}
+
 async fn post_once(
     slack: &dyn SlackBot,
     channel: &str,
@@ -414,6 +439,9 @@ pub(crate) async fn unlaunched_workflow() -> NightlyWorkflow {
         Context::new(
             store::test_support::mem_surreal().await,
             Arc::new(workflows::CapturingSlackBot::new()),
+            Arc::new(crate::firm_slack::SharedSlackBot(Arc::new(
+                workflows::CapturingSlackBot::new(),
+            ))),
             "C_STAGING_MESSAGES".to_owned(),
             true,
             Providers {

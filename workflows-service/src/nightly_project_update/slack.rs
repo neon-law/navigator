@@ -19,6 +19,8 @@ use uuid::Uuid;
 use workflows::{upsert_channel_canvas, CanvasWrite, SlackBot};
 
 use super::{slack_error, tag_retry_policy, ProjectTagRequest};
+use crate::firm_slack::ProjectSlackBots;
+use crate::project_slack::LaneError;
 
 /// What one Project's `slack` child did. Counts only.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -42,7 +44,7 @@ pub enum CanvasStep {
 #[derive(Clone)]
 pub struct SlackTagService {
     surreal: SurrealDb,
-    slack: Arc<dyn SlackBot>,
+    bots: Arc<dyn ProjectSlackBots>,
     portal_origin: Option<String>,
     forge: Option<Arc<dyn ForgeService>>,
 }
@@ -50,17 +52,17 @@ pub struct SlackTagService {
 impl SlackTagService {
     /// `portal_origin` is the deployment's public origin, such as
     /// `https://www.example.com`; without it the canvas links the portal by
-    /// its path.
+    /// its path. `bots` resolves the owning Firm's bot per Project (ENG-392).
     #[must_use]
     pub fn new(
         surreal: SurrealDb,
-        slack: Arc<dyn SlackBot>,
+        bots: Arc<dyn ProjectSlackBots>,
         portal_origin: Option<String>,
         forge: Option<Arc<dyn ForgeService>>,
     ) -> Self {
         Self {
             surreal,
-            slack,
+            bots,
             portal_origin,
             forge,
         }
@@ -77,12 +79,16 @@ impl SlackTagService {
     ) -> Result<Json<SlackOutcome>, HandlerError> {
         let ProjectTagRequest { ran_on, project_id } = request.into_inner();
 
-        let (surreal, slack) = (self.surreal.clone(), Arc::clone(&self.slack));
+        let (surreal, bots) = (self.surreal.clone(), Arc::clone(&self.bots));
         let origin = self.portal_origin.clone();
         let day = ran_on.clone();
         // The directory emails stay inside this journaled operation.
         let canvas = ctx
             .run(move || async move {
+                let slack = bots
+                    .for_project(&surreal, project_id)
+                    .await
+                    .map_err(LaneError::into_handler_error)?;
                 upsert_canvas(
                     &surreal,
                     slack.as_ref(),
@@ -97,10 +103,14 @@ impl SlackTagService {
             .retry_policy(tag_retry_policy())
             .await;
 
-        let (surreal, slack) = (self.surreal.clone(), Arc::clone(&self.slack));
+        let (surreal, bots) = (self.surreal.clone(), Arc::clone(&self.bots));
         let forge = self.forge.clone();
         let posted = ctx
             .run(move || async move {
+                let slack = bots
+                    .for_project(&surreal, project_id)
+                    .await
+                    .map_err(LaneError::into_handler_error)?;
                 post_notice(
                     &surreal,
                     slack.as_ref(),

@@ -18,11 +18,11 @@
 
 use std::sync::Arc;
 
+use crate::firm_slack::ProjectSlackBots;
 use dbos::WorkflowRef;
 use serde::{Deserialize, Serialize};
 use sqlx::Connection;
 use store::surreal::SurrealDb;
-use workflows::SlackBot;
 
 use crate::project_slack::{
     ensure_internal_channel, main_push_destination, render_main_push, LaneError, MainPushRequest,
@@ -200,13 +200,14 @@ impl Drop for ProjectSlackLane {
     }
 }
 
-/// The stores and bot one Project Slack lane runs against. Cloned per
-/// execution; the `SurrealDB` handle and the bot are shared with the Restate
-/// object, the PostgreSQL handle is the same pool the engine runs on.
+/// The stores and bot resolver one Project Slack lane runs against. Cloned
+/// per execution; the `SurrealDB` handle and the resolver are shared with
+/// the Restate object, the PostgreSQL handle is the same pool the engine
+/// runs on. Each step resolves the owning Firm's bot (ENG-392).
 #[derive(Clone)]
 pub struct Context {
     surreal: SurrealDb,
-    slack: Arc<dyn SlackBot>,
+    bots: Arc<dyn ProjectSlackBots>,
     postgres: store::postgres::PostgresDb,
     simulated: bool,
 }
@@ -216,13 +217,13 @@ impl Context {
     #[must_use]
     pub fn new(
         surreal: SurrealDb,
-        slack: Arc<dyn SlackBot>,
+        bots: Arc<dyn ProjectSlackBots>,
         postgres: store::postgres::PostgresDb,
         simulated: bool,
     ) -> Self {
         Self {
             surreal,
-            slack,
+            bots,
             postgres,
             simulated,
         }
@@ -276,24 +277,34 @@ async fn run_lane(
     match request {
         LaneRequest::ClientView => {
             let surreal = context.surreal.clone();
-            let slack = Arc::clone(&context.slack);
+            let bots = Arc::clone(&context.bots);
             let simulated = context.simulated;
             let channel_id: String =
                 dbos::step_with("ensure-channel", lane_step_options(), move || {
                     let surreal = surreal.clone();
-                    let slack = Arc::clone(&slack);
+                    let bots = Arc::clone(&bots);
                     async move {
+                        let slack = bots
+                            .for_project(&surreal, project_id)
+                            .await
+                            .map_err(dbos::Error::Application)?;
                         ensure_internal_channel(&surreal, &slack, project_id, simulated)
                             .await
                             .map_err(dbos::Error::Application)
                     }
                 })
                 .await?;
-            let slack = Arc::clone(&context.slack);
+            let surreal = context.surreal.clone();
+            let bots = Arc::clone(&context.bots);
             dbos::step_with("post-client-view", lane_step_options(), move || {
-                let slack = Arc::clone(&slack);
+                let surreal = surreal.clone();
+                let bots = Arc::clone(&bots);
                 let channel_id = channel_id.clone();
                 async move {
+                    let slack = bots
+                        .for_project(&surreal, project_id)
+                        .await
+                        .map_err(dbos::Error::Application)?;
                     slack
                         .post_message(&channel_id, CLIENT_PROJECT_VIEW_MESSAGE)
                         .await
@@ -307,13 +318,17 @@ async fn run_lane(
         }
         LaneRequest::MainPush(event) => {
             let surreal = context.surreal.clone();
-            let slack = Arc::clone(&context.slack);
+            let bots = Arc::clone(&context.bots);
             let simulated = context.simulated;
             let destination =
                 dbos::step_with("resolve-destination", lane_step_options(), move || {
                     let surreal = surreal.clone();
-                    let slack = Arc::clone(&slack);
+                    let bots = Arc::clone(&bots);
                     async move {
+                        let slack = bots
+                            .for_project(&surreal, project_id)
+                            .await
+                            .map_err(dbos::Error::Application)?;
                         main_push_destination(&surreal, &slack, project_id, simulated)
                             .await
                             .map_err(dbos::Error::Application)
@@ -321,13 +336,19 @@ async fn run_lane(
                 })
                 .await?;
             let message = render_main_push(&event, destination.repository_url.as_deref());
-            let slack = Arc::clone(&context.slack);
+            let surreal = context.surreal.clone();
+            let bots = Arc::clone(&context.bots);
             let channel_id = destination.channel_id;
             dbos::step_with("post-main-push", lane_step_options(), move || {
-                let slack = Arc::clone(&slack);
+                let surreal = surreal.clone();
+                let bots = Arc::clone(&bots);
                 let channel_id = channel_id.clone();
                 let message = message.clone();
                 async move {
+                    let slack = bots
+                        .for_project(&surreal, project_id)
+                        .await
+                        .map_err(dbos::Error::Application)?;
                     slack
                         .post_message(&channel_id, &message)
                         .await
@@ -373,6 +394,7 @@ mod tests {
             gate: CiOutcome::Pass,
             publish: Some(CiOutcome::Skipped),
             run_attempt,
+            subject: None,
         }
     }
 

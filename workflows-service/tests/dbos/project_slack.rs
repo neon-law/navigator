@@ -28,6 +28,7 @@ fn push(short_sha: &str, run_attempt: u32) -> MainPushRequest {
         gate: CiOutcome::Pass,
         publish: Some(CiOutcome::Skipped),
         run_attempt,
+        subject: None,
     }
 }
 
@@ -135,7 +136,12 @@ async fn launch_lane(
     let executor = dbos::DBOS::new(dbos_engine::config(url, APP_VERSION));
     let workflow = dbos_project_slack::register(
         &executor,
-        dbos_project_slack::Context::new(surreal.clone(), bot.clone(), postgres.clone(), false),
+        dbos_project_slack::Context::new(
+            surreal.clone(),
+            Arc::new(workflows_service::firm_slack::SharedSlackBot(bot.clone())),
+            postgres.clone(),
+            false,
+        ),
     )
     .expect("register ProjectSlack");
     executor.launch().await.expect("launch DBOS");

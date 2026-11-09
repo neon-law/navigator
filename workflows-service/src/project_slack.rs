@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use workflows::{project_channel_name, SlackBot, SlackBotError, SlackChannel};
 
+use crate::firm_slack::ProjectSlackBots;
+
 /// Why a lane step failed, shared by the Restate and DBOS paths.
 ///
 /// The variant is the classification: [`LaneError::terminal`] answers whether
@@ -114,10 +116,12 @@ impl CiOutcome {
 
 /// One push to a Project repository's `main`, as `POST
 /// /app/api/projects/{id}/events/main-push` relays it from the shared
-/// `project-gate.yml`. Mechanism only: a short SHA, the run, the pusher's
-/// login, and the two outcomes. No commit subject, so none can reach the
-/// channel. `publish` is absent when the gate reports before the publish
-/// half has run.
+/// `project-gate.yml` or `navigator project notify-main-push`. The
+/// mechanism fields — a short SHA, the run, the pusher's login, and the two
+/// outcomes — plus the commit's subject line (ENG-1285), the one free-text
+/// field, which [`render_main_push`] shows as escaped plain text. `publish`
+/// is absent when the gate reports before the publish half has run;
+/// `subject` is absent from callers on an older release.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct MainPushRequest {
     pub short_sha: String,
@@ -127,7 +131,14 @@ pub struct MainPushRequest {
     #[serde(default)]
     pub publish: Option<CiOutcome>,
     pub run_attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
+
+/// The longest subject the portal door accepts; the lane refuses the same.
+const MAIN_PUSH_SUBJECT_LIMIT: usize = 512;
+/// How much of the subject the notice shows.
+const MAIN_PUSH_SUBJECT_SHOWN: usize = 120;
 
 impl MainPushRequest {
     /// The idempotency key: one notice per `(sha, run attempt)`.
@@ -171,6 +182,15 @@ impl MainPushRequest {
                 "run_attempt must be at least 1".to_string(),
             ));
         }
+        if let Some(subject) = &self.subject {
+            if subject.chars().count() > MAIN_PUSH_SUBJECT_LIMIT
+                || subject.chars().any(char::is_control)
+            {
+                return Err(LaneError::InvalidEvent(
+                    "subject must be one line of at most 512 characters".to_string(),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -202,25 +222,28 @@ pub struct ClientProjectViewRequest {}
 /// itself is the Project-specific destination.
 pub const CLIENT_PROJECT_VIEW_MESSAGE: &str = "A client viewed this Project in the portal.";
 
+/// The Restate object. `bots` resolves the owning Firm's Slack bot for each
+/// Project at the moment a step needs it (ENG-392): there is no
+/// deployment-wide bot for Project channels.
 #[derive(Clone)]
 pub struct ProjectSlackService {
     surreal: store::surreal::SurrealDb,
-    slack: Arc<dyn SlackBot>,
+    bots: Arc<dyn ProjectSlackBots>,
     simulated: bool,
 }
 
 impl ProjectSlackService {
     /// `simulated` selects the channel prefix: `staging-` on a
-    /// simulated-matters deployment, `project-` otherwise.
+    /// simulated-matters deployment, `navigator-` otherwise.
     #[must_use]
     pub fn new(
         surreal: store::surreal::SurrealDb,
-        slack: Arc<dyn SlackBot>,
+        bots: Arc<dyn ProjectSlackBots>,
         simulated: bool,
     ) -> Self {
         Self {
             surreal,
-            slack,
+            bots,
             simulated,
         }
     }
@@ -292,6 +315,11 @@ pub(crate) async fn ensure_internal_channel(
 /// Resolve the Project's channel: keep the recorded one, else adopt the
 /// private channel already carrying the expected name, else create it. A
 /// `name_taken` race is resolved by adopting the winner.
+///
+/// The channel id and its canonical URL are recorded together (LAW-282): the
+/// URL is what `navigator.yaml`'s `private_slack_channel` and the gate read,
+/// so a row carrying only the id reads `not provisioned` until it is filled.
+/// A recorded id with no URL is backfilled; a URL already recorded is kept.
 pub(crate) async fn ensure_channel(
     surreal: &store::surreal::SurrealDb,
     slack: &Arc<dyn SlackBot>,
@@ -299,6 +327,9 @@ pub(crate) async fn ensure_channel(
     simulated: bool,
 ) -> Result<ChannelOutcome, LaneError> {
     if let Some(channel_id) = &project.internal_slack_channel_id {
+        if project.internal_slack_channel_url.is_none() {
+            record_channel(surreal, project.id, channel_id).await?;
+        }
         return Ok(ChannelOutcome::Existing(channel_id.clone()));
     }
     let name = project_channel_name(simulated, &project.code);
@@ -322,17 +353,33 @@ pub(crate) async fn ensure_channel(
             Err(error) => return Err(LaneError::Slack(error.to_string())),
         }
     };
-    store::projects::set_internal_slack_channel_id(surreal, project.id, &channel.id)
-        .await
-        .map_err(|error| project_command_error(&error))?
-        .ok_or_else(|| {
-            LaneError::ProjectGone("Project disappeared while saving Slack channel".to_string())
-        })?;
+    record_channel(surreal, project.id, &channel.id).await?;
     Ok(if adopted {
         ChannelOutcome::Adopted(channel.id)
     } else {
         ChannelOutcome::Created(channel.id)
     })
+}
+
+/// Write the channel id and its canonical `https://slack.com/archives/{id}`
+/// URL as one Project-row update.
+async fn record_channel(
+    surreal: &store::surreal::SurrealDb,
+    project_id: uuid::Uuid,
+    channel_id: &str,
+) -> Result<(), LaneError> {
+    store::projects::set_internal_slack_channel(
+        surreal,
+        project_id,
+        channel_id,
+        &cloud::slack_channel_url(channel_id),
+    )
+    .await
+    .map_err(|error| project_command_error(&error))?
+    .ok_or_else(|| {
+        LaneError::ProjectGone("Project disappeared while saving Slack channel".to_string())
+    })?;
+    Ok(())
 }
 
 async fn post_client_view_notice(
@@ -392,10 +439,37 @@ pub(crate) async fn main_push_destination(
     })
 }
 
+/// The commit subject as the notice shows it: one line of plain text that
+/// cannot ping or link anyone. Slack's control characters (`<`, `>`, `&`)
+/// are escaped, so `<!channel>`, `<@U…>` and `<url|text>` render literally;
+/// mrkdwn markers are dropped; the line is cut to about 120 characters.
+fn subject_line(subject: &str) -> Option<String> {
+    let plain: String = subject
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '*' | '_' | '~' | '`'))
+        .collect();
+    let plain = plain.trim();
+    if plain.is_empty() {
+        return None;
+    }
+    let mut shown: String = plain.chars().take(MAIN_PUSH_SUBJECT_SHOWN).collect();
+    if shown.chars().count() < plain.chars().count() {
+        shown.push('…');
+    }
+    Some(
+        shown
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;"),
+    )
+}
+
 /// The main-push notice. Short SHA (linked to the commit when a repository
 /// URL is recorded), the pusher's login, the gate and publish outcomes, and
-/// the run link. No client name, matter name, Project code, or commit
-/// subject: the private channel is already the Project-specific destination.
+/// the run link, then the commit subject as escaped plain text on its own
+/// line (ENG-1285). The notice adds no client name, matter name, or Project
+/// code of its own: the private channel is already the Project-specific
+/// destination, and the subject is the matter's own log line.
 #[must_use]
 pub fn render_main_push(event: &MainPushRequest, repository_url: Option<&str>) -> String {
     let sha = repository_url.map_or_else(
@@ -412,13 +486,18 @@ pub fn render_main_push(event: &MainPushRequest, repository_url: Option<&str>) -
     let publish = event.publish.map_or_else(String::new, |publish| {
         format!(", publish {}", publish.as_str())
     });
-    format!(
+    let mut notice = format!(
         "Push to main: {sha} by {} — gate {}{publish}. <{}|CI run #{}>",
         event.author_login,
         event.gate.as_str(),
         event.run_url,
         event.run_attempt
-    )
+    );
+    if let Some(subject) = event.subject.as_deref().and_then(subject_line) {
+        notice.push('\n');
+        notice.push_str(&subject);
+    }
+    notice
 }
 
 /// Decide whether `event` is new for a Project that has already posted
@@ -452,10 +531,14 @@ impl ProjectSlackService {
         async move {
             let project_id = project_id(ctx.key())?;
             let surreal = self.surreal.clone();
-            let slack = Arc::clone(&self.slack);
+            let bots = Arc::clone(&self.bots);
             let simulated = self.simulated;
             let channel_id: String = ctx
                 .run(|| async move {
+                    let slack = bots
+                        .for_project(&surreal, project_id)
+                        .await
+                        .map_err(LaneError::into_handler_error)?;
                     ensure_internal_channel(&surreal, &slack, project_id, simulated)
                         .await
                         .map(Json)
@@ -465,8 +548,13 @@ impl ProjectSlackService {
                 .await?
                 .into_inner();
 
-            let slack = Arc::clone(&self.slack);
+            let surreal = self.surreal.clone();
+            let bots = Arc::clone(&self.bots);
             ctx.run(move || async move {
+                let slack = bots
+                    .for_project(&surreal, project_id)
+                    .await
+                    .map_err(LaneError::into_handler_error)?;
                 post_client_view_notice(&slack, &channel_id)
                     .await
                     .map_err(HandlerError::from)
@@ -503,10 +591,14 @@ impl ProjectSlackService {
             }
 
             let surreal = self.surreal.clone();
-            let slack = Arc::clone(&self.slack);
+            let bots = Arc::clone(&self.bots);
             let simulated = self.simulated;
             let destination: MainPushDestination = ctx
                 .run(|| async move {
+                    let slack = bots
+                        .for_project(&surreal, project_id)
+                        .await
+                        .map_err(LaneError::into_handler_error)?;
                     main_push_destination(&surreal, &slack, project_id, simulated)
                         .await
                         .map(Json)
@@ -517,9 +609,14 @@ impl ProjectSlackService {
                 .into_inner();
 
             let message = render_main_push(&event, destination.repository_url.as_deref());
-            let slack = Arc::clone(&self.slack);
+            let surreal = self.surreal.clone();
+            let bots = Arc::clone(&self.bots);
             let channel_id = destination.channel_id;
             ctx.run(move || async move {
+                let slack = bots
+                    .for_project(&surreal, project_id)
+                    .await
+                    .map_err(LaneError::into_handler_error)?;
                 slack
                     .post_message(&channel_id, &message)
                     .await
@@ -638,6 +735,7 @@ mod tests {
             gate: CiOutcome::Pass,
             publish: Some(CiOutcome::Skipped),
             run_attempt,
+            subject: None,
         }
     }
 
@@ -713,11 +811,12 @@ mod tests {
     }
 
     /// The content guard, mirroring `client_view_copy_names_no_client_or_matter`:
-    /// the notice is built from the mechanism fields only, so a client name,
-    /// matter name, Project code, or commit subject can never reach the
-    /// channel.
+    /// the notice is built from the mechanism fields, so a client name, matter
+    /// name, or Project code never reaches the channel unless the commit
+    /// subject itself says it — and an event without a subject renders as it
+    /// did before ENG-1285.
     #[test]
-    fn the_main_push_notice_names_no_client_matter_project_or_subject() {
+    fn the_main_push_notice_names_no_client_matter_or_project() {
         let event = push("abc1234", 2);
         let message = render_main_push(
             &event,
@@ -731,7 +830,6 @@ mod tests {
         assert!(!lower.contains('@'));
         assert!(!lower.contains("client"));
         assert!(!lower.contains("matter"));
-        assert!(!lower.contains("subject"));
         let fields: serde_json::Value = serde_json::to_value(&event).unwrap();
         let names: Vec<&str> = fields
             .as_object()
@@ -749,13 +847,58 @@ mod tests {
                 "run_url",
                 "short_sha"
             ],
-            "the event carries mechanism fields only; there is no subject or name to leak"
+            "the subject is the only free-text field, and it is omitted when absent"
         );
         let bare = render_main_push(&push("abc1234", 1), None);
         assert!(
             bare.starts_with("Push to main: `abc1234` by octocat — gate pass"),
             "{bare}"
         );
+    }
+
+    /// ENG-1285: the subject renders under the SHA line, cannot ping or link
+    /// anyone, drops mrkdwn, and is cut to about 120 characters.
+    #[test]
+    fn the_main_push_notice_shows_the_subject_as_plain_text() {
+        let mut event = push("abc1234", 1);
+        event.subject = Some("feat(will): add the *residuary* clause".to_string());
+        let message = render_main_push(&event, None);
+        assert_eq!(
+            message,
+            "Push to main: `abc1234` by octocat — gate pass, publish skipped. <https://github.com/an-organization/sample-push/actions/runs/1|CI run #1>\nfeat(will): add the residuary clause"
+        );
+
+        event.subject =
+            Some("<!channel> <@U123> see <https://evil.example|this> & that".to_string());
+        let message = render_main_push(&event, None);
+        let subject = message.rsplit('\n').next().unwrap();
+        assert_eq!(
+            subject,
+            "&lt;!channel&gt; &lt;@U123&gt; see &lt;https://evil.example|this&gt; &amp; that"
+        );
+        assert!(!subject.contains("<!"), "no mention can survive escaping");
+
+        event.subject = Some("x".repeat(300));
+        let message = render_main_push(&event, None);
+        let subject = message.rsplit('\n').next().unwrap();
+        assert_eq!(
+            subject.chars().count(),
+            121,
+            "120 characters plus the ellipsis"
+        );
+        assert!(subject.ends_with('…'));
+
+        event.subject = Some("  \t ".to_string());
+        assert!(
+            !render_main_push(&event, None).contains('\n'),
+            "a blank subject adds no line"
+        );
+
+        let mut two_lines = push("abc1234", 1);
+        two_lines.subject = Some("a subject\nand a body".to_string());
+        assert!(two_lines.validate().is_err(), "a subject is one line");
+        two_lines.subject = Some("s".repeat(513));
+        assert!(two_lines.validate().is_err(), "over the door's limit");
     }
 
     #[tokio::test]
@@ -833,7 +976,16 @@ mod tests {
             .await
             .expect("reuse channel");
         assert_eq!(first, second);
-        assert_eq!(slack.created_channels(), vec!["project-sample-slack"]);
+        assert_eq!(slack.created_channels(), vec!["navigator-sample-slack"]);
+        let stored = store::projects::find_by_id(&surreal, project.id)
+            .await
+            .expect("read")
+            .expect("exists");
+        assert_eq!(
+            stored.internal_slack_channel_url.as_deref(),
+            Some(cloud::slack_channel_url(&first).as_str()),
+            "LAW-282: the URL the gate reads is recorded with the id"
+        );
 
         post_client_view_notice(&bot, &first)
             .await
@@ -870,6 +1022,54 @@ mod tests {
             .expect("reuse stored channel");
         assert_eq!(channel, "CEXISTING");
         assert!(slack.created_channels().is_empty());
+        let stored = store::projects::find_by_id(&surreal, project.id)
+            .await
+            .expect("read")
+            .expect("exists");
+        assert_eq!(
+            stored.internal_slack_channel_url.as_deref(),
+            Some("https://slack.com/archives/CEXISTING"),
+            "LAW-282: a row with an id and no URL is backfilled"
+        );
+    }
+
+    /// A URL a lawyer recorded by hand is kept: only a null URL is filled.
+    #[tokio::test]
+    async fn ensure_keeps_a_url_already_recorded() {
+        let surreal = mem_surreal().await;
+        let project = create(
+            &surreal,
+            &NewProject {
+                code: "sample-kept".to_string(),
+                name: "Sample Kept".to_string(),
+                status: "open".to_string(),
+                entity_id: seed_entity(&surreal).await,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create Project");
+        store::projects::set_internal_slack_channel(
+            &surreal,
+            project.id,
+            "CKEPT",
+            "https://acme.slack.com/archives/CKEPT",
+        )
+        .await
+        .expect("persist")
+        .expect("project exists");
+        let bot: Arc<dyn workflows::SlackBot> = Arc::new(CapturingSlackBot::new());
+        ensure_internal_channel(&surreal, &bot, project.id, false)
+            .await
+            .expect("reuse");
+        let stored = store::projects::find_by_id(&surreal, project.id)
+            .await
+            .expect("read")
+            .expect("exists");
+        assert_eq!(
+            stored.internal_slack_channel_url.as_deref(),
+            Some("https://acme.slack.com/archives/CKEPT")
+        );
     }
 
     #[tokio::test]
@@ -883,10 +1083,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_holds_the_store_and_bot() {
+    async fn service_holds_the_store_and_bots() {
         let surreal = mem_surreal().await;
         let slack: Arc<dyn workflows::SlackBot> = Arc::new(CapturingSlackBot::new());
-        let _service = ProjectSlackService::new(surreal, slack, false);
+        let _service = ProjectSlackService::new(
+            surreal,
+            Arc::new(crate::firm_slack::SharedSlackBot(slack)),
+            false,
+        );
     }
 
     #[tokio::test]
@@ -978,7 +1182,7 @@ mod tests {
         let slack = Arc::new(ExistingChannelSlack {
             found: Some(workflows::SlackChannel {
                 id: "GADOPTED".to_string(),
-                name: "project-sample-adopt".to_string(),
+                name: "navigator-sample-adopt".to_string(),
             }),
             create_error: None,
             created: std::sync::Mutex::default(),

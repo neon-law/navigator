@@ -71,8 +71,11 @@ continues with the next tag and Project. The children live in `workflows-service
 **open** Project the `membership` child:
 
 1. creates the private Slack channel when none is recorded, adopts a private channel of the expected name when one
-   exists, and replaces a recorded channel Slack no longer knows. Channels are named `project-<code>` in production and
-   `staging-<code>` on a simulated-matters deployment, so the two never collide;
+   exists, and replaces a recorded channel Slack no longer knows, recording the channel id and its canonical URL
+   together. Channels are named `navigator-<code>` in production and `staging-<code>` on a simulated-matters deployment,
+   so the two never collide; the Project code is unique across the deployment, so the name is too. The channel is
+   created, posted to, and reconciled with the owning Firm's own Slack bot (its `slack_bot_token` Firm credential),
+   never a deployment-wide token;
 2. invites the Lawyer DRI and participating Clerks, preferring their recorded Slack identities and falling back to
    directory email lookup. It also includes Lawyers and Clerks in the owning Firm who have recorded Slack identities,
    skipping existing members. An identity supplies an address; role and Firm scope determine eligibility.

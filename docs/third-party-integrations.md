@@ -55,6 +55,15 @@ deployment environment variable. Owner may view the same page's metadata (kind, 
 appoints the DRI, but Owner is not a secret writer — `ManageIntegrationSecrets` admits only the Firm's own Admin DRI,
 which an Owner may itself be.
 
+Slack is connected **once per Firm**. The Firm's `slack_bot_token` is the one bot every Project in that Firm uses:
+`navigator project setup` creates or adopts the Project's private channel with it, the main-push notice a Project
+repository's `cd` posts goes through it, and the Nightly Project Update repairs membership and writes the channel canvas
+with it. The channel is named from the Project code by environment — `navigator-<code>` in production, `staging-<code>`
+on a simulated-matters deployment — and a channel found under its recorded id but another name is renamed back. Opening
+a Project in a Firm that has connected Slack needs no further Slack step; a Project whose Firm has not stored the token
+reports `credential_missing`, and the worker refuses to post rather than borrowing another token. The deployment-wide
+`SLACK_BOT_TOKEN` serves only the deployment's own channels (`#general`, `#finance`, the messages channels).
+
 The runtime KMS coordinate is `NAVIGATOR_RUNTIME_KMS_KEY`. It must name a dedicated runtime key, never the deployment
 configuration key. Staging manifests and operator documentation may describe the workload permission; this repository
 does not apply IAM or write cloud state. Provider clients receive a resolved credential through an injected trait and

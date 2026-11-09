@@ -106,13 +106,16 @@ pub struct SlackChannel {
 /// Slack's channel-name limit.
 const SLACK_CHANNEL_NAME_LIMIT: usize = 80;
 
-/// The private channel name for a Project: `project-<code>` in production and
-/// `staging-<code>` on a simulated-matters deployment, so the two workspaces'
-/// channels never collide. The code is lowercased and anything Slack rejects
-/// becomes a hyphen; the result stays within Slack's 80-character limit.
+/// The private channel name for a Project, derived from (environment, code)
+/// and nothing else (ENG-1286): `navigator-<code>` in production and
+/// `staging-<code>` on a simulated-matters deployment, so the two
+/// deployments' channels never collide in one workspace. A Project code is
+/// unique across the deployment, so the name is too. The code is lowercased
+/// and anything Slack rejects becomes a hyphen; the result stays within
+/// Slack's 80-character limit.
 #[must_use]
 pub fn project_channel_name(simulated: bool, code: &str) -> String {
-    let prefix = if simulated { "staging" } else { "project" };
+    let prefix = if simulated { "staging" } else { "navigator" };
     let slug: String = code
         .to_ascii_lowercase()
         .chars()
@@ -1900,7 +1903,7 @@ mod tests {
         use super::project_channel_name;
         assert_eq!(
             project_channel_name(false, "sample-estate"),
-            "project-sample-estate"
+            "navigator-sample-estate"
         );
         assert_eq!(
             project_channel_name(true, "sample-estate"),
@@ -1908,7 +1911,7 @@ mod tests {
         );
         assert_eq!(
             project_channel_name(false, "Acme v. Co."),
-            "project-acme-v--co-"
+            "navigator-acme-v--co-"
         );
         assert_eq!(project_channel_name(true, &"x".repeat(200)).len(), 80);
     }
