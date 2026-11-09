@@ -1060,6 +1060,52 @@ fn docker_context_excludes_private_runtime_files_and_keeps_env_examples() {
     }
 }
 
+/// `rules` embeds the Firm Assumptions schema with
+/// `include_str!("../../assumptions/schema.yaml")`, a file outside the crate
+/// directory. Every image that stages `rules` must stage `assumptions`, or
+/// `cargo build` fails at `couldn't read .../assumptions/schema.yaml` — the
+/// 26.11.9 KIND fixture failed on `Containerfile.workflows-service` this way,
+/// and no PR check builds an image.
+#[test]
+fn every_containerfile_that_stages_rules_also_copies_assumptions() {
+    let keys_rs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rules/src/assumption_keys.rs");
+    let keys_body =
+        fs::read_to_string(&keys_rs).unwrap_or_else(|e| panic!("read {}: {e}", keys_rs.display()));
+    assert!(
+        keys_body.contains("include_str!(\"../../assumptions/schema.yaml\")"),
+        "{} no longer embeds assumptions/schema.yaml; if that is deliberate, drop this guard",
+        keys_rs.display()
+    );
+
+    let mut checked = 0;
+    for entry in fs::read_dir(images_dir()).unwrap() {
+        let path = entry.unwrap().path();
+        if !path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("Containerfile")
+        {
+            continue;
+        }
+        let body = fs::read_to_string(&path).unwrap();
+        if copies_crate(&body, "rules") {
+            checked += 1;
+            assert!(
+                copies_crate(&body, "assumptions"),
+                "{} stages `rules` but not `assumptions`, so a build that compiles \
+                 `rules` fails on its include_str! of `assumptions/schema.yaml`; add \
+                 `COPY assumptions assumptions`",
+                path.display()
+            );
+        }
+    }
+    assert!(
+        checked > 0,
+        "no Containerfile stages `rules` — this guard has lost its subject"
+    );
+}
+
 /// Rules embeds the Project Skill catalog for both the CLI and MCP tools.
 #[test]
 fn every_containerfile_that_stages_rules_also_copies_project_skills() {

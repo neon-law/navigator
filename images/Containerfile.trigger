@@ -101,6 +101,9 @@ COPY .agents            .agents
 # `skills/<jurisdiction>/<practice_area>.md` with include_dir!, so that
 # tree must be staged too (build 36157231129 failed on the missing dir).
 COPY skills             skills
+# `rules` embeds `assumptions/schema.yaml` with include_str!, outside the crate
+# dir, so that tree must be staged too (the 26.11.9 KIND fixture failed on it).
+COPY assumptions        assumptions
 
 RUN cargo build --release --target x86_64-unknown-linux-musl -p "${CRATE}" --bin "${BIN}" \
     && cp "target/x86_64-unknown-linux-musl/release/${BIN}" /trigger-bin

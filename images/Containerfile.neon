@@ -111,6 +111,9 @@ RUN cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked \
 COPY rules             rules
 COPY project-scaffold project-scaffold
 COPY skills            skills
+# `rules` embeds `assumptions/schema.yaml` with include_str!, outside the crate
+# dir, so that tree must be staged too (the 26.11.9 KIND fixture failed on it).
+COPY assumptions       assumptions
 COPY store             store
 COPY repos             repos
 COPY import            import
