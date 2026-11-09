@@ -144,7 +144,7 @@ async fn run_checked(
             "navigator.yaml names no project; privacy coverage is incomplete"
         ));
     };
-    let terms = match remote::resolve(Some(host)) {
+    let outcomes = match remote::resolve(Some(host)) {
         Ok((base, token)) => feedback_check::private_terms(&base, &token, &[project]).await,
         Err(_) => {
             return Outcome::Fatal(anyhow!(
@@ -152,11 +152,23 @@ async fn run_checked(
             ));
         }
     };
-    let Ok(terms) = terms else {
+    let Ok(outcomes) = outcomes else {
         return Outcome::Fatal(anyhow!(
             "could not read private terms; privacy coverage is incomplete"
         ));
     };
+    // The check is strict, like feedback-check: one named matter has
+    // nothing to continue past, so a refusal is fatal and its reason —
+    // which names the Project — is the message.
+    let mut terms = Vec::new();
+    for outcome in &outcomes {
+        match &outcome.read {
+            feedback_check::ProjectRead::Resolved(resolved) => terms.extend(resolved.clone()),
+            feedback_check::ProjectRead::Refused { reason } => {
+                return Outcome::Fatal(anyhow!("{reason}"));
+            }
+        }
+    }
     // 4. The scan, over the draft with the matter's terms merged in.
     let merged = cli::pii_audit::merge_terms(&terms, &[]);
     let findings = cli::feedback_scan::scan(&draft, &merged);
