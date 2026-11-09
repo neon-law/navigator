@@ -418,6 +418,15 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/project-repositories",
             get(reconcile_project_repositories_door),
         ),
+        // Own noun, same reason as `project-repositories`: the `projects`
+        // GET rule admits any authenticated caller up to five segments, and
+        // a private-terms reconciliation nested there would be
+        // policy-reachable by a client even though the handler refuses one.
+        (
+            "GET",
+            "/app/api/project-private-terms-reconciliation",
+            get(reconcile_private_terms_door),
+        ),
         // Own noun, same reason as `project-repositories`: this reads every
         // matter's lifecycle without granting a matter-content read.
         (
@@ -2106,52 +2115,37 @@ async fn private_terms_for_project(
     db: &store::surreal::SurrealDb,
     project: store::projects::Project,
 ) -> Result<PrivateTerms, ApiError> {
-    let member_ids = store::projects::participations_for_project(db, project.id)
-        .await
-        .map_err(|e| ApiError::Db(e.to_string()))?
-        .into_iter()
-        .map(|row| row.person_id)
-        .collect::<std::collections::HashSet<_>>();
-    let mut person_ids = member_ids.iter().copied().collect::<Vec<_>>();
-    let mut entity_ids = vec![project.entity_id];
-    for reference in store::project_references::for_project(db, project.id)
-        .await
-        .map_err(|e| ApiError::Db(e.to_string()))?
-    {
-        match reference.party.kind {
-            store::relationships::Endpoint::Person => person_ids.push(reference.party.id),
-            store::relationships::Endpoint::Entity => entity_ids.push(reference.party.id),
-        }
-    }
-    person_ids.sort_unstable();
-    person_ids.dedup();
-    entity_ids.sort_unstable();
-    entity_ids.dedup();
-    let people = store::persons::find_by_ids(db, &person_ids)
+    let resolution = store::private_terms::resolve(db, &project)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?;
-    let entities = store::entities::find_by_ids(db, &entity_ids)
-        .await
-        .map_err(|e| ApiError::Db(e.to_string()))?;
-    if people.len() != person_ids.len() {
-        return Err(ApiError::PrivateTermsConflict(
-            "private terms: missing Person record",
-        ));
-    }
-    if entities.len() != entity_ids.len() {
-        return Err(ApiError::PrivateTermsConflict(
-            "private terms: missing Entity record",
-        ));
+    // The refusal and the admin-tier reconciliation door read the same
+    // records through the same checks (`store::private_terms`); here a
+    // finding refuses, the first one in the report's order.
+    if let Some(finding) = resolution.findings.first() {
+        return Err(match finding {
+            store::private_terms::Finding::MissingPerson { .. } => {
+                ApiError::PrivateTermsConflict("private terms: missing Person record")
+            }
+            store::private_terms::Finding::MissingEntity { .. } => {
+                ApiError::PrivateTermsConflict("private terms: missing Entity record")
+            }
+            store::private_terms::Finding::InvalidEntityMetadata { .. } => {
+                ApiError::PrivateTermsInvalid("private terms: invalid Entity metadata")
+            }
+            store::private_terms::Finding::InvalidEntityEin { .. } => {
+                ApiError::PrivateTermsInvalid("private terms: invalid Entity EIN")
+            }
+        });
     }
     let mut identifiers = vec![project.id.to_string()];
     let mut participants = Vec::new();
-    for person in people {
+    for person in resolution.people {
         identifiers.push(person.id.to_string());
         identifiers.extend(person.given_name);
         identifiers.extend(person.middle_name);
         identifiers.extend(person.family_name);
         identifiers.extend(person.xero_contact_id);
-        if member_ids.contains(&person.id) {
+        if resolution.participation_ids.contains(&person.id) {
             participants.push(PrivateTermsParticipant {
                 name: person.name,
                 email: person.email,
@@ -2162,27 +2156,11 @@ async fn private_terms_for_project(
             identifiers.extend(person.phone);
         }
     }
-    for entity in entities {
+    for entity in resolution.entities {
         if let Some(metadata) = entity.metadata.as_ref() {
-            let object = metadata.as_object().ok_or_else(|| {
-                ApiError::PrivateTermsInvalid("private terms: invalid Entity metadata")
-            })?;
-            if let Some(value) = object.get("ein") {
-                let ein = value
-                    .as_str()
-                    .filter(|value| {
-                        value.len() == 10
-                            && value.bytes().enumerate().all(|(index, byte)| {
-                                if index == 2 {
-                                    byte == b'-'
-                                } else {
-                                    byte.is_ascii_digit()
-                                }
-                            })
-                    })
-                    .ok_or_else(|| {
-                        ApiError::PrivateTermsInvalid("private terms: invalid Entity EIN")
-                    })?;
+            // Every stored EIN reaching this loop is standardized — a
+            // malformed one came back as a finding above.
+            if let Some(ein) = metadata.get("ein").and_then(serde_json::Value::as_str) {
                 identifiers.push(ein.to_owned());
             }
         }
@@ -2197,6 +2175,64 @@ async fn private_terms_for_project(
         participants,
         identifiers,
     })
+}
+
+#[derive(Debug, Serialize)]
+struct PrivateTermsReconciliationEntry {
+    project_id: Uuid,
+    code: String,
+    items: Vec<store::private_terms::Finding>,
+}
+
+#[derive(Debug, Serialize)]
+struct PrivateTermsReconciliationReport {
+    findings: Vec<PrivateTermsReconciliationEntry>,
+}
+
+/// `GET /app/api/project-private-terms-reconciliation` — every matter whose
+/// private-terms response would be refused, with the record that breaks it.
+///
+/// Admin-tier only via [`AdminSession`], and the tier is the point: the
+/// question is about the whole deployment, so it reads
+/// [`store::projects::all`] instead of pretending a per-caller lens is an
+/// inventory (the [`reconcile_project_repositories_door`] doctrine). It runs
+/// the same reconciliation the private-terms refusal runs —
+/// [`store::private_terms::resolve`] — and reports every finding instead of
+/// refusing on the first, so a repair can name its work without correlating
+/// server logs.
+///
+/// The payload is findings only: per broken matter, its code and each
+/// finding's kind, dangling id, and attachment or field path. A dangling
+/// UUID is the same value class the terms list treats as private, and is the
+/// most the reconciliation needs — no name, mailbox, phone, or EIN crosses
+/// this door, and healthy matters are omitted. Fail-closed is untouched: the
+/// private-terms door still refuses 409/422, and this door never repairs.
+async fn reconcile_private_terms_door(
+    State(state): State<ApiState>,
+    _authed: AdminSession,
+) -> Result<Response, ApiError> {
+    let projects = store::projects::all(&state.surreal)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    let mut findings = Vec::new();
+    for project in projects {
+        let resolution = store::private_terms::resolve(&state.surreal, &project)
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+        if resolution.findings.is_empty() {
+            continue;
+        }
+        findings.push(PrivateTermsReconciliationEntry {
+            project_id: project.id,
+            code: project.code,
+            items: resolution.findings,
+        });
+    }
+    Ok((
+        StatusCode::OK,
+        Json(PrivateTermsReconciliationReport { findings }),
+    )
+        .into_response())
 }
 
 /// `GET /app/api/projects/{id}/finance`: the Project's latest finance aggregate,
@@ -13507,6 +13543,11 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
         let (p, r) = (f.project, Uuid::now_v7());
         let doors: Vec<(&str, String, Option<serde_json::Value>)> = vec![
             ("GET", "/app/api/project-repositories".into(), None),
+            (
+                "GET",
+                "/app/api/project-private-terms-reconciliation".into(),
+                None,
+            ),
             ("GET", "/app/api/project-lifecycle".into(), None),
             ("POST", format!("/app/api/project-surfaces/{p}"), None),
             (
@@ -14255,6 +14296,384 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             "an incomplete set must not scan clean"
         );
         assert!(json.get("identifiers").is_none());
+    }
+
+    /// Stored Entity identifier data that is not a JSON object refuses with
+    /// the typed invalid-metadata error. Asserted over HTTP because this
+    /// refusal class had no handler test before the reconciliation work.
+    #[tokio::test]
+    async fn private_terms_refuse_entity_metadata_that_is_not_an_object() {
+        let f = door_fixture().await;
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: f.project,
+                person_id: f.lawyer.person_id.unwrap(),
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .unwrap();
+        let project = store::projects::find_by_id(&f.db, f.project)
+            .await
+            .unwrap()
+            .unwrap();
+        f.db.query("UPDATE $entity SET metadata = $metadata")
+            .bind((
+                "entity",
+                store::surreal::record_id("entity", project.entity_id),
+            ))
+            .bind(("metadata", serde_json::json!("not an object")))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/projects/{}/private-terms", f.project),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{json}");
+        assert_eq!(json["error"], "private_terms_incomplete", "{json}");
+        assert!(json.get("identifiers").is_none(), "{json}");
+    }
+
+    /// A stored EIN that is not `NN-NNNNNNN` refuses with the typed
+    /// invalid-EIN error. Asserted over HTTP because this refusal class had
+    /// no handler test before the reconciliation work.
+    #[tokio::test]
+    async fn private_terms_refuse_an_ein_that_is_not_nn_nnnnnnn() {
+        let f = door_fixture().await;
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: f.project,
+                person_id: f.lawyer.person_id.unwrap(),
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .unwrap();
+        let project = store::projects::find_by_id(&f.db, f.project)
+            .await
+            .unwrap()
+            .unwrap();
+        f.db.query("UPDATE $entity SET metadata = $metadata")
+            .bind((
+                "entity",
+                store::surreal::record_id("entity", project.entity_id),
+            ))
+            .bind(("metadata", serde_json::json!({ "ein": "123456789" })))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let (status, json) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            &format!("/app/api/projects/{}/private-terms", f.project),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{json}");
+        assert_eq!(json["error"], "private_terms_incomplete", "{json}");
+        assert!(json.get("identifiers").is_none(), "{json}");
+    }
+
+    /// A clean deployment answers an empty findings list, and a run with one
+    /// broken matter names only that matter — healthy ones are omitted.
+    #[tokio::test]
+    async fn the_reconciliation_door_reports_only_broken_matters() {
+        let f = door_fixture().await;
+        let healthy = store::projects::create(
+            &f.db,
+            &store::projects::NewProject {
+                code: "healthy-matter".into(),
+                name: "healthy matter".into(),
+                status: "open".into(),
+                entity_id: store::test_support::seed_entity(&f.db).await,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let admin = crate::SessionData::fresh("admin", store::persons::Role::Owner);
+        let (status, json) = call(
+            &f.state,
+            Some(&admin),
+            "GET",
+            "/app/api/project-private-terms-reconciliation",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["findings"].as_array().unwrap().len(), 0, "{json}");
+
+        // The seeded matter's client Entity record goes away out of band.
+        let project = store::projects::find_by_id(&f.db, f.project)
+            .await
+            .unwrap()
+            .unwrap();
+        f.db.query("DELETE $entity")
+            .bind((
+                "entity",
+                store::surreal::record_id("entity", project.entity_id),
+            ))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        let (status, json) = call(
+            &f.state,
+            Some(&admin),
+            "GET",
+            "/app/api/project-private-terms-reconciliation",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let findings = json["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 1, "{json}");
+        assert_eq!(findings[0]["project_id"], f.project.to_string(), "{json}");
+        assert_eq!(findings[0]["code"], project.code, "{json}");
+        assert_eq!(findings[0]["items"][0]["kind"], "missing_entity", "{json}");
+        assert_eq!(
+            findings[0]["items"][0]["attached_as"], "project.client",
+            "{json}"
+        );
+        // The healthy matter is omitted.
+        assert!(
+            findings[0]["project_id"] != healthy.id.to_string(),
+            "{json}"
+        );
+    }
+
+    /// The door and the refusal read the same records through the same
+    /// checks (`store::private_terms`), so the report's kind must match the
+    /// class the private-terms response refuses with — for every failure
+    /// class, on the same broken records.
+    // One matter per finding kind: the door's report and the private-terms
+    // refusal must classify the same broken records identically, so neither
+    // can drift from the other.
+    struct ReconciliationCase {
+        project: store::projects::Project,
+        kind: &'static str,
+        attached_as: Option<&'static str>,
+        field: Option<&'static str>,
+        refused_as: fn(&ApiError) -> bool,
+    }
+
+    async fn seed_extra_matters(f: &DoorFixture) -> Vec<store::projects::Project> {
+        let mut extra = Vec::new();
+        for prefix in ["second", "third", "fourth"] {
+            let entity = store::test_support::seed_entity(&f.db).await;
+            extra.push(
+                store::projects::create(
+                    &f.db,
+                    &store::projects::NewProject {
+                        code: format!("{prefix}-matter"),
+                        name: format!("{prefix} matter"),
+                        status: "open".into(),
+                        entity_id: entity,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        extra
+    }
+
+    // Each matter breaks a different way, the way an orphan arrives: out of
+    // band, never through the in-band command boundary.
+    async fn break_matters_out_of_band(
+        f: &DoorFixture,
+        first: &store::projects::Project,
+        extra: &[store::projects::Project],
+    ) {
+        let dangling = store::persons::create(
+            &f.db,
+            &store::persons::NewPerson::with_role(
+                "Dangling Participant",
+                "dangling-participant@example.com",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: first.id,
+                person_id: dangling.id,
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .unwrap();
+        f.db.query("DELETE $person")
+            .bind(("person", store::surreal::record_id("person", dangling.id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        f.db.query("DELETE $entity")
+            .bind((
+                "entity",
+                store::surreal::record_id("entity", extra[0].entity_id),
+            ))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        f.db.query("UPDATE $entity SET metadata = $metadata")
+            .bind((
+                "entity",
+                store::surreal::record_id("entity", extra[1].entity_id),
+            ))
+            .bind(("metadata", serde_json::json!("not an object")))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        f.db.query("UPDATE $entity SET metadata = $metadata")
+            .bind((
+                "entity",
+                store::surreal::record_id("entity", extra[2].entity_id),
+            ))
+            .bind(("metadata", serde_json::json!({ "ein": "123456789" })))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+    }
+
+    fn reconciliation_cases(
+        first: store::projects::Project,
+        extra: &[store::projects::Project],
+    ) -> Vec<ReconciliationCase> {
+        vec![
+            ReconciliationCase {
+                project: first,
+                kind: "missing_person",
+                attached_as: Some("participation"),
+                field: None,
+                refused_as: |error: &ApiError| {
+                    matches!(
+                        error,
+                        ApiError::PrivateTermsConflict("private terms: missing Person record")
+                    )
+                },
+            },
+            ReconciliationCase {
+                project: extra[0].clone(),
+                kind: "missing_entity",
+                attached_as: Some("project.client"),
+                field: None,
+                refused_as: |error: &ApiError| {
+                    matches!(
+                        error,
+                        ApiError::PrivateTermsConflict("private terms: missing Entity record")
+                    )
+                },
+            },
+            ReconciliationCase {
+                project: extra[1].clone(),
+                kind: "invalid_entity_metadata",
+                attached_as: None,
+                field: Some("metadata"),
+                refused_as: |error: &ApiError| {
+                    matches!(
+                        error,
+                        ApiError::PrivateTermsInvalid("private terms: invalid Entity metadata")
+                    )
+                },
+            },
+            ReconciliationCase {
+                project: extra[2].clone(),
+                kind: "invalid_entity_ein",
+                attached_as: None,
+                field: Some("metadata.ein"),
+                refused_as: |error: &ApiError| {
+                    matches!(
+                        error,
+                        ApiError::PrivateTermsInvalid("private terms: invalid Entity EIN")
+                    )
+                },
+            },
+        ]
+    }
+
+    async fn assert_the_report_row_and_the_refusal_agree(
+        f: &DoorFixture,
+        json: &serde_json::Value,
+        case: &ReconciliationCase,
+    ) {
+        let entry = json["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["project_id"] == case.project.id.to_string())
+            .unwrap_or_else(|| panic!("the report must name every broken matter: {json}"));
+        let items = entry["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "{json}");
+        assert_eq!(items[0]["kind"], case.kind, "{json}");
+        assert_eq!(
+            items[0]
+                .get("attached_as")
+                .and_then(serde_json::Value::as_str),
+            case.attached_as,
+            "{json}"
+        );
+        assert_eq!(
+            items[0].get("field").and_then(serde_json::Value::as_str),
+            case.field,
+            "{json}"
+        );
+        // The same broken records refuse the private-terms response with
+        // the matching class — the report and the refusal cannot drift.
+        let Err(error) = super::private_terms_for_project(&f.db, case.project.clone()).await else {
+            panic!("the matter must refuse: {}", case.kind);
+        };
+        assert!((case.refused_as)(&error), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn the_reconciliation_door_and_the_refusal_classify_alike() {
+        let f = door_fixture().await;
+        let extra = seed_extra_matters(&f).await;
+        let first = store::projects::find_by_id(&f.db, f.project)
+            .await
+            .unwrap()
+            .unwrap();
+        break_matters_out_of_band(&f, &first, &extra).await;
+
+        // One full run attributes every broken matter.
+        let admin = crate::SessionData::fresh("admin", store::persons::Role::Owner);
+        let (status, json) = call(
+            &f.state,
+            Some(&admin),
+            "GET",
+            "/app/api/project-private-terms-reconciliation",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let findings = json["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 4, "{json}");
+
+        for case in reconciliation_cases(first, &extra) {
+            assert_the_report_row_and_the_refusal_agree(&f, &json, &case).await;
+        }
     }
 
     #[tokio::test]

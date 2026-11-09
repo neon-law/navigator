@@ -1817,6 +1817,32 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/project-private-terms-reconciliation": {
+          "get": {
+            "summary": "Reconcile every matter's private-terms records (admin)",
+            "description":
+              "Names every matter whose `GET /app/api/projects/{id}/private-terms` response would be refused: \
+               a dangling participation or referenced-person id, a missing client or referenced Entity, or Entity \
+               identifier data that is malformed — a non-object `metadata`, or a `metadata.ein` present but not \
+               `NN-NNNNNNN`. The report runs the same checks the private-terms read refuses on (`store::private_terms`) \
+               and lists one entry per broken matter — its `project_id`, `code`, and `items`, each carrying the failing \
+               `kind`, the dangling record `id`, and its `attached_as` attachment (`participation`, `reference:person`, \
+               `project.client`, `reference:entity`) or malformed `field` path — so a repair can be attributed from an \
+               admin workstation without server logs. Healthy matters are omitted, and no name, mailbox, phone, or EIN \
+               crosses this door: a dangling id is the most the reconciliation needs. Fail-closed is unchanged — the \
+               private-terms read still refuses 409/422, and this door never repairs. Authorization: admin-tier only \
+               (`owner`/`admin`) — the deployment-wide read is the point, not a precaution.",
+            "responses": {
+              "200": { "description": "The reconciliation report — one entry per matter with a finding, empty on a clean deployment", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "The matters could not be read", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/project-lifecycle": {
           "get": {
             "summary": "Read every matter's lifecycle fields (admin)",
