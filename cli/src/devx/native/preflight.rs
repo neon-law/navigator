@@ -176,7 +176,7 @@ fn binary_path(prefix: &str, name: &str) -> PathBuf {
 }
 
 /// Run a `brew` subcommand, surfacing its stderr on failure.
-fn brew(args: &[&str]) -> Result<String> {
+pub(crate) fn brew(args: &[&str]) -> Result<String> {
     let output = Command::new("brew")
         .args(args)
         .output()
@@ -192,9 +192,9 @@ fn brew(args: &[&str]) -> Result<String> {
 }
 
 /// Locate Homebrew, returning its prefix.
-fn require_homebrew() -> Result<String> {
+pub(crate) fn require_homebrew() -> Result<String> {
     let output = Command::new("brew").arg("--prefix").output().context(
-        "Homebrew is required by the native dependency tier but `brew` is not on PATH.\n\
+        "Homebrew is required but `brew` is not on PATH.\n\
              Install it from https://brew.sh, then re-run this command.",
     )?;
     if !output.status.success() {

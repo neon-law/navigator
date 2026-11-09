@@ -45,6 +45,8 @@ pub(crate) mod github_setup;
 mod host_setup;
 mod lifecycle;
 mod native;
+// `navigator project repository jj` installs jj with the same Homebrew seam.
+pub(crate) use native::{brew, require_homebrew};
 // `navigator nautilus preview` serves the bundle this module stages, so
 // its staging helper is crate-reachable.
 pub(crate) mod nautilus;

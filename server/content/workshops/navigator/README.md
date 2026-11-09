@@ -289,6 +289,37 @@ keeps the exhibits.
 Open one file in the sample repository's history on the forge and read who changed it and why. Then have two attendees
 edit the same sentence on separate branches and open pull requests, so the room sees the second one stop on a conflict.
 
+### Optional: work the folder with jj
+
+Jujutsu (`jj`) is a second front end over the same Git repository. The forge, the gate, and protected `main` still see
+plain Git; what changes is the attendee's own desk. Every edit is saved as it happens, any step can be undone, and a
+conflict is recorded in the change instead of stopping work. One command installs jj with Homebrew on macOS, adds it
+beside `.git`, and copies the checkout's Git author and signing settings:
+
+```bash
+navigator project repository jj
+```
+
+| jj | What it is in a matter |
+| --- | --- |
+| Change | A redline that keeps the same name however often it is revised |
+| Bookmark | The tab on a redline the forge reads as a branch; it stays put until moved |
+| `jj undo` | Withdraw the last step, whatever it was |
+| `jj op log` | The desk's own docket: every step taken in this checkout, by a person or an agent |
+| Recorded conflict | Two redlines of one sentence, kept side by side until a person decides |
+
+A bookmark is the one habit to learn. It does not follow new changes the way a Git branch does, so a push after a
+revision sends the old one unless the bookmark is moved (`jj bookmark set`). `jj git push --change @` avoids the
+question: it names a fresh bookmark `push/<change-id>`, the namespace `navigator project repository push` already uses.
+
+---
+
+Run `navigator project repository jj` in the sample checkout. Edit a file, then `jj st` and `jj describe -m "why"`, and
+push with `jj git push --change @`; open the pull request from the `push/` bookmark on the forge. Repeat the conflict
+exercise with `jj git fetch` and `jj rebase -d main@origin`, and read the conflict in `jj log`. Revise the change and
+push without moving its bookmark, so the room sees the stale push, then fix it with `jj bookmark set`. Finish by
+deleting a file on purpose, running `jj undo`, and reading the step back in `jj op log`.
+
 ### Sign in, then receive repository access
 
 Forgejo hosts source repositories and pull requests. Open the repository recorded on the Project rather than guessing
