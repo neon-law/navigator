@@ -10471,7 +10471,9 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::IepDefenders,
         LiveHomeContract {
             title: "<title>IEP Defenders | Home</title>",
-            copy: "Special education lawyers defending your child",
+            // A fragment that stops before the tagline's apostrophe, so the
+            // contract cannot break on HTML escaping of "child's".
+            copy: "defending your child",
         },
     ),
 ];
@@ -10515,6 +10517,144 @@ fn assert_live_practice_home(key: views::brand::BrandKey, host: &str, body: &str
     assert!(
         body.contains(&format!("/public/css/brand-{}-tokens.css", key.as_str())),
         "{host} must load its scoped brand tokens: {body}"
+    );
+}
+
+/// The IEP Defenders home is a marketing-page band sequence, so its rendered
+/// HTML carries every band's anchor, the hero CTA, exactly one `<h1>`, and a
+/// qualifier beside each stat — a stat without its qualifier is a bare
+/// advertising claim.
+#[tokio::test]
+async fn the_iep_defenders_home_renders_its_band_sequence_with_qualifiers() {
+    let state = empty_state_with_canonical_host(CanonicalHost::new(None)).await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+
+    let resp = get_on_host(&app, "/", "iep.neonlaw.com").await;
+    assert_eq!(resp.status(), StatusCode::OK, "iep.neonlaw.com /");
+    let body = body_string(resp).await;
+
+    // Every band's anchor survives the full SSR pass. Statement bands carry
+    // no anchor attribute in the shared renderer, so they are asserted by
+    // heading below.
+    for anchor in ["results", "problems", "process", "fees", "reviews"] {
+        assert!(
+            body.contains(&format!(r#"id="{anchor}""#)),
+            "the `{anchor}` band anchor is missing: {body}"
+        );
+    }
+    for statement_heading in [
+        "Children are people, not numbers.",
+        "This work was personal from the beginning.",
+    ] {
+        assert!(
+            body.contains(statement_heading),
+            "the `{statement_heading}` statement band is missing: {body}"
+        );
+    }
+
+    // Exactly one h1: the practice skin's hero tagline.
+    let h1_count = body.matches("<h1").count();
+    assert_eq!(
+        h1_count, 1,
+        "the IEP home must render exactly one h1, saw {h1_count}: {body}"
+    );
+    assert!(
+        body.contains("special education lawyers defending your child"),
+        "the hero tagline is missing: {body}"
+    );
+
+    // Stats and fees travel with their qualifiers.
+    for qualifier in [
+        "Past results do not guarantee future outcomes.",
+        "For many qualifying due process matters.",
+        "How attorney&#39;s fees are handled",
+    ] {
+        assert!(
+            body.contains(qualifier),
+            "the qualifier `{qualifier}` is missing: {body}"
+        );
+    }
+
+    // The hero CTA names its destination.
+    assert!(
+        body.contains("Start with what your child is missing."),
+        "the hero CTA label is missing: {body}"
+    );
+    assert!(body.contains(r#"href="/contact""#), "{body}");
+
+    // The review wall renders attributed testimonials.
+    for attribution in [
+        "Alysa Brown",
+        "Sierra Zamorano",
+        "Danyel Sheely",
+        "Wendy Aumick",
+    ] {
+        assert!(
+            body.contains(attribution),
+            "the `{attribution}` testimonial attribution is missing: {body}"
+        );
+    }
+}
+
+/// The Lex Tecnica home is a marketing-page band sequence lifted from the
+/// firm's published lextecnica.com — the #SaveTheTrees case banner, the
+/// three pillars, and the closing "Let's Go Change the World" statement —
+/// so its rendered HTML carries the pillar band's anchor, every statement
+/// heading, exactly one `<h1>`, and its own brand tokens stylesheet.
+#[tokio::test]
+async fn the_lex_tecnica_home_renders_its_band_sequence_from_the_reference() {
+    let state = empty_state_with_canonical_host(CanonicalHost::new(None)).await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+
+    let resp = get_on_host(&app, "/", "lex-tecnica.neonlaw.com").await;
+    assert_eq!(resp.status(), StatusCode::OK, "lex-tecnica.neonlaw.com /");
+    let body = body_string(resp).await;
+
+    // The cards band's anchor survives the full SSR pass. Statement bands
+    // carry no anchor attribute in the shared renderer, so they are
+    // asserted by heading below (fragments stop before apostrophes, whose
+    // HTML escaping the contract must not depend on).
+    assert!(
+        body.contains(r#"id="pillars""#),
+        "the pillar band anchor is missing: {body}"
+    );
+    for statement_fragment in ["case against SNWA and LVVWD", "Go Change the World"] {
+        assert!(
+            body.contains(statement_fragment),
+            "the `{statement_fragment}` statement band is missing: {body}"
+        );
+    }
+
+    // The three pillars render under their reference titles.
+    for pillar in ["On Your Team", "Strategic Focus", "Full Spectrum"] {
+        assert!(
+            body.contains(pillar),
+            "the `{pillar}` pillar is missing: {body}"
+        );
+    }
+
+    // Exactly one h1: the practice skin's hero tagline.
+    let h1_count = body.matches("<h1").count();
+    assert_eq!(
+        h1_count, 1,
+        "the Lex Tecnica home must render exactly one h1, saw {h1_count}: {body}"
+    );
+    assert!(
+        body.contains("law firm for entrepreneurs, by entrepreneurs"),
+        "the hero tagline is missing: {body}"
+    );
+
+    // The hero and closing CTAs name their destination.
+    assert!(
+        body.matches("Contact Us").count() >= 2,
+        "the hero and closing CTAs are missing: {body}"
+    );
+    assert!(body.contains(r#"href="/contact""#), "{body}");
+
+    // The page resolves its own brand tokens stylesheet.
+    assert!(
+        body.contains("/public/css/brand-lex-tecnica-tokens.css"),
+        "the lex-tecnica tokens stylesheet is missing: {body}"
     );
 }
 
@@ -11048,6 +11188,33 @@ async fn assert_brand_home_lead_capture(
     db: &store::surreal::SurrealDb,
     brand: views::brand::BrandKey,
 ) {
+    // The band-built IEP Defenders and Lex Tecnica homes close on a
+    // Contact Us link to `/contact` — their published CTA shape — rather
+    // than an inline lead form. Their lead-capture path runs through the
+    // contact page on the brand's own host, which serves the one lead
+    // form.
+    if matches!(
+        brand,
+        views::brand::BrandKey::IepDefenders | views::brand::BrandKey::LexTecnica
+    ) {
+        let host = brand.canonical_host();
+        let response = get_on_host(app, "/", host).await;
+        assert_eq!(response.status(), StatusCode::OK, "{host} home");
+        let body = body_string(response).await;
+        assert!(
+            body.contains(r#"href="/contact""#),
+            "{host}: home links its contact page"
+        );
+        let contact = get_on_host(app, "/contact", host).await;
+        assert_eq!(contact.status(), StatusCode::OK, "{host} contact");
+        let contact_body = body_string(contact).await;
+        assert_eq!(
+            contact_body.matches(r#"action="/leads""#).count(),
+            1,
+            "exactly one lead form on {host} contact"
+        );
+        return;
+    }
     let (host, cookie, body) = brand_home_lead_form(app, brand).await;
     let encoded = brand_home_lead_payload(&body, brand);
     let response = app
@@ -11408,12 +11575,12 @@ async fn design_page_renders_the_component_gallery() {
         body.contains("page=2"),
         "renders a `?page=` pagination anchor"
     );
-    // The marketing card cluster renders too — pricing cards and the legal
-    // disclaimer. Testimonials remain intentionally empty until publication.
+    // The marketing card cluster renders too — pricing cards, the
+    // attributed sample testimonials, and the legal disclaimer.
     assert!(body.contains("pricing-card"), "renders pricing cards");
     assert!(
-        !body.contains("testimonial-card"),
-        "does not invent testimonials"
+        body.contains("testimonial-card"),
+        "renders the attributed sample testimonials"
     );
     assert!(
         body.contains("template-disclaimer"),

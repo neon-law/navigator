@@ -1,0 +1,194 @@
+head_title: "{site_name} | Home"
+meta_description: >-
+  IEP Defenders is the special education practice of Lex Tecnica, Ltd. Help
+  with evaluations, eligibility, IEP implementation, placement, school
+  discipline, state complaints, mediation, and due process for families in
+  Nevada, Arizona, California, New York, Utah, New Hampshire, Hawaii, and
+  North Carolina. Attorney advertisement.
+title: A practice of Lex Tecnica, Ltd.
+tagline: Free special education lawyers defending your child's rights
+hero_lead: >-
+  When the school keeps delaying, denying, or ignoring the IEP, your child
+  is the one who loses time. Our special education attorneys help you
+  understand what the school should be doing and what your legal options
+  are when it is not happening. You do not need to know the legal term for
+  the problem before you call.
+hero_cta:
+  href: /contact
+  label: Start with what your child is missing.
+skin: practice
+bands:
+  - kind: stats
+    anchor: results
+    overline: The record
+    heading: Results, with their qualifiers attached
+    description: For many qualifying due process matters.
+    items:
+      - value: 99%
+        label: of cases won**
+        note: Past results do not guarantee future outcomes.
+      - value: 7 weeks
+        label: average time to results**
+        note: Past results do not guarantee future outcomes.
+      - value: No upfront
+        label: attorney fees*
+        note: For many qualifying due process matters.
+  - kind: statement
+    anchor: mission
+    heading: Children are people, not numbers.
+    body:
+      - - text: >-
+            Your child has their own strengths, challenges, and way of
+            learning. The services in their IEP should reflect that.
+      - - text: >-
+            When the school is not listening, you should not have to become
+            a special education lawyer just to be heard. We review what has
+            happened, explain your options, and use due process when that
+            is the right step for your child.
+  - kind: cards
+    anchor: problems
+    overline: When the school is not following through
+    heading: Problems our team can review
+    description: >-
+      You have sent the emails and attended the meetings. If your child is
+      still missing support, these are some of the problems our team can
+      review.
+    items:
+      - title: The IEP promises services your child is not getting.
+        body:
+          - - text: >-
+                Speech, OT, accommodations, behavioral support, specialized
+                instruction. If it is written into the plan but not
+                happening, that gap matters.
+      - title: You asked for an evaluation. The answer is delay after delay.
+        body:
+          - - text: >-
+                The school keeps asking for more time, pushing the meeting
+                back, or leaving you unsure whether testing is even moving
+                forward.
+      - title: The school wants to change placement or cut support.
+        body:
+          - - text: >-
+                You are being asked to agree to a plan that does not match
+                what you are seeing your child need.
+      - title: Your child is being removed instead of supported.
+        body:
+          - - text: >-
+                Suspensions, shortened days, repeated calls home, or
+                behavior responses are becoming the way the school manages
+                the problem.
+      - title: You've already had the meeting. And the meeting after that.
+        body:
+          - - text: >-
+                Everyone talks. Notes are taken. Promises are made. Then
+                your child goes back to the same problem.
+      - title: >-
+            The school says the IEP is working, but your child is still
+            struggling.
+        body:
+          - - text: >-
+                Progress reports, evaluations, grades, or what you are
+                seeing at home may tell a different story. If the school's
+                description of your child's progress does not match the
+                record or your child's experience, that deserves a closer
+                look.
+  - kind: steps
+    anchor: process
+    overline: What happens when you contact a special education lawyer
+    heading: Start with what happened.
+    description: >-
+      Bring the IEP, emails, evaluations, or notices you have. We can tell
+      you what else we need.
+    items:
+      - title: Tell us where things broke down.
+        body:
+          - - text: >-
+                What did you ask the school to do? What was the response?
+                What is your child still missing?
+      - title: We review the record.
+        body:
+          - - text: >-
+                Our team looks at the IEP, timeline, and prior requests to
+                determine whether the matter fits the legal work we handle.
+      - title: Understand your next step.
+        body:
+          - - text: >-
+                If we can take the matter, we explain the scope, fees, and
+                next legal step before you decide how to proceed.
+  - kind: statement
+    anchor: attorney
+    overline: Sam Castor, Esq.
+    heading: This work was personal from the beginning.
+    body:
+      - - text: >-
+            For co-founder David Gardner, the need became clear while
+            advocating for his own child. Even as an attorney working with
+            the Department of Education, he found the IEP process
+            intimidating, complicated, and difficult to navigate.
+      - - text: >-
+            If it was this difficult for an attorney familiar with
+            education law, what was it like for a parent facing the
+            process alone?
+      - - text: That question helped inspire IEP Defenders.
+  - kind: cards
+    anchor: fees
+    overline: How fees are handled
+    heading: Do not rule out legal help because you assume you cannot afford it.
+    description: >-
+      How attorney's fees are handled depends on the type of case and
+      applicable law. In many qualifying special education due process
+      matters, families may not need to pay attorney's fees upfront. Other
+      matters, including some tuition-reimbursement cases, can involve
+      different fee arrangements.
+    items:
+      - title: Fee arrangements can vary by case type and state.
+      - title: We review how fees would be handled as part of the case evaluation.
+      - title: >-
+            We explain the scope of representation and fee arrangement
+            before you move forward.
+  - kind: testimonials
+    anchor: reviews
+    overline: What parents say
+    heading: What parents say about working with IEP Defenders.
+    description: Hear from families who have worked with the team.
+    items:
+      - author: Alysa Brown
+        when: Parent review
+        body: >-
+          Dylan is very professional and compassionate and really cared
+          about my child getting the services he deserved. He was honest,
+          reasonable and answered all my emails and phone calls at all
+          hours of the night. Very thankful to have him represent us and
+          highly recommend him. He didnt seem like an "attorney" he seemed
+          like a relatable parent who could negotiate strongly on my son's
+          behalf. He operates with extreme integrity and we are so grateful
+          to have him in our corner!
+      - author: Sierra Zamorano
+        when: Parent review
+        body: Dylan is the best and really went above and beyond to help us.
+      - author: Danyel Sheely
+        when: Parent review
+        body: >-
+          Justin and his team went above and beyond for my son. They know
+          the AZ Educational Laws and Rights, and stood by our family when
+          we needed it most. The circumstances surrounding our case were
+          uniquely complex, but Justin's support and dedication never
+          wavered. I am forever grateful for their time, compassion, and
+          investment in protecting my son's future.
+      - author: Wendy Aumick
+        when: Parent review
+        body: >-
+          From the fist call to the last document signed this was an
+          amazing group to work with. They did the hard work and made life
+          so much easier for me!! 1000% recommend
+  - kind: cta
+    heading: Tell us what is going on.
+    body: >-
+      If the IEP problem is still happening after you have asked the school
+      to fix it, tell us what is going on. You do not need the right legal
+      words. Tell us what your child is missing, what the school has said,
+      and what you have already tried. We will start there.
+    email: "{firm_email}"
+    action:
+      href: /contact
+      label: Start with what your child is missing.

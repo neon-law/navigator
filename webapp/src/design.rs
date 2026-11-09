@@ -44,9 +44,10 @@ use crate::components::{
     OpenTermLink, Pagination, Panel, PeopleListInputs, PersonChoice, PersonPicker, PricingCard,
     PricingSection, Progress, PublicShell, QuestionStage, RowActions, RunParagraph,
     SampleMattersBanner, Separator, SeparatorOrientation, SignatureSeal, SignatureSealData,
-    SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta, SortState, Stage, StageWidth, StatusCell,
-    StatusStrip, StepMeta, Stepper, StepperPanel, Tab, Tabs, TestimonialCards, TestimonialSection,
-    Toast, ToastTone, ToggleGroup, ToggleOption, THEME_STYLESHEET_HREF,
+    SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta, SortState, Stage, StageWidth, StatEntry,
+    StatGrid, StatusCell, StatusStrip, StepMeta, Stepper, StepperPanel, Tab, Tabs, TestimonialCard,
+    TestimonialCards, TestimonialSection, Toast, ToastTone, ToggleGroup, ToggleOption,
+    THEME_STYLESHEET_HREF,
 };
 // The vendor marks come from their own module rather than the theme root: they
 // are the one component whose colours are a third party's rather than the
@@ -777,6 +778,7 @@ fn DesignGalleryContent(chrome: PublicChrome) -> Element {
             ConfirmDeleteShowcase {}
             PricingShowcase {}
             TestimonialShowcase {}
+            BandShowcase {}
             IdentityShowcase {}
             DisclaimerShowcase {}
             ClientDriViewShowcase {}
@@ -1222,6 +1224,68 @@ fn TestimonialShowcase() -> Element {
                 cards: Vec::new(),
             }
             TestimonialCards { cards: Vec::new() }
+        }
+    }
+}
+
+/// The two newest shapes in the marketing [`crate::marketing_page::Band`]
+/// vocabulary, rendered through the production components the pages mount:
+/// a stat grid whose every figure carries its qualifier, and an attributed
+/// testimonial run.
+#[component]
+fn BandShowcase() -> Element {
+    rsx! {
+        section {
+            h2 { "Marketing bands" }
+            p {
+                "The marketing pages are ordered "
+                code { "Band" }
+                " data, and these are the two newest shapes in that vocabulary — the "
+                "same components a page renders, shown with sample content. A stat never "
+                "renders without its qualifier, and a review never renders without its "
+                "attribution."
+            }
+            h3 { "Stats" }
+            StatGrid {
+                items: vec![
+                    StatEntry {
+                        value: "99%".to_string(),
+                        label: "of cases won".to_string(),
+                        note: "for many qualifying due process matters".to_string(),
+                    },
+                    StatEntry {
+                        value: "7 weeks".to_string(),
+                        label: "average time to a filing".to_string(),
+                        note: "across matters opened in the last year".to_string(),
+                    },
+                    StatEntry {
+                        value: "No upfront".to_string(),
+                        label: "fees to start".to_string(),
+                        note: "we are paid from the recovery".to_string(),
+                    },
+                ],
+            }
+            h3 { "Testimonials" }
+            TestimonialSection {
+                heading: "What clients say".to_string(),
+                lead: "In their own words.".to_string(),
+                cards: vec![
+                    TestimonialCard {
+                        quote: "They opened my matter in a day.".to_string(),
+                        attribution: "Aries Ram".to_string(),
+                        detail: Some("LLC formation".to_string()),
+                        profile_image_url: None,
+                        product_label: None,
+                    },
+                    TestimonialCard {
+                        quote: "They read the file before we met.".to_string(),
+                        attribution: "Taurus Bull".to_string(),
+                        detail: Some("Due process filing".to_string()),
+                        profile_image_url: None,
+                        product_label: None,
+                    },
+                ],
+            }
         }
     }
 }

@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use crate::components::pricing::{DayRateBadge, PricingCard, PricingSection};
 use crate::components::{
     BillMarkGlyph, PlainCodeBlock, PlatformMark, PlatformMarkGlyph, PracticeMark,
-    PracticeMarkGlyph, PublicShell, SocialMeta,
+    PracticeMarkGlyph, PublicShell, SocialMeta, StatEntry, StatGrid, TestimonialCard,
+    TestimonialSection,
 };
 use crate::lead_capture::{LeadCaptureContext, LeadCaptureCopy, LeadCaptureForm};
 use crate::litigation_page::HeroWord;
@@ -179,6 +180,18 @@ pub struct AppCheck {
     pub detail: String,
 }
 
+/// One attributed client review in a [`Band::Testimonials`] run.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct TestimonialEntry {
+    /// Who said it, as published. Rendered as the card's attribution row.
+    pub author: String,
+    /// When the review is from — the engagement it came out of, or the date
+    /// it was left.
+    pub when: String,
+    /// The review itself.
+    pub body: String,
+}
+
 /// One horizontal band of a marketing page.
 ///
 /// A page is an ordered list of these. Adding a band shape here is the only
@@ -218,6 +231,26 @@ pub enum Band {
         /// Render with the shared "Navigator-UX" pricing-card treatment
         /// instead of the plain grid.
         pricing_style: bool,
+    },
+    /// A titled run of statistics: the value, what it measures, and the
+    /// qualifier that keeps the claim honest. Each entry renders as a
+    /// [`crate::components::StatGrid`] card, and a stat never renders
+    /// without its qualifier — see [`StatEntry::note`].
+    Stats {
+        anchor: String,
+        overline: String,
+        heading: String,
+        description: Option<String>,
+        items: Vec<StatEntry>,
+    },
+    /// A titled run of client testimonials, rendering the shared
+    /// [`crate::components::TestimonialSection`] component.
+    Testimonials {
+        anchor: String,
+        overline: String,
+        heading: String,
+        description: Option<String>,
+        items: Vec<TestimonialEntry>,
     },
     /// A user-controlled public presentation video.
     Video {
@@ -833,6 +866,54 @@ pub(crate) fn Bands(
                                                 a { class: "fm-card__link", href: "{href}", "{label}" }
                                             }
                                         }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                Band::Stats { anchor, overline, heading, description, items } => {
+                    if items.is_empty() {
+                        rsx! {}
+                    } else {
+                        rsx! {
+                            section { class: "fm-band fm-band--stats", id: "{anchor}",
+                                div { class: "fm-band__inner",
+                                    BandHeading {
+                                        overline: overline.clone(),
+                                        heading: heading.clone(),
+                                        description: description.clone(),
+                                    }
+                                    StatGrid { items: items.clone() }
+                                }
+                            }
+                        }
+                    }
+                },
+                Band::Testimonials { anchor, overline, heading, description, items } => {
+                    if items.is_empty() {
+                        rsx! {}
+                    } else {
+                        let cards: Vec<TestimonialCard> = items
+                            .iter()
+                            .map(|entry| TestimonialCard {
+                                quote: entry.body.clone(),
+                                attribution: entry.author.clone(),
+                                detail: Some(entry.when.clone()),
+                                profile_image_url: None,
+                                product_label: None,
+                            })
+                            .collect();
+                        rsx! {
+                            section { class: "fm-band fm-band--testimonials", id: "{anchor}",
+                                div { class: "fm-band__inner",
+                                    if !overline.is_empty() {
+                                        p { class: "fm-overline", "{overline}" }
+                                    }
+                                    TestimonialSection {
+                                        heading: heading.clone(),
+                                        lead: description.clone().unwrap_or_default(),
+                                        cards,
                                     }
                                 }
                             }
@@ -1610,6 +1691,7 @@ mod tests {
                         Run::strong("very little to run"),
                     ]],
                 },
+                stats_band(),
                 Band::Cards {
                     anchor: "what-we-do".to_string(),
                     overline: "The programs".to_string(),
@@ -1639,46 +1721,8 @@ mod tests {
                         image: None,
                     }],
                 },
-                Band::ProjectNetwork {
-                    anchor: "connected-project".to_string(),
-                    overline: "The map".to_string(),
-                    heading: "One Project".to_string(),
-                    description: Some("The work, in one view.".to_string()),
-                    center_eyebrow: "The Project center".to_string(),
-                    center_heading: "Navigator".to_string(),
-                    center_detail: "Web API MCP CLI".to_string(),
-                    left_lane_label: "Project resources to the left of Navigator".to_string(),
-                    right_lane_label: "Project resources to the right of Navigator".to_string(),
-                    left: vec![ProjectNetworkNode {
-                        label: "Internal Slack".to_string(),
-                        detail: "Firm conversation.".to_string(),
-                    }],
-                    right: vec![ProjectNetworkNode {
-                        label: "Client portal".to_string(),
-                        detail: "Client experience.".to_string(),
-                    }],
-                    mcp_tools: vec![
-                        "Court Listener".to_string(),
-                        "Descrybe".to_string(),
-                        "Exa".to_string(),
-                        "Midpage".to_string(),
-                    ],
-                    agentic_coding_tools: vec![
-                        "Antigravity".to_string(),
-                        "Claude Code".to_string(),
-                        "Codex".to_string(),
-                        "Cursor".to_string(),
-                    ],
-                    saas_tools: vec![
-                        "Descript".to_string(),
-                        "DocuSign".to_string(),
-                        "Google Workspace".to_string(),
-                        "Highlight".to_string(),
-                        "Linear".to_string(),
-                        "Mercury".to_string(),
-                        "Xero".to_string(),
-                    ],
-                },
+                project_network_band(),
+                testimonials_band(),
                 Band::Cta {
                     heading: "Tell us about the matter.".to_string(),
                     body: None,
@@ -1788,14 +1832,217 @@ mod tests {
     fn a_page_renders_every_band_in_order() {
         let out = page_html();
         let statement = out.find("shortage of hours").expect("statement band");
+        let stats = out.find("Outcomes you can check").expect("stats band");
         let cards = out.find("What we do").expect("cards band");
         let steps = out.find("How it works").expect("steps band");
         let network = out.find("One Project").expect("connected Project band");
+        let testimonials = out.find("What clients say").expect("testimonials band");
         let cta = out.find("Tell us about the matter.").expect("cta band");
         assert!(
-            statement < cards && cards < steps && steps < network && network < cta,
+            statement < stats
+                && stats < cards
+                && cards < steps
+                && steps < network
+                && network < testimonials
+                && testimonials < cta,
             "bands render in the order the content lists them: {out}"
         );
+    }
+
+    /// The Project network band, extracted to keep `sample_page` a band list.
+    fn project_network_band() -> Band {
+        Band::ProjectNetwork {
+            anchor: "connected-project".to_string(),
+            overline: "The map".to_string(),
+            heading: "One Project".to_string(),
+            description: Some("The work, in one view.".to_string()),
+            center_eyebrow: "The Project center".to_string(),
+            center_heading: "Navigator".to_string(),
+            center_detail: "Web API MCP CLI".to_string(),
+            left_lane_label: "Project resources to the left of Navigator".to_string(),
+            right_lane_label: "Project resources to the right of Navigator".to_string(),
+            left: vec![ProjectNetworkNode {
+                label: "Internal Slack".to_string(),
+                detail: "Firm conversation.".to_string(),
+            }],
+            right: vec![ProjectNetworkNode {
+                label: "Client portal".to_string(),
+                detail: "Client experience.".to_string(),
+            }],
+            mcp_tools: vec![
+                "Court Listener".to_string(),
+                "Descrybe".to_string(),
+                "Exa".to_string(),
+                "Midpage".to_string(),
+            ],
+            agentic_coding_tools: vec![
+                "Antigravity".to_string(),
+                "Claude Code".to_string(),
+                "Codex".to_string(),
+                "Cursor".to_string(),
+            ],
+            saas_tools: vec![
+                "Descript".to_string(),
+                "DocuSign".to_string(),
+                "Google Workspace".to_string(),
+                "Highlight".to_string(),
+                "Linear".to_string(),
+                "Mercury".to_string(),
+                "Xero".to_string(),
+            ],
+        }
+    }
+
+    fn stats_band() -> Band {
+        Band::Stats {
+            anchor: "results".to_string(),
+            overline: "The record".to_string(),
+            heading: "Outcomes you can check".to_string(),
+            description: Some("Every figure carries its qualifier.".to_string()),
+            items: vec![
+                StatEntry {
+                    value: "99%".to_string(),
+                    label: "of cases won".to_string(),
+                    note: "for many qualifying due process matters".to_string(),
+                },
+                StatEntry {
+                    value: "7 weeks".to_string(),
+                    label: "average time to a filing".to_string(),
+                    note: "across matters opened in the last year".to_string(),
+                },
+            ],
+        }
+    }
+
+    fn testimonials_band() -> Band {
+        Band::Testimonials {
+            anchor: "clients".to_string(),
+            overline: "Client words".to_string(),
+            heading: "What clients say".to_string(),
+            description: Some("In their own words.".to_string()),
+            items: vec![
+                TestimonialEntry {
+                    author: "Aries Ram".to_string(),
+                    when: "LLC formation".to_string(),
+                    body: "They opened my matter in a day.".to_string(),
+                },
+                TestimonialEntry {
+                    author: "Taurus Bull".to_string(),
+                    when: "Due process filing".to_string(),
+                    body: "They read the file before we met.".to_string(),
+                },
+            ],
+        }
+    }
+
+    /// The empty bands, for the no-section convention: a heading over
+    /// nothing must not render.
+    fn empty_stats_band() -> Band {
+        Band::Stats {
+            anchor: "results".to_string(),
+            overline: "The record".to_string(),
+            heading: "Outcomes you can check".to_string(),
+            description: None,
+            items: Vec::new(),
+        }
+    }
+
+    fn empty_testimonials_band() -> Band {
+        Band::Testimonials {
+            anchor: "clients".to_string(),
+            overline: "Client words".to_string(),
+            heading: "What clients say".to_string(),
+            description: None,
+            items: Vec::new(),
+        }
+    }
+
+    /// A stat never renders without its qualifier: the value, the label, and
+    /// the note are one claim, and the band carries all three.
+    #[test]
+    fn a_stats_band_renders_the_value_label_and_qualifier() {
+        fn app() -> Element {
+            rsx! { Bands { items: vec![stats_band()] } }
+        }
+        let out = render(app);
+        assert!(out.contains(r#"class="fm-band fm-band--stats""#), "{out}");
+        assert!(out.contains(r#"id="results""#), "the nav's anchor: {out}");
+        assert!(
+            out.contains(r#"<p class="nav-stat__value">99%</p>"#),
+            "the figure: {out}"
+        );
+        assert!(out.contains("of cases won"), "the label: {out}");
+        assert!(
+            out.contains("for many qualifying due process matters"),
+            "the qualifier renders with the stat: {out}"
+        );
+        assert_eq!(
+            out.matches(r#"class="nav-stat""#).count(),
+            2,
+            "one card per entry: {out}"
+        );
+        assert!(
+            out.contains(r#"<h2 class="fm-band__title">Outcomes you can check</h2>"#),
+            "the band heading: {out}"
+        );
+    }
+
+    /// The empty band is the `practices` convention: no section markup at
+    /// all, not a heading over an empty grid.
+    #[test]
+    fn an_empty_stats_band_renders_no_section() {
+        fn app() -> Element {
+            rsx! { Bands { items: vec![empty_stats_band()] } }
+        }
+        let out = render(app);
+        assert!(
+            !out.contains("fm-band--stats"),
+            "an empty stats band renders nothing: {out}"
+        );
+        assert!(!out.contains("nav-stat"), "{out}");
+    }
+
+    /// Each review renders attributed — author and timing beside the quote —
+    /// under the band's own heading.
+    #[test]
+    fn a_testimonials_band_renders_attributed_reviews_under_its_heading() {
+        fn app() -> Element {
+            rsx! { Bands { items: vec![testimonials_band()] } }
+        }
+        let out = render(app);
+        assert!(
+            out.contains(r#"class="fm-band fm-band--testimonials""#),
+            "{out}"
+        );
+        assert!(out.contains(r#"id="clients""#), "the nav's anchor: {out}");
+        assert!(
+            out.contains(r"<h2>What clients say</h2>"),
+            "the section's own heading: {out}"
+        );
+        assert!(out.contains(r#"class="fm-overline">Client words"#), "{out}");
+        assert!(out.contains("They opened my matter in a day."), "{out}");
+        assert!(out.contains("They read the file before we met."), "{out}");
+        assert!(
+            out.contains(r#"testimonial-card__name">Aries Ram"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"testimonial-card__detail">LLC formation"#),
+            "the timing renders as the attribution detail: {out}"
+        );
+    }
+
+    #[test]
+    fn an_empty_testimonials_band_renders_no_section() {
+        fn app() -> Element {
+            rsx! { Bands { items: vec![empty_testimonials_band()] } }
+        }
+        let out = render(app);
+        assert!(
+            !out.contains("fm-band--testimonials"),
+            "an empty testimonials band renders nothing: {out}"
+        );
+        assert!(!out.contains("testimonial-card"), "{out}");
     }
 
     #[test]

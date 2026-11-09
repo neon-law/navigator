@@ -20,6 +20,7 @@ use webapp::components::DayRateBadge;
 use webapp::lead_capture::LeadCaptureCopy;
 use webapp::marketing_page::{
     Band, Card, Download, HeroCta, PackageInstall, PageContent, ProjectNetworkNode, Run, Step,
+    TestimonialEntry,
 };
 
 /// The shared copy catalog: a sentence several pages or brands publish,
@@ -83,7 +84,8 @@ const VESTA_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/vesta/free-r
 const VESTA_SERVICES_YAML: &str = include_str!("../locales/en/vesta/services.yaml");
 const MISERICORDIA_HOME_YAML: &str = include_str!("../locales/en/misericordia/home.yaml");
 const MISERICORDIA_SERVICES_YAML: &str = include_str!("../locales/en/misericordia/services.yaml");
-const IEP_DEFENDERS_HOME_YAML: &str = include_str!("../locales/en/iep-defenders/home.yaml");
+const IEP_DEFENDERS_HOME_MARKETING_YAML: &str =
+    include_str!("../locales/en/iep-defenders/home-marketing.yaml");
 const IEP_DEFENDERS_SERVICES_YAML: &str = include_str!("../locales/en/iep-defenders/services.yaml");
 const ABHAYA_HOME_YAML: &str = include_str!("../locales/en/abhaya/home.yaml");
 const ABHAYA_SERVICES_YAML: &str = include_str!("../locales/en/abhaya/services.yaml");
@@ -189,7 +191,7 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Groundwork, "services") => Some(GROUNDWORK_SERVICES_YAML),
         (BrandKey::Daybridge, "home") => Some(DAYBRIDGE_HOME_YAML),
         (BrandKey::Daybridge, "services") => Some(DAYBRIDGE_SERVICES_YAML),
-        (BrandKey::IepDefenders, "home") => Some(IEP_DEFENDERS_HOME_YAML),
+        (BrandKey::IepDefenders, "home-marketing") => Some(IEP_DEFENDERS_HOME_MARKETING_YAML),
         (BrandKey::IepDefenders, "services") => Some(IEP_DEFENDERS_SERVICES_YAML),
         (BrandKey::Neon, "litigation") => Some(NEON_LITIGATION_YAML),
         (BrandKey::Neon, "fractional-gc") => Some(NEON_FRACTIONAL_GC_YAML),
@@ -234,7 +236,9 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
 /// catalogs.
 fn lex_tecnica_catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
     match (key, page) {
-        (BrandKey::LexTecnica, "home") => Some(include_str!("../locales/en/lex-tecnica/home.yaml")),
+        (BrandKey::LexTecnica, "home-marketing") => Some(include_str!(
+            "../locales/en/lex-tecnica/home-marketing.yaml"
+        )),
         (BrandKey::LexTecnica, "services") => {
             Some(include_str!("../locales/en/lex-tecnica/services.yaml"))
         }
@@ -713,6 +717,8 @@ fn band(copy: BandCopy, catalog: Option<&views::locales::services::ServicesCatal
             description,
             items: items.into_iter().map(step).collect(),
         },
+        copy @ BandCopy::Stats { .. } => stats_band(copy),
+        copy @ BandCopy::Testimonials { .. } => testimonials_band(copy),
         copy @ BandCopy::ProjectNetwork { .. } => project_network_band(copy),
         BandCopy::Downloads {
             anchor,
@@ -824,6 +830,64 @@ fn app_preview_band(copy: BandCopy) -> Band {
         app_store_label,
         play_store_label,
         availability,
+    }
+}
+
+/// Converts a `Stats` copy band into its component band. Destructuring
+/// the variant (rather than matching) keeps the `band` dispatch exhaustive:
+/// a new variant fails compile until it has an arm.
+fn stats_band(copy: BandCopy) -> Band {
+    let BandCopy::Stats {
+        anchor,
+        overline,
+        heading,
+        description,
+        items,
+    } = copy
+    else {
+        unreachable!("stats_band is only called with BandCopy::Stats")
+    };
+    Band::Stats {
+        anchor,
+        overline,
+        heading,
+        description,
+        items: items
+            .into_iter()
+            .map(|views::locales::StatEntryCopy { value, label, note }| {
+                webapp::components::StatEntry { value, label, note }
+            })
+            .collect(),
+    }
+}
+
+/// Converts a `Testimonials` copy band into its component band.
+fn testimonials_band(copy: BandCopy) -> Band {
+    let BandCopy::Testimonials {
+        anchor,
+        overline,
+        heading,
+        description,
+        items,
+    } = copy
+    else {
+        unreachable!("testimonials_band is only called with BandCopy::Testimonials")
+    };
+    Band::Testimonials {
+        anchor,
+        overline,
+        heading,
+        description,
+        items: items
+            .into_iter()
+            .map(
+                |views::locales::TestimonialEntryCopy { author, when, body }| TestimonialEntry {
+                    author,
+                    when,
+                    body,
+                },
+            )
+            .collect(),
     }
 }
 
@@ -1533,6 +1597,25 @@ pub fn delete_your_data_gateway(
     content
 }
 
+/// Lex Tecnica's home is a marketing-page band sequence mirroring the
+/// firm's published lextecnica.com structure — the `#SaveTheTrees` case
+/// banner, the three pillars, and the closing "Let's Go Change the World"
+/// statement — served through the same `HomeContent.marketing_page` seam
+/// as the other band-built homes.
+pub fn lex_tecnica_home(
+    branding: &views::brand::Branding,
+    _deployment_host: Option<&str>,
+) -> PageContent {
+    marketing_page(load_page(branding, "home-marketing"), None, branding)
+}
+
+/// IEP Defenders' home is a marketing-page band sequence mirroring the
+/// firm's published iepdefenders.com structure, served through the same
+/// `HomeContent.marketing_page` seam as the other band-built homes.
+pub fn iep_home(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
+    marketing_page(load_page(branding, "home-marketing"), None, branding)
+}
+
 /// Nautilus uses the same prices and billing periods as `DeleteYourData`.
 pub fn nautilus(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
     let mut content = marketing_page(load_page(branding, "nautilus"), None, branding);
@@ -1753,9 +1836,31 @@ mod tests {
     /// pipe, then the page: `{site_name} | Home`.
     #[test]
     fn every_brand_home_carries_the_account_invitation() {
-        for key in views::brand::BrandKey::ALL {
+        // Lex Tecnica and IEP Defenders have band-built marketing-page
+        // homes, not the legacy home schema this invariant polices.
+        for key in views::brand::BrandKey::ALL
+            .iter()
+            .filter(|key| !matches!(key, BrandKey::IepDefenders | BrandKey::LexTecnica))
+        {
             let content = home(key.resolve_branding(&views::brand::DEFAULT_BRANDING));
             assert!(content.signup.is_some(), "{}", key.as_str());
+        }
+    }
+
+    /// The Lex Tecnica home is band data, and band data never names a
+    /// colour: the gold-on-parchment palette resolves through the
+    /// `lex-tecnica` token stylesheet, so a hex literal in the catalog
+    /// would be a theme escape hatch the token system forbids.
+    #[test]
+    fn the_lex_tecnica_home_band_data_names_no_color() {
+        let yaml = include_str!("../locales/en/lex-tecnica/home-marketing.yaml");
+        let hex_run = |rest: &str| rest.chars().take_while(char::is_ascii_hexdigit).count() >= 6;
+        for (index, fragment) in yaml.split('#').enumerate().skip(1) {
+            assert!(
+                !hex_run(fragment),
+                "band data names a hex literal at `#{}` (fragment {index})",
+                &fragment[..fragment.len().min(8)]
+            );
         }
     }
 

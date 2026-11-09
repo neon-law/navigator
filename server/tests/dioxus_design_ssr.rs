@@ -366,11 +366,23 @@ async fn gallery_renders_pricing_testimonial_and_disclaimer_sections() {
     );
     // An off-site CTA opens a new tab with the OWASP rel pair.
     assert!(html.contains(r#"rel="noopener noreferrer""#), "{html}");
-    // Testimonials are an intentional empty state until a client requests
-    // publication; the design gallery must not invent a quote to illustrate it.
+    // Testimonials render through the marketing-band showcase: the two
+    // newest band shapes are demonstrated with clearly synthetic sample
+    // content, and a review never renders without its attribution.
     assert!(
-        !html.contains("testimonial-card"),
-        "empty testimonials: {html}"
+        html.contains("testimonial-card"),
+        "renders the testimonial cards: {html}"
+    );
+    // One attribution per line: the audit joins same-line string literals
+    // into one candidate, so two names on a line would scan as a single
+    // combined PERSON span that matches no allowlist entry.
+    assert!(
+        html.contains("Aries Ram"),
+        "the first demo quote keeps its attribution: {html}"
+    );
+    assert!(
+        html.contains("Taurus Bull"),
+        "the second demo quote keeps its attribution: {html}"
     );
     // The legal disclaimer partial, with its three load-bearing UPL points.
     assert!(

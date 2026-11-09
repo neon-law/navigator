@@ -5847,6 +5847,36 @@ a.nav-steps__step:focus-visible {
 .nav-fact-card__body > :first-child { margin-top: 0; }
 .nav-fact-card__body > :last-child { margin-bottom: 0; }
 
+.nav-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--nav-space-3);
+}
+.nav-stat {
+  padding: var(--nav-space-3) var(--nav-space-4);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+  text-align: center;
+}
+.nav-stat__value {
+  margin: 0;
+  color: var(--nav-color-primary);
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.nav-stat__label {
+  margin: var(--nav-space-1) 0 0;
+  color: var(--nav-color-text);
+}
+.nav-stat__note {
+  margin: var(--nav-space-1) 0 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.85rem;
+}
+
 .nav-status-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));

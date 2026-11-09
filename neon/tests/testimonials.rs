@@ -74,7 +74,11 @@ async fn assert_clean_empty(app: &axum::Router, host: &str, key: BrandKey) {
     let response = get(app, host, "/").await;
     assert_eq!(response.status(), 200, "{} home route", key.as_str());
     let home = body(response).await;
-    assert!(!home.contains("testimonial-card"), "{host}: {home}");
+    // The band-built brand homes render authored testimonial bands from
+    // their `home-marketing` catalogs, not store rows.
+    if !matches!(key, BrandKey::IepDefenders | BrandKey::LexTecnica) {
+        assert!(!home.contains("testimonial-card"), "{host}: {home}");
+    }
 }
 
 #[tokio::test]

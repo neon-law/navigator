@@ -186,8 +186,9 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             .chain(key.practice_pages().iter().map(|(path, _)| *path))
             .map(str::to_string)
             .collect(),
-        // Lex Tecnica publishes its home and services pages only.
-        BrandKey::LexTecnica => ["/", "/services"]
+        // Lex Tecnica publishes its home, services, and contact pages: the
+        // band-built home's CTA links `/contact` (`#572`).
+        BrandKey::LexTecnica => ["/", "/services", "/contact"]
             .iter()
             .map(|path| (*path).to_string())
             .collect(),
