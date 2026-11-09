@@ -667,4 +667,135 @@ mod control_contract {
             );
         }
     }
+
+    /// Characters a page may not draw as an icon: arrows, checks, crosses,
+    /// stars, warnings, and disclosure triangles. Each has an [`super::IconName`].
+    /// `×` is left out on purpose — it is the multiplication sign in
+    /// `1080×1920`, not a close control.
+    const GLYPH_ICONS: &[char] = &[
+        '←', '→', '↑', '↓', '↗', '↘', '↩', '↪', '✓', '✔', '✗', '✘', '✕', '✖', '★', '☆', '⚠', '▸',
+        '▾', '▶', '◀', '►',
+    ];
+
+    /// Page modules that still draw an icon as a text glyph — mostly a `← Back`
+    /// link that `BackBreadcrumb` already renders with `IconName::ArrowLeft`. A
+    /// file may only go down; delete its row when the page reaches zero.
+    const GLYPH_ICON_DEBT: &[(&str, usize)] = &[
+        ("admin_people_new.rs", 1),
+        ("blog_post.rs", 1),
+        ("brand_blog_posts.rs", 2),
+        ("brands_edit.rs", 2),
+        ("brands_new.rs", 2),
+        ("catalog_certificate_sent.rs", 1),
+        ("catalog_display.rs", 1),
+        ("catalog_index.rs", 1),
+        ("catalog_material.rs", 1),
+        ("catalog_slides.rs", 1),
+        ("catalog_step.rs", 4),
+        ("clause_editor.rs", 1),
+        ("clause_library.rs", 2),
+        ("clerk.rs", 2),
+        ("conversation.rs", 1),
+        ("entity_edit.rs", 2),
+        ("entity_new.rs", 1),
+        ("firm_edit.rs", 2),
+        ("firm_move.rs", 1),
+        ("firm_new.rs", 1),
+        ("firm_show.rs", 2),
+        ("graph_views.rs", 3),
+        ("home/company.rs", 5),
+        ("home/cyber_injury.rs", 4),
+        ("home/cyber_injury/assessment.rs", 2),
+        ("home/privacy.rs", 2),
+        ("home/sibling_practice.rs", 1),
+        ("home/summons.rs", 8),
+        ("lawyer_project_notations.rs", 2),
+        ("letter_detail.rs", 2),
+        ("notation_outline.rs", 1),
+        ("notations_about.rs", 2),
+        ("person_show.rs", 2),
+        ("playbooks.rs", 3),
+        ("project_document_detail.rs", 1),
+        ("project_edit.rs", 1),
+        ("project_new.rs", 1),
+        ("project_participation.rs", 1),
+        ("retainer_start.rs", 2),
+        ("review.rs", 1),
+        ("sections/page.rs", 1),
+        ("template_gallery.rs", 1),
+        ("walker_step.rs", 1),
+    ];
+
+    /// Lines of shipped code (above the file's test module) whose string
+    /// literal carries a glyph icon.
+    fn glyph_icon_lines(source: &str) -> Vec<usize> {
+        source
+            .lines()
+            .take_while(|line| !line.trim_start().starts_with("#[cfg(test)]"))
+            .enumerate()
+            .filter(|(_, line)| line.contains('"') && line.contains(GLYPH_ICONS))
+            .map(|(index, _)| index + 1)
+            .collect()
+    }
+
+    #[test]
+    fn glyph_scanner_skips_tests_and_dimensions() {
+        let source = "a { \"← Back\" }\nb { \"1080×1920\" }\n#[cfg(test)]\nc { \"→\" }";
+        assert_eq!(glyph_icon_lines(source), vec![1]);
+    }
+
+    /// Icons come from the library: a page draws `Icon { name: IconName::… }`
+    /// (with a `label` when the icon carries meaning), never a text glyph that
+    /// screen readers announce as "leftwards arrow".
+    #[test]
+    fn page_modules_draw_icons_through_the_library() {
+        for (path, source) in page_sources() {
+            let lines = glyph_icon_lines(&source);
+            let budget = GLYPH_ICON_DEBT
+                .iter()
+                .find(|(file, _)| path.ends_with(file))
+                .map_or(0, |(_, count)| *count);
+            assert!(
+                lines.len() <= budget,
+                "{}: {} glyph icon(s), budget {budget}. Draw it with `Icon {{ name: IconName::… }}` \
+                 (components/icon.rs), or `BackBreadcrumb` for a back link. First offender: line {}.",
+                path.display(),
+                lines.len(),
+                lines.first().copied().unwrap_or(0),
+            );
+            assert!(
+                lines.len() == budget,
+                "{}: glyph icons fell to {} under a budget of {budget} — lower the row in \
+                 GLYPH_ICON_DEBT (delete it at zero) so the ratchet holds.",
+                path.display(),
+                lines.len(),
+            );
+        }
+    }
+
+    #[test]
+    fn the_component_library_draws_no_glyph_icons() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/components");
+        for entry in std::fs::read_dir(&root).expect("read components") {
+            let path = entry.expect("components entry").path();
+            let lines = glyph_icon_lines(&code_of(&path));
+            assert!(
+                lines.is_empty(),
+                "{}: a library component draws a glyph icon at line {:?}; use `Icon`.",
+                path.display(),
+                lines,
+            );
+        }
+    }
+
+    #[test]
+    fn glyph_icon_debt_names_only_files_that_exist() {
+        let sources = page_sources();
+        for (file, _) in GLYPH_ICON_DEBT {
+            assert!(
+                sources.iter().any(|(path, _)| path.ends_with(file)),
+                "GLYPH_ICON_DEBT names missing page source {file}"
+            );
+        }
+    }
 }

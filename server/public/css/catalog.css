@@ -527,6 +527,63 @@
   flex: 0 0 auto;
 }
 
+/* The "All questions" outline: a compact table whose rows jump the walk. */
+.notation-demo__outline summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.notation-demo__outline .nav-table-wrap {
+  margin-top: 0.5rem;
+}
+
+.notation-demo__outline-table th,
+.notation-demo__outline-table td {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.9rem;
+}
+
+.notation-demo__outline-table th:first-child {
+  width: 1.5rem;
+}
+
+.notation-demo__outline-table th:nth-child(2) {
+  width: 2rem;
+}
+
+.notation-demo__outline-table th:last-child {
+  width: 2.5rem;
+}
+
+.notation-demo__marker,
+.notation-demo__status {
+  line-height: 1;
+}
+
+.notation-demo__marker {
+  color: var(--nav-color-primary);
+}
+
+.notation-demo__status {
+  color: var(--nav-color-text-muted);
+}
+
+.notation-demo__outline-table tr[data-answered="true"] .notation-demo__status {
+  color: var(--nav-color-success);
+}
+
+.notation-demo__outline-table tr[aria-current="step"] {
+  font-weight: 600;
+}
+
+.notation-demo .notation-demo__jump {
+  width: auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .notation-demo__document table,
 .notation-preview table {
   table-layout: fixed;

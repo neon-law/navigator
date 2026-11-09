@@ -488,6 +488,28 @@ textarea {
 
 /* Data table — the URL-contract reference surface. `.nav-table-wrap` scrolls
    horizontally on narrow viewports so the page body never does. */
+/* A button that reads as a link: an action that stays on the page (jump to a
+   question, expand a row) in a place where a filled `.nav-btn` would shout. */
+.nav-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--nav-color-link);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-link-button:hover {
+  text-decoration: underline;
+}
+
+.nav-link-button:focus-visible {
+  outline: 2px solid var(--nav-color-link);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .nav-table-wrap {
   overflow-x: auto;
 }
@@ -954,6 +976,12 @@ a.nav-pagination__link:hover {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+/* Every public page wears the header without a rule beneath it; the page's own
+   first band supplies the edge. */
+.public-shell > .site-header {
+  border-bottom: 0;
 }
 
 .public-shell__main {

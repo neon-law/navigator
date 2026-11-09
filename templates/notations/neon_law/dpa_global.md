@@ -1,7 +1,7 @@
 ---
 kind: agreement
 title: Global Data Processing Addendum
-jurisdiction: US
+jurisdiction: GLOBAL
 respondent_type: person_and_entity
 confidential: false
 clauses:

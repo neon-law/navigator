@@ -676,6 +676,9 @@ const ICONS: &[(IconName, &str)] = &[
     (IconName::Diagram3Fill, "Structure"),
     (IconName::CheckLg, "Done"),
     (IconName::XLg, "Dismiss"),
+    (IconName::CheckCircleFill, "Answered"),
+    (IconName::Circle, "Not answered"),
+    (IconName::CaretRightFill, "Current"),
 ];
 
 /// The `/design` gallery component.

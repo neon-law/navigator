@@ -160,6 +160,10 @@ records:
   - name: Germany
     code: GMBH
     jurisdiction_type: country
+  # A template written to work under any body of law declares `GLOBAL`.
+  - name: Global
+    code: GLOBAL
+    jurisdiction_type: global
   # Countries (ISO 3166-1, alpha-3 codes — alpha-2 would collide with the
   # state codes above, e.g. CA). United States and Germany are seeded above.
   - name: Afghanistan

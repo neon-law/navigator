@@ -56,6 +56,12 @@ pub enum IconName {
     LinkedIn,
     /// The `YouTube` mark.
     YouTube,
+    /// A filled circle with a check: something is complete or answered.
+    CheckCircleFill,
+    /// An empty circle: something is still open or unanswered.
+    Circle,
+    /// A right-pointing caret: the item the reader is on now.
+    CaretRightFill,
 }
 
 /// The catalog spelling for the inline scales icon.
@@ -97,6 +103,9 @@ impl IconName {
             Self::X => "x",
             Self::LinkedIn => "linkedin",
             Self::YouTube => "youtube",
+            Self::CheckCircleFill => "check-circle-fill",
+            Self::Circle => "circle",
+            Self::CaretRightFill => "caret-right-fill",
         }
     }
 
@@ -132,6 +141,9 @@ impl IconName {
             "x" => Some(Self::X),
             "linkedin" => Some(Self::LinkedIn),
             "youtube" => Some(Self::YouTube),
+            "check-circle-fill" => Some(Self::CheckCircleFill),
+            "circle" => Some(Self::Circle),
+            "caret-right-fill" => Some(Self::CaretRightFill),
             _ => None,
         }
     }
@@ -260,6 +272,25 @@ fn icon_body(name: IconName) -> Element {
             contact_mark(name)
         }
         IconName::X | IconName::LinkedIn | IconName::YouTube => social_mark(name),
+        IconName::CheckCircleFill | IconName::Circle | IconName::CaretRightFill => {
+            status_mark(name)
+        }
+    }
+}
+
+/// The status glyphs: answered, open, and the current item.
+fn status_mark(name: IconName) -> Element {
+    match name {
+        IconName::CheckCircleFill => rsx! {
+            path { d: "M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0m-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z" }
+        },
+        IconName::Circle => rsx! {
+            path { d: "M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16" }
+        },
+        IconName::CaretRightFill => rsx! {
+            path { d: "m12.14 8.753-5.482 4.796c-.646.566-1.658.106-1.658-.753V3.204a1 1 0 0 1 1.659-.753l5.48 4.796a1 1 0 0 1 0 1.506z" }
+        },
+        _ => rsx! {},
     }
 }
 
@@ -342,6 +373,9 @@ mod tests {
         IconName::X,
         IconName::LinkedIn,
         IconName::YouTube,
+        IconName::CheckCircleFill,
+        IconName::Circle,
+        IconName::CaretRightFill,
     ];
 
     #[test]
