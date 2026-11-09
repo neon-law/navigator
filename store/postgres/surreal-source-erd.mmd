@@ -1031,6 +1031,41 @@ erDiagram
         uuid project_id
         string updated_at
     }
+    plan_intake {
+        string id
+        uuid accepted_by
+        datetime assigned_at
+        string benefit_code
+        boolean conflict_blocking
+        boolean conflict_checked
+        string conflict_summary
+        uuid conversation_id
+        datetime decided_at
+        string decline_reason
+        string fee_covered_benefit
+        string fee_effective_on
+        number fee_plan_fee_cents
+        number fee_supplemental_flat_cents
+        number fee_supplemental_hourly_cents
+        uuid firm_id
+        datetime inserted_at
+        string legal_plan_id
+        string legal_plan_name
+        string member_email
+        uuid member_entity_id
+        string member_name
+        uuid member_person_id
+        string plan_matter_type
+        string plan_member_id
+        string plan_number
+        boolean plan_portal_only
+        string plan_state
+        uuid project_id
+        string provider
+        uuid source_message_id
+        string status
+        datetime updated_at
+    }
     playbook {
         string id
         boolean active
@@ -1559,6 +1594,13 @@ erDiagram
     person }o--|| person_phone : person_id
     person }o--|| person_project_role : person_id
     project }o--|| person_project_role : project_id
+    person }o--|| plan_intake : accepted_by
+    inbox_conversation }o--|| plan_intake : conversation_id
+    firm }o--|| plan_intake : firm_id
+    entity }o--|| plan_intake : member_entity_id
+    person }o--|| plan_intake : member_person_id
+    project }o--|| plan_intake : project_id
+    message }o--|| plan_intake : source_message_id
     entity }o--|| playbook : entity_id
     person }o--|| project : client_dri_person_id
     entity }o--|| project : entity_id
