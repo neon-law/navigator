@@ -267,6 +267,7 @@ values = [
   "enabling", "solving", "reversible", "direct", "authenticated", "backfill",
   "complete", "this", "billing", "scopes", "undesignated", "split", "panda",
   "gorp", "noto", "barlow", "daybridge",
+  "playbook", "layoff",
 ]
 
 [[names]]
