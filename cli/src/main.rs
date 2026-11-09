@@ -1246,6 +1246,14 @@ enum ProjectsCmd {
         #[command(subcommand)]
         action: DocumentsCmd,
     },
+    /// Watch open Projects, fetch remote bookmarks, and download document revisions.
+    Watch {
+        /// Directory holding one checkout per Project.
+        #[arg(long)]
+        dir: PathBuf,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Reconcile the Git-ignored `documents/` and the committed `blobs/` with
     /// the live Project in both directions: download live revisions, upload
     /// local edits as new revisions, and ask before overwriting either side.
@@ -6423,6 +6431,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             })
             .await
         }
+        ProjectsCmd::Watch { dir, host } => projects::watch::run(&dir, host.host.as_deref()).await,
         ProjectsCmd::Sync {
             dry_run,
             yes,

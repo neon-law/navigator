@@ -54,3 +54,4 @@ pub mod source_import;
 pub mod status;
 pub mod surfaces;
 pub mod surfaces_reconcile;
+pub mod watch;
