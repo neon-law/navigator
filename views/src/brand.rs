@@ -1271,9 +1271,10 @@ impl BrandKey {
             | Self::IepDefenders => {
                 matches!(path, "/" | "/services" | "/contact" | "/testimonials")
             }
-            // Lex Tecnica publishes its home and services pages; the contact
-            // page it links to is on the firm's own site.
-            Self::LexTecnica => matches!(path, "/" | "/services"),
+            // Lex Tecnica publishes its home and services pages, and the
+            // contact page its band-built home CTA links to (`#572`): the
+            // brand's contact copy is served on its own host.
+            Self::LexTecnica => matches!(path, "/" | "/services" | "/contact"),
         }
     }
 

@@ -11175,6 +11175,29 @@ async fn assert_brand_home_lead_capture(
     db: &store::surreal::SurrealDb,
     brand: views::brand::BrandKey,
 ) {
+    // The band-built Lex Tecnica home closes on a Contact Us link to
+    // `/contact` — its published CTA shape — rather than an inline lead
+    // form. Its lead-capture path runs through the contact page on the
+    // brand's own host, which serves the one lead form.
+    if brand == views::brand::BrandKey::LexTecnica {
+        let host = brand.canonical_host();
+        let response = get_on_host(app, "/", host).await;
+        assert_eq!(response.status(), StatusCode::OK, "{host} home");
+        let body = body_string(response).await;
+        assert!(
+            body.contains(r#"href="/contact""#),
+            "{host}: home links its contact page"
+        );
+        let contact = get_on_host(app, "/contact", host).await;
+        assert_eq!(contact.status(), StatusCode::OK, "{host} contact");
+        let contact_body = body_string(contact).await;
+        assert_eq!(
+            contact_body.matches(r#"action="/leads""#).count(),
+            1,
+            "exactly one lead form on {host} contact"
+        );
+        return;
+    }
     let (host, cookie, body) = brand_home_lead_form(app, brand).await;
     let encoded = brand_home_lead_payload(&body, brand);
     let response = app
@@ -11535,12 +11558,12 @@ async fn design_page_renders_the_component_gallery() {
         body.contains("page=2"),
         "renders a `?page=` pagination anchor"
     );
-    // The marketing card cluster renders too — pricing cards and the legal
-    // disclaimer. Testimonials remain intentionally empty until publication.
+    // The marketing card cluster renders too — pricing cards, the
+    // attributed sample testimonials, and the legal disclaimer.
     assert!(body.contains("pricing-card"), "renders pricing cards");
     assert!(
-        !body.contains("testimonial-card"),
-        "does not invent testimonials"
+        body.contains("testimonial-card"),
+        "renders the attributed sample testimonials"
     );
     assert!(
         body.contains("template-disclaimer"),
