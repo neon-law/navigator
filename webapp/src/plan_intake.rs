@@ -22,7 +22,7 @@ pub const PLAN_INTAKE_PATH: &str = "/app/plan-intake";
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanRowView {
     pub staged_id: String,
-    pub member_name: String,
+    pub member_name: Option<String>,
     #[serde(default)]
     pub member_email: Option<String>,
     pub provider: String,
@@ -209,10 +209,11 @@ fn plan_row(row: &PlanRowView, csrf: &str) -> Element {
     let matter_type_choices = matter_type_choices();
     let selected_matter_type = row.matter_type.clone();
     let state_value = row.state.clone().unwrap_or_default();
+    let member_name = row.member_name.as_deref().unwrap_or("Unnamed member");
     rsx! {
         li { class: "plan-intake__row", id: "plan-row-{row.staged_id}",
             p { class: "plan-intake__member",
-                strong { "{row.member_name}" }
+                strong { "{member_name}" }
                 if let Some(email) = row.member_email.as_ref() {
                     span { class: "plan-intake__email", " · {email}" }
                 }
@@ -371,7 +372,7 @@ mod tests {
     fn row() -> PlanRowView {
         PlanRowView {
             staged_id: "019a0000-0000-7000-8000-000000000001".into(),
-            member_name: "Dana Example".into(),
+            member_name: Some("Dana Example".into()),
             member_email: Some("dana@example.com".into()),
             provider: "arag".into(),
             member_number: Some("AR-004512".into()),

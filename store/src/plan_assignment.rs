@@ -99,6 +99,8 @@ pub struct Assignment {
     pub member_name: Option<String>,
     /// The provider's member or membership identifier.
     pub member_number: Option<String>,
+    /// The member's plan or certificate number, when the notice prints one.
+    pub plan_number: Option<String>,
     /// The kind of legal matter, in the notice's words.
     pub matter_type: Option<String>,
     /// The plan or coverage effective date, when the notice prints one.
@@ -139,9 +141,11 @@ pub fn parse(
         case_number,
         member_name: None,
         member_number: None,
+        plan_number: None,
         matter_type: None,
         effective_date: None,
         contact_email: None,
+        state: None,
     };
     match provider {
         PlanProvider::Arag => {
@@ -169,6 +173,7 @@ pub fn parse(
         PlanProvider::LegalShield => {
             assignment.member_name = field(text, "member");
             assignment.member_number = field(text, "membership id");
+            assignment.plan_number = field(text, "certificate number");
             assignment.matter_type = field(text, "legal matter");
             assignment.effective_date =
                 field(text, "coverage start").and_then(|value| date(&value));
@@ -189,6 +194,8 @@ fn flatten(text: &str) -> String {
 fn non_empty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
+}
+
 /// The first case number `provider` prints in `haystack`: a token holding a
 /// digit right after one of its markers.
 fn case_number(provider: PlanProvider, haystack: &str) -> Option<String> {
@@ -314,6 +321,7 @@ mod tests {
         assert_eq!(notice.member_name.as_deref(), Some("Dana Example"));
         assert_eq!(notice.matter_type.as_deref(), Some("Will Preparation"));
         assert_eq!(notice.member_number, None);
+        assert_eq!(notice.plan_number, None);
     }
 
     #[test]
@@ -389,6 +397,7 @@ mod tests {
         assert_eq!(notice.case_number, "CERT-330291");
         assert_eq!(notice.member_name.as_deref(), Some("Harper Sample"));
         assert_eq!(notice.member_number.as_deref(), Some("LS-902441"));
+        assert_eq!(notice.plan_number.as_deref(), Some("CERT-330291"));
         assert_eq!(
             notice.matter_type.as_deref(),
             Some("Consumer Contract Review")

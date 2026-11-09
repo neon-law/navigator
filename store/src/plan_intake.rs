@@ -55,7 +55,8 @@ pub struct StagedAssignment {
     pub source_message_id: Uuid,
     /// The provider spelling from [`crate::plan_assignment::PlanProvider::as_str`].
     pub provider: String,
-    pub member_name: String,
+    /// The member's name, when the notice prints one.
+    pub member_name: Option<String>,
     pub member_email: Option<String>,
     /// The member's anchored client person, when the notice printed a
     /// contact email. `None` leaves the conflict check unrun and refuses
@@ -224,7 +225,7 @@ struct StagedRow {
     conversation_id: RecordId,
     source_message_id: RecordId,
     provider: String,
-    member_name: String,
+    member_name: Option<String>,
     member_email: Option<String>,
     member_person_id: Option<RecordId>,
     member_entity_id: Option<RecordId>,
@@ -504,13 +505,18 @@ async fn staging_context(
 /// The member anchor: a `Role::Client` person for the notice's contact
 /// email, and a fresh `Human` entity beside it — the same shape the
 /// self-serve retainer walk creates for a solo natural person. A notice
-/// without a contact email stages unanchored; the review screen resolves
-/// the member before acceptance.
+/// without a contact email or a printed name stages unanchored; the
+/// review screen resolves the member before acceptance.
 async fn anchor_member(
     surreal: &SurrealDb,
     assignment: &crate::plan_assignment::Assignment,
 ) -> Result<Option<(Uuid, Uuid)>, PlanIntakeError> {
     let Some(email) = &assignment.contact_email else {
+        return Ok(None);
+    };
+    // Anchoring a Navigator person needs a name; a notice that printed
+    // only an email stages unanchored for the attorney to resolve.
+    let Some(member_name) = &assignment.member_name else {
         return Ok(None);
     };
     let person = match crate::persons::find_by_email_ci(surreal, email).await? {
@@ -519,7 +525,7 @@ async fn anchor_member(
             crate::persons::create(
                 surreal,
                 &crate::persons::NewPerson {
-                    name: assignment.member_name.clone(),
+                    name: member_name.clone(),
                     email: email.clone(),
                     role: crate::persons::Role::Client,
                     ..crate::persons::NewPerson::default()
@@ -528,7 +534,7 @@ async fn anchor_member(
             .await?
         }
     };
-    let entity = create_human_entity(surreal, &assignment.member_name).await?;
+    let entity = create_human_entity(surreal, member_name).await?;
     Ok(Some((person.id, entity)))
 }
 
@@ -547,8 +553,9 @@ async fn conflict_report(
         }
         None => Ok((
             vec![
-                "The notice has no member contact email, so no member person \
-                 anchors the matter and the conflict check has not run."
+                "The notice printed neither a member contact email nor a member \
+                 name, so no member person anchors the matter and the conflict \
+                 check has not run."
                     .to_string(),
             ],
             false,
@@ -580,7 +587,8 @@ pub async fn stage(
     }
 
     let assignment = &input.assignment;
-    let matter_type = matter_type_from_notice(&assignment.matter_type);
+    let matter_type =
+        matter_type_from_notice(assignment.matter_type.as_deref().unwrap_or(""));
     let context = staging_context(surreal, pg, input, matter_type).await?;
     let now = Utc::now();
     let id = Uuid::now_v7();
@@ -624,7 +632,7 @@ pub async fn stage(
             "member_entity_id",
             context.member_entity_id.map(|id| record_id("entity", id)),
         ))
-        .bind(("plan_member_id", Some(assignment.member_number.clone())))
+        .bind(("plan_member_id", assignment.member_number.clone()))
         // The notice names no benefit code, so `benefit_code` stages
         // empty; the verbatim plan/certificate number is the project's
         // future `plan_case_number`.
@@ -720,12 +728,18 @@ async fn open_on_acceptance(
     let name = input
         .name
         .clone()
-        .unwrap_or_else(|| default_matter_name(&plan.name, &staged.member_name, matter_type));
+        .unwrap_or_else(|| {
+            default_matter_name(
+                &plan.name,
+                staged.member_name.as_deref().unwrap_or("the member"),
+                matter_type,
+            )
+        });
     let description = format!(
         "Accepted from a {} assignment notice for member {} ({}).",
         staged.provider,
         staged.plan_member_id.as_deref().unwrap_or("unknown"),
-        staged.member_name
+        staged.member_name.as_deref().unwrap_or("the member")
     );
     let existing = crate::projects::find_by_code(surreal, &input.code).await?;
     let project = match existing {
@@ -1214,14 +1228,14 @@ mod tests {
         PlanIntakeError, StageInput, Status,
     };
     use crate::legal_plans::{LegalPlan, NewLegalPlan, NewPlanFeeSchedule, PlanMatterType};
-    use crate::plan_assignment::{fixtures, parse_text};
+    use crate::plan_assignment::{fixtures, parse, Assignment, PlanProvider};
     use crate::postgres::PostgresDb;
     use crate::test_support::{mem_surreal, seed_firm_with_brand};
     use chrono::{Duration, NaiveDate, TimeZone, Utc};
     use uuid::Uuid;
 
-    /// The ARAG fixture's staged input: a parsed notice with its landing
-    /// coordinates.
+    /// An ARAG-shaped staged input with the notice's fields spelled out —
+    /// staging tests exercise staging, not parsing.
     fn arag_input(firm_id: Uuid, landing_at: chrono::DateTime<Utc>) -> StageInput {
         StageInput {
             firm_id,
@@ -1229,12 +1243,22 @@ mod tests {
             source_message_id: Uuid::now_v7(),
             landing_at,
             provider: "arag".to_string(),
-            assignment: parse_text(&fixtures::arag_assignment_text())
-                .expect("the ARAG fixture parses"),
+            assignment: Assignment {
+                provider: PlanProvider::Arag,
+                case_number: "4900000-001".to_string(),
+                member_name: Some("Dana Example".to_string()),
+                member_number: Some("AR-004512".to_string()),
+                plan_number: Some("PLAN-778812".to_string()),
+                matter_type: Some("Will Preparation".to_string()),
+                effective_date: None,
+                contact_email: Some("dana@example.com".to_string()),
+                state: Some("nv".to_string()),
+            },
         }
     }
 
-    /// The LegalShield fixture's staged input.
+    /// A LegalShield-shaped staged input, distinct from the ARAG one so
+    /// queue tests can order two rows.
     fn legal_shield_input(firm_id: Uuid, landing_at: chrono::DateTime<Utc>) -> StageInput {
         StageInput {
             firm_id,
@@ -1242,8 +1266,17 @@ mod tests {
             source_message_id: Uuid::now_v7(),
             landing_at,
             provider: "legal_shield".to_string(),
-            assignment: parse_text(&fixtures::legal_shield_assignment_text())
-                .expect("the LegalShield fixture parses"),
+            assignment: Assignment {
+                provider: PlanProvider::LegalShield,
+                case_number: "CERT-330291".to_string(),
+                member_name: Some("Harper Sample".to_string()),
+                member_number: Some("LS-902441".to_string()),
+                plan_number: Some("CERT-330291".to_string()),
+                matter_type: Some("Consumer Contract Review".to_string()),
+                effective_date: None,
+                contact_email: Some("riley@example.com".to_string()),
+                state: Some("ny".to_string()),
+            },
         }
     }
 
@@ -1523,6 +1556,41 @@ mod tests {
             .conflict_summary
             .iter()
             .any(|line| line.contains("conflict check has not run")));
+    }
+
+    #[tokio::test]
+    async fn the_parsed_notice_stages_with_its_fields_intact() {
+        // Parser to workflow: the real LegalShield fixture through the
+        // parser stages with its fields intact.
+        let surreal = mem_surreal().await;
+        let assignment = parse(
+            PlanProvider::LegalShield,
+            "Member Assignment",
+            &fixtures::legal_shield_assignment_text(),
+        )
+        .expect("the LegalShield fixture parses");
+        let staged = stage(
+            &surreal,
+            None,
+            &StageInput {
+                firm_id: Uuid::now_v7(),
+                conversation_id: Uuid::now_v7(),
+                source_message_id: Uuid::now_v7(),
+                landing_at: Utc::now(),
+                provider: PlanProvider::LegalShield.as_str().to_string(),
+                assignment,
+            },
+        )
+        .await
+        .expect("staging succeeds");
+        assert_eq!(staged.member_name.as_deref(), Some("Harper Sample"));
+        assert_eq!(staged.member_email.as_deref(), Some("riley@example.com"));
+        assert_eq!(staged.plan_member_id.as_deref(), Some("LS-902441"));
+        assert_eq!(staged.plan_number.as_deref(), Some("CERT-330291"));
+        assert_eq!(staged.plan_state.as_deref(), Some("ny"));
+        assert_eq!(staged.provider, "legal_shield");
+        assert_eq!(staged.plan_matter_type, "document_review");
+        assert!(staged.member_person_id.is_some());
     }
 
     #[tokio::test]

@@ -2987,7 +2987,7 @@ DEFINE FIELD OVERWRITE firm_id ON plan_intake TYPE record<firm>;
 DEFINE FIELD OVERWRITE conversation_id ON plan_intake TYPE record<inbox_conversation>;
 DEFINE FIELD OVERWRITE source_message_id ON plan_intake TYPE record<message>;
 DEFINE FIELD OVERWRITE provider ON plan_intake TYPE string;
-DEFINE FIELD OVERWRITE member_name ON plan_intake TYPE string;
+DEFINE FIELD OVERWRITE member_name ON plan_intake TYPE option<string>;
 DEFINE FIELD OVERWRITE member_email ON plan_intake TYPE option<string>;
 DEFINE FIELD OVERWRITE member_person_id ON plan_intake TYPE option<record<person>>;
 DEFINE FIELD OVERWRITE member_entity_id ON plan_intake TYPE option<record<entity>>;

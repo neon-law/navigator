@@ -171,7 +171,7 @@ async fn send_member_intro(
     let matter_type = store::legal_plans::PlanMatterType::parse(&staged.plan_matter_type)
         .map_err(|_| "unknown matter type".to_string())?;
     let body = store::plan_intake::member_intro_body(
-        &staged.member_name,
+        staged.member_name.as_deref().unwrap_or("there"),
         &firm_name,
         store::plan_intake::matter_label(matter_type),
         questions,
@@ -234,7 +234,7 @@ async fn send_plan_reply(
         "Accepted: the {} matter for {} (member {}, plan {}) is open with our firm. \
          We will follow up directly with the member.\n",
         store::plan_intake::matter_label(matter_type),
-        staged.member_name,
+        staged.member_name.as_deref().unwrap_or("the member"),
         staged.plan_member_id.as_deref().unwrap_or("number pending"),
         staged.plan_number.as_deref().unwrap_or("plan pending"),
     );
