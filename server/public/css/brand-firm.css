@@ -63,7 +63,6 @@ body:has(.public-shell) {
 
 .public-shell > .site-header {
   background: var(--nav-color-surface);
-  border-bottom: 0;
 }
 
 /* The shell owns the wash; hero-local glows would double it and expose the

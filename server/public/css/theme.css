@@ -956,6 +956,12 @@ a.nav-pagination__link:hover {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
+/* Every public page wears the header without a rule beneath it; the page's own
+   first band supplies the edge. */
+.public-shell > .site-header {
+  border-bottom: 0;
+}
+
 .public-shell__main {
   width: min(100%, 72rem);
   box-sizing: border-box;
