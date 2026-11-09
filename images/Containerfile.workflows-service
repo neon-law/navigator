@@ -52,6 +52,7 @@ COPY skills            skills
 # dir, so that tree must be staged too (the 26.11.9 KIND fixture failed on it).
 COPY assumptions       assumptions
 COPY store             store
+COPY assumptions/schema.yaml assumptions/schema.yaml
 COPY repos             repos
 COPY import            import
 COPY cli               cli
