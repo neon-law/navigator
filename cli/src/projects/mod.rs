@@ -29,6 +29,7 @@ pub mod forge_forgejo;
 pub mod forge_github;
 pub mod gate;
 pub mod ics;
+pub mod jj;
 pub mod lifecycle;
 pub mod lifecycle_read;
 pub mod local_bytes;

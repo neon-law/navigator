@@ -1650,6 +1650,18 @@ enum ProjectRepositoryCmd {
         #[arg(long, default_value = ".")]
         dir: PathBuf,
     },
+    /// Put Jujutsu (`jj`) over this Git checkout: install it with Homebrew
+    /// when missing (macOS), colocate a `.jj` store beside `.git`, and copy
+    /// the Git author and signing settings into jj's repo config.
+    ///
+    /// The forge still sees plain Git. `jj git push --change @` names its
+    /// bookmark `push/<change-id>`, the namespace `push` already uses.
+    /// Idempotent: a re-run rewrites the same settings.
+    Jj {
+        /// Project repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+    },
     /// Move a checkout's pointers to `blobs/` and its document bytes into
     /// their matter folders under `documents/`.
     ///
@@ -6583,6 +6595,13 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     }
                 }
             }
+            ProjectRepositoryCmd::Jj { dir } => match projects::jj::run(&dir) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("navigator: {error:#}");
+                    ExitCode::from(2)
+                }
+            },
             ProjectRepositoryCmd::MigrateDocuments { dir, dry_run } => {
                 match document_layout::migrate_checkout(&dir, dry_run) {
                     Ok(()) => ExitCode::SUCCESS,
