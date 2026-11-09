@@ -373,9 +373,16 @@ async fn gallery_renders_pricing_testimonial_and_disclaimer_sections() {
         html.contains("testimonial-card"),
         "renders the testimonial cards: {html}"
     );
+    // One attribution per line: the audit joins same-line string literals
+    // into one candidate, so two names on a line would scan as a single
+    // combined PERSON span that matches no allowlist entry.
     assert!(
-        html.contains("Aries Ram") && html.contains("Taurus Bull"),
-        "every demo quote keeps its attribution: {html}"
+        html.contains("Aries Ram"),
+        "the first demo quote keeps its attribution: {html}"
+    );
+    assert!(
+        html.contains("Taurus Bull"),
+        "the second demo quote keeps its attribution: {html}"
     );
     // The legal disclaimer partial, with its three load-bearing UPL points.
     assert!(
