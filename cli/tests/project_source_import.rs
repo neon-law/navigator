@@ -362,9 +362,17 @@ fn prepare_scaffold(credentials: &Path, host: &str, dir: &Path) {
         ],
     );
     assert!(rebuilt.success, "{}", rebuilt.stderr);
+    assert!(
+        rebuilt
+            .stderr
+            .contains("deployment host is missing from the Brand registry"),
+        "{}",
+        rebuilt.stderr
+    );
     let manifest = fs::read_to_string(dir.join("navigator.yaml")).unwrap();
     assert!(manifest.contains("firm: 00000000-0000-0000-0000-000000000001"));
     assert!(manifest.contains("brand: sample"));
+    assert!(manifest.contains("host: 127.0.0.1"), "{manifest}");
     assert!(
         manifest.contains("client_dri: client@example.com"),
         "{manifest}"
@@ -627,6 +635,48 @@ async fn a_fresh_scaffold_cancels_without_attestation_and_refuses_a_taken_code()
         taken.stderr
     );
     assert!(!dir.exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resume_refuses_a_visible_project_without_an_owning_firm() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let login = TempDir::new().unwrap();
+    let credentials = credentials(&login, &host, Some("lawyer@example.com"));
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": Uuid::now_v7(), "code": CODE, "firm_id": null, "brand": "sample" }
+        ])))
+        .mount(&server)
+        .await;
+
+    let parent = TempDir::new().unwrap();
+    let result = scaffold(
+        &credentials,
+        &host,
+        &parent.path().join(CODE),
+        &[
+            "--resume",
+            CODE,
+            "--no-repository",
+            "--client-email",
+            "client@example.com",
+        ],
+    );
+    assert_eq!(result.code, Some(2));
+    assert!(
+        result.stderr.contains("opened Project has no owning Firm"),
+        "{}",
+        result.stderr
+    );
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.method.as_str() == "GET"));
 }
 
 #[test]
