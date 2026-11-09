@@ -3,6 +3,7 @@
 //! Downstream consumers (the `cli` binary) build a
 //! [`RuleEngine`] from a set of rules and run it over a directory.
 
+pub mod assumption_keys;
 pub mod c001;
 pub mod c002;
 pub mod c003;
@@ -115,6 +116,9 @@ pub mod source_archive;
 pub mod tables;
 pub mod workflow_steps;
 
+pub use assumption_keys::{
+    catalog_keys as assumption_catalog_keys, SCHEMA_YAML as ASSUMPTIONS_SCHEMA_YAML,
+};
 pub use c001::C001ContentTitle;
 pub use c002::C002ContentDescription;
 pub use c003::C003BlogFilename;
@@ -211,7 +215,8 @@ pub use m059::M059DescriptiveLinkText;
 pub use m060::M060TableColumnStyle;
 pub use m061::M061WebPortableLink;
 pub use project_skill::{
-    catalog_violations as project_skill_catalog_violations, ProjectSkill, ProjectSkillError,
+    assumption_references, catalog_violations as project_skill_catalog_violations,
+    render_assumptions, ProjectSkill, ProjectSkillError, UNDEFINED_ASSUMPTION_CODE,
 };
 pub use questionnaire::{deserialize_frontmatter, normalize_value, signer_boxes, SIGNER_BOXES_KEY};
 pub use questionnaire_hover::{

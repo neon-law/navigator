@@ -1939,6 +1939,20 @@ pub fn is_valid_calendar_id(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@'))
 }
 
+/// Whether a value has the shape of a recorded Kit version:
+/// `{jurisdiction}/{practice_area}/{version}` — three non-empty path segments
+/// with no whitespace. The value is displayed as recorded and matched against
+/// the Project Skill catalog's `version` field, so anything beyond the
+/// segment shape is accepted verbatim rather than second-guessed here.
+#[must_use]
+pub fn is_valid_kit_version(value: &str) -> bool {
+    let segments: Vec<&str> = value.split('/').collect();
+    segments.len() == 3
+        && segments
+            .iter()
+            .all(|segment| !segment.is_empty() && !segment.chars().any(char::is_whitespace))
+}
+
 /// The notation id of the person's **sole open matter**, for auto-routing an
 /// inbound message to a matter without manual triage. Returns `Some` only
 /// when the person is the client (`notations.person_id`) on exactly one
@@ -2948,6 +2962,14 @@ pub struct UpdateProjectCommand {
     /// an omitted one leaves it untouched.
     #[serde(default)]
     pub onboarding_jurisdiction: Option<String>,
+    /// The Kit version this matter used, `{jurisdiction}/{practice_area}/
+    /// {version}` — written through by `navigator project skill use` when it
+    /// pins the same pair into the Project's `navigator.yaml`, so every
+    /// matter reports which Kit produced its work. A blank submission clears
+    /// it; an omitted one leaves it untouched. Checked by
+    /// [`is_valid_kit_version`].
+    #[serde(default)]
+    pub kit_version: Option<String>,
 }
 
 /// Set or clear the Project's source repository URL.
@@ -3111,7 +3133,7 @@ pub enum ProjectCommandError {
 /// `SET` clause carries and which parameters are bound — so a new optional
 /// column is one row here instead of two `if` blocks that must agree. `None`
 /// means "leave this column alone"; `Some("")` means "clear it".
-fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 10] {
+fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 11] {
     [
         ("description", input.description.as_ref()),
         (
@@ -3138,6 +3160,7 @@ fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option
             "onboarding_jurisdiction",
             input.onboarding_jurisdiction.as_ref(),
         ),
+        ("kit_version", input.kit_version.as_ref()),
     ]
 }
 
@@ -3212,33 +3235,11 @@ async fn validate_firm_brand_update(
     }
 }
 
-/// Update a matter's descriptive fields — name, entity, scope narrative, its
-/// Slack channels, and its source repository URL. Behind both the JSON
-/// `PATCH /app/api/projects/{id}` command and the `/app/projects/{id}` edit
-/// form, so neither door re-implements the write. Name is required; a submitted
-/// `entity_id` or `description` is applied and an omitted one is left
-/// untouched, with a blank description clearing the column.
-///
-/// `repository_url` is the one Project field that is validated rather than
-/// merely trimmed ([`is_valid_repository_url`]): it is handed to `git clone`
-/// and rendered as a link, so a bad scheme or an embedded credential is
-/// refused here rather than stored.
-///
-/// Scope is deliberately narrow. It is not the matter-open path (no conflict
-/// check), it does not move the agreed price (the append-only price-events
-/// command), and it does not change `status`/`closed_at` — a lifecycle
-/// transition whose retention semantics are a firm-policy determination owned
-/// by [`transition_project`].
-///
-/// Because every written value comes wholly from the request (never from a
-/// read of the row), there is no read-modify-write to serialize: the sparse
-/// `Unchanged(id)` update leaves `status`, `closed_at`, and every other
-/// column a concurrent lifecycle write may be changing entirely untouched.
-pub async fn update_project(
-    surreal: &SurrealDb,
-    id: Uuid,
-    input: &UpdateProjectCommand,
-) -> Result<Project, ProjectCommandError> {
+/// Validate the request-only update invariants: required name, the
+/// repository URL's clone-and-render safety, resource links, and the Kit
+/// version's three-segment shape. Every check is a pure function of
+/// `input`, so the command can fail before any read or write.
+fn validate_update_command(input: &UpdateProjectCommand) -> Result<(), ProjectCommandError> {
     if let Some(name) = &input.name {
         if name.trim().is_empty() {
             return Err(ProjectCommandError::Invalid("Name is required."));
@@ -3252,7 +3253,27 @@ pub async fn update_project(
         }
     }
     validate_resource_links(input)?;
-    let firm_brand = validate_firm_brand_update(surreal, input).await?;
+    // A Kit version is displayed as recorded and reported per matter, so a
+    // value that is not three path segments is refused rather than normalized.
+    if let Some(kit_version) = &input.kit_version {
+        if !kit_version.trim().is_empty() && !is_valid_kit_version(kit_version.trim()) {
+            return Err(ProjectCommandError::Invalid(
+                "kit_version must be {jurisdiction}/{practice_area}/{version}, three non-empty \
+                 segments with no whitespace.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate the row-dependent update references: the matter exists, a
+/// repointed entity exists, and a named Drive ingest folder is not recorded
+/// on another matter.
+async fn validate_update_references(
+    surreal: &SurrealDb,
+    id: Uuid,
+    input: &UpdateProjectCommand,
+) -> Result<(), ProjectCommandError> {
     if find_by_id(surreal, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
@@ -3286,6 +3307,39 @@ pub async fn update_project(
             ));
         }
     }
+    Ok(())
+}
+
+/// Update a matter's descriptive fields — name, entity, scope narrative, its
+/// Slack channels, and its source repository URL. Behind both the JSON
+/// `PATCH /app/api/projects/{id}` command and the `/app/projects/{id}` edit
+/// form, so neither door re-implements the write. Name is required; a submitted
+/// `entity_id` or `description` is applied and an omitted one is left
+/// untouched, with a blank description clearing the column.
+///
+/// `repository_url` is the one Project field that is validated rather than
+/// merely trimmed ([`is_valid_repository_url`]): it is handed to `git clone`
+/// and rendered as a link, so a bad scheme or an embedded credential is
+/// refused here rather than stored.
+///
+/// Scope is deliberately narrow. It is not the matter-open path (no conflict
+/// check), it does not move the agreed price (the append-only price-events
+/// command), and it does not change `status`/`closed_at` — a lifecycle
+/// transition whose retention semantics are a firm-policy determination owned
+/// by [`transition_project`].
+///
+/// Because every written value comes wholly from the request (never from a
+/// read of the row), there is no read-modify-write to serialize: the sparse
+/// `Unchanged(id)` update leaves `status`, `closed_at`, and every other
+/// column a concurrent lifecycle write may be changing entirely untouched.
+pub async fn update_project(
+    surreal: &SurrealDb,
+    id: Uuid,
+    input: &UpdateProjectCommand,
+) -> Result<Project, ProjectCommandError> {
+    validate_update_command(input)?;
+    let firm_brand = validate_firm_brand_update(surreal, input).await?;
+    validate_update_references(surreal, id, input).await?;
     // The optional text columns are handled from one table, so a column is set
     // and bound from the same row rather than from two `if` blocks a hundred
     // lines apart that have to be kept in step.
@@ -5551,6 +5605,42 @@ mod drive_folder_input_tests {
             "javascript:alert(1)",
         ] {
             assert_eq!(drive_folder_id_from_input(input), None, "{input}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod kit_version_tests {
+    use super::is_valid_kit_version;
+
+    /// A recorded Kit version is `{jurisdiction}/{practice_area}/{version}` —
+    /// the shape `navigator project skill use` writes through.
+    #[test]
+    fn a_three_segment_kit_version_is_valid() {
+        for value in [
+            "NV/estates/1",
+            "ny/uncontested-divorce/1.0.0",
+            "TX/probate/2026.01",
+        ] {
+            assert!(is_valid_kit_version(value), "{value}");
+        }
+    }
+
+    /// Anything that is not three non-empty, whitespace-free segments is
+    /// refused rather than normalized — a mis-shaped value on the matter row
+    /// would defeat the report it exists for.
+    #[test]
+    fn anything_else_is_refused() {
+        for value in [
+            "",
+            "NV/estates",
+            "NV/estates/1/two",
+            "NV/estates/",
+            "/estates/1",
+            "NV/uncontested divorce/1",
+            " NV/estates/1",
+        ] {
+            assert!(!is_valid_kit_version(value), "{value}");
         }
     }
 }

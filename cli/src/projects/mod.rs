@@ -48,6 +48,7 @@ pub mod service;
 pub mod set;
 pub mod setup;
 pub mod skill;
+pub mod skill_feedback;
 pub mod source_import;
 pub mod status;
 pub mod surfaces;

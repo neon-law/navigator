@@ -31,8 +31,11 @@ use crate::postgres::PostgresDb;
 
 /// The repository's public key catalog, `assumptions/schema.yaml`: keys,
 /// types, and null defaults, never a Firm's value. Pinned at compile time
-/// so the accessor and the catalog cannot drift apart unnoticed.
-pub const SCHEMA_YAML: &str = include_str!("../../assumptions/schema.yaml");
+/// so the accessor and the catalog cannot drift apart unnoticed. The embed
+/// lives once, in `rules::assumption_keys` — `rules` needs the key list for
+/// the Project Skill gate (`N128`) and carries no `store` dependency — and
+/// this static re-exports it rather than including the file a second time.
+pub const SCHEMA_YAML: &str = rules::assumption_keys::SCHEMA_YAML;
 
 /// The value shape a key's catalog entry declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

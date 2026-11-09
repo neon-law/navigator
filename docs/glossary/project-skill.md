@@ -20,4 +20,7 @@ to parse. Pinning is by version string, not a Git commit: a Project's `navigator
 practice_area, version}`, and `navigator project skill status` (and `navigator project gate --check`, through the same
 shared resolver) reports whether that pin still resolves against the compiled-in catalog.
 
+The pinned pair is a [Kit](kit.md). When `navigator.yaml` names a live deployment, `navigator project skill use` also
+writes the Kit version through to the matter row as `kit_version`, so the record survives a missing local checkout.
+
 - Reference: [`docs/project-skills.md`](../project-skills.md)
