@@ -247,9 +247,9 @@ CronJob.
 ## ProfitDigest
 
 `ProfitDigest` is born on DBOS; it has no Restate twin. The process runs it when both `NAVIGATOR_DBOS_ENABLED=true` and
-`NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED=true` are set, and a deployed `web` gets both by default. The daily run
-`ProfitDigest-<UTC date>` starts at 14:00 UTC and catches up when the executor starts later that day. It posts the
-[Profit Digest](glossary/profit-digest.md) to the messages channel: `SLACK_STAGING_MESSAGES_CHANNEL_ID` on a
+`NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED=true` are set, and a deployed `web` with PostgreSQL gets both by default. The
+daily run `ProfitDigest-<UTC date>` starts at 14:00 UTC and catches up when the executor starts later that day. It posts
+the [Profit Digest](glossary/profit-digest.md) to the messages channel: `SLACK_STAGING_MESSAGES_CHANNEL_ID` on a
 simulated-matters deployment, `SLACK_MESSAGES_CHANNEL_ID` otherwise. An enabled host needs `SLACK_BOT_TOKEN`, the
 channel, `NAV_BASE_URL`, and the application's PostgreSQL login, and fails the boot without them.
 
@@ -257,10 +257,11 @@ Its steps read yesterday's `expected_cash` event, read and render the Firm rollu
 `expected_cash` event, and `post`. The post uses its Effect Key as Slack's `client_msg_id` and reuses a retained
 receipt, the `GeneralNag` rule. A day with no open contingent matter posts nothing.
 
-Ship turns it on wherever the row's `config.toml` sets `NAVIGATOR_DBOS_ENABLED = "true"`, unless the row sets
-`NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED = "false"`. It renders the switch and both messages channels into `web`, refuses
-the render when either channel is missing, and retires no CronJob. Local development and the workflows service keep the
-literal-`true` opt-in, so they need no Slack credentials.
+Ship turns it on wherever the row's `config.toml` sets both `NAVIGATOR_DBOS_ENABLED = "true"` and
+`NAVIGATOR_POSTGRES_ENABLED = "true"`, unless the row sets `NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED = "false"`. It refuses
+an explicit `"true"` on a row without PostgreSQL, so the gap fails the ship rather than the boot. It renders the switch
+and both messages channels into `web`, refuses the render when either channel is missing, and retires no CronJob. Local
+development and the workflows service keep the literal-`true` opt-in, so they need no Slack credentials.
 
 ## ProjectRecovery
 
