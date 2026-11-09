@@ -35,6 +35,12 @@ const KUBERNETES_SERVICE_ACCOUNTS: &[&str] = &["navigator-web", "workflows-servi
 /// segment needs delete.
 const POSTGRES_BACKUP_KUBERNETES_ACCOUNT: &str = "navigator-postgres-backup";
 const POSTGRES_BACKUP_ROLE: &str = "roles/storage.objectAdmin";
+/// The archive writer probes its bucket's retention policy before every
+/// write (`storage.buckets.get`), which `objectAdmin` does not include. This
+/// is the smallest predefined role that does; it adds list and nothing that
+/// deletes. Granted by setup so a reconcile cannot drop it — the 2026-11-05
+/// outage was four days of every write failing on exactly this permission.
+pub(super) const ARCHIVE_PROBE_ROLE: &str = "roles/storage.legacyBucketReader";
 
 /// Create the runtime GSA and idempotently bind its direct GCP access. The GKE
 /// workload identity bindings are a separate step because the cluster must
@@ -121,6 +127,39 @@ async fn bind_project_roles(client: &GcpClient, project_id: &str, gsa: &str) -> 
         )?;
     }
     Ok(())
+}
+
+/// Let the runtime identity read the archive bucket's own metadata — the
+/// retention-policy probe every archive write starts with. Additive and
+/// idempotent like the other bucket bindings.
+pub async fn ensure_archive_probe(
+    client: &GcpClient,
+    project_id: &str,
+    config: &SetupConfig,
+    bucket: &str,
+) -> SetupResult<()> {
+    let gsa = format!(
+        "{}@{project_id}.iam.gserviceaccount.com",
+        config.google_service_account_id
+    );
+    classify(
+        client
+            .shell_out(
+                "gcloud",
+                &[
+                    "storage",
+                    "buckets",
+                    "add-iam-policy-binding",
+                    &format!("gs://{bucket}"),
+                    "--member",
+                    &format!("serviceAccount:{gsa}"),
+                    "--role",
+                    ARCHIVE_PROBE_ROLE,
+                ],
+            )
+            .await?,
+        "bind archive bucket probe role",
+    )
 }
 
 async fn bind_bucket_roles(client: &GcpClient, gsa: &str, buckets: &[&str]) -> SetupResult<()> {
@@ -420,5 +459,30 @@ mod tests {
         assert!(plan.contains("neon-law-test.svc.id.goog[example-a/workflows-service]"));
         assert!(plan.contains("roles/iam.serviceAccountTokenCreator"));
         assert_eq!(client.recorded_calls().len(), 12);
+    }
+
+    /// ENG-1039: the archive writer can probe its bucket's policy, and that
+    /// grant is part of setup rather than a hand-applied fix a reconcile
+    /// would drop.
+    #[tokio::test]
+    async fn archive_probe_grant_is_bucket_get_on_the_archive_bucket_only() {
+        let client = GcpClient::new(Arc::new(StaticToken("t".into()))).with_dry_run();
+        let config = SetupConfig {
+            google_service_account_id: "example-a-web".into(),
+            ..SetupConfig::default()
+        };
+        super::ensure_archive_probe(&client, "example-deploy", &config, "example-archives")
+            .await
+            .unwrap();
+        let calls = client.recorded_calls();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        let command = calls[0].url.as_str();
+        assert!(command.contains("gs://example-archives"), "{command}");
+        assert!(
+            command.contains("serviceAccount:example-a-web@example-deploy.iam.gserviceaccount.com"),
+            "{command}"
+        );
+        assert!(command.contains(super::ARCHIVE_PROBE_ROLE), "{command}");
+        assert!(!command.contains("objectAdmin"), "{command}");
     }
 }

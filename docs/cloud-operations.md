@@ -140,10 +140,12 @@ service accounts, and clusters; they must never include database URLs, passwords
 secret value.
 
 All four deployment buckets stay private. The deployment Google service account receives `roles/storage.objectAdmin` on
-each bucket, and Workload Identity maps both `navigator-web` and `workflows-service` to that principal. Marketing assets
-become anonymous only when `web` reads them from the dedicated assets bucket through the cacheable same-origin
-`/assets/*` route. No bucket receives `allUsers`, and setup never changes organization policy. The application does not
-expose corresponding routes for the documents, exports, or logs buckets.
+each bucket, plus `roles/storage.legacyBucketReader` on the archive bucket: the archive writer probes the bucket's
+retention policy (`storage.buckets.get`) before every write, which object admin alone cannot, and setup grants it so a
+reconcile cannot drop it. Workload Identity maps both `navigator-web` and `workflows-service` to that principal.
+Marketing assets become anonymous only when `web` reads them from the dedicated assets bucket through the cacheable
+same-origin `/assets/*` route. No bucket receives `allUsers`, and setup never changes organization policy. The
+application does not expose corresponding routes for the documents, exports, or logs buckets.
 
 When an endpoint drifts, update the module's wiremock test to match Google's current docs first, then update the
 implementation and run the dry-run command from [`oss-install.md`](oss-install.md).

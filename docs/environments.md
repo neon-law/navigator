@@ -246,9 +246,10 @@ the `--*-bucket` flag. Bundles come from `navigator ops forgejo bundle archive` 
 Bundles and Iceberg tables cannot share a bucket: the Iceberg writer replaces `metadata/version-hint.text` on every run,
 which a retention policy refuses, while a bundle must be undeletable by the identity that wrote it. A locked policy can
 be lengthened later and never shortened, so the bundle lane locks the shorter defensible window first. The deployment
-identity holds create and read on each locked bucket and nothing else; an object hold is not a substitute, because an
-object admin can release it. The runtime reads the bundle bucket as `NAVIGATOR_FORGEJO_ARCHIVES_BUCKET` and the Iceberg
-bucket as `NAVIGATOR_ARCHIVES_BUCKET` ([Iceberg archive](iceberg-archive.md)).
+identity holds create, read, and the retention-policy probe (`storage.buckets.get`) on each locked bucket and nothing
+else; an object hold is not a substitute, because an object admin can release it. The runtime reads the bundle bucket as
+`NAVIGATOR_FORGEJO_ARCHIVES_BUCKET` and the Iceberg bucket as `NAVIGATOR_ARCHIVES_BUCKET` ([Iceberg
+archive](iceberg-archive.md)).
 
 ## See also
 

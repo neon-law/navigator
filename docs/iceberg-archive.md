@@ -181,7 +181,8 @@ existing variable set).
 **What the variable accepts.** Either the archive project's id (e.g. `example-archive-project`) or its numeric project
 number (e.g. `123456789012`). The two forms prove different things, because the workflows-service identity holds only
 `roles/storage.objectCreator` and `roles/storage.objectViewer` on the bucket — no Cloud Resource Manager access — so the
-only project identity GCS reports to it is the bucket's numeric project number:
+only project identity GCS reports to it is the bucket's numeric project number (`roles/storage.legacyBucketReader` adds
+the bucket-metadata read the retention probe needs, still no Resource Manager access):
 
 - **A number** verifies by direct equality against that probe. This is the stronger form.
 - **An id** cannot be resolved to a number under a storage-only credential, so the check verifies the property it
@@ -333,7 +334,8 @@ deployment's real coordinates only at the CLI, never in a committed file.
    provisioner creates the bucket with its retention policy already in place, verifies the policy against the live
    bucket, and only then locks it — the lock is irreversible, so a wrong policy is converged by deleting the bucket
    before it was ever locked, never by "fixing" a locked one. The workflows-service identity receives
-   `roles/storage.objectCreator` and `roles/storage.objectViewer` on the bucket and nothing else.
+   `roles/storage.objectCreator`, `roles/storage.objectViewer`, and `roles/storage.legacyBucketReader` (the
+   retention-policy probe) on the bucket and nothing else.
 2. **Configure.** Set `NAVIGATOR_ARCHIVES_BUCKET` to the offsite bucket and `NAVIGATOR_ARCHIVES_GCP_PROJECT_ID` to
    the archive project's id or numeric project number on the workflows-service pod (see the example deployment's
    [`config.toml`](../deployments/example-deployment/config.toml)).

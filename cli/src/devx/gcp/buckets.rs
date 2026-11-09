@@ -272,13 +272,18 @@ impl LockedLane {
 }
 
 /// The exact roles the deployment's workflows-service identity holds on a
-/// locked archive bucket, and nothing else: create and read, with no
-/// delete, overwrite, or administration anywhere in the grant. The writer
-/// path in `archives/` never deletes — but even if code changed, IAM has no
-/// delete permission to grant, and GCS's locked retention rejects deletion
+/// locked archive bucket, and nothing else: create, read, and the bucket
+/// metadata read the retention probe needs
+/// ([`super::workload_identity::ARCHIVE_PROBE_ROLE`]), with no delete,
+/// overwrite, or administration anywhere in the grant. The writer path in
+/// `archives/` never deletes — but even if code changed, IAM has no delete
+/// permission to grant, and GCS's locked retention rejects deletion
 /// regardless.
-const LOCKED_ARCHIVE_ROLES: &[&str] =
-    &["roles/storage.objectCreator", "roles/storage.objectViewer"];
+const LOCKED_ARCHIVE_ROLES: &[&str] = &[
+    "roles/storage.objectCreator",
+    "roles/storage.objectViewer",
+    super::workload_identity::ARCHIVE_PROBE_ROLE,
+];
 
 #[derive(Serialize)]
 struct CreateBucketBody<'a> {
@@ -1821,7 +1826,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn offsite_archive_writer_grant_is_exactly_creator_and_viewer() {
+    async fn locked_archive_writer_grant_is_creator_viewer_and_bucket_probe() {
         let client = GcpClient::new(Arc::new(StaticToken("t".into()))).with_dry_run();
         ensure_locked_archive_writer(
             &client,
@@ -1835,8 +1840,8 @@ mod tests {
         let calls = client.recorded_calls();
         assert_eq!(
             calls.len(),
-            2,
-            "exactly the creator and viewer bindings: {calls:?}"
+            3,
+            "exactly the creator, viewer, and bucket-probe bindings: {calls:?}"
         );
         for call in &calls {
             let command = call.url.as_str();
@@ -1861,6 +1866,9 @@ mod tests {
             .join("\n");
         assert!(plan.contains("roles/storage.objectCreator"), "{plan}");
         assert!(plan.contains("roles/storage.objectViewer"), "{plan}");
+        // The writer probes the bucket's retention policy before every write;
+        // without `storage.buckets.get` every write fails (ENG-1289).
+        assert!(plan.contains("roles/storage.legacyBucketReader"), "{plan}");
         // No administration, no overwrite, and no deletion anywhere in the
         // grant — the IAM layer of the write-only guarantee.
         for forbidden in [

@@ -29,7 +29,9 @@
 //!    telemetry buckets, each followed by [`buckets::ensure_lifecycle`] so the
 //!    telemetry expiry is in place before the first object lands.
 //! 5. [`workload_identity::ensure_runtime_identity`] — per-deployment GSA
-//!    and direct GCP access.
+//!    and direct GCP access, plus
+//!    [`workload_identity::ensure_archive_probe`] on the archive bucket when
+//!    the deployment names one.
 //! 6. Registry access, then
 //!    [`gke::ensure_autopilot_cluster_foundation`] — GKE Autopilot cluster
 //!    and Gateway static IP.
@@ -673,6 +675,12 @@ pub async fn run(client: &GcpClient, project_id: &str, config: &SetupConfig) -> 
     );
     workload_identity::ensure_runtime_identity(client, project_id, config, &names.granted())
         .await?;
+    // The archive writer probes its bucket's retention policy before every
+    // write; objectAdmin alone cannot, and the hand grant that fixed the
+    // 2026-11 outage belongs here so a reconcile keeps it.
+    if let Some(bucket) = names.archives.as_deref() {
+        workload_identity::ensure_archive_probe(client, project_id, config, bucket).await?;
+    }
 
     // Locked archives after runtime identity: their cross-project grants name
     // the deployment's workflows-service GSA, which stage 12 just ensured
