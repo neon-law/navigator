@@ -88,14 +88,15 @@ with a line saying staging passed and production begins.
 `ship-production` needs `ship-staging` and carries no status function in its `if:`, so a failed, cancelled, or skipped
 staging run blocks it. It rolls `needs.ship-staging.outputs.tag` — exactly the tag staging served.
 
-### Brand host changes wait for certificate issuance
+### Brand host changes wait for certificate issuance once
 
-When a tag changes the brand host inventory, `ops ship` stages `navigator-firm-next`, waits for it, patches the shared
-`navigator-firm` certificate, and waits again before it applies the release. Each wait is bounded at 45 minutes
-(`--certificate-timeout-minutes`), so both ship jobs carry a `timeout-minutes: 130` cap, and a test pins that cap above
-both waits plus the roll. To keep the waits out of the release, run `navigator ops certificates pre-roll` against
-staging and then production before the tag ships. The ship then finds the domains already matching. See [Changing shared
-certificate domains](dns.md#changing-shared-certificate-domains).
+When a tag changes the brand host inventory, `ops ship` requests the shared Firm certificate for the new domain set
+before the ordered release, so Google issues it while the release rolls. After the rollouts it waits for that
+certificate to serve every host, then deletes the one it replaced, so brand readiness runs against serving certificates.
+The wait is bounded at 45 minutes (`--certificate-timeout-minutes`), and a test pins both ship jobs' `timeout-minutes`
+above that wait plus the roll. `navigator ops certificates pre-roll` does the same ahead of the release, and the ship
+then finds the certificate serving. See [Changing shared certificate
+domains](dns.md#changing-shared-certificate-domains).
 
 ### Prereleases stay on staging
 
