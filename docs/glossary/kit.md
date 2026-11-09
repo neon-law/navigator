@@ -4,9 +4,9 @@ description: "A Kit is the versioned Project Skill a matter applied, recorded on
 ---
 
 A **Kit** is the versioned [Project Skill](project-skill.md) a [Project](project.md) applies: one public playbook, one
-version. The catalog ships the playbook text and its bundled [Notation](notation.md) codes; nothing in a Kit
-names a [Firm](firm.md) or its economics. Financial premises — target minutes, staffing ratios — stay with the Firm as
-[Firm Assumptions](firm-assumption.md), which the Kit references by dotted key and resolves at run time. A missing value
+version. The catalog ships the playbook text and its bundled [Notation](notation.md) codes; nothing in a Kit names a
+[Firm](firm.md) or its economics. Financial premises — target minutes, staffing ratios — stay with the Firm as [Firm
+Assumptions](firm-assumption.md), which the Kit references by dotted key and resolves at run time. A missing value
 renders blank. It never renders another Firm's number.
 
 `navigator project skill use` pins the Kit into `navigator.yaml` and, when the Project names a live deployment, records
