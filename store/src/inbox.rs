@@ -122,7 +122,7 @@ pub mod route {
     pub const NEF: &str = "nef";
     /// A bankruptcy claims-agent notice from a recognized noticing vendor.
     pub const CLAIMS_AGENT: &str = "claims_agent";
-    /// A fixed-fee legal-plan assignment notice (ARAG, LegalShield).
+    /// Mail from a fixed-fee legal plan (ARAG, `LegalEASE`, `LegalShield`).
     pub const PLAN_ASSIGNMENT: &str = "plan_assignment";
     /// Court mail that is not a noticing event, or a hearing invitation.
     pub const CHAMBERS: &str = "chambers";

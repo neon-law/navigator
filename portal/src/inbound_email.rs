@@ -1154,7 +1154,7 @@ pub enum InboxRoute {
     Nef,
     /// A bankruptcy claims-agent notice from a recognized noticing vendor.
     ClaimsAgent,
-    /// A fixed-fee legal-plan assignment notice from a plan provider.
+    /// Mail from a fixed-fee legal-plan provider, read for its Plan Case Number.
     PlanAssignment,
     /// Court mail that is not a noticing event, or any message carrying a
     /// video-conference link (a hearing).
