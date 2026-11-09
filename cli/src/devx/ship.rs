@@ -438,7 +438,7 @@ where
     substitutions.push(Substitution {
         token: MANAGED_CERTIFICATES_ANNOTATION_TOKEN,
         env: "views::brand::BrandKey",
-        value: managed_certificates_annotation(&brand_bindings),
+        value: managed_certificates_annotation(&public_host, &brand_bindings),
     });
     substitutions.push(Substitution {
         token: BRAND_INGRESS_RULES_TOKEN,
@@ -1124,10 +1124,29 @@ fn brand_certificate_name(key: BrandKey) -> String {
 /// <https://docs.cloud.google.com/load-balancing/docs/ssl-certificates>.
 pub(crate) const TARGET_PROXY_CERTIFICATE_LIMIT: usize = 15;
 
-/// The one `ManagedCertificate` that carries every brand host of the
-/// environment: the Firm wears every brand, so its storefronts share a
-/// certificate instead of spending a target-proxy slot each.
-pub(crate) const FIRM_CERTIFICATE_NAME: &str = "navigator-firm";
+/// The name every shared Firm certificate starts with. The Firm wears every
+/// brand, so its storefronts share one `ManagedCertificate` instead of
+/// spending a target-proxy slot each.
+pub(crate) const FIRM_CERTIFICATE_PREFIX: &str = "navigator-firm";
+
+/// The shared Firm certificate for `domains`, named by a hash of the set.
+///
+/// GKE re-issues a `ManagedCertificate` whose domains change, so a changed
+/// set is a new certificate under a new name rather than an edit: the one
+/// serving now stays untouched until its replacement serves. See
+/// `firm_certificate_roll`.
+pub(crate) fn firm_certificate_name(domains: &[String]) -> String {
+    use sha2::{Digest as _, Sha256};
+    use std::fmt::Write as _;
+    let sorted: std::collections::BTreeSet<&str> = domains.iter().map(String::as_str).collect();
+    let digest = Sha256::digest(sorted.into_iter().collect::<Vec<_>>().join("\n"));
+    digest[..5]
+        .iter()
+        .fold(format!("{FIRM_CERTIFICATE_PREFIX}-"), |mut name, byte| {
+            let _ = write!(name, "{byte:02x}");
+            name
+        })
+}
 
 /// Brands served only by the Firm certificate. The rest keep their own
 /// certificate until the Firm certificate is `Active` on every deployment;
@@ -1151,19 +1170,12 @@ fn has_own_certificate(key: BrandKey) -> bool {
 /// release created, and GKE attaches every `ManagedCertificate` still in the
 /// namespace whether or not the Ingress names it. Left in place they push the
 /// target proxy past its 15 certificates, the Ingress stops syncing, and
-/// `navigator-firm` is never attached, so it can never validate.
-///
-/// So is the staged replacement a shared-certificate transition leaves: once
-/// `navigator-firm` serves the new domain set, the rendered annotation no
-/// longer names it.
+/// the shared Firm certificate is never attached, so it can never validate.
 fn retired_brand_certificates() -> Vec<String> {
     FIRM_CERTIFICATE_ONLY
         .iter()
         .copied()
         .map(brand_certificate_name)
-        .chain(std::iter::once(
-            super::firm_certificate_roll::NEXT_CERTIFICATE_NAME.to_string(),
-        ))
         .collect()
 }
 
@@ -1220,10 +1232,11 @@ fn brand_managed_certificate_yaml(
     public_host: &str,
     bindings: &[AdditionalBrandBinding],
 ) -> String {
+    let firm_hosts = firm_certificate_hosts(public_host);
     std::iter::once(managed_certificate_document(
         namespace,
-        FIRM_CERTIFICATE_NAME,
-        &firm_certificate_hosts(public_host),
+        &firm_certificate_name(&firm_hosts),
+        &firm_hosts,
     ))
     .chain(
         bindings
@@ -1246,7 +1259,10 @@ fn brand_cert_kustomize_resource() -> String {
     "  - ingress/brand-managed-certificates.yaml\n".to_string()
 }
 
-fn managed_certificates_annotation(bindings: &[AdditionalBrandBinding]) -> String {
+fn managed_certificates_annotation(
+    public_host: &str,
+    bindings: &[AdditionalBrandBinding],
+) -> String {
     let mut names = vec!["navigator-web".to_string()];
     names.extend(
         bindings
@@ -1256,7 +1272,7 @@ fn managed_certificates_annotation(bindings: &[AdditionalBrandBinding]) -> Strin
     );
     names.push("navigator-workflows".to_string());
     names.push("navigator-forgejo".to_string());
-    names.push(FIRM_CERTIFICATE_NAME.to_string());
+    names.push(firm_certificate_name(&firm_certificate_hosts(public_host)));
     format!(
         "    networking.gke.io/managed-certificates: {}\n",
         names.join(",")
@@ -3270,6 +3286,11 @@ fn offline_ship_plan(
             local_validation.push(format!(
                 "parsed {count} rendered YAML documents and collector YAML"
             ));
+            let firm = firm_certificate_name(&firm_certificate_hosts(&cfg.public_host));
+            operations.push(format!(
+                "request {firm} for this build's brand hosts unless it already serves, keeping \
+                 the serving Firm certificate attached"
+            ));
             operations.extend(ordered_release_steps().iter().map(|step| match step {
                 ReleaseStep::Postgres => "reconcile PostgreSQL StatefulSet".to_owned(),
                 ReleaseStep::PostgresRoles => "run PostgreSQL roles Job".to_owned(),
@@ -3289,19 +3310,19 @@ fn offline_ship_plan(
                     "delete the Restate CronJob {cronjob} now hosted by DBOS"
                 ));
             }
-            operations.push(format!(
-                "stage {} and reconcile {FIRM_CERTIFICATE_NAME} first when its domains change",
-                super::firm_certificate_roll::NEXT_CERTIFICATE_NAME
-            ));
             for name in retired_brand_certificates() {
                 operations.push(format!(
-                    "delete the ManagedCertificate {name} now carried by \
-                     {FIRM_CERTIFICATE_NAME}"
+                    "delete the ManagedCertificate {name} now carried by {firm}"
                 ));
             }
             operations.push("pin Navigator CronJob images to the selected tag".to_owned());
             operations.push("wait for rollouts and re-register the Restate worker".to_owned());
-            operations.push("verify public assets and smoke-check the public host".to_owned());
+            operations.push("verify public assets".to_owned());
+            operations.push(format!(
+                "wait for {firm} to serve every brand host, then delete the Firm certificates it \
+                 replaces"
+            ));
+            operations.push("smoke-check the public host".to_owned());
         }
     }
     print_offline_ship_plan(
@@ -3897,9 +3918,10 @@ fn roll(
         dbos_enabled(deployment),
         archives_enabled(deployment),
     )?;
-    // 4c. Move a changed shared certificate onto its new domain set before
-    //     the apply could patch it in place; see `firm_certificate_roll`.
-    super::firm_certificate_roll::reconcile(cfg, opts.certificate_timeout_minutes, dry_run)?;
+    // 4c. Request the shared Firm certificate for this build's brand hosts
+    //     now, so Google issues it while the release rolls, and keep the one
+    //     serving today attached until it does; see `firm_certificate_roll`.
+    let firm_roll = super::firm_certificate_roll::begin(cfg, &target, dry_run)?;
 
     // 5. Reconcile services in dependency order, then apply the application.
     reconcile_ordered_services(cfg, dry_run, &rendered, opts, &tag, &target)?;
@@ -3930,6 +3952,16 @@ fn roll(
         || reregister(cfg, dry_run),
         crate::assets::verify_public_asset_origin,
         crate::assets::verify_public_asset_origin_embedded,
+    )?;
+
+    // 6b. Wait for the Firm certificate requested at 4c, then detach and
+    //     delete the one it replaces, so brand readiness finds every host
+    //     serving.
+    super::firm_certificate_roll::finish(
+        cfg,
+        &firm_roll,
+        opts.certificate_timeout_minutes,
+        dry_run,
     )?;
 
     // 7. Smoke-check the public surface (best-effort).
@@ -7080,7 +7112,7 @@ mod tests {
         assert!(
             ingress.contains(&format!(
                 "networking.gke.io/managed-certificates: {}",
-                expected_managed_certificates_annotation()
+                expected_managed_certificates_annotation("navigator.example.invalid")
             )),
             "the Ingress attaches every family's certificate: {ingress}"
         );
@@ -8189,8 +8221,8 @@ mod tests {
     }
 
     /// Staging's Ingress asked for 17 certificates for 21 hours: the three
-    /// brands moved onto `navigator-firm` kept their own `ManagedCertificate`
-    /// because nothing deleted it, so `navigator-firm` never attached.
+    /// brands moved onto the Firm certificate kept their own `ManagedCertificate`
+    /// because nothing deleted it, so the Firm certificate never attached.
     #[test]
     fn every_roll_deletes_the_certificates_the_firm_certificate_replaced() {
         let manifests = rendered_manifests(with_schedules(None, None, None));
@@ -8202,7 +8234,6 @@ mod tests {
                 "navigator-web-guieb-shook",
                 "navigator-web-lex-tecnica",
                 "navigator-web-iep-defenders",
-                "navigator-firm-next"
             ]
         );
         for name in &retired {
@@ -8605,7 +8636,7 @@ mod tests {
         assert!(
             ingress.contains(&format!(
                 "networking.gke.io/managed-certificates: {}",
-                expected_managed_certificates_annotation()
+                expected_managed_certificates_annotation("staging.navigator.example.invalid")
             )),
             "staging attaches every family's certificate: {ingress}"
         );
@@ -8623,7 +8654,7 @@ mod tests {
     /// services, then the Firm certificate — derived from the same
     /// [`views::brand::BrandKey::ALL`] the render reads, so this drifts with
     /// the registry rather than needing a hand-maintained string.
-    fn expected_managed_certificates_annotation() -> String {
+    fn expected_managed_certificates_annotation(public_host: &str) -> String {
         let mut names = vec!["navigator-web".to_string()];
         names.extend(
             released_keys()
@@ -8634,7 +8665,7 @@ mod tests {
         );
         names.push("navigator-workflows".to_string());
         names.push("navigator-forgejo".to_string());
-        names.push(FIRM_CERTIFICATE_NAME.to_string());
+        names.push(firm_certificate_name(&firm_certificate_hosts(public_host)));
         names.join(",")
     }
 
@@ -8649,7 +8680,7 @@ mod tests {
             "staging.navigator.example.invalid",
         ] {
             let bindings = additional_brand_bindings(public_host);
-            let annotation = managed_certificates_annotation(&bindings);
+            let annotation = managed_certificates_annotation(public_host, &bindings);
             let names = annotation
                 .trim()
                 .trim_start_matches("networking.gke.io/managed-certificates: ")
@@ -8866,14 +8897,11 @@ mod tests {
             )),
             vec!["navigator.example.invalid"]
         );
-        let firm_certificate =
-            manifest_doc(&manifests, "ManagedCertificate", FIRM_CERTIFICATE_NAME);
+        let firm_name = firm_certificate_name(&firm_certificate_hosts("navigator.example.invalid"));
+        let firm_certificate = manifest_doc(&manifests, "ManagedCertificate", &firm_name);
         let firm_domains = certificate_domains(&firm_certificate);
         assert!(firm_domains.contains(&"navigator.example.invalid"));
-        let mut certificate_names = vec![
-            "navigator-web".to_string(),
-            FIRM_CERTIFICATE_NAME.to_string(),
-        ];
+        let mut certificate_names = vec!["navigator-web".to_string(), firm_name.clone()];
         for key in released_keys() {
             if *key == views::brand::BrandKey::default() {
                 continue;
@@ -8923,7 +8951,7 @@ mod tests {
                 .and_then(|metadata| metadata.get("annotations"))
                 .and_then(|annotations| annotations.get("networking.gke.io/managed-certificates"))
                 .and_then(serde_yaml::Value::as_str),
-            Some(expected_managed_certificates_annotation().as_str())
+            Some(expected_managed_certificates_annotation("navigator.example.invalid").as_str())
         );
         let hosts: Vec<&str> = ingress
             .get("spec")

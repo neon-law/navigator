@@ -390,32 +390,32 @@ the brand's page, never a TLS handshake failure. Each family keeps its own isola
 
 ### Changing shared certificate domains
 
-A brand host added, moved or retired changes the domain set of the shared `navigator-firm` `ManagedCertificate`. GKE
-recreates a managed certificate whose domains change, so patching it in place can interrupt HTTPS for every brand it
-carries while the replacement provisions. `ops ship` and `ops certificates pre-roll` therefore make the change as a
-staged transition, never in place:
+Every brand host of an environment shares one Firm `ManagedCertificate`. Its name is `navigator-firm-` followed by a
+hash of its domain set: the environment's public host and every other brand host this build registers on it. GKE
+re-issues a managed certificate whose domains change, and issuance takes 20 to 40 minutes, so the certificate is never
+edited. A brand host added, moved or retired is a new certificate under a new name, and `ops ship` rolls it in one
+release:
 
-1. Stage `navigator-firm-next` with the target domain set (the environment's public host and every other brand host this
-   build registers on it). A matching `-next` left by an earlier run is reused; a stale one is replaced.
-2. Append `navigator-firm-next` to the `networking.gke.io/managed-certificates` annotation on `navigator-web-gke`,
-   keeping every serving certificate attached. The step refuses past the target proxy's 15-certificate limit.
-3. Wait until `navigator-firm-next` reports `Active` for exactly the target set and every target host answers a trusted
-   TLS handshake (`curl` with the ordinary trust store, never `-k`).
-4. Patch `navigator-firm` to the target set, then wait for the same two conditions again. The status must name the new
-   set, so a lingering `Active` for the old domains does not count.
-5. The roll continues. Its rendered annotation drops `navigator-firm-next`, and the roll deletes the object after the
-   apply along with the retired brand certificates.
+1. Before the ordered release, request the certificate for this build's set unless it already serves. Every Firm
+   certificate `Active` on `navigator-web-gke` today stays in the rendered `networking.gke.io/managed-certificates`
+   annotation beside the new one, so the apply never detaches a serving certificate. The step refuses past the target
+   proxy's 15-certificate limit.
+2. Roll the release while Google issues the new certificate.
+3. After the rollouts, Restate registration, and the asset check, wait until the new certificate reports `Active` for
+   exactly its set and every host answers a trusted TLS handshake (`curl` with the ordinary trust store, never `-k`).
+4. Detach the certificates kept in step 1, and delete every other Firm certificate, including a legacy `navigator-firm`
+   or `navigator-firm-next`.
 
-Each wait is bounded by `--certificate-timeout-minutes` on `ops ship` and `--timeout-minutes` on the pre-roll, 45
-minutes by default. New Google-managed certificates took 20 to 40 minutes per environment on 2026-11-04. A wait that
-runs out stops before the next write, so the serving certificates stay attached. A pending host usually lacks DNS
-pointing at the Ingress; fix that and rerun, and the run resumes from the staged certificate. A first deployment with no
-live `navigator-firm` provisions it normally.
+The wait is bounded by `--certificate-timeout-minutes` on `ops ship` and `--timeout-minutes` on the pre-roll, 45 minutes
+by default. A wait that runs out fails the ship with the old certificate still attached, so every host it covers keeps
+serving. A pending host usually lacks DNS pointing at the Ingress; fix that and rerun, and the run resumes the wait for
+the certificate already requested. A first deployment with no Ingress provisions everything at once.
 
 #### Pre-roll before the release
 
-The release workflow budgets for both waits, but a ship that waits up to 90 minutes is slow. To keep the waits out of
-the release, pre-roll each environment, staging first, as soon as the host change merges:
+`ops certificates pre-roll` runs the same roll outside a release: it requests the new certificate, attaches it beside
+the serving one on the live Ingress, waits, then detaches and deletes the old one. The next ship finds the certificate
+serving and waits for nothing:
 
 ```bash
 navigator ops certificates pre-roll --deployment neon-law-stg --project-id <staging-project> --dry-run
@@ -424,12 +424,9 @@ navigator ops certificates pre-roll --deployment neon-production --project-id <p
 ```
 
 The target set is compiled into the CLI, so run the build of the release you are about to ship, such as `cargo run -p
-cli --` from that commit. `--dry-run` reads the live certificate and Ingress and prints the plan without writing. The
-command is a no-op once the domains match, and the next ship then finds nothing to change and prunes the staged
-certificate.
-
+cli --` from that commit. `--dry-run` reads the live certificate and Ingress and prints the plan without writing.
 Pre-rolling ahead of the release removes the retired hosts from TLS before the old release stops routing them. That is
-the intent for a moved or retired brand. A host being added must resolve to the Ingress before either certificate can
+the intent for a moved or retired brand. A host being added must resolve to the Ingress before its certificate can
 issue.
 
 Keep issuance and per-host verification receipts in the deployment's approved private records.

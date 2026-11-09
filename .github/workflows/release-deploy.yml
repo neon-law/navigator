@@ -228,11 +228,11 @@ jobs:
     # Standard runner. A ship pulls the signed CLI image and drives `ops ship`
     # against the cluster; it compiles nothing and builds no image. Measured
     # at 8.8 to 12.1 minutes on Blacksmith (runs 40161400290, 40323676699).
-    # A release that changes the shared `navigator-firm` certificate's
-    # domains adds two bounded issuance waits (`--certificate-timeout-minutes`,
-    # 45 each by default; 20 to 40 minutes measured on 2026-11-04), so the
-    # cap is two waits plus the roll and a margin. A pre-rolled deployment
-    # (`ops certificates pre-roll`) skips both waits.
+    # A release that changes the shared Firm certificate's domains requests
+    # the new certificate before the roll and waits for it after
+    # (`--certificate-timeout-minutes`, 45 by default; issuance took 20 to 40
+    # minutes in November 2026), so the cap is that wait plus the roll and a
+    # margin. A pre-rolled deployment (`ops certificates pre-roll`) skips it.
     runs-on: ubuntu-24.04
     environment: staging-deploy
     timeout-minutes: 130

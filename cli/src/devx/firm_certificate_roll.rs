@@ -1,44 +1,45 @@
-//! The staged transition of the shared `navigator-firm` `ManagedCertificate`
-//! when a brand host is added, moved or retired.
+//! The shared Firm `ManagedCertificate` across a change to its brand hosts.
 //!
-//! GKE recreates a managed certificate whose `spec.domains` change, so
-//! patching `navigator-firm` in place can drop HTTPS for every brand it
-//! carries while the replacement provisions. The transition keeps trusted TLS
-//! serving throughout:
+//! GKE re-issues a managed certificate whose `spec.domains` change, and
+//! issuance takes 20 to 40 minutes, so the certificate is never edited. Its
+//! name is a hash of its domain set ([`firm_certificate_name`]), and a
+//! changed set is a new certificate:
 //!
-//! 1. stage [`NEXT_CERTIFICATE_NAME`] with the target domain set and attach it
-//!    to the Ingress beside the serving certificates;
-//! 2. wait for it to be `Active` for exactly that set, and for every target
-//!    host to answer a trusted TLS handshake;
-//! 3. patch `navigator-firm` to the target set, and wait the same way again.
+//! 1. [`begin`], early in `ops ship`, requests this build's certificate unless
+//!    it already serves, and adds every Firm certificate serving today to the
+//!    rendered Ingress annotation, so the apply never detaches one;
+//! 2. the release rolls while Google issues the new certificate;
+//! 3. [`finish`], after the rollouts, waits until the new certificate is
+//!    `Active` for exactly its set and every host answers trusted TLS, then
+//!    detaches and deletes every other Firm certificate.
 //!
-//! `ops ship` runs it whenever the rendered set differs from the live one, and
-//! `ops certificates pre-roll` runs it ahead of a release so the ship finds
-//! nothing to change. The ship's own render then drops the staged certificate
-//! from the Ingress annotation and deletes it. See `docs/dns.md`, "Changing
-//! shared certificate domains".
+//! A brand host change therefore costs one issuance, overlapped with the
+//! roll, and brand readiness runs only once every host serves.
+//! `ops certificates pre-roll` runs the same two halves ahead of a release.
+//! See `docs/dns.md`, "Changing shared certificate domains".
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 
 use super::ship::{
-    firm_certificate_hosts, kubectl, kubectl_json_if_present, managed_certificate_document,
-    ShipConfig, FIRM_CERTIFICATE_NAME, TARGET_PROXY_CERTIFICATE_LIMIT,
+    firm_certificate_hosts, firm_certificate_name, kubectl, kubectl_json_if_present,
+    managed_certificate_document, ShipConfig, FIRM_CERTIFICATE_PREFIX,
+    TARGET_PROXY_CERTIFICATE_LIMIT,
 };
-
-/// The replacement certificate staged beside `navigator-firm`.
-pub(crate) const NEXT_CERTIFICATE_NAME: &str = "navigator-firm-next";
 
 /// The GKE Ingress every brand host routes through.
 const INGRESS_NAME: &str = "navigator-web-gke";
 
 const MANAGED_CERTIFICATES_ANNOTATION: &str = "networking.gke.io/managed-certificates";
 
-/// How long each of the transition's two waits may take by default. New
-/// Google-managed certificates took 20–40 minutes per environment on
-/// 2026-11-04; the release workflow's ship jobs budget two of these waits.
+/// The rendered Ingress, relative to the GKE kustomize root.
+const INGRESS_FILE: &str = "ingress/ingress.yaml";
+
+/// How long [`finish`] may wait for issuance by default. New Google-managed
+/// certificates took 20 to 40 minutes per environment in November 2026.
 pub(crate) const DEFAULT_ISSUANCE_TIMEOUT_MINUTES: u32 = 45;
 
 /// The pause between two issuance polls.
@@ -48,37 +49,31 @@ const POLL_INTERVAL: Duration = if cfg!(test) {
     Duration::from_secs(30)
 };
 
-/// What one reconcile found and did.
+/// What [`begin`] found, carried to [`finish`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Outcome {
-    /// No live `navigator-firm`: a first deployment provisions it normally.
-    NoLiveCertificate,
-    /// The live domain set already matches the target.
-    Unchanged,
-    /// The dry run found drift and printed the steps it would take.
-    Planned {
-        add: Vec<String>,
-        remove: Vec<String>,
-    },
-    /// `navigator-firm` now carries the target set and is serving.
-    Rolled {
-        add: Vec<String>,
-        remove: Vec<String>,
-    },
+pub(crate) enum Roll {
+    /// No Ingress yet: a first deployment provisions everything at once.
+    FirstDeployment,
+    /// This build's certificate already serves its set.
+    Serving,
+    /// This build's certificate is issuing; `keep` stays attached until it
+    /// serves.
+    Issuing { keep: Vec<String> },
 }
 
-/// The cluster and network effects the transition needs, behind a seam so
-/// tests script them.
+/// The cluster and network effects the roll needs, behind a seam so tests
+/// script them.
 pub(crate) trait Cluster {
     fn get_json(&mut self, kind: &str, name: &str) -> Result<Option<serde_json::Value>>;
+    fn list_names(&mut self, kind: &str) -> Result<Vec<String>>;
     fn apply(&mut self, document: &str) -> Result<()>;
+    fn delete(&mut self, kind: &str, name: &str) -> Result<()>;
     fn annotate_ingress(&mut self, ingress: &str, key: &str, value: &str) -> Result<()>;
-    fn patch_domains(&mut self, certificate: &str, domains: &[String]) -> Result<()>;
     /// A trusted TLS handshake to `https://<host>/` through the ordinary
     /// trust store, given at most `max`. Never insecure.
     fn tls_trusted(&mut self, host: &str, max: Duration) -> bool;
     fn sleep(&mut self, duration: Duration);
-    /// Time since the transition began, reads and checks included.
+    /// Time since the roll began, reads and checks included.
     fn elapsed(&self) -> Duration;
 }
 
@@ -88,9 +83,36 @@ pub(crate) struct KubectlCluster<'a> {
     pub started: std::time::Instant,
 }
 
+impl KubectlCluster<'_> {
+    fn run(&self, args: &[&str], what: &str) -> Result<()> {
+        let status = kubectl(self.cfg)
+            .args(args)
+            .status()
+            .with_context(|| format!("run kubectl {what}"))?;
+        ensure!(status.success(), "kubectl {what} failed");
+        Ok(())
+    }
+}
+
 impl Cluster for KubectlCluster<'_> {
     fn get_json(&mut self, kind: &str, name: &str) -> Result<Option<serde_json::Value>> {
         kubectl_json_if_present(self.cfg, kind, name)
+    }
+
+    fn list_names(&mut self, kind: &str) -> Result<Vec<String>> {
+        let out = kubectl(self.cfg)
+            .args(["get", kind, "-o", "name"])
+            .output()
+            .with_context(|| format!("run kubectl get {kind}"))?;
+        ensure!(
+            out.status.success(),
+            "kubectl get {kind} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| line.rsplit_once('/').map(|(_, name)| name.to_string()))
+            .collect())
     }
 
     fn apply(&mut self, document: &str) -> Result<()> {
@@ -105,51 +127,33 @@ impl Cluster for KubectlCluster<'_> {
             .take()
             .ok_or_else(|| anyhow!("kubectl apply has no stdin"))?
             .write_all(document.as_bytes())
-            .context("write the staged certificate to kubectl apply")?;
+            .context("write the Firm certificate to kubectl apply")?;
         let status = child.wait().context("wait for kubectl apply")?;
         ensure!(
             status.success(),
-            "kubectl apply of {NEXT_CERTIFICATE_NAME} failed"
+            "kubectl apply of the Firm certificate failed"
         );
         Ok(())
     }
 
+    fn delete(&mut self, kind: &str, name: &str) -> Result<()> {
+        self.run(
+            &["delete", kind, name, "--ignore-not-found=true"],
+            &format!("delete {kind} {name}"),
+        )
+    }
+
     fn annotate_ingress(&mut self, ingress: &str, key: &str, value: &str) -> Result<()> {
-        let status = kubectl(self.cfg)
-            .args([
+        self.run(
+            &[
                 "annotate",
                 "ingress",
                 ingress,
                 &format!("{key}={value}"),
                 "--overwrite",
-            ])
-            .status()
-            .context("run kubectl annotate")?;
-        ensure!(
-            status.success(),
-            "kubectl annotate ingress {ingress} failed"
-        );
-        Ok(())
-    }
-
-    fn patch_domains(&mut self, certificate: &str, domains: &[String]) -> Result<()> {
-        let patch = serde_json::json!({ "spec": { "domains": domains } }).to_string();
-        let status = kubectl(self.cfg)
-            .args([
-                "patch",
-                "managedcertificate",
-                certificate,
-                "--type=merge",
-                "-p",
-                &patch,
-            ])
-            .status()
-            .context("run kubectl patch")?;
-        ensure!(
-            status.success(),
-            "kubectl patch managedcertificate {certificate} failed"
-        );
-        Ok(())
+            ],
+            &format!("annotate ingress {ingress}"),
+        )
     }
 
     fn tls_trusted(&mut self, host: &str, max: Duration) -> bool {
@@ -168,6 +172,12 @@ impl Cluster for KubectlCluster<'_> {
     fn elapsed(&self) -> Duration {
         self.started.elapsed()
     }
+}
+
+/// Whether `name` is a shared Firm certificate, current or replaced.
+fn is_firm_certificate(name: &str) -> bool {
+    name.strip_prefix(FIRM_CERTIFICATE_PREFIX)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
 }
 
 fn certificate_domains(certificate: &serde_json::Value) -> Result<BTreeSet<String>> {
@@ -199,38 +209,20 @@ fn attached_certificates(ingress: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// The annotation with [`NEXT_CERTIFICATE_NAME`] appended, or `None` when it
-/// is already attached. Refuses past the target proxy's certificate limit.
-fn annotation_with_next(attached: &[String]) -> Result<Option<String>> {
-    if attached.iter().any(|name| name == NEXT_CERTIFICATE_NAME) {
-        return Ok(None);
-    }
-    ensure!(
-        attached.len() < TARGET_PROXY_CERTIFICATE_LIMIT,
-        "cannot stage {NEXT_CERTIFICATE_NAME}: {INGRESS_NAME} already attaches {} certificates \
-         and a target HTTPS proxy accepts at most {TARGET_PROXY_CERTIFICATE_LIMIT}. Retire a \
-         brand's own certificate first.",
-        attached.len()
-    );
-    let mut names = attached.to_vec();
-    names.push(NEXT_CERTIFICATE_NAME.to_string());
-    Ok(Some(names.join(",")))
+fn certificate_status(certificate: &serde_json::Value) -> Option<&str> {
+    certificate
+        .pointer("/status/certificateStatus")
+        .and_then(serde_json::Value::as_str)
 }
 
 /// Whether the controller reports `certificate` `Active` for exactly
-/// `desired`. A status still naming the old domain set is not issuance of
-/// the new one, so the per-domain list must match as well.
+/// `desired`, per domain as well as overall.
 fn issued_for(certificate: &serde_json::Value, desired: &BTreeSet<String>) -> Result<bool> {
     if certificate_domains(certificate)? != *desired {
         return Ok(false);
     }
-    let status = certificate.get("status");
-    let active = status
-        .and_then(|status| status.get("certificateStatus"))
-        .and_then(serde_json::Value::as_str)
-        == Some("Active");
-    let domains: BTreeSet<String> = status
-        .and_then(|status| status.get("domainStatus"))
+    let domains: BTreeSet<String> = certificate
+        .pointer("/status/domainStatus")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
@@ -238,7 +230,7 @@ fn issued_for(certificate: &serde_json::Value, desired: &BTreeSet<String>) -> Re
         .filter_map(|entry| entry.get("domain").and_then(serde_json::Value::as_str))
         .map(str::to_string)
         .collect();
-    Ok(active && domains == *desired)
+    Ok(certificate_status(certificate) == Some("Active") && domains == *desired)
 }
 
 /// The most one host's TLS check may take.
@@ -257,11 +249,9 @@ fn wait_serving<C: Cluster>(
     loop {
         let live = cluster
             .get_json("managedcertificate", certificate)?
-            .ok_or_else(|| {
-                anyhow!("managedcertificate {certificate} disappeared mid-transition")
-            })?;
-        let mut untrusted: Vec<&str> = Vec::new();
+            .ok_or_else(|| anyhow!("managedcertificate {certificate} disappeared mid-roll"))?;
         let issued = issued_for(&live, desired)?;
+        let mut untrusted: Vec<&str> = Vec::new();
         for host in desired {
             let remaining = deadline.saturating_sub(cluster.elapsed());
             if !issued
@@ -277,8 +267,8 @@ fn wait_serving<C: Cluster>(
         let remaining = deadline.saturating_sub(cluster.elapsed());
         if remaining.is_zero() {
             bail!(
-                "{certificate} did not serve trusted TLS within {} minutes; pending: {}. \
-                 {NEXT_CERTIFICATE_NAME} stays attached and a rerun resumes the transition. A \
+                "{certificate} did not serve trusted TLS within {} minutes; pending: {}. The Firm \
+                 certificate serving before it stays attached, and a rerun resumes the wait. A \
                  pending host must resolve to the Ingress; rerun once it does, or raise the \
                  timeout.",
                 timeout.as_secs() / 60,
@@ -289,114 +279,217 @@ fn wait_serving<C: Cluster>(
     }
 }
 
-/// Move `navigator-firm` to `desired` without an HTTPS gap. `timeout` bounds
-/// each of the two waits.
-pub(crate) fn reconcile_with<C: Cluster>(
+/// Request the certificate for `desired` unless it already serves, and name
+/// the Firm certificates that must stay attached until it does.
+pub(crate) fn begin_with<C: Cluster>(
     cluster: &mut C,
     namespace: &str,
     desired: &[String],
-    timeout: Duration,
     dry_run: bool,
-) -> Result<Outcome> {
-    let Some(firm) = cluster.get_json("managedcertificate", FIRM_CERTIFICATE_NAME)? else {
-        return Ok(Outcome::NoLiveCertificate);
+) -> Result<Roll> {
+    let target = firm_certificate_name(desired);
+    let set: BTreeSet<String> = desired.iter().cloned().collect();
+    if let Some(live) = cluster.get_json("managedcertificate", &target)? {
+        if issued_for(&live, &set)? {
+            return Ok(Roll::Serving);
+        }
+    }
+    let Some(ingress) = cluster.get_json("ingress", INGRESS_NAME)? else {
+        return Ok(Roll::FirstDeployment);
     };
-    let live = certificate_domains(&firm)
-        .with_context(|| format!("read the live {FIRM_CERTIFICATE_NAME} domains"))?;
-    let target: BTreeSet<String> = desired.iter().cloned().collect();
-    if live == target {
-        // A run that patched `navigator-firm` and then stopped leaves the
-        // domains matching while `navigator-firm-next` may still be the only
-        // certificate serving some host. The ship deletes `-next` next, so
-        // confirm `navigator-firm` serves first.
-        if !dry_run
-            && cluster
-                .get_json("managedcertificate", NEXT_CERTIFICATE_NAME)?
-                .is_some()
-        {
-            wait_serving(cluster, FIRM_CERTIFICATE_NAME, &target, timeout)?;
-            eprintln!(
-                "==> {FIRM_CERTIFICATE_NAME} is Active and serves trusted TLS for every host"
-            );
+    let mut keep = Vec::new();
+    for name in attached_certificates(&ingress) {
+        if !is_firm_certificate(&name) || name == target {
+            continue;
         }
-        return Ok(Outcome::Unchanged);
+        let live = cluster.get_json("managedcertificate", &name)?;
+        if live.as_ref().and_then(certificate_status) == Some("Active") {
+            keep.push(name);
+        }
     }
-    let add: Vec<String> = target.difference(&live).cloned().collect();
-    let remove: Vec<String> = live.difference(&target).cloned().collect();
-    eprintln!(
-        "==> {FIRM_CERTIFICATE_NAME} domains change (add: [{}], remove: [{}]); staging \
-         {NEXT_CERTIFICATE_NAME} first",
-        add.join(", "),
-        remove.join(", ")
-    );
-
-    let ingress = cluster
-        .get_json("ingress", INGRESS_NAME)?
-        .ok_or_else(|| anyhow!("ingress {INGRESS_NAME} is missing; nothing serves the brands"))?;
-    let annotation = annotation_with_next(&attached_certificates(&ingress))?;
-    let staged = cluster.get_json("managedcertificate", NEXT_CERTIFICATE_NAME)?;
-    let staged_matches = staged
-        .as_ref()
-        .map(certificate_domains)
-        .transpose()?
-        .is_some_and(|domains| domains == target);
-
     if dry_run {
-        if !staged_matches {
-            eprintln!(
-                "DRY-RUN stage {NEXT_CERTIFICATE_NAME} with [{}]",
-                desired.join(", ")
-            );
+        eprintln!("DRY-RUN request {target} for [{}]", desired.join(", "));
+    } else {
+        cluster.apply(&managed_certificate_document(namespace, &target, desired))?;
+    }
+    eprintln!(
+        "==> {target} requested for this build's brand hosts; {} serves until it is Active",
+        if keep.is_empty() {
+            "nothing else".to_string()
+        } else {
+            keep.join(", ")
         }
-        if let Some(value) = &annotation {
-            eprintln!(
-                "DRY-RUN annotate ingress {INGRESS_NAME} {MANAGED_CERTIFICATES_ANNOTATION}={value}"
-            );
-        }
-        eprintln!(
-            "DRY-RUN wait for {NEXT_CERTIFICATE_NAME}, patch {FIRM_CERTIFICATE_NAME}, wait again \
-             (each wait bounded by the timeout)"
-        );
-        return Ok(Outcome::Planned { add, remove });
-    }
-
-    if !staged_matches {
-        // Replacing a stale staged certificate is safe: `navigator-firm` is
-        // still serving every live host.
-        cluster.apply(&managed_certificate_document(
-            namespace,
-            NEXT_CERTIFICATE_NAME,
-            desired,
-        ))?;
-    }
-    if let Some(value) = annotation {
-        cluster.annotate_ingress(INGRESS_NAME, MANAGED_CERTIFICATES_ANNOTATION, &value)?;
-    }
-    wait_serving(cluster, NEXT_CERTIFICATE_NAME, &target, timeout)?;
-    eprintln!("==> {NEXT_CERTIFICATE_NAME} is Active and serves trusted TLS for every host");
-
-    cluster.patch_domains(FIRM_CERTIFICATE_NAME, desired)?;
-    wait_serving(cluster, FIRM_CERTIFICATE_NAME, &target, timeout)?;
-    eprintln!("==> {FIRM_CERTIFICATE_NAME} is Active and serves trusted TLS for every host");
-    Ok(Outcome::Rolled { add, remove })
+    );
+    Ok(Roll::Issuing { keep })
 }
 
-/// [`reconcile_with`] against the live cluster `cfg` names.
-pub(crate) fn reconcile(cfg: &ShipConfig, timeout_minutes: u32, dry_run: bool) -> Result<Outcome> {
-    reconcile_with(
-        &mut KubectlCluster {
-            cfg,
-            started: std::time::Instant::now(),
-        },
-        &cfg.namespace,
+/// The rendered annotation line with `keep` attached before the target.
+fn annotation_keeping(rendered: &str, target: &str, keep: &[String]) -> Result<String> {
+    let line = rendered
+        .lines()
+        .find(|line| {
+            line.trim_start()
+                .starts_with(MANAGED_CERTIFICATES_ANNOTATION)
+        })
+        .ok_or_else(|| anyhow!("the rendered Ingress has no {MANAGED_CERTIFICATES_ANNOTATION}"))?;
+    let (key, value) = line
+        .split_once(": ")
+        .ok_or_else(|| anyhow!("unreadable rendered annotation `{line}`"))?;
+    let mut names: Vec<&str> = value.split(',').map(str::trim).collect();
+    let at = names
+        .iter()
+        .position(|name| *name == target)
+        .ok_or_else(|| anyhow!("the rendered Ingress does not attach {target}"))?;
+    for (offset, name) in keep.iter().enumerate() {
+        names.insert(at + offset, name);
+    }
+    ensure!(
+        names.len() <= TARGET_PROXY_CERTIFICATE_LIMIT,
+        "cannot keep {} attached beside {target}: {INGRESS_NAME} would attach {} certificates \
+         and a target HTTPS proxy accepts at most {TARGET_PROXY_CERTIFICATE_LIMIT}. Retire a \
+         brand's own certificate first.",
+        keep.join(", "),
+        names.len()
+    );
+    Ok(rendered.replacen(line, &format!("{key}: {}", names.join(",")), 1))
+}
+
+/// Keep `roll`'s serving certificates in the rendered Ingress at `root`.
+fn keep_attached(root: &Path, target: &str, roll: &Roll) -> Result<()> {
+    let Roll::Issuing { keep } = roll else {
+        return Ok(());
+    };
+    if keep.is_empty() {
+        return Ok(());
+    }
+    let path = root.join(INGRESS_FILE);
+    let rendered =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    std::fs::write(&path, annotation_keeping(&rendered, target, keep)?)
+        .with_context(|| format!("write {}", path.display()))
+}
+
+/// Wait for the certificate [`begin_with`] requested, then detach the ones
+/// it kept and delete every other Firm certificate.
+pub(crate) fn finish_with<C: Cluster>(
+    cluster: &mut C,
+    desired: &[String],
+    roll: &Roll,
+    timeout: Duration,
+    dry_run: bool,
+) -> Result<()> {
+    let target = firm_certificate_name(desired);
+    if *roll == Roll::FirstDeployment {
+        return Ok(());
+    }
+    if dry_run {
+        eprintln!("DRY-RUN wait for {target} to serve, then delete every other Firm certificate");
+        return Ok(());
+    }
+    if let Roll::Issuing { keep } = roll {
+        let set: BTreeSet<String> = desired.iter().cloned().collect();
+        wait_serving(cluster, &target, &set, timeout)?;
+        eprintln!("==> {target} is Active and serves trusted TLS for every host");
+        if !keep.is_empty() {
+            let ingress = cluster
+                .get_json("ingress", INGRESS_NAME)?
+                .ok_or_else(|| anyhow!("ingress {INGRESS_NAME} is missing"))?;
+            let names: Vec<String> = attached_certificates(&ingress)
+                .into_iter()
+                .filter(|name| !keep.contains(name))
+                .collect();
+            cluster.annotate_ingress(
+                INGRESS_NAME,
+                MANAGED_CERTIFICATES_ANNOTATION,
+                &names.join(","),
+            )?;
+        }
+    }
+    for name in cluster.list_names("managedcertificate")? {
+        if is_firm_certificate(&name) && name != target {
+            cluster.delete("managedcertificate", &name)?;
+            eprintln!("==> deleted {name}, replaced by {target}");
+        }
+    }
+    Ok(())
+}
+
+fn live_cluster(cfg: &ShipConfig) -> KubectlCluster<'_> {
+    KubectlCluster {
+        cfg,
+        started: std::time::Instant::now(),
+    }
+}
+
+/// [`begin_with`] against `cfg`'s cluster, then keep the serving
+/// certificates in the rendered tree at `root` the ship is about to apply.
+pub(crate) fn begin(cfg: &ShipConfig, root: &Path, dry_run: bool) -> Result<Roll> {
+    let desired = firm_certificate_hosts(&cfg.public_host);
+    let roll = begin_with(&mut live_cluster(cfg), &cfg.namespace, &desired, dry_run)?;
+    keep_attached(root, &firm_certificate_name(&desired), &roll)?;
+    Ok(roll)
+}
+
+/// [`finish_with`] against `cfg`'s cluster.
+pub(crate) fn finish(
+    cfg: &ShipConfig,
+    roll: &Roll,
+    timeout_minutes: u32,
+    dry_run: bool,
+) -> Result<()> {
+    finish_with(
+        &mut live_cluster(cfg),
         &firm_certificate_hosts(&cfg.public_host),
+        roll,
         Duration::from_secs(u64::from(timeout_minutes) * 60),
         dry_run,
     )
 }
 
+/// Attach `target` to the live Ingress beside what it attaches now, for a
+/// roll that runs outside `ops ship`.
+fn attach_live<C: Cluster>(cluster: &mut C, target: &str) -> Result<()> {
+    let ingress = cluster
+        .get_json("ingress", INGRESS_NAME)?
+        .ok_or_else(|| anyhow!("ingress {INGRESS_NAME} is missing"))?;
+    let mut names = attached_certificates(&ingress);
+    if names.iter().any(|name| name == target) {
+        return Ok(());
+    }
+    ensure!(
+        names.len() < TARGET_PROXY_CERTIFICATE_LIMIT,
+        "cannot attach {target}: {INGRESS_NAME} already attaches {} certificates and a target \
+         HTTPS proxy accepts at most {TARGET_PROXY_CERTIFICATE_LIMIT}. Retire a brand's own \
+         certificate first.",
+        names.len()
+    );
+    names.push(target.to_string());
+    cluster.annotate_ingress(
+        INGRESS_NAME,
+        MANAGED_CERTIFICATES_ANNOTATION,
+        &names.join(","),
+    )
+}
+
+/// `begin`, attach, and `finish` against any cluster: the whole roll ahead of
+/// a release.
+pub(crate) fn pre_roll_with<C: Cluster>(
+    cluster: &mut C,
+    namespace: &str,
+    desired: &[String],
+    timeout: Duration,
+    dry_run: bool,
+) -> Result<Roll> {
+    let roll = begin_with(cluster, namespace, desired, dry_run)?;
+    if matches!(roll, Roll::Issuing { .. }) && !dry_run {
+        attach_live(cluster, &firm_certificate_name(desired))?;
+    }
+    finish_with(cluster, desired, &roll, timeout, dry_run)?;
+    Ok(roll)
+}
+
 /// `navigator ops certificates pre-roll`: resolve the deployment, fetch its
-/// cluster credentials, and reconcile ahead of the release.
+/// cluster credentials, and roll the Firm certificate ahead of the release.
 pub fn pre_roll_for_deployment(
     deployment: &str,
     deployments_dir: Option<&std::path::Path>,
@@ -413,24 +506,24 @@ pub fn pre_roll_for_deployment(
     let cfg = ShipConfig::from_deployment(&loaded)
         .with_context(|| format!("resolve ShipConfig for deployment {deployment}"))?;
     let _credentials = super::ship::ShipCredentials::cluster(&cfg)?;
-    match reconcile(&cfg, timeout_minutes, dry_run)? {
-        Outcome::NoLiveCertificate => {
-            eprintln!(
-                "==> no live {FIRM_CERTIFICATE_NAME} on this deployment; ops ship provisions it"
-            );
+    let desired = firm_certificate_hosts(&cfg.public_host);
+    let target = firm_certificate_name(&desired);
+    let roll = pre_roll_with(
+        &mut live_cluster(&cfg),
+        &cfg.namespace,
+        &desired,
+        Duration::from_secs(u64::from(timeout_minutes) * 60),
+        dry_run,
+    )?;
+    match roll {
+        Roll::FirstDeployment => {
+            eprintln!("==> no Ingress on this deployment yet; ops ship provisions {target}");
         }
-        Outcome::Unchanged => {
-            eprintln!("==> {FIRM_CERTIFICATE_NAME} already carries this build's hosts");
-        }
-        Outcome::Planned { .. } => {
+        Roll::Serving => eprintln!("==> {target} already serves this build's hosts"),
+        Roll::Issuing { .. } if dry_run => {
             eprintln!("==> rerun without --dry-run to pre-roll this deployment");
         }
-        Outcome::Rolled { .. } => {
-            eprintln!(
-                "==> {FIRM_CERTIFICATE_NAME} pre-rolled; the next ops ship drops \
-                 {NEXT_CERTIFICATE_NAME}"
-            );
-        }
+        Roll::Issuing { .. } => eprintln!("==> {target} pre-rolled; the release finds it serving"),
     }
     Ok(())
 }
@@ -468,32 +561,38 @@ mod tests {
             Ok(Some(object.clone()))
         }
 
+        fn list_names(&mut self, kind: &str) -> Result<Vec<String>> {
+            Ok(self
+                .objects
+                .keys()
+                .filter(|(k, _)| k == kind)
+                .map(|(_, name)| name.clone())
+                .collect())
+        }
+
         fn apply(&mut self, document: &str) -> Result<()> {
             let doc: serde_json::Value = serde_yaml::from_str(document)?;
             let name = doc["metadata"]["name"].as_str().unwrap().to_string();
             self.log.push(format!("apply {name}"));
             self.objects
-                .insert(("managedcertificate".into(), name), doc);
+                .entry(("managedcertificate".into(), name))
+                .or_insert(doc);
+            Ok(())
+        }
+
+        fn delete(&mut self, kind: &str, name: &str) -> Result<()> {
+            self.log.push(format!("delete {name}"));
+            self.objects.remove(&(kind.to_string(), name.to_string()));
             Ok(())
         }
 
         fn annotate_ingress(&mut self, ingress: &str, key: &str, value: &str) -> Result<()> {
-            self.log.push(format!("annotate {ingress} {value}"));
+            self.log.push(format!("annotate {value}"));
             let object = self
                 .objects
                 .get_mut(&("ingress".to_string(), ingress.to_string()))
                 .unwrap();
             object["metadata"]["annotations"][key] = value.into();
-            Ok(())
-        }
-
-        fn patch_domains(&mut self, certificate: &str, domains: &[String]) -> Result<()> {
-            self.log.push(format!("patch {certificate}"));
-            let object = self
-                .objects
-                .get_mut(&("managedcertificate".to_string(), certificate.to_string()))
-                .unwrap();
-            object["spec"]["domains"] = serde_json::json!(domains);
             Ok(())
         }
 
@@ -544,262 +643,276 @@ mod tests {
         })
     }
 
-    fn cluster(live: &[&str], attached: &str) -> FakeCluster {
+    const NAMESPACE: &str = "navigator";
+    const SERVICES: &str = "navigator-web,navigator-workflows,navigator-forgejo";
+    const HOUR: Duration = Duration::from_secs(3600);
+
+    fn name(domains: &[&str]) -> String {
+        firm_certificate_name(&hosts(domains))
+    }
+
+    /// A cluster whose Ingress attaches the services and `serving`, a Firm
+    /// certificate issued for `live`.
+    fn cluster(serving: &str, live: &[&str]) -> FakeCluster {
         let mut fake = FakeCluster::default();
         fake.objects.insert(
-            ("managedcertificate".into(), FIRM_CERTIFICATE_NAME.into()),
-            certificate(FIRM_CERTIFICATE_NAME, live),
+            ("managedcertificate".into(), serving.into()),
+            certificate(serving, live),
         );
         fake.objects.insert(
             ("ingress".into(), INGRESS_NAME.into()),
             serde_json::json!({
-                "metadata": { "annotations": { MANAGED_CERTIFICATES_ANNOTATION: attached } },
+                "metadata": { "annotations": {
+                    MANAGED_CERTIFICATES_ANNOTATION: format!("{SERVICES},{serving}"),
+                } },
             }),
         );
         fake
     }
 
-    const ATTACHED: &str = "navigator-web,navigator-workflows,navigator-forgejo,navigator-firm";
-    const HOUR: Duration = Duration::from_secs(3600);
+    fn annotation(fake: &FakeCluster) -> String {
+        fake.objects[&("ingress".to_string(), INGRESS_NAME.to_string())]["metadata"]["annotations"]
+            [MANAGED_CERTIFICATES_ANNOTATION]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
 
     #[test]
-    fn a_first_deployment_has_nothing_to_transition() {
+    fn the_name_is_the_domain_set_whatever_its_order() {
+        assert_eq!(name(&["b.test", "a.test"]), name(&["a.test", "b.test"]));
+        assert_ne!(name(&["a.test"]), name(&["a.test", "b.test"]));
+        assert!(name(&["a.test"]).starts_with("navigator-firm-"));
+        assert!(is_firm_certificate("navigator-firm"));
+        assert!(is_firm_certificate("navigator-firm-next"));
+        assert!(!is_firm_certificate("navigator-firmament"));
+        assert!(!is_firm_certificate("navigator-web"));
+    }
+
+    #[test]
+    fn a_first_deployment_requests_nothing_and_waits_for_nothing() {
         let mut fake = FakeCluster::default();
-        let outcome = reconcile_with(&mut fake, "navigator", &hosts(&["a.test"]), HOUR, false);
-        assert_eq!(outcome.unwrap(), Outcome::NoLiveCertificate);
-        assert!(fake.log.is_empty());
+        let desired = hosts(&["a.test"]);
+        let roll = begin_with(&mut fake, NAMESPACE, &desired, false).unwrap();
+        assert_eq!(roll, Roll::FirstDeployment);
+        finish_with(&mut fake, &desired, &roll, HOUR, false).unwrap();
+        assert!(fake.log.is_empty(), "{:?}", fake.log);
     }
 
     #[test]
-    fn an_unchanged_domain_set_touches_nothing_whatever_the_order() {
-        let mut fake = cluster(&["b.test", "a.test"], ATTACHED);
-        let outcome = reconcile_with(
-            &mut fake,
-            "navigator",
-            &hosts(&["a.test", "b.test"]),
-            HOUR,
-            false,
+    fn a_serving_certificate_is_left_alone_and_replaced_ones_are_deleted() {
+        let target = name(&["a.test", "b.test"]);
+        let mut fake = cluster(&target, &["a.test", "b.test"]);
+        fake.objects.insert(
+            ("managedcertificate".into(), "navigator-firm".into()),
+            certificate("navigator-firm", &["a.test"]),
         );
-        assert_eq!(outcome.unwrap(), Outcome::Unchanged);
-        assert!(fake.log.is_empty());
+        let desired = hosts(&["b.test", "a.test"]);
+        let roll = begin_with(&mut fake, NAMESPACE, &desired, false).unwrap();
+        assert_eq!(roll, Roll::Serving);
+        finish_with(&mut fake, &desired, &roll, HOUR, false).unwrap();
+        assert_eq!(fake.log, ["delete navigator-firm"]);
+        assert_eq!(fake.slept, Duration::ZERO);
     }
 
-    /// The 26.11.4 shape: one host retired and one renamed. The staged
-    /// certificate must be attached and serving before `navigator-firm` is
-    /// patched, and the patch waits for the new set's issuance, not the old
-    /// set's lingering `Active`.
+    /// The 26.11.9 shape: a host retired. The new certificate is requested
+    /// at the start without any wait, the serving one stays attached through
+    /// the roll, and only after the new one serves is the old one detached
+    /// and deleted.
     #[test]
-    fn a_host_change_stages_next_then_patches_the_firm_certificate() {
-        let mut fake = cluster(&["a.test", "old.test", "gone.test"], ATTACHED);
-        let target = ["a.test", "new.test"];
+    fn a_host_change_requests_early_and_swaps_only_once_serving() {
+        let mut fake = cluster("navigator-firm", &["a.test", "gone.test"]);
+        let desired = hosts(&["a.test"]);
+        let target = name(&["a.test"]);
         fake.statuses.insert(
-            NEXT_CERTIFICATE_NAME.into(),
+            target.clone(),
             VecDeque::from([
-                provisioning(&target),
-                provisioning(&target),
-                active(&target),
-            ]),
-        );
-        fake.statuses.insert(
-            FIRM_CERTIFICATE_NAME.into(),
-            // The first read is the reconcile's own; the old set's status
-            // then lingers after the patch before the new set provisions.
-            VecDeque::from([
-                active(&["a.test", "old.test", "gone.test"]),
-                active(&["a.test", "old.test", "gone.test"]),
-                provisioning(&target),
-                active(&target),
+                provisioning(&["a.test"]),
+                provisioning(&["a.test"]),
+                active(&["a.test"]),
             ]),
         );
 
-        let outcome = reconcile_with(&mut fake, "navigator", &hosts(&target), HOUR, false).unwrap();
-
+        let roll = begin_with(&mut fake, NAMESPACE, &desired, false).unwrap();
         assert_eq!(
-            outcome,
-            Outcome::Rolled {
-                add: hosts(&["new.test"]),
-                remove: hosts(&["gone.test", "old.test"]),
+            roll,
+            Roll::Issuing {
+                keep: hosts(&["navigator-firm"])
             }
         );
+        assert_eq!(fake.log, [format!("apply {target}")]);
+        assert_eq!(fake.slept, Duration::ZERO, "the request never waits");
+
+        // The ship's apply attaches the rendered annotation, which keeps
+        // the serving certificate beside the new one.
+        fake.annotate_ingress(
+            INGRESS_NAME,
+            MANAGED_CERTIFICATES_ANNOTATION,
+            &format!("{SERVICES},navigator-firm,{target}"),
+        )
+        .unwrap();
+        fake.log.clear();
+
+        finish_with(&mut fake, &desired, &roll, HOUR, false).unwrap();
         assert_eq!(
             fake.log,
             [
-                format!("apply {NEXT_CERTIFICATE_NAME}"),
-                format!("annotate {INGRESS_NAME} {ATTACHED},{NEXT_CERTIFICATE_NAME}"),
-                format!("patch {FIRM_CERTIFICATE_NAME}"),
+                format!("annotate {SERVICES},{target}"),
+                "delete navigator-firm".to_string(),
             ]
         );
-        let firm = &fake.objects[&(
-            "managedcertificate".to_string(),
-            FIRM_CERTIFICATE_NAME.to_string(),
-        )];
-        assert_eq!(
-            certificate_domains(firm).unwrap(),
-            target.iter().map(|h| (*h).to_string()).collect()
-        );
+        assert!(fake.slept > Duration::ZERO);
     }
 
     #[test]
-    fn the_firm_certificate_is_never_patched_while_a_host_lacks_trusted_tls() {
-        let mut fake = cluster(&["a.test", "gone.test"], ATTACHED);
-        fake.statuses.insert(
-            NEXT_CERTIFICATE_NAME.into(),
-            VecDeque::from([active(&["a.test"])]),
-        );
+    fn the_serving_certificate_stays_while_a_host_lacks_trusted_tls() {
+        let mut fake = cluster("navigator-firm", &["a.test", "gone.test"]);
+        let desired = hosts(&["a.test"]);
+        let target = name(&["a.test"]);
+        fake.statuses
+            .insert(target.clone(), VecDeque::from([active(&["a.test"])]));
         fake.untrusted.insert("a.test".into());
+        let roll = begin_with(&mut fake, NAMESPACE, &desired, false).unwrap();
+        fake.log.clear();
         let timeout = Duration::from_secs(5);
-        let error = reconcile_with(&mut fake, "navigator", &hosts(&["a.test"]), timeout, false)
+        let error = finish_with(&mut fake, &desired, &roll, timeout, false)
             .unwrap_err()
             .to_string();
         assert!(error.contains("pending: a.test"), "{error}");
-        assert!(
-            !fake.log.iter().any(|line| line.starts_with("patch")),
-            "{:?}",
-            fake.log
-        );
+        assert!(fake.log.is_empty(), "{:?}", fake.log);
         assert_eq!(fake.slept, timeout);
-    }
-
-    #[test]
-    fn a_staged_certificate_that_never_issues_times_out_within_its_bound() {
-        let mut fake = cluster(&["a.test"], ATTACHED);
-        let target = ["a.test", "unpointed.test"];
-        fake.statuses.insert(
-            NEXT_CERTIFICATE_NAME.into(),
-            VecDeque::from(vec![provisioning(&target); 100]),
-        );
-        let timeout = Duration::from_secs(10);
-        let error = reconcile_with(&mut fake, "navigator", &hosts(&target), timeout, false)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("did not serve trusted TLS"), "{error}");
-        assert_eq!(fake.slept, timeout);
-    }
-
-    /// A transition an operator already began (as on production 2026-11-04)
-    /// is resumed, not restarted: the matching staged certificate is reused
-    /// and the annotation is not rewritten.
-    #[test]
-    fn an_already_staged_and_attached_next_certificate_is_reused() {
-        let attached = format!("{ATTACHED},{NEXT_CERTIFICATE_NAME}");
-        let mut fake = cluster(&["a.test", "gone.test"], &attached);
-        fake.objects.insert(
-            ("managedcertificate".into(), NEXT_CERTIFICATE_NAME.into()),
-            certificate(NEXT_CERTIFICATE_NAME, &["a.test"]),
-        );
-        fake.statuses.insert(
-            FIRM_CERTIFICATE_NAME.into(),
-            VecDeque::from([active(&["a.test", "gone.test"]), active(&["a.test"])]),
-        );
-        reconcile_with(&mut fake, "navigator", &hosts(&["a.test"]), HOUR, false).unwrap();
-        assert_eq!(fake.log, [format!("patch {FIRM_CERTIFICATE_NAME}")]);
-    }
-
-    #[test]
-    fn a_stale_staged_certificate_is_replaced_with_the_target_set() {
-        let mut fake = cluster(&["a.test"], ATTACHED);
-        fake.objects.insert(
-            ("managedcertificate".into(), NEXT_CERTIFICATE_NAME.into()),
-            certificate(NEXT_CERTIFICATE_NAME, &["stale.test"]),
-        );
-        fake.statuses.insert(
-            NEXT_CERTIFICATE_NAME.into(),
-            VecDeque::from([active(&["stale.test"]), active(&["a.test", "b.test"])]),
-        );
-        fake.statuses.insert(
-            FIRM_CERTIFICATE_NAME.into(),
-            VecDeque::from([active(&["a.test"]), active(&["a.test", "b.test"])]),
-        );
-        reconcile_with(
-            &mut fake,
-            "navigator",
-            &hosts(&["a.test", "b.test"]),
-            HOUR,
-            false,
-        )
-        .unwrap();
-        assert_eq!(fake.log[0], format!("apply {NEXT_CERTIFICATE_NAME}"));
-    }
-
-    #[test]
-    fn staging_refuses_past_the_target_proxy_certificate_limit() {
-        let full = (0..TARGET_PROXY_CERTIFICATE_LIMIT)
-            .map(|i| format!("cert-{i}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let mut fake = cluster(&["a.test"], &full);
-        let error = reconcile_with(&mut fake, "navigator", &hosts(&["b.test"]), HOUR, false)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("at most 15"), "{error}");
-        assert!(fake.log.is_empty());
+        assert!(annotation(&fake).contains("navigator-firm"));
     }
 
     /// Slow or unreachable hosts count against the bound: the wait ends at
     /// the configured timeout, not at the timeout plus every host check.
     #[test]
     fn the_wait_bound_is_wall_time_including_host_checks() {
-        let target = ["a.test", "b.test", "c.test"];
-        let mut fake = cluster(&["a.test"], ATTACHED);
-        fake.statuses.insert(
-            NEXT_CERTIFICATE_NAME.into(),
-            VecDeque::from([active(&target)]),
-        );
-        fake.untrusted.extend(hosts(&target));
+        let target_hosts = ["a.test", "b.test", "c.test"];
+        let mut fake = cluster("navigator-firm", &["a.test"]);
+        let desired = hosts(&target_hosts);
+        fake.statuses
+            .insert(name(&target_hosts), VecDeque::from([active(&target_hosts)]));
+        fake.untrusted.extend(hosts(&target_hosts));
         fake.tls_cost = Duration::from_secs(15);
+        let roll = begin_with(&mut fake, NAMESPACE, &desired, false).unwrap();
+        let start = fake.elapsed();
         let timeout = Duration::from_secs(60);
-        let error = reconcile_with(&mut fake, "navigator", &hosts(&target), timeout, false)
+        let error = finish_with(&mut fake, &desired, &roll, timeout, false)
             .unwrap_err()
             .to_string();
         assert!(error.contains("did not serve trusted TLS"), "{error}");
-        assert_eq!(fake.elapsed(), timeout);
+        assert_eq!(fake.elapsed().saturating_sub(start), timeout);
     }
 
-    /// A run that patched `navigator-firm` and stopped during the second wait
-    /// leaves the domains matching. The rerun must not report `Unchanged`
-    /// (letting the ship delete `-next`) until `navigator-firm` serves.
+    /// A rerun after a timed-out wait resumes it: the certificate already
+    /// requested is kept, and the one still serving is kept attached.
     #[test]
-    fn a_rerun_after_the_second_wait_failed_waits_before_cleanup() {
-        let target = ["a.test", "new.test"];
-        let attached = format!("{ATTACHED},{NEXT_CERTIFICATE_NAME}");
-        let mut fake = cluster(&target, &attached);
+    fn a_rerun_resumes_the_issuing_certificate() {
+        let target = name(&["a.test"]);
+        let mut fake = cluster("navigator-firm", &["a.test", "gone.test"]);
         fake.objects.insert(
-            ("managedcertificate".into(), NEXT_CERTIFICATE_NAME.into()),
-            certificate(NEXT_CERTIFICATE_NAME, &target),
+            ("managedcertificate".into(), target.clone()),
+            certificate(&target, &["a.test"]),
         );
-        fake.statuses.insert(
-            FIRM_CERTIFICATE_NAME.into(),
-            VecDeque::from(vec![provisioning(&target); 100]),
-        );
-        let timeout = Duration::from_secs(5);
-        let error = reconcile_with(&mut fake, "navigator", &hosts(&target), timeout, false)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains(FIRM_CERTIFICATE_NAME), "{error}");
-
-        fake.statuses.insert(
-            FIRM_CERTIFICATE_NAME.into(),
-            VecDeque::from([active(&target)]),
-        );
-        let outcome = reconcile_with(&mut fake, "navigator", &hosts(&target), timeout, false);
-        assert_eq!(outcome.unwrap(), Outcome::Unchanged);
-        assert!(fake.log.is_empty(), "{:?}", fake.log);
-    }
-
-    #[test]
-    fn a_dry_run_plans_the_transition_and_writes_nothing() {
-        let mut fake = cluster(&["a.test", "gone.test"], ATTACHED);
-        let outcome =
-            reconcile_with(&mut fake, "navigator", &hosts(&["a.test"]), HOUR, true).unwrap();
+        fake.statuses
+            .insert(target.clone(), VecDeque::from([provisioning(&["a.test"])]));
+        let roll = begin_with(&mut fake, NAMESPACE, &hosts(&["a.test"]), false).unwrap();
         assert_eq!(
-            outcome,
-            Outcome::Planned {
-                add: vec![],
-                remove: hosts(&["gone.test"])
+            roll,
+            Roll::Issuing {
+                keep: hosts(&["navigator-firm"])
             }
         );
-        assert!(fake.log.is_empty());
+    }
+
+    #[test]
+    fn only_an_active_firm_certificate_is_kept() {
+        let mut fake = cluster("navigator-firm", &["a.test"]);
+        fake.statuses.insert(
+            "navigator-firm".into(),
+            VecDeque::from([provisioning(&["a.test"])]),
+        );
+        let roll = begin_with(&mut fake, NAMESPACE, &hosts(&["b.test"]), false).unwrap();
+        assert_eq!(roll, Roll::Issuing { keep: vec![] });
+    }
+
+    #[test]
+    fn a_dry_run_writes_and_waits_for_nothing() {
+        let mut fake = cluster("navigator-firm", &["a.test", "gone.test"]);
+        let desired = hosts(&["a.test"]);
+        let roll = begin_with(&mut fake, NAMESPACE, &desired, true).unwrap();
+        finish_with(&mut fake, &desired, &roll, HOUR, true).unwrap();
+        assert!(fake.log.is_empty(), "{:?}", fake.log);
         assert_eq!(fake.slept, Duration::ZERO);
+    }
+
+    #[test]
+    fn the_rendered_annotation_keeps_the_serving_certificate_before_the_new_one() {
+        let target = name(&["a.test"]);
+        let rendered = format!(
+            "metadata:\n  annotations:\n    {MANAGED_CERTIFICATES_ANNOTATION}: {SERVICES},{target}\n    other: x\n"
+        );
+        let kept = annotation_keeping(&rendered, &target, &hosts(&["navigator-firm"])).unwrap();
+        assert_eq!(
+            kept,
+            format!(
+                "metadata:\n  annotations:\n    {MANAGED_CERTIFICATES_ANNOTATION}: {SERVICES},navigator-firm,{target}\n    other: x\n"
+            )
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("ingress")).unwrap();
+        std::fs::write(dir.path().join(INGRESS_FILE), &rendered).unwrap();
+        keep_attached(
+            dir.path(),
+            &target,
+            &Roll::Issuing {
+                keep: hosts(&["navigator-firm"]),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(INGRESS_FILE)).unwrap(),
+            kept
+        );
+    }
+
+    #[test]
+    fn keeping_refuses_past_the_target_proxy_certificate_limit() {
+        let target = name(&["a.test"]);
+        let full = (1..TARGET_PROXY_CERTIFICATE_LIMIT)
+            .map(|i| format!("cert-{i}"))
+            .chain(std::iter::once(target.clone()))
+            .collect::<Vec<_>>()
+            .join(",");
+        let rendered = format!("    {MANAGED_CERTIFICATES_ANNOTATION}: {full}\n");
+        let error = annotation_keeping(&rendered, &target, &hosts(&["navigator-firm"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("at most 15"), "{error}");
+    }
+
+    #[test]
+    fn a_pre_roll_attaches_waits_and_swaps_on_the_live_ingress() {
+        let mut fake = cluster("navigator-firm", &["a.test", "gone.test"]);
+        let desired = hosts(&["a.test"]);
+        let target = name(&["a.test"]);
+        fake.statuses.insert(
+            target.clone(),
+            VecDeque::from([provisioning(&["a.test"]), active(&["a.test"])]),
+        );
+        pre_roll_with(&mut fake, NAMESPACE, &desired, HOUR, false).unwrap();
+        assert_eq!(
+            fake.log,
+            [
+                format!("apply {target}"),
+                format!("annotate {SERVICES},navigator-firm,{target}"),
+                format!("annotate {SERVICES},{target}"),
+                "delete navigator-firm".to_string(),
+            ]
+        );
+        assert_eq!(annotation(&fake), format!("{SERVICES},{target}"));
     }
 
     #[test]
@@ -815,10 +928,10 @@ mod tests {
         assert!(!issued_for(&cert, &desired).unwrap());
     }
 
-    /// The release workflow's ship jobs must outlast both waits at the
-    /// default bound, plus the roll itself.
+    /// The release workflow's ship jobs must outlast the one issuance wait at
+    /// the default bound, plus the roll itself.
     #[test]
-    fn the_release_ship_jobs_absorb_two_issuance_waits() {
+    fn the_release_ship_jobs_absorb_the_issuance_wait() {
         let workflow = include_str!("../../../.github/workflows/release-deploy.yml");
         let doc: serde_yaml::Value = serde_yaml::from_str(workflow).unwrap();
         let jobs = doc["jobs"].as_mapping().unwrap();
@@ -832,7 +945,7 @@ mod tests {
             .map(|job| job["timeout-minutes"].as_u64().unwrap())
             .collect();
         assert_eq!(ships.len(), 2, "ship staging and ship production");
-        let floor = 2 * u64::from(DEFAULT_ISSUANCE_TIMEOUT_MINUTES) + 30;
+        let floor = u64::from(DEFAULT_ISSUANCE_TIMEOUT_MINUTES) + 30;
         for minutes in ships {
             assert!(minutes >= floor, "ship job timeout {minutes} < {floor}");
         }

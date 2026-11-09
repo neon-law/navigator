@@ -426,21 +426,21 @@ fn env_port(key: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
-/// The default bound on each wait of a shared-certificate transition.
+/// The default bound on the shared Firm certificate's issuance wait.
 pub const DEFAULT_CERTIFICATE_TIMEOUT_MINUTES: u32 =
     firm_certificate_roll::DEFAULT_ISSUANCE_TIMEOUT_MINUTES;
 
 /// `navigator ops certificates`: shared-certificate maintenance.
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum CertificatesCmd {
-    /// Move the shared `navigator-firm` certificate onto this build's brand
-    /// host inventory ahead of the release that changes it: stage
-    /// `navigator-firm-next` with the target domains, attach it to the
-    /// Ingress, wait until it is Active and every host serves trusted TLS,
-    /// then patch `navigator-firm` and wait again. Run it with the navigator
-    /// build of the release you are about to ship, staging first. A no-op
-    /// when the domains already match; `--dry-run` reads the live
-    /// certificate and prints the plan without writing.
+    /// Roll the shared Firm certificate onto this build's brand hosts ahead
+    /// of the release that changes them: request the certificate named for
+    /// the new domain set, attach it beside the one serving, wait until it is
+    /// Active and every host serves trusted TLS, then detach and delete the
+    /// one it replaces. `ops ship` does the same within the release; this
+    /// moves the wait out of it. Run it with the navigator build of that
+    /// release. A no-op when the certificate already serves; `--dry-run`
+    /// reads the live certificate and prints the plan without writing.
     PreRoll {
         /// Deployment directory under `deployments/`, such as `neon-law-stg`.
         #[arg(long)]
@@ -453,7 +453,7 @@ pub enum CertificatesCmd {
         /// instead of a local tree. Requires ADC.
         #[arg(long, conflicts_with = "deployments_dir")]
         project_id: Option<String>,
-        /// The bound on each of the two waits, in minutes.
+        /// The bound on the issuance wait, in minutes.
         #[arg(long, default_value_t = DEFAULT_CERTIFICATE_TIMEOUT_MINUTES, value_parser = clap::value_parser!(u32).range(1..))]
         timeout_minutes: u32,
         /// Read the live certificate and print the plan; write nothing.

@@ -3306,10 +3306,10 @@ enum OpsCmd {
         /// `NAVIGATOR_SHIP_LOG_SINK`.
         #[arg(long, env = "NAVIGATOR_SHIP_LOG_SINK", requires = "quiet")]
         log_sink: Option<String>,
-        /// When a brand host change alters the shared `navigator-firm`
-        /// certificate's domains, the roll stages `navigator-firm-next`,
-        /// waits for it, patches `navigator-firm`, and waits again. This
-        /// bounds each wait, in minutes.
+        /// When a brand host change alters the shared Firm certificate's
+        /// domains, the roll requests the new certificate before the
+        /// release and waits for it after the rollouts. This bounds that
+        /// wait, in minutes.
         #[arg(long, default_value_t = devx::DEFAULT_CERTIFICATE_TIMEOUT_MINUTES, value_parser = clap::value_parser!(u32).range(1..))]
         certificate_timeout_minutes: u32,
     },
