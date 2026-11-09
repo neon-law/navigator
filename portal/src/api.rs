@@ -2430,6 +2430,23 @@ async fn main_push_event_door(
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
+    // ENG-1287: a notice the worker cannot post must not look delivered. The
+    // lane posts with the owning Firm's own Slack bot (ENG-392), so the Firm's
+    // credential is resolved here first: a Firm that has not connected Slack,
+    // or a deployment that cannot unseal Firm credentials, is refused with a
+    // body the CI step prints instead of a 202 the lane would later drop.
+    if let Err(error) = state.integration_providers.slack(&state.surreal, id).await {
+        tracing::warn!(project_id = %id, short_sha = %event.short_sha, outcome = error.slug(), "main push notice refused: Slack is not connected for the Project's Firm");
+        return Ok((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "slack_not_connected",
+                "outcome": error.slug(),
+                "message": format!("the Project channel notice was not queued: {error}"),
+            })),
+        )
+            .into_response());
+    }
     let dbos_flag = std::env::var(workflows::trigger::PROJECT_SLACK_ENABLED_ENV).ok();
     let Ok(dbos_ingress) = project_slack_dbos_ingress_config(
         dbos_flag.as_deref(),

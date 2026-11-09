@@ -184,8 +184,11 @@ pub async fn notify(dir: &Path, gate: Outcome) -> Result<()> {
     if let Err(error) = send_notice(&host, &body).await {
         return warn_notice_lost(gate, error);
     }
+    // The server has queued the notice for the Project's channel, to be
+    // posted with the Firm's own Slack bot; a Firm that has not connected
+    // Slack is refused above and warned about, never reported as delivered.
     println!(
-        "Reported this push to the Project channel ({})",
+        "Queued the main-push notice for the Project channel ({})",
         gate.as_str()
     );
     Ok(())
@@ -285,8 +288,17 @@ mod tests {
             assert!(status.success(), "git {args:?}");
         };
         git(&["init", "-q"]);
-        git(&["commit", "-q", "--allow-empty", "-m", "feat: add the will\n\nA body line."]);
-        assert_eq!(head_subject(dir.path()).as_deref(), Some("feat: add the will"));
+        git(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "feat: add the will\n\nA body line.",
+        ]);
+        assert_eq!(
+            head_subject(dir.path()).as_deref(),
+            Some("feat: add the will")
+        );
     }
 
     #[test]

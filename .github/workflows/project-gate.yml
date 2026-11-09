@@ -233,9 +233,12 @@ jobs:
             --arg subject "${subject}" \
             --argjson run_attempt "${RUN_ATTEMPT}" \
             '{short_sha: $short_sha, run_url: $run_url, author_login: $author_login, gate: $gate, run_attempt: $run_attempt} + (if $subject == "" then {} else {subject: $subject} end)')"
-          if ! curl -sSf --retry 3 --retry-connrefused --retry-all-errors -X POST -H "Authorization: Bearer ${session}" -H 'Content-Type: application/json' \
-            -d "${body}" "${base}/app/api/projects/${project_id}/events/main-push"; then
-            notify_gave_up "could not post the main-push event"
+          # A refusal carries a body naming why (for example the Project's Firm
+          # has not connected Slack); it is printed so a lost notice is never
+          # mistaken for a delivered one.
+          if ! response="$(curl -sS --fail-with-body --retry 3 --retry-connrefused --retry-all-errors -X POST -H "Authorization: Bearer ${session}" -H 'Content-Type: application/json' \
+            -d "${body}" "${base}/app/api/projects/${project_id}/events/main-push")"; then
+            notify_gave_up "could not post the main-push event: ${response}"
           fi
 
   # The one required check. Besides gathering the jobs above, it holds the

@@ -188,12 +188,21 @@ async fn the_scoped_session_reaches_its_own_project_and_a_malformed_event_is_400
     let token = mint_document_token(&fixture.app).await;
     let bearer = format!("Bearer {token}");
 
-    // No Restate ingress is configured for a test router, so the door that
-    // has admitted and validated the event reports the missing ingress —
-    // the step after authorization, and nothing in the matter was touched.
+    // A test router has no Firm integration runtime, so the door that has
+    // admitted and validated the event refuses it as unpostable (ENG-1287):
+    // the step after authorization, with a body naming why, and nothing in
+    // the matter was touched. A 202 here would be a notice nobody receives.
     let (status, body) = post_event(&fixture.app, fixture.project_id, Some(&bearer), event()).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
-    assert_eq!(body["error"], "workflows_unavailable");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "slack_not_connected");
+    assert_eq!(body["outcome"], "runtime_not_configured");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not queued"),
+        "{body}"
+    );
 
     let mut malformed = event();
     malformed["short_sha"] = serde_json::Value::String("not-hex".into());
@@ -213,12 +222,13 @@ async fn the_scoped_session_reaches_its_own_project_and_a_malformed_event_is_400
         with_subject,
     )
     .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
-    assert_eq!(body["error"], "workflows_unavailable");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "slack_not_connected");
 
     let mut with_body = event();
     with_body["subject"] = serde_json::Value::String("feat: a subject\n\nand a body".into());
-    let (status, body) = post_event(&fixture.app, fixture.project_id, Some(&bearer), with_body).await;
+    let (status, body) =
+        post_event(&fixture.app, fixture.project_id, Some(&bearer), with_body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "invalid_event");
 }
