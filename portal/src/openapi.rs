@@ -4914,6 +4914,8 @@ fn canonical_document(base: &str) -> Value {
                     "exists": { "type": "boolean" },
                     "size_bytes": { "type": "integer" },
                     "recorded_size": { "type": "integer" },
+                    "filename": { "type": "string", "description": "Stored filename, when present, in the Lawyer lens." },
+                    "revision": { "type": "object", "description": "Revision summary in the same format as the revisions route, available in the Lawyer lens." },
                     "sha256_matches": { "type": "boolean" },
                     "docket_name_matches": { "type": "boolean", "description": "Whether exactly one linked Docket Entry gives this document its current DKT filename; no docket content is returned." }
                   } } },

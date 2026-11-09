@@ -1089,6 +1089,8 @@ const INTEGRITY_RETRY_DELAY: std::time::Duration = std::time::Duration::from_mil
 pub(crate) struct IntegrityAsset {
     pub(crate) asset_id: Uuid,
     pub(crate) slug: Option<String>,
+    pub(crate) filename: Option<String>,
+    pub(crate) revision: Option<RevisionSummary>,
     #[serde(default)]
     pub(crate) sha256: String,
     #[serde(default)]

@@ -407,7 +407,6 @@ pub(crate) async fn check_with(
     let integrity = session.integrity(deep).await?;
     let mut errors = Vec::new();
     let mut locals = index_pointers(dir, &mut errors)?;
-    let live_slugs = live_slugs(&integrity.assets);
 
     for asset in &integrity.assets {
         for message in row_problems(asset, deep) {
@@ -436,7 +435,7 @@ pub(crate) async fn check_with(
     let removed = RemovedPointers::scan(dir);
     let mut claimed: BTreeSet<String> = BTreeSet::new();
     let (resolved, colliding, unread) =
-        resolve_live_slugs(&session, &live_slugs, &locals, &mut errors).await;
+        resolve_live_slugs(&session, &integrity.assets, &locals, deep, &mut errors).await;
     claimed.extend(colliding.iter().cloned());
     for (slug, live, key) in resolved {
         if colliding.contains(&key) {
@@ -526,13 +525,6 @@ fn transcript_source_problem(asset: &IntegrityAsset, assets: &[IntegrityAsset]) 
         );
     }
     None
-}
-
-fn live_slugs(assets: &[IntegrityAsset]) -> BTreeSet<String> {
-    assets
-        .iter()
-        .filter_map(|asset| slug_of(asset).map(str::to_string))
-        .collect()
 }
 
 fn slug_of(asset: &IntegrityAsset) -> Option<&str> {
@@ -652,7 +644,60 @@ fn index_pointers(dir: &Path, errors: &mut Vec<CheckFailure>) -> Result<BTreeMap
     Ok(locals)
 }
 
-/// Fetch every live slug's revisions once, in parallel, then group them by
+/// Reuse a complete, healthy integrity chain only if it proves the pointer
+/// would survive ordinary reconciliation unchanged. Missing rows (including
+/// soft-deleted revisions) and legacy responses go through the revisions door.
+fn matching_integrity_chain(
+    slug: &str,
+    rows: &[&IntegrityAsset],
+    locals: &BTreeMap<String, Local>,
+    deep: bool,
+) -> Option<(RevisionsResponse, String)> {
+    let mut revisions: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            let revision = row.revision.as_ref()?;
+            (revision.asset_id == row.asset_id
+                && revision.sha256 == row.sha256
+                && revision.size_bytes == row.recorded_size
+                && Some(revision.version) == row.version
+                && revision.operative == row.operative
+                && revision.deleted_at.is_none())
+            .then_some(revision)
+        })
+        .collect::<Option<_>>()?;
+    revisions.sort_unstable_by_key(|revision| std::cmp::Reverse(revision.version));
+    let head = *revisions.first()?;
+    if !revisions.iter().enumerate().all(|(index, revision)| {
+        revision.version == revisions.len() - index && revision.operative == (index == 0)
+    }) {
+        return None;
+    }
+
+    let row = rows.iter().find(|row| row.asset_id == head.asset_id)?;
+    let filename = row.filename.as_deref()?;
+    let kind = row.kind.as_deref()?;
+    let key = local_key(slug, filename);
+    let pointer = local_pointer(locals.get(&key))?;
+    // The pointer encodes its filename in its path, ahead of the YAML suffix.
+    if filename != head.filename
+        || Path::new(&key).file_name()?.to_str()? != filename
+        || storage_problem(row, deep).is_some()
+    {
+        return None;
+    }
+    let live = RevisionsResponse {
+        kind: kind.to_string(),
+        revisions: revisions.into_iter().cloned().collect(),
+    };
+    (desired_pointer(Some(pointer), &live.kind, &live.revisions)
+        .ok()
+        .as_ref()
+        == Some(pointer))
+    .then_some((live, key))
+}
+
+/// Resolve each live slug from integrity or a bounded parallel read, then group by
 /// pointer key. A slug whose revisions could not be read is reported in
 /// `errors` and named in the third returned set.
 ///
@@ -665,8 +710,9 @@ fn index_pointers(dir: &Path, errors: &mut Vec<CheckFailure>) -> Result<BTreeMap
 /// round.
 async fn resolve_live_slugs(
     session: &LiveSession<'_>,
-    live_slugs: &BTreeSet<String>,
+    assets: &[IntegrityAsset],
     locals: &BTreeMap<String, Local>,
+    deep: bool,
     errors: &mut Vec<CheckFailure>,
 ) -> (
     Vec<(String, RevisionsResponse, String)>,
@@ -675,7 +721,21 @@ async fn resolve_live_slugs(
 ) {
     let mut resolved: Vec<(String, RevisionsResponse, String)> = Vec::new();
     let mut unread: BTreeSet<String> = BTreeSet::new();
-    for (slug, read) in session.list_each(live_slugs).await {
+    let mut by_slug = BTreeMap::<&str, Vec<&IntegrityAsset>>::new();
+    for asset in assets {
+        if let Some(slug) = slug_of(asset) {
+            by_slug.entry(slug).or_default().push(asset);
+        }
+    }
+    let mut pending = BTreeSet::new();
+    for (slug, rows) in by_slug {
+        if let Some((live, key)) = matching_integrity_chain(slug, &rows, locals, deep) {
+            resolved.push((slug.to_string(), live, key));
+        } else {
+            pending.insert(slug.to_string());
+        }
+    }
+    for (slug, read) in session.list_each(&pending).await {
         match read {
             Ok(live) => {
                 let key = pointer_key(slug, &live);
@@ -690,6 +750,7 @@ async fn resolve_live_slugs(
             }
         }
     }
+    resolved.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     let mut by_key: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (slug, _, key) in &resolved {
         by_key.entry(key.as_str()).or_default().push(slug.as_str());
@@ -1480,6 +1541,8 @@ mod tests {
     fn transcript_gate_rejects_a_source_revision_that_is_no_longer_operative() {
         let source_id = Uuid::now_v7();
         let transcript = IntegrityAsset {
+            filename: None,
+            revision: None,
             asset_id: Uuid::now_v7(),
             slug: Some("transcripts/order.transcript.md".into()),
             kind: Some("transcript".into()),
@@ -1498,6 +1561,8 @@ mod tests {
             docket_name_matches: None,
         };
         let source = IntegrityAsset {
+            filename: None,
+            revision: None,
             asset_id: source_id,
             slug: Some("pleadings/order.pdf".into()),
             kind: Some("filing".into()),
@@ -1520,6 +1585,8 @@ mod tests {
     fn transcript_gate_checks_linkage_and_accepts_the_current_source_revision() {
         let source_id = Uuid::now_v7();
         let transcript = IntegrityAsset {
+            filename: None,
+            revision: None,
             asset_id: Uuid::now_v7(),
             slug: Some("transcripts/order.transcript.md".into()),
             kind: Some("transcript".into()),
@@ -1538,6 +1605,8 @@ mod tests {
             docket_name_matches: None,
         };
         let source = IntegrityAsset {
+            filename: None,
+            revision: None,
             asset_id: source_id,
             slug: Some("pleadings/order.pdf".into()),
             kind: Some("filing".into()),
@@ -1801,6 +1870,92 @@ mod tests {
             value["sha256_matches"] = serde_json::json!(matches);
         }
         value
+    }
+
+    #[tokio::test]
+    async fn integrity_skips_revision_reads_only_when_it_proves_the_pointer() {
+        let slug = "pleadings/summons.pdf";
+        for mismatch in [
+            None,
+            Some("filename"),
+            Some("asset_id"),
+            Some("sha256"),
+            Some("size_bytes"),
+            Some("visibility"),
+            Some("missing filename"),
+            Some("legacy response"),
+            Some("incomplete chain"),
+        ] {
+            let (server, project_id, asset_id) = server().await;
+            let dir = tempfile::tempdir().unwrap();
+            write_tree(
+                dir.path(),
+                "blobs/pleadings/summons.pdf.yaml",
+                &pointer_yaml(asset_id, SHA),
+            );
+            gitignore(dir.path());
+            let mut row = asset(asset_id, Some(slug), true, None);
+            row["kind"] = serde_json::json!("filing");
+            row["sha256"] = serde_json::json!(SHA);
+            row["filename"] = serde_json::json!("summons.pdf");
+            row["operative"] = serde_json::json!(true);
+            row["version"] = serde_json::json!(1);
+            row["revision"] = serde_json::json!({
+                "asset_id": asset_id, "sha256": SHA, "filename": "summons.pdf",
+                "size_bytes": 18, "version": 1, "operative": true,
+                "created_at": "2026-09-05T12:00:00Z", "visibility": "internal"
+            });
+            match mismatch {
+                Some("filename") => {
+                    row["filename"] = serde_json::json!("other.pdf");
+                    row["revision"]["filename"] = row["filename"].clone();
+                }
+                Some("asset_id") => {
+                    row["asset_id"] = serde_json::json!(Uuid::now_v7());
+                    row["revision"]["asset_id"] = row["asset_id"].clone();
+                }
+                Some("sha256") => {
+                    row["sha256"] = serde_json::json!("different");
+                    row["revision"]["sha256"] = row["sha256"].clone();
+                }
+                Some("size_bytes") => {
+                    row["recorded_size"] = serde_json::json!(19);
+                    row["size_bytes"] = row["recorded_size"].clone();
+                    row["revision"]["size_bytes"] = row["recorded_size"].clone();
+                }
+                Some("visibility") => row["revision"]["visibility"] = serde_json::json!("client"),
+                Some("missing filename") => {
+                    row.as_object_mut().unwrap().remove("filename");
+                }
+                Some("legacy response") => {
+                    row.as_object_mut().unwrap().remove("filename");
+                    row.as_object_mut().unwrap().remove("revision");
+                }
+                Some("incomplete chain") => {
+                    row["version"] = serde_json::json!(2);
+                    row["revision"]["version"] = row["version"].clone();
+                }
+                _ => {}
+            }
+            mount_integrity(&server, project_id, serde_json::json!({ "assets": [row] })).await;
+            if mismatch.is_some() {
+                mount_revisions(&server, project_id, slug, asset_id, SHA).await;
+            }
+
+            let outcome = check(dir.path(), &client(&server, project_id), false, false)
+                .await
+                .unwrap();
+            if mismatch == Some("asset_id") {
+                assert_eq!(outcome.errors.len(), 1);
+                assert_eq!(
+                    outcome.errors[0].message,
+                    "operative revision is absent from the integrity report"
+                );
+            } else {
+                assert!(!outcome.rejects(true), "{mismatch:?}: {:?}", outcome.errors);
+            }
+            assert!(outcome.fixes.is_empty());
+        }
     }
 
     #[tokio::test]
