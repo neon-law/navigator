@@ -310,6 +310,11 @@ pub(crate) async fn ensure_internal_channel(
 /// Resolve the Project's channel: keep the recorded one, else adopt the
 /// private channel already carrying the expected name, else create it. A
 /// `name_taken` race is resolved by adopting the winner.
+///
+/// The channel id and its canonical URL are recorded together (LAW-282): the
+/// URL is what `navigator.yaml`'s `private_slack_channel` and the gate read,
+/// so a row carrying only the id reads `not provisioned` until it is filled.
+/// A recorded id with no URL is backfilled; a URL already recorded is kept.
 pub(crate) async fn ensure_channel(
     surreal: &store::surreal::SurrealDb,
     slack: &Arc<dyn SlackBot>,
@@ -317,6 +322,9 @@ pub(crate) async fn ensure_channel(
     simulated: bool,
 ) -> Result<ChannelOutcome, LaneError> {
     if let Some(channel_id) = &project.internal_slack_channel_id {
+        if project.internal_slack_channel_url.is_none() {
+            record_channel(surreal, project.id, channel_id).await?;
+        }
         return Ok(ChannelOutcome::Existing(channel_id.clone()));
     }
     let name = project_channel_name(simulated, &project.code);
@@ -340,17 +348,33 @@ pub(crate) async fn ensure_channel(
             Err(error) => return Err(LaneError::Slack(error.to_string())),
         }
     };
-    store::projects::set_internal_slack_channel_id(surreal, project.id, &channel.id)
-        .await
-        .map_err(|error| project_command_error(&error))?
-        .ok_or_else(|| {
-            LaneError::ProjectGone("Project disappeared while saving Slack channel".to_string())
-        })?;
+    record_channel(surreal, project.id, &channel.id).await?;
     Ok(if adopted {
         ChannelOutcome::Adopted(channel.id)
     } else {
         ChannelOutcome::Created(channel.id)
     })
+}
+
+/// Write the channel id and its canonical `https://slack.com/archives/{id}`
+/// URL as one Project-row update.
+async fn record_channel(
+    surreal: &store::surreal::SurrealDb,
+    project_id: uuid::Uuid,
+    channel_id: &str,
+) -> Result<(), LaneError> {
+    store::projects::set_internal_slack_channel(
+        surreal,
+        project_id,
+        channel_id,
+        &cloud::slack_channel_url(channel_id),
+    )
+    .await
+    .map_err(|error| project_command_error(&error))?
+    .ok_or_else(|| {
+        LaneError::ProjectGone("Project disappeared while saving Slack channel".to_string())
+    })?;
+    Ok(())
 }
 
 async fn post_client_view_notice(
@@ -925,6 +949,15 @@ mod tests {
             .expect("reuse channel");
         assert_eq!(first, second);
         assert_eq!(slack.created_channels(), vec!["project-sample-slack"]);
+        let stored = store::projects::find_by_id(&surreal, project.id)
+            .await
+            .expect("read")
+            .expect("exists");
+        assert_eq!(
+            stored.internal_slack_channel_url.as_deref(),
+            Some(cloud::slack_channel_url(&first).as_str()),
+            "LAW-282: the URL the gate reads is recorded with the id"
+        );
 
         post_client_view_notice(&bot, &first)
             .await
@@ -961,6 +994,54 @@ mod tests {
             .expect("reuse stored channel");
         assert_eq!(channel, "CEXISTING");
         assert!(slack.created_channels().is_empty());
+        let stored = store::projects::find_by_id(&surreal, project.id)
+            .await
+            .expect("read")
+            .expect("exists");
+        assert_eq!(
+            stored.internal_slack_channel_url.as_deref(),
+            Some("https://slack.com/archives/CEXISTING"),
+            "LAW-282: a row with an id and no URL is backfilled"
+        );
+    }
+
+    /// A URL a lawyer recorded by hand is kept: only a null URL is filled.
+    #[tokio::test]
+    async fn ensure_keeps_a_url_already_recorded() {
+        let surreal = mem_surreal().await;
+        let project = create(
+            &surreal,
+            &NewProject {
+                code: "sample-kept".to_string(),
+                name: "Sample Kept".to_string(),
+                status: "open".to_string(),
+                entity_id: seed_entity(&surreal).await,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create Project");
+        store::projects::set_internal_slack_channel(
+            &surreal,
+            project.id,
+            "CKEPT",
+            "https://acme.slack.com/archives/CKEPT",
+        )
+        .await
+        .expect("persist")
+        .expect("project exists");
+        let bot: Arc<dyn workflows::SlackBot> = Arc::new(CapturingSlackBot::new());
+        ensure_internal_channel(&surreal, &bot, project.id, false)
+            .await
+            .expect("reuse");
+        let stored = store::projects::find_by_id(&surreal, project.id)
+            .await
+            .expect("read")
+            .expect("exists");
+        assert_eq!(
+            stored.internal_slack_channel_url.as_deref(),
+            Some("https://acme.slack.com/archives/CKEPT")
+        );
     }
 
     #[tokio::test]
