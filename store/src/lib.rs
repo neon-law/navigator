@@ -199,6 +199,9 @@ pub mod postgres_schema;
 /// Sampled comparisons of SurrealDB reads with their PostgreSQL equivalents.
 pub mod postgres_shadow;
 pub mod posts;
+/// The private-terms record checks the Pre-Filing PII Check refuses on, run
+/// in report mode for the admin-tier reconciliation door.
+pub mod private_terms;
 pub mod project_archives;
 pub mod project_calendar;
 pub mod project_closeout;
