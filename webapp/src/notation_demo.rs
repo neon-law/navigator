@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use dioxus::prelude::*;
 
-use crate::components::Progress;
+use crate::components::{Icon, IconName, Progress};
 use crate::notation_preview_storage::{PreviewSnapshot, PreviewStorage};
 
 /// A clearly-synthetic sample matter, named in the demo's chrome so the walk
@@ -158,7 +158,12 @@ pub fn QuestionnaireDemo(
                         key: "{question.code}",
                         {demo_field(question, answers)}
                     }
-                    {question_outline(&questions, index)}
+                    QuestionOutline {
+                        questions: questions.clone(),
+                        index,
+                        answers: answers.read().clone(),
+                        step,
+                    }
                     {demo_actions(index, position, total, step)}
                     button {
                         class: "nav-btn nav-btn--secondary",
@@ -180,15 +185,117 @@ pub fn QuestionnaireDemo(
     }
 }
 
-fn question_outline(questions: &[DemoQuestion], index: usize) -> Element {
+/// Whether `question` holds a value: whitespace and an empty schedule do not count.
+fn is_answered(question: &DemoQuestion, answers: &BTreeMap<String, String>) -> bool {
+    answers
+        .get(&question.code)
+        .is_some_and(|value| !matches!(value.trim(), "" | "[]"))
+}
+
+fn answered_count(questions: &[DemoQuestion], answers: &BTreeMap<String, String>) -> usize {
+    questions
+        .iter()
+        .filter(|question| is_answered(question, answers))
+        .count()
+}
+
+/// Where an arrow key in the outline moves focus from row `from` of `total`.
+fn outline_target(key: &Key, from: usize, total: usize) -> Option<usize> {
+    match key {
+        Key::ArrowDown => Some((from + 1).min(total - 1)),
+        Key::ArrowUp => Some(from.saturating_sub(1)),
+        Key::Home => Some(0),
+        Key::End => Some(total - 1),
+        _ => None,
+    }
+}
+
+/// Every question as one compact row — its short label, an icon for whether
+/// it holds an answer — and a button that jumps the walk straight to it.
+///
+/// The rows are one tab stop: `ArrowUp`/`ArrowDown`, `Home` and `End` move
+/// between them and `Enter` or `Space` jumps.
+#[component]
+fn QuestionOutline(
+    questions: Vec<DemoQuestion>,
+    index: usize,
+    answers: BTreeMap<String, String>,
+    step: Signal<usize>,
+) -> Element {
+    let total = questions.len();
+    let answered = answered_count(&questions, &answers);
+    let mut focused = use_signal(|| index);
+    let mut rows = use_signal(|| vec![None::<std::rc::Rc<MountedData>>; total]);
+    use_effect(use_reactive!(|index| focused.set(index)));
     rsx! {
         details { class: "notation-demo__outline",
-            summary { "All questions" }
-            ol {
-                for (number, question) in questions.iter().enumerate() {
-                    li {
-                        aria_current: if number == index { "step" } else { "" },
-                        "{question.prompt}"
+            summary { "All {total} questions · {answered} answered" }
+            div { class: "nav-table-wrap",
+                table { class: "nav-table notation-demo__outline-table",
+                    caption { class: "nav-visually-hidden", "Questions and whether each is answered" }
+                    thead {
+                        tr {
+                            th { scope: "col", span { class: "nav-visually-hidden", "Current" } }
+                            th { scope: "col", "#" }
+                            th { scope: "col", "Question" }
+                            th { scope: "col", span { class: "nav-visually-hidden", "Answered" } }
+                        }
+                    }
+                    tbody {
+                        for (number, question) in questions.iter().enumerate() {
+                            {
+                                let label = if question.role_label.is_empty() {
+                                    question.prompt.clone()
+                                } else {
+                                    question.role_label.clone()
+                                };
+                                let position = number + 1;
+                                let (icon, status) = if is_answered(question, &answers) {
+                                    (IconName::CheckCircleFill, "Answered")
+                                } else {
+                                    (IconName::Circle, "Not answered")
+                                };
+                                let mut step = step;
+                                rsx! {
+                                    tr {
+                                        key: "{question.code}-{number}",
+                                        "data-answered": if is_answered(question, &answers) { "true" } else { "false" },
+                                        aria_current: if number == index { "step" } else { "" },
+                                        td { class: "notation-demo__marker",
+                                            if number == index {
+                                                Icon { name: IconName::CaretRightFill }
+                                            }
+                                        }
+                                        td { "{position}" }
+                                        td {
+                                            button {
+                                                class: "nav-link-button notation-demo__jump",
+                                                r#type: "button",
+                                                tabindex: if number == focused() { "0" } else { "-1" },
+                                                title: "{question.prompt}",
+                                                aria_label: "Go to question {position}: {label}",
+                                                onmounted: move |event| rows.write()[number] = Some(event.data()),
+                                                onclick: move |_| { focused.set(number); step.set(number); },
+                                                onkeydown: move |event| {
+                                                    let Some(target) = outline_target(&event.key(), number, total) else {
+                                                        return;
+                                                    };
+                                                    event.prevent_default();
+                                                    focused.set(target);
+                                                    if let Some(row) = rows.peek()[target].clone() {
+                                                        spawn(async move { drop(row.set_focus(true).await); });
+                                                    }
+                                                },
+                                                "{label}"
+                                            }
+                                        }
+                                        td { class: "notation-demo__status",
+                                            Icon { name: icon, label: status.to_string() }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -675,21 +782,63 @@ mod tests {
     }
 
     #[test]
-    fn the_outline_lists_every_question_behind_a_closed_disclosure() {
-        let out = render(vec![
-            interactive("custom_text", "First?", vec![]),
-            interactive("custom_text", "Second?", vec![]),
-        ]);
+    fn the_outline_tables_every_question_behind_a_closed_disclosure() {
+        let mut client = explanation("Who is Client?");
+        client.role_label = "Client".to_string();
+        let out = render(vec![interactive("custom_text", "First?", vec![]), client]);
         assert!(out.contains("Question 1 of 2"), "{out}");
-        assert!(out.contains("notation-demo__outline"), "{out}");
-        assert!(!out.contains("nav-steps__item"), "{out}");
+        assert!(out.contains("All 2 questions · 0 answered"), "{out}");
+        assert!(out.contains("nav-table notation-demo__outline-table"), "{out}");
         assert!(out.contains(r#"aria-current="step""#), "{out}");
-        assert!(out.contains("All questions"), "{out}");
-        assert!(out.contains("First?") && out.contains("Second?"), "{out}");
+        // Status reads as an icon whose accessible name says it.
+        assert_eq!(out.matches("<title>Not answered</title>").count(), 2, "{out}");
+        assert!(!out.contains("nav-badge"), "status is an icon, not a pill: {out}");
+        // One tab stop: the current row; arrows move between the rest.
+        assert_eq!(out.matches(r#"tabindex="0""#).count(), 1, "{out}");
+        assert_eq!(out.matches(r#"tabindex="-1""#).count(), 1, "{out}");
+        // A role label stands in for a long prompt, which stays on hover.
+        assert!(out.contains(r#"title="Who is Client?""#), "{out}");
+        assert!(out.contains(">Client<"), "{out}");
+        assert!(out.contains(">First?<"), "no role label falls back: {out}");
+        assert!(
+            out.contains(r#"aria-label="Go to question 2: Client""#),
+            "{out}"
+        );
         assert!(
             !out.contains("notation-demo__outline\" open"),
             "the outline starts closed: {out}"
         );
+    }
+
+    #[test]
+    fn arrow_keys_move_between_outline_rows_and_stop_at_the_ends() {
+        assert_eq!(outline_target(&Key::ArrowDown, 0, 3), Some(1));
+        assert_eq!(outline_target(&Key::ArrowDown, 2, 3), Some(2));
+        assert_eq!(outline_target(&Key::ArrowUp, 0, 3), Some(0));
+        assert_eq!(outline_target(&Key::ArrowUp, 2, 3), Some(1));
+        assert_eq!(outline_target(&Key::Home, 2, 3), Some(0));
+        assert_eq!(outline_target(&Key::End, 0, 3), Some(2));
+        assert_eq!(outline_target(&Key::Enter, 1, 3), None);
+    }
+
+    #[test]
+    fn a_question_counts_as_answered_only_with_a_value() {
+        let named = |code: &str| DemoQuestion {
+            code: code.to_string(),
+            ..DemoQuestion::default()
+        };
+        let questions = vec![named("a"), named("b"), named("c"), named("d")];
+        let answers = BTreeMap::from([
+            ("a".to_string(), "Acme".to_string()),
+            ("b".to_string(), "   ".to_string()),
+            ("c".to_string(), "[]".to_string()),
+            ("stale".to_string(), "kept from an older template".to_string()),
+        ]);
+        assert!(is_answered(&questions[0], &answers));
+        assert!(!is_answered(&questions[1], &answers));
+        assert!(!is_answered(&questions[2], &answers), "an empty schedule");
+        assert!(!is_answered(&questions[3], &answers));
+        assert_eq!(answered_count(&questions, &answers), 1);
     }
 
     #[test]

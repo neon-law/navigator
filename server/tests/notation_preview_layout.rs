@@ -75,6 +75,8 @@ async fn public_preview_fits_questions_fields_and_the_document() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_descendants_fit(&client).await;
 
+    assert_outline_jumps_and_moves_by_keyboard(&client).await;
+
     inject_corner_widget(&client).await;
     let button = client
         .find(fantoccini::Locator::Css(
@@ -197,7 +199,7 @@ async fn basic_will_preview_offers_every_states_question() {
         // The outline lists every declared question, so a parse that drops
         // questions cannot pass silently.
         let outline_items = client
-            .find_all(fantoccini::Locator::Css(".notation-demo__outline ol li"))
+            .find_all(fantoccini::Locator::Css(".notation-demo__outline tbody tr"))
             .await
             .expect("outline items");
         assert_eq!(
@@ -424,4 +426,51 @@ async fn inject_corner_widget(client: &Client) {
         )
         .await
         .expect("widget");
+}
+
+/// Each outline row jumps the walk to its question, and the arrow keys move
+/// focus between rows without leaving the table.
+async fn assert_outline_jumps_and_moves_by_keyboard(client: &fantoccini::Client) {
+    let count = || async {
+        client
+            .find(fantoccini::Locator::Css(".notation-demo__count"))
+            .await
+            .expect("count")
+            .text()
+            .await
+            .expect("count text")
+    };
+    let jumps = client
+        .find_all(fantoccini::Locator::Css(".notation-demo__jump"))
+        .await
+        .expect("jump buttons");
+    let total = jumps.len();
+    jumps
+        .last()
+        .expect("at least one question")
+        .click()
+        .await
+        .expect("jump to the last question");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(count().await, format!("Question {total} of {total}"));
+
+    jumps[0].click().await.expect("jump back to the first question");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(count().await, format!("Question 1 of {total}"));
+    if total > 1 {
+        jumps[0]
+            .send_keys(&fantoccini::key::Key::Down.to_string())
+            .await
+            .expect("arrow down");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let focused = client
+            .execute("return document.activeElement.getAttribute('aria-label');", vec![])
+            .await
+            .expect("focused element");
+        assert!(
+            focused.as_str().is_some_and(|label| label.starts_with("Go to question 2:")),
+            "ArrowDown moves focus to the next row: {focused:?}"
+        );
+        assert_eq!(count().await, format!("Question 1 of {total}"), "arrows move focus, not the walk");
+    }
 }

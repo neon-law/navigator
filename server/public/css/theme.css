@@ -488,6 +488,28 @@ textarea {
 
 /* Data table — the URL-contract reference surface. `.nav-table-wrap` scrolls
    horizontally on narrow viewports so the page body never does. */
+/* A button that reads as a link: an action that stays on the page (jump to a
+   question, expand a row) in a place where a filled `.nav-btn` would shout. */
+.nav-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--nav-color-link);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-link-button:hover {
+  text-decoration: underline;
+}
+
+.nav-link-button:focus-visible {
+  outline: 2px solid var(--nav-color-link);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .nav-table-wrap {
   overflow-x: auto;
 }
