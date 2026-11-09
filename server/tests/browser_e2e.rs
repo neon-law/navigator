@@ -1332,6 +1332,35 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
         );
     }
 
+    let surreal = store::surreal::connect_from_env()
+        .await
+        .expect("connect to the port-forwarded SurrealDB");
+    let notation = store::notations::find_by_id(&surreal, notation_id)
+        .await
+        .unwrap()
+        .expect("opened retainer");
+    let project = store::projects::find_by_id(&surreal, notation.project_id)
+        .await
+        .unwrap()
+        .expect("retainer Project");
+    c.goto(&format!("{}/app/projects/{}", base_url(), project.code))
+        .await
+        .unwrap();
+    wait_for_text(&c, &notation_id.to_string(), Duration::from_secs(20)).await;
+    let current = c
+        .execute(
+            "const grid = document.querySelector('.project-notations table');
+             const column = [...grid.tHead.rows[0].cells].findIndex(
+                 cell => cell.textContent.trim() === 'lawyer_review');
+             const row = [...grid.tBodies[0].rows].find(
+                 row => [...row.cells].some(cell => cell.textContent.trim() === arguments[0]));
+             return column >= 0 && !!row && row.cells[column].textContent.trim().startsWith('●');",
+            vec![serde_json::Value::String(notation_id.to_string())],
+        )
+        .await
+        .unwrap();
+    assert_eq!(current, serde_json::Value::Bool(true));
+
     // --- Attorney writes the fee terms as a clause -----------
     // The engagement agreement leaves the fee to a custom clause, and the
     // send gate refuses an empty one (`ClausesRequired`). Add one before
@@ -1400,9 +1429,6 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
     // `.devx/env`. We read through the same `store::notation_events` seam
     // the worker writes through, so the assertion exercises the wire
     // shape end-to-end without shelling out to a client.
-    let surreal = store::surreal::connect_from_env()
-        .await
-        .expect("connect to the port-forwarded SurrealDB");
     let mut events = store::notation_events::for_notation(&surreal, notation_id)
         .await
         .expect("read notation_event from surreal");
