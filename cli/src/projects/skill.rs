@@ -398,6 +398,66 @@ mod tests {
         }
     }
 
+    fn assert_kit_bundles_its_notations(jurisdiction: &str, practice_area: &str) {
+        let entries = catalog();
+        let kit = find(&entries, jurisdiction, practice_area)
+            .unwrap_or_else(|| panic!("{jurisdiction}/{practice_area} should be in the catalog"));
+        assert!(
+            !kit.notations.is_empty(),
+            "the kit bundles its deliverables: {kit:?}"
+        );
+        let bundled = portal::template_api::bundled_files();
+        for code in &kit.notations {
+            let found = bundled.iter().any(|(path, _)| {
+                std::path::Path::new(path)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    == Some(code.as_str())
+            });
+            assert!(found, "bundled Notation `{code}` missing from the catalog");
+        }
+    }
+
+    #[test]
+    fn the_new_york_document_review_kit_resolves_and_bundles_its_memo() {
+        assert_kit_bundles_its_notations("NY", "document_review");
+    }
+
+    #[test]
+    fn the_new_york_letters_kit_resolves_and_bundles_its_letter() {
+        assert_kit_bundles_its_notations("NY", "letters");
+    }
+
+    #[test]
+    fn the_nevada_document_review_kit_resolves_and_bundles_its_memo() {
+        assert_kit_bundles_its_notations("NV", "document_review");
+    }
+
+    #[test]
+    fn the_nevada_letters_kit_resolves_and_bundles_its_letter() {
+        assert_kit_bundles_its_notations("NV", "letters");
+    }
+
+    #[test]
+    fn the_california_document_review_kit_resolves_and_bundles_its_memo() {
+        assert_kit_bundles_its_notations("CA", "document_review");
+    }
+
+    #[test]
+    fn the_california_letters_kit_resolves_and_bundles_its_letter() {
+        assert_kit_bundles_its_notations("CA", "letters");
+    }
+
+    #[test]
+    fn the_washington_document_review_kit_resolves_and_bundles_its_memo() {
+        assert_kit_bundles_its_notations("WA", "document_review");
+    }
+
+    #[test]
+    fn the_washington_letters_kit_resolves_and_bundles_its_letter() {
+        assert_kit_bundles_its_notations("WA", "letters");
+    }
+
     #[test]
     fn find_is_case_insensitive_on_jurisdiction() {
         let entries = catalog();

@@ -181,6 +181,22 @@ const NY_UNEMPLOYMENT_APPEAL: &str =
     include_str!("../../templates/notations/neon_law/unemployment_appeal_letter__new_york.md");
 const NY_LAYOFF_NEXT_STEPS: &str =
     include_str!("../../templates/notations/neon_law/layoff_next_steps__new_york.md");
+const NY_DOCUMENT_REVIEW_MEMO: &str =
+    include_str!("../../templates/notations/neon_law/document_review_memo__new_york.md");
+const NY_PLAN_LETTER: &str =
+    include_str!("../../templates/notations/neon_law/plan_letter__new_york.md");
+const NV_DOCUMENT_REVIEW_MEMO: &str =
+    include_str!("../../templates/notations/neon_law/document_review_memo__nevada.md");
+const NV_PLAN_LETTER: &str =
+    include_str!("../../templates/notations/neon_law/plan_letter__nevada.md");
+const CA_DOCUMENT_REVIEW_MEMO: &str =
+    include_str!("../../templates/notations/neon_law/document_review_memo__california.md");
+const CA_PLAN_LETTER: &str =
+    include_str!("../../templates/notations/neon_law/plan_letter__california.md");
+const WA_DOCUMENT_REVIEW_MEMO: &str =
+    include_str!("../../templates/notations/neon_law/document_review_memo__washington.md");
+const WA_PLAN_LETTER: &str =
+    include_str!("../../templates/notations/neon_law/plan_letter__washington.md");
 const FORM_990: &str =
     include_str!("../../templates/notations/forms/united_states/federal/irs/us__form_990.md");
 const NATURALIZATION: &str = include_str!(
@@ -445,6 +461,46 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
             "new-york-layoff-next-steps",
             "notations/neon_law/layoff_next_steps__new_york.md",
             NY_LAYOFF_NEXT_STEPS,
+        ),
+        preview_doc(
+            "new-york-document-review-memo",
+            "notations/neon_law/document_review_memo__new_york.md",
+            NY_DOCUMENT_REVIEW_MEMO,
+        ),
+        preview_doc(
+            "new-york-plan-letter",
+            "notations/neon_law/plan_letter__new_york.md",
+            NY_PLAN_LETTER,
+        ),
+        preview_doc(
+            "nevada-document-review-memo",
+            "notations/neon_law/document_review_memo__nevada.md",
+            NV_DOCUMENT_REVIEW_MEMO,
+        ),
+        preview_doc(
+            "nevada-plan-letter",
+            "notations/neon_law/plan_letter__nevada.md",
+            NV_PLAN_LETTER,
+        ),
+        preview_doc(
+            "california-document-review-memo",
+            "notations/neon_law/document_review_memo__california.md",
+            CA_DOCUMENT_REVIEW_MEMO,
+        ),
+        preview_doc(
+            "california-plan-letter",
+            "notations/neon_law/plan_letter__california.md",
+            CA_PLAN_LETTER,
+        ),
+        preview_doc(
+            "washington-document-review-memo",
+            "notations/neon_law/document_review_memo__washington.md",
+            WA_DOCUMENT_REVIEW_MEMO,
+        ),
+        preview_doc(
+            "washington-plan-letter",
+            "notations/neon_law/plan_letter__washington.md",
+            WA_PLAN_LETTER,
         ),
         preview_doc(
             "irs-form-990",
@@ -735,6 +791,62 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
                 "new-york-layoff-next-steps",
                 "The client one-pager for the days after a layoff (`layoff_next_steps__new_york`).",
                 NY_LAYOFF_NEXT_STEPS,
+            ),
+            notation_card(
+                "New York",
+                "Document Review Memo",
+                "new-york-document-review-memo",
+                "The plan memo reviewing one New York document against the rights in play (`document_review_memo__new_york`).",
+                NY_DOCUMENT_REVIEW_MEMO,
+            ),
+            notation_card(
+                "New York",
+                "Plan Letter",
+                "new-york-plan-letter",
+                "The letter the Firm drafts at a member's direction under a New York plan (`plan_letter__new_york`).",
+                NY_PLAN_LETTER,
+            ),
+            notation_card(
+                "Nevada",
+                "Document Review Memo",
+                "nevada-document-review-memo",
+                "The plan memo reviewing one Nevada document against the rights in play (`document_review_memo__nevada`).",
+                NV_DOCUMENT_REVIEW_MEMO,
+            ),
+            notation_card(
+                "Nevada",
+                "Plan Letter",
+                "nevada-plan-letter",
+                "The letter the Firm drafts at a member's direction under a Nevada plan (`plan_letter__nevada`).",
+                NV_PLAN_LETTER,
+            ),
+            notation_card(
+                "California",
+                "Document Review Memo",
+                "california-document-review-memo",
+                "The plan memo reviewing one California document against the rights in play (`document_review_memo__california`).",
+                CA_DOCUMENT_REVIEW_MEMO,
+            ),
+            notation_card(
+                "California",
+                "Plan Letter",
+                "california-plan-letter",
+                "The letter the Firm drafts at a member's direction under a California plan (`plan_letter__california`).",
+                CA_PLAN_LETTER,
+            ),
+            notation_card(
+                "Washington",
+                "Document Review Memo",
+                "washington-document-review-memo",
+                "The plan memo reviewing one Washington document against the rights in play (`document_review_memo__washington`).",
+                WA_DOCUMENT_REVIEW_MEMO,
+            ),
+            notation_card(
+                "Washington",
+                "Plan Letter",
+                "washington-plan-letter",
+                "The letter the Firm drafts at a member's direction under a Washington plan (`plan_letter__washington`).",
+                WA_PLAN_LETTER,
             ),
             notation_card(
                 "Federal",

@@ -49,7 +49,13 @@ struct FrontmatterShape {
 /// role whose value is genuinely one-off narrative or a primitive the
 /// registry has no better shape for — never a glossary noun.
 pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
-    "business_forum", // Negotiated courts; governing law remains a jurisdiction reference.
+    // Legal-plan kits (ENG-1271c): one-off narrative about a member's own
+    // document or member-directed letter — no glossary noun has this shape.
+    "demand",           // What a collection letter or notice demands of the member.
+    "document_kind",    // The kind of document the member asks the Firm to review.
+    "document_summary", // The member's summary of the document under review.
+    "letter_subject",   // The one-clause subject of a member-directed plan letter.
+    "business_forum",   // Negotiated courts; governing law remains a jurisdiction reference.
     // Business instruments: lawyer-authored schedules and negotiated provisions.
     // Parties, dates, notice addresses, and governing law use typed states.
     "business_acceptance", // Describe the actual notice and assent mechanism, including how changes are accepted.
