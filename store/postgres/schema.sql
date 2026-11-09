@@ -4488,7 +4488,6 @@ CREATE INDEX notation_creation_attempt_project_idx
 ALTER TABLE project ADD COLUMN plan_case_number TEXT;
 
 -- Migration: 20261109120000_add_project_status_transition.sql
-
 CREATE TABLE project_status_transition (
     sequence BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     project_id UUID NOT NULL REFERENCES project(id) ON DELETE CASCADE,
