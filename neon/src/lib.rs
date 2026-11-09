@@ -191,7 +191,7 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             .iter()
             .map(|path| (*path).to_string())
             .collect(),
-        BrandKey::GuiebShook => ["/", "/testimonials"]
+        BrandKey::GuiebShook => ["/", "/testimonials", "/team", "/team/nick", "/team/waleed"]
             .iter()
             .map(|path| (*path).to_string())
             .collect(),
@@ -217,9 +217,6 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
                 "/divorce",
                 "/notations",
                 "/contact",
-                "/team",
-                "/team/nick",
-                "/team/waleed",
                 "/blog",
                 "/presentations",
                 "/testimonials",
@@ -305,9 +302,17 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
         | BrandKey::Aegis
         | BrandKey::Groundwork
         | BrandKey::CyberInjuryLaw
-        | BrandKey::GuiebShook
         | BrandKey::LexTecnica
         | BrandKey::IepDefenders) => practice_brand_llms_txt(key),
+        BrandKey::GuiebShook => {
+            let mut index = practice_brand_llms_txt(BrandKey::GuiebShook);
+            index.pages.push(indexed_page(
+                "Team",
+                "/team",
+                "A short directory that links to each person's profile.",
+            ));
+            index
+        }
         BrandKey::DeleteYourData => {
             let branding = &views::brand::DELETE_YOUR_DATA_BRANDING;
             let mark = branding.firm.site_name;
@@ -457,11 +462,6 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "Contact",
             "/contact",
             "How to reach the firm about a matter, and what to include in the first email.",
-        ),
-        indexed_page(
-            "Team",
-            "/team",
-            "A short directory that links to each person's profile.",
         ),
     ]);
     pages

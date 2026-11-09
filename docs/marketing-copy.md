@@ -32,7 +32,7 @@ Neon Law (`neon/`):
 | `neon/locales/en/neon/navigator.yaml` | `/navigator` and the shared hosted legal-aid offer |
 | `neon/locales/en/neon/legal-aid.yaml` | `/legal-aid` workshop and self-hosting paths |
 | `neon/locales/en/neon/notations.yaml` | `/notations` format introduction |
-| `neon/locales/en/neon/team.yaml` | `/team` and short individual profiles |
+| `neon/locales/en/guieb-shook/team.yaml` | `/team` and profiles on guiebshook.com |
 | `neon/locales/en/neon/gateway-delete-your-debt.yaml` | `/delete-your-debt` — Neon-only gateway to DeleteYourDebt.com |
 
 The shared catalog sits beside the brand directories rather than inside one, because it is shared across brands:

@@ -66,7 +66,6 @@ pub const KNOWN_PAGES: &[&str] = &[
     "nautilus",
     "navigator",
     "notations",
-    "team",
 ];
 
 /// Replace the two brand placeholders a catalog file may carry.

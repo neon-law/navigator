@@ -27,7 +27,6 @@ use webapp::marketing_page::{
 const SHARED_CATALOG_YAML: &str = include_str!("../locales/en/shared.yaml");
 
 const NEON_HOME_YAML: &str = include_str!("../locales/en/neon/home.yaml");
-const NEON_TEAM_YAML: &str = include_str!("../locales/en/neon/team.yaml");
 const NEON_LITIGATION_YAML: &str = include_str!("../locales/en/neon/litigation.yaml");
 const NEON_FRACTIONAL_GC_YAML: &str = include_str!("../locales/en/neon/fractional-gc.yaml");
 const NEON_NOTATIONS_YAML: &str = include_str!("../locales/en/neon/notations.yaml");
@@ -155,7 +154,6 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
             "../locales/en/groundwork/explainer-documents.yaml"
         )),
         (BrandKey::Neon, "home") => Some(NEON_HOME_YAML),
-        (BrandKey::Neon, "team") => Some(NEON_TEAM_YAML),
         (BrandKey::Neon, "free-resources") => Some(NEON_FREE_RESOURCES_YAML),
         (BrandKey::Vesta, "home") => Some(VESTA_HOME_YAML),
         (BrandKey::Vesta, "free-resources") => Some(VESTA_FREE_RESOURCES_YAML),
@@ -187,6 +185,7 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::GuiebShook, "services") => {
             Some(include_str!("../locales/en/guieb-shook/services.yaml"))
         }
+        (BrandKey::GuiebShook, "team") => Some(include_str!("../locales/en/guieb-shook/team.yaml")),
         (BrandKey::Groundwork, "services") => Some(GROUNDWORK_SERVICES_YAML),
         (BrandKey::Daybridge, "home") => Some(DAYBRIDGE_HOME_YAML),
         (BrandKey::Daybridge, "services") => Some(DAYBRIDGE_SERVICES_YAML),
@@ -243,11 +242,11 @@ fn lex_tecnica_catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
     }
 }
 
-/// The public team directory and individual profiles, authored in Neon's
-/// `team.yaml` catalog.
+/// The public team directory and individual profiles. Guieb & Shook publishes
+/// the catalog; `branding` supplies the site name interpolated into it.
 pub fn team(branding: &views::brand::Branding) -> views::locales::TeamCopy {
-    let raw = catalog_yaml(branding.brand_key, "team")
-        .expect("invariant: the Neon brand publishes its team catalog");
+    let raw = catalog_yaml(BrandKey::GuiebShook, "team")
+        .expect("invariant: Guieb & Shook publishes its team catalog");
     let interpolated = interpolate(raw, branding.firm.site_name, branding.firm_email);
     serde_yaml::from_str(&interpolated)
         .expect("invariant: navigator project gate validates the team catalog")

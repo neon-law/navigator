@@ -402,7 +402,12 @@ async fn the_guieb_shook_sitemap_lists_only_that_brands_pages_under_its_host() {
             "missing {required}: {paths:?}"
         );
     }
-    // A bare holding page, not a marketing site: it publishes `/` alone.
+    for required_team in ["/team", "/team/nick", "/team/waleed"] {
+        assert!(
+            paths.iter().any(|path| path == required_team),
+            "missing {required_team}: {paths:?}"
+        );
+    }
     for absent in ["/services", "/contact", "/disputes"] {
         assert!(
             !paths.iter().any(|path| path == absent),

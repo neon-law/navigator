@@ -1782,6 +1782,21 @@ a.nav-pagination__link:hover {
   margin: 0;
 }
 
+/* Two sentences. A narrow footer stacks them; a wide one keeps them on one line. */
+.site-footer__tagline span {
+  display: block;
+}
+
+@media (min-width: 54rem) {
+  .site-footer__tagline span {
+    display: inline;
+  }
+
+  .site-footer__tagline span + span::before {
+    content: " ";
+  }
+}
+
 /* With no contact band above it the legal strip is the footer's first child,
    and the header-matching rule on `.site-footer` is already the only one it
    needs — a second rule immediately below the first would read as a seam. */

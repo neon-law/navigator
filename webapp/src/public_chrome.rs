@@ -1059,9 +1059,21 @@ mod tests {
                 key.as_str()
             );
             assert!(!html.contains("lextecnica.com"), "{}: {html}", key.as_str());
+            let tagline = html
+                .split("site-footer__tagline")
+                .nth(1)
+                .and_then(|rest| rest.split("</p>").next())
+                .unwrap_or_else(|| panic!("{} has no tagline: {html}", key.as_str()));
             assert!(
-                html.contains("Everyone deserves access to justice.<br/>Made with ❤️ in 🗽."),
+                tagline.contains("Everyone deserves access to justice.")
+                    && tagline.find("Everyone deserves access to justice.")
+                        < tagline.find("Made with ❤️ in 🗽."),
                 "{}: {html}",
+                key.as_str()
+            );
+            assert!(
+                !tagline.contains("<br"),
+                "{} stacks the lines in CSS, not a break: {html}",
                 key.as_str()
             );
             assert!(
