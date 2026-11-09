@@ -1096,6 +1096,9 @@ generated repository. The gate accepts the exact generated stub without a jurisd
 requires an explicit jurisdiction, and `navigator project onboard` can open a notation from it. Add any other
 Project-specific Draft or application content deliberately afterward.
 
+When scaffold writes a new tree, it keeps the configured deployment host in `project.host` and warns if the compiled
+Brand registry does not recognize it. Custom development hosts can still be scaffolded.
+
 Unless `--no-repository` keeps the Project repository-less, the scaffold then asks the server to create or adopt the
 Project's source repository and prints each resource's outcome. If any step fails after the Project opened, rerun with
 `--resume <code>`: it skips the prompts and the open, writes the tree into an empty directory or repairs the canonical

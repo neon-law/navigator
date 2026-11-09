@@ -308,6 +308,12 @@ fn write_tree(base: &str, directory: &Path, code: &str, client_email: Option<&st
         .ok()
         .and_then(|url| url.host_str().map(str::to_string))
         .context("deployment URL has no host")?;
+    if cli::letterhead::resolve_brand(None, Some(&manifest_host)).is_err() {
+        eprintln!(
+            "navigator: warning: deployment host is missing from the Brand registry; \
+             continuing with the configured host"
+        );
+    }
     let lawyer_email = crate::credentials::load(&crate::credentials::default_credentials_path())
         .ok()
         .and_then(|credentials| {
