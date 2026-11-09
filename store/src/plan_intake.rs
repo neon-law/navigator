@@ -774,8 +774,8 @@ async fn mark_accepted(
     matter_type: PlanMatterType,
     plan: &crate::legal_plans::LegalPlan,
     fee: Option<crate::legal_plans::PlanFeeSchedule>,
+    accepted_at: DateTime<Utc>,
 ) -> Result<StagedAssignment, PlanIntakeError> {
-    let now = Utc::now();
     let mut response = surreal
         .query(format!(
             "UPDATE $id SET status = 'accepted', project_id = $project_id, \
@@ -791,7 +791,7 @@ async fn mark_accepted(
         .bind(("id", record_id(TABLE, staged.id)))
         .bind(("project_id", record_id("project", project_id)))
         .bind(("accepted_by", record_id("person", input.acting_person_id)))
-        .bind(("decided_at", surrealdb::types::Datetime::from(now)))
+        .bind(("decided_at", surrealdb::types::Datetime::from(accepted_at)))
         .bind(("plan_matter_type", matter_type.as_str()))
         .bind(("plan_state", input.plan_state.clone()))
         .bind(("legal_plan_id", Some(plan.id.to_string())))
@@ -817,7 +817,7 @@ async fn mark_accepted(
             "fee_effective_on",
             fee.as_ref().map(|fee| fee.effective_on.to_string()),
         ))
-        .bind(("updated_at", surrealdb::types::Datetime::from(now)))
+        .bind(("updated_at", surrealdb::types::Datetime::from(accepted_at)))
         .await?
         .check()?;
     let staged = response
@@ -860,6 +860,11 @@ pub async fn accept(
         .ok_or(PlanIntakeError::MissingMemberAnchor)?;
     let matter_type = validated_matter_type(input)?;
 
+    // One clock reading for the whole acceptance: the accepted-on date,
+    // the record's decided_at, and the turnaround SLA all derive from the
+    // same instant, so they can never disagree by a capture gap.
+    let accepted_at = Utc::now();
+
     // The plan is the firm's own — the lookup is firm-scoped, so another
     // firm's plan id refuses here.
     let plan = crate::legal_plans::find(pg, staged.firm_id, input.legal_plan_id)
@@ -890,7 +895,7 @@ pub async fn accept(
             // The assignment date is the email-landing date, not the
             // acceptance date — the plan's clock started at landing.
             plan_assigned_on: Some(staged.assigned_at.date_naive().to_string()),
-            plan_accepted_on: Some(Utc::now().date_naive().to_string()),
+            plan_accepted_on: Some(accepted_at.date_naive().to_string()),
             plan_closed_on: None,
             // The kit catalog is compiled from the project-skill kits;
             // until ENG-1271's catalog matches plan matter types, no kit
@@ -918,10 +923,27 @@ pub async fn accept(
     };
 
     // The plan's SLA deadlines, from the email-landing time.
-    create_plan_deadlines(surreal, project.id, &staged, &plan, &input.code).await?;
+    create_plan_deadlines(
+        surreal,
+        project.id,
+        &staged,
+        &plan,
+        &input.code,
+        accepted_at,
+    )
+    .await?;
 
-    let staged =
-        mark_accepted(surreal, &staged, project.id, input, matter_type, &plan, fee).await?;
+    let staged = mark_accepted(
+        surreal,
+        &staged,
+        project.id,
+        input,
+        matter_type,
+        &plan,
+        fee,
+        accepted_at,
+    )
+    .await?;
     Ok(Accepted {
         staged,
         project_id: project.id,
@@ -1128,9 +1150,9 @@ async fn create_plan_deadlines(
     staged: &StagedAssignment,
     plan: &LegalPlan,
     code: &str,
+    accepted_at: DateTime<Utc>,
 ) -> Result<(), PlanIntakeError> {
     let acceptance_due = acceptance_due(staged.assigned_at, plan.acceptance_sla_hours);
-    let now = Utc::now();
 
     let acceptance_deadline = crate::project_deadlines::create(
         surreal,
@@ -1158,7 +1180,7 @@ async fn create_plan_deadlines(
     .await?;
     // An acceptance inside the SLA closes its own clock; a late one stays
     // open and overdue, which is exactly what the daily alert should show.
-    if now <= acceptance_due {
+    if accepted_at <= acceptance_due {
         crate::project_deadlines::complete(surreal, project_id, acceptance_deadline.id).await?;
     }
 
@@ -1171,7 +1193,7 @@ async fn create_plan_deadlines(
                 "{} expects the matter finished within {} days of acceptance.",
                 plan.name, plan.turnaround_sla_days
             )),
-            due_at: turnaround_due(now, plan.turnaround_sla_days).to_rfc3339(),
+            due_at: turnaround_due(accepted_at, plan.turnaround_sla_days).to_rfc3339(),
             authority_kind: "internal".to_string(),
             authority: format!("{} turnaround SLA", plan.name),
             source: "plan_intake".to_string(),
@@ -1628,7 +1650,10 @@ mod tests {
         crate::test_support::approve_test_brand_domain(&surreal, "neon").await;
         plan_firm(&pg, firm_id).await;
         let plan = arag_plan_on(&pg, firm_id, "ARAG", None).await;
-        let staged = stage(&surreal, Some(&pg), &arag_input(firm_id, Utc::now()))
+        // The same notice redelivered: restage dedupes on the source
+        // message, so both stage calls share one input.
+        let input = arag_input(firm_id, Utc::now());
+        let staged = stage(&surreal, Some(&pg), &input)
             .await
             .expect("staging succeeds");
         let attorney = crate::persons::create(
@@ -1676,7 +1701,7 @@ mod tests {
 
         // The parser itself never opens a project either: staging is the
         // only automated step, and it wrote none.
-        let staged_again = stage(&surreal, Some(&pg), &arag_input(firm_id, Utc::now()))
+        let staged_again = stage(&surreal, Some(&pg), &input)
             .await
             .expect("restaging is idempotent");
         assert_eq!(staged_again.id, staged.id);
@@ -1779,9 +1804,20 @@ mod tests {
             .iter()
             .find(|deadline| deadline.title.as_deref() == Some("Plan turnaround deadline"))
             .expect("the turnaround deadline exists");
-        assert_eq!(
-            turnaround.due_at,
-            turnaround_due(Utc::now(), 10).to_rfc3339()
+        // The turnaround clock starts at the acceptance instant — the same
+        // reading the record keeps as decided_at — so the deadline and the
+        // record agree by construction. The small tolerance only absorbs
+        // datetime round-trip precision in storage.
+        let decided = record
+            .decided_at
+            .expect("the acceptance records its instant");
+        let due = chrono::DateTime::parse_from_rfc3339(&turnaround.due_at)
+            .expect("due parses")
+            .with_timezone(&Utc);
+        let expected = turnaround_due(decided, 10);
+        assert!(
+            (due - expected).abs() <= chrono::Duration::seconds(2),
+            "the turnaround deadline starts at the acceptance instant: {due} vs {expected}"
         );
         assert_eq!(turnaround.status, "open");
 
