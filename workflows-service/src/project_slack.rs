@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use workflows::{project_channel_name, SlackBot, SlackBotError, SlackChannel};
 
+use crate::firm_slack::ProjectSlackBots;
+
 /// Why a lane step failed, shared by the Restate and DBOS paths.
 ///
 /// The variant is the classification: [`LaneError::terminal`] answers whether
@@ -220,10 +222,13 @@ pub struct ClientProjectViewRequest {}
 /// itself is the Project-specific destination.
 pub const CLIENT_PROJECT_VIEW_MESSAGE: &str = "A client viewed this Project in the portal.";
 
+/// The Restate object. `bots` resolves the owning Firm's Slack bot for each
+/// Project at the moment a step needs it (ENG-392): there is no
+/// deployment-wide bot for Project channels.
 #[derive(Clone)]
 pub struct ProjectSlackService {
     surreal: store::surreal::SurrealDb,
-    slack: Arc<dyn SlackBot>,
+    bots: Arc<dyn ProjectSlackBots>,
     simulated: bool,
 }
 
@@ -233,12 +238,12 @@ impl ProjectSlackService {
     #[must_use]
     pub fn new(
         surreal: store::surreal::SurrealDb,
-        slack: Arc<dyn SlackBot>,
+        bots: Arc<dyn ProjectSlackBots>,
         simulated: bool,
     ) -> Self {
         Self {
             surreal,
-            slack,
+            bots,
             simulated,
         }
     }
@@ -526,10 +531,14 @@ impl ProjectSlackService {
         async move {
             let project_id = project_id(ctx.key())?;
             let surreal = self.surreal.clone();
-            let slack = Arc::clone(&self.slack);
+            let bots = Arc::clone(&self.bots);
             let simulated = self.simulated;
             let channel_id: String = ctx
                 .run(|| async move {
+                    let slack = bots
+                        .for_project(&surreal, project_id)
+                        .await
+                        .map_err(LaneError::into_handler_error)?;
                     ensure_internal_channel(&surreal, &slack, project_id, simulated)
                         .await
                         .map(Json)
@@ -539,8 +548,13 @@ impl ProjectSlackService {
                 .await?
                 .into_inner();
 
-            let slack = Arc::clone(&self.slack);
+            let surreal = self.surreal.clone();
+            let bots = Arc::clone(&self.bots);
             ctx.run(move || async move {
+                let slack = bots
+                    .for_project(&surreal, project_id)
+                    .await
+                    .map_err(LaneError::into_handler_error)?;
                 post_client_view_notice(&slack, &channel_id)
                     .await
                     .map_err(HandlerError::from)
@@ -577,10 +591,14 @@ impl ProjectSlackService {
             }
 
             let surreal = self.surreal.clone();
-            let slack = Arc::clone(&self.slack);
+            let bots = Arc::clone(&self.bots);
             let simulated = self.simulated;
             let destination: MainPushDestination = ctx
                 .run(|| async move {
+                    let slack = bots
+                        .for_project(&surreal, project_id)
+                        .await
+                        .map_err(LaneError::into_handler_error)?;
                     main_push_destination(&surreal, &slack, project_id, simulated)
                         .await
                         .map(Json)
@@ -591,9 +609,14 @@ impl ProjectSlackService {
                 .into_inner();
 
             let message = render_main_push(&event, destination.repository_url.as_deref());
-            let slack = Arc::clone(&self.slack);
+            let surreal = self.surreal.clone();
+            let bots = Arc::clone(&self.bots);
             let channel_id = destination.channel_id;
             ctx.run(move || async move {
+                let slack = bots
+                    .for_project(&surreal, project_id)
+                    .await
+                    .map_err(LaneError::into_handler_error)?;
                 slack
                     .post_message(&channel_id, &message)
                     .await
@@ -1055,10 +1078,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_holds_the_store_and_bot() {
+    async fn service_holds_the_store_and_bots() {
         let surreal = mem_surreal().await;
         let slack: Arc<dyn workflows::SlackBot> = Arc::new(CapturingSlackBot::new());
-        let _service = ProjectSlackService::new(surreal, slack, false);
+        let _service = ProjectSlackService::new(
+            surreal,
+            Arc::new(crate::firm_slack::SharedSlackBot(slack)),
+            false,
+        );
     }
 
     #[tokio::test]
