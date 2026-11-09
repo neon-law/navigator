@@ -231,6 +231,10 @@ fn every_telemetry_recorder_field_survives_the_export_boundary() {
             "record_nightly_project_update_with_meter",
             telemetry::NIGHTLY_PROJECT_UPDATE_ATTRIBUTE_KEYS,
         ),
+        (
+            "record_archives_run_with_meter",
+            telemetry::ARCHIVES_ATTRIBUTE_KEYS,
+        ),
     ];
     let missing: Vec<(&str, &str)> = contracts
         .iter()

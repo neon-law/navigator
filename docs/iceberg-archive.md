@@ -97,6 +97,11 @@ same TLS settings. Missing configuration, denied reads, or source failures recor
 terminate the invocation. Completed SurrealDB snapshots remain available. Recovery requires a new invocation because
 replay retains the journaled extraction outcome.
 
+The same rule holds for every table with rows: a table that fails to write fails the run. The digest is posted first,
+opening with `Iceberg data export FAILED`, the failure count, and one line per failing table with the first line of its
+error; then the run ends with a terminal error naming those tables, so Restate and DBOS both record it as failed. A
+table that is empty is skipped before the bucket is touched and does not fail the run.
+
 1. **Verify coverage.** Read `pg_catalog` so denied privileges cannot hide relations. Check every application schema,
    DBOS table, AGE catalog and graph relation, migration ledger, sequence, materialized view, and large-object table
    against the reviewed manifest. Added, dropped, inaccessible, unclassified, and unsupported relations fail the run. An
@@ -176,7 +181,8 @@ existing variable set).
 **What the variable accepts.** Either the archive project's id (e.g. `example-archive-project`) or its numeric project
 number (e.g. `123456789012`). The two forms prove different things, because the workflows-service identity holds only
 `roles/storage.objectCreator` and `roles/storage.objectViewer` on the bucket — no Cloud Resource Manager access — so the
-only project identity GCS reports to it is the bucket's numeric project number:
+only project identity GCS reports to it is the bucket's numeric project number (`roles/storage.legacyBucketReader` adds
+the bucket-metadata read the retention probe needs, still no Resource Manager access):
 
 - **A number** verifies by direct equality against that probe. This is the stronger form.
 - **An id** cannot be resolved to a number under a storage-only credential, so the check verifies the property it
@@ -197,7 +203,10 @@ bucket in the archive project's context rather than whichever project the viewer
 
 The offsite bucket carries a **locked** GCS Bucket Lock retention policy — 25 years (25 × 365.25 days, expressed in
 seconds as `OFFSITE_ARCHIVES_RETENTION_SECONDS`), set at bucket creation and locked once verified. A locked policy
-rejects both replacement and deletion of any object, so on that lane the writer's contract is **create-only**:
+rejects both replacement and deletion of any object, so on that lane the writer's contract is **create-only**. The Git
+bundle archive is the other locked lane (`<deployment>-bundles`, 7 years, see [archive
+buckets](environments.md#archive-buckets)); it is a separate bucket because this unlocked in-project lane rewrites
+`version-hint.text` every run.
 
 - **Probe before write.** Every writer probes the bucket's policy (`retention_locked`) and branches on the answer. A
   backend that cannot determine its bucket's policy fails the run — an unprobeable locked bucket must never receive a
@@ -325,7 +334,8 @@ deployment's real coordinates only at the CLI, never in a committed file.
    provisioner creates the bucket with its retention policy already in place, verifies the policy against the live
    bucket, and only then locks it — the lock is irreversible, so a wrong policy is converged by deleting the bucket
    before it was ever locked, never by "fixing" a locked one. The workflows-service identity receives
-   `roles/storage.objectCreator` and `roles/storage.objectViewer` on the bucket and nothing else.
+   `roles/storage.objectCreator`, `roles/storage.objectViewer`, and `roles/storage.legacyBucketReader` (the
+   retention-policy probe) on the bucket and nothing else.
 2. **Configure.** Set `NAVIGATOR_ARCHIVES_BUCKET` to the offsite bucket and `NAVIGATOR_ARCHIVES_GCP_PROJECT_ID` to
    the archive project's id or numeric project number on the workflows-service pod (see the example deployment's
    [`config.toml`](../deployments/example-deployment/config.toml)).

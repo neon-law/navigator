@@ -4,8 +4,11 @@
 //! firm-ops channel: an iceberg glyph and the run date, then one line per
 //! snapshotted table — table name, row count, and a link that opens the
 //! table's Iceberg files in the Google Cloud Storage browser. A table that
-//! failed to snapshot surfaces as its own ⚠️ line, so a silent gap can't hide
-//! in the scheduled signal.
+//! failed to write is the headline, not a footnote: the message opens with
+//! the failure count and names each failing table with its error before any
+//! table that landed, so a run that wrote nothing never reads as a normal
+//! digest. That run also ends as a failure in the workflow engine
+//! ([`crate::workflow`]); the digest is where a lawyer-ops reader sees why.
 //!
 //! Slack **mrkdwn**, not a fenced code block: the per-table links must render
 //! as clickable `<url|label>`, which a code fence would print as literal text.
@@ -60,15 +63,33 @@ const GCS_BROWSER_BASE: &str = "https://console.cloud.google.com/storage/browser
 /// Render the data export as a single Slack **mrkdwn** message: an iceberg
 /// glyph and the run date, then one line per snapshotted table — name, row
 /// count, and a link into the Google Cloud Storage browser for that table's
-/// Iceberg files. A table that failed to snapshot gets a ⚠️ line instead of a
-/// link. Pure and exposed so the formatting is unit-tested.
+/// Iceberg files. When any table failed to write, the header says `FAILED`
+/// with the failure count and the failing tables come first, each with the
+/// first line of its error. Pure and exposed so the formatting is unit-tested.
 #[must_use]
 pub fn render_archives_slack(report: &DiagnosticReport) -> String {
-    let mut out = format!(
-        "🧊 *Iceberg data export — {}*  ({} tables)\n",
-        report.run_date,
-        report.snapshots.len()
-    );
+    let mut out = if report.failures.is_empty() {
+        format!(
+            "🧊 *Iceberg data export — {}*  ({} tables)\n",
+            report.run_date,
+            report.snapshots.len()
+        )
+    } else {
+        format!(
+            "⚠️ *Iceberg data export FAILED — {}*  ({} of {} tables failed to write)\n",
+            report.run_date,
+            report.failures.len(),
+            report.failures.len() + report.snapshots.len()
+        )
+    };
+    for failure in &report.failures {
+        let _ = writeln!(
+            out,
+            "• ⚠️ *{}* — snapshot failed: {}",
+            failure.table,
+            error_summary(&failure.error)
+        );
+    }
     if let Some(project) = &report.archive_project {
         let _ = writeln!(out, "• *archive project* — {project} (offsite bucket)");
     }
@@ -92,10 +113,18 @@ pub fn render_archives_slack(report: &DiagnosticReport) -> String {
             entry.table, entry.rows
         );
     }
-    for failure in &report.failures {
-        let _ = writeln!(out, "• ⚠️ *{}* — snapshot failed", failure.table);
-    }
     out.trim_end().to_string()
+}
+
+/// The error's first line, bounded so a long GCS message cannot swallow the
+/// digest. The full error stays in the journaled summary and the logs.
+fn error_summary(error: &str) -> String {
+    const LIMIT: usize = 160;
+    let line = error.lines().next().unwrap_or_default().trim();
+    match line.char_indices().nth(LIMIT) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -181,20 +210,53 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_table_surfaces_as_a_warning_line_not_a_link() {
+    fn a_failed_table_leads_the_digest_with_its_error_and_no_link() {
         let msg = render_archives_slack(&sample(
             vec![snap("persons", 10)],
             vec![TableFailure {
                 table: "documents".into(),
-                error: "connection reset".into(),
+                error: "connection reset\nsecond line stays in the journal".into(),
             }],
         ));
+        // A run with a failure is never rendered as a normal digest: the
+        // header says so, with the count, before any table that landed.
         assert!(
-            msg.contains("• ⚠️ *documents* — snapshot failed"),
-            "failure must be visible: {msg}"
+            msg.starts_with(
+                "⚠️ *Iceberg data export FAILED — 2026-07-10*  (1 of 2 tables failed to write)"
+            ),
+            "header must lead with the failure: {msg}"
         );
+        let failure_at = msg.find("• ⚠️ *documents* — snapshot failed: connection reset");
+        let success_at = msg.find("• *persons* — 10 rows");
+        assert!(
+            failure_at.is_some() && failure_at < success_at,
+            "failing tables come first, each with its error: {msg}"
+        );
+        assert!(!msg.contains("second line"));
         // The failed table has no GCS link (it never landed in the bucket).
         assert!(!msg.contains("application/documents"));
+    }
+
+    #[test]
+    fn a_run_that_wrote_nothing_but_failed_is_not_a_normal_digest() {
+        let msg = render_archives_slack(&sample(
+            vec![],
+            vec![
+                TableFailure {
+                    table: "persons".into(),
+                    error: "x".repeat(400),
+                },
+                TableFailure {
+                    table: "documents".into(),
+                    error: "denied".into(),
+                },
+            ],
+        ));
+        assert!(msg.contains("(2 of 2 tables failed to write)"), "{msg}");
+        assert!(!msg.contains("(0 tables)"), "{msg}");
+        assert!(msg.contains("*persons*") && msg.contains("*documents*"));
+        // A long error is cut so the digest stays readable.
+        assert!(msg.contains(&format!("{}…", "x".repeat(160))), "{msg}");
     }
 
     #[test]

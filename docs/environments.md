@@ -230,6 +230,27 @@ deployment cannot pull an image; a routine `ops gcp setup` re-run is refused for
 reports this as `SetupError::OrgPolicyRefused` rather than a bare 403. Allow the directory on the hub's organization
 **before** moving a project, not after.
 
+## Archive buckets
+
+Each row keeps three archive lanes, and only these. Every other bucket that once held archives is legacy and is retired
+once its contents are verified elsewhere.
+
+| Bucket | Holds | Retention | Setup flags |
+| --- | --- | --- | --- |
+| `neon-law-archives-<deployment>` | Iceberg tables, rewritten in place | None (overwrite lane) | `--archives-bucket` |
+| `<deployment>-bundles` | Git bundles and receipts | Locked, 7 years | `--forgejo-archives-*` |
+| `<deployment>-archives-offsite` | Offsite Iceberg archive, create-only | Locked, 25 years | `--offsite-archives-*` |
+
+The two locked buckets live in the archive project, never the deployment's; each `--*-project-id` flag names it beside
+the `--*-bucket` flag. Bundles come from `navigator ops forgejo bundle archive` and the nightly repository backup.
+Bundles and Iceberg tables cannot share a bucket: the Iceberg writer replaces `metadata/version-hint.text` on every run,
+which a retention policy refuses, while a bundle must be undeletable by the identity that wrote it. A locked policy can
+be lengthened later and never shortened, so the bundle lane locks the shorter defensible window first. The deployment
+identity holds create, read, and the retention-policy probe (`storage.buckets.get`) on each locked bucket and nothing
+else; an object hold is not a substitute, because an object admin can release it. The runtime reads the bundle bucket as
+`NAVIGATOR_FORGEJO_ARCHIVES_BUCKET` and the Iceberg bucket as `NAVIGATOR_ARCHIVES_BUCKET` ([Iceberg
+archive](iceberg-archive.md)).
+
 ## See also
 
 - [`Operating Neon Law Navigator`](../server/content/workshops/navigator/DEPLOY.md) — exact provision, secret-audit,

@@ -16,4 +16,5 @@ operations](../../../../docs/cloud-operations.md).
 Apply it to the deployment's Dash0 dataset with the Dash0 CLI or the Dash0 operator. The file header gives both
 commands. `dash0-forgejo-check-rules.yaml` holds the Forgejo Actions rules, applied the same way: a job waiting with no
 runner, a stopped runner controller, a gate or CD failure on `main`, a merge with no CD run, leftover runners, and
-missing Forgejo metrics.
+missing Forgejo metrics. `dash0-archives-check-rules.yaml` holds the Archives rules: a failed run, and no archive table
+written in 13 hours, which also catches a run that never started.

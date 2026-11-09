@@ -29,7 +29,9 @@
 //!    telemetry buckets, each followed by [`buckets::ensure_lifecycle`] so the
 //!    telemetry expiry is in place before the first object lands.
 //! 5. [`workload_identity::ensure_runtime_identity`] — per-deployment GSA
-//!    and direct GCP access.
+//!    and direct GCP access, plus
+//!    [`workload_identity::ensure_archive_probe`] on the archive bucket when
+//!    the deployment names one.
 //! 6. Registry access, then
 //!    [`gke::ensure_autopilot_cluster_foundation`] — GKE Autopilot cluster
 //!    and Gateway static IP.
@@ -78,6 +80,7 @@ pub mod workload_identity;
 
 pub use error::{SetupError, SetupResult};
 
+use self::buckets::LockedLane;
 use self::client::GcpClient;
 
 const SETUP_STAGE_COUNT: usize = 20;
@@ -123,6 +126,11 @@ pub const ARCHIVES_BUCKET_PREFIX: &str = "neon-law-archives-";
 /// retention policy. The suffix lets `buckets::from_name` classify the lane
 /// even though the bucket itself is operator-named and cross-project.
 pub const OFFSITE_ARCHIVES_BUCKET_SUFFIX: &str = "-archives-offsite";
+/// The locked Git bundle archive, `<deployment>-bundles`, created in the
+/// archive project beside the offsite Iceberg archive. Bundles cannot share
+/// the Iceberg bucket: the unlocked Iceberg lane rewrites
+/// `metadata/version-hint.text` every run, which a retention policy refuses.
+pub const GIT_BUNDLES_BUCKET_SUFFIX: &str = "-bundles";
 
 /// Default Artifact Registry repository name that holds every image.
 pub const DEFAULT_ARTIFACT_REGISTRY_REPO: &str = "navigator";
@@ -215,6 +223,12 @@ pub struct SetupConfig {
     /// archive project must differ from the deployment project.
     pub offsite_archives_project_id: Option<String>,
     pub offsite_archives_bucket: Option<String>,
+    /// The locked Git bundle archive, under the same rules as the offsite
+    /// pair above: both set or both absent, in a project other than the
+    /// deployment's, written with create and read roles only. The runtime
+    /// reads it as `NAVIGATOR_FORGEJO_ARCHIVES_BUCKET`.
+    pub forgejo_archives_project_id: Option<String>,
+    pub forgejo_archives_bucket: Option<String>,
     /// Google service-account id used by the web and workflows Kubernetes
     /// service accounts through GKE Workload Identity. Deployments sharing a
     /// GCP project set this explicitly so their principals stay isolated.
@@ -261,6 +275,8 @@ impl Default for SetupConfig {
             archived_projects_bucket: None,
             offsite_archives_project_id: None,
             offsite_archives_bucket: None,
+            forgejo_archives_project_id: None,
+            forgejo_archives_bucket: None,
             google_service_account_id: "navigator-web".to_string(),
             drive_service_account_id: "navigator-drive".to_string(),
             kubernetes_namespace: "navigator".to_string(),
@@ -427,34 +443,49 @@ async fn ensure_buckets(
 
 /// Resolve and validate the offsite archive lane: both names supplied
 /// together, and the archive in a different project than the deployment.
+/// The two setup flags that name one locked lane.
+const fn locked_lane_flags(lane: LockedLane) -> (&'static str, &'static str) {
+    match lane {
+        LockedLane::OffsiteArchives => {
+            ("--offsite-archives-project-id", "--offsite-archives-bucket")
+        }
+        LockedLane::GitBundles => ("--forgejo-archives-project-id", "--forgejo-archives-bucket"),
+    }
+}
+
 /// `None` means the deployment declines the lane — a first-class answer, like
 /// the archive and telemetry buckets. A half-configured pair or an in-project
 /// archive refuses the run: a bucket provisioned inside the deployment
-/// project shares its blast radius, which is exactly what the lane exists to
-/// avoid.
-fn resolve_offsite_archive<'a>(
+/// project shares its blast radius, which is exactly what a locked lane
+/// exists to avoid.
+fn resolve_locked_lane<'a>(
     project_id: &str,
     config: &'a SetupConfig,
+    lane: LockedLane,
 ) -> SetupResult<Option<(&'a str, &'a str)>> {
-    let resolved: Option<(&'a str, &'a str)> = match (
-        &config.offsite_archives_project_id,
-        &config.offsite_archives_bucket,
-    ) {
+    let (project_flag, bucket_flag) = locked_lane_flags(lane);
+    let pair = match lane {
+        LockedLane::OffsiteArchives => (
+            &config.offsite_archives_project_id,
+            &config.offsite_archives_bucket,
+        ),
+        LockedLane::GitBundles => (
+            &config.forgejo_archives_project_id,
+            &config.forgejo_archives_bucket,
+        ),
+    };
+    let resolved: Option<(&'a str, &'a str)> = match pair {
         (Some(archive_project), Some(bucket)) if archive_project != project_id => {
             Ok(Some((archive_project.as_str(), bucket.as_str())))
         }
         (Some(_), Some(_)) => Err(SetupError::InvalidFlag {
-            flag: "--offsite-archives-project-id",
-            detail: "must differ from the deployment project: the offsite archive exists \
+            flag: project_flag,
+            detail: "must differ from the deployment project: a locked archive exists \
                      so the deployment project's blast radius cannot reach it",
         }),
         (None, None) => Ok(None),
-        (Some(_), None) => Err(SetupError::MissingConfiguration(
-            "--offsite-archives-bucket",
-        )),
-        (None, Some(_)) => Err(SetupError::MissingConfiguration(
-            "--offsite-archives-project-id",
-        )),
+        (Some(_), None) => Err(SetupError::MissingConfiguration(bucket_flag)),
+        (None, Some(_)) => Err(SetupError::MissingConfiguration(project_flag)),
     }?;
     if let Some((_, bucket)) = &resolved {
         if BucketNames::resolve(project_id, config)
@@ -462,51 +493,61 @@ fn resolve_offsite_archive<'a>(
             .contains(bucket)
         {
             return Err(SetupError::InvalidFlag {
-                flag: "--offsite-archives-bucket",
+                flag: bucket_flag,
                 detail: "must not name a bucket the runtime identity is already granted on: \
                          that grant carries objectAdmin, which would leave delete permission \
-                         on the archive the offsite lane exists to keep write-only",
+                         on the archive a locked lane exists to keep write-only",
             });
         }
     }
     Ok(resolved)
 }
 
-/// Stage 13: the offsite Iceberg archive — a locked, write-only bucket in a
-/// different GCP project, plus the workflows-service grant that may write it
-/// but never administer it. The bucket is created with its retention policy
-/// already in place, verified against the live bucket, and only then locked:
-/// the lock is irreversible.
-async fn ensure_offsite_archive(
+/// Stage 13: the locked archives — the offsite Iceberg archive and the Git
+/// bundle archive, each a locked, write-only bucket in a different GCP
+/// project, plus the workflows-service grant that may write it but never
+/// administer it. Each bucket is created with its retention policy already
+/// in place, verified against the live bucket, and only then locked: the
+/// lock is irreversible.
+async fn ensure_locked_archives(
     client: &GcpClient,
     project_id: &str,
     config: &SetupConfig,
 ) -> SetupResult<()> {
-    match resolve_offsite_archive(project_id, config)? {
-        Some((archive_project, bucket)) => {
-            progress(
+    for lane in [LockedLane::OffsiteArchives, LockedLane::GitBundles] {
+        match resolve_locked_lane(project_id, config, lane)? {
+            Some((archive_project, bucket)) => {
+                progress(
+                    project_id,
+                    13,
+                    &format!(
+                        "{} bucket {bucket} in project {archive_project} (locked {}-year retention)",
+                        lane.label(),
+                        lane.retention_seconds() / 31_557_600
+                    ),
+                );
+                buckets::ensure_locked_archive(
+                    client,
+                    archive_project,
+                    bucket,
+                    &config.region,
+                    lane,
+                )
+                .await?;
+                buckets::ensure_locked_archive_writer(
+                    client,
+                    project_id,
+                    &config.google_service_account_id,
+                    bucket,
+                )
+                .await?;
+            }
+            None => progress(
                 project_id,
                 13,
-                &format!(
-                    "offsite Iceberg archive bucket {bucket} in project {archive_project} \
-                     (locked 25-year retention)"
-                ),
-            );
-            buckets::ensure_offsite_archive(client, archive_project, bucket, &config.region)
-                .await?;
-            buckets::ensure_offsite_archive_writer(
-                client,
-                project_id,
-                &config.google_service_account_id,
-                bucket,
-            )
-            .await?;
+                &format!("{} (not configured; skipped)", lane.label()),
+            ),
         }
-        None => progress(
-            project_id,
-            13,
-            "offsite Iceberg archive (not configured; skipped)",
-        ),
     }
     Ok(())
 }
@@ -571,10 +612,12 @@ pub async fn run(client: &GcpClient, project_id: &str, config: &SetupConfig) -> 
     if let Some(images_project_id) = config.images_project_id.as_deref() {
         tenants::validate_images_project(project_id, images_project_id)?;
     }
-    // Offsite archive lane validated before any cloud call, like every other
-    // early check: a misconfigured pair must fail the plan, not a
-    // half-provisioned project.
-    resolve_offsite_archive(project_id, config)?;
+    // Locked lanes validated before any cloud call, like every other early
+    // check: a misconfigured pair must fail the plan, not a half-provisioned
+    // project.
+    for lane in [LockedLane::OffsiteArchives, LockedLane::GitBundles] {
+        resolve_locked_lane(project_id, config, lane)?;
+    }
     let public_base_url = config
         .public_base_url
         .as_deref()
@@ -632,12 +675,18 @@ pub async fn run(client: &GcpClient, project_id: &str, config: &SetupConfig) -> 
     );
     workload_identity::ensure_runtime_identity(client, project_id, config, &names.granted())
         .await?;
+    // The archive writer probes its bucket's retention policy before every
+    // write; objectAdmin alone cannot, and the hand grant that fixed the
+    // 2026-11 outage belongs here so a reconcile keeps it.
+    if let Some(bucket) = names.archives.as_deref() {
+        workload_identity::ensure_archive_probe(client, project_id, config, bucket).await?;
+    }
 
-    // Offsite archive after runtime identity: its cross-project grant names
+    // Locked archives after runtime identity: their cross-project grants name
     // the deployment's workflows-service GSA, which stage 12 just ensured
     // exists. Never part of `names.granted()` — that grant is
-    // `objectAdmin`, and the offsite bucket must never carry it.
-    ensure_offsite_archive(client, project_id, config).await?;
+    // `objectAdmin`, and a locked bucket must never carry it.
+    ensure_locked_archives(client, project_id, config).await?;
 
     // Registry before the cluster: GKE nodes pull the app images from
     // it, and the reader binding must exist before the first pull.
@@ -773,6 +822,7 @@ mod tests {
 
     #[test]
     fn offsite_archive_requires_both_names_and_a_different_project() {
+        let lane = super::LockedLane::OffsiteArchives;
         let config = |project: Option<&str>, bucket: Option<&str>| super::SetupConfig {
             offsite_archives_project_id: project.map(ToString::to_string),
             offsite_archives_bucket: bucket.map(ToString::to_string),
@@ -780,35 +830,38 @@ mod tests {
         };
         // The lane declined is a first-class answer.
         assert_eq!(
-            super::resolve_offsite_archive("example-deploy", &config(None, None)).unwrap(),
+            super::resolve_locked_lane("example-deploy", &config(None, None), lane).unwrap(),
             None
         );
         // Both names, different projects: resolved.
         assert_eq!(
-            super::resolve_offsite_archive(
+            super::resolve_locked_lane(
                 "example-deploy",
                 &config(
                     Some("example-archive"),
                     Some("example-deployment-archives-offsite")
-                )
+                ),
+                lane
             )
             .unwrap(),
             Some(("example-archive", "example-deployment-archives-offsite"))
         );
         // Half-configured in either direction refuses — a bucket without the
         // project id would provision in-project.
-        let err = super::resolve_offsite_archive(
+        let err = super::resolve_locked_lane(
             "example-deploy",
             &config(Some("example-archive"), None),
+            lane,
         )
         .unwrap_err();
         assert!(
             err.to_string().contains("--offsite-archives-bucket"),
             "{err}"
         );
-        let err = super::resolve_offsite_archive(
+        let err = super::resolve_locked_lane(
             "example-deploy",
             &config(None, Some("example-deployment-archives-offsite")),
+            lane,
         )
         .unwrap_err();
         assert!(
@@ -817,12 +870,13 @@ mod tests {
         );
         // An archive inside the deployment project defeats the lane's whole
         // purpose: same blast radius as the live workload.
-        let err = super::resolve_offsite_archive(
+        let err = super::resolve_locked_lane(
             "example-deploy",
             &config(
                 Some("example-deploy"),
                 Some("example-deployment-archives-offsite"),
             ),
+            lane,
         )
         .unwrap_err();
         assert!(
@@ -843,12 +897,76 @@ mod tests {
         // The runtime grant on the archives bucket carries objectAdmin; the
         // offsite lane must not layer creator+viewer on top of a bucket the
         // runtime can already delete from.
-        let err = super::resolve_offsite_archive("example-deploy", &config).unwrap_err();
+        let err = super::resolve_locked_lane(
+            "example-deploy",
+            &config,
+            super::LockedLane::OffsiteArchives,
+        )
+        .unwrap_err();
         assert!(
             err.to_string().contains("--offsite-archives-bucket"),
             "{err}"
         );
         assert!(err.to_string().contains("objectAdmin"), "{err}");
+    }
+
+    /// ENG-1292: the Git bundle lane resolves from its own flag pair, under
+    /// the same rules as the offsite lane, and provisions a locked bucket
+    /// with a write-only grant — no delete anywhere in the plan.
+    #[tokio::test]
+    async fn git_bundle_lane_is_provisioned_locked_with_a_write_only_grant() {
+        let lane = super::LockedLane::GitBundles;
+        let config = super::SetupConfig {
+            forgejo_archives_project_id: Some("example-archive".into()),
+            forgejo_archives_bucket: Some("example-deployment-bundles".into()),
+            ..super::SetupConfig::default()
+        };
+        assert_eq!(
+            super::resolve_locked_lane("example-deploy", &config, lane).unwrap(),
+            Some(("example-archive", "example-deployment-bundles"))
+        );
+        let half = super::SetupConfig {
+            forgejo_archives_bucket: Some("example-deployment-bundles".into()),
+            ..super::SetupConfig::default()
+        };
+        let err = super::resolve_locked_lane("example-deploy", &half, lane).unwrap_err();
+        assert!(
+            err.to_string().contains("--forgejo-archives-project-id"),
+            "{err}"
+        );
+
+        let client = offline_dry_run_client();
+        super::ensure_locked_archives(&client, "example-deploy", &config)
+            .await
+            .unwrap();
+        let calls = client.recorded_calls();
+        let plan = calls
+            .iter()
+            .map(|call| format!("{} {}", call.url, call.body.as_deref().unwrap_or_default()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            plan.contains("/storage/v1/b?project=example-archive")
+                && plan.contains("\"retentionPeriod\":\"220903200\""),
+            "created in the archive project with the bundle retention: {plan}"
+        );
+        assert!(
+            plan.contains("/storage/v1/b/example-deployment-bundles/lockRetentionPolicy"),
+            "{plan}"
+        );
+        assert!(
+            plan.contains("gs://example-deployment-bundles")
+                && plan.contains("roles/storage.objectCreator")
+                && plan.contains(
+                    "serviceAccount:navigator-web@example-deploy.iam.gserviceaccount.com"
+                ),
+            "{plan}"
+        );
+        for forbidden in ["roles/storage.objectAdmin", "roles/storage.objectUser"] {
+            assert!(!plan.contains(forbidden), "{forbidden} in the plan: {plan}");
+        }
+        // The offsite lane was declined, so nothing names it.
+        assert!(!plan.contains("archives-offsite"), "{plan}");
     }
 
     #[tokio::test]

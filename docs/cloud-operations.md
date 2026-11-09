@@ -140,10 +140,12 @@ service accounts, and clusters; they must never include database URLs, passwords
 secret value.
 
 All four deployment buckets stay private. The deployment Google service account receives `roles/storage.objectAdmin` on
-each bucket, and Workload Identity maps both `navigator-web` and `workflows-service` to that principal. Marketing assets
-become anonymous only when `web` reads them from the dedicated assets bucket through the cacheable same-origin
-`/assets/*` route. No bucket receives `allUsers`, and setup never changes organization policy. The application does not
-expose corresponding routes for the documents, exports, or logs buckets.
+each bucket, plus `roles/storage.legacyBucketReader` on the archive bucket: the archive writer probes the bucket's
+retention policy (`storage.buckets.get`) before every write, which object admin alone cannot, and setup grants it so a
+reconcile cannot drop it. Workload Identity maps both `navigator-web` and `workflows-service` to that principal.
+Marketing assets become anonymous only when `web` reads them from the dedicated assets bucket through the cacheable
+same-origin `/assets/*` route. No bucket receives `allUsers`, and setup never changes organization policy. The
+application does not expose corresponding routes for the documents, exports, or logs buckets.
 
 When an endpoint drifts, update the module's wiremock test to match Google's current docs first, then update the
 implementation and run the dry-run command from [`oss-install.md`](oss-install.md).
@@ -295,6 +297,8 @@ gcloud logging buckets list --location=global --project="$NAVIGATOR_GCP_PROJECT_
 | PostgreSQL base backups + WAL | 30 days | `POSTGRES_BACKUPS_RETENTION_DAYS` in `cli/src/devx/gcp/buckets.rs` |
 | Backup for GKE (`navigator-daily`) | 30 days | The backup plan; see [`gke-prod.md`](gke-prod.md) |
 | Surreal archives | Kept indefinitely | No lifecycle rule; see [`surreal-archives.md`](surreal-archives.md) |
+| Git bundles (`<deployment>-bundles`) | Locked, 7 years | `GIT_BUNDLES_RETENTION_SECONDS` in `gcp/buckets.rs` |
+| Offsite Iceberg archive | Locked, 25 years | `OFFSITE_ARCHIVES_RETENTION_SECONDS` in the same file |
 
 Thirty days of PostgreSQL backups always keeps two or more base backups and all the WAL after the oldest.
 
