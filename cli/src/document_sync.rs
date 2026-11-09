@@ -876,7 +876,7 @@ pub(crate) fn write_uploaded_pointer(
     Ok(path)
 }
 
-fn raw_document_is_git_ignored(root: &Path, target: &Path) -> Result<()> {
+pub(crate) fn raw_document_is_git_ignored(root: &Path, target: &Path) -> Result<()> {
     let relative = target
         .strip_prefix(root)
         .map_err(|_| anyhow!("{} is outside {}", target.display(), root.display()))?;
@@ -2529,7 +2529,7 @@ fn ensure_pull_target_parent_is_safe(root: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ensure_pull_target_is_safe(root: &Path, target: &Path) -> Result<()> {
+pub(crate) fn ensure_pull_target_is_safe(root: &Path, target: &Path) -> Result<()> {
     ensure_pull_target_parent_is_safe(root, target)?;
     match std::fs::symlink_metadata(target) {
         Ok(metadata) if metadata_is_symlink(&metadata) => Err(anyhow!(
