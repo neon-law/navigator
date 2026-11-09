@@ -25,6 +25,15 @@ Follow the [AGE graph runbook](age-graph-runbook.md) for extension setup, migrat
 After PostgreSQL graph writes begin, the SurrealDB graph is a frozen snapshot; changing the reader back cannot supply
 fresh graph data. The Relationship Log has a separate append contract.
 
+## Project lifecycle
+
+After applying the Project Status Transition migration, set `NAVIGATOR_POSTGRES_PROJECT_LIFECYCLE_AUTHORITY=1` on all
+lifecycle writers together. PostgreSQL commits each [Project Status Transition](glossary/project-status-transition.md)
+with the Project's current status and retention start. The existing Project mirror supplies the parent row and the first
+transition records the known starting state. Status reads use the PostgreSQL projection for enrolled Projects. The
+lifecycle command also refreshes the SurrealDB compatibility projection. If that refresh fails, retry the same
+transition to repair it. Keep lifecycle authority enabled once a deployment has recorded transitions.
+
 ## Other domains
 
 The [Firm journal](firm-journal.md) documents its backend selection and PostgreSQL-only reconciliation features.

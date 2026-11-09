@@ -350,3 +350,93 @@ async fn source_initialization_records_an_absent_repository_without_erasing_meta
             .unwrap();
     assert_eq!(later, initialized);
 }
+
+#[tokio::test]
+async fn lifecycle_history_and_current_project_state_commit_together() {
+    use super::project_lifecycle::{append, baseline, history, lock, StatusTransition};
+
+    let Some(Fixture { pg, input }) = fixture().await else {
+        return;
+    };
+    let project = super::projects::create_on(&pg, &input).await.unwrap();
+    let at = chrono::Utc::now();
+    let actor = Uuid::new_v4();
+    let event = |from: &str, to: &str, reason: &str| StatusTransition {
+        from_status: Some(from.to_owned()),
+        to_status: to.to_owned(),
+        effective_at: Some(at),
+        recorded_at: Some(at),
+        reason: Some(reason.to_owned()),
+        attesting_person_id: Some(actor),
+    };
+    let mut tx = pg.pool().begin().await.unwrap();
+    let row = lock(&mut tx, project.id).await.unwrap().unwrap();
+    append(&mut tx, &row, &baseline(&row), None, None)
+        .await
+        .unwrap();
+    let closed_at = at.to_rfc3339();
+    let close = event("open", "closed", "engagement_completed");
+    append(
+        &mut tx,
+        &row,
+        &close,
+        Some(&closed_at),
+        close.reason.as_deref(),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = pg.pool().begin().await.unwrap();
+    let row = lock(&mut tx, project.id).await.unwrap().unwrap();
+    assert_eq!(row.closed_at.as_deref(), Some(closed_at.as_str()));
+    let reopen = event("closed", "open", "new_matter_event");
+    append(&mut tx, &row, &reopen, None, None).await.unwrap();
+    assert_eq!(
+        lock(&mut tx, project.id).await.unwrap().unwrap().status,
+        "open"
+    );
+    tx.rollback().await.unwrap();
+
+    let mut tx = pg.pool().begin().await.unwrap();
+    let row = lock(&mut tx, project.id).await.unwrap().unwrap();
+    assert_eq!(row.status, "closed");
+    assert_eq!(history(&mut tx, project.id).await.unwrap().len(), 2);
+    append(&mut tx, &row, &reopen, None, None).await.unwrap();
+    tx.commit().await.unwrap();
+
+    sqlx::query("UPDATE project SET status='closed', closed_at=$2 WHERE id=$1")
+        .bind(project.id)
+        .bind(&closed_at)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    let mut tx = pg.pool().begin().await.unwrap();
+    let row = lock(&mut tx, project.id).await.unwrap().unwrap();
+    assert_eq!(row.status, "open");
+    assert!(row.closed_at.is_none());
+    let reclose = event("open", "closed", "client_terminated");
+    append(
+        &mut tx,
+        &row,
+        &reclose,
+        Some(&closed_at),
+        reclose.reason.as_deref(),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = pg.pool().begin().await.unwrap();
+    let row = lock(&mut tx, project.id).await.unwrap().unwrap();
+    assert_eq!(row.status, "closed");
+    assert_eq!(row.closure_reason.as_deref(), Some("client_terminated"));
+    let events = history(&mut tx, project.id).await.unwrap();
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[1].reason.as_deref(), Some("engagement_completed"));
+    assert_eq!(
+        events[1].effective_at.unwrap().timestamp_micros(),
+        at.timestamp_micros()
+    );
+    assert_eq!(events[2].attesting_person_id, Some(actor));
+}
