@@ -471,6 +471,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "project_status_transition",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "project_task",
       "missing_column": null,
       "missing_table": null,
@@ -1976,7 +1983,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 164,
+    "table_count": 165,
     "tables": {
       "address": {
         "columns": {
@@ -5163,6 +5170,30 @@
         "foreign_keys": [],
         "name": "project_source_import",
         "references": []
+      },
+      "project_status_transition": {
+        "columns": {
+          "attesting_person_id": "UUID",
+          "closed_at": "TEXT",
+          "closure_reason": "TEXT",
+          "effective_at": "TIMESTAMPTZ",
+          "from_status": "TEXT",
+          "project_id": "UUID",
+          "reason": "TEXT",
+          "recorded_at": "TIMESTAMPTZ",
+          "sequence": "BIGINT",
+          "to_status": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_status_transition",
+        "references": [
+          "project"
+        ]
       },
       "project_task": {
         "columns": {

@@ -15,6 +15,7 @@ pub mod inbox;
 /// PostgreSQL Project participation ledger, preparatory to application authority.
 pub mod participation;
 
+pub mod project_lifecycle;
 /// Native Project records; application authority remains guarded.
 pub mod projects;
 

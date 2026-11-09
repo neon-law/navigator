@@ -304,6 +304,14 @@ fn site_projects_close_accepts_an_effective_time() {
     assert!(unwrapped(&output).contains("RFC 3339 time when the matter actually closed."));
 }
 
+#[test]
+fn project_reopen_exposes_reason_effective_time_and_host() {
+    let output = help(&["project", "reopen", "--help"]);
+    for argument in ["<PROJECT_CODE>", "--reason", "--effective-at", "--host"] {
+        assert!(output.contains(argument), "missing {argument} in {output}");
+    }
+}
+
 /// The disclosure has to carry the *fallback* as well as the mappings it
 /// enumerates. A lawyer who drops a file into a folder the conventions do not
 /// name gets `unclassified`, and without that sentence the help reads as
@@ -371,6 +379,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "participant",
             "preview",
             "reference",
+            "reopen",
             "repository",
             "scaffold",
             "search",

@@ -2096,7 +2096,7 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/status": {
           "get": {
             "summary": "Read live matter lifecycle and onboarding evidence",
-            "description": "Lawyer-tier, firm-side participation required for every tier. Returns the workbench lifecycle label, stored project_status, opened_at (Project creation), closed_at, source_state, onboarding presence and document visibility, and missing onboarding work. Presence includes generated onboarding instruments and never verifies execution.",
+            "description": "Lawyer-tier, firm-side participation required for every tier. Returns the workbench lifecycle label, current project_status, opened_at (Project creation), closed_at, ordered history, source_state, onboarding presence and document visibility, and missing onboarding work. Presence includes generated onboarding instruments and never verifies execution.",
             "parameters": [
               { "name": "id", "in": "path", "required": true,
                 "schema": { "type": "string", "format": "uuid" } }
@@ -5666,14 +5666,14 @@ fn canonical_document(base: &str) -> Value {
               "effective_at": {
                 "type": ["string", "null"],
                 "format": "date-time",
-                "description": "When a close or archive actually took effect. Optional; rejected for \
-                                reopen, in the future, or before matter-open. A supplied valid value \
+                "description": "When the transition took effect. Optional; rejected in the future or before \
+                                matter-open. Reopen effective time requires PostgreSQL lifecycle authority. A supplied valid value \
                                 replaces an existing close stamp so the retention start can be corrected."
               },
               "reason": {
                 "type": ["string", "null"],
-                "enum": ["pitch_declined", "pitch_lapsed", "pitch_withdrawn", "pitch_superseded", "engagement_completed", "client_terminated", "firm_withdrew", null],
-                "description": "Required for a first close. Pitch reasons apply only before onboarding; active-matter reasons apply only after onboarding. A pitch also requires an offboarding document."
+                "enum": ["pitch_declined", "pitch_lapsed", "pitch_withdrawn", "pitch_superseded", "engagement_completed", "client_terminated", "firm_withdrew", "new_matter_event", null],
+                "description": "Required for a first close and an attested reopen. Use new_matter_event for reopening. Pitch reasons apply only before onboarding; active-matter reasons apply only after onboarding. A pitch also requires an offboarding document."
               }
             },
             "example": {

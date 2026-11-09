@@ -1426,6 +1426,19 @@ enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Reopen a closed Project. Unarchive its source repository separately.
+    Reopen {
+        /// Project code, resolved against Projects visible to the login.
+        project_code: String,
+        /// Why the matter reopened.
+        #[arg(long, value_enum)]
+        reason: ReopenReasonArg,
+        /// RFC 3339 time when the matter actually reopened.
+        #[arg(long)]
+        effective_at: Option<chrono::DateTime<chrono::Utc>>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Verify this machine and a Project workspace before Navigator creates
     /// anything: the active deployment, its Google Workspace, Shared Drive
     /// and Projects root, an optional local Drive mount, the stored site
@@ -5210,6 +5223,12 @@ const CLI_STACK_BYTES: usize = 64 * 1024 * 1024;
 /// CLI spelling of [`store::projects::ClosureReason`]. The store type stays
 /// free of clap; `--help` lists these `snake_case` values because the field is
 /// a [`clap::ValueEnum`].
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ReopenReasonArg {
+    #[value(name = "new_matter_event")]
+    NewMatterEvent,
+}
+
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 #[value(rename_all = "snake_case")]
 enum ClosureReasonArg {
@@ -6551,6 +6570,21 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 return closed;
             }
             remote::archive_repository(host.host.as_deref(), &project_code, &dir).await
+        }
+        ProjectsCmd::Reopen {
+            project_code,
+            reason,
+            effective_at,
+            host,
+        } => {
+            let ReopenReasonArg::NewMatterEvent = reason;
+            remote::matter_reopen(
+                host.host.as_deref(),
+                &project_code,
+                store::projects::ReopenReason::NewMatterEvent,
+                effective_at,
+            )
+            .await
         }
         ProjectsCmd::Doctor { host, project } => {
             projects::doctor::run(host.host.as_deref(), project.as_deref())

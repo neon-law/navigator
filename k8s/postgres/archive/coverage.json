@@ -1255,6 +1255,20 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "project_status_transition",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "project_status_transition_sequence_seq",
+        "kind": "sequence",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "project_task",
         "kind": "table",
         "accessible": true

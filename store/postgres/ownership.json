@@ -712,6 +712,13 @@
     "target_only": true,
     "through": "firm_id and project_id recorded on the import; born in PostgreSQL with no Surreal source"
   },
+  "project_status_transition": {
+    "migration_slice": "project-lifecycle",
+    "parity_scenario": "append and current status commit or roll back together; close, reopen, and reclose retain the first closure",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id -> Project; PostgreSQL lifecycle authority"
+  },
   "purchase": {
     "migration_slice": "purchase",
     "parity_scenario": "at most one unpaid invoice per Client and Offering; price copied at purchase; active only once Xero reports the invoice paid",

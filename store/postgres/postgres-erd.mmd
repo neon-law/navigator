@@ -1581,6 +1581,18 @@ erDiagram
         string state
         string tree_sha256
     }
+    project_status_transition {
+        uuid attesting_person_id
+        string closed_at
+        string closure_reason
+        datetime effective_at
+        string from_status
+        uuid project_id
+        string reason
+        datetime recorded_at
+        int sequence
+        string to_status
+    }
     project_task {
         uuid assignee_id
         string body
@@ -2102,6 +2114,7 @@ erDiagram
     person }o--|| project_service : references
     project }o--|| project_service : references
     sent_email }o--|| project_service : references
+    project }o--|| project_status_transition : references
     person_project_role }o--|| project_task : references
     project }o--|| project_task : references
     person }o--|| project_task_events : references

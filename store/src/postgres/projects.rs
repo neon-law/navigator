@@ -48,7 +48,7 @@ fn write_error(error: sqlx::Error) -> ProjectError {
     ProjectError::Query(error)
 }
 
-fn row(row: &sqlx::postgres::PgRow) -> Result<Project, ProjectError> {
+pub(super) fn row(row: &sqlx::postgres::PgRow) -> Result<Project, ProjectError> {
     let time = |name| -> Result<String, sqlx::Error> {
         let time: DateTime<Utc> = row.try_get(name)?;
         Ok(time.to_rfc3339_opts(SecondsFormat::Micros, true))

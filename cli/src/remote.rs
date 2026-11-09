@@ -3837,35 +3837,7 @@ pub async fn matter_close(
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> ExitCode {
     run(async {
-        let (base, token) = resolve(host)?;
-        let client = reqwest::Client::new();
-        let list_body = fetch_project_list(&client, &base, &token).await?;
-        let projects: Vec<VisibleProject> =
-            serde_json::from_str(&list_body).context("parse GET /app/api/projects")?;
-        let project = projects
-            .iter()
-            .find(|project| project.code == project_code)
-            .ok_or_else(|| anyhow!("no visible matter with code `{project_code}`"))?;
-        let url = format!("{base}/app/api/projects/{}/lifecycle", project.id);
-        let mut payload = serde_json::json!({ "transition": "close", "reason": reason });
-        if let Some(effective_at) = effective_at {
-            payload["effective_at"] = serde_json::json!(effective_at);
-        }
-        let response = client
-            .post(&url)
-            .bearer_auth(token)
-            .json(&payload)
-            .send()
-            .await
-            .with_context(|| format!("POST {url}"))?;
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "close project `{project_code}` failed: {status}: {}",
-                first_line(&body)
-            ));
-        }
+        post_project_transition(host, project_code, "close", reason, effective_at).await?;
         println!(
             "{} {}",
             palette::dim("closed matter"),
@@ -3874,6 +3846,61 @@ pub async fn matter_close(
         Ok(())
     })
     .await
+}
+
+pub async fn matter_reopen(
+    host: Option<&str>,
+    project_code: &str,
+    reason: store::projects::ReopenReason,
+    effective_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> ExitCode {
+    run(async {
+        post_project_transition(host, project_code, "reopen", reason, effective_at).await?;
+        println!(
+            "Project reopened. If its source repository is archived, unarchive it in the forge."
+        );
+        Ok(())
+    })
+    .await
+}
+
+async fn post_project_transition(
+    host: Option<&str>,
+    project_code: &str,
+    transition: &str,
+    reason: impl serde::Serialize,
+    effective_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<()> {
+    let (base, token) = resolve(host)?;
+    let client = reqwest::Client::new();
+    let list_body = fetch_project_list(&client, &base, &token).await?;
+    let projects: Vec<VisibleProject> =
+        serde_json::from_str(&list_body).context("parse GET /app/api/projects")?;
+    let project = projects
+        .iter()
+        .find(|project| project.code == project_code)
+        .ok_or_else(|| anyhow!("no visible matter with code `{project_code}`"))?;
+    let url = format!("{base}/app/api/projects/{}/lifecycle", project.id);
+    let mut payload = serde_json::json!({ "transition": transition, "reason": reason });
+    if let Some(effective_at) = effective_at {
+        payload["effective_at"] = serde_json::json!(effective_at);
+    }
+    let response = client
+        .post(&url)
+        .bearer_auth(token)
+        .json(&payload)
+        .send()
+        .await
+        .with_context(|| format!("POST {url}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "{transition} project `{project_code}` failed: {status}: {}",
+            first_line(&body)
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -8303,6 +8330,52 @@ mod tests {
             .await,
             ExitCode::SUCCESS
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn matter_reopen_posts_reason_and_effective_time_without_touching_the_forge() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::new(&server_uri);
+        let project_id = Uuid::now_v7();
+        let effective_at: chrono::DateTime<chrono::Utc> = "2001-02-03T04:05:06Z".parse().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": project_id, "code": "acme"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/projects/{project_id}/lifecycle")))
+            .and(body_json(serde_json::json!({
+                "transition": "reopen",
+                "reason": "new_matter_event",
+                "effective_at": "2001-02-03T04:05:06Z"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": project_id,
+                "code": "acme",
+                "status": "open",
+                "closed_at": null
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            super::matter_reopen(
+                Some(server_uri.as_str()),
+                "acme",
+                store::projects::ReopenReason::NewMatterEvent,
+                Some(effective_at)
+            )
+            .await,
+            ExitCode::SUCCESS
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
     #[tokio::test(flavor = "current_thread")]

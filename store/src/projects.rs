@@ -298,6 +298,8 @@ const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id,
 /// Errors from the SurrealDB Project read seam.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectStoreError {
+    #[error("PostgreSQL Project lifecycle state is unavailable")]
+    LifecycleUnavailable,
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error(transparent)]
@@ -1503,7 +1505,8 @@ pub async fn find_by_code(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<ProjectRow> = response.take(0)?;
-    let project = row.and_then(ProjectRow::into_project);
+    let mut project = row.and_then(ProjectRow::into_project);
+    Box::pin(overlay_lifecycle(project.as_mut_slice())).await?;
     crate::postgres_shadow::project_read(
         crate::postgres_shadow::ShadowKey::Text(code.to_string()),
         project.as_ref(),
@@ -1631,7 +1634,8 @@ pub async fn find_by_id(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<ProjectRow> = response.take(0)?;
-    let project = row.and_then(ProjectRow::into_project);
+    let mut project = row.and_then(ProjectRow::into_project);
+    Box::pin(overlay_lifecycle(project.as_mut_slice())).await?;
     crate::postgres_shadow::project_read(
         crate::postgres_shadow::ShadowKey::Id(id),
         project.as_ref(),
@@ -1665,10 +1669,12 @@ pub async fn all(surreal: &SurrealDb) -> Result<Vec<Project>, ProjectStoreError>
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let rows: Vec<ProjectRow> = response.take(0)?;
-    Ok(rows
+    let mut projects: Vec<_> = rows
         .into_iter()
         .filter_map(ProjectRow::into_project)
-        .collect())
+        .collect();
+    Box::pin(overlay_lifecycle(&mut projects)).await?;
+    Ok(projects)
 }
 
 /// Which side of a matter a DRI designation applies to.
@@ -2120,6 +2126,13 @@ impl std::str::FromStr for ClosureReason {
     }
 }
 
+/// The reason an attorney reopened a closed Project.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReopenReason {
+    NewMatterEvent,
+}
+
 impl Transition {
     /// The status this transition lands the matter in.
     #[must_use]
@@ -2178,18 +2191,90 @@ pub async fn transition_project_with_reason(
     reason: Option<ClosureReason>,
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<Project, ProjectCommandError> {
+    transition_project_attested(surreal, id, transition, reason, None, effective_at, None).await
+}
+
+fn postgres_lifecycle_enabled() -> bool {
+    matches!(
+        std::env::var("NAVIGATOR_POSTGRES_PROJECT_LIFECYCLE_AUTHORITY").as_deref(),
+        Ok("1" | "true")
+    )
+}
+
+async fn overlay_lifecycle(projects: &mut [Project]) -> Result<(), ProjectStoreError> {
+    if postgres_lifecycle_enabled() && !projects.is_empty() {
+        let pg = PostgresDb::from_env()
+            .await
+            .map_err(|_| ProjectStoreError::LifecycleUnavailable)?;
+        crate::postgres::project_lifecycle::overlay(&pg, projects)
+            .await
+            .map_err(|_| ProjectStoreError::LifecycleUnavailable)?;
+    }
+    Ok(())
+}
+
+/// Apply a lifecycle request with the authenticated attorney and optional reopening reason.
+pub async fn transition_project_attested(
+    surreal: &SurrealDb,
+    id: Uuid,
+    transition: Transition,
+    reason: Option<ClosureReason>,
+    reopen_reason: Option<ReopenReason>,
+    effective_at: Option<chrono::DateTime<chrono::Utc>>,
+    attesting_person_id: Option<Uuid>,
+) -> Result<Project, ProjectCommandError> {
+    if postgres_lifecycle_enabled() {
+        return Box::pin(transition_on_postgres(
+            surreal,
+            id,
+            transition,
+            reason,
+            reopen_reason,
+            effective_at,
+            attesting_person_id,
+        ))
+        .await;
+    }
+    if reopen_reason.is_some() {
+        return Err(ProjectCommandError::Invalid(
+            "Reopen with history requires PostgreSQL lifecycle authority.",
+        ));
+    }
     let row = find_by_id(surreal, id)
         .await
-        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
+        .map_err(lifecycle_db_error)?
         .ok_or(ProjectCommandError::NotFound)?;
-
     if effective_at.is_some() && transition == Transition::Reopen {
         return Err(ProjectCommandError::Invalid(
             "An effective date applies only to close and archive transitions.",
         ));
     }
-
     let now = chrono::Utc::now();
+    let (closed_at, closure_reason) =
+        lifecycle_projection(surreal, &row, transition, reason, effective_at, now).await?;
+    let target = transition.target_status();
+    if row.status == target && row.closed_at == closed_at && row.closure_reason == closure_reason {
+        return Ok(row);
+    }
+    let updated =
+        project_lifecycle_projection(surreal, id, target, closed_at, closure_reason).await?;
+    mirrored(surreal, Some(updated))
+        .await
+        .ok_or(ProjectCommandError::NotFound)
+}
+
+fn lifecycle_db_error(error: impl std::fmt::Display) -> ProjectCommandError {
+    ProjectCommandError::Db(error.to_string())
+}
+
+async fn lifecycle_projection(
+    surreal: &SurrealDb,
+    row: &Project,
+    transition: Transition,
+    reason: Option<ClosureReason>,
+    effective_at: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<(Option<String>, Option<String>), ProjectCommandError> {
     if let Some(effective_at) = effective_at {
         if effective_at > now {
             return Err(ProjectCommandError::Invalid(
@@ -2216,7 +2301,7 @@ pub async fn transition_project_with_reason(
 
     if transition == Transition::Close && row.status == "open" {
         let (has_engagement, has_offboarding) =
-            matter_lifecycle_sets(surreal, std::slice::from_ref(&row))
+            matter_lifecycle_sets(surreal, std::slice::from_ref(row))
                 .await
                 .map_err(ProjectCommandError::Db)?;
         let reason = reason.ok_or(ProjectCommandError::Invalid("A close reason is required."))?;
@@ -2259,15 +2344,16 @@ pub async fn transition_project_with_reason(
         Transition::Close if row.status == "open" => reason.map(|value| value.as_str().to_string()),
         Transition::Archive | Transition::Close => row.closure_reason.clone(),
     };
-    let target = transition.target_status();
+    Ok((closed_at, closure_reason))
+}
 
-    // Already there with the requested stamp: nothing to write. Guarded
-    // after the terminal check so reopening an archived matter still
-    // reports why. A supplied correction is a write only when it differs.
-    if row.status == target && row.closed_at == closed_at && row.closure_reason == closure_reason {
-        return Ok(row);
-    }
-
+async fn project_lifecycle_projection(
+    surreal: &SurrealDb,
+    id: Uuid,
+    target: &str,
+    closed_at: Option<String>,
+    closure_reason: Option<String>,
+) -> Result<Project, ProjectCommandError> {
     let mut response = surreal
         .query(format!(
             "UPDATE $id SET status = $status, closed_at = $closed_at, closure_reason = $closure_reason, updated_at = $updated_at \
@@ -2277,16 +2363,169 @@ pub async fn transition_project_with_reason(
         .bind(("status", target.to_string()))
         .bind(("closed_at", closed_at))
         .bind(("closure_reason", closure_reason))
-        .bind(("updated_at", now.to_rfc3339()))
+        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
         .await
         .and_then(surrealdb::IndexedResults::check)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
     let updated: Option<ProjectRow> = response
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    mirrored(surreal, updated.and_then(ProjectRow::into_project))
-        .await
+    updated
+        .and_then(ProjectRow::into_project)
         .ok_or(ProjectCommandError::NotFound)
+}
+
+async fn transition_on_postgres(
+    surreal: &SurrealDb,
+    id: Uuid,
+    transition: Transition,
+    reason: Option<ClosureReason>,
+    reopen_reason: Option<ReopenReason>,
+    effective_at: Option<chrono::DateTime<chrono::Utc>>,
+    attesting_person_id: Option<Uuid>,
+) -> Result<Project, ProjectCommandError> {
+    use crate::postgres::project_lifecycle as ledger;
+
+    if transition == Transition::Reopen
+        && (reopen_reason.is_none() || attesting_person_id.is_none())
+    {
+        return Err(ProjectCommandError::Invalid(
+            "A reopen reason and an attesting Person are required.",
+        ));
+    }
+    if transition != Transition::Reopen && reopen_reason.is_some() {
+        return Err(ProjectCommandError::Invalid(
+            "A reopen reason applies only to reopening a Project.",
+        ));
+    }
+    let pg = PostgresDb::from_env().await.map_err(lifecycle_db_error)?;
+    find_by_id(surreal, id)
+        .await
+        .map_err(lifecycle_db_error)?
+        .ok_or(ProjectCommandError::NotFound)?;
+    crate::postgres_mirror::mirror(surreal, &pg, &MirrorKey::Project(id))
+        .await
+        .map_err(lifecycle_db_error)?;
+
+    let mut tx = pg.pool().begin().await.map_err(lifecycle_db_error)?;
+    let row = ledger::lock(&mut tx, id)
+        .await
+        .map_err(lifecycle_db_error)?
+        .ok_or(ProjectCommandError::NotFound)?;
+    let now = chrono::Utc::now();
+    let (closed_at, closure_reason) =
+        lifecycle_projection(surreal, &row, transition, reason, effective_at, now).await?;
+    let target = transition.target_status();
+    if row.status != target || row.closed_at != closed_at || row.closure_reason != closure_reason {
+        if !ledger::has_history(&mut tx, id)
+            .await
+            .map_err(lifecycle_db_error)?
+        {
+            ledger::append(
+                &mut tx,
+                &row,
+                &lifecycle_baseline(surreal, &row).await?,
+                row.closed_at.as_deref(),
+                row.closure_reason.as_deref(),
+            )
+            .await
+            .map_err(lifecycle_db_error)?;
+        }
+        let event = ledger::StatusTransition {
+            from_status: Some(row.status.clone()),
+            to_status: target.to_owned(),
+            effective_at: Some(effective_at.unwrap_or(now)),
+            recorded_at: Some(now),
+            reason: reopen_reason
+                .map(|ReopenReason::NewMatterEvent| "new_matter_event".to_owned())
+                .or_else(|| {
+                    closure_reason
+                        .clone()
+                        .filter(|_| transition == Transition::Close)
+                }),
+            attesting_person_id,
+        };
+        ledger::append(
+            &mut tx,
+            &row,
+            &event,
+            closed_at.as_deref(),
+            closure_reason.as_deref(),
+        )
+        .await
+        .map_err(lifecycle_db_error)?;
+    }
+    tx.commit().await.map_err(lifecycle_db_error)?;
+
+    // The old engine is a compatibility projection. Lock and read the latest
+    // committed state again so concurrent transitions cannot publish it out
+    // of order. A retry also repairs a previously failed projection.
+    let mut tx = pg.pool().begin().await.map_err(lifecycle_db_error)?;
+    let current = ledger::lock(&mut tx, id)
+        .await
+        .map_err(lifecycle_db_error)?
+        .ok_or(ProjectCommandError::NotFound)?;
+    let projected = project_lifecycle_projection(
+        surreal,
+        id,
+        &current.status,
+        current.closed_at,
+        current.closure_reason,
+    )
+    .await?;
+    tx.commit().await.map_err(lifecycle_db_error)?;
+    Ok(projected)
+}
+
+async fn lifecycle_baseline(
+    surreal: &SurrealDb,
+    project: &Project,
+) -> Result<crate::postgres::project_lifecycle::StatusTransition, ProjectCommandError> {
+    let mut baseline = crate::postgres::project_lifecycle::baseline(project);
+    if baseline.to_status == "open" {
+        let opening = crate::relationship_logs::for_project(surreal, project.id)
+            .await
+            .map_err(lifecycle_db_error)?
+            .into_iter()
+            .find(|entry| entry.action == "conflict_attestation" && entry.subject_id == project.id);
+        baseline.attesting_person_id = opening.and_then(|entry| entry.actor_person_id);
+    }
+    Ok(baseline)
+}
+
+/// Read current lifecycle and history from the same committed PostgreSQL snapshot.
+pub async fn status_with_history(
+    surreal: &SurrealDb,
+    mut project: Project,
+) -> Result<
+    (
+        Project,
+        Vec<crate::postgres::project_lifecycle::StatusTransition>,
+    ),
+    ProjectCommandError,
+> {
+    use crate::postgres::project_lifecycle as ledger;
+    if !postgres_lifecycle_enabled() {
+        return Ok((project, Vec::new()));
+    }
+    let pg = PostgresDb::from_env().await.map_err(lifecycle_db_error)?;
+    let mut tx = pg.pool().begin().await.map_err(lifecycle_db_error)?;
+    let current = ledger::lock(&mut tx, project.id)
+        .await
+        .map_err(lifecycle_db_error)?;
+    let mut history = ledger::history(&mut tx, project.id)
+        .await
+        .map_err(lifecycle_db_error)?;
+    if let Some(current) = current.filter(|_| !history.is_empty()) {
+        project.status = current.status;
+        project.closed_at = current.closed_at;
+        project.closure_reason = current.closure_reason;
+    }
+    tx.commit().await.map_err(lifecycle_db_error)?;
+    if history.is_empty() {
+        history.push(lifecycle_baseline(surreal, &project).await?);
+    }
+    Ok((project, history))
 }
 
 /// Set or clear the opaque Drive folder address for a matter.

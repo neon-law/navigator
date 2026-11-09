@@ -1916,6 +1916,7 @@ async fn project_status_door(
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
+    let (project, history) = store::projects::status_with_history(&state.surreal, project).await?;
     let (opening, closing) =
         store::projects::matter_lifecycle_sets(&state.surreal, std::slice::from_ref(&project))
             .await
@@ -1947,6 +1948,7 @@ async fn project_status_door(
     Ok(Json(serde_json::json!({
         "code": project.code,
         "status": if project.status == "archived" { "archived" } else { lifecycle.label() },
+        "history": history,
         "project_status": project.status,
         // Project creation is the opening timestamp; there is no separate opened_at column.
         "opened_at": project.inserted_at,
@@ -3338,8 +3340,15 @@ async fn update_project(
 #[serde(deny_unknown_fields)]
 struct TransitionProjectRequest {
     transition: store::projects::Transition,
-    reason: Option<store::projects::ClosureReason>,
+    reason: Option<LifecycleReason>,
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(untagged)]
+enum LifecycleReason {
+    Close(store::projects::ClosureReason),
+    Reopen(store::projects::ReopenReason),
 }
 
 const PITCH_OFFBOARDING_FILENAME: &str = "pitch-offboarding-letter.pdf";
@@ -3452,10 +3461,25 @@ fn pitch_offboarding_typst(client_name: &str, letter_date: &str) -> String {
 /// archive is refused as `400`.
 async fn transition_matter(
     State(state): State<ApiState>,
-    _lawyer: LawyerSession,
+    lawyer: LawyerSession,
     Path(id): Path<Uuid>,
     JsonOrForm(input): JsonOrForm<TransitionProjectRequest>,
 ) -> Result<Response, ApiError> {
+    use store::projects::Transition;
+    let (reason, reopen_reason) = match (input.transition, input.reason) {
+        (Transition::Close, Some(LifecycleReason::Close(reason))) => (Some(reason), None),
+        (Transition::Reopen, Some(LifecycleReason::Reopen(reason))) => (None, Some(reason)),
+        (_, None) => (None, None),
+        _ => {
+            return Err(store::projects::ProjectCommandError::Invalid(
+                "The reason must match the lifecycle transition.",
+            )
+            .into())
+        }
+    };
+    if reopen_reason.is_some() && !participates_as_firm(&state, &lawyer, id).await {
+        return Err(ApiError::NotFound);
+    }
     // Final archival waits on a verified recovery generation cut after the
     // close and every required handoff's acknowledgment; a repeat of an
     // archive already done is not gated again.
@@ -3487,7 +3511,7 @@ async fn transition_matter(
         }
     }
     if input.transition == store::projects::Transition::Close
-        && input.reason.is_some_and(|reason| {
+        && reason.is_some_and(|reason| {
             matches!(
                 reason,
                 store::projects::ClosureReason::PitchDeclined
@@ -3514,12 +3538,14 @@ async fn transition_matter(
             }
         }
     }
-    let updated = store::projects::transition_project_with_reason(
+    let updated = store::projects::transition_project_attested(
         &state.surreal,
         id,
         input.transition,
-        input.reason,
+        reason,
+        reopen_reason,
         input.effective_at,
+        lawyer.0.person_id,
     )
     .await?;
     let updated = if updated.status == "open" {
