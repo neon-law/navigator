@@ -36,6 +36,7 @@ pub(super) fn SearchHome(chrome: PublicChrome, title: String) -> Element {
                     h1 { label { r#for: "nautilus-question", "What’s your legal need?" } }
                     div { class: "nautilus-home__input",
                         input {
+                            class: "nav-input",
                             id: "nautilus-question",
                             r#type: "search",
                             required: true,
@@ -60,7 +61,7 @@ pub(super) fn SearchHome(chrome: PublicChrome, title: String) -> Element {
                 h2 { id: "nautilus-dialog-title", "Search with Nautilus" }
                 if signed_in {
                     p { "Your question is ready. Identity verification is required before we can run it." }
-                    button { r#type: "button", disabled: true, "Verify identity and search" }
+                    button { class: "nav-btn nav-btn--primary", r#type: "button", disabled: true, "Verify identity and search" }
                     p { "Online identity verification is coming soon. You can call us for help in the meantime." }
                 } else {
                     p { "Sign in or create an account, then verify your identity to search. We’ll keep your question ready." }
