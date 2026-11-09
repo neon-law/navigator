@@ -1072,9 +1072,11 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
             webapp::contact_page::InjectedContact(resolve_firm_contact_content(resolved))
         }),
     ));
-    // The team's public copy is a small static catalog; the public roster
-    // never reads person records or client data.
-    let team = locales::team(branding);
+    // The team's public copy is a small static catalog on Guieb & Shook; the
+    // public roster never reads person records or client data. Other hosts
+    // 404 the path and link the directory on this host.
+    let team_branding = views::brand::BrandKey::GuiebShook.resolve_branding(branding);
+    let team = locales::team(team_branding);
     routers.push(dioxus_app::team_index_router(
         "/team",
         webapp::team_page::TeamIndexContent {
@@ -1096,7 +1098,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         routers.push(dioxus_app::team_profile_router(
             &path,
             webapp::team_page::TeamProfileContent {
-                head_title: format!("{} | {}", branding.firm.site_name, profile.name),
+                head_title: format!("{} | {}", team_branding.firm.site_name, profile.name),
                 meta_description: profile.biography.clone(),
                 og_description: None,
                 name: profile.name,

@@ -331,8 +331,9 @@ these HTTP paths and every descendant:
 
 The brand-owned public routes are:
 
-- Neon Law: `/`, `/contact`, `/team`, `/team/nick`, `/blog`, `/blog/{slug}`, `/notations`, `/workshops/*`,
+- Neon Law: `/`, `/contact`, `/blog`, `/blog/{slug}`, `/notations`, `/workshops/*`,
   `/presentations/*`, `/privacy`, `/terms`, `/robots.txt`, `/sitemap.xml`, and `/llms.txt`.
+- Guieb & Shook: `/team`, `/team/nick`, and `/team/waleed`. Other hosts link that directory.
 
 This precedence is fail-closed, not merge order. Each brand declares every route it mounts; startup returns an error if
 an exact path or descendant overlaps a Navigator-owned prefix. A brand therefore cannot shadow data access,

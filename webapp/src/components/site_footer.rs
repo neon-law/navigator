@@ -633,7 +633,10 @@ pub fn SiteFooterLegal(
                         }
                     }
                     if tagline {
-                        p { class: "site-footer__tagline", "{FOOTER_TAGLINE[0]}" br {} "{FOOTER_TAGLINE[1]}" }
+                        p { class: "site-footer__tagline",
+                            span { "{FOOTER_TAGLINE[0]}" }
+                            span { "{FOOTER_TAGLINE[1]}" }
+                        }
                     }
                     // One line names the software this page runs: "Powered
                     // by", the public source repository, the release serving

@@ -434,11 +434,12 @@ async fn the_guieb_shook_llms_txt_is_that_brands_pages_under_its_host() {
     let host = "staging.guiebshook.com";
     let (status, body) = get_on_host(&app, "/llms.txt", Some(host)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    // The firm's own index: its home and services pages under its host,
-    // never another brand's surface.
+    // The firm's own index: its home, services, and team directory under its
+    // host, never another brand's surface.
     assert!(body.starts_with("# Guieb & Shook\n"), "{body}");
     assert!(body.contains(&format!("https://{host}/)")), "{body}");
     assert!(body.contains("/services"), "{body}");
+    assert!(body.contains("/team"), "{body}");
     assert!(!body.contains("neonlaw.com"), "{body}");
     assert!(!body.contains("/disputes"), "{body}");
     assert!(!body.contains("/contact"), "{body}");

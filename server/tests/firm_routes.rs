@@ -96,6 +96,19 @@ async fn anon_get(app: &Router, path: &str) -> axum::http::Response<Body> {
         .unwrap()
 }
 
+async fn get_on_host(app: &Router, path: &str, host: &str) -> axum::http::Response<Body> {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("host", host)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
 async fn body_string(resp: axum::http::Response<Body>) -> String {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
@@ -284,7 +297,7 @@ async fn the_footer_carries_the_pages_the_header_does_not() {
         "/notations",
         "/presentations",
         "/privacy",
-        "/team",
+        "https://www.guiebshook.com/team",
         "/terms",
         "/testimonials",
     ];
@@ -2056,13 +2069,15 @@ async fn every_public_page_names_and_links_navigator() {
 #[tokio::test]
 async fn the_team_directory_links_to_nicks_profile() {
     let app = site_app().await;
-    let body = body_string(anon_get(&app, "/team").await).await;
+    let missing = get_on_host(&app, "/team", "www.neonlaw.com").await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let body = body_string(get_on_host(&app, "/team", "www.guiebshook.com").await).await;
     assert!(
         body.contains(r#"href="/team/nick""#),
         "the team index links to Nick's profile"
     );
     assert!(body.contains("Nick Shook"), "the team index names Nick");
-    let profile = anon_get(&app, "/team/nick").await;
+    let profile = get_on_host(&app, "/team/nick", "www.guiebshook.com").await;
     assert_eq!(profile.status(), StatusCode::OK);
     let profile = body_string(profile).await;
     assert!(profile.contains("Nick Shook"), "profile title: {profile}");
@@ -2094,10 +2109,10 @@ async fn the_team_directory_links_to_nicks_profile() {
 #[tokio::test]
 async fn the_team_directory_links_to_waleeds_profile() {
     let app = site_app().await;
-    let directory = body_string(anon_get(&app, "/team").await).await;
+    let directory = body_string(get_on_host(&app, "/team", "www.guiebshook.com").await).await;
     assert!(directory.contains(r#"href="/team/waleed""#));
     assert!(directory.contains("Waleed Amer"));
-    let profile = anon_get(&app, "/team/waleed").await;
+    let profile = get_on_host(&app, "/team/waleed", "www.guiebshook.com").await;
     assert_eq!(profile.status(), StatusCode::OK);
     let profile = body_string(profile).await;
     assert!(profile.contains("Waleed Amer"));
