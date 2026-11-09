@@ -599,8 +599,8 @@ mod firm_copy_tests {
             content.meta_description
         );
         assert!(
-            text.contains("Token efficiency") && text.contains("spends tokens on the legal work"),
-            "the page leads with token efficiency: {text}"
+            text.contains("Token efficiency") && text.contains("Spend tokens on the legal work"),
+            "the page explains token efficiency: {text}"
         );
         for named in [
             "navigator glossary show",
