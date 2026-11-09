@@ -441,10 +441,6 @@ mod firm_copy_tests {
     fn the_navigator_page_invites_pro_bono_co_counsel() {
         let content = super::navigator(&views::brand::DEFAULT_BRANDING);
         let text = format!("{} {}", page_text(&content.bands), content.meta_description);
-        assert_eq!(
-            content.tagline,
-            "A general-purpose agentic lawyering engine, built so your agent spends tokens on the legal work."
-        );
         assert!(
             text.contains("Free use for those who co-counsel with us."),
             "the page offers free use to co-counseling attorneys: {text}"

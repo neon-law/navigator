@@ -22,6 +22,10 @@ Cloud Native PDX · Portland, Oregon
 Navigator is an open-source platform for running a law firm. We want lawyers to spend more time with clients by making
 the repeatable work around a matter easier to do.
 
+Think of the Project repository as the agent’s mise en place. Agents organize source material and prepare drafts.
+Lawyers review the work and advise clients. Each Project has a Git repository. Jujutsu (`jj`) can work with Git
+repositories, so it can be part of a contributor’s local workflow.
+
 ### Live demo — Oregon probate
 
 - Open a fictional Vesta Estate Planning Project in staging.

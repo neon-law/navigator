@@ -477,6 +477,30 @@ Open the emitted `.yaml` under `blobs/` and point out what it does not contain. 
 purpose (`git add -f`) and running `navigator project gate` so the room meets the gate error here, with context, rather
 than on their first real upload.
 
+### Work in a Project with Jujutsu
+
+Use `~/Work/<project-code>` for each local checkout. Jujutsu (`jj`) can work alongside Git in a colocated checkout, so
+the Project keeps its Git remote and Navigator commands still run from the same folder.
+
+```bash
+mkdir -p ~/Work
+cd ~/Work/sample-litigation
+jj git init --colocate
+jj status
+jj log
+```
+
+A `jj` change is a revision you can edit. A bookmark names a revision and can track a Git branch on the forge.
+
+Run `jj git fetch` to update remote bookmarks. Review incoming changes and update your working copy.
+
+Run `navigator project sync` to read the current document pointers.
+
+---
+
+Use an existing synthetic Git checkout for this exercise. Show a change, its bookmark, and the corresponding pull
+request on the forge. Then run the document sync exercise from the same checkout.
+
 ### Pull a fresh checkout's documents
 
 `navigator project sync` also fills a fresh clone: it downloads each committed pointer's own revision into

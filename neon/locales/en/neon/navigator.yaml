@@ -6,8 +6,8 @@ meta_description: >-
 title: Neon Law Navigator
 hero_mark: helm
 tagline: >-
-  A general-purpose agentic lawyering engine, built so your agent spends tokens
-  on the legal work.
+  An agentic lawyering engine with a Git repository for each Project, where
+  agents prepare the work and lawyers review it and advise clients.
 skin: marketing
 bands:
   - kind: project_network
