@@ -3075,9 +3075,25 @@ pub(super) struct ShipCredentials {
     dir: tempfile::TempDir,
 }
 
-/// The scratch Docker config of the ship in progress. Only the `cosign`
+/// The scratch registry login of the ship in progress. Only the `cosign`
 /// children read it; every other child keeps the operator's own.
-static COSIGN_DOCKER_CONFIG: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+static COSIGN_LOGIN: std::sync::Mutex<Option<CosignLogin>> = std::sync::Mutex::new(None);
+
+/// A scratch Docker config holding one `oauth2accesstoken` login for `host`.
+struct CosignLogin {
+    docker_config: PathBuf,
+    host: String,
+}
+
+impl CosignLogin {
+    /// Re-mint the login with `token`. A `gcloud` access token lives an hour
+    /// and the staged certificate swap ahead of the ordered release can
+    /// outlast it, so every verification batch writes a fresh one rather
+    /// than trusting the token the ship started with.
+    fn refresh(&self, token: &str) -> Result<()> {
+        write_registry_login(&self.docker_config, &self.host, token)
+    }
+}
 
 impl ShipCredentials {
     /// Fetch the row's cluster credentials into a scratch kubeconfig that
@@ -3102,9 +3118,12 @@ impl ShipCredentials {
         if let Some(host) = artifact_registry_host(&cfg.registry) {
             let docker_config = credentials.dir.path().join("docker");
             write_registry_login(&docker_config, host, &gcloud_access_token()?)?;
-            *COSIGN_DOCKER_CONFIG
+            *COSIGN_LOGIN
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(docker_config);
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(CosignLogin {
+                docker_config,
+                host: host.to_owned(),
+            });
             eprintln!("==> cosign uses a scratch registry login for {host}");
         }
         Ok(credentials)
@@ -3113,7 +3132,7 @@ impl ShipCredentials {
 
 impl Drop for ShipCredentials {
     fn drop(&mut self) {
-        *COSIGN_DOCKER_CONFIG
+        *COSIGN_LOGIN
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
@@ -3182,8 +3201,10 @@ fn registry_login_config(host: &str, token: &str) -> String {
 fn write_registry_login(docker_config: &Path, host: &str, token: &str) -> Result<()> {
     use std::io::Write as _;
     fs::create_dir_all(docker_config).context("create scratch DOCKER_CONFIG")?;
+    // A refresh replaces the file in place; the mode applies when it is
+    // first created and stays private thereafter.
     let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
+    options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
@@ -4636,6 +4657,18 @@ fn pin_and_verify_manifest_images(
     let digests = read_digest_manifest(digest_file)?;
     let prefix = format!("{}/", cfg.registry());
     let repositories = manifest_images_under_registry(manifests, &prefix);
+    let docker_config = {
+        let login = COSIGN_LOGIN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match login.as_ref() {
+            Some(login) => {
+                login.refresh(&gcloud_access_token()?)?;
+                Some(login.docker_config.clone())
+            }
+            None => None,
+        }
+    };
     for repository in repositories {
         let reference = format!("{}/{}", cfg.registry(), repository);
         let digest = digest_for_image(&digests, &repository, &reference)?;
@@ -4643,10 +4676,6 @@ fn pin_and_verify_manifest_images(
             .with_context(|| format!("resolve {reference}:{tag} to its registry digest"))?;
         ensure_tag_digest(&reference, tag, &digest, &tagged_digest)?;
         let signed_ref = format!("{reference}@{digest}");
-        let docker_config = COSIGN_DOCKER_CONFIG
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
         let output = cosign_verify_command(&signed_ref, docker_config.as_deref())
             .output()
             .with_context(|| format!("verify cosign signature for {signed_ref}"))?;
@@ -6123,8 +6152,33 @@ mod tests {
                 0o600
             );
         }
-        // A second login never overwrites one already on disk.
-        assert!(write_registry_login(&docker_config, "us-docker.pkg.dev", "other").is_err());
+    }
+
+    #[test]
+    fn refreshing_the_login_replaces_the_token_and_keeps_it_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let login = CosignLogin {
+            docker_config: dir.path().join("docker"),
+            host: "us-docker.pkg.dev".to_owned(),
+        };
+        login.refresh("expired-token").unwrap();
+        login.refresh("fresh-token").unwrap();
+        let path = login.docker_config.join("config.json");
+        let body: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let auth = body["auths"]["us-docker.pkg.dev"]["auth"].as_str().unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(auth)
+            .unwrap();
+        assert_eq!(decoded, b"oauth2accesstoken:fresh-token");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 
     #[test]
