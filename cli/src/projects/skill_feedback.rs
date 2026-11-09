@@ -48,10 +48,8 @@ fn select_pin<'m>(
     let matched: Vec<&manifest::SkillPin> = pins
         .iter()
         .filter(|pin| {
-            jurisdiction
-                .is_none_or(|j| pin.jurisdiction.eq_ignore_ascii_case(j))
-                && practice_area
-                    .is_none_or(|a| pin.practice_area.eq_ignore_ascii_case(a))
+            jurisdiction.is_none_or(|j| pin.jurisdiction.eq_ignore_ascii_case(j))
+                && practice_area.is_none_or(|a| pin.practice_area.eq_ignore_ascii_case(a))
         })
         .collect();
     match matched.as_slice() {
