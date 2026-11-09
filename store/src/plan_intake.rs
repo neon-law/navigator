@@ -587,8 +587,7 @@ pub async fn stage(
     }
 
     let assignment = &input.assignment;
-    let matter_type =
-        matter_type_from_notice(assignment.matter_type.as_deref().unwrap_or(""));
+    let matter_type = matter_type_from_notice(assignment.matter_type.as_deref().unwrap_or(""));
     let context = staging_context(surreal, pg, input, matter_type).await?;
     let now = Utc::now();
     let id = Uuid::now_v7();
@@ -725,16 +724,13 @@ async fn open_on_acceptance(
     input: &AcceptInput,
     matter_type: PlanMatterType,
 ) -> Result<crate::projects::Project, PlanIntakeError> {
-    let name = input
-        .name
-        .clone()
-        .unwrap_or_else(|| {
-            default_matter_name(
-                &plan.name,
-                staged.member_name.as_deref().unwrap_or("the member"),
-                matter_type,
-            )
-        });
+    let name = input.name.clone().unwrap_or_else(|| {
+        default_matter_name(
+            &plan.name,
+            staged.member_name.as_deref().unwrap_or("the member"),
+            matter_type,
+        )
+    });
     let description = format!(
         "Accepted from a {} assignment notice for member {} ({}).",
         staged.provider,

@@ -455,8 +455,8 @@ mod tests {
             .filter(|line| !line.starts_with("State:"))
             .collect::<Vec<_>>()
             .join("\n");
-        let notice = parse(PlanProvider::LegalShield, "Member Assignment", &text)
-            .expect("notice parses");
+        let notice =
+            parse(PlanProvider::LegalShield, "Member Assignment", &text).expect("notice parses");
         assert_eq!(notice.state, None);
     }
 
@@ -465,8 +465,8 @@ mod tests {
         // The parser reports what the notice printed; the intake layer
         // validates the word against the fee-schedule vocabulary.
         let text = fixtures::legal_shield_assignment_text().replace("State: NY", "State: Unknown");
-        let notice = parse(PlanProvider::LegalShield, "Member Assignment", &text)
-            .expect("notice parses");
+        let notice =
+            parse(PlanProvider::LegalShield, "Member Assignment", &text).expect("notice parses");
         assert_eq!(notice.state.as_deref(), Some("unknown"));
     }
 }
