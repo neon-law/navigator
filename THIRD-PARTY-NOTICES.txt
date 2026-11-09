@@ -1092,7 +1092,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-zlib-rs 0.6.6
+zlib-rs 0.6.8
 
 (C) 2024 Trifecta Tech Foundation 
 
@@ -14724,7 +14724,7 @@ ff 0.13.1
 ff 0.14.0
 filetime 0.2.29
 find-msvc-tools 0.1.9
-flate2 1.1.10
+flate2 1.1.11
 fnv 1.0.7
 form_urlencoded 1.2.2
 getopts 0.2.24
@@ -20444,7 +20444,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-flate2 1.1.10
+flate2 1.1.11
 
 Copyright (c) 2014-2026 Alex Crichton
 
