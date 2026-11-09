@@ -21,3 +21,7 @@ plan.target_minutes.court_appearance:
     type: integer
     default: null
     description: The minutes per court appearance the Firm plans its plan-work capacity around.
+plan.target_minutes.severance_review:
+    type: integer
+    default: null
+    description: The minutes per severance review the Firm plans its plan-work capacity around.

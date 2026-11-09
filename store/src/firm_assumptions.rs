@@ -337,6 +337,10 @@ mod tests {
                 "plan.target_minutes.court_appearance",
                 AssumptionType::Integer,
             ),
+            (
+                "plan.target_minutes.severance_review",
+                AssumptionType::Integer,
+            ),
         ];
         for (key, kind) in known {
             let spec = catalog()

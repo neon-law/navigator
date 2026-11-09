@@ -171,6 +171,16 @@ const ENGAGEMENT_LETTER: &str =
 const SUMMONS: &str = include_str!("../../templates/notations/neon_law/summons__nevada.md");
 const ESTATE_SIGNING_PREPARATION: &str =
     include_str!("../../templates/notations/neon_law/estate_signing_preparation__letter.md");
+const NY_SEVERANCE_REVIEW_MEMO: &str =
+    include_str!("../../templates/notations/neon_law/severance_review_memo__new_york.md");
+const NY_NON_COMPETE_ANALYSIS: &str =
+    include_str!("../../templates/notations/neon_law/non_compete_analysis__new_york.md");
+const NY_SEVERANCE_NEGOTIATION_LETTER: &str =
+    include_str!("../../templates/notations/neon_law/severance_negotiation_letter__new_york.md");
+const NY_UNEMPLOYMENT_APPEAL: &str =
+    include_str!("../../templates/notations/neon_law/unemployment_appeal_letter__new_york.md");
+const NY_LAYOFF_NEXT_STEPS: &str =
+    include_str!("../../templates/notations/neon_law/layoff_next_steps__new_york.md");
 const FORM_990: &str =
     include_str!("../../templates/notations/forms/united_states/federal/irs/us__form_990.md");
 const NATURALIZATION: &str = include_str!(
@@ -410,6 +420,31 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
             "nevada-estate-signing-preparation",
             "notations/neon_law/estate_signing_preparation__letter.md",
             ESTATE_SIGNING_PREPARATION,
+        ),
+        preview_doc(
+            "new-york-severance-review-memo",
+            "notations/neon_law/severance_review_memo__new_york.md",
+            NY_SEVERANCE_REVIEW_MEMO,
+        ),
+        preview_doc(
+            "new-york-non-compete-analysis",
+            "notations/neon_law/non_compete_analysis__new_york.md",
+            NY_NON_COMPETE_ANALYSIS,
+        ),
+        preview_doc(
+            "new-york-severance-negotiation-letter",
+            "notations/neon_law/severance_negotiation_letter__new_york.md",
+            NY_SEVERANCE_NEGOTIATION_LETTER,
+        ),
+        preview_doc(
+            "new-york-unemployment-appeal",
+            "notations/neon_law/unemployment_appeal_letter__new_york.md",
+            NY_UNEMPLOYMENT_APPEAL,
+        ),
+        preview_doc(
+            "new-york-layoff-next-steps",
+            "notations/neon_law/layoff_next_steps__new_york.md",
+            NY_LAYOFF_NEXT_STEPS,
         ),
         preview_doc(
             "irs-form-990",
@@ -665,6 +700,41 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
                 "nevada-estate-signing-preparation",
                 "The client email sent ahead of an estate-plan signing ceremony (`estate_signing_preparation__letter`).",
                 ESTATE_SIGNING_PREPARATION,
+            ),
+            notation_card(
+                "New York",
+                "Severance Review Memo",
+                "new-york-severance-review-memo",
+                "The memo reviewing a New York separation agreement against the OWBPA windows (`severance_review_memo__new_york`).",
+                NY_SEVERANCE_REVIEW_MEMO,
+            ),
+            notation_card(
+                "New York",
+                "Non-Compete Analysis",
+                "new-york-non-compete-analysis",
+                "The analysis of whether a New York restrictive covenant binds the client (`non_compete_analysis__new_york`).",
+                NY_NON_COMPETE_ANALYSIS,
+            ),
+            notation_card(
+                "New York",
+                "Severance Negotiation Letter",
+                "new-york-severance-negotiation-letter",
+                "The letter answering a severance offer and opening the negotiation (`severance_negotiation_letter__new_york`).",
+                NY_SEVERANCE_NEGOTIATION_LETTER,
+            ),
+            notation_card(
+                "New York",
+                "Unemployment Appeal Letter",
+                "new-york-unemployment-appeal",
+                "The appeal of a denied New York unemployment claim, filed inside the thirty-day window (`unemployment_appeal_letter__new_york`).",
+                NY_UNEMPLOYMENT_APPEAL,
+            ),
+            notation_card(
+                "New York",
+                "Layoff Next Steps",
+                "new-york-layoff-next-steps",
+                "The client one-pager for the days after a layoff (`layoff_next_steps__new_york`).",
+                NY_LAYOFF_NEXT_STEPS,
             ),
             notation_card(
                 "Federal",

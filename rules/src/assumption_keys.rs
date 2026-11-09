@@ -38,6 +38,10 @@ mod tests {
             SCHEMA_YAML.contains("plan.target_minutes.document_review"),
             "the embed carries the seeded document-review key"
         );
+        assert!(
+            SCHEMA_YAML.contains("plan.target_minutes.severance_review"),
+            "the embed carries the severance-review key the layoff kits declare"
+        );
     }
 
     #[test]
