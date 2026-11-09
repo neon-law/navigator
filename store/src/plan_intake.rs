@@ -771,11 +771,11 @@ async fn mark_accepted(
     staged: &StagedAssignment,
     project_id: Uuid,
     input: &AcceptInput,
-    matter_type: PlanMatterType,
     plan: &crate::legal_plans::LegalPlan,
     fee: Option<crate::legal_plans::PlanFeeSchedule>,
     accepted_at: DateTime<Utc>,
 ) -> Result<StagedAssignment, PlanIntakeError> {
+    let matter_type = validated_matter_type(input)?;
     let mut response = surreal
         .query(format!(
             "UPDATE $id SET status = 'accepted', project_id = $project_id, \
@@ -933,17 +933,8 @@ pub async fn accept(
     )
     .await?;
 
-    let staged = mark_accepted(
-        surreal,
-        &staged,
-        project.id,
-        input,
-        matter_type,
-        &plan,
-        fee,
-        accepted_at,
-    )
-    .await?;
+    let staged =
+        mark_accepted(surreal, &staged, project.id, input, &plan, fee, accepted_at).await?;
     Ok(Accepted {
         staged,
         project_id: project.id,
