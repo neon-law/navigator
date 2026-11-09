@@ -51,7 +51,9 @@ workflow:
 
 **Other party.** {{entity__other_party.name}}
 
-**Document.** {{custom_text__document_kind}}, received {{custom_datetime__document_received}}
+**Document.** {{custom_text__document_kind}}
+
+**Received.** {{custom_datetime__document_received}}
 
 **What the document demands.** {{custom_text__demand}}
 
@@ -79,26 +81,26 @@ controls it.
 ### 1. What the document asks
 
 The review starts with the demand recorded above. A document that asks for nothing but a signature is reviewed as an
-agreement; a document that asks for money, records, or an answer is reviewed as a demand, and the Firm tests each
-demand for a source the law or a signed instrument actually supplies.
+agreement; a document that asks for money, records, or an answer is reviewed as a demand, and the Firm tests each demand
+for a source the law or a signed instrument actually supplies.
 
 ### 2. The Nevada rights in play
 
 Nevada names deceptive trade practices in NRS 598.0915, and the reviewing lawyer checks the document's conduct against
-it. The lawyer confirms the limitations period that governs the document before the Person relies on any date this
-memo names.
+it. The lawyer confirms the limitations period that governs the document before the Person relies on any date this memo
+names.
 
 ### 3. The deadlines
 
 The demand recorded above sets the pace, and nothing in this memo extends a date. The lawyer confirms every limitation
-and response window against primary sources and records what it confirms; the deliverable `plan_letter__nevada`
-answers a demand in writing when the Person wants one.
+and response window against primary sources and records what it confirms; the deliverable `plan_letter__nevada` answers
+a demand in writing when the Person wants one.
 
 ### 4. The plan's frame
 
 The review is plan work at the plan fee. It covers the one document, a written answer, and a letter the Firm drafts at
-the Person's direction. Negotiating revisions, contesting a demand in court, and defending a lawsuit are new
-engagements the plan does not cover.
+the Person's direction. Negotiating revisions, contesting a demand in court, and defending a lawsuit are new engagements
+the plan does not cover.
 
 ## Recommendation
 

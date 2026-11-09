@@ -49,8 +49,8 @@ The Person asks you to:
 3. Respond in writing by {{custom_datetime__response_deadline}}.
 
 Nevada's deceptive-trade-practice provisions, NRS 598.0915, protect the Person's interests here, and the Firm expects
-any resolution to respect them. This letter is not a complete statement of the Person's position and waives no right
-or claim.
+any resolution to respect them. This letter is not a complete statement of the Person's position and waives no right or
+claim.
 
 Sincerely,
 

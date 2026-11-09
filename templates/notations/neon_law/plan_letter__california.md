@@ -48,9 +48,9 @@ The Person asks you to:
 2. Preserve every record connected to the subject of this letter.
 3. Respond in writing by {{custom_datetime__response_deadline}}.
 
-California's Consumers Legal Remedies Act, Civil Code § 1750, and unfair-competition law, Business and Professions
-Code § 17200, protect the Person's interests here, and the Firm expects any resolution to respect them. This letter is
-not a complete statement of the Person's position and waives no right or claim.
+California's Consumers Legal Remedies Act, Civil Code § 1750, and unfair-competition law, Business and Professions Code
+§ 17200, protect the Person's interests here, and the Firm expects any resolution to respect them. This letter is not a
+complete statement of the Person's position and waives no right or claim.
 
 Sincerely,
 

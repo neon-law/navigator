@@ -12,9 +12,9 @@ assumptions:
 # New York Document Review Playbook
 
 This Kit governs one document review for one Person's plan matter under New York law. The Firm reads the document the
-Person received, records what it actually says, and answers in writing. Defined terms carry their glossary meanings:
-the client is a Person, the matter a Project, a work product a Notation, a docketed date a Deadline, and the Firm is
-the Firm.
+Person received, records what it actually says, and answers in writing. Defined terms carry their glossary meanings: the
+client is a Person, the matter a Project, a work product a Notation, a docketed date a Deadline, and the Firm is the
+Firm.
 
 The Kit carries no Firm numbers. Where the playbook plans effort, it renders the Firm's own Assumption for the key
 declared above. The field stays blank until the Firm sets a value in the Firm Assumptions catalog.
@@ -42,16 +42,14 @@ computes each window from the intake answers and the plan agreement and records 
 
 The command records one row; the Firm runs it once per row:
 
-```bash
-navigator project deadline create \
-  --title "Plan review turnaround" \
-  --due-at <RFC 3339 instant> \
-  --authority-kind contract \
-  --authority "Legal plan agreement" \
-  --calendar-role firm \
-  --category internal \
-  --source lawyer
-```
+```bash navigator project deadline create
+  --title "Plan review turnaround"
+  --due-at <RFC 3339 instant>
+  --authority-kind contract
+  --authority "Legal plan agreement"
+  --calendar-role firm
+  --category internal
+  --source lawyer ```
 
 A demand's date the Person disputes, or an amended document, changes the rows, not the Kit: the lawyer updates the row
 in place with `navigator project deadline update`.
@@ -60,9 +58,9 @@ in place with `navigator project deadline update`.
 
 The Kit scaffolds one Notation onto the Project.
 
-1. **Document review memo.** `document_review_memo__new_york`. The Firm plans
-   {{ plan.target_minutes.document_review }} attorney minutes for the review, tests the document's demands against
-   General Business Law § 349 and the limitations period that fits, and reserves the recommendation for the lawyer.
+1. **Document review memo.** `document_review_memo__new_york`. The Firm plans {{ plan.target_minutes.document_review }}
+   attorney minutes for the review, tests the document's demands against General Business Law § 349 and the limitations
+   period that fits, and reserves the recommendation for the lawyer.
 
 When the Person wants a written answer sent, the letters kit for this jurisdiction scaffolds `plan_letter__new_york`
 onto the same Project.

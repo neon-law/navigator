@@ -11,10 +11,10 @@ assumptions:
 
 # California Document Review Playbook
 
-This Kit governs one document review for one Person's plan matter under California law. The Firm reads the document
-the Person received, records what it actually says, and answers in writing. Defined terms carry their glossary
-meanings: the client is a Person, the matter a Project, a work product a Notation, a docketed date a Deadline, and
-the Firm is the Firm.
+This Kit governs one document review for one Person's plan matter under California law. The Firm reads the document the
+Person received, records what it actually says, and answers in writing. Defined terms carry their glossary meanings: the
+client is a Person, the matter a Project, a work product a Notation, a docketed date a Deadline, and the Firm is the
+Firm.
 
 The Kit carries no Firm numbers. Where the playbook plans effort, it renders the Firm's own Assumption for the key
 declared above. The field stays blank until the Firm sets a value in the Firm Assumptions catalog.
@@ -42,16 +42,14 @@ computes each window from the intake answers and the plan agreement and records 
 
 The command records one row; the Firm runs it once per row:
 
-```bash
-navigator project deadline create \
-  --title "Plan review turnaround" \
-  --due-at <RFC 3339 instant> \
-  --authority-kind contract \
-  --authority "Legal plan agreement" \
-  --calendar-role firm \
-  --category internal \
-  --source lawyer
-```
+```bash navigator project deadline create
+  --title "Plan review turnaround"
+  --due-at <RFC 3339 instant>
+  --authority-kind contract
+  --authority "Legal plan agreement"
+  --calendar-role firm
+  --category internal
+  --source lawyer ```
 
 A demand's date the Person disputes, or an amended document, changes the rows, not the Kit: the lawyer updates the row
 in place with `navigator project deadline update`.
@@ -60,10 +58,9 @@ in place with `navigator project deadline update`.
 
 The Kit scaffolds one Notation onto the Project.
 
-1. **Document review memo.** `document_review_memo__california`. The Firm plans
-   {{ plan.target_minutes.document_review }} attorney minutes for the review, tests the document's conduct against the
-   Consumers Legal Remedies Act, Civil Code § 1750, and the unfair-competition law, § 17200, and reserves the
-   recommendation for the lawyer.
+1. **Document review memo.** `document_review_memo__california`. The Firm plans {{ plan.target_minutes.document_review
+   }} attorney minutes for the review, tests the document's conduct against the Consumers Legal Remedies Act, Civil Code
+   § 1750, and the unfair-competition law, § 17200, and reserves the recommendation for the lawyer.
 
 When the Person wants a written answer sent, the letters kit for this jurisdiction scaffolds `plan_letter__california`
 onto the same Project.

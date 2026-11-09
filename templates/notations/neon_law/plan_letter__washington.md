@@ -49,8 +49,7 @@ The Person asks you to:
 3. Respond in writing by {{custom_datetime__response_deadline}}.
 
 Washington's Consumer Protection Act, RCW 19.86, protects the Person's interests here, and the Firm expects any
-resolution to respect it. This letter is not a complete statement of the Person's position and waives no right or
-claim.
+resolution to respect it. This letter is not a complete statement of the Person's position and waives no right or claim.
 
 Sincerely,
 
