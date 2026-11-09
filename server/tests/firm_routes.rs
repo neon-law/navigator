@@ -1929,39 +1929,37 @@ async fn blog_kebab_slug_is_served_without_redirect() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
-// ---- Notations format introduction and template catalog ----
+// ---- Notations: the template gallery, and the format story beside it ----
 
 #[tokio::test]
-async fn notations_page_opens_with_search_and_keeps_format_details_optional() {
+async fn notations_page_is_the_searchable_gallery_and_links_the_format_story() {
     let app = site_app().await;
     let resp = anon_get(&app, "/notations").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp).await;
-    assert!(
-        body.contains("notations-page"),
-        "notation format page: {body}"
-    );
-    for section in ["notation-flow", "notation-source", "rules", "templates"] {
-        assert!(
-            body.contains(&format!("id=\"{section}\"")),
-            "missing {section}"
-        );
-    }
-    assert!(body.contains("/public/notation-pen.svg"));
-    assert!(!body.contains("/public/navigator-wheel.svg"));
+    assert!(body.contains("id=\"templates\""), "gallery: {body}");
+    assert!(body.contains("Search templates"), "search: {body}");
+    assert!(body.contains("data-template-search="));
     assert!(body.contains("/public/css/notations.css"));
     assert!(body.contains("/public/js/template-search.js"));
     assert!(
-        body.find("Search templates").expect("template search")
-            < body
-                .find("About the Notation format")
-                .expect("format disclosure")
+        body.contains(r#"href="/notations/about""#),
+        "the gallery links the format story: {body}"
     );
-    assert!(body.contains("data-template-search="));
-
-    let navigator = body_string(anon_get(&app, "/navigator").await).await;
-    assert!(!navigator.contains("id=\"notation-flow\""));
-    // Every card's default link opens the notation's own show page now — the
+    // The list is the page: none of the format story or the kind catalog
+    // renders beneath it any more.
+    for gone in [
+        "notations-page",
+        "id=\"notation-flow\"",
+        "id=\"notation-source\"",
+        "Every notation kind",
+    ] {
+        assert!(
+            !body.contains(gone),
+            "{gone} belongs to /notations/about: {body}"
+        );
+    }
+    // Every card's default link opens the notation's own show page — the
     // raw GitHub source lives on that page, not the catalog card.
     assert!(
         body.contains(r#"href="/notations/onboarding-letter""#),
@@ -1981,6 +1979,40 @@ async fn notations_page_opens_with_search_and_keeps_format_details_optional() {
     );
     assert!(body.contains("site-header"), "public header chrome");
     assert!(body.contains("site-footer__legal"), "public legal footer");
+}
+
+#[tokio::test]
+async fn notations_about_tells_the_format_story_and_returns_to_the_gallery() {
+    let app = site_app().await;
+    let resp = anon_get(&app, "/notations/about").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp).await;
+    assert!(body.contains("notations-page"), "format story: {body}");
+    for section in [
+        "notation-source",
+        "notation-flow",
+        "anatomy",
+        "rules",
+        "kinds",
+    ] {
+        assert!(
+            body.contains(&format!("id=\"{section}\"")),
+            "missing {section}"
+        );
+    }
+    assert!(body.contains("/public/notation-pen.svg"));
+    assert!(!body.contains("/public/navigator-wheel.svg"));
+    assert!(body.contains("Every notation kind"), "kind catalog: {body}");
+    assert!(
+        body.contains(r#"href="/notations""#),
+        "back to the gallery: {body}"
+    );
+    // The static segment wins over `/notations/{slug}`: this is the story,
+    // not a 404 for an unknown notation.
+    assert!(!body.contains("Template frontmatter"), "{body}");
+
+    let navigator = body_string(anon_get(&app, "/navigator").await).await;
+    assert!(!navigator.contains("id=\"notation-flow\""));
 }
 
 // ---- Contact surface (firm-owned, Dioxus SSR port #641 / #730 PR6) ----

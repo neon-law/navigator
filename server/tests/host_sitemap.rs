@@ -190,6 +190,7 @@ async fn the_sitemap_advertises_the_firms_pages() {
         "/accidents",
         "/divorce",
         "/notations",
+        "/notations/about",
         "/contact",
         "/blog",
         "/presentations",

@@ -14,7 +14,7 @@ hero_lead_runs:
   - text: " connects each answer to the document it belongs in."
 hero_cta:
   label: Explore the templates
-  href: '#templates'
+  href: /notations
 bands:
   - kind: project_network
     anchor: notation-flow

@@ -22,7 +22,7 @@
   letter-spacing: .06em;
 }
 
-.notations-hero h2 {
+.notations-hero h1 {
   font-size: clamp(3.3rem, 6.3vw, 6.7rem);
   letter-spacing: -.065em;
   line-height: 1.02;
@@ -93,7 +93,7 @@
 }
 @media (max-width: 850px) {
   .notations-hero { grid-template-columns: 1fr; }
-  .notations-hero h2 { max-width: 13ch; }
+  .notations-hero h1 { max-width: 13ch; }
   .notations-specimen { transform: none; margin-right: 12px; }
   .notations-specimen pre, .notations-specimen .nav-code pre { font-size: .76rem; }
 }
@@ -236,6 +236,8 @@
   padding: 1.5rem clamp(1rem, 3vw, 3rem);
 }
 .catalog-library--notations h1 { margin-block: 0 1rem; }
+.catalog-about { margin: -0.5rem 0 1.25rem; }
+.notations-about { max-width: 1120px; margin: 1.5rem auto 0; padding-inline: 1.5rem; }
 .template-search { margin-bottom: 1rem; }
 .template-search label { display: block; font-weight: 600; margin-bottom: .35rem; }
 .nav-template-search__input {

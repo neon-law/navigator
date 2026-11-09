@@ -3678,6 +3678,42 @@ pub fn catalog_index_router(
         ))
 }
 
+/// The Notation format's story — the four slides and the kind catalog the
+/// `/notations` gallery links to. Public, like the gallery.
+pub const NOTATIONS_ABOUT_PATH: &str = "/notations/about";
+
+/// The ungated Dioxus mount for [`NOTATIONS_ABOUT_PATH`]. Content is fixed at
+/// construction and handed to the render task by a pre-layer, the same shape
+/// as [`catalog_index_router`]; a static segment, so it wins over the
+/// `{slug}` of [`NOTATION_PREVIEW_PATH`] when the two are merged.
+pub fn notations_about_router(content: webapp::notations_about::NotationsAboutContent) -> Router {
+    Router::<FullstackState>::new()
+        .route(
+            NOTATIONS_ABOUT_PATH,
+            get(render_handler)
+                .layer(from_fn(dioxus_document_head))
+                .layer(from_fn(inject_public_utility))
+                .layer(from_fn_with_state(content, inject_notations_about)),
+        )
+        .with_state(FullstackState::new(
+            ServeConfig::new(),
+            webapp::notations_about::NotationsAboutEntry,
+        ))
+}
+
+/// Hand the format story to the render task.
+async fn inject_notations_about(
+    axum::extract::State(content): axum::extract::State<
+        webapp::notations_about::NotationsAboutContent,
+    >,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    req.extensions_mut()
+        .insert(webapp::notations_about::InjectedNotationsAbout(content));
+    next.run(req).await
+}
+
 /// Hand this category's resolved content to the render task.
 async fn inject_catalog_index(
     axum::extract::State(content): axum::extract::State<webapp::catalog_index::CatalogIndexContent>,
