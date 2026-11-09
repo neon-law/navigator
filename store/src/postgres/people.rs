@@ -136,6 +136,32 @@ pub(crate) async fn by_role(pg: &PostgresDb, role: Role) -> Result<Vec<Person>, 
         .map_err(database)
 }
 
+/// Every person holding `role` at one Firm — the firm-filtered lookup the
+/// deployment-wide [`by_role`] cannot answer. Membership is the
+/// `person_firm_role` join; the person's own role stays the system-wide
+/// tier, so "the Firm's Owner" is an Owner-tier person with a membership
+/// row, and a Firm with none returns an empty list.
+pub(crate) async fn by_role_and_firm(
+    pg: &PostgresDb,
+    role: Role,
+    firm_id: Uuid,
+) -> Result<Vec<Person>, PersonError> {
+    let rows = sqlx::query(AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM person \
+         WHERE role = $1 \
+           AND id IN (SELECT person_id FROM person_firm_role WHERE firm_id = $2)"
+    )))
+    .bind(role.as_str())
+    .bind(firm_id)
+    .fetch_all(&pg.0)
+    .await
+    .map_err(database)?;
+    rows.iter()
+        .map(person)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(database)
+}
+
 /// The directory's `ORDER BY`: only `name` and `email` are honored, never
 /// the caller's string, and an empty sort falls back to name.
 /// One keyset page of the people directory over the `person_directory` view:

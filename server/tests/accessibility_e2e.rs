@@ -206,6 +206,11 @@ fn plan(path: &str) -> AuditPlan {
     // gives up. That is the shape every POST-only route takes here, and it is
     // why a write handler has to be skipped by name rather than left to fall
     // through into `Audit`.
+    // The directory publishes on Guieb & Shook. This audit runs against the
+    // Neon host, which links out and answers 404 here.
+    if matches!(path, "/team" | "/team/nick" | "/team/waleed") {
+        return AuditPlan::Skip("published on guiebshook.com");
+    }
     if path == "/leads" {
         return AuditPlan::Skip("the POST-only lead-capture write handler");
     }
@@ -1034,9 +1039,9 @@ async fn the_error_pages_pass_axe_wcag_a_and_aa() {
 /// The public surface's two interactive image affordances: the home page's call
 /// to action, and the blog collage's lightbox dialog.
 ///
-/// The `/team` index and profile are audited by every caller of
-/// `audit_urls(neon::PUBLIC_PATHS)` like every other declared path — this test
-/// stays scoped to the two interactive image affordances its name promises.
+/// The directory publishes on Guieb & Shook, so this Neon audit skips it.
+/// This test stays scoped to the two interactive image affordances its name
+/// promises.
 #[tokio::test]
 async fn public_navigation_images_and_collage_dialog_are_accessible() {
     let site_base_url = base_url();

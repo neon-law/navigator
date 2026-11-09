@@ -987,6 +987,7 @@ mod tests {
 
     async fn open_acme(surreal: &crate::surreal::SurrealDb) -> projects::Project {
         seed_firm_with_brand(surreal, "neon").await;
+        crate::test_support::approve_test_brand_domain(surreal, "neon").await;
         let entity_id = seed_entity(surreal).await;
         let lawyer = persons::create(
             surreal,
@@ -1562,6 +1563,7 @@ mod tests {
             onboarding_jurisdiction: None,
             legal_plan_id: None,
             plan_member_id: None,
+            plan_case_number: None,
             benefit_code: None,
             plan_matter_type: None,
             plan_state: None,

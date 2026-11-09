@@ -380,6 +380,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "notation_creation_attempt",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "notation_machine_state",
       "missing_column": null,
       "missing_table": null,
@@ -1654,6 +1661,7 @@
         "onboarding_jurisdiction": "option<string>",
         "plan_accepted_on": "option<string>",
         "plan_assigned_on": "option<string>",
+        "plan_case_number": "option<string>",
         "plan_closed_on": "option<string>",
         "plan_matter_type": "option<string>",
         "plan_member_id": "option<string>",
@@ -1968,7 +1976,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 163,
+    "table_count": 164,
     "tables": {
       "address": {
         "columns": {
@@ -4204,6 +4212,19 @@
           "person"
         ]
       },
+      "notation_creation_attempt": {
+        "columns": {
+          "failed_at": "timestamptz",
+          "id": "uuid",
+          "notation_id": "uuid",
+          "project_id": "uuid",
+          "respondent_id": "uuid",
+          "template_code": "text"
+        },
+        "foreign_keys": [],
+        "name": "notation_creation_attempt",
+        "references": []
+      },
       "notation_document": {
         "columns": {
           "current_version_id": "UUID",
@@ -4761,6 +4782,7 @@
           "onboarding_jurisdiction": "TEXT",
           "plan_accepted_on": "DATE",
           "plan_assigned_on": "DATE",
+          "plan_case_number": "TEXT",
           "plan_closed_on": "DATE",
           "plan_matter_type": "TEXT",
           "plan_member_id": "TEXT",

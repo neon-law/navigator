@@ -131,6 +131,7 @@ pub mod filings;
 pub mod finance_aggregate;
 pub mod firm_assumptions;
 pub mod firm_capability;
+pub mod firm_digest;
 pub mod firm_journal;
 pub mod firm_library;
 pub mod firm_secrets;
@@ -178,6 +179,7 @@ pub mod people_commands;
 pub mod person_merge;
 pub mod person_phones;
 pub mod persons;
+pub mod plan_assignment;
 pub mod plan_metrics;
 pub mod plan_seeds;
 pub mod playbooks;
@@ -197,6 +199,9 @@ pub mod postgres_schema;
 /// Sampled comparisons of SurrealDB reads with their PostgreSQL equivalents.
 pub mod postgres_shadow;
 pub mod posts;
+/// The private-terms record checks the Pre-Filing PII Check refuses on, run
+/// in report mode for the admin-tier reconciliation door.
+pub mod private_terms;
 pub mod project_archives;
 pub mod project_calendar;
 pub mod project_closeout;

@@ -92,9 +92,11 @@ postgres_client_service_only:
   NAVIGATOR_POSTGRES_BACKUP_PASSWORD: navigator_backup replication login password
 
 # Optional in the same PostgreSQL service file, beside the client logins above:
-# the DBOS executor's login, projected as its own mounted Secret.
+# the DBOS executor's login and the read-only Iceberg archive login, each
+# projected as its own mounted Secret.
 postgres_dbos_service_only:
   NAVIGATOR_POSTGRES_DBOS_PASSWORD: navigator_dbos DBOS executor login password
+  NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD: navigator_archive read-only Iceberg archive login password
 
 forgejo_service_only:
   NAVIGATOR_FORGEJO_DATABASE_PASSWORD: Forgejo's dedicated PostgreSQL role password

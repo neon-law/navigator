@@ -83,6 +83,7 @@ fn row(row: &sqlx::postgres::PgRow) -> Result<Project, ProjectError> {
         // reader renders the same shape both lanes read.
         legal_plan_id: row.try_get("legal_plan_id")?,
         plan_member_id: row.try_get("plan_member_id")?,
+        plan_case_number: row.try_get("plan_case_number")?,
         benefit_code: row.try_get("benefit_code")?,
         plan_matter_type: row.try_get("plan_matter_type")?,
         plan_state: row.try_get("plan_state")?,

@@ -85,6 +85,11 @@ pub struct Project {
     /// The plan's member identifier for this matter, verbatim from the
     /// assignment.
     pub plan_member_id: Option<String>,
+    /// The [Plan Case Number](../../docs/glossary/plan-case-number.md): the
+    /// number the Legal Plan gave this referral (ARAG's CaseAssist number,
+    /// LegalEASE's member case number), verbatim. Every plan email and
+    /// claim cites it, so it is what links the matter back to how it is paid.
+    pub plan_case_number: Option<String>,
     /// The benefit code the plan's assignment named, verbatim.
     pub benefit_code: Option<String>,
     /// Which kind of plan matter this is — a closed vocabulary shared with
@@ -208,6 +213,7 @@ struct ProjectRow {
     /// `onboarding_jurisdiction`.
     legal_plan_id: Option<Uuid>,
     plan_member_id: Option<String>,
+    plan_case_number: Option<String>,
     benefit_code: Option<String>,
     plan_matter_type: Option<String>,
     plan_state: Option<String>,
@@ -257,6 +263,7 @@ impl ProjectRow {
             booking_url: self.booking_url,
             legal_plan_id: self.legal_plan_id,
             plan_member_id: self.plan_member_id,
+            plan_case_number: self.plan_case_number,
             benefit_code: self.benefit_code,
             plan_matter_type: self.plan_matter_type,
             plan_state: self.plan_state,
@@ -283,8 +290,8 @@ const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id,
                               internal_slack_channel_id, \
                               private_notion_page_url, shared_notion_page_url, \
                               calendar_id, booking_url, \
-                              legal_plan_id, plan_member_id, benefit_code, \
-                              plan_matter_type, plan_state, plan_assigned_on, \
+                              legal_plan_id, plan_member_id, plan_case_number, \
+                              benefit_code, plan_matter_type, plan_state, plan_assigned_on, \
                               plan_accepted_on, plan_closed_on, kit_version, \
                               inserted_at, updated_at";
 
@@ -1383,6 +1390,7 @@ pub async fn restore_archived(
                  shared_notion_page_url = $shared_notion_page_url, \
                  calendar_id = $calendar_id, booking_url = $booking_url, \
                  legal_plan_id = $legal_plan_id, plan_member_id = $plan_member_id, \
+                 plan_case_number = $plan_case_number, \
                  benefit_code = $benefit_code, plan_matter_type = $plan_matter_type, \
                  plan_state = $plan_state, plan_assigned_on = $plan_assigned_on, \
                  plan_accepted_on = $plan_accepted_on, plan_closed_on = $plan_closed_on, \
@@ -1436,6 +1444,7 @@ pub async fn restore_archived(
             .bind(("booking_url", project.booking_url.clone()))
             .bind(("legal_plan_id", project.legal_plan_id))
             .bind(("plan_member_id", project.plan_member_id.clone()))
+            .bind(("plan_case_number", project.plan_case_number.clone()))
             .bind(("benefit_code", project.benefit_code.clone()))
             .bind(("plan_matter_type", project.plan_matter_type.clone()))
             .bind(("plan_state", project.plan_state.clone()))
@@ -1928,6 +1937,20 @@ pub fn is_valid_calendar_id(value: &str) -> bool {
         && value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@'))
+}
+
+/// Whether a value has the shape of a recorded Kit version:
+/// `{jurisdiction}/{practice_area}/{version}` — three non-empty path segments
+/// with no whitespace. The value is displayed as recorded and matched against
+/// the Project Skill catalog's `version` field, so anything beyond the
+/// segment shape is accepted verbatim rather than second-guessed here.
+#[must_use]
+pub fn is_valid_kit_version(value: &str) -> bool {
+    let segments: Vec<&str> = value.split('/').collect();
+    segments.len() == 3
+        && segments
+            .iter()
+            .all(|segment| !segment.is_empty() && !segment.chars().any(char::is_whitespace))
 }
 
 /// The notation id of the person's **sole open matter**, for auto-routing an
@@ -2578,7 +2601,7 @@ pub async fn set_client_dri_person_id(
 
 /// The legal-plan panel columns staged onto a plan matter (ENG-1269). The
 /// intake path (ENG-1270) sets them when the attorney accepts a staged
-/// matter; every field is optional and a `None` clears the column. The nine
+/// matter; every field is optional and a `None` clears the column. The ten
 /// land in one patch so a staged matter never reads with half its plan
 /// identity.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -2588,6 +2611,9 @@ pub struct PlanColumns {
     /// the value plain.
     pub legal_plan_id: Option<Uuid>,
     pub plan_member_id: Option<String>,
+    /// The plan's own number for this referral, verbatim — what the plan's
+    /// emails and claims cite.
+    pub plan_case_number: Option<String>,
     pub benefit_code: Option<String>,
     /// A word from the closed [`crate::legal_plans::PlanMatterType`]
     /// vocabulary — `as_str()`, so `plan_fee_schedule` and the assumption
@@ -2605,10 +2631,32 @@ pub struct PlanColumns {
     pub kit_version: Option<String>,
 }
 
+impl PlanColumns {
+    /// The plan columns one Project carries now — the base a partial
+    /// update overlays, so a caller changing one field keeps the rest.
+    #[must_use]
+    pub fn of(project: &Project) -> Self {
+        Self {
+            legal_plan_id: project.legal_plan_id,
+            plan_member_id: project.plan_member_id.clone(),
+            plan_case_number: project.plan_case_number.clone(),
+            benefit_code: project.benefit_code.clone(),
+            plan_matter_type: project.plan_matter_type.clone(),
+            plan_state: project.plan_state.clone(),
+            plan_assigned_on: project.plan_assigned_on.clone(),
+            plan_accepted_on: project.plan_accepted_on.clone(),
+            plan_closed_on: project.plan_closed_on.clone(),
+            kit_version: project.kit_version.clone(),
+        }
+    }
+}
+
 const PLAN_MATTER_TYPE_INVALID: &str =
     "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance";
 const PLAN_STATE_INVALID: &str = "plan_state is not a lowercase jurisdiction code";
 const PLAN_DATE_INVALID: &str = "plan date is not an ISO YYYY-MM-DD date";
+const PLAN_CASE_NUMBER_INVALID: &str =
+    "plan_case_number must be 1 to 64 visible characters with no spaces";
 const PLAN_UNKNOWN: &str = "legal_plan_id does not name a legal plan";
 const PLAN_FIRM_MISMATCH: &str = "legal_plan_id names a plan of another firm";
 
@@ -2618,6 +2666,12 @@ const PLAN_FIRM_MISMATCH: &str = "legal_plan_id names a plan of another firm";
 fn valid_plan_date(text: &str) -> bool {
     chrono::NaiveDate::parse_from_str(text, "%F")
         .is_ok_and(|date| date.format("%F").to_string() == text)
+}
+
+/// A Plan Case Number as the plan prints it (`4963680-001`, `412590`): one
+/// token, so an inbox rule can match it as a whole word in a subject line.
+fn valid_plan_case_number(text: &str) -> bool {
+    (1..=64).contains(&text.chars().count()) && text.chars().all(|c| c.is_ascii_graphic())
 }
 
 /// Writes the legal-plan panel columns onto one Project in one patch
@@ -2647,6 +2701,11 @@ pub async fn set_plan_columns(
     if let Some(state) = &columns.plan_state {
         if !crate::legal_plans::valid_state_code(state) {
             return Err(ProjectCommandError::Invalid(PLAN_STATE_INVALID));
+        }
+    }
+    if let Some(case_number) = &columns.plan_case_number {
+        if !valid_plan_case_number(case_number) {
+            return Err(ProjectCommandError::Invalid(PLAN_CASE_NUMBER_INVALID));
         }
     }
     for text in [
@@ -2680,7 +2739,8 @@ pub async fn set_plan_columns(
     let mut response = surreal
         .query(format!(
             "UPDATE $id SET legal_plan_id = $legal_plan_id, \
-             plan_member_id = $plan_member_id, benefit_code = $benefit_code, \
+             plan_member_id = $plan_member_id, \
+             plan_case_number = $plan_case_number, benefit_code = $benefit_code, \
              plan_matter_type = $plan_matter_type, plan_state = $plan_state, \
              plan_assigned_on = $plan_assigned_on, \
              plan_accepted_on = $plan_accepted_on, \
@@ -2690,6 +2750,7 @@ pub async fn set_plan_columns(
         .bind(("id", record_id(PROJECT_TABLE, project_id)))
         .bind(("legal_plan_id", columns.legal_plan_id))
         .bind(("plan_member_id", columns.plan_member_id.clone()))
+        .bind(("plan_case_number", columns.plan_case_number.clone()))
         .bind(("benefit_code", columns.benefit_code.clone()))
         .bind(("plan_matter_type", columns.plan_matter_type.clone()))
         .bind(("plan_state", columns.plan_state.clone()))
@@ -2901,6 +2962,14 @@ pub struct UpdateProjectCommand {
     /// an omitted one leaves it untouched.
     #[serde(default)]
     pub onboarding_jurisdiction: Option<String>,
+    /// The Kit version this matter used, `{jurisdiction}/{practice_area}/
+    /// {version}` — written through by `navigator project skill use` when it
+    /// pins the same pair into the Project's `navigator.yaml`, so every
+    /// matter reports which Kit produced its work. A blank submission clears
+    /// it; an omitted one leaves it untouched. Checked by
+    /// [`is_valid_kit_version`].
+    #[serde(default)]
+    pub kit_version: Option<String>,
 }
 
 /// Set or clear the Project's source repository URL.
@@ -3064,7 +3133,7 @@ pub enum ProjectCommandError {
 /// `SET` clause carries and which parameters are bound — so a new optional
 /// column is one row here instead of two `if` blocks that must agree. `None`
 /// means "leave this column alone"; `Some("")` means "clear it".
-fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 10] {
+fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 11] {
     [
         ("description", input.description.as_ref()),
         (
@@ -3091,6 +3160,7 @@ fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option
             "onboarding_jurisdiction",
             input.onboarding_jurisdiction.as_ref(),
         ),
+        ("kit_version", input.kit_version.as_ref()),
     ]
 }
 
@@ -3165,33 +3235,11 @@ async fn validate_firm_brand_update(
     }
 }
 
-/// Update a matter's descriptive fields — name, entity, scope narrative, its
-/// Slack channels, and its source repository URL. Behind both the JSON
-/// `PATCH /app/api/projects/{id}` command and the `/app/projects/{id}` edit
-/// form, so neither door re-implements the write. Name is required; a submitted
-/// `entity_id` or `description` is applied and an omitted one is left
-/// untouched, with a blank description clearing the column.
-///
-/// `repository_url` is the one Project field that is validated rather than
-/// merely trimmed ([`is_valid_repository_url`]): it is handed to `git clone`
-/// and rendered as a link, so a bad scheme or an embedded credential is
-/// refused here rather than stored.
-///
-/// Scope is deliberately narrow. It is not the matter-open path (no conflict
-/// check), it does not move the agreed price (the append-only price-events
-/// command), and it does not change `status`/`closed_at` — a lifecycle
-/// transition whose retention semantics are a firm-policy determination owned
-/// by [`transition_project`].
-///
-/// Because every written value comes wholly from the request (never from a
-/// read of the row), there is no read-modify-write to serialize: the sparse
-/// `Unchanged(id)` update leaves `status`, `closed_at`, and every other
-/// column a concurrent lifecycle write may be changing entirely untouched.
-pub async fn update_project(
-    surreal: &SurrealDb,
-    id: Uuid,
-    input: &UpdateProjectCommand,
-) -> Result<Project, ProjectCommandError> {
+/// Validate the request-only update invariants: required name, the
+/// repository URL's clone-and-render safety, resource links, and the Kit
+/// version's three-segment shape. Every check is a pure function of
+/// `input`, so the command can fail before any read or write.
+fn validate_update_command(input: &UpdateProjectCommand) -> Result<(), ProjectCommandError> {
     if let Some(name) = &input.name {
         if name.trim().is_empty() {
             return Err(ProjectCommandError::Invalid("Name is required."));
@@ -3205,7 +3253,27 @@ pub async fn update_project(
         }
     }
     validate_resource_links(input)?;
-    let firm_brand = validate_firm_brand_update(surreal, input).await?;
+    // A Kit version is displayed as recorded and reported per matter, so a
+    // value that is not three path segments is refused rather than normalized.
+    if let Some(kit_version) = &input.kit_version {
+        if !kit_version.trim().is_empty() && !is_valid_kit_version(kit_version.trim()) {
+            return Err(ProjectCommandError::Invalid(
+                "kit_version must be {jurisdiction}/{practice_area}/{version}, three non-empty \
+                 segments with no whitespace.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate the row-dependent update references: the matter exists, a
+/// repointed entity exists, and a named Drive ingest folder is not recorded
+/// on another matter.
+async fn validate_update_references(
+    surreal: &SurrealDb,
+    id: Uuid,
+    input: &UpdateProjectCommand,
+) -> Result<(), ProjectCommandError> {
     if find_by_id(surreal, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
@@ -3239,6 +3307,39 @@ pub async fn update_project(
             ));
         }
     }
+    Ok(())
+}
+
+/// Update a matter's descriptive fields — name, entity, scope narrative, its
+/// Slack channels, and its source repository URL. Behind both the JSON
+/// `PATCH /app/api/projects/{id}` command and the `/app/projects/{id}` edit
+/// form, so neither door re-implements the write. Name is required; a submitted
+/// `entity_id` or `description` is applied and an omitted one is left
+/// untouched, with a blank description clearing the column.
+///
+/// `repository_url` is the one Project field that is validated rather than
+/// merely trimmed ([`is_valid_repository_url`]): it is handed to `git clone`
+/// and rendered as a link, so a bad scheme or an embedded credential is
+/// refused here rather than stored.
+///
+/// Scope is deliberately narrow. It is not the matter-open path (no conflict
+/// check), it does not move the agreed price (the append-only price-events
+/// command), and it does not change `status`/`closed_at` — a lifecycle
+/// transition whose retention semantics are a firm-policy determination owned
+/// by [`transition_project`].
+///
+/// Because every written value comes wholly from the request (never from a
+/// read of the row), there is no read-modify-write to serialize: the sparse
+/// `Unchanged(id)` update leaves `status`, `closed_at`, and every other
+/// column a concurrent lifecycle write may be changing entirely untouched.
+pub async fn update_project(
+    surreal: &SurrealDb,
+    id: Uuid,
+    input: &UpdateProjectCommand,
+) -> Result<Project, ProjectCommandError> {
+    validate_update_command(input)?;
+    let firm_brand = validate_firm_brand_update(surreal, input).await?;
+    validate_update_references(surreal, id, input).await?;
     // The optional text columns are handled from one table, so a column is set
     // and bound from the same row rather than from two `if` blocks a hundred
     // lines apart that have to be kept in step.
@@ -3586,6 +3687,7 @@ fn person_lookup_failed(err: &crate::persons::PersonError) -> OpenMatterError {
 async fn validate_open_references(
     surreal: &SurrealDb,
     input: &OpenMatterCommand,
+    firm_id: Uuid,
 ) -> Result<Role, OpenMatterError> {
     let client = lock_person(surreal, input.client_id)
         .await?
@@ -3612,6 +3714,23 @@ async fn validate_open_references(
     // attorney, whichever door (web form, CLI, or API) drove the open.
     if !attester.role.is_lawyer_tier() {
         return Err(OpenMatterError::AttesterNotAllowed);
+    }
+    let keys = crate::firms::brand_keys_for_firm(surreal, firm_id)
+        .await
+        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
+    let mut brands = Vec::with_capacity(keys.len());
+    for key in keys {
+        if let Some(brand) = crate::brands::find_by_key(surreal, &key)
+            .await
+            .map_err(|error| OpenMatterError::Db(error.to_string()))?
+        {
+            brands.push(brand);
+        }
+    }
+    if !crate::brand_domains::DomainPolicy::from_brands(&brands).admits(&attester.email) {
+        return Err(OpenMatterError::Invalid(
+            "The lawyer DRI must have an approved Firm or Brand email domain.",
+        ));
     }
     if let Some(jurisdiction_id) = input.jurisdiction_id {
         if crate::jurisdictions::find_by_id(surreal, jurisdiction_id)
@@ -3746,7 +3865,7 @@ pub async fn open_matter(
     // transaction conflicts retry with jitter. `lock_person` remains the
     // accepted narrowing.
     let attester_participation =
-        participation_for_role(validate_open_references(surreal, input).await?);
+        participation_for_role(validate_open_references(surreal, input, firm_id).await?);
     // Conflict check, before any write. The relationship graph is advisory to
     // clear but authoritative to block: a confident adverse link to a current
     // client hard-stops the open, and no attestation overrides it (a waiver is
@@ -5486,6 +5605,42 @@ mod drive_folder_input_tests {
             "javascript:alert(1)",
         ] {
             assert_eq!(drive_folder_id_from_input(input), None, "{input}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod kit_version_tests {
+    use super::is_valid_kit_version;
+
+    /// A recorded Kit version is `{jurisdiction}/{practice_area}/{version}` —
+    /// the shape `navigator project skill use` writes through.
+    #[test]
+    fn a_three_segment_kit_version_is_valid() {
+        for value in [
+            "NV/estates/1",
+            "ny/uncontested-divorce/1.0.0",
+            "TX/probate/2026.01",
+        ] {
+            assert!(is_valid_kit_version(value), "{value}");
+        }
+    }
+
+    /// Anything that is not three non-empty, whitespace-free segments is
+    /// refused rather than normalized — a mis-shaped value on the matter row
+    /// would defeat the report it exists for.
+    #[test]
+    fn anything_else_is_refused() {
+        for value in [
+            "",
+            "NV/estates",
+            "NV/estates/1/two",
+            "NV/estates/",
+            "/estates/1",
+            "NV/uncontested divorce/1",
+            " NV/estates/1",
+        ] {
+            assert!(!is_valid_kit_version(value), "{value}");
         }
     }
 }

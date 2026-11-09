@@ -1668,10 +1668,203 @@ fn gate_autofix_preserves_the_firm_identity_in_a_definition_and_signature() {
     let revised = fs::read_to_string(draft).unwrap();
     assert!(revised.contains(&definition), "{revised}");
     assert!(revised.contains(&wrapped.replace('\n', " ")), "{revised}");
+    // The draft's `kind: onboarding` frontmatter makes it a letter-family
+    // draft: authored prose keeps the Firm's legal name, and the signature
+    // section still moves to the render binding.
+    assert!(
+        revised.contains(&format!("Contact {name} with questions.")),
+        "{revised}"
+    );
+    assert!(revised.contains("For {{firm.legal_name}}:"), "{revised}");
+    assert!(
+        revised.contains(&format!("Ask {name} for a copy.")),
+        "{revised}"
+    );
+}
+
+/// The one compiled Firm legal name with an ampersand, so a fixture names
+/// the Firm the way a compiled Brand does.
+fn ampersand_firm_legal_name() -> String {
+    views::brand::BrandKey::ALL
+        .iter()
+        .map(|key| {
+            key.resolve_branding(&views::brand::DEFAULT_BRANDING)
+                .firm
+                .legal_entity
+        })
+        .find(|name| name.contains('&'))
+        .unwrap()
+        .to_string()
+}
+
+/// The stub draft without its arbitration clause include and declaration, so
+/// a fixture can declare a kind other than the clause's required
+/// `onboarding`.
+fn draft_without_arbitration_clause(draft: &str) -> String {
+    draft
+        .replace(
+            "clauses:\n  arbitration:\n    source: engagement_arbitration@1\n    inputs:\n      law: jurisdiction__governing_law\n      seat: jurisdiction__arbitration_seat\n",
+            "",
+        )
+        .replace(
+            "\n{{> arbitration}}\n",
+            "\nGoverning law: {{jurisdiction__governing_law}}. Arbitration seat: {{jurisdiction__arbitration_seat}}.\n",
+        )
+}
+
+/// The stub draft re-kinded: `Some` sets a kind, `None` drops the kind line.
+fn draft_with_kind(draft: &str, kind: Option<&str>) -> String {
+    let stripped = draft_without_arbitration_clause(draft);
+    match kind {
+        Some(kind) => stripped.replace("kind: onboarding", &format!("kind: {kind}")),
+        None => stripped.replace("kind: onboarding\n", ""),
+    }
+}
+
+/// A letter-family draft's authored prose survives the gate autofix
+/// byte-identical: the gate computes no rewrite for prose-only names, so it
+/// never writes the file, and the Y027 warning still stands.
+#[test]
+fn gate_autofix_leaves_a_letter_familys_prose_byte_identical_and_warns() {
+    for kind in ["letter", "onboarding"] {
+        let dir = TempDir::new().unwrap();
+        scaffold(dir.path(), "example-project");
+        let draft = dir.path().join("drafts/onboarding__letter.md");
+        let name = ampersand_firm_legal_name();
+        let original = fs::read_to_string(&draft).unwrap();
+        // An onboarding template must declare and include the arbitration
+        // clause (N132), so only the letter variant drops it.
+        let authored = if kind == "onboarding" {
+            original.clone()
+        } else {
+            draft_with_kind(&original, Some(kind))
+        } + &format!("\nThank you for choosing {name} for this engagement.\n");
+        fs::write(&draft, &authored).unwrap();
+
+        let assert = gate(dir.path()).stdout(str::contains(": warning: Y027: line "));
+        offline_gate_is_clean(assert);
+
+        assert_eq!(
+            fs::read_to_string(&draft).unwrap(),
+            authored,
+            "{kind} prose was rewritten"
+        );
+    }
+}
+
+/// A non-letter draft keeps the general prose de-branding: the Firm's legal
+/// name in authored prose becomes "the Firm" on disk.
+#[test]
+fn gate_autofix_still_debrands_a_non_letter_drafts_prose() {
+    for kind in ["memo", "filing"] {
+        let dir = TempDir::new().unwrap();
+        scaffold(dir.path(), "example-project");
+        let draft = dir.path().join("drafts/onboarding__letter.md");
+        let name = ampersand_firm_legal_name();
+        let original = fs::read_to_string(&draft).unwrap();
+        fs::write(
+            &draft,
+            format!(
+                "{}\nContact {name} with questions.\n",
+                draft_with_kind(&original, Some(kind))
+            ),
+        )
+        .unwrap();
+
+        offline_gate_is_clean(gate(dir.path()));
+
+        let revised = fs::read_to_string(&draft).unwrap();
+        assert!(
+            revised.contains("Contact the Firm with questions."),
+            "{kind}: {revised}"
+        );
+    }
+
+    // A kind-less draft cannot reach a clean gate — S104 errors on it — but
+    // the prose de-brand still applies to it as plain prose.
+    let dir = TempDir::new().unwrap();
+    scaffold(dir.path(), "example-project");
+    let draft = dir.path().join("drafts/onboarding__letter.md");
+    let name = ampersand_firm_legal_name();
+    let original = fs::read_to_string(&draft).unwrap();
+    fs::write(
+        &draft,
+        format!(
+            "{}\nContact {name} with questions.\n",
+            draft_with_kind(&original, None)
+        ),
+    )
+    .unwrap();
+
+    gate(dir.path());
+
+    let revised = fs::read_to_string(&draft).unwrap();
     assert!(
         revised.contains("Contact the Firm with questions."),
         "{revised}"
     );
-    assert!(revised.contains("For {{firm.legal_name}}:"), "{revised}");
-    assert!(revised.contains("Ask the Firm for a copy."), "{revised}");
+}
+
+/// Each recognized closing formula routes the signature block's name to the
+/// render binding instead of the prose de-brand, in a letter-kind draft.
+#[test]
+fn gate_autofix_routes_a_letter_closings_name_to_the_placeholder() {
+    for closing in [
+        "Yours truly,",
+        "Very truly yours,",
+        "Warm regards,",
+        "Kind regards,",
+        "Best regards,",
+    ] {
+        let dir = TempDir::new().unwrap();
+        scaffold(dir.path(), "example-project");
+        let draft = dir.path().join("drafts/onboarding__letter.md");
+        let name = ampersand_firm_legal_name();
+        let original = fs::read_to_string(&draft).unwrap();
+        // The blank line keeps the closing and the name in separate
+        // paragraphs: the S102 packing fix would otherwise join them before
+        // the Y027 pass runs, and the letter exemption would keep the pair
+        // as written.
+        fs::write(
+            &draft,
+            format!("{original}\n{closing}\n\n{name}, Attorneys at Law\n"),
+        )
+        .unwrap();
+
+        offline_gate_is_clean(gate(dir.path()));
+
+        let revised = fs::read_to_string(&draft).unwrap();
+        assert!(
+            revised.contains(&format!(
+                "{closing}\n\n{{{{firm.legal_name}}}}, Attorneys at Law"
+            )),
+            "{closing}: {revised}"
+        );
+        assert!(
+            !revised.contains(&format!("{name}, Attorneys at Law")),
+            "{closing}: {revised}"
+        );
+    }
+}
+
+/// An unrecognized closing is a known gap: the name line under it is left
+/// as written and the Y027 warning stands.
+#[test]
+fn gate_autofix_leaves_a_letter_drafts_name_under_an_unrecognized_closing() {
+    let dir = TempDir::new().unwrap();
+    scaffold(dir.path(), "example-project");
+    let draft = dir.path().join("drafts/onboarding__letter.md");
+    let name = ampersand_firm_legal_name();
+    let original = fs::read_to_string(&draft).unwrap();
+    let authored = format!("{original}\nYours faithfully,\n\n{name}, Attorneys at Law\n");
+    fs::write(&draft, &authored).unwrap();
+
+    let assert = gate(dir.path()).stdout(str::contains(": warning: Y027: line "));
+    offline_gate_is_clean(assert);
+
+    assert_eq!(
+        fs::read_to_string(&draft).unwrap(),
+        authored,
+        "the unrecognized closing's name line was rewritten"
+    );
 }

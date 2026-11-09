@@ -1558,6 +1558,21 @@ route_allow if {
 	is_admin(input.session)
 }
 
+# Reconcile every matter's private-terms records: GET
+# /app/api/project-private-terms-reconciliation. Admin-only, and it carries
+# its own noun rather than sitting under `projects` on purpose — the projects
+# GET rule above admits any authenticated caller up to five segments, so
+# nesting this there would make it policy-reachable by a client. Three
+# segments and GET.
+route_allow if {
+	input.path[0] == "app"
+	input.path[1] == "api"
+	input.path[2] == "project-private-terms-reconciliation"
+	count(input.path) == 3
+	input.method == "GET"
+	is_admin(input.session)
+}
+
 # Read every matter's lifecycle fields: GET /app/api/project-lifecycle.
 # Admin-only, and it carries its own noun because the projects GET rule admits
 # any authenticated caller up to five segments. Three segments and GET.

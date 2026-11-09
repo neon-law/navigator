@@ -24,6 +24,7 @@ use crate::Notifier;
 
 pub mod billing_canary;
 pub mod billing_digest;
+pub mod ceo_digest;
 pub mod daily;
 /// The nightly Deadline-mirror reconcile schedule.
 pub mod deadline_mirror;
@@ -212,6 +213,16 @@ pub struct Schedules {
     pub billing_digest: Option<billing_digest::Context>,
     pub notation_reset: Option<notation_reset::Context>,
     pub profit_digest: Option<profit_digest::Context>,
+    pub ceo_digest: Option<ceo_digest::Context>,
+}
+
+/// Register an optional schedule's workflows when its context is present.
+fn register_optional<C, W>(
+    dbos: &dbos::DBOS,
+    context: Option<C>,
+    register: fn(&dbos::DBOS, C) -> dbos::Result<W>,
+) -> dbos::Result<Option<W>> {
+    context.map(|context| register(dbos, context)).transpose()
 }
 
 /// A schedule loop registered by a crate outside `workflows`.
@@ -379,44 +390,29 @@ impl Executor {
         let dbos = dbos::DBOS::new(settings.config());
         let clock = heartbeat::system_clock();
         let beat = heartbeat::register(&dbos, notifier, Arc::clone(&clock))?;
-        let nag = schedules
-            .general_nag
-            .map(|context| general_nag::register(&dbos, context))
-            .transpose()?;
-        let digest = schedules
-            .dri_digest
-            .map(|context| dri_digest::register(&dbos, context))
-            .transpose()?;
-        let recovery = schedules
-            .project_recovery
-            .map(|context| project_recovery::register(&dbos, context))
-            .transpose()?;
-        let imports = schedules
-            .source_imports
-            .map(|context| source_imports::register(&dbos, context))
-            .transpose()?;
-        let purge = schedules
-            .retention_purge
-            .map(|context| retention_purge::register(&dbos, context))
-            .transpose()?;
-        let mirror = schedules
-            .deadline_mirror
-            .map(|context| deadline_mirror::register(&dbos, context))
-            .transpose()?;
-        let activation = schedules
-            .purchase_activation
-            .map(|context| purchase_activation::register(&dbos, context))
-            .transpose()?;
+        let nag = register_optional(&dbos, schedules.general_nag, general_nag::register)?;
+        let digest = register_optional(&dbos, schedules.dri_digest, dri_digest::register)?;
+        let recovery = register_optional(
+            &dbos,
+            schedules.project_recovery,
+            project_recovery::register,
+        )?;
+        let imports = register_optional(&dbos, schedules.source_imports, source_imports::register)?;
+        let purge = register_optional(&dbos, schedules.retention_purge, retention_purge::register)?;
+        let mirror =
+            register_optional(&dbos, schedules.deadline_mirror, deadline_mirror::register)?;
+        let activation = register_optional(
+            &dbos,
+            schedules.purchase_activation,
+            purchase_activation::register,
+        )?;
         let restate_ports =
             RestatePorts::register(&dbos, schedules.billing_canary, schedules.notation_reset)?;
-        let billing_digest = schedules
-            .billing_digest
-            .map(|context| billing_digest::register(&dbos, context))
-            .transpose()?;
-        let profit_digest = schedules
-            .profit_digest
-            .map(|context| profit_digest::register(&dbos, context))
-            .transpose()?;
+        let billing_digest =
+            register_optional(&dbos, schedules.billing_digest, billing_digest::register)?;
+        let profit_digest =
+            register_optional(&dbos, schedules.profit_digest, profit_digest::register)?;
+        let ceo_digest = register_optional(&dbos, schedules.ceo_digest, ceo_digest::register)?;
         let external_schedules = register_external(&dbos)?;
         dbos.launch().await?;
         tracing::info!(app_name = APP_NAME, "DBOS launched");
@@ -433,6 +429,18 @@ impl Executor {
             loops.push(tokio::spawn(profit_digest::schedule(
                 profit_digest,
                 profit_digest::system_clock(),
+                stop.clone(),
+            )));
+        }
+        if let Some(ceo_digest) = ceo_digest {
+            loops.push(tokio::spawn(ceo_digest::schedule_weekly(
+                ceo_digest.weekly,
+                ceo_digest::system_clock(),
+                stop.clone(),
+            )));
+            loops.push(tokio::spawn(ceo_digest::schedule_alert(
+                ceo_digest.alert,
+                ceo_digest::system_clock(),
                 stop.clone(),
             )));
         }

@@ -53,6 +53,8 @@ use anyhow::{Context, Result};
 
 use super::KindConfig;
 
+pub(crate) use preflight::{brew, require_homebrew};
+
 /// Stable service labels and the host-native process ports.
 const RAUTHY_LABEL: &str = "rauthy";
 const SEAWEEDFS_LABEL: &str = "seaweedfs";

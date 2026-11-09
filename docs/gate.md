@@ -429,7 +429,7 @@ literally and the columns disappear.
 | `Y016` | Error | Valid DRIs and surface handles; declared Firm/brand pairs need a UUID and key. | No |
 | `Y017` | Error | Onboarding/offboarding templates cannot name Neon Law as the Firm's trade name or party. | No |
 | `Y018` | Error | California onboarding/offboarding templates cannot name an LLC as the law firm. | No |
-| `Y027` | Warning | Contract prose names the Firm by role. A local gate rewrites a compiled legal name. | Locally |
+| `Y027` | Warning | A local gate rewrites a compiled legal name; a letter-family draft keeps its prose. | Locally |
 | `Y019` | Error | A `matter:` block and each pleading's `caption_title` and `footer_title` must be complete. | No |
 | `Y020` | Error | A Project manifest `dockets:` must be a list of non-empty case numbers. | No |
 | `Y021` | Error | A Project manifest `pages:` must be a list of entries with unique, URL-safe slugs. | No |
@@ -488,6 +488,13 @@ that prose is a warning. A local gate rewrites a role mention to "the Firm", and
 From line, to `{{firm.legal_name}}`. Render fills that placeholder from the Firm behind `project.brand`. A sentence
 about a conversion, a shareholding, a services agreement, or a trademark keeps the entity's name. `--ci` reports the
 warning and does not rewrite.
+
+A letter-family Draft — frontmatter `kind: letter` or `kind: onboarding` — keeps its authored prose: the letter
+identifies the Firm, so the gate never rewrites its prose and the Y027 warning stands. Only its signature sections and
+From lines move to `{{firm.legal_name}}`. The signature detector recognizes a fixed list of closing formulas
+(`Sincerely,`, `Respectfully,`, `Yours truly,`, `Very truly yours,`, `Warm regards,`, `Kind regards,`, `Best regards,`,
+`Agreed and accepted:`) plus signature, acceptance, and execution headings; a closing formula it does not know is a
+known gap, and the name line under it is left as written.
 
 `Y014` runs in the same Project-repository check whenever `documents/` exists. The root `.gitignore` ignores the whole
 folder, so a pointer left there drops out of the next `git add`. Local `project gate`, `project sync`, and `project gate

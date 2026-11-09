@@ -503,9 +503,13 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // + 1 for the firm inbox reading pane POST /app/inbox/pane: Lawyer and
     //   Clerk admitted, Client and anonymous denied.
     // 675 + 1 = 676.
+    // + 6 for the private-terms reconciliation door GET
+    //   /app/api/project-private-terms-reconciliation: Admin and Owner
+    //   admitted; Lawyer, Clerk, Client, and anonymous denied.
+    // 676 + 6 = 682.
     assert_eq!(
         test_names.len(),
-        676,
+        682,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

@@ -171,6 +171,16 @@ const ENGAGEMENT_LETTER: &str =
 const SUMMONS: &str = include_str!("../../templates/notations/neon_law/summons__nevada.md");
 const ESTATE_SIGNING_PREPARATION: &str =
     include_str!("../../templates/notations/neon_law/estate_signing_preparation__letter.md");
+const NY_SEVERANCE_REVIEW_MEMO: &str =
+    include_str!("../../templates/notations/neon_law/severance_review_memo__new_york.md");
+const NY_NON_COMPETE_ANALYSIS: &str =
+    include_str!("../../templates/notations/neon_law/non_compete_analysis__new_york.md");
+const NY_SEVERANCE_NEGOTIATION_LETTER: &str =
+    include_str!("../../templates/notations/neon_law/severance_negotiation_letter__new_york.md");
+const NY_UNEMPLOYMENT_APPEAL: &str =
+    include_str!("../../templates/notations/neon_law/unemployment_appeal_letter__new_york.md");
+const NY_LAYOFF_NEXT_STEPS: &str =
+    include_str!("../../templates/notations/neon_law/layoff_next_steps__new_york.md");
 const FORM_990: &str =
     include_str!("../../templates/notations/forms/united_states/federal/irs/us__form_990.md");
 const NATURALIZATION: &str = include_str!(
@@ -410,6 +420,31 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
             "nevada-estate-signing-preparation",
             "notations/neon_law/estate_signing_preparation__letter.md",
             ESTATE_SIGNING_PREPARATION,
+        ),
+        preview_doc(
+            "new-york-severance-review-memo",
+            "notations/neon_law/severance_review_memo__new_york.md",
+            NY_SEVERANCE_REVIEW_MEMO,
+        ),
+        preview_doc(
+            "new-york-non-compete-analysis",
+            "notations/neon_law/non_compete_analysis__new_york.md",
+            NY_NON_COMPETE_ANALYSIS,
+        ),
+        preview_doc(
+            "new-york-severance-negotiation-letter",
+            "notations/neon_law/severance_negotiation_letter__new_york.md",
+            NY_SEVERANCE_NEGOTIATION_LETTER,
+        ),
+        preview_doc(
+            "new-york-unemployment-appeal",
+            "notations/neon_law/unemployment_appeal_letter__new_york.md",
+            NY_UNEMPLOYMENT_APPEAL,
+        ),
+        preview_doc(
+            "new-york-layoff-next-steps",
+            "notations/neon_law/layoff_next_steps__new_york.md",
+            NY_LAYOFF_NEXT_STEPS,
         ),
         preview_doc(
             "irs-form-990",
@@ -665,6 +700,41 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
                 "nevada-estate-signing-preparation",
                 "The client email sent ahead of an estate-plan signing ceremony (`estate_signing_preparation__letter`).",
                 ESTATE_SIGNING_PREPARATION,
+            ),
+            notation_card(
+                "New York",
+                "Severance Review Memo",
+                "new-york-severance-review-memo",
+                "The memo reviewing a New York separation agreement against the OWBPA windows (`severance_review_memo__new_york`).",
+                NY_SEVERANCE_REVIEW_MEMO,
+            ),
+            notation_card(
+                "New York",
+                "Non-Compete Analysis",
+                "new-york-non-compete-analysis",
+                "The analysis of whether a New York restrictive covenant binds the client (`non_compete_analysis__new_york`).",
+                NY_NON_COMPETE_ANALYSIS,
+            ),
+            notation_card(
+                "New York",
+                "Severance Negotiation Letter",
+                "new-york-severance-negotiation-letter",
+                "The letter answering a severance offer and opening the negotiation (`severance_negotiation_letter__new_york`).",
+                NY_SEVERANCE_NEGOTIATION_LETTER,
+            ),
+            notation_card(
+                "New York",
+                "Unemployment Appeal Letter",
+                "new-york-unemployment-appeal",
+                "The appeal of a denied New York unemployment claim, filed inside the thirty-day window (`unemployment_appeal_letter__new_york`).",
+                NY_UNEMPLOYMENT_APPEAL,
+            ),
+            notation_card(
+                "New York",
+                "Layoff Next Steps",
+                "new-york-layoff-next-steps",
+                "The client one-pager for the days after a layoff (`layoff_next_steps__new_york`).",
+                NY_LAYOFF_NEXT_STEPS,
             ),
             notation_card(
                 "Federal",
@@ -1002,9 +1072,11 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
             webapp::contact_page::InjectedContact(resolve_firm_contact_content(resolved))
         }),
     ));
-    // The team's public copy is a small static catalog; the public roster
-    // never reads person records or client data.
-    let team = locales::team(branding);
+    // The team's public copy is a small static catalog on Guieb & Shook; the
+    // public roster never reads person records or client data. Other hosts
+    // 404 the path and link the directory on this host.
+    let team_branding = views::brand::BrandKey::GuiebShook.resolve_branding(branding);
+    let team = locales::team(team_branding);
     routers.push(dioxus_app::team_index_router(
         "/team",
         webapp::team_page::TeamIndexContent {
@@ -1026,7 +1098,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         routers.push(dioxus_app::team_profile_router(
             &path,
             webapp::team_page::TeamProfileContent {
-                head_title: format!("{} | {}", branding.firm.site_name, profile.name),
+                head_title: format!("{} | {}", team_branding.firm.site_name, profile.name),
                 meta_description: profile.biography.clone(),
                 og_description: None,
                 name: profile.name,
@@ -1048,7 +1120,8 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         world_copy,
     ));
     let deployment_host = state.canonical_host.host();
-    let home = resolve_firm_home_content(branding, deployment_host);
+    let search_preview = portal::config::hosted_staging_from(|key| std::env::var(key).ok());
+    let home = resolve_firm_home_content(branding, deployment_host, search_preview);
     // The home page (`/`): static copy plus the store's approved testimonials.
     // The practice boxes on `/` are the YAML catalog workshop slides
     // reuse — one list, not a second Rust copy. Slides always expand the
@@ -1057,7 +1130,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         .practices
         .clone();
     let home_copy = branded_map(branding, "/", |resolved| webapp::home::InjectedHome {
-        content: resolve_firm_home_content(resolved, deployment_host),
+        content: resolve_firm_home_content(resolved, deployment_host, search_preview),
         lead_capture: Some(home_lead_capture(resolved)),
         brand_key: resolved.brand_key.as_str().to_string(),
     });
@@ -1568,8 +1641,14 @@ fn resolve_world_content(branding: &views::brand::Branding) -> webapp::world_pag
 pub(crate) fn resolve_firm_home_content(
     branding: &views::brand::Branding,
     deployment_host: Option<&str>,
+    search_preview: bool,
 ) -> webapp::home::HomeContent {
     match branding.brand_key {
+        BrandKey::Neon if search_preview => webapp::home::HomeContent {
+            head_title: "Neon Law".to_string(),
+            nautilus_search: true,
+            ..Default::default()
+        },
         BrandKey::Neon => {
             let page = firm_copy::nautilus(branding, deployment_host);
             webapp::home::HomeContent {
@@ -1636,16 +1715,30 @@ mod home_page_tests {
     use views::brand::BrandKey;
 
     #[test]
-    fn neon_home_publishes_nautilus_without_changing_other_brand_homes() {
-        let home = resolve_firm_home_content(&views::brand::DEFAULT_BRANDING, None);
-        assert!(
-            home.marketing_page
-                == Some(super::firm_copy::nautilus(
-                    &views::brand::DEFAULT_BRANDING,
-                    None
-                )),
-            "Neon's home uses the same Nautilus content as /nautilus"
-        );
+    fn search_preview_requires_explicit_hosted_staging() {
+        for (profile, staging, expected) in [
+            (Some("production"), Some("true"), true),
+            (Some("production"), Some("false"), false),
+            (Some("production"), None, false),
+            (Some("production"), Some("TRUE"), false),
+            (Some("dev"), Some("true"), false),
+            (None, Some("true"), false),
+        ] {
+            let enabled = portal::config::hosted_staging_from(|key| match key {
+                store::config::NAVIGATOR_ENVIRONMENT => profile.map(str::to_owned),
+                store::config::NAVIGATOR_STAGING => staging.map(str::to_owned),
+                _ => None,
+            });
+            let home = resolve_firm_home_content(&views::brand::DEFAULT_BRANDING, None, enabled);
+            assert_eq!(home.nautilus_search, expected);
+            assert_eq!(home.marketing_page.is_some(), !expected);
+        }
+    }
+
+    #[test]
+    fn neon_home_offers_nautilus_search_without_changing_other_brand_homes() {
+        let home = resolve_firm_home_content(&views::brand::DEFAULT_BRANDING, None, true);
+        assert!(home.nautilus_search);
         assert!(home.company.is_none());
         assert!(home.signup.is_none());
         // The IEP Defenders and Lex Tecnica homes are marketing-page band
@@ -1661,8 +1754,9 @@ mod home_page_tests {
             let content = resolve_firm_home_content(
                 key.resolve_branding(&views::brand::DEFAULT_BRANDING),
                 None,
+                true,
             );
-            assert!(content.marketing_page.is_none(), "{}", key.as_str());
+            assert!(!content.nautilus_search, "{}", key.as_str());
         }
     }
 
@@ -1672,8 +1766,9 @@ mod home_page_tests {
     fn every_brand_home_has_design_or_a_coming_soon_notice() {
         for key in BrandKey::ALL {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
-            let content = resolve_firm_home_content(branding, None);
-            let authored_design = content.marketing_page.is_some()
+            let content = resolve_firm_home_content(branding, None, false);
+            let authored_design = content.nautilus_search
+                || content.marketing_page.is_some()
                 || !content.heading.is_empty()
                     && (content.service.is_some()
                         || content.estate.is_some()
@@ -1702,7 +1797,7 @@ mod home_page_tests {
 
     #[test]
     fn summons_publishes_the_catalog_and_intake() {
-        let content = resolve_firm_home_content(&views::brand::SUMMONS_BRANDING, None);
+        let content = resolve_firm_home_content(&views::brand::SUMMONS_BRANDING, None, false);
         let copy = content.summons.expect("Summons has a designed home");
         assert!(content.bare.is_none());
         assert_eq!(copy.fees[0][1], "$100");
@@ -1726,7 +1821,8 @@ mod home_page_tests {
 mod guieb_shook_home_tests {
     #[test]
     fn guieb_shook_home_does_not_open_the_account_invitation() {
-        let content = super::resolve_firm_home_content(&views::brand::GUIEB_SHOOK_BRANDING, None);
+        let content =
+            super::resolve_firm_home_content(&views::brand::GUIEB_SHOOK_BRANDING, None, false);
         // The homepage reads the brand's own catalog — the authored classic-NY
         // page, not the holding notice — and the account invitation stays
         // closed on the firm's own site.

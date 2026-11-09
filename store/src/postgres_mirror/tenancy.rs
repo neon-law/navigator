@@ -87,6 +87,7 @@ const PROJECT_COLUMNS: &[&str] = &[
     // text, parsed by [`date`].
     "legal_plan_id",
     "plan_member_id",
+    "plan_case_number",
     "benefit_code",
     "plan_matter_type",
     "plan_state",
@@ -418,6 +419,7 @@ struct ProjectImage {
     /// [`ProjectImage::from_source`] parses.
     legal_plan_id: Option<Uuid>,
     plan_member_id: Option<String>,
+    plan_case_number: Option<String>,
     benefit_code: Option<String>,
     plan_matter_type: Option<String>,
     plan_state: Option<String>,
@@ -458,6 +460,7 @@ impl ProjectImage {
             client_dri_person_id: project.client_dri_person_id,
             legal_plan_id: project.legal_plan_id,
             plan_member_id: project.plan_member_id.clone(),
+            plan_case_number: project.plan_case_number.clone(),
             benefit_code: project.benefit_code.clone(),
             plan_matter_type: project.plan_matter_type.clone(),
             plan_state: project.plan_state.clone(),
@@ -501,6 +504,7 @@ impl ProjectImage {
             client_dri_person_id: row.try_get("client_dri_person_id")?,
             legal_plan_id: row.try_get("legal_plan_id")?,
             plan_member_id: row.try_get("plan_member_id")?,
+            plan_case_number: row.try_get("plan_case_number")?,
             benefit_code: row.try_get("benefit_code")?,
             plan_matter_type: row.try_get("plan_matter_type")?,
             plan_state: row.try_get("plan_state")?,
@@ -824,6 +828,7 @@ async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirro
         .bind(project.client_dri_person_id)
         .bind(project.legal_plan_id)
         .bind(&project.plan_member_id)
+        .bind(&project.plan_case_number)
         .bind(&project.benefit_code)
         .bind(&project.plan_matter_type)
         .bind(&project.plan_state)

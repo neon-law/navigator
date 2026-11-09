@@ -1059,6 +1059,142 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/firms/{id}/legal-plans": {
+          "get": {
+            "summary": "List a Firm's Legal Plans",
+            "description": "The panel programs the Firm works (ARAG, LegalEASE, …), name order: the portal each is logged into, its provider contact, and its service levels. Plans are Firm data. Authorization: any member of the Firm (`view_directory`); anyone else gets 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": {
+              "200": { "description": "The Firm's plans", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "type": "object", "properties": {
+                  "id": { "type": "string", "format": "uuid" },
+                  "firm_id": { "type": "string", "format": "uuid" },
+                  "name": { "type": "string" },
+                  "contact": { "type": ["string", "null"] },
+                  "portal": { "type": ["string", "null"] },
+                  "acceptance_sla_hours": { "type": "integer" },
+                  "turnaround_sla_days": { "type": "integer" },
+                  "reporting_requirements": { "type": ["string", "null"] },
+                  "inserted_at": { "type": "string", "format": "date-time" }
+                } } }
+              } } },
+              "401": { "description": "No authenticated session" },
+              "404": { "description": "No such Firm, or the caller is not a member" }
+            }
+          },
+          "post": {
+            "summary": "Add a Legal Plan to a Firm",
+            "description": "Adds one plan to the Firm's vocabulary. A name is unique per Firm. Authorization: the `manage_legal_plans` capability — Owner, or an Admin of the Firm; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "type": "object", "required": ["name", "acceptance_sla_hours", "turnaround_sla_days"], "properties": {
+                "name": { "type": "string" },
+                "contact": { "type": "string" },
+                "portal": { "type": "string", "description": "Where the Firm logs in to accept cases and file claims." },
+                "acceptance_sla_hours": { "type": "integer", "minimum": 1 },
+                "turnaround_sla_days": { "type": "integer", "minimum": 1 },
+                "reporting_requirements": { "type": "string" }
+              } }
+            } } },
+            "responses": {
+              "201": { "description": "The new plan", "content": { "application/json": { "schema": { "type": "object", "properties": {
+                  "id": { "type": "string", "format": "uuid" },
+                  "firm_id": { "type": "string", "format": "uuid" },
+                  "name": { "type": "string" },
+                  "contact": { "type": ["string", "null"] },
+                  "portal": { "type": ["string", "null"] },
+                  "acceptance_sla_hours": { "type": "integer" },
+                  "turnaround_sla_days": { "type": "integer" },
+                  "reporting_requirements": { "type": ["string", "null"] },
+                  "inserted_at": { "type": "string", "format": "date-time" }
+                } } } } },
+              "401": { "description": "No authenticated session" },
+              "404": { "description": "No such Firm, or the caller does not hold the capability" },
+              "409": { "description": "The Firm already has a plan of that name" },
+              "422": { "description": "A field is invalid; `field` names it" }
+            }
+          }
+        },
+        "/app/api/projects/{id}/legal-plan": {
+          "get": {
+            "summary": "Read how a Project is paid",
+            "description": "The Legal Plan this matter works under, its Plan Case Number, and its plan dates. `legal_plan` is null for a matter no plan referred. Authorization: Lawyer tier and membership of the Project's Firm; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": {
+              "200": { "description": "The matter's plan link", "content": { "application/json": { "schema": { "type": "object", "properties": {
+                "project_id": { "type": "string", "format": "uuid" },
+                "code": { "type": "string" },
+                "legal_plan": { "oneOf": [{ "type": "object", "properties": {
+                  "id": { "type": "string", "format": "uuid" },
+                  "firm_id": { "type": "string", "format": "uuid" },
+                  "name": { "type": "string" },
+                  "contact": { "type": ["string", "null"] },
+                  "portal": { "type": ["string", "null"] },
+                  "acceptance_sla_hours": { "type": "integer" },
+                  "turnaround_sla_days": { "type": "integer" },
+                  "reporting_requirements": { "type": ["string", "null"] },
+                  "inserted_at": { "type": "string", "format": "date-time" }
+                } }, { "type": "null" }] },
+                "plan_case_number": { "type": ["string", "null"], "description": "The plan's own number for this referral (ARAG CaseAssist, LegalEASE member case), verbatim." },
+                "plan_member_id": { "type": ["string", "null"] },
+                "benefit_code": { "type": ["string", "null"] },
+                "plan_matter_type": { "type": ["string", "null"], "enum": ["document_review", "letter", "uncontested_divorce", "court_appearance", null] },
+                "plan_state": { "type": ["string", "null"], "description": "Lowercase jurisdiction code." },
+                "plan_assigned_on": { "type": ["string", "null"], "format": "date" },
+                "plan_accepted_on": { "type": ["string", "null"], "format": "date" },
+                "plan_closed_on": { "type": ["string", "null"], "format": "date" }
+              } } } } },
+              "401": { "description": "No authenticated session" },
+              "404": { "description": "No such Project, a Project with no Firm, or the caller is not a member of its Firm" }
+            }
+          },
+          "patch": {
+            "summary": "Link a Project to a Legal Plan",
+            "description": "Links the matter to one of its Firm's plans (named in `legal_plan`, ignoring case) and records its Plan Case Number and plan dates. An absent field keeps its value; an empty string clears it. Dates are ISO `YYYY-MM-DD`; the matter type is the closed Plan Matter Type vocabulary; the Plan Case Number is one token of up to 64 visible characters. Authorization: Lawyer tier and membership of the Project's Firm; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "type": "object", "additionalProperties": false, "properties": {
+                "legal_plan": { "type": "string", "description": "One of the Firm's plan names; empty clears the link." },
+                "plan_case_number": { "type": "string", "description": "The plan's own number for this referral (ARAG CaseAssist, LegalEASE member case), verbatim." },
+                "plan_member_id": { "type": "string" },
+                "benefit_code": { "type": "string" },
+                "plan_matter_type": { "type": "string", "enum": ["document_review", "letter", "uncontested_divorce", "court_appearance"] },
+                "plan_state": { "type": "string", "description": "Lowercase jurisdiction code." },
+                "plan_assigned_on": { "type": "string", "format": "date" },
+                "plan_accepted_on": { "type": "string", "format": "date" },
+                "plan_closed_on": { "type": "string", "format": "date" }
+              } }
+            } } },
+            "responses": {
+              "200": { "description": "The matter's plan link after the change", "content": { "application/json": { "schema": { "type": "object", "properties": {
+                "project_id": { "type": "string", "format": "uuid" },
+                "code": { "type": "string" },
+                "legal_plan": { "oneOf": [{ "type": "object", "properties": {
+                  "id": { "type": "string", "format": "uuid" },
+                  "firm_id": { "type": "string", "format": "uuid" },
+                  "name": { "type": "string" },
+                  "contact": { "type": ["string", "null"] },
+                  "portal": { "type": ["string", "null"] },
+                  "acceptance_sla_hours": { "type": "integer" },
+                  "turnaround_sla_days": { "type": "integer" },
+                  "reporting_requirements": { "type": ["string", "null"] },
+                  "inserted_at": { "type": "string", "format": "date-time" }
+                } }, { "type": "null" }] },
+                "plan_case_number": { "type": ["string", "null"], "description": "The plan's own number for this referral (ARAG CaseAssist, LegalEASE member case), verbatim." },
+                "plan_member_id": { "type": ["string", "null"] },
+                "benefit_code": { "type": ["string", "null"] },
+                "plan_matter_type": { "type": ["string", "null"], "enum": ["document_review", "letter", "uncontested_divorce", "court_appearance", null] },
+                "plan_state": { "type": ["string", "null"], "description": "Lowercase jurisdiction code." },
+                "plan_assigned_on": { "type": ["string", "null"], "format": "date" },
+                "plan_accepted_on": { "type": ["string", "null"], "format": "date" },
+                "plan_closed_on": { "type": ["string", "null"], "format": "date" }
+              } } } } },
+              "400": { "description": "A field is invalid, or `legal_plan` names no plan of the Firm" },
+              "401": { "description": "No authenticated session" },
+              "404": { "description": "No such Project, a Project with no Firm, or the caller is not a member of its Firm" }
+            }
+          }
+        },
         "/app/api/firms/{id}/assumptions": {
           "get": {
             "summary": "List a Firm's current assumptions",
@@ -1681,6 +1817,32 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/project-private-terms-reconciliation": {
+          "get": {
+            "summary": "Reconcile every matter's private-terms records (admin)",
+            "description":
+              "Names every matter whose `GET /app/api/projects/{id}/private-terms` response would be refused: \
+               a dangling participation or referenced-person id, a missing client or referenced Entity, or Entity \
+               identifier data that is malformed — a non-object `metadata`, or a `metadata.ein` present but not \
+               `NN-NNNNNNN`. The report runs the same checks the private-terms read refuses on (`store::private_terms`) \
+               and lists one entry per broken matter — its `project_id`, `code`, and `items`, each carrying the failing \
+               `kind`, the dangling record `id`, and its `attached_as` attachment (`participation`, `reference:person`, \
+               `project.client`, `reference:entity`) or malformed `field` path — so a repair can be attributed from an \
+               admin workstation without server logs. Healthy matters are omitted, and no name, mailbox, phone, or EIN \
+               crosses this door: a dangling id is the most the reconciliation needs. Fail-closed is unchanged — the \
+               private-terms read still refuses 409/422, and this door never repairs. Authorization: admin-tier only \
+               (`owner`/`admin`) — the deployment-wide read is the point, not a precaution.",
+            "responses": {
+              "200": { "description": "The reconciliation report — one entry per matter with a finding, empty on a clean deployment", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "The matters could not be read", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/project-lifecycle": {
           "get": {
             "summary": "Read every matter's lifecycle fields (admin)",
@@ -1803,6 +1965,7 @@ fn canonical_document(base: &str) -> Value {
                row and designated the accountable lawyer DRI — never taken from the request body. \
                Authorization: the caller's `persons.role` must be `lawyer` or `admin`; at this firm \
                `lawyer` is an attorney, so this is the 'an attorney is opening and attesting' gate. \
+               The lawyer DRI's email must use an approved domain on a Brand worn by the owning Firm. \
                Anonymous, `client`, and non-lawyer `clerk` callers are rejected. Optionally opens \
                the matter already closed: `status: \"closed\"` with a required `closed_at` records \
                an engagement that ended before anyone opened its row, in one call, through the \
@@ -1823,7 +1986,7 @@ fn canonical_document(base: &str) -> Value {
               "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
-              "400": { "description": "Validation failed, a bad client/entity reference, a non-client client of record, a non-lawyer attester, or a missing attestation", "content": { "application/json": {
+              "400": { "description": "Validation failed, a bad client/entity reference, a non-client client of record, an ineligible lawyer DRI, or a missing attestation", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "409": { "description": "A blocking conflict (adverse to a current client) or a duplicate project code", "content": { "application/json": {
@@ -4777,6 +4940,8 @@ fn canonical_document(base: &str) -> Value {
                     "exists": { "type": "boolean" },
                     "size_bytes": { "type": "integer" },
                     "recorded_size": { "type": "integer" },
+                    "filename": { "type": "string", "description": "Stored filename, when present, in the Lawyer lens." },
+                    "revision": { "type": "object", "description": "Revision summary in the same format as the revisions route, available in the Lawyer lens." },
                     "sha256_matches": { "type": "boolean" },
                     "docket_name_matches": { "type": "boolean", "description": "Whether exactly one linked Docket Entry gives this document its current DKT filename; no docket content is returned." }
                   } } },

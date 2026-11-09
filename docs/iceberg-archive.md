@@ -90,8 +90,10 @@ These are binding records: the snapshot log is never pruned (`expire_before_ms: 
 
 The `snapshot` step requires reviewed Navigator and Forgejo inventories when PostgreSQL is configured. Supply
 `NAVIGATOR_ARCHIVE_COVERAGE` with both manifests and the separate `NAVIGATOR_ARCHIVE_FORGEJO_USER` and
-`NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD` credentials. Forgejo uses database `forgejo` on the same server with the same TLS
-settings. Missing configuration, denied reads, or source failures record a PostgreSQL failure in the digest and
+`NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD` credentials. `NAVIGATOR_ARCHIVE_POSTGRES_USER` and
+`NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD` set the Navigator login; unset, it reuses the `NAVIGATOR_POSTGRES_*` login. The
+deployed shape is under [Where it runs](#where-it-runs). Forgejo uses database `forgejo` on the same server with the
+same TLS settings. Missing configuration, denied reads, or source failures record a PostgreSQL failure in the digest and
 terminate the invocation. Completed SurrealDB snapshots remain available. Recovery requires a new invocation because
 replay retains the journaled extraction outcome.
 
@@ -246,10 +248,69 @@ catalog choice does not change the bytes on GCS — only how BigQuery is pointed
 
 ## Where it runs
 
-Inside the existing scheduled `Archives` Restate workflow on `workflows-service` — **no new worker pod** ([all workflows
-live in workflows-service](durable-workflows.md)). The Iceberg metadata write is one additional journaled `ctx.run` step
-per table, after the Parquet write it already does. The diagnostic email gains an "Iceberg tables" line per table
-(snapshot id + metadata version).
+The PostgreSQL coverage generation runs on the **DBOS executor inside `web`**. That is the process `ops ship` already
+gives the PostgreSQL connection and the DBOS login, and it moves the schedule off Restate. Set
+`NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"` in the deployment's `config.toml`, beside `NAVIGATOR_POSTGRES_ENABLED` and
+`NAVIGATOR_DBOS_ENABLED`. `ops ship` then:
+
+1. Renders the switch, `NAVIGATOR_ARCHIVES_BUCKET`, and the messages channels into `web`.
+2. Adds `examples/deploy/k8s/gke/postgres/web/web-archives.yaml`. It gives `web` the read-only `navigator_archive` login
+   for both the `navigator` and `forgejo` databases, from the `navigator-postgres-archive` Secret.
+3. Adds the `navigator-archive-coverage` ConfigMap from `k8s/postgres/archive`, read as `NAVIGATOR_ARCHIVE_COVERAGE`.
+4. Drops the Restate `archives-trigger` CronJob from the render and deletes the live one after the roll.
+
+`ops ship` refuses the switch without `NAVIGATOR_POSTGRES_ENABLED` and `NAVIGATOR_DBOS_ENABLED`, and refuses to apply
+without `NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD` in the PostgreSQL service file and its Secret in the namespace. `web`
+refuses to boot with the switch on and any coverage setting or the Slack bot missing. The run keeps the Restate
+workflow's slots, `Archives:<UTC slot>` workflow ids, and step names (`snapshot`, `cost`, `iceberg_telemetry`, `email`).
+Each successful slot publishes `postgres/_paired/<generation>.json` last.
+
+With the switch off, the `archives-trigger` CronJob still starts the Restate workflow on `workflows-service`. That pod
+has no PostgreSQL login, so it exports SurrealDB and telemetry only.
+
+The `navigator_archive` login holds `pg_read_all_data` and `CONNECT` on both databases. It reads every relation the
+manifest names, including `dbos`, AGE's catalogs, the migration ledger, and large objects, and it can write nothing. The
+`navigator_app` runtime login cannot read those relations, so it cannot run the export. `k8s/postgres/access/roles.sql`
+creates the archive login once its Secret is mounted.
+
+Each extraction holds both databases' Parquet in memory before it uploads. Watch `web`'s memory on the first scheduled
+runs, and raise its request if a run approaches it.
+
+### The coverage manifest
+
+`k8s/postgres/archive/coverage.json` is the reviewed coverage manifest. It has a `navigator` half and a `forgejo` half,
+and each lists every relation its database holds. A relation the manifest does not name fails the generation, so a
+change that adds one updates this file in the same pull request:
+
+- **A migration, or a DBOS SDK upgrade.** `archives/tests/coverage_manifest.rs` migrates a fresh database, launches
+  DBOS on it, and checks the `navigator` half against what it finds. When it fails, it prints a draft of the observed
+  inventory. Review the draft and copy the changed relations into the file.
+- **A Forgejo upgrade.** Start the new Forgejo image against a disposable PostgreSQL database and let it migrate. Then
+  run `cargo run -p archives --example coverage_inventory -- <url of that database>` and review the `forgejo` half
+  against the output. CI has no Forgejo database, so this check is manual. A missed relation fails the scheduled run
+  closed and posts the failure to Slack.
+
+A draft gives every view an empty reconstruction reason, and the archive refuses an empty reason. A reviewer must write
+how each view is rebuilt before it can ship. `person_directory` and `firm_visible_person` are derived this way: each is
+a plain view over exported tables, rebuilt by its migration. PostGIS's `geometry_columns` and `geography_columns` are
+derived from the system catalogs and recreated by `CREATE EXTENSION postgis`; its `spatial_ref_sys` table is exported.
+
+## Recovery: physical backups first
+
+The Iceberg archive is the **logical and analytical copy** of PostgreSQL. It is not the recovery path for the
+self-hosted server that runs AGE and DBOS:
+
+- **Recover the server from physical backups.** The WAL archive and the daily base backup in `k8s/postgres/backup`,
+  proven by the scratch restore drill in `k8s/postgres/restore-drill`, restore both databases to one point in time. They
+  also keep DBOS's pending workflows resumable on the same executor identity and release ([PostgreSQL on
+  Kubernetes](postgres-kubernetes.md#backups-and-point-in-time-recovery)).
+- **Iceberg does not certify DBOS replay.** It holds the `dbos` tables as rows. Rehydrated rows are a record of what
+  ran, not a system database an executor can resume from.
+- **Iceberg has no shared recovery point.** Each database has its own watermark (`cross_database_atomic: false`), and
+  sequences are read outside MVCC.
+
+Use the Iceberg archive for queries, audits, long-term retention, and row-level recovery into an isolated database. Use
+the physical backups to bring the server back.
 
 ## Post-provisioning drill
 

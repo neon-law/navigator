@@ -66,6 +66,7 @@ that signs in as the bootstrap superuser.
 | `navigator_app` | `web`, mirror Job | Connect; `SELECT`, `INSERT`, `UPDATE`, `DELETE` rows and use sequences |
 | `navigator_backup` | WAL archive, base backups | `REPLICATION` only; no database privileges |
 | `navigator_dbos` | `web` with DBOS on | Own `dbos`; database `CONNECT` and `CREATE`; nothing on `public` |
+| `navigator_archive` | `web` with Archives on DBOS | `pg_read_all_data`; `CONNECT` on both databases; no writes |
 
 `PUBLIC` loses its default database and schema rights. The runtime login cannot create, alter, or truncate objects and
 cannot read the migration bookkeeping tables. No role is granted Apache AGE's `ag_catalog`, so graph access stays denied
@@ -88,9 +89,11 @@ and server certificate. It adds the four client keys as a set. Each projects to 
 | `navigator-postgres-migrator` | `password`, `ca.crt` | `navigator-migrate`, roles Job |
 | `navigator-postgres-backup` | `password`, `ca.crt` | WAL archive, base backups, roles Job |
 | `navigator-postgres-dbos` | `password`, `ca.crt` | `web` (DBOS opt-in), roles Job (optional mount) |
+| `navigator-postgres-archive` | `password`, `ca.crt` | `web` (Archives opt-in), roles Job (optional mount) |
 
 `navigator-postgres-dbos` comes from the optional `NAVIGATOR_POSTGRES_DBOS_PASSWORD`, which needs the client set for its
-CA bundle. The roles Job converges the `navigator_dbos` login only when that Secret exists.
+CA bundle. The roles Job converges the `navigator_dbos` login only when that Secret exists. `navigator-postgres-archive`
+and the `navigator_archive` login follow the same rule with `NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD`.
 
 None of these values enters the `envFrom` deployment Secret. A pod mounts only its own login, plus the CA bundle.
 
@@ -112,6 +115,16 @@ and the `NAVIGATOR_DBOS_HOST`, `PORT`, `DATABASE`, `SSLMODE` (`verify-full`), `R
 values inline. It takes the password from `navigator-postgres-dbos` and mounts only that Secret's `ca.crt`. Both rows
 ship `"true"`; `ops ship` refuses a row whose `navigator-postgres-dbos` Secret is missing. [DBOS
 durability](dbos-durability.md) has the operator steps.
+
+### Archives opt-in
+
+Set `NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"` to run the Archives schedule on the DBOS executor in `web`. It needs both
+opt-ins above. `ops ship` adds `examples/deploy/k8s/gke/postgres/web/web-archives.yaml` and the reviewed
+`navigator-archive-coverage` ConfigMap, then deletes the Restate `archives-trigger` CronJob. Each 05:55 and 17:55 UTC
+run exports the whole `navigator` and `forgejo` databases to Iceberg as `navigator_archive`. Add
+`NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD` to the PostgreSQL service file, apply it with `navigator ops secrets apply
+--service postgres`, and re-run the roles Job before the first ship with the switch on. See [Iceberg
+archive](iceberg-archive.md#where-it-runs).
 
 ### Migration Job
 
@@ -196,7 +209,9 @@ that bucket directly.
 | Recovery point (RPO) | 2 minutes of committed data | Drill's `recovered_through` against the live last write |
 | Recovery time (RTO) | 1 hour to a verified, promoted copy | Job start/completion timestamps |
 
-Iceberg exports complement these physical backups; they do not preserve WAL or recovery semantics.
+These physical backups are the recovery path for the server, its AGE graph, and DBOS. The Iceberg archive is a logical
+and analytical copy: it keeps no WAL, has no shared recovery point across the two databases, and does not certify DBOS
+replay ([Iceberg archive](iceberg-archive.md#recovery-physical-backups-first)).
 
 ### Restore drill
 
@@ -313,8 +328,9 @@ Forgejo's Git, LFS, and attachment files remain on its own retained volume and m
 The twice-daily Iceberg export must treat each database as an independent source: record its database identity, schema
 version, source cutoff, table inventory, and generation manifest; publish separate Navigator and Forgejo namespaces; and
 test rehydrating each into a fresh database without crossing service ownership. A single PostgreSQL transaction cannot
-provide a common snapshot cutoff across separate databases. Until the per-database exports and restore drills exist,
-Forgejo's database is not covered by the existing Surreal-backed Iceberg archive.
+provide a common snapshot cutoff across separate databases. The paired Iceberg generation covers both databases when
+Archives runs on DBOS in `web` ([Archives opt-in](#archives-opt-in)). The read-only `navigator_archive` login is the one
+role granted `CONNECT` on both databases, and it can write neither.
 
 ## Evidence
 

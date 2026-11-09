@@ -47,6 +47,18 @@ async fn build_app(tag: &str) -> (axum::Router, store::surreal::SurrealDb) {
             .unwrap(),
     );
     seed::seed_canonical(&surreal, &storage).await.unwrap();
+    let brand = store::brands::find_by_key(&surreal, "neon")
+        .await
+        .unwrap()
+        .unwrap();
+    store::brands::set_website_url(
+        &surreal,
+        store::persons::Role::Owner,
+        brand.id,
+        seed::compiled_brand_website_url("neon"),
+    )
+    .await
+    .unwrap();
     let runtime = Arc::new(InMemoryRuntime::new());
     let email: Arc<dyn portal::email::EmailService> =
         Arc::new(portal::email::CapturingEmail::new());

@@ -32,6 +32,18 @@ class = "phone"
 match = "7434374357"
 reason = "IEP Defenders' published voice line (iepdefenders.com/contact-us/), carried by the held-out IEP Brand."
 
+[[allow]]
+class = "phone"
+match = "(?:8662724529|8662085143)"
+paths = ["docs/legal-plans.md", ".github/pii/allowlist.toml"]
+reason = "Legal-plan provider-support lines published on araglegal.com/attorneys and legaleaseplan.com/provider-info."
+
+[[allow]]
+class = "email"
+match = '''(?i)[a-z]+@(?:legaleaseplan\.com|araglegal\.com)'''
+paths = ["docs/legal-plans.md"]
+reason = "Legal-plan providers' published provider-support desks (legaleaseplan.com/provider-info), not people."
+
 # --- Third-party attributions and machine identities ------------------------
 
 [[allow]]
@@ -147,6 +159,13 @@ class = "email"
 match = '''(?:no-reply@(?:claims\.)?kroll\.com|no-reply@notkroll\.com)'''
 paths = ["portal/src/inbound_email.rs", "portal/tests/inbox_api.rs"]
 reason = "The claims-agent noticing vendor domain and its lookalike are the behaviour under test in the inbox classifier; the mailboxes are invented."
+
+
+[[allow]]
+class = "email"
+match = '''[a-z0-9-]+@(?:[a-z0-9-]+\.)*(?:arag\.com|aragconnect\.com|araglegal\.com|legaleaseplan\.com|legalshield\.com|notarag\.com)'''
+paths = ["store/src/plan_assignment.rs", "portal/src/plan_assignment_lane.rs"]
+reason = "Plan providers' notice-sender domains (ARAG's aragconnect.com case requests and araglegal.com provider mail, LegalEASE's legaleaseplan.com) are the behaviour under test in the plan-assignment sender matcher and intake lane; the mailboxes are invented. notarag.com is the near-miss negative."
 
 [[allow]]
 class = "email"

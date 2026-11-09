@@ -1084,6 +1084,7 @@ mod tests {
             booking_url: None,
             legal_plan_id: None,
             plan_member_id: None,
+            plan_case_number: None,
             benefit_code: None,
             plan_matter_type: None,
             plan_state: None,

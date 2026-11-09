@@ -140,14 +140,14 @@ async fn every_firm_footer_destination_publishes_the_complete_footer() {
     })
     .await;
     for link in links {
-        let path = link
-            .href
-            .strip_prefix("https://www.neonlaw.com")
-            .unwrap_or(link.href);
-        let brand = if link.href.starts_with("https://") {
-            BrandKey::Neon
+        // Absolute footer links leave Vesta for the host that publishes the
+        // page. Team is Guieb & Shook; the rest of the shared row is Neon.
+        let (brand, path) = if let Some(path) = link.href.strip_prefix("https://www.neonlaw.com") {
+            (BrandKey::Neon, path)
+        } else if let Some(path) = link.href.strip_prefix("https://www.guiebshook.com") {
+            (BrandKey::GuiebShook, path)
         } else {
-            BrandKey::Vesta
+            (BrandKey::Vesta, link.href)
         };
         let html = preview(brand, path).await;
         // API is the shared standalone Swagger explorer, not a brand content page.

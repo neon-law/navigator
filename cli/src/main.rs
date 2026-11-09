@@ -36,6 +36,7 @@ mod glossary;
 mod inbox;
 mod inbox_import;
 mod journal;
+mod legal_plans;
 mod login;
 mod lsp_download;
 mod lsp_publish;
@@ -46,6 +47,7 @@ mod notation_import;
 mod notation_kinds;
 mod notations_preview;
 mod notices;
+mod ops_private_terms;
 mod palette;
 mod postgres_backfill;
 mod postgres_mirror;
@@ -874,6 +876,16 @@ enum Command {
         #[command(subcommand)]
         action: journal::JournalCmd,
     },
+    /// A Firm's Legal Plans: where each is logged into, who to call, and its
+    /// service levels.
+    LegalPlans {
+        #[arg(long)]
+        firm: uuid::Uuid,
+        #[arg(long)]
+        host: Option<String>,
+        #[command(subcommand)]
+        action: legal_plans::LegalPlansCmd,
+    },
     /// A Firm's stated premises the CEO Digest checks actuals against.
     Assumptions {
         #[arg(long)]
@@ -1115,6 +1127,11 @@ enum ProjectsCmd {
     Communication {
         #[command(subcommand)]
         action: CommunicationCmd,
+    },
+    /// Read or set the Legal Plan this Project is paid through.
+    LegalPlan {
+        #[command(subcommand)]
+        action: LegalPlanCmd,
     },
     /// Read the live Project lifecycle and onboarding evidence.
     Status {
@@ -1634,6 +1651,18 @@ enum ProjectRepositoryCmd {
         #[arg(long, default_value = ".")]
         dir: PathBuf,
     },
+    /// Put Jujutsu (`jj`) over this Git checkout: install it with Homebrew
+    /// when missing (macOS), colocate a `.jj` store beside `.git`, and copy
+    /// the Git author and signing settings into jj's repo config.
+    ///
+    /// The forge still sees plain Git. `jj git push --change @` names its
+    /// bookmark `push/<change-id>`, the namespace `push` already uses.
+    /// Idempotent: a re-run rewrites the same settings.
+    Jj {
+        /// Project repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+    },
     /// Move a checkout's pointers to `blobs/` and its document bytes into
     /// their matter folders under `documents/`.
     ///
@@ -1977,6 +2006,29 @@ enum CommunicationCmd {
         /// Print the request and write nothing.
         #[arg(long)]
         dry_run: bool,
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+}
+
+#[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
+enum LegalPlanCmd {
+    /// The matter's plan, Plan Case Number, and plan dates.
+    Show {
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Link the matter to one of the Firm's plans; only the flags given change.
+    Set {
+        #[command(flatten)]
+        fields: legal_plans::PlanFields,
         /// Project code. Defaults to project.name in navigator.yaml.
         #[arg(long)]
         project: Option<String>,
@@ -2445,6 +2497,29 @@ enum ProjectSkillCmd {
     /// (ENG-879), so the two report the same verdict for the same
     /// `navigator.yaml`. Run from the Project repository root.
     Status,
+    /// Prepare a Kit template defect report for the Lawyers team's issue
+    /// tracker, from inside the matter.
+    ///
+    /// Reads the draft (a file, or stdin when `--file` is omitted), resolves
+    /// this matter's private terms through the site session, and scans the
+    /// draft locally with the same scanner `navigator project feedback-check`
+    /// runs. A clean draft prints the prepared issue — Kit provenance from
+    /// `navigator.yaml` on top, the draft under it — ready to file. A draft
+    /// carrying an identifier exits non-zero naming each placeholder to use.
+    /// Nothing is sent anywhere. Run from the Project repository root.
+    Feedback {
+        /// Draft title and body; reads stdin when omitted.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Which pinned Kit to report against. Required only when several
+        /// Kits are pinned.
+        #[arg(long)]
+        jurisdiction: Option<String>,
+        /// Which pinned Kit to report against. Required only when several
+        /// Kits are pinned.
+        #[arg(long)]
+        practice_area: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2532,6 +2607,12 @@ enum NotationCmd {
         /// `--answer counterparty_legal_name="NEON GmbH"`.
         #[arg(long = "answer", value_parser = parse_answer)]
         answers: Vec<(String, String)>,
+        /// Load questionnaire Answers from a local YAML file.
+        #[arg(long)]
+        answers_file: Option<PathBuf>,
+        /// Reuse Answers from the latest Notation for this Draft or a Notation UUID.
+        #[arg(long, conflicts_with = "answers_file")]
+        answers_from: Option<String>,
         /// Render a draft for review: unanswered placeholders survive,
         /// highlighted. Without it the render is final and refuses any
         /// unanswered placeholder, bracketed drafting marker, fill-in blank
@@ -3484,6 +3565,15 @@ enum OpsCmd {
     Firms {
         #[command(subcommand)]
         action: FirmsAction,
+    },
+    /// Every matter whose pre-filing PII check would be refused, with the
+    /// record that breaks it (LAW-301). Reads the admin-tier
+    /// `GET /app/api/project-private-terms-reconciliation` door over the
+    /// `site login` session — no local database coordinates — and never
+    /// repairs a row: a finding names the work, and a human decides.
+    PrivateTerms {
+        #[command(flatten)]
+        host: HostOpt,
     },
     /// Inspect the fixed Solana devnet SAS program account.
     #[command(subcommand)]
@@ -5221,6 +5311,9 @@ fn run() -> ExitCode {
         Command::Assumptions { firm, host, action } => {
             runtime().block_on(assumptions::run(firm, host, action))
         }
+        Command::LegalPlans { firm, host, action } => {
+            runtime().block_on(legal_plans::run(firm, host, action))
+        }
         Command::Mail { action } => runtime().block_on(mail::run(action)),
         Command::Inbox { action } => runtime().block_on(inbox::run(action)),
         Command::Downloads { action } => runtime().block_on(downloads::run(action)),
@@ -5475,8 +5568,32 @@ fn run() -> ExitCode {
                 file,
                 out,
                 answers,
+                answers_file,
+                answers_from,
                 preview,
-            } => run_render(&file, &out, &answers, "pdf", preview),
+            } => {
+                let answers = match answers_file {
+                    Some(path) => match answers_file::pdf_answers(&path, answers) {
+                        Ok(answers) => answers,
+                        Err(error) => {
+                            eprintln!("navigator: {error:#}");
+                            return ExitCode::from(2);
+                        }
+                    },
+                    None => match runtime().block_on(remote::pdf_project_answers(
+                        &file,
+                        answers_from.as_deref(),
+                        answers,
+                    )) {
+                        Ok(answers) => answers,
+                        Err(error) => {
+                            eprintln!("navigator: {error:#}");
+                            return ExitCode::from(2);
+                        }
+                    },
+                };
+                run_render(&file, &out, &answers, "pdf", preview)
+            }
             NotationCmd::Word {
                 file,
                 out,
@@ -5502,6 +5619,7 @@ fn run() -> ExitCode {
             | OpsCmd::Release { .. }
             | OpsCmd::Notices { .. }
             | OpsCmd::Firms { .. }
+            | OpsCmd::PrivateTerms { .. }
             | OpsCmd::Postgres(_)
             | OpsCmd::Sas(_)),
         ) => match action {
@@ -5509,6 +5627,9 @@ fn run() -> ExitCode {
             OpsCmd::Firms { action } => match action {
                 FirmsAction::Doctor => firms_doctor::run(),
             },
+            OpsCmd::PrivateTerms { host } => {
+                runtime().block_on(ops_private_terms::run(host.host.as_deref()))
+            }
             OpsCmd::Sas(SasCmd::Program) => match runtime().block_on(sas::program()) {
                 Ok(code) => code,
                 Err(error) => {
@@ -6191,6 +6312,16 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 .await
             }
         },
+        ProjectsCmd::LegalPlan { action } => match action {
+            LegalPlanCmd::Show { project, host } => {
+                legal_plans::show(host.host.as_deref(), project.as_deref()).await
+            }
+            LegalPlanCmd::Set {
+                fields,
+                project,
+                host,
+            } => legal_plans::set(host.host.as_deref(), project.as_deref(), &fields).await,
+        },
         ProjectsCmd::Adverse { action } => match action {
             AdverseCmd::Add {
                 party,
@@ -6455,7 +6586,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             json,
             host,
         } => projects::setup::run(host.host.as_deref(), project_code.as_deref(), all, json).await,
-        ProjectsCmd::Skill { action } => run_project_skill(action),
+        ProjectsCmd::Skill { action } => run_project_skill(action).await,
         ProjectsCmd::Repository { action } => match action {
             ProjectRepositoryCmd::SyncSkills { dir } => {
                 match projects::repository::repair_skills(&dir) {
@@ -6478,6 +6609,13 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     }
                 }
             }
+            ProjectRepositoryCmd::Jj { dir } => match projects::jj::run(&dir) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("navigator: {error:#}");
+                    ExitCode::from(2)
+                }
+            },
             ProjectRepositoryCmd::MigrateDocuments { dir, dry_run } => {
                 match document_layout::migrate_checkout(&dir, dry_run) {
                     Ok(()) => ExitCode::SUCCESS,
@@ -6600,8 +6738,10 @@ fn parse_stale_duration(input: &str) -> Option<chrono::Duration> {
 /// `list` and `show` read only the compiled-in catalog; `use` and `status`
 /// additionally read (and `use` writes) `./navigator.yaml`, so all four run
 /// from the current directory rather than taking a `--dir` flag — the same
-/// current-directory convention `navigator project gate` uses.
-fn run_project_skill(action: ProjectSkillCmd) -> ExitCode {
+/// current-directory convention `navigator project gate` uses. `use` then
+/// writes the pinned Kit version through to the live matter when the
+/// manifest names a deployment.
+async fn run_project_skill(action: ProjectSkillCmd) -> ExitCode {
     match action {
         ProjectSkillCmd::List => projects::skill::run_list(),
         ProjectSkillCmd::Show {
@@ -6611,8 +6751,20 @@ fn run_project_skill(action: ProjectSkillCmd) -> ExitCode {
         ProjectSkillCmd::Use {
             jurisdiction,
             practice_area,
-        } => projects::skill::run_use(Path::new("."), &jurisdiction, &practice_area),
+        } => {
+            let code = projects::skill::run_use(Path::new("."), &jurisdiction, &practice_area);
+            if code == ExitCode::SUCCESS {
+                projects::skill::record_kit_version(Path::new("."), &jurisdiction, &practice_area)
+                    .await;
+            }
+            code
+        }
         ProjectSkillCmd::Status => projects::skill::run_status(Path::new(".")),
+        ProjectSkillCmd::Feedback {
+            file,
+            jurisdiction,
+            practice_area,
+        } => projects::skill_feedback::run(file, jurisdiction, practice_area).await,
     }
 }
 

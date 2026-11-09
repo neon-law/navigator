@@ -48,7 +48,11 @@ RUN rustup target add "$(cat /tmp/rust-target)"
 COPY rules             rules
 COPY project-scaffold project-scaffold
 COPY skills            skills
+# `rules` embeds `assumptions/schema.yaml` with include_str!, outside the crate
+# dir, so that tree must be staged too (the 26.11.9 KIND fixture failed on it).
+COPY assumptions       assumptions
 COPY store             store
+COPY assumptions/schema.yaml assumptions/schema.yaml
 COPY repos             repos
 COPY import            import
 COPY cli               cli

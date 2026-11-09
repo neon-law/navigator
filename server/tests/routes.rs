@@ -6859,6 +6859,8 @@ async fn api_projects_lifecycle_404s_for_an_unknown_matter() {
 /// once per role in a loop, re-seeding the client of record (unique `email`).
 /// A blind insert would hit a duplicate-key panic before any assertion runs.
 async fn open_matter_prereqs(surreal: &store::surreal::SurrealDb) -> (uuid::Uuid, uuid::Uuid) {
+    store::test_support::approve_test_brand_domain(surreal, "neon").await;
+    store::test_support::approve_test_brand_domain(surreal, "delete-your-data").await;
     let client = match store::persons::find_by_email_ci(surreal, "client-of-record@example.com")
         .await
         .unwrap()
@@ -6908,6 +6910,12 @@ async fn api_projects_open_authorizes_only_lawyer_and_admin() {
             "",
         ),
         (
+            "external-lawyer",
+            Some(store::persons::Role::Lawyer),
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+        ),
+        (
             "admin",
             Some(store::persons::Role::Admin),
             StatusCode::CREATED,
@@ -6937,8 +6945,13 @@ async fn api_projects_open_authorizes_only_lawyer_and_admin() {
                     .header(header::COOKIE, cookie)
                     .header("x-csrf-token", csrf);
             } else {
+                let domain = if label == "external-lawyer" {
+                    "example.net"
+                } else {
+                    "example.com"
+                };
                 let attester =
-                    seeded_actor(&surreal, &format!("{label}-attorney@neonlaw.com"), role).await;
+                    seeded_actor(&surreal, &format!("{label}-attorney@{domain}"), role).await;
                 let (cookie, csrf) = session_cookie_and_csrf_for_person(&attester);
                 builder = builder
                     .header(header::COOKIE, cookie)
@@ -6981,7 +6994,7 @@ async fn api_projects_open_closed_records_status_and_closed_at() {
     let (client_id, entity_id) = open_matter_prereqs(&surreal).await;
     let attester = seeded_actor(
         &surreal,
-        "closed-open-attorney@neonlaw.com",
+        "closed-open-attorney@example.com",
         store::persons::Role::Lawyer,
     )
     .await;
@@ -7028,7 +7041,7 @@ async fn api_projects_open_closed_requires_closed_at() {
     let (client_id, entity_id) = open_matter_prereqs(&surreal).await;
     let attester = seeded_actor(
         &surreal,
-        "missing-closed-at@neonlaw.com",
+        "missing-closed-at@example.com",
         store::persons::Role::Lawyer,
     )
     .await;
@@ -7079,7 +7092,7 @@ async fn api_projects_open_rejects_closed_at_without_status() {
     let (client_id, entity_id) = open_matter_prereqs(&surreal).await;
     let attester = seeded_actor(
         &surreal,
-        "stray-closed-at@neonlaw.com",
+        "stray-closed-at@example.com",
         store::persons::Role::Lawyer,
     )
     .await;
@@ -7153,7 +7166,7 @@ async fn api_projects_open_defaults_to_the_host_and_refuses_an_unpaired_brand() 
         let (client_id, entity_id) = open_matter_prereqs(&surreal).await;
         let attester = seeded_actor(
             &surreal,
-            &format!("{code}-attorney@neonlaw.com"),
+            &format!("{code}-attorney@example.com"),
             store::persons::Role::Lawyer,
         )
         .await;
@@ -7220,7 +7233,7 @@ async fn api_projects_open_requires_the_attorneys_attestation() {
     let (client_id, entity_id) = open_matter_prereqs(&surreal).await;
     let attester = seeded_actor(
         &surreal,
-        "attorney@neonlaw.com",
+        "attorney@example.com",
         store::persons::Role::Lawyer,
     )
     .await;
@@ -7271,14 +7284,14 @@ async fn api_projects_open_refuses_a_non_client_of_record() {
     let (_client_id, entity_id) = open_matter_prereqs(&surreal).await;
     let attester = seeded_actor(
         &surreal,
-        "attorney@neonlaw.com",
+        "attorney@example.com",
         store::persons::Role::Lawyer,
     )
     .await;
     // Point client_id at a lawyer person — not allowed as the client of record.
     let lawyer_as_client = seeded_actor(
         &surreal,
-        "not-a-client@neonlaw.com",
+        "not-a-client@example.com",
         store::persons::Role::Lawyer,
     )
     .await;
@@ -7318,7 +7331,7 @@ async fn api_projects_open_accepts_a_lawyer_bearer_session() {
     let (client_id, entity_id) = open_matter_prereqs(&surreal).await;
     let attester = seeded_actor(
         &surreal,
-        "bearer-attorney@neonlaw.com",
+        "bearer-attorney@example.com",
         store::persons::Role::Lawyer,
     )
     .await;
@@ -7361,7 +7374,7 @@ async fn api_projects_open_rejects_a_cross_site_origin() {
     let (client_id, entity_id) = open_matter_prereqs(&surreal).await;
     let attester = seeded_actor(
         &surreal,
-        "attorney@neonlaw.com",
+        "attorney@example.com",
         store::persons::Role::Lawyer,
     )
     .await;

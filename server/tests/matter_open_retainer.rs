@@ -64,6 +64,18 @@ async fn build_app(
             .unwrap(),
     );
     seed::seed_canonical(&surreal, &storage).await.unwrap();
+    let brand = store::brands::find_by_key(&surreal, "neon")
+        .await
+        .unwrap()
+        .unwrap();
+    store::brands::set_website_url(
+        &surreal,
+        store::persons::Role::Owner,
+        brand.id,
+        seed::compiled_brand_website_url("neon"),
+    )
+    .await
+    .unwrap();
 
     // The `generate_pdf__retainer_pdf` step is worker-dispatched, so the
     // in-memory runtime is wrapped in `DispatchingRuntime` (the same

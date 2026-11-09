@@ -1108,6 +1108,14 @@ erDiagram
         int position
         datetime updated_at
     }
+    notation_creation_attempt {
+        string failed_at
+        string id
+        string notation_id
+        string project_id
+        string respondent_id
+        string template_code
+    }
     notation_document {
         uuid current_version_id
         uuid id
@@ -1401,6 +1409,7 @@ erDiagram
         string onboarding_jurisdiction
         datetime plan_accepted_on
         datetime plan_assigned_on
+        string plan_case_number
         datetime plan_closed_on
         string plan_matter_type
         string plan_member_id

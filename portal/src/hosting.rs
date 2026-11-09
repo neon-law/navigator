@@ -887,6 +887,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     let lookup = |key: &str| std::env::var(key).ok();
     let dbos_schedules = dbos_schedules(&rt, host_dbos, lookup).await?;
     let sent_email_export = sent_email_export_source(host_dbos, lookup).await?;
+    let archives = archives_context(host_dbos, rt.config.environment, lookup)?;
     let router = crate::bootstrap(
         rt.state,
         &rt.public_dir,
@@ -947,16 +948,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
             lookup,
             workflows::notify::notifier_from_lookup(lookup),
             dbos_schedules,
-            move |dbos| {
-                let mut starters: Vec<dbos_engine::ScheduleStarter> = Vec::new();
-                if let Some(source) = sent_email_export {
-                    let workflow = archives::sent_email_export::register(dbos, source)?;
-                    starters.push(Box::new(move |stop| {
-                        tokio::spawn(archives::sent_email_export::schedule(workflow, stop))
-                    }));
-                }
-                Ok(starters)
-            },
+            move |dbos| register_archive_schedules(dbos, sent_email_export, archives),
             serve,
         )
         .await
@@ -965,6 +957,30 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     };
     telemetry_guard.shutdown();
     served
+}
+
+/// Register the archive crate's DBOS schedules this host enabled, returning
+/// a starter for each.
+fn register_archive_schedules(
+    dbos: &dbos::DBOS,
+    sent_email_export: Option<Arc<dyn archives::sent_email_export::ExportSource>>,
+    archives: Option<archives::workflow::DbosContext>,
+) -> dbos::Result<Vec<dbos_engine::ScheduleStarter>> {
+    let mut starters: Vec<dbos_engine::ScheduleStarter> = Vec::new();
+    if let Some(source) = sent_email_export {
+        let workflow = archives::sent_email_export::register(dbos, source)?;
+        starters.push(Box::new(move |stop| {
+            tokio::spawn(archives::sent_email_export::schedule(workflow, stop))
+        }));
+    }
+    if let Some(context) = archives {
+        let workflow =
+            archives::workflow::register_dbos(dbos, context.slack, context.channel_id, true)?;
+        starters.push(Box::new(move |stop| {
+            tokio::spawn(archives::workflow::schedule_dbos(workflow, stop))
+        }));
+    }
+    Ok(starters)
 }
 
 /// The Sent Email Export's source, when this host runs DBOS and the schedule's
@@ -989,6 +1005,32 @@ async fn sent_email_export_source(
             .await
             .context("configure DBOS SentEmailExport")?,
     )))
+}
+
+/// The Archives schedule's digest context, when this host runs DBOS and the
+/// schedule's own switch is on. `web` holds the PostgreSQL login, so each run
+/// also exports the paired PostgreSQL coverage generation; the switch is read
+/// first, and an enabled schedule with any of that configuration missing fails
+/// the boot rather than its first scheduled run.
+fn archives_context(
+    host_dbos: bool,
+    environment: store::DeploymentEnvironment,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<Option<archives::workflow::DbosContext>> {
+    if !host_dbos || !dbos_engine::enabled(lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
+        return Ok(None);
+    }
+    if !archives::workflow::dbos_enabled(lookup)
+        .map_err(anyhow::Error::msg)
+        .context("read NAVIGATOR_DBOS_ARCHIVES_ENABLED")?
+    {
+        return Ok(None);
+    }
+    let simulated = store::sample_matters_from(environment, lookup)
+        .context("resolve simulated-matters deployment")?;
+    archives::workflow::DbosContext::from_lookup(simulated, lookup)
+        .map(Some)
+        .context("configure DBOS Archives")
 }
 
 /// Build every optional DBOS schedule this host enabled. Each schedule has its
@@ -1018,22 +1060,7 @@ async fn dbos_schedules(
     } else {
         None
     };
-    let source_imports = if should_host_source_imports(host_dbos, lookup)? {
-        let pg = store::postgres::PostgresDb::from_env()
-            .await
-            .context("connect PostgreSQL for source imports")?;
-        Some(workflows::dbos_engine::source_imports::Context::new(
-            Arc::new(
-                workflows::dbos_engine::source_imports::StoreImportSource::new(
-                    rt.state.surreal.clone(),
-                    pg,
-                    cloud::runtime_kms_from_env().await,
-                ),
-            ),
-        ))
-    } else {
-        None
-    };
+    let source_imports = source_imports_schedule(rt, host_dbos, lookup).await?;
     let retention_purge = if should_host_retention_purge(host_dbos, lookup)? {
         Some(
             retention_purge_context(rt, lookup)
@@ -1083,6 +1110,7 @@ async fn dbos_schedules(
         None
     };
     let profit_digest = profit_digest_context(rt, host_dbos, lookup).await?;
+    let ceo_digest = ceo_digest_schedule(rt, host_dbos, lookup).await?;
     Ok(dbos_engine::Schedules {
         general_nag,
         dri_digest,
@@ -1095,7 +1123,48 @@ async fn dbos_schedules(
         billing_digest,
         notation_reset,
         profit_digest,
+        ceo_digest,
     })
+}
+
+/// Resolve the independent SourceImports gate and build its context, so an
+/// unused schedule never requires PostgreSQL or KMS credentials.
+async fn source_imports_schedule(
+    rt: &HostRuntime,
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<Option<workflows::dbos_engine::source_imports::Context>> {
+    if !should_host_source_imports(host_dbos, lookup)? {
+        return Ok(None);
+    }
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .context("connect PostgreSQL for source imports")?;
+    Ok(Some(workflows::dbos_engine::source_imports::Context::new(
+        Arc::new(
+            workflows::dbos_engine::source_imports::StoreImportSource::new(
+                rt.state.surreal.clone(),
+                pg,
+                cloud::runtime_kms_from_env().await,
+            ),
+        ),
+    )))
+}
+
+/// Resolve the independent CeoDigest gate and build its context, so an
+/// unused schedule never requires Vertex, email, or PostgreSQL credentials.
+async fn ceo_digest_schedule(
+    rt: &HostRuntime,
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<Option<workflows::dbos_engine::ceo_digest::Context>> {
+    if !should_host_ceo_digest(host_dbos, lookup)? {
+        return Ok(None);
+    }
+    let context = ceo_digest_context(rt, lookup)
+        .await
+        .context("configure DBOS CeoDigest")?;
+    Ok(Some(context))
 }
 
 /// Resolve the independent BillingCanary gate.
@@ -1358,6 +1427,45 @@ fn should_host_dri_digest(
         .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")
 }
 
+async fn ceo_digest_context(
+    rt: &HostRuntime,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<workflows::dbos_engine::ceo_digest::Context> {
+    let simulated = store::sample_matters(rt.config.environment)
+        .context("resolve simulated-matters deployment")?;
+    let prose = workflows::dbos_engine::ceo_digest::VertexProseProvider::from_lookup(lookup)
+        .context("configure the CEO digest prose provider")?;
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .context("connect PostgreSQL for the CEO digest")?;
+    workflows::dbos_engine::ceo_digest::Context::from_lookup(
+        Arc::new(workflows::dbos_engine::ceo_digest::StoreDigestSource::new(
+            rt.state.surreal.clone(),
+            pg,
+        )),
+        Arc::new(prose),
+        crate::email::from_lookup(lookup, rt.state.surreal.clone())
+            .context("configure the CEO digest email backend")?,
+        simulated,
+        lookup,
+    )
+    .context("validate CEO digest delivery configuration")
+}
+
+/// Resolve the independent CEO digest gate before constructing a delivery
+/// context, so an unused schedule never requires Slack credentials or a
+/// Vertex project.
+fn should_host_ceo_digest(
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<bool> {
+    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
+        return Ok(false);
+    }
+    workflows::dbos_engine::ceo_digest::enabled(lookup)
+        .context("read NAVIGATOR_DBOS_CEO_DIGEST_ENABLED")
+}
+
 fn general_nag_context(
     rt: &HostRuntime,
 ) -> anyhow::Result<workflows::dbos_engine::general_nag::Context> {
@@ -1411,7 +1519,7 @@ fn preflight(brand: &Site, rt: &HostRuntime) {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_ports, sent_email_export_source, should_host_billing_canary,
+        archives_context, bind_ports, sent_email_export_source, should_host_billing_canary,
         should_host_billing_digest, should_host_deadline_mirror, should_host_dri_digest,
         should_host_general_nag, should_host_notation_reset, should_host_profit_digest,
         should_host_project_recovery, should_host_purchase_activation, should_host_retention_purge,
@@ -1441,6 +1549,35 @@ mod tests {
             _ => None,
         };
         assert!(sent_email_export_source(true, malformed).await.is_err());
+    }
+
+    /// Archives reads its configuration only when the executor and its own
+    /// switch are both on; a malformed switch or an incomplete configuration
+    /// fails the boot instead of leaving the archive unscheduled.
+    #[test]
+    fn archives_needs_dbos_its_own_switch_and_complete_coverage() {
+        let environment = store::DeploymentEnvironment::Production;
+        let dbos = workflows::dbos_engine::ENABLED_ENV;
+        let switch = archives::workflow::DBOS_ENABLED_ENV;
+        let on = |key: &str| (key == dbos || key == switch).then(|| "true".to_owned());
+        assert!(archives_context(false, environment, on).unwrap().is_none());
+        let dbos_only = |key: &str| (key == dbos).then(|| "true".to_owned());
+        assert!(archives_context(true, environment, dbos_only)
+            .unwrap()
+            .is_none());
+        let malformed = |key: &str| match key {
+            key if key == dbos => Some("true".to_owned()),
+            key if key == switch => Some("yes".to_owned()),
+            _ => None,
+        };
+        assert!(archives_context(true, environment, malformed).is_err());
+        let Err(error) = archives_context(true, environment, on) else {
+            panic!("an enabled schedule without its coverage settings must fail the boot");
+        };
+        assert!(
+            format!("{error:#}").contains("NAVIGATOR_ARCHIVES_BUCKET"),
+            "{error:#}"
+        );
     }
 
     type Gate = fn(bool, &dyn Fn(&str) -> Option<String>) -> anyhow::Result<bool>;

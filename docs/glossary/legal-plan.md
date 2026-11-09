@@ -11,7 +11,10 @@ dictionary. Each row carries the acceptance service level (hours from the assign
 service level (days from acceptance) that reporting compares actuals against, plus what the plan asks the Firm to
 report.
 
-What a plan pays for one covered benefit lives in a [Plan Fee Schedule](plan-fee-schedule.md), which names its plan.
+What a plan pays for one covered benefit lives in a [Plan Fee Schedule](plan-fee-schedule.md), which names its plan. A
+plan matter is a [Project](project.md) linked to its plan row, carrying the plan's [Plan Case
+Number](plan-case-number.md). The [Legal plans](../legal-plans.md) guide lists where the Firm logs into each plan and
+how a referral becomes a paid matter.
 
 - Vocabulary: [`store::legal_plans`](../../store/src/legal_plans.rs)
 

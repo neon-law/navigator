@@ -13,9 +13,11 @@ for private names the store does not know. Show the checked text to the lawyer b
 
 The terms come from `GET /app/api/projects/{id}/private-terms` with the caller's `site login` session. Only a firm-side
 participant reads that door; others receive the same 404 an unknown Project receives. `--host`, or the checkout's host,
-picks the deployment. An incomplete response, failed read, unknown code or ambiguous code refuses the check; it never
-counts as clean. The draft never leaves the machine. Findings name categories and replacement placeholders, not the
-matched private values.
+picks the deployment. A refused per-Project read names that Project's code. With `--all-projects`, the check continues
+past a refused matter, scans every matter whose terms resolved, and prints `coverage incomplete: N matters unresolved`
+as the first line of its output — a partially covered scan is never clean, and the command exits `2`. A failed Project
+list read, unknown code, or ambiguous code refuses the whole check. No incomplete check ever counts as clean. The draft
+never leaves the machine. Findings name categories and replacement placeholders, not the matched private values.
 
 `--project <Project code>` limits a scan to explicitly selected Projects. Without `--all-projects` or `--project`,
 `--term` and generic-pattern scanning work offline. A clean scan is coverage for the identifiers and patterns checked;

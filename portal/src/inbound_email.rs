@@ -1154,6 +1154,8 @@ pub enum InboxRoute {
     Nef,
     /// A bankruptcy claims-agent notice from a recognized noticing vendor.
     ClaimsAgent,
+    /// Mail from a fixed-fee legal-plan provider, read for its Plan Case Number.
+    PlanAssignment,
     /// Court mail that is not a noticing event, or any message carrying a
     /// video-conference link (a hearing).
     Chambers,
@@ -1168,6 +1170,7 @@ impl InboxRoute {
         match self {
             Self::Nef => "nef",
             Self::ClaimsAgent => "claims_agent",
+            Self::PlanAssignment => "plan_assignment",
             Self::Chambers => "chambers",
             Self::Other => "other",
         }
@@ -1179,6 +1182,7 @@ impl InboxRoute {
         match self {
             Self::Nef => "NEF",
             Self::ClaimsAgent => "Claims agent",
+            Self::PlanAssignment => "Plan assignment",
             Self::Chambers => "Chambers",
             Self::Other => "Other",
         }
@@ -1257,6 +1261,16 @@ pub fn classify_inbound_facts(from: &str, subject: &str, body: &str) -> RouteDec
             route: InboxRoute::ClaimsAgent,
             reason: format!(
                 "sender domain `{domain}` is a recognized claims-agent noticing vendor"
+            ),
+        };
+    }
+
+    if let Some(provider) = store::plan_assignment::provider_for_sender(from) {
+        return RouteDecision {
+            route: InboxRoute::PlanAssignment,
+            reason: format!(
+                "sender domain `{domain}` is the `{}` plan provider's noticing domain",
+                provider.as_str()
             ),
         };
     }

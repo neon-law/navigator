@@ -122,13 +122,15 @@ pub mod route {
     pub const NEF: &str = "nef";
     /// A bankruptcy claims-agent notice from a recognized noticing vendor.
     pub const CLAIMS_AGENT: &str = "claims_agent";
+    /// Mail from a fixed-fee legal plan (ARAG, `LegalEASE`, `LegalShield`).
+    pub const PLAN_ASSIGNMENT: &str = "plan_assignment";
     /// Court mail that is not a noticing event, or a hearing invitation.
     pub const CHAMBERS: &str = "chambers";
     /// Anything the classification layer cannot name confidently.
     pub const OTHER: &str = "other";
 
     /// Every route spelling, in classification order.
-    pub const ALL: &[&str] = &[NEF, CLAIMS_AGENT, CHAMBERS, OTHER];
+    pub const ALL: &[&str] = &[NEF, CLAIMS_AGENT, PLAN_ASSIGNMENT, CHAMBERS, OTHER];
 
     /// Whether `value` is a route the schema accepts on `message.route`.
     #[must_use]

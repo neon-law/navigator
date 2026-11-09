@@ -33,8 +33,8 @@ stack we run. Let's stand it up.
 > `cargo run -p neon` serves it on `localhost`. Boot it locally, inspect the canonical seed, and only
 > come back here when you want it on the public internet. The full local loop is in the checkout's `AGENTS.md`.
 
-**Set the budget alert before you provision** — one command caps the surprise so the bill cannot run away while you
-learn:
+**Set a budget alert before you provision.** The alert notifies you at the configured thresholds. Charges continue while
+resources run.
 
 ```bash
 gcloud billing budgets create --billing-account "$BILLING_ACCOUNT_ID" \
@@ -331,8 +331,9 @@ these HTTP paths and every descendant:
 
 The brand-owned public routes are:
 
-- Neon Law: `/`, `/contact`, `/team`, `/team/nick`, `/blog`, `/blog/{slug}`, `/notations`, `/workshops/*`,
+- Neon Law: `/`, `/contact`, `/blog`, `/blog/{slug}`, `/notations`, `/workshops/*`,
   `/presentations/*`, `/privacy`, `/terms`, `/robots.txt`, `/sitemap.xml`, and `/llms.txt`.
+- Guieb & Shook: `/team`, `/team/nick`, and `/team/waleed`. Other hosts link that directory.
 
 This precedence is fail-closed, not merge order. Each brand declares every route it mounts; startup returns an error if
 an exact path or descendant overlaps a Navigator-owned prefix. A brand therefore cannot shadow data access,
@@ -870,7 +871,7 @@ Only then switch the selected Project and prove gate, merge, publication and not
 
 ---
 
-Navigator has three operating modes but only two parsed deployment profiles. “Dev” is the local KIND lane, including its
+Navigator uses three operating modes and two parsed deployment profiles. “Dev” is the local KIND lane, including its
 disposable `navigator dev staging` integration surface; the wire value is `dev`. All persistent hosted rows use
 `production`, even when a config, namespace, or hostname ends in `-staging`. “Test” is the `dev` profile with
 `NAVIGATOR_CI_HARNESS=1`, not a third parsed value. Exact means exact: `staging`, `test`, `Dev`, `Production`, or any
@@ -922,11 +923,95 @@ could halt a production rollout by being deleted would be a worse failure than t
 ---
 
 Two selectors, two questions. Ask the room which one decides whether a visitor sees invented clients — the answer is not
-the one whose name contains "environment". Then point out that staging's runtime profile is `production`, and let the
-implication land: nothing in the process can tell staging from production, so staging has to say so itself. That is why
-there is a second selector at all rather than a third value on the first one.
+the one whose name contains "environment". Then point out that staging's runtime profile is `production` , and let the
+operator identify the release ring by checking `NAVIGATOR_STAGING` in the selected deployment row. That is why there is
+a second selector at all rather than a third value on the first one.
 
 The banner is the part worth dwelling on. It distinguishes a demo environment from one that may hold real files.
+
+### Deployment and release switches
+
+| Switch | What the operator controls |
+| --- | --- |
+| `NAVIGATOR_ENVIRONMENT` | Runtime profile. Exact `dev` or `production`. Empty or unset selects production. |
+| `NAVIGATOR_CREDENTIAL_ENVIRONMENT` | Credential profile. Persistent hosted rows use `production`. |
+| `NAVIGATOR_STAGING` | Exact `true` marks staging and blocks social writes. Unset or `false` leaves it off. |
+| `NAVIGATOR_SIMULATED_MATTERS` | Exact `true` seeds sample matters. Unset follows the runtime profile. |
+| `NAVIGATOR_CI_HARNESS` | `1` selects the dev test harness. Production rejects it. |
+| `NAVIGATOR_DEV_RELOAD` | `1` serves the reload script under exact `dev`. |
+| `NAVIGATOR_FORGEJO_ACTIONS_ENABLED` | `true` opts the deployment into managed Forgejo Actions. |
+| `DEPLOY_AUTOMATION_ENABLED` | GitHub repository variable. Exact `true` dispatches release rollout. |
+| `RELEASE_TRAIN_ENABLED` | GitHub repository variable. Exact `true` enables the scheduled release cut. |
+
+The Neon Law homepage search preview requires explicit `NAVIGATOR_ENVIRONMENT=production` and `NAVIGATOR_STAGING=true` .
+The preview exercises sign-in and question restoration. Identity verification and search execution need the provider
+integration. The same binary can serve the regular homepage on other rows.
+
+---
+
+Before shipping, read the selected row's config and inspect the rendered environment for the web and worker services.
+Check the staging hostname with a synthetic account, then confirm the regular homepage on the other row. Keep sample
+data, credentials, and release automation separate when reasoning about a deployment.
+
+### Workflow host and routing switches
+
+| Switch | What the operator controls |
+| --- | --- |
+| `NAVIGATOR_WORKFLOW_ENGINE` | Selects the worker engine. `dbos` starts the DBOS worker alongside Restate. |
+| `NAVIGATOR_DBOS_ENABLED` | Hosts the DBOS executor in web. Requires a separate DBOS database login. |
+| `NAVIGATOR_DBOS_ARCHIVES_ENABLED` | Selects DBOS for the archive schedule. |
+| `NAVIGATOR_DBOS_BILLING_CANARY_ENABLED` | Registers the weekly billing canary in the enabled DBOS host. |
+| `NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED` | Runs the billing digest through DBOS. |
+| `NAVIGATOR_DBOS_DEADLINE_MIRROR_ENABLED` | Registers the DBOS deadline mirror in web. |
+| `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED` | Moves the DRI digest schedule to DBOS. |
+| `NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED` | Selects DBOS for the durable email summary workflow. |
+| `NAVIGATOR_DBOS_FINANCE_AGGREGATE_ENABLED` | Routes finance aggregate work to the DBOS worker. |
+| `NAVIGATOR_DBOS_GENERAL_NAG_ENABLED` | Moves the General Nag schedule to DBOS. |
+| `NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED` | Selects DBOS for inbound message alerts. |
+| `NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED` | Selects DBOS for nightly project updates. |
+| `NAVIGATOR_DBOS_NOTATION_ENABLED` | Routes notation work to the DBOS worker. |
+| `NAVIGATOR_DBOS_NOTATION_RESET_ENABLED` | Moves the notation reset schedule to DBOS. |
+| `NAVIGATOR_DBOS_PROJECT_RECOVERY_ENABLED` | Registers project recovery in web. |
+| `NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED` | Selects DBOS for Project Slack work. Requires the Slack bot. |
+| `NAVIGATOR_DBOS_PURCHASE_ACTIVATION_ENABLED` | Registers purchase activation in web. |
+| `NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED` | Selects DBOS for invoice reconciliation. |
+| `NAVIGATOR_DBOS_RETENTION_PURGE_ENABLED` | Registers the retention purge in web. Requires Firm authority config. |
+| `NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED` | Routes the sandbox credit reset trigger to DBOS ingress. |
+| `NAVIGATOR_DBOS_SENT_EMAIL_EXPORT_ENABLED` | Registers the sent email export in web. |
+| `NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED` | Registers the publisher in the DBOS worker. |
+| `NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED` | Registers the reconciler. Enable the publisher first. |
+| `NAVIGATOR_DBOS_SOURCE_IMPORT_ENABLED` | Registers source import in web. |
+
+DBOS switches opt in with `true` and default off. Use `false` to turn them off. Set the executor or worker selector and
+the workflow switch together with the credentials its host needs.
+
+See the [DBOS runbook](../../../../docs/dbos-durability.md) for schedule ownership, prerequisites, and rollback.
+
+---
+
+A trigger and an executor can read the same switch in different processes. Compare their rendered settings before
+rolling a workflow over. Verify that one scheduler owns each job and inspect the next expected run in that engine. For a
+rollback, follow the workflow's runbook so the old scheduler resumes without a duplicate run.
+
+### Capability and storage switches
+
+| Switch | What the operator controls |
+| --- | --- |
+| `OIDC_DISABLED` | `true` or `1` bypasses bearer verification. Deployment validation rejects both values. |
+| `NAVIGATOR_POSTGRES_ENABLED` | `true` selects the PostgreSQL deployment wiring at ship time. |
+| `NAVIGATOR_POSTGRES_MIRROR` | `1` opts into the mirror lane. Ship requires PostgreSQL wiring. |
+| `NAVIGATOR_SUMMARY_ENABLED` | Enables the durable summary lane independently of its engine. |
+| `NAVIGATOR_TRIAGE_ENABLED` | Enables configured inbound triage providers. Unset leaves rules-only triage. |
+| `NAVIGATOR_GITHUB_AUTOMATION_HOME` | Grants the deployment the GitHub automation receiver and worker bindings. |
+
+Plausible follows the explicit production profile and the real-matter setting. Each supported Brand has its own compiled
+analytics site. Provider capabilities can also depend on the presence of credentials and endpoint coordinates. The
+runtime tables below identify those inputs.
+
+---
+
+When a capability stays off, check the switch, the process that consumes it, and its prerequisites in that order.
+Inspect startup and schedule metadata. Keep secret values out of rendered examples and logs.
 
 ### Configuration precedence: the first source wins
 

@@ -1180,8 +1180,8 @@ impl BrandKey {
             // marketing-page band sequences (`home-marketing`), not the
             // legacy home schema.
             Self::IepDefenders | Self::LexTecnica => &["home-marketing", "services"],
-            Self::GuiebShook
-            | Self::DeleteYourData
+            Self::GuiebShook => &["home", "services", "team"],
+            Self::DeleteYourData
             | Self::Misericordia
             | Self::Abhaya
             | Self::DeleteYourDebt
@@ -1247,12 +1247,17 @@ impl BrandKey {
         if path == "/world" || path.starts_with("/world/") {
             return self == Self::Vesta;
         }
+        // The directory and each profile publish on Guieb & Shook. Every
+        // other brand's footer links that host instead of answering here.
+        if path == "/team" || path.starts_with("/team/") {
+            return self == Self::GuiebShook;
+        }
         match self {
             Self::Neon => !matches!(path.trim_end_matches('/'), "/disputes" | "/services"),
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),
             // Guieb & Shook publishes its services page: the homepage's
             // practice cards link there, so the route must resolve on this
-            // host. No other path joins the set.
+            // host. The team directory is admitted above.
             Self::GuiebShook => matches!(path, "/" | "/services" | "/testimonials"),
             Self::CyberInjuryLaw => {
                 matches!(
@@ -2073,6 +2078,12 @@ pub fn firm_footer_nav() -> Vec<NavLink> {
         nav.extend(FIRM_FOOTER_NAV.iter().map(|link| match link.href {
             // Every Brand publishes its own content and design reference.
             "/blog" | "/design" => NavLink::leaf(link.label, link.href),
+            // The directory publishes on Guieb & Shook. That host links it
+            // locally; every other brand leaves for the same page.
+            "/team" if branding.brand_key == BrandKey::GuiebShook => {
+                NavLink::leaf(link.label, link.href)
+            }
+            "/team" => NavLink::leaf(link.label, shared.guieb_path(link.href)),
             // Neon's own pages stay on its own host: only another brand,
             // borrowing the shared row, leaves the site for them.
             path if path.starts_with('/') && branding.brand_key == BrandKey::Neon => {
@@ -2099,7 +2110,9 @@ pub fn firm_footer_nav() -> Vec<NavLink> {
 /// process for the deployment's own environment (staging links staging).
 struct SharedFooterHrefs {
     neon: String,
+    guieb: String,
     neon_paths: std::sync::Mutex<Vec<(&'static str, &'static str)>>,
+    guieb_paths: std::sync::Mutex<Vec<(&'static str, &'static str)>>,
 }
 
 impl SharedFooterHrefs {
@@ -2114,6 +2127,17 @@ impl SharedFooterHrefs {
         cache.push((path, href));
         href
     }
+
+    /// `https://<guieb shook host><path>`, interned the same way as [`Self::neon_path`].
+    fn guieb_path(&self, path: &'static str) -> &'static str {
+        let mut cache = self.guieb_paths.lock().expect("footer href cache");
+        if let Some((_, href)) = cache.iter().find(|(key, _)| *key == path) {
+            return href;
+        }
+        let href: &'static str = Box::leak(format!("{}{path}", self.guieb).into_boxed_str());
+        cache.push((path, href));
+        href
+    }
 }
 
 fn shared_footer_hrefs() -> &'static SharedFooterHrefs {
@@ -2121,7 +2145,9 @@ fn shared_footer_hrefs() -> &'static SharedFooterHrefs {
         let host = env::var("NAVIGATOR_PUBLIC_HOST").ok();
         SharedFooterHrefs {
             neon: BrandKey::Neon.public_home_href_for(host.as_deref()),
+            guieb: BrandKey::GuiebShook.public_home_href_for(host.as_deref()),
             neon_paths: std::sync::Mutex::new(Vec::new()),
+            guieb_paths: std::sync::Mutex::new(Vec::new()),
         }
     });
     &HREFS
@@ -2842,6 +2868,17 @@ mod tests {
                     .find(|n| n.label == "Design")
                     .unwrap_or_else(|| panic!("{} footer links Design", key.as_str()));
                 assert_eq!(design.href, "/design", "{}", key.as_str());
+                let team_href = if *key == super::BrandKey::GuiebShook {
+                    "/team"
+                } else {
+                    "https://www.guiebshook.com/team"
+                };
+                assert_eq!(
+                    nav.iter().find(|link| link.label == "Team").unwrap().href,
+                    team_href,
+                    "{} Team",
+                    key.as_str()
+                );
                 for (label, path) in [("Privacy", "/privacy"), ("Testimonials", "/testimonials")] {
                     assert_eq!(
                         nav.iter().find(|link| link.label == label).unwrap().href,
@@ -2912,9 +2949,11 @@ mod tests {
         }
     }
 
-    /// Neon's own footer links its pages relatively. On any other brand only
-    /// Contact, Testimonials, Blog, Design, Privacy, and Terms are local routes;
-    /// Neon's unique pages link to their published destinations.
+    /// Neon's own footer links its pages relatively, except Team, which
+    /// publishes on Guieb & Shook. On any other brand only Contact,
+    /// Testimonials, Blog, Design, Privacy, and Terms are local routes;
+    /// Neon's unique pages link to their published destinations, and Team
+    /// links to Guieb & Shook.
     #[tokio::test]
     async fn contact_testimonials_and_blog_are_internal_footer_links() {
         for link in super::firm_footer_nav() {
@@ -2922,9 +2961,10 @@ mod tests {
                 "Contact" | "Testimonials" | "Blog" => assert!(link.href.starts_with('/')),
                 "Privacy" => assert_eq!(link.href, "/privacy"),
                 "Terms" => assert_eq!(link.href, "/terms"),
+                "Team" => assert_eq!(link.href, "https://www.guiebshook.com/team"),
                 _ => assert!(
                     link.href.starts_with('/'),
-                    "{} links {} — Neon's own footer has no external links",
+                    "{} links {} — Neon's own footer keeps its pages on its own host",
                     link.label,
                     link.href
                 ),
@@ -2932,7 +2972,9 @@ mod tests {
         }
         scope(&super::ABHAYA_BRANDING, async {
             for link in super::firm_footer_nav() {
-                if !matches!(
+                if link.label == "Team" {
+                    assert_eq!(link.href, "https://www.guiebshook.com/team");
+                } else if !matches!(
                     link.label,
                     "Contact" | "Testimonials" | "Blog" | "Design" | "Privacy" | "Terms"
                 ) {
@@ -3504,6 +3546,10 @@ mod tests {
         assert!(!BrandKey::DeleteYourData.publishes_firm_path("/disputes"));
         assert!(!BrandKey::Neon.publishes_firm_path("/services"));
         assert!(!BrandKey::Neon.publishes_firm_path("/disputes"));
+        assert!(BrandKey::GuiebShook.publishes_firm_path("/team"));
+        assert!(BrandKey::GuiebShook.publishes_firm_path("/team/nick"));
+        assert!(!BrandKey::Neon.publishes_firm_path("/team"));
+        assert!(!BrandKey::Neon.publishes_firm_path("/team/waleed"));
         assert!(BrandKey::CyberInjuryLaw.publishes_firm_path("/services"));
     }
 
