@@ -78,6 +78,14 @@ pub(crate) async fn receive(
     let Some(inbound) = ingest_support_email(db, storage, email).await? else {
         return Ok(());
     };
+    match crate::plan_assignment_lane::run(storage, email).await? {
+        crate::plan_assignment_lane::LaneOutcome::NotPlanMail => {}
+        outcome => tracing::info!(
+            message_id = %inbound.message_id,
+            outcome = ?outcome,
+            "plan-assignment lane recorded the intake"
+        ),
+    }
     crate::inbox::start_inbound_message_alert(inbound.message_id).await?;
     crate::inbox::start_inbound_message_triage(inbound.message_id).await?;
     let Some(mailbox) = mailbox(email).filter(|_| receipt_allowed(email)) else {

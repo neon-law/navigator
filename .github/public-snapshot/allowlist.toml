@@ -148,6 +148,13 @@ match = '''(?:no-reply@(?:claims\.)?kroll\.com|no-reply@notkroll\.com)'''
 paths = ["portal/src/inbound_email.rs", "portal/tests/inbox_api.rs"]
 reason = "The claims-agent noticing vendor domain and its lookalike are the behaviour under test in the inbox classifier; the mailboxes are invented."
 
+
+[[allow]]
+class = "email"
+match = '''[a-z0-9-]+@(?:[a-z0-9-]+\.)*(?:arag\.com|legalshield\.com|notarag\.com)'''
+paths = ["store/src/plan_assignment.rs", "portal/src/plan_assignment_lane.rs"]
+reason = "Plan providers' assignment notice-sender domains are the behaviour under test in the plan-assignment sender matcher and intake lane; the mailboxes are invented. notarag.com is the near-miss negative."
+
 [[allow]]
 class = "email"
 match = '''clerk@notuscourts\.gov'''
