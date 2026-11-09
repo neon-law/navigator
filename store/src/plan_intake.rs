@@ -1625,6 +1625,7 @@ mod tests {
         };
         let surreal = mem_surreal().await;
         let firm_id = seed_firm_with_brand(&surreal, "neon").await;
+        crate::test_support::approve_test_brand_domain(&surreal, "neon").await;
         plan_firm(&pg, firm_id).await;
         let plan = arag_plan_on(&pg, firm_id, "ARAG", None).await;
         let staged = stage(&surreal, Some(&pg), &arag_input(firm_id, Utc::now()))
@@ -1690,6 +1691,7 @@ mod tests {
         };
         let surreal = mem_surreal().await;
         let firm_id = seed_firm_with_brand(&surreal, "neon").await;
+        crate::test_support::approve_test_brand_domain(&surreal, "neon").await;
         plan_firm(&pg, firm_id).await;
         let plan = arag_plan_on(&pg, firm_id, "ARAG", None).await;
         let landing = Utc::now();
@@ -1797,6 +1799,7 @@ mod tests {
         };
         let surreal = mem_surreal().await;
         let firm_id = seed_firm_with_brand(&surreal, "neon").await;
+        crate::test_support::approve_test_brand_domain(&surreal, "neon").await;
         plan_firm(&pg, firm_id).await;
         let plan = arag_plan_on(&pg, firm_id, "ARAG", None).await;
         let landing = Utc::now() - Duration::hours(48);
@@ -1844,6 +1847,10 @@ mod tests {
         };
         let surreal = mem_surreal().await;
         let firm_id = seed_firm_with_brand(&surreal, "neon").await;
+        // The open-matter DRI check admits the attorney only on an approved
+        // Firm or Brand email domain — approve the fixture domain the way the
+        // other Project-open tests do.
+        crate::test_support::approve_test_brand_domain(&surreal, "neon").await;
         plan_firm(&pg, firm_id).await;
         let plan = arag_plan_on(&pg, firm_id, "ARAG Portal", Some("portal.arag.example")).await;
         let input = arag_input(firm_id, Utc::now());
