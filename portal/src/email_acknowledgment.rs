@@ -227,8 +227,8 @@ mod tests {
         let mut email = sample_email();
         email.from = "ARAG <assignments@notice.arag.com>".into();
         email.to = "staging@neonlaw.com".into();
-        email.subject = "Attorney Assignment".into();
-        email.text = store::plan_assignment::fixtures::arag_assignment_text();
+        email.subject = store::plan_assignment::fixtures::ARAG_SUBJECT.into();
+        email.text = store::plan_assignment::fixtures::arag_case_request_text();
         email.message_id = Some("<plan-notice-1@notice.arag.com>".into());
         receive(&db, &storage, &service, &email).await.unwrap();
         // No generic receipt: the member intro the acceptance sends reserves
