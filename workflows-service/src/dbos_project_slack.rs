@@ -373,6 +373,7 @@ mod tests {
             gate: CiOutcome::Pass,
             publish: Some(CiOutcome::Skipped),
             run_attempt,
+            subject: None,
         }
     }
 

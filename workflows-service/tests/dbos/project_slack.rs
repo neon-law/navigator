@@ -28,6 +28,7 @@ fn push(short_sha: &str, run_attempt: u32) -> MainPushRequest {
         gate: CiOutcome::Pass,
         publish: Some(CiOutcome::Skipped),
         run_attempt,
+        subject: None,
     }
 }
 

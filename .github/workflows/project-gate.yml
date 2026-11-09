@@ -197,6 +197,9 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           AUTHOR_LOGIN: ${{ github.event.head_commit.author.username || github.actor }}
+          # Commit text is untrusted input: it reaches the script only through
+          # the environment, never by interpolation into it.
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
           # A notice failure must never fail cd (continue-on-error above), but a
@@ -219,13 +222,17 @@ jobs:
             notify_gave_up "could not look up the project"
             exit 0
           fi
+          # The subject is the message's first line; the notice shows it so the
+          # channel reads as a short log of what changed.
+          subject="${HEAD_COMMIT_MESSAGE%%$'\n'*}"
           body="$(jq -cn \
             --arg short_sha "${GITHUB_SHA:0:7}" \
             --arg run_url "${RUN_URL}" \
             --arg author_login "${AUTHOR_LOGIN}" \
             --arg gate "${GATE}" \
+            --arg subject "${subject}" \
             --argjson run_attempt "${RUN_ATTEMPT}" \
-            '{short_sha: $short_sha, run_url: $run_url, author_login: $author_login, gate: $gate, run_attempt: $run_attempt}')"
+            '{short_sha: $short_sha, run_url: $run_url, author_login: $author_login, gate: $gate, run_attempt: $run_attempt} + (if $subject == "" then {} else {subject: $subject} end)')"
           if ! curl -sSf --retry 3 --retry-connrefused --retry-all-errors -X POST -H "Authorization: Bearer ${session}" -H 'Content-Type: application/json' \
             -d "${body}" "${base}/app/api/projects/${project_id}/events/main-push"; then
             notify_gave_up "could not post the main-push event"

@@ -202,18 +202,23 @@ async fn the_scoped_session_reaches_its_own_project_and_a_malformed_event_is_400
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "invalid_event");
 
+    // ENG-1285: the commit subject is accepted and reaches the same queue
+    // step as an event without one.
     let mut with_subject = event();
     with_subject["subject"] = serde_json::Value::String("feat: a commit subject".into());
-    let (status, _) = post_event(
+    let (status, body) = post_event(
         &fixture.app,
         fixture.project_id,
         Some(&bearer),
         with_subject,
     )
     .await;
-    assert_eq!(
-        status,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "a commit subject is not a field this door accepts"
-    );
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "workflows_unavailable");
+
+    let mut with_body = event();
+    with_body["subject"] = serde_json::Value::String("feat: a subject\n\nand a body".into());
+    let (status, body) = post_event(&fixture.app, fixture.project_id, Some(&bearer), with_body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_event");
 }

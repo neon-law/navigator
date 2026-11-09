@@ -2343,8 +2343,10 @@ enum CiOutcome {
     Skipped,
 }
 
-/// `POST /app/api/projects/{id}/events/main-push`'s body. Mechanism fields
-/// only — there is no commit subject, so none can reach the channel.
+/// `POST /app/api/projects/{id}/events/main-push`'s body: the run's
+/// mechanism fields plus the commit's subject line (ENG-1285). The subject
+/// is the one free-text field; the worker renders it as escaped plain text,
+/// so it can never mention or link anything.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct MainPushEvent {
@@ -2356,7 +2358,14 @@ struct MainPushEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     publish: Option<CiOutcome>,
     run_attempt: u32,
+    /// The commit's subject line. Absent from callers on an older release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subject: Option<String>,
 }
+
+/// The longest subject the door accepts. Git itself has no limit, but the
+/// worker shows about 120 characters, and anything longer is not a subject.
+const MAIN_PUSH_SUBJECT_LIMIT: usize = 512;
 
 impl MainPushEvent {
     /// Refuse anything that is not a short SHA, an `https` run URL, a GitHub
@@ -2384,6 +2393,13 @@ impl MainPushEvent {
         }
         if self.run_attempt == 0 {
             return Err("run_attempt must be at least 1");
+        }
+        if let Some(subject) = &self.subject {
+            if subject.chars().count() > MAIN_PUSH_SUBJECT_LIMIT
+                || subject.chars().any(char::is_control)
+            {
+                return Err("subject must be one line of at most 512 characters");
+            }
         }
         Ok(())
     }
@@ -11729,6 +11745,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             gate: super::CiOutcome::Pass,
             publish: None,
             run_attempt: 1,
+            subject: None,
         };
         event.validate().expect("a well-formed event");
         super::queue_main_push(&server.uri(), Some("tok"), project_id, &event)
@@ -11745,8 +11762,19 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             gate: super::CiOutcome::Fail,
             publish: Some(super::CiOutcome::Skipped),
             run_attempt: 2,
+            subject: Some("feat: a commit subject".into()),
         };
         assert!(good.validate().is_ok());
+        let two_lines = super::MainPushEvent {
+            subject: Some("feat: a subject\nand a body".into()),
+            ..good.clone()
+        };
+        assert!(two_lines.validate().is_err(), "a subject is one line");
+        let too_long = super::MainPushEvent {
+            subject: Some("s".repeat(513)),
+            ..good.clone()
+        };
+        assert!(too_long.validate().is_err());
         let bad_sha = super::MainPushEvent {
             short_sha: "ABC1234".into(),
             ..good.clone()
@@ -11767,6 +11795,15 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             ..good
         };
         assert!(bad_attempt.validate().is_err());
+        let without_subject = serde_json::from_value::<super::MainPushEvent>(serde_json::json!({
+            "short_sha": "abc1234",
+            "run_url": "https://example.com",
+            "author_login": "octocat",
+            "gate": "pass",
+            "run_attempt": 1
+        }))
+        .expect("a caller on an older release sends no subject");
+        assert_eq!(without_subject.subject, None);
         assert!(
             serde_json::from_value::<super::MainPushEvent>(serde_json::json!({
                 "short_sha": "abc1234",
@@ -11774,10 +11811,10 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 "author_login": "octocat",
                 "gate": "pass",
                 "run_attempt": 1,
-                "subject": "feat: a commit subject"
+                "client": "Acme"
             }))
             .is_err(),
-            "a commit subject is not a field this door accepts"
+            "the subject is the only free-text field this door accepts"
         );
     }
 

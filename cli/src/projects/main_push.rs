@@ -6,8 +6,10 @@
 //! `project-gate.yml` makes with `curl` and `jq`, neither of which a Forgejo
 //! runner image is guaranteed to carry. The run's OIDC token is exchanged
 //! for the document-scoped session bound to this repository's live Project,
-//! and the body carries mechanism fields only: a short SHA, the run URL, the
-//! pusher's login, the outcome and the attempt. No commit subject is sent.
+//! and the body carries the run's mechanism fields — a short SHA, the run
+//! URL, the pusher's login, the outcome and the attempt — plus the subject
+//! line of the checked-out `HEAD` commit, so the channel reads as a short log
+//! of what changed.
 
 use std::path::Path;
 
@@ -30,10 +32,14 @@ impl Outcome {
     }
 }
 
-/// The run's mechanism fields, read from the runner's environment. Forgejo
-/// exports `FORGEJO_*` and the `GITHUB_*` compatibility names; GitHub only the
-/// latter.
-fn event_body(get: impl Fn(&str) -> Option<String>, gate: Outcome) -> Result<Value> {
+/// The run's mechanism fields, read from the runner's environment, and the
+/// commit subject when one is known. Forgejo exports `FORGEJO_*` and the
+/// `GITHUB_*` compatibility names; GitHub only the latter.
+fn event_body(
+    get: impl Fn(&str) -> Option<String>,
+    gate: Outcome,
+    subject: Option<&str>,
+) -> Result<Value> {
     let read = |names: &[&str]| {
         names
             .iter()
@@ -60,13 +66,35 @@ fn event_body(get: impl Fn(&str) -> Option<String>, gate: Outcome) -> Result<Val
         .unwrap_or(1)
         .max(1);
     let author = read(&["FORGEJO_ACTOR", "GITHUB_ACTOR"]).context("the run has no actor")?;
-    Ok(json!({
+    let mut body = json!({
         "short_sha": sha[..7].to_ascii_lowercase(),
         "run_url": format!("{}/{repository}/actions/runs/{run}", server.trim_end_matches('/')),
         "author_login": author,
         "gate": gate.as_str(),
         "run_attempt": attempt,
-    }))
+    });
+    if let Some(subject) = subject.map(str::trim).filter(|subject| !subject.is_empty()) {
+        body["subject"] = json!(subject);
+    }
+    Ok(body)
+}
+
+/// The subject line of the commit checked out in `dir`, or `None` when the
+/// checkout is not a Git repository the runner can read. A missing subject
+/// never blocks the notice; the server renders an event without one as it
+/// always has.
+fn head_subject(dir: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["log", "-1", "--format=%s"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let subject = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!subject.is_empty()).then_some(subject)
 }
 
 /// Tries per notify request before the notice gives up — the same budget the
@@ -151,7 +179,8 @@ pub async fn notify(dir: &Path, gate: Outcome) -> Result<()> {
     let manifest = super::manifest::read(dir).context("navigator.yaml is missing or invalid")?;
     let host = super::manifest::non_empty(manifest.host.as_deref())
         .ok_or_else(|| anyhow!("navigator.yaml has no host"))?;
-    let body = event_body(|name| std::env::var(name).ok(), gate)?;
+    let subject = head_subject(dir);
+    let body = event_body(|name| std::env::var(name).ok(), gate, subject.as_deref())?;
     if let Err(error) = send_notice(&host, &body).await {
         return warn_notice_lost(gate, error);
     }
@@ -206,6 +235,7 @@ mod tests {
                 ("GITHUB_ACTOR", "nick_s.law"),
             ]),
             Outcome::Fail,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -220,10 +250,49 @@ mod tests {
         );
     }
 
+    /// ENG-1285: the checked-out commit's subject rides along when known, and
+    /// a blank one is left out rather than sent as an empty string.
+    #[test]
+    fn the_head_subject_is_sent_when_known() {
+        let runner = [
+            ("GITHUB_SHA", "abcdef0123456789abcdef0123456789abcdef01"),
+            ("GITHUB_SERVER_URL", "https://github.com"),
+            ("GITHUB_REPOSITORY", "neon-law/sample-estate"),
+            ("GITHUB_RUN_ID", "9001"),
+            ("GITHUB_ACTOR", "octocat"),
+        ];
+        let body = event_body(env(&runner), Outcome::Pass, Some(" feat: add the will ")).unwrap();
+        assert_eq!(body["subject"], "feat: add the will");
+        let blank = event_body(env(&runner), Outcome::Pass, Some("   ")).unwrap();
+        assert!(blank.get("subject").is_none());
+    }
+
+    #[test]
+    fn the_head_subject_comes_from_the_checked_out_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(head_subject(dir.path()), None, "not a repository");
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "Test")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "Test")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "feat: add the will\n\nA body line."]);
+        assert_eq!(head_subject(dir.path()).as_deref(), Some("feat: add the will"));
+    }
+
     #[test]
     fn a_run_without_a_commit_reports_nothing() {
-        assert!(event_body(env(&[("GITHUB_SHA", "not-hex!")]), Outcome::Pass).is_err());
-        assert!(event_body(env(&[]), Outcome::Pass).is_err());
+        assert!(event_body(env(&[("GITHUB_SHA", "not-hex!")]), Outcome::Pass, None).is_err());
+        assert!(event_body(env(&[]), Outcome::Pass, None).is_err());
     }
 
     #[tokio::test]
