@@ -111,6 +111,9 @@ pub async fn plan_intake_page() -> Result<PlanIntakePage, ServerFnError> {
 
 /// The fee-quote line for one row: the plan fee plus the supplemental
 /// terms, the schedule's effective date, and the covered benefit's name.
+/// Server-only: the wasm client build has no `store`, and this helper only
+/// runs inside `#[server]` bodies.
+#[cfg(feature = "server")]
 fn fee_quote(staged: &store::plan_intake::StagedAssignment) -> String {
     let Some(plan_fee) = staged.fee_plan_fee_cents else {
         return "Not priced on the schedule yet — confirm the state and matter type on acceptance."
@@ -150,6 +153,9 @@ fn fee_quote(staged: &store::plan_intake::StagedAssignment) -> String {
 
 /// Map one staged record to its row view. The actor id rides along so the
 /// accept door can attribute the decision.
+/// Server-only: the wasm client build has no `store` to name the staged type;
+/// the wasm graph only ever sees the rendered `PlanRowView` rows.
+#[cfg(feature = "server")]
 fn row_view(staged: store::plan_intake::StagedAssignment, _actor: uuid::Uuid) -> PlanRowView {
     let plan = staged
         .legal_plan_name
