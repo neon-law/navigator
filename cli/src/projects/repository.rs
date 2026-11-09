@@ -2678,7 +2678,12 @@ fn entity_suffix(rest: &str) -> Option<String> {
 /// local gate rewrites it. A signature block or From line uses
 /// `{{firm.legal_name}}`, which render fills from the Brand declared in
 /// `navigator.yaml`. A definition or fact that identifies a named entity is
-/// left as written.
+/// left as written. A letter-family Draft (`kind: letter` or
+/// `kind: onboarding`) keeps its authored prose — the letter identifies the
+/// Firm — and the warning stands: only its signature sections and From lines
+/// move to the render binding. `signature_line` knows a fixed list of closing
+/// formulas; an unrecognized closing is a known gap whose name line is left
+/// as written.
 pub const FIRM_ROLE_NAME_CODE: &str = "Y027";
 
 /// Legal names the compiled Brand registry publishes. Longer names precede
@@ -2786,7 +2791,14 @@ fn signature_line(line: &str, section: &mut Option<usize>) -> bool {
     let label = lower.trim_matches(['*', '_']);
     if matches!(
         label,
-        "sincerely," | "respectfully," | "agreed and accepted:"
+        "sincerely,"
+            | "respectfully,"
+            | "yours truly,"
+            | "very truly yours,"
+            | "warm regards,"
+            | "kind regards,"
+            | "best regards,"
+            | "agreed and accepted:"
     ) || label.starts_with("in witness whereof")
     {
         *section = Some(usize::MAX);
@@ -2846,6 +2858,44 @@ fn rewrite_firm_role_prose(contents: &str, names: &[&str]) -> Option<String> {
     changed.then_some(out)
 }
 
+/// A letter-family draft — correspondence the Firm sends to the client —
+/// keeps its authored prose: the letter identifies the Firm.
+fn letter_family_kind(contents: &str) -> bool {
+    let kind = rules::frontmatter::extract(contents)
+        .and_then(|frontmatter| rules::frontmatter::field(frontmatter, "kind"));
+    matches!(kind.as_deref(), Some("letter" | "onboarding"))
+}
+
+/// The letter-family write surface: only signature sections and From lines
+/// move to the render binding; authored prose is preserved byte-identical so
+/// the gate never silently destroys client-facing work product. `None` when
+/// nothing would move.
+fn rewrite_letter_family_prose(contents: &str, names: &[&str]) -> Option<String> {
+    if !names.iter().any(|name| contents.contains(name)) {
+        return None;
+    }
+    let facts = named_entity_fact_lines(contents);
+    let mut changed = false;
+    let mut out = String::with_capacity(contents.len());
+    let mut signature_section = None;
+    for (index, line) in contents.split_inclusive('\n').enumerate() {
+        let (body, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |body| (body, "\n"));
+        let in_signature = signature_line(body, &mut signature_section);
+        if !in_signature && !from_line(body) {
+            out.push_str(line);
+            continue;
+        }
+        let in_fact = facts.get(index).copied().unwrap_or(false);
+        let rewritten = rewrite_firm_role_line(body, names, in_fact, in_signature);
+        changed |= rewritten != body;
+        out.push_str(&rewritten);
+        out.push_str(newline);
+    }
+    changed.then_some(out)
+}
+
 fn firm_role_findings(path: &Path, contents: &str, rewritten: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (index, (original, revised)) in contents.lines().zip(rewritten.lines()).enumerate() {
@@ -2869,7 +2919,23 @@ fn apply_firm_role_prose(
     warnings: &mut Vec<Finding>,
 ) {
     let names = compiled_firm_legal_names();
-    let Some(rewritten) = rewrite_firm_role_prose(contents, &names) else {
+    let letter_family = letter_family_kind(contents);
+    // A letter-family draft separates the write from the warning: the write
+    // keeps authored prose and only migrates signature sections and From
+    // lines to the render binding, while the warning still names every line
+    // that spells a legal name.
+    let debranded = rewrite_firm_role_prose(contents, &names);
+    let rewritten = if letter_family {
+        rewrite_letter_family_prose(contents, &names)
+    } else {
+        debranded.clone()
+    };
+    if letter_family {
+        if let Some(debranded) = debranded.as_ref() {
+            warnings.extend(firm_role_findings(path, contents, debranded));
+        }
+    }
+    let Some(rewritten) = rewritten else {
         return;
     };
     if write_fixes {
@@ -2885,7 +2951,9 @@ fn apply_firm_role_prose(
         }
         return;
     }
-    warnings.extend(firm_role_findings(path, contents, &rewritten));
+    if !letter_family {
+        warnings.extend(firm_role_findings(path, contents, &rewritten));
+    }
 }
 
 fn validate_firm_role_prose(root: &Path, write_fixes: bool, warnings: &mut Vec<Finding>) {
@@ -3372,14 +3440,15 @@ mod tests {
         is_release_tag, lint_project_template, misnamed_firm_entities,
         missing_root_gitignore_lines, publish_workflow_prefix, repair_root_gitignore,
         repair_skills, repository_name, retired_workflow_refused, rewrite_firm_role_prose,
-        validate_agent_contract, validate_cd_workflow, validate_client_visibility,
-        validate_documents_gitignore, validate_gate, validate_github_path, validate_layout,
-        validate_skills, validate_templates, validate_workflow, workflow, workflow_for, Finding,
-        LayoutOutcome, AGENT_CONTRACT_BASE, ALLOWED_ROOTS, AUTOMERGE_WORKFLOW_CONTENTS,
-        CD_WORKFLOW, CLAUDE_SETTINGS, CLAUDE_SETTINGS_CONTENTS, DEFAULT_WORKFLOW_HOME,
-        DRAFT_DIRECTORY, ENTITY_CODE, FINAL_RETIRED_WORKFLOW_RELEASE, FIRM_TRADE_NAME_CODE,
-        PROJECT_MANIFEST, RETIRED_CD_WORKFLOW, RETIRED_SYNCED_SKILLS, RETIRED_WORKFLOW,
-        ROOT_GITIGNORE, SYNCED_SKILLS, TEMPLATE_DIRECTORY, WORKFLOW,
+        rewrite_letter_family_prose, signature_line, validate_agent_contract, validate_cd_workflow,
+        validate_client_visibility, validate_documents_gitignore, validate_gate,
+        validate_github_path, validate_layout, validate_skills, validate_templates,
+        validate_workflow, workflow, workflow_for, Finding, LayoutOutcome, AGENT_CONTRACT_BASE,
+        ALLOWED_ROOTS, AUTOMERGE_WORKFLOW_CONTENTS, CD_WORKFLOW, CLAUDE_SETTINGS,
+        CLAUDE_SETTINGS_CONTENTS, DEFAULT_WORKFLOW_HOME, DRAFT_DIRECTORY, ENTITY_CODE,
+        FINAL_RETIRED_WORKFLOW_RELEASE, FIRM_TRADE_NAME_CODE, PROJECT_MANIFEST,
+        RETIRED_CD_WORKFLOW, RETIRED_SYNCED_SKILLS, RETIRED_WORKFLOW, ROOT_GITIGNORE,
+        SYNCED_SKILLS, TEMPLATE_DIRECTORY, WORKFLOW,
     };
     use super::{
         tracked_file_admitted, validate_tracked_files, CANONICAL_GITATTRIBUTES, CODEOWNERS,
@@ -5933,6 +6002,65 @@ jobs:
         assert_eq!(
             rewrite_firm_role_prose(&wrapped, &names).expect("the role paragraph rewrites"),
             format!("{name}\nconverted from a PLLC.\n\nPrepared by the Firm.\n")
+        );
+    }
+
+    #[test]
+    fn signature_line_recognizes_the_letter_closings() {
+        for closing in [
+            "Yours truly,",
+            "Very truly yours,",
+            "Warm regards,",
+            "Kind regards,",
+            "Best regards,",
+        ] {
+            assert!(signature_line(closing, &mut None), "{closing}");
+        }
+        assert!(!signature_line("Yours faithfully,", &mut None));
+    }
+
+    #[test]
+    fn letter_family_prose_keeps_its_name_and_the_signature_takes_the_placeholder() {
+        let names = compiled_firm_legal_names();
+        let name = names
+            .iter()
+            .copied()
+            .find(|name| name.contains('&'))
+            .expect("a compiled Firm legal name");
+        let letter = format!(
+            "---\nkind: letter\n---\nThank you for choosing {name}.\n\nYours truly,\n\n{name}, Attorneys at Law\n"
+        );
+        let rewritten =
+            rewrite_letter_family_prose(&letter, &names).expect("the signature rewrites");
+        assert!(
+            rewritten.contains(&format!("Thank you for choosing {name}.")),
+            "{rewritten}"
+        );
+        assert!(
+            rewritten.contains("Yours truly,\n\n{{firm.legal_name}}, Attorneys at Law"),
+            "{rewritten}"
+        );
+
+        for closing in [
+            "Very truly yours,",
+            "Warm regards,",
+            "Kind regards,",
+            "Best regards,",
+        ] {
+            let letter = format!("---\nkind: letter\n---\n{closing}\n\n{name}, Attorneys at Law\n");
+            let rewritten = rewrite_letter_family_prose(&letter, &names)
+                .unwrap_or_else(|| panic!("{closing} routes the name"));
+            assert!(
+                rewritten.contains("{{firm.legal_name}}, Attorneys at Law"),
+                "{closing}: {rewritten}"
+            );
+        }
+
+        let unknown =
+            format!("---\nkind: letter\n---\nYours faithfully,\n\n{name}, Attorneys at Law\n");
+        assert!(
+            rewrite_letter_family_prose(&unknown, &names).is_none(),
+            "an unrecognized closing is fail-safe"
         );
     }
 
