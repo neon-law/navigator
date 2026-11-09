@@ -839,8 +839,9 @@ DEFINE INDEX OVERWRITE person_external_identity_person_system
 -- never user-typed — so no stored lowercase field is needed the way
 -- `person.email_lower` is.
 --
--- The domain of `jurisdiction_type` is closed and load-bearing: the intake
--- `country` question type filters on
+-- The domain of `jurisdiction_type` is closed and load-bearing: `global`
+-- marks the one row a template written for no single body of law declares,
+-- and the intake `country` question type filters on
 -- `jurisdiction_type = 'country'`, so a typo'd value would silently
 -- vanish from every picker rather than fail. The ASSERT makes that a
 -- write-time error, the same way `person.role` carries its ladder.
@@ -848,7 +849,7 @@ DEFINE TABLE IF NOT EXISTS jurisdiction SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE name ON jurisdiction TYPE string;
 DEFINE FIELD OVERWRITE code ON jurisdiction TYPE string;
 DEFINE FIELD OVERWRITE jurisdiction_type ON jurisdiction TYPE string
-    ASSERT $value IN ['state', 'country'];
+    ASSERT $value IN ['state', 'country', 'global'];
 DEFINE FIELD OVERWRITE inserted_at ON jurisdiction TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON jurisdiction TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE jurisdiction_code ON jurisdiction FIELDS code UNIQUE;

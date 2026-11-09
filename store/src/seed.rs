@@ -7222,8 +7222,8 @@ records:
             .expect("seed");
         let js = jurisdictions::list_all(&surreal).await.unwrap();
         // 50 states + DC + the ISO 3166-1 country set (alpha-3 codes,
-        // with United States and Germany on their pre-ISO codes).
-        assert_eq!(js.len(), 248);
+        // with United States and Germany on their pre-ISO codes) + Global.
+        assert_eq!(js.len(), 249);
         let codes: Vec<&str> = js.iter().map(|j| j.code.as_str()).collect();
         for code in [
             "NV", "CA", "NY", "TX", "WY", "DC", "US", "GMBH", "MEX", "CAN", "GBR",
@@ -7238,6 +7238,8 @@ records:
         assert_eq!(by_code("US").jurisdiction_type, "country");
         assert_eq!(by_code("GMBH").jurisdiction_type, "country");
         assert_eq!(by_code("MEX").jurisdiction_type, "country");
+        // Global is neither, so no country picker offers it.
+        assert_eq!(by_code("GLOBAL").jurisdiction_type, "global");
         // The state Georgia and the country Georgia stay distinct by
         // name, so a name-keyed answer can never be ambiguous.
         assert_eq!(by_code("GA").name, "Georgia");

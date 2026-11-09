@@ -51,9 +51,12 @@ pub(crate) const TABLE: &str = "jurisdiction";
 /// A US state or DC — the `jurisdiction_type` IOLTA pools by, so
 /// `store::iolta_accounts` names it rather than spelling the token again.
 pub const JURISDICTION_TYPE_STATE: &str = "state";
-/// A federal sovereign. Named beside its sibling so the closed set the
-/// schema ASSERTs reads as a pair in Rust too.
+/// A federal sovereign. Named beside its siblings so the closed set the
+/// schema ASSERTs reads as one list in Rust too.
 pub const JURISDICTION_TYPE_COUNTRY: &str = "country";
+/// No single body of law: the one `Global` row a template that works
+/// anywhere declares as `jurisdiction: GLOBAL`.
+pub const JURISDICTION_TYPE_GLOBAL: &str = "global";
 
 /// One jurisdiction.
 ///
