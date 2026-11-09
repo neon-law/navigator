@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex, Once};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use cloud::SlackService;
 use http_body_util::BodyExt;
 use portal::integrations::FakeIntegrations;
 use portal::{AppState, SessionStore};
@@ -1301,11 +1302,48 @@ async fn partial_provider_failure_is_retryable() {
         .is_some());
 }
 
-/// Same as the archived case, but for a channel someone renamed by hand — a
-/// name search cannot see it either, since the name no longer matches the
-/// query.
+/// The channel name is derived from (environment, code), never a bare code
+/// (ENG-1286), so a deployment's channels cannot collide with another's in
+/// the same workspace.
+fn expected_channel_name(code: &str) -> String {
+    let prefix = if cloud::labels_slack_from_staging_env() {
+        "staging"
+    } else {
+        "navigator"
+    };
+    format!("{prefix}-{code}")
+}
+
 #[tokio::test]
-async fn slack_ensure_reports_a_renamed_recorded_channel() {
+async fn slack_ensure_names_the_channel_from_the_environment_and_code() {
+    let fx = build_fixture(true).await;
+    let body = serde_json::json!({ "project_code": fx.code });
+    post(&fx, ALL_DOORS[2], Some(&fx.admin), body).await;
+    let stored = store::projects::find_by_code(&fx.surreal, &fx.code)
+        .await
+        .unwrap()
+        .unwrap();
+    let channel = fx
+        .providers
+        .slack
+        .channel(&expected_channel_name(&fx.code))
+        .expect("the channel carries the environment-qualified name");
+    assert_eq!(
+        stored.internal_slack_channel_id.as_deref(),
+        Some(channel.id.as_str())
+    );
+    assert!(
+        fx.providers.slack.channel(&fx.code).is_none(),
+        "no bare-code channel"
+    );
+}
+
+/// A channel found under its recorded id but another name — the pre-ENG-1286
+/// `project-<code>`, a bare code, or a rename by hand — is renamed back as a
+/// reconcile. Slack keeps the id across a rename, so the recorded coordinate
+/// and the channel's history survive; the former name is the detail.
+#[tokio::test]
+async fn slack_ensure_renames_a_recorded_channel_back_to_its_canonical_name() {
     let fx = build_fixture(true).await;
     let body = serde_json::json!({ "project_code": fx.code });
     post(&fx, ALL_DOORS[2], Some(&fx.admin), body.clone()).await;
@@ -1317,16 +1355,75 @@ async fn slack_ensure_reports_a_renamed_recorded_channel() {
         .internal_slack_channel_id
         .expect("channel id recorded");
 
+    let former = format!("project-{}", fx.code);
+    fx.providers.slack.rename(&channel_id, &former);
+    let repaired = json(post(&fx, ALL_DOORS[2], Some(&fx.admin), body.clone()).await).await;
+    assert_eq!(
+        outcomes(&repaired),
+        vec![(fx.code.clone(), "repaired".to_string())]
+    );
+    assert_eq!(
+        repaired["results"][0]["detail"].as_str(),
+        Some(former.as_str())
+    );
+    let channel = fx
+        .providers
+        .slack
+        .get_channel(&channel_id)
+        .await
+        .unwrap()
+        .expect("the channel kept its id");
+    assert_eq!(channel.name, expected_channel_name(&fx.code));
+    let stored = store::projects::find_by_code(&fx.surreal, &fx.code)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.internal_slack_channel_id.as_deref(),
+        Some(channel_id.as_str())
+    );
+    assert_eq!(
+        stored.internal_slack_channel_url.as_deref(),
+        Some(cloud::slack_channel_url(&channel_id).as_str())
+    );
+
+    // A second run changes nothing.
+    let again = json(post(&fx, ALL_DOORS[2], Some(&fx.admin), body).await).await;
+    assert_eq!(
+        outcomes(&again),
+        vec![(fx.code.clone(), "adopted".to_string())]
+    );
+}
+
+/// When the canonical name is already held by another channel the bot can
+/// see, the rename is refused as a conflict for an operator, and the recorded
+/// channel is left as it is.
+#[tokio::test]
+async fn slack_ensure_reports_a_rename_blocked_by_a_taken_name_as_conflict() {
+    let fx = build_fixture(true).await;
+    let body = serde_json::json!({ "project_code": fx.code });
+    post(&fx, ALL_DOORS[2], Some(&fx.admin), body.clone()).await;
+    let stored = store::projects::find_by_code(&fx.surreal, &fx.code)
+        .await
+        .unwrap()
+        .unwrap();
+    let channel_id = stored
+        .internal_slack_channel_id
+        .expect("channel id recorded");
     fx.providers
         .slack
         .rename(&channel_id, "someone-renamed-this");
-    let renamed = json(post(&fx, ALL_DOORS[2], Some(&fx.admin), body).await).await;
+    fx.providers
+        .slack
+        .simulate_name_taken(&expected_channel_name(&fx.code));
+
+    let report = json(post(&fx, ALL_DOORS[2], Some(&fx.admin), body).await).await;
     assert_eq!(
-        outcomes(&renamed),
-        vec![(fx.code.clone(), "renamed".to_string())]
+        outcomes(&report),
+        vec![(fx.code.clone(), "conflict".to_string())]
     );
     assert_eq!(
-        renamed["results"][0]["detail"].as_str(),
+        report["results"][0]["detail"].as_str(),
         Some("someone-renamed-this")
     );
 }
@@ -1455,7 +1552,9 @@ async fn post_app(
 #[tokio::test]
 async fn slack_ensure_reports_a_name_collision_as_conflict() {
     let fx = build_fixture(true).await;
-    fx.providers.slack.simulate_name_taken(&fx.code);
+    fx.providers
+        .slack
+        .simulate_name_taken(&expected_channel_name(&fx.code));
     let body = serde_json::json!({ "project_code": fx.code });
 
     let report = json(post(&fx, ALL_DOORS[2], Some(&fx.admin), body).await).await;

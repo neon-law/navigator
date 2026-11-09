@@ -100,6 +100,58 @@ async fn a_code_needing_normalization_is_stored_lowercased() {
     assert_eq!(project.code, "litbox");
 }
 
+/// A Project code is unique across the whole deployment, not within a Firm
+/// (ENG-1286): a second Firm cannot hold a code the first already holds, so
+/// the code alone names one Project. The check is the store's unique index,
+/// which every open path ends at, so the two rows are written directly.
+#[tokio::test]
+async fn a_second_firm_cannot_hold_a_code_another_firm_holds() {
+    let surreal = mem_surreal().await;
+    let admin = persons::create(
+        &surreal,
+        &NewPerson::with_role("Firm Admin", "firm-admin@example.com", Role::Admin),
+    )
+    .await
+    .expect("admin")
+    .id;
+    // Each Firm is its own entity, and so is each Project below.
+    let firm = |name: &str, entity_id: Uuid| store::firms::NewFirm {
+        name: name.to_string(),
+        status: "active".to_string(),
+        entity_id,
+        admin_dri_person_id: admin,
+    };
+    let first_firm =
+        store::firms::create(&surreal, &firm("First Firm", seed_entity(&surreal).await))
+            .await
+            .expect("first Firm")
+            .id;
+    let second_firm =
+        store::firms::create(&surreal, &firm("Second Firm", seed_entity(&surreal).await))
+            .await
+            .expect("second Firm")
+            .id;
+    assert_ne!(first_firm, second_firm);
+    let matter = |firm_id: Uuid, entity_id: Uuid| store::projects::NewProject {
+        code: "acme-holdings".to_string(),
+        name: "Acme Holdings".to_string(),
+        status: "open".to_string(),
+        entity_id,
+        firm_id: Some(firm_id),
+        ..Default::default()
+    };
+
+    projects::create(&surreal, &matter(first_firm, seed_entity(&surreal).await))
+        .await
+        .expect("the first Firm's matter");
+    let second =
+        projects::create(&surreal, &matter(second_firm, seed_entity(&surreal).await)).await;
+    assert!(
+        matches!(second, Err(store::projects::ProjectStoreError::CodeTaken)),
+        "the same code in another Firm must be refused, never disambiguated by Firm"
+    );
+}
+
 /// Two matters cannot open on the same code: the caller owns this
 /// coordinate, so a collision is refused rather than silently disambiguated,
 /// and the first matter's row is unaffected.

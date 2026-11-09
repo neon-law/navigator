@@ -118,13 +118,17 @@ impl SlackMemberId {
     }
 }
 
+/// A Firm's Slack bot, addressed by channel name or id. The name is the
+/// Project's environment-qualified channel name (`navigator-<code>` or
+/// `staging-<code>`), never a bare Project code, so a deployment's channels
+/// cannot collide with another's in the same workspace.
 #[async_trait]
 pub trait SlackService: Send + Sync {
     async fn find_private_channel(
         &self,
-        project_code: &str,
+        channel_name: &str,
     ) -> Result<Option<SlackChannel>, SlackError>;
-    async fn create_private_channel(&self, project_code: &str) -> Result<SlackChannel, SlackError>;
+    async fn create_private_channel(&self, channel_name: &str) -> Result<SlackChannel, SlackError>;
     async fn invite_firm_members(
         &self,
         channel_id: &str,
@@ -138,6 +142,14 @@ pub trait SlackService: Send + Sync {
     /// id no longer resolves to any channel (deleted, or a foreign/malformed
     /// id).
     async fn get_channel(&self, channel_id: &str) -> Result<Option<SlackChannel>, SlackError>;
+    /// Rename a channel the bot is a member of, keeping its id and history.
+    /// The reconcile uses it to bring a recorded channel back to its
+    /// canonical name (ENG-1286). Slack's `name_taken` is reported as such.
+    async fn rename_channel(
+        &self,
+        channel_id: &str,
+        channel_name: &str,
+    ) -> Result<SlackChannel, SlackError>;
 }
 
 /// The canonical URL for a private channel, from its id. Slack's own
@@ -155,17 +167,17 @@ pub fn channel_url(channel_id: &str) -> String {
 /// `true` would report every re-run as a new Firm-private channel.
 pub async fn ensure_private_channel<S: SlackService + ?Sized>(
     service: &S,
-    project_code: &str,
+    channel_name: &str,
     members: &[SlackMemberId],
 ) -> Result<(SlackChannel, bool), SlackError> {
-    let (channel, created) = match service.find_private_channel(project_code).await? {
+    let (channel, created) = match service.find_private_channel(channel_name).await? {
         Some(channel) => (channel, false),
-        None => (service.create_private_channel(project_code).await?, true),
+        None => (service.create_private_channel(channel_name).await?, true),
     };
     if !channel.is_private {
         return Err(SlackError::NotPrivate);
     }
-    if channel.name != project_code {
+    if channel.name != channel_name {
         return Err(SlackError::Api);
     }
     service.invite_firm_members(&channel.id, members).await?;
@@ -368,6 +380,27 @@ impl SlackService for FakeSlack {
             .expect("Slack fake lock poisoned")
             .get(channel_id)
             .cloned())
+    }
+
+    async fn rename_channel(
+        &self,
+        channel_id: &str,
+        channel_name: &str,
+    ) -> Result<SlackChannel, SlackError> {
+        self.check_available()?;
+        if self.channel(channel_name).is_some()
+            || self
+                .name_taken
+                .lock()
+                .expect("Slack fake lock poisoned")
+                .contains(channel_name)
+        {
+            return Err(SlackError::NameTaken);
+        }
+        let mut by_id = self.by_id.lock().expect("Slack fake lock poisoned");
+        let channel = by_id.get_mut(channel_id).ok_or(SlackError::Api)?;
+        channel.name = channel_name.to_string();
+        Ok(channel.clone())
     }
 }
 
@@ -654,6 +687,37 @@ impl SlackService for SlackClient {
             is_private: channel.is_private,
         }))
     }
+
+    /// `conversations.rename` — the id survives, so the recorded coordinate
+    /// and the channel's history do too.
+    async fn rename_channel(
+        &self,
+        channel_id: &str,
+        channel_name: &str,
+    ) -> Result<SlackChannel, SlackError> {
+        let body = self
+            .post(
+                "conversations.rename",
+                json!({ "channel": channel_id, "name": channel_name }),
+            )
+            .await?;
+        let response: ChannelResponse =
+            serde_json::from_value(body).map_err(|_| SlackError::IncompleteResponse)?;
+        if !response.ok {
+            return Err(if response.error.as_deref() == Some("name_taken") {
+                SlackError::NameTaken
+            } else {
+                SlackError::Api
+            });
+        }
+        let channel = response.channel.ok_or(SlackError::IncompleteResponse)?;
+        Ok(SlackChannel {
+            id: channel.id,
+            name: channel.name,
+            is_archived: channel.is_archived,
+            is_private: channel.is_private,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -930,6 +994,81 @@ mod tests {
             .expect("still resolves by id");
         assert!(!looked_up.is_archived);
         assert_eq!(looked_up.name, "someone-renamed-this");
+    }
+
+    /// ENG-1286: a rename keeps the id, so a recorded coordinate survives it,
+    /// and a name another channel already holds is refused as `name_taken`.
+    #[tokio::test]
+    async fn rename_keeps_the_id_and_refuses_a_taken_name() {
+        let slack = FakeSlack::new();
+        let (channel, _) = ensure_private_channel(&slack, "project-sample", &[])
+            .await
+            .unwrap();
+        let renamed = slack
+            .rename_channel(&channel.id, "navigator-sample")
+            .await
+            .unwrap();
+        assert_eq!(renamed.id, channel.id);
+        assert_eq!(renamed.name, "navigator-sample");
+        assert_eq!(
+            slack.find_private_channel("project-sample").await.unwrap(),
+            None
+        );
+        let (other, _) = ensure_private_channel(&slack, "navigator-other", &[])
+            .await
+            .unwrap();
+        assert!(matches!(
+            slack.rename_channel(&other.id, "navigator-sample").await,
+            Err(SlackError::NameTaken)
+        ));
+        assert!(matches!(
+            slack.rename_channel("never-created", "navigator-x").await,
+            Err(SlackError::Api)
+        ));
+    }
+
+    #[tokio::test]
+    async fn rename_posts_the_channel_and_name_and_reports_a_taken_name() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/conversations.rename"))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "channel": "C1",
+                "name": "navigator-sample"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "channel": { "id": "C1", "name": "navigator-sample", "is_private": true, "is_archived": false }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/conversations.rename"))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "channel": "C2",
+                "name": "navigator-taken"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": false,
+                "error": "name_taken"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = SlackClient::with_base_url("test-token", server.uri());
+        let renamed = client
+            .rename_channel("C1", "navigator-sample")
+            .await
+            .unwrap();
+        assert_eq!(
+            (renamed.id.as_str(), renamed.name.as_str()),
+            ("C1", "navigator-sample")
+        );
+        assert!(matches!(
+            client.rename_channel("C2", "navigator-taken").await,
+            Err(SlackError::NameTaken)
+        ));
     }
 
     #[tokio::test]

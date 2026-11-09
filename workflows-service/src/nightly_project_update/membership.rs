@@ -4,7 +4,7 @@
 //! The channel is created, adopted when one of the expected name already
 //! exists, or replaced when the recorded channel has been deleted; the Lawyer
 //! DRI, participating Clerks, and owning-Firm Lawyers and Clerks with recorded
-//! Slack identities are invited. Channels are named `project-<code>`, or
+//! Slack identities are invited. Channels are named `navigator-<code>`, or
 //! `staging-<code>` on a simulated-matters deployment, and every call goes
 //! through the owning Firm's own Slack bot (ENG-392).
 //!
@@ -522,7 +522,7 @@ mod tests {
         );
         assert_eq!(
             *slack.created.lock().expect("created lock"),
-            ["project-sync-no-channel"]
+            ["navigator-sync-no-channel"]
         );
         assert_eq!(
             *slack.lookups.lock().expect("lookups lock"),
@@ -741,7 +741,7 @@ mod tests {
         assert_eq!(report.channels_archived, 0, "no channel to archive");
         assert_eq!(
             *slack.created.lock().expect("created lock"),
-            ["project-sample-stale"]
+            ["navigator-sample-stale"]
         );
         let stored = projects::find_by_id(&surreal, stale.id)
             .await

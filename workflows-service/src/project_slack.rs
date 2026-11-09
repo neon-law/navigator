@@ -234,7 +234,7 @@ pub struct ProjectSlackService {
 
 impl ProjectSlackService {
     /// `simulated` selects the channel prefix: `staging-` on a
-    /// simulated-matters deployment, `project-` otherwise.
+    /// simulated-matters deployment, `navigator-` otherwise.
     #[must_use]
     pub fn new(
         surreal: store::surreal::SurrealDb,
@@ -868,7 +868,8 @@ mod tests {
             "Push to main: `abc1234` by octocat — gate pass, publish skipped. <https://github.com/an-organization/sample-push/actions/runs/1|CI run #1>\nfeat(will): add the residuary clause"
         );
 
-        event.subject = Some("<!channel> <@U123> see <https://evil.example|this> & that".to_string());
+        event.subject =
+            Some("<!channel> <@U123> see <https://evil.example|this> & that".to_string());
         let message = render_main_push(&event, None);
         let subject = message.rsplit('\n').next().unwrap();
         assert_eq!(
@@ -880,7 +881,11 @@ mod tests {
         event.subject = Some("x".repeat(300));
         let message = render_main_push(&event, None);
         let subject = message.rsplit('\n').next().unwrap();
-        assert_eq!(subject.chars().count(), 121, "120 characters plus the ellipsis");
+        assert_eq!(
+            subject.chars().count(),
+            121,
+            "120 characters plus the ellipsis"
+        );
         assert!(subject.ends_with('…'));
 
         event.subject = Some("  \t ".to_string());
@@ -971,7 +976,7 @@ mod tests {
             .await
             .expect("reuse channel");
         assert_eq!(first, second);
-        assert_eq!(slack.created_channels(), vec!["project-sample-slack"]);
+        assert_eq!(slack.created_channels(), vec!["navigator-sample-slack"]);
         let stored = store::projects::find_by_id(&surreal, project.id)
             .await
             .expect("read")
@@ -1177,7 +1182,7 @@ mod tests {
         let slack = Arc::new(ExistingChannelSlack {
             found: Some(workflows::SlackChannel {
                 id: "GADOPTED".to_string(),
-                name: "project-sample-adopt".to_string(),
+                name: "navigator-sample-adopt".to_string(),
             }),
             create_error: None,
             created: std::sync::Mutex::default(),

@@ -590,10 +590,13 @@ exits nonzero. A partially configured provider fails the reconcile door with its
 
 Setup never replaces a recorded provider identity. A deleted or otherwise unresolvable recorded resource is reported as
 `recorded_resource_missing`, and a provider privacy or Notion-parent mismatch is reported for operator remediation. The
-Slack id and canonical URL are persisted in one Project-row update. If one door fails, the other doors still run; rerun
-setup after the provider or credential is repaired. The in-process lock prevents duplicate work within one Navigator
-replica. Across replicas, the guarantee is only the provider adapters' find/create idempotency and the single-row
-recorded-identity check; this command does not claim a distributed exactly-once lock.
+Slack channel is named from the Project code by environment, `navigator-<code>` in production and `staging-<code>` on
+the simulated-matters deployment; a recorded channel found under another name is renamed back and reported `repaired`
+with the former name as the detail, since Slack keeps the id across a rename. The Slack id and canonical URL are
+persisted in one Project-row update. If one door fails, the other doors still run; rerun setup after the provider or
+credential is repaired. The in-process lock prevents duplicate work within one Navigator replica. Across replicas, the
+guarantee is only the provider adapters' find/create idempotency and the single-row recorded-identity check; this
+command does not claim a distributed exactly-once lock.
 
 **Prerequisite: a Firm credential.** Every door resolves the caller's `FirmCapability::UseIntegrations` against the
 target Project's owning Firm and then reads that Firm's typed provider credential (`store::firm_secrets`) — there is no
