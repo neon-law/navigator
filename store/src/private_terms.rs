@@ -27,8 +27,8 @@ use uuid::Uuid;
 use crate::entities;
 use crate::persons;
 use crate::project_references;
-use crate::relationships::Endpoint;
 use crate::projects;
+use crate::relationships::Endpoint;
 use crate::surreal::SurrealDb;
 
 /// Why a matter's private-terms response would be incomplete: one dangling or
@@ -527,23 +527,22 @@ mod tests {
         // edge the never-minted target the graph happily holds.
         let gone = Uuid::now_v7();
         let now = chrono::Utc::now().to_rfc3339();
-        m.db
-            .query(
-                "CREATE $id SET person_id = $person, project_id = $project, \
+        m.db.query(
+            "CREATE $id SET person_id = $person, project_id = $project, \
                  participation = $participation, inserted_at = $now, updated_at = $now",
-            )
-            .bind(("id", record_id("person_project_role", Uuid::now_v7())))
-            .bind(("person", record_id("person", gone)))
-            .bind(("project", record_id("project", m.project.id)))
-            .bind((
-                "participation",
-                projects::participation_for_role(Role::Client),
-            ))
-            .bind(("now", now))
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
+        )
+        .bind(("id", record_id("person_project_role", Uuid::now_v7())))
+        .bind(("person", record_id("person", gone)))
+        .bind(("project", record_id("project", m.project.id)))
+        .bind((
+            "participation",
+            projects::participation_for_role(Role::Client),
+        ))
+        .bind(("now", now))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
         project_references::reference(
             &m.db,
             m.project.id,
