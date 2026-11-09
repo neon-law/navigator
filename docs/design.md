@@ -45,6 +45,7 @@ at the call site rather than imported into the component.
 | No `portal`, `server`, `store`, `sea_orm`, or `cloud` import | `webapp::components::leaf_contract` |
 | No router import, no `AppState`, no `SessionData` | `webapp::components::leaf_contract` |
 | No literal colour — `--nav-*` tokens only | `webapp::components::leaf_contract` |
+| No text glyph drawn as an icon | `webapp::components::control_contract` |
 | A gallery entry for every component | `webapp::design::tests` |
 
 `views::components::code` is the one permitted crossing: `code.rs` calls its pure `syntect` highlighter inside a
@@ -101,11 +102,36 @@ ships green and renders unstyled. Every migrated surface adds its chrome rules i
 ## Forms
 
 Page modules name fields with `webapp::components::{Field, FormCard}`; the component library renders the controls and
-the page carries `nav-btn` on any standalone button. Hidden inputs are wiring and remain the page's responsibility. The
+the page carries `nav-btn` on any standalone button, or `nav-link-button` on an in-page action that should read as a
+link (jumping to a question, expanding a row). Hidden inputs are wiring and remain the page's responsibility. The
 executable source contract is `webapp::components::control_contract` in `webapp/src/components.rs`: it scans page
 modules for raw `input`, `select`, `textarea`, and `button` RSX openers, allows existing debt only while it is
 explicitly pinned, and requires that debt to ratchet down. Add a primitive to the library and show it in `/design`
 instead of adding another page-local control.
+
+## Iconography
+
+Show state and direction with an icon; spell it out only where an icon cannot carry it alone.
+
+- **Icons first.** Status (answered, done, current, blocked), direction (back, next, off-site), and repeated actions
+  (edit, delete, view) are icons from `webapp::components::IconName`, drawn with `Icon`. A short word beside the icon is
+  for a label the glyph cannot carry by itself (a heading, a call to action), not a repeat of what the icon says.
+- **Every meaningful icon has a name.** Pass `label` and `Icon` renders `role="img"` with a `<title>`; the screen reader
+  hears "Answered", not a shape. An icon that repeats adjacent text, or a state already announced by an attribute such
+  as `aria-current`, is decorative: omit `label` so it is `aria-hidden`.
+- **Never colour alone.** An icon's shape carries the state (a filled check against an empty circle); colour reinforces
+  it.
+- **No text glyphs.** Unicode arrows, check marks, crosses, stars, warning signs, and disclosure triangles typed into a
+  string are not icons: they scale with the font, ignore the token colours, and are announced as "leftwards arrow". A
+  back link is `BackBreadcrumb`; an off-site link gets `IconName::BoxArrowUpRight`. The glyph ratchet in
+  `webapp::components::control_contract` fails a page that adds one, pins the existing debt per file in
+  `GLYPH_ICON_DEBT`, and requires that debt to fall. The component library itself carries none.
+- **One glyph set.** Icons are inline SVG from Bootstrap Icons (MIT) at a 16×16 viewBox, drawn at `1em` in
+  `currentColor`. A new icon is a new `IconName` variant with its path data and a row in the `/design` gallery, never an
+  icon font, emoji, or image file.
+
+The notation questionnaire's "All questions" table is the reference: a caret marks the current row, a filled check or an
+empty circle says whether each question is answered, and the summary line counts them.
 
 ## Accessibility
 
@@ -158,6 +184,11 @@ fills the `?` overlay and the `/` palette from the same list, so a key that work
   outside an editable field; text editing keeps the browser's native Backspace behavior. Re-answering appends a new
   answer, preserving the earlier answer while reads select the latest. A stale form cannot bind its value to a new
   question, and a completed or reviewed questionnaire cannot be reopened.
+
+**Inside a widget.** A composite control owns its arrow keys the way a native radio group does: the rows of the notation
+questionnaire's "All questions" table are a single tab stop, `ArrowUp`/`ArrowDown`, `Home`, and `End` move between them,
+and `Enter` or `Space` jumps. These keys act only while focus is inside the widget, so they are not page shortcuts and
+do not appear in the `?` overlay.
 
 `server/tests/browser_e2e.rs` walks both questionnaires to completion with the keyboard, and checks the overlay, the
 palette and the chords against a live page — on a firm app page and a Portal page alike.
