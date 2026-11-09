@@ -6895,29 +6895,37 @@ async fn list_document_revisions_door(
         revisions: revisions
             .into_iter()
             .enumerate()
-            .map(|(index, asset)| RevisionSummary {
-                version: total - index,
-                asset_id: asset.id,
-                created_at: asset
-                    .inserted_at
-                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                sha256: asset.sha256_hex,
-                size_bytes: asset.byte_size,
-                filename: asset.filename.unwrap_or_default(),
-                visibility: asset.visibility,
-                operative: index == 0,
-                signing: asset.signing,
-                notarization: asset.notarization,
-                deleted_at: asset
-                    .deleted_at
-                    .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-                purge_after: asset
-                    .purge_after
-                    .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-            })
+            .map(|(index, asset)| revision_summary(&asset, total - index, index == 0))
             .collect(),
     };
     Ok((StatusCode::OK, Json(body)).into_response())
+}
+
+fn revision_summary(
+    asset: &store::assets::Asset,
+    version: usize,
+    operative: bool,
+) -> RevisionSummary {
+    RevisionSummary {
+        version,
+        asset_id: asset.id,
+        created_at: asset
+            .inserted_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        sha256: asset.sha256_hex.clone(),
+        size_bytes: asset.byte_size,
+        filename: asset.filename.clone().unwrap_or_default(),
+        visibility: asset.visibility.clone(),
+        operative,
+        signing: asset.signing,
+        notarization: asset.notarization.clone(),
+        deleted_at: asset
+            .deleted_at
+            .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        purge_after: asset
+            .purge_after
+            .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+    }
 }
 
 /// Most rows one integrity page may carry. A page's storage reads run
@@ -6949,6 +6957,11 @@ struct IntegrityAsset {
     slug: Option<String>,
     kind: Option<String>,
     sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filename: Option<String>,
+    /// Revision metadata for the lawyer gate's reconciliation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<RevisionSummary>,
     /// Structured transcript source revision. Returned to the lawyer gate only.
     #[serde(skip_serializing_if = "Option::is_none")]
     derived_from: Option<serde_json::Value>,
@@ -7192,11 +7205,21 @@ async fn integrity_row(
     } else {
         None
     };
+    let operative = asset
+        .slug
+        .as_deref()
+        .and_then(|slug| current_by_slug.get(slug))
+        .is_some_and(|current_id| *current_id == Some(asset.id));
+    let version = version_by_id.get(&asset.id).copied();
     Ok(IntegrityAsset {
         asset_id: asset.id,
         slug: asset.slug.clone(),
         kind: asset.kind.clone(),
         sha256: asset.sha256_hex.clone(),
+        filename: if lawyer { asset.filename.clone() } else { None },
+        revision: version
+            .filter(|_| lawyer)
+            .map(|version| revision_summary(asset, version, operative)),
         derived_from: if lawyer {
             asset.derived_from.clone()
         } else {
@@ -7207,12 +7230,8 @@ async fn integrity_row(
         } else {
             None
         },
-        operative: asset
-            .slug
-            .as_deref()
-            .and_then(|slug| current_by_slug.get(slug))
-            .is_some_and(|current_id| *current_id == Some(asset.id)),
-        version: version_by_id.get(&asset.id).copied(),
+        operative,
+        version,
         exists: head.is_some(),
         size_bytes: stored_size,
         recorded_size: asset.byte_size,
@@ -9961,6 +9980,9 @@ mod tests {
         internal: &BTreeSet<uuid::Uuid>,
     ) {
         let (client_rows, _) = integrity_pages(state, client, project_id, false, Some(50)).await;
+        assert!(client_rows
+            .iter()
+            .all(|row| row.get("filename").is_none() && row.get("revision").is_none()));
         let client_ids: BTreeSet<String> = client_rows
             .iter()
             .map(|row| row["asset_id"].as_str().unwrap().to_string())
@@ -10039,6 +10061,13 @@ mod tests {
 
         let (rows, pages) = integrity_pages(&state, &lawyer, project_id, false, Some(50)).await;
         assert_eq!(pages, live.len().div_ceil(50));
+        assert!(rows.iter().all(|row| row["filename"] == "agreement.pdf"));
+        assert!(rows.iter().all(|row| {
+            row["revision"]["filename"] == row["filename"]
+                && row["revision"]["asset_id"] == row["asset_id"]
+                && row["revision"]["version"] == row["version"]
+                && row["revision"]["operative"] == row["operative"]
+        }));
         let keys: Vec<_> = rows.iter().map(integrity_row_key).collect();
         assert!(
             keys.windows(2).all(|pair| pair[0] < pair[1]),
