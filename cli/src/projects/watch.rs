@@ -1,4 +1,4 @@
-//! Foreground Project checkout and document watcher.
+//! Watch open projects and download document revisions.
 
 use std::collections::HashMap;
 use std::io::Write;
